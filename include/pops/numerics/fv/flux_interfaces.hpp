@@ -29,8 +29,7 @@ struct FaceContext {
   Real cell_measure = Real(1);
 
   POPS_HD static FaceContext axis_aligned(int axis_, Real measure = Real(1),
-                                          FaceOrientation orientation_ =
-                                              FaceOrientation::kPositive,
+                                          FaceOrientation orientation_ = FaceOrientation::kPositive,
                                           Real cell_measure_ = Real(1)) {
     FaceContext result{};
     result.axis = axis_;
@@ -284,8 +283,9 @@ struct PhysicalFluxView {
       result.grad_x = providers.values_[1];
     if constexpr (ProviderPack::value_count > 2)
       result.grad_y = providers.values_[2];
-#define POPS_FLUX_PROVIDER_ASSIGN(name, index) \
-  if constexpr (ProviderPack::value_count > index) result.name = providers.values_[index];
+#define POPS_FLUX_PROVIDER_ASSIGN(name, index)     \
+  if constexpr (ProviderPack::value_count > index) \
+    result.name = providers.values_[index];
     POPS_AUX_FIELDS(POPS_FLUX_PROVIDER_ASSIGN)
 #undef POPS_FLUX_PROVIDER_ASSIGN
     if constexpr (ProviderPack::value_count > kAuxNamedBase) {
@@ -316,9 +316,7 @@ struct PhysicalFluxView {
   POPS_HD void signed_wave_speeds(const Trace& trace, const FaceContext& face, Real& lower,
                                   Real& upper) const
     requires requires(const Model& model, const State& state, const Aux& providers, int axis,
-                      Real& lo, Real& hi) {
-      model.wave_speeds(state, providers, axis, lo, hi);
-    }
+                      Real& lo, Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
   {
     const Aux providers = physical_providers(trace.providers);
     physical.wave_speeds(trace.state, providers, face.axis, lower, upper);
@@ -338,10 +336,8 @@ struct PhysicalFluxView {
   POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
                              Real pressure_right, Real speed_left, Real speed_right,
                              const FaceContext& face) const
-    requires requires(const Model& model, const State& l, const State& r, Real pl, Real pr,
-                      Real sl, Real sr, int axis) {
-      model.contact_speed(l, r, pl, pr, sl, sr, axis);
-    }
+    requires requires(const Model& model, const State& l, const State& r, Real pl, Real pr, Real sl,
+                      Real sr, int axis) { model.contact_speed(l, r, pl, pr, sl, sr, axis); }
   {
     return physical.contact_speed(left, right, pressure_left, pressure_right, speed_left,
                                   speed_right, face.axis);
@@ -359,9 +355,7 @@ struct PhysicalFluxView {
   POPS_HD State roe_dissipation(const Trace& left, const Trace& right,
                                 const FaceContext& face) const
     requires requires(const Model& model, const State& l, const Aux& lp, const State& r,
-                      const Aux& rp, int axis) {
-      model.roe_dissipation(l, lp, r, rp, axis);
-    }
+                      const Aux& rp, int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
   {
     const Aux left_values = physical_providers(left.providers);
     const Aux right_values = physical_providers(right.providers);
@@ -370,44 +364,48 @@ struct PhysicalFluxView {
 };
 
 template <class T>
-concept PhysicalFlux = requires(const T& flux, const typename T::Trace& trace,
-                                const FaceContext& face) {
-  typename T::State;
-  typename T::ProviderPack;
-  { T::n_vars } -> std::convertible_to<int>;
-  { flux.evaluate(trace, face) } -> std::same_as<FluxDensity<typename T::State>>;
-  { flux.stability(trace, face) } -> std::same_as<StabilityBound>;
-};
+concept PhysicalFlux =
+    requires(const T& flux, const typename T::Trace& trace, const FaceContext& face) {
+      typename T::State;
+      typename T::ProviderPack;
+      { T::n_vars } -> std::convertible_to<int>;
+      { flux.evaluate(trace, face) } -> std::same_as<FluxDensity<typename T::State>>;
+      { flux.stability(trace, face) } -> std::same_as<StabilityBound>;
+    };
 
 template <class T, class Physical>
-concept NumericalFlux = PhysicalFlux<Physical> &&
+concept NumericalFlux =
+    PhysicalFlux<Physical> &&
     requires(const T& numerical, const Physical& physical, const typename Physical::Trace& left,
              const typename Physical::Trace& right, const FaceContext& face) {
-      { numerical(physical, left, right, face) } ->
-          std::same_as<FluxEvaluation<typename Physical::State>>;
+      {
+        numerical(physical, left, right, face)
+      } -> std::same_as<FluxEvaluation<typename Physical::State>>;
     };
 
 /// Constitutive capability gates used only during route resolution.  NumericalFlux policies do not
 /// receive these Models; installation wraps a conforming value in the narrow PhysicalFluxView.
 template <class Model>
-concept HasHLLCStructure =
-    requires(const Model& model, const typename Model::State& state,
-             const typename Model::State& other, const Aux& providers, Real scalar, int axis,
-             Real& lower, Real& upper) {
-      { model.pressure(state) } -> std::convertible_to<Real>;
-      model.wave_speeds(state, providers, axis, lower, upper);
-      { model.contact_speed(state, other, scalar, scalar, scalar, scalar, axis) } ->
-          std::convertible_to<Real>;
-      { model.hllc_star_state(state, scalar, scalar, scalar, axis) } ->
-          std::same_as<typename Model::State>;
-    };
+concept HasHLLCStructure = requires(const Model& model, const typename Model::State& state,
+                                    const typename Model::State& other, const Aux& providers,
+                                    Real scalar, int axis, Real& lower, Real& upper) {
+  { model.pressure(state) } -> std::convertible_to<Real>;
+  model.wave_speeds(state, providers, axis, lower, upper);
+  {
+    model.contact_speed(state, other, scalar, scalar, scalar, scalar, axis)
+  } -> std::convertible_to<Real>;
+  {
+    model.hllc_star_state(state, scalar, scalar, scalar, axis)
+  } -> std::same_as<typename Model::State>;
+};
 
 template <class Model>
 concept HasRoeDissipation =
     requires(const Model& model, const typename Model::State& left, const Aux& left_providers,
              const typename Model::State& right, const Aux& right_providers, int axis) {
-      { model.roe_dissipation(left, left_providers, right, right_providers, axis) } ->
-          std::same_as<typename Model::State>;
+      {
+        model.roe_dissipation(left, left_providers, right, right_providers, axis)
+      } -> std::same_as<typename Model::State>;
     };
 
 template <class Numerical, class Model>
@@ -426,13 +424,11 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
 template <class Numerical, class Model, class Storage>
 POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
     const Numerical& numerical, const Model& model, const typename Model::State& left_state,
-    const Storage& left_providers, int left_i, int left_j,
-    const typename Model::State& right_state, const Storage& right_providers, int right_i,
-    int right_j, const FaceContext& face) {
+    const Storage& left_providers, int left_i, int left_j, const typename Model::State& right_state,
+    const Storage& right_providers, int right_i, int right_j, const FaceContext& face) {
   return evaluate_numerical_flux(
-      numerical, model, left_state,
-      bind_flux_providers_at<Model>(left_providers, left_i, left_j), right_state,
-      bind_flux_providers_at<Model>(right_providers, right_i, right_j), face);
+      numerical, model, left_state, bind_flux_providers_at<Model>(left_providers, left_i, left_j),
+      right_state, bind_flux_providers_at<Model>(right_providers, right_i, right_j), face);
 }
 
 }  // namespace pops

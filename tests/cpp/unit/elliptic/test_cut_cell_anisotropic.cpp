@@ -79,8 +79,7 @@ TEST(test_cut_cell_anisotropic, aniso_order2_l2) {
   std::printf("cut-cell anisotrope (ex=%.1f ey=%.1f) L2 : %.3e %.3e %.3e  ordre=%.2f\n", ex, ey,
               a128, a256, a512, o);
   EXPECT_TRUE(o > 1.7) << "cutcell_aniso_ordre2_L2 (order=" << o << ")";
-  EXPECT_TRUE(std::isfinite(a512) && a512 > 0)
-      << "cutcell_aniso_fini (a512=" << a512 << ")";
+  EXPECT_TRUE(std::isfinite(a512) && a512 > 0) << "cutcell_aniso_fini (a512=" << a512 << ")";
 }
 
 // (B) non-regression : eps_x=eps_y=1 (degenere) == cut-cell sans eps (operateur lap, f=-4).

@@ -17,7 +17,7 @@
 #   bash scripts/build_python.sh            # build + install into the active env
 #   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
 #   bash scripts/build_python.sh --fresh    # --clean AND `ccache -C`: a true COLD compile (measuring)
-#   bash scripts/build_python.sh --mpi      # also build the distributed MPI backend (POPS_USE_MPI=ON)
+#   bash scripts/build_python.sh --mpi      # distributed MPI + native parallel-HDF5 backend
 #   bash scripts/build_python.sh --wheel-dir /tmp/wheels
 #                                           # build, retain, then install that exact wheel
 #   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
@@ -118,7 +118,13 @@ if [[ $DO_FRESH -eq 1 ]]; then
 fi
 
 # --- build + install --------------------------------------------------------------------------------
-[[ $WITH_MPI -eq 1 ]] && { export POPS_USE_MPI=ON; echo "MPI backend: ON"; }
+if [[ $WITH_MPI -eq 1 ]]; then
+  # The final distributed runtime contract includes its native collective writer.  A serial HDF5
+  # discovery is rejected by CMake; there is no reduced-capability `--mpi` artifact.
+  export POPS_USE_MPI=ON
+  export POPS_USE_HDF5=ON
+  echo "MPI backend: ON; native parallel HDF5: ON"
+fi
 cd "$HERE"
 if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
   WHEEL_DIR="$HERE/$WHEEL_DIR"

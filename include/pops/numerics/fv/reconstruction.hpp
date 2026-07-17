@@ -69,7 +69,7 @@ struct VanLeer {
 /// Must NOT be called directly by a mesh user: go through the Weno5 policy and the reconstruct
 /// function of spatial_operator.hpp.
 POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
-                          Real eps = kWenoEpsilon) {
+                           Real eps = kWenoEpsilon) {
   // ADC-645: eps is the WENO-Z smoothness regulariser (default = the historical kWenoEpsilon
   // literal, bit-identical); a per-block override reaches here through Weno5::eps.
   // three third-order reconstructions of the +x face of v0

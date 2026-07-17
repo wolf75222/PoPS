@@ -252,7 +252,13 @@ def _require_interface_component(install_plan: Any, binding: dict[str, Any]) -> 
     if installed.component_manifest.token != binding.get("component_manifest_identity"):
         raise ValueError("shared interface changed installed component manifest identity")
     interface = binding.get("native_interface")
-    if not isinstance(interface, dict) or interface != installed.interface.to_data() \
+    # Detaching a compiled plan converts tuple carriers to their JSON-equivalent lists.  The
+    # canonical encoder intentionally gives both the same ordered-array identity, so compare that
+    # authenticated structure instead of Python container implementation details.
+    from pops.identity import canonical_bytes
+
+    if not isinstance(interface, dict) or canonical_bytes(interface) != canonical_bytes(
+            installed.interface.to_data()) \
             or binding.get("interface_version") != installed.interface.version:
         raise ValueError("shared interface changed native interface identity/version")
     if installed.native_handle is None:

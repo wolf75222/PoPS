@@ -8,17 +8,16 @@ populate the SSA value list -- the compiled ``.so`` owns the runtime step).
 
 Pure Python (IR construction only); skips cleanly if pops.time is unavailable, never fakes.
 """
+from tests.python.support.requirements import require_native_or_skip
 from typed_program_support import typed_state
 
-import sys
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_std_decorator (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_std_decorator (pops.time unavailable: %s)' % exc)
     return t
 
 

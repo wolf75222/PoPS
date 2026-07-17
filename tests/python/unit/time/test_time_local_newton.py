@@ -22,6 +22,8 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
     numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
 """
+
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
@@ -37,14 +39,12 @@ def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # noqa: BLE001 -- pops not importable here -> skip, never fake
-        print("skip test_time_local_newton (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip("test_time_local_newton (pops.time unavailable: %s)" % exc)
     return t
 
 
 def _skip(msg):
-    print("skip test_time_local_newton (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip("test_time_local_newton (%s)" % msg)
 
 
 def raises(exc_types, fn):
@@ -63,6 +63,7 @@ def reaction_model(name, k):
     no transport: the Program drives only the LOCAL non-linear solve). A complete compilable block
     (flux + primitive + eigenvalue + named source_term)."""
     from pops.physics._facade import Model
+
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -77,6 +78,7 @@ def reaction_model(name, k):
 def reaction_program(t, name="implicit_reaction", model=None):
     from pops.solvers.nonlinear import LocalNewton
     from pops.time import LocalResidual
+
     """W = the per-cell solution of r(rho) = rho - rho0 - dt*S(rho) = 0 (an implicit Euler reaction
     step). The residual is built from the named source ``react`` + the iterate / frozen guess."""
     P = t.Program(name)
@@ -86,12 +88,16 @@ def reaction_program(t, name="implicit_reaction", model=None):
     guess = P.value("implicit_guess", U, at=endpoint.point)
 
     def residual(P, Uit, U0):
-        S = P._source("react", state=Uit)  # private name seam; public handle route is tested separately
-        return P.value(
-            "r", Uit - U0 - dt * S, at=Uit.point)  # r = U - U0 - dt*S(U)
+        S = P._source(
+            "react", state=Uit
+        )  # private name seam; public handle route is tested separately
+        return P.value("r", Uit - U0 - dt * S, at=Uit.point)  # r = U - U0 - dt*S(U)
 
-    W = P.solve(LocalResidual(residual, guess), name="W", solver=LocalNewton(
-        tolerance=1e-12, max_iterations=50)).consume(action=t.FailRun())
+    W = P.solve(
+        LocalResidual(residual, guess),
+        name="W",
+        solver=LocalNewton(tolerance=1e-12, max_iterations=50),
+    ).consume(action=t.FailRun())
     P.commit(endpoint, W)
     return P
 
@@ -110,45 +116,55 @@ def chk(cond, label):
 def section_a(t):
     from pops.solvers.nonlinear import LocalNewton
     from pops.time import LocalResidual
+
     print("== (A) solve_local_nonlinear validation + codegen ==")
     try:
         from pops.physics._facade import Model
     except Exception as exc:  # noqa: BLE001 -- dsl needs _pops; A still skips cleanly, never fakes
-        print("-- (A) skipped: pops.dsl unavailable (%s) --" % exc)
+        require_native_or_skip("-- (A) skipped: pops.dsl unavailable (%s) --" % exc)
         return
 
     # --- builder validation ---
     P = t.Program("v")
     U = typed_state(P, "blk")
-    chk(raises(TypeError, lambda: LocalResidual(U, U)),
-        "a non-callable residual is rejected")
+    chk(raises(TypeError, lambda: LocalResidual(U, U)), "a non-callable residual is rejected")
 
     def resid(P, Uit, U0):
         return P.value("validation_residual", Uit - U0)
-    chk(raises(ValueError, lambda: P.solve(LocalResidual(resid, "x"), solver=LocalNewton())),
-        "a non-State initial_guess is rejected")
-    chk(raises(ValueError, lambda: LocalNewton(max_iterations=0)),
-        "max_iter <= 0 is rejected")
-    chk(raises(TypeError, lambda: P.solve(LocalResidual(resid, U), solver="broyden")),
-        "a string solver selector is rejected")
+
+    chk(
+        raises(ValueError, lambda: P.solve(LocalResidual(resid, "x"), solver=LocalNewton())),
+        "a non-State initial_guess is rejected",
+    )
+    chk(raises(ValueError, lambda: LocalNewton(max_iterations=0)), "max_iter <= 0 is rejected")
+    chk(
+        raises(TypeError, lambda: P.solve(LocalResidual(resid, U), solver="broyden")),
+        "a string solver selector is rejected",
+    )
 
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
         R = P.rhs(state=Uit, terms=[Flux(), DefaultSource()])
         return P.value("nonlocal_residual", Uit - U0 - P.dt * R, at=Uit.point)
-    chk(raises(ValueError, lambda: P.solve(
-        LocalResidual(bad_resid, U), solver=LocalNewton())),
-        "a non-local residual op (P.rhs) is rejected")
+
+    chk(
+        raises(ValueError, lambda: P.solve(LocalResidual(bad_resid, U), solver=LocalNewton())),
+        "a non-local residual op (P.rhs) is rejected",
+    )
 
     # --- a valid Newton IR validates + hashes; the residual sub-block is recorded ---
     Pr = reaction_program(t)
     chk(Pr.validate() is True, "the implicit-reaction Newton IR validates")
     chk(bool(Pr._ir_hash()), "the Newton IR serializes to a stable hash")
     nl = [v for v in Pr._values if v.op == "solve_local_nonlinear"][0]
-    chk(nl.attrs["max_iter"] == 50 and nl.attrs["tol"].to_python() == 1e-12,
-        "tol / max_iter recorded on the op")
-    chk(len(nl.attrs["residual_block"]) >= 3,
-        "the residual sub-block holds the iterate + guess + ops")
+    chk(
+        nl.attrs["max_iter"] == 50 and nl.attrs["tol"].to_python() == 1e-12,
+        "tol / max_iter recorded on the op",
+    )
+    chk(
+        len(nl.attrs["residual_block"]) >= 3,
+        "the residual sub-block holds the iterate + guess + ops",
+    )
 
     # --- the IR hash is sensitive to the Newton parameters (a different tol / max_iter rehashes) ---
     def _h(tol, mi):
@@ -161,21 +177,37 @@ def section_a(t):
         def r(Q, Uit, U0):
             return Q.value(
                 "parameterized_residual",
-                Uit - U0 - dt * Q._source("react", state=Uit), at=Uit.point)
-        Q.commit(endpoint, Q.solve(
-            LocalResidual(r, guess), name="W", solver=LocalNewton(
-                tolerance=tol, max_iterations=mi)).consume(action=t.FailRun()))
+                Uit - U0 - dt * Q._source("react", state=Uit),
+                at=Uit.point,
+            )
+
+        Q.commit(
+            endpoint,
+            Q.solve(
+                LocalResidual(r, guess),
+                name="W",
+                solver=LocalNewton(tolerance=tol, max_iterations=mi),
+            ).consume(action=t.FailRun()),
+        )
         return Q._ir_hash()
+
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
     chk(_h(1e-10, 20) != _h(1e-10, 30), "a different max_iter rehashes the IR")
 
     # --- the codegen lowers a per-cell Newton kernel ---
     m = reaction_model("react_cg", 2.0)
     src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
-    for frag in ("auto residual_eval = [&]", "pops::detail::mat_inverse<1>(",
-                 "for (int it_ = 0;", "J_[1][1]", "std::fmax(rmax_, std::fabs(r_",
-                 "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
-                 "const pops::Real eps_", "U_[i_] -= du_;", "pops::for_each_cell("):
+    for frag in (
+        "auto residual_eval = [&]",
+        "pops::detail::mat_inverse<1>(",
+        "for (int it_ = 0;",
+        "J_[1][1]",
+        "std::fmax(rmax_, std::fabs(r_",
+        "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
+        "const pops::Real eps_",
+        "U_[i_] -= du_;",
+        "pops::for_each_cell(",
+    ):
         chk(frag in src, "the Newton kernel has %r" % frag)
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
@@ -186,8 +218,10 @@ def section_a(t):
         chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
 
     # --- refused without a model (the residual's named source needs the model coefficients) ---
-    chk(raises(NotImplementedError, lambda: emit_cpp_program(reaction_program(t, "react_nm"))),
-        "the Newton codegen is refused without a model")
+    chk(
+        raises(NotImplementedError, lambda: emit_cpp_program(reaction_program(t, "react_nm"))),
+        "the Newton codegen is refused without a model",
+    )
 
     # --- n_cons is manifest-sized (the FD Jacobian is an exact N x N stack inverse) ---
     big = Model("too_big_nl")
@@ -200,15 +234,20 @@ def section_a(t):
 
     def big_resid(P, Uit, U0):
         return P.value(
-            "wide_residual",
-            Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point)
-    Pbig.commit(endpoint,
-                Pbig.solve(
-                    LocalResidual(big_resid, guess), name="W", solver=LocalNewton()
-                ).consume(action=t.FailRun()))
+            "wide_residual", Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point
+        )
+
+    Pbig.commit(
+        endpoint,
+        Pbig.solve(LocalResidual(big_resid, guess), name="W", solver=LocalNewton()).consume(
+            action=t.FailRun()
+        ),
+    )
     big_src = emit_cpp_program(Pbig, model=big)
-    chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
-        "n_cons=9 emits exact manifest-sized Newton storage")
+    chk(
+        "pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
+        "n_cons=9 emits exact manifest-sized Newton storage",
+    )
 
 
 # ============================ (B) end-to-end implicit-reaction parity ============================
@@ -218,16 +257,26 @@ def section_b(t):
 
         import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            ) from None
+        require_native_or_skip("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            )
+        require_native_or_skip(
+            "-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --"
+        )
         return
 
     print("== (B) end-to-end: per-cell implicit reaction vs analytic + offline Newton ==")
-    k = 1.5            # reaction rate
-    dt = 0.2           # a big step so the implicit move is non-trivial (Newton must iterate)
+    k = 1.5  # reaction rate
+    dt = 0.2  # a big step so the implicit move is non-trivial (Newton must iterate)
     n = 16
 
     # ---- offline numpy Newton on the IDENTICAL per-cell residual r(U) = U - U0 - dt*S(U), S = -k U^2 ----
@@ -237,14 +286,14 @@ def section_b(t):
         first_res = None
         last_res = None
         for _ in range(max_iter):
-            r = u - u0 - dt * (-k * u * u)           # r(U)
+            r = u - u0 - dt * (-k * u * u)  # r(U)
             res = np.abs(r)
             if first_res is None:
                 first_res = float(res.max())
             last_res = float(res.max())
             if res.max() < tol:
                 break
-            jac = 1.0 - dt * (-2.0 * k * u)          # r'(U) = 1 + 2*dt*k*U
+            jac = 1.0 - dt * (-2.0 * k * u)  # r'(U) = 1 + 2*dt*k*U
             u = u - r / jac
             iters += (res >= tol).astype(int)
         return u, iters, first_res, last_res
@@ -253,8 +302,8 @@ def section_b(t):
     try:
         program_model = reaction_model("react_prog", k)
         compiled = compile_drivers.compile_problem(
-            model=program_model,
-            time=reaction_program(t, "react_step", model=program_model))
+            model=program_model, time=reaction_program(t, "react_step", model=program_model)
+        )
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -265,9 +314,12 @@ def section_b(t):
         compiled_model = reaction_model("react_block", k).compile(backend="production")
     except RuntimeError as exc:
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    sim.add_equation(
+        "blk",
+        compiled_model,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
+    )
 
     # A KNOWN positive field with spatial variation (each cell solves its own scalar Newton).
     x = (np.arange(n) + 0.5) / n
@@ -292,18 +344,26 @@ def section_b(t):
     # Residual of the COMPILED solution against the per-cell residual (must be ~0 at convergence).
     res_compiled = float(np.abs(rho - rho0 - dt * (-k * rho * rho)).max())
 
-    print("  implicit reaction: max|rho-closed| = %.2e  max|rho-offline_newton| = %.2e" %
-          (e_closed, e_newton))
-    print("  offline Newton: iters(max) = %d  residual %.2e -> %.2e  |compiled residual| = %.2e  moved %.2e"
-          % (max_iters, first_res, last_res, res_compiled, moved))
+    print(
+        "  implicit reaction: max|rho-closed| = %.2e  max|rho-offline_newton| = %.2e"
+        % (e_closed, e_newton)
+    )
+    print(
+        "  offline Newton: iters(max) = %d  residual %.2e -> %.2e  |compiled residual| = %.2e  moved %.2e"
+        % (max_iters, first_res, last_res, res_compiled, moved)
+    )
 
     chk(e_closed < 1e-10, "stepped rho == analytic implicit reaction (max|d| = %.2e)" % e_closed)
     chk(e_newton < 1e-10, "stepped rho == offline numpy Newton (max|d| = %.2e)" % e_newton)
-    chk(res_compiled < 1e-10, "the compiled solution drives the per-cell residual to ~0 (%.2e)"
-        % res_compiled)
+    chk(
+        res_compiled < 1e-10,
+        "the compiled solution drives the per-cell residual to ~0 (%.2e)" % res_compiled,
+    )
     chk(max_iters > 1, "the Newton solve takes more than one iteration (%d)" % max_iters)
-    chk(last_res < 1e-12 and first_res > 1e-3,
-        "the residual drops from O(%.1e) to below tol (Newton converges)" % first_res)
+    chk(
+        last_res < 1e-12 and first_res > 1e-3,
+        "the residual drops from O(%.1e) to below tol (Newton converges)" % first_res,
+    )
     chk(moved > 1e-2, "the implicit step actually moved the state (max|d| = %.2e)" % moved)
 
 

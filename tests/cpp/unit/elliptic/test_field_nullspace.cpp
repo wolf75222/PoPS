@@ -30,11 +30,9 @@ struct TwoIslandFixture {
 
   FieldNullspacePlan plan() const {
     return labelled_mean_zero_nullspace(
-        "two-island-nullspace", "two-island-layout", FieldNullspaceScope::Uniform,
-        {labels},
-        {{1, "island-a", "fixture:cell-label:1"},
-         {2, "island-b", "fixture:cell-label:2"}},
-        {}, {Real(0.5)}, 0);
+        "two-island-nullspace", "two-island-layout", FieldNullspaceScope::Uniform, {labels},
+        {{1, "island-a", "fixture:cell-label:1"}, {2, "island-b", "fixture:cell-label:2"}}, {},
+        {Real(0.5)}, 0);
   }
 };
 

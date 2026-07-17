@@ -1,4 +1,4 @@
-"""Source-ownership fence for the compiled System/AMR runtime.
+"""Source-ownership fence for the compiled System/AMR/output runtime.
 
 ``src/CMakeLists.txt`` is the only native source manifest.  Python owns pybind adapters, tests own
 executables, and both consume the same central object targets without compiling private runtime
@@ -20,6 +20,7 @@ SRC_CMAKE = (ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")
 PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
 TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+PACKAGE_CONFIG = (ROOT / "cmake" / "popsConfig.cmake.in").read_text(encoding="utf-8")
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -58,7 +59,7 @@ def test_no_system_method_definition_lives_below_python_bindings():
 
 
 def test_src_cmake_is_the_single_runtime_source_authority():
-    for target in ("pops_runtime_system", "pops_runtime_amr"):
+    for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
         assert SRC_CMAKE.count(f"add_library({target} OBJECT") == 1
         assert not re.search(rf"add_library\(\s*{target}\b", PYTHON_CMAKE)
         assert not re.search(rf"add_library\(\s*{target}\b", TESTS_CMAKE)
@@ -83,10 +84,10 @@ def test_src_cmake_is_the_single_runtime_source_authority():
 def test_python_and_tests_consume_the_central_targets():
     assert re.search(
         r"target_link_libraries\(\s*_pops\s+PRIVATE\s+"
-        r"pops_runtime_system\s+pops_runtime_amr\b",
+        r"pops_runtime_system\s+pops_runtime_amr\s+pops_runtime_output\b",
         PYTHON_CMAKE,
     )
-    for target in ("pops_runtime_system", "pops_runtime_amr"):
+    for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
         assert target in TESTS_CMAKE, f"tests have no consumers for {target}"
 
     positions = {
@@ -95,6 +96,19 @@ def test_python_and_tests_consume_the_central_targets():
     }
     assert positions["src"] < positions["tests"]
     assert positions["src"] < positions["python"]
+
+
+def test_installed_package_rehydrates_native_backend_dependencies():
+    """Exported interface targets must never name dependencies the config did not recreate."""
+    assert "POPS_USE_HDF5 AND NOT POPS_USE_MPI" in ROOT_CMAKE
+    assert "native collective HDF5 writer and therefore requires" in ROOT_CMAKE
+    assert "if(@POPS_HAS_HDF5@ AND NOT CMAKE_C_COMPILER_LOADED)" in PACKAGE_CONFIG
+    assert "find_dependency(MPI REQUIRED COMPONENTS C CXX)" in PACKAGE_CONFIG
+    assert "find_dependency(MPI REQUIRED COMPONENTS CXX)" in PACKAGE_CONFIG
+    assert "find_dependency(HDF5 REQUIRED COMPONENTS C)" in PACKAGE_CONFIG
+    assert "if(NOT HDF5_IS_PARALLEL)" in PACKAGE_CONFIG
+    assert "test_installed_package_consumer" in ROOT_CMAKE
+    assert "test_hdf5_without_mpi_rejected" in ROOT_CMAKE
 
 
 def test_central_targets_preserve_consumer_specific_compile_contracts():

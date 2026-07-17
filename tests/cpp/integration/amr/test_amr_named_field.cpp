@@ -113,8 +113,7 @@ static Real max_abs_diff(const MultiFab& lhs, const MultiFab& rhs) {
     for (int component = 0; component < lhs.ncomp(); ++component)
       for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
         for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
-          result = std::max(
-              result, std::fabs(left(i, j, component) - right(i, j, component)));
+          result = std::max(result, std::fabs(left(i, j, component) - right(i, j, component)));
   }
   return result;
 }
@@ -133,9 +132,8 @@ static Real max_abs_component_diff(const MultiFab& lhs, const MultiFab& rhs, int
   return result;
 }
 
-static Real max_gradient_error(const MultiFab& phi, const MultiFab& aux,
-                               int gx_comp, int gy_comp, Real sign,
-                               Real dx, Real dy) {
+static Real max_gradient_error(const MultiFab& phi, const MultiFab& aux, int gx_comp, int gy_comp,
+                               Real sign, Real dx, Real dy) {
   device_fence();
   Real result = Real(0);
   for (int li = 0; li < aux.local_size(); ++li) {
@@ -174,8 +172,7 @@ struct CoarseFineGhostCheck {
   int samples = 0;
 };
 
-static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
-                                                    const MultiFab& fine,
+static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, const MultiFab& fine,
                                                     int component) {
   device_fence();
   CoarseFineGhostCheck result;
@@ -207,8 +204,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
   return result;
 }
 
-static Real max_valid_coarse_injection_gap(const MultiFab& coarse,
-                                           const MultiFab& fine,
+static Real max_valid_coarse_injection_gap(const MultiFab& coarse, const MultiFab& fine,
                                            int component) {
   device_fence();
   Real result = Real(0);
@@ -275,12 +271,12 @@ TEST(test_amr_named_field, Runs) {
   // native ExB block reads only comps 0..2; the runtime sizes the channel to max(b.aux_ncomp), so a
   // wider value just reserves room (the extra comps are written only by the named solve). This is what a
   // model declaring m.aux_field("psi"/"g2x"/"g2y") would set via aux_comps<Model>().
-  const int kPhiPsi = kAuxNamedBase;      // 5
-  const int kGxPsi = kAuxNamedBase + 1;   // 6
-  const int kGyPsi = kAuxNamedBase + 2;   // 7
-  const int kPhiChi = kAuxNamedBase + 3;  // 8
-  const int kGxChi = kAuxNamedBase + 4;   // 9
-  const int kGyChi = kAuxNamedBase + 5;   // 10
+  const int kPhiPsi = kAuxNamedBase;       // 5
+  const int kGxPsi = kAuxNamedBase + 1;    // 6
+  const int kGyPsi = kAuxNamedBase + 2;    // 7
+  const int kPhiChi = kAuxNamedBase + 3;   // 8
+  const int kGxChi = kAuxNamedBase + 4;    // 9
+  const int kGyChi = kAuxNamedBase + 5;    // 10
   const int kPhiFail = kAuxNamedBase + 6;  // 11 (forced late failure, phi only)
   blocks[0].aux_ncomp = kPhiFail + 1;
 
@@ -293,8 +289,7 @@ TEST(test_amr_named_field, Runs) {
   const SolveReport default_report = rt.solve_default_field();
   ASSERT_TRUE(default_report.solved())
       << "status=" << default_report.status_name() << " action=" << default_report.action_name()
-      << " iters=" << default_report.iters
-      << " rel_residual=" << default_report.rel_residual;
+      << " iters=" << default_report.iters << " rel_residual=" << default_report.rel_residual;
   EXPECT_GT(default_report.iters, 0) << "default field returns its real GeometricMG report";
 
   // Default Poisson REFERENCE: read the accepted warm start without launching another relative solve.
@@ -321,8 +316,7 @@ TEST(test_amr_named_field, Runs) {
   psi_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/psi/rhs", "plasma", "psi", Real(1)});
   rt.install_field_plan("psi", psi_plan);
-  rt.register_named_field(
-      "plasma", "psi", kPhiPsi, kGxPsi, kGyPsi, /*gradient_sign=*/-1);
+  rt.register_named_field("plasma", "psi", kPhiPsi, kGxPsi, kGyPsi, /*gradient_sign=*/-1);
   rt.set_block_named_elliptic_rhs(0, "psi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(q), 0, rhs);  // f_psi = q * rho == default Poisson RHS
   });
@@ -333,9 +327,8 @@ TEST(test_amr_named_field, Runs) {
   ASSERT_EQ(rt.provider_potential_levels("psi"), rt.nlev());
   for (int level = 0; level < rt.nlev(); ++level) {
     const Real spacing = S.geom.dx() / Real(1 << level);
-    EXPECT_EQ(max_gradient_error(
-                  rt.provider_potential_level("psi", level), rt.aux(level),
-                  kGxPsi, kGyPsi, Real(-1), spacing, spacing),
+    EXPECT_EQ(max_gradient_error(rt.provider_potential_level("psi", level), rt.aux(level), kGxPsi,
+                                 kGyPsi, Real(-1), spacing, spacing),
               Real(0))
         << "GradientOutput(sign=-1) publishes -grad(phi) on FAC level " << level;
   }
@@ -376,8 +369,7 @@ TEST(test_amr_named_field, Runs) {
   chi_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/chi/rhs", "plasma", "chi", Real(1)});
   rt.install_field_plan("chi", chi_plan);
-  rt.register_named_field(
-      "plasma", "chi", kPhiChi, kGxChi, kGyChi, /*gradient_sign=*/1);
+  rt.register_named_field("plasma", "chi", kPhiChi, kGxChi, kGyChi, /*gradient_sign=*/1);
   rt.set_block_named_elliptic_rhs(0, "chi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(2.0 * q), 0, rhs);  // f_chi = 2 * (q * rho)
   });
@@ -389,9 +381,8 @@ TEST(test_amr_named_field, Runs) {
   ASSERT_EQ(rt.provider_potential_levels("chi"), rt.nlev());
   for (int level = 0; level < rt.nlev(); ++level) {
     const Real spacing = S.geom.dx() / Real(1 << level);
-    EXPECT_EQ(max_gradient_error(
-                  rt.provider_potential_level("chi", level), rt.aux(level),
-                  kGxChi, kGyChi, Real(1), spacing, spacing),
+    EXPECT_EQ(max_gradient_error(rt.provider_potential_level("chi", level), rt.aux(level), kGxChi,
+                                 kGyChi, Real(1), spacing, spacing),
               Real(0))
         << "GradientOutput(sign=+1) publishes +grad(phi) on level-local level " << level;
   }
@@ -448,8 +439,7 @@ TEST(test_amr_named_field, Runs) {
       << context_diagnostic;
   EXPECT_EQ(max_abs_diff(rt.phi(), context_phi_before), Real(0));
   for (int level = 0; level < rt.nlev(); ++level)
-    EXPECT_EQ(max_abs_diff(rt.aux(level),
-                           context_aux_before[static_cast<std::size_t>(level)]),
+    EXPECT_EQ(max_abs_diff(rt.aux(level), context_aux_before[static_cast<std::size_t>(level)]),
               Real(0));
   live_state = std::move(accepted_state);
 
@@ -487,8 +477,7 @@ TEST(test_amr_named_field, Runs) {
   fail_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/zeta/rhs", "plasma", "zeta", Real(1)});
   rt.install_field_plan("zeta", fail_plan);
-  rt.register_named_field(
-      "plasma", "zeta", kPhiFail, /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/1);
+  rt.register_named_field("plasma", "zeta", kPhiFail, /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/1);
   rt.set_block_named_elliptic_rhs(0, "zeta", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(q), 0, rhs);
   });
@@ -524,18 +513,17 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
 
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "plasma", blob(n, 0.5),
-        /*has_density=*/true, 1.4, 1, false, false));
+    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
+                                                blob(n, 0.5),
+                                                /*has_density=*/true, 1.4, 1, false, false));
   });
   constexpr int phi_component = kAuxNamedBase;
   constexpr int gx_component = kAuxNamedBase + 1;
   constexpr int gy_component = kAuxNamedBase + 2;
   blocks[0].aux_ncomp = gy_component + 1;
 
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse,
-                     layout.wall);
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   AmrFieldSolveConfig plan;
@@ -552,12 +540,12 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   plan.providers.push_back(
       FieldProviderBinding{"test:plasma/screened/rhs", "plasma", "screened", Real(1)});
   runtime.install_field_plan("screened", plan);
-  runtime.register_named_field("plasma", "screened", phi_component, gx_component,
-                               gy_component, /*gradient_sign=*/-1);
-  runtime.set_block_named_elliptic_rhs(
-      0, "screened", [charge](const MultiFab& state, MultiFab& rhs) {
-        add_scaled_component(state, Real(charge), 0, rhs);
-      });
+  runtime.register_named_field("plasma", "screened", phi_component, gx_component, gy_component,
+                               /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(0, "screened",
+                                       [charge](const MultiFab& state, MultiFab& rhs) {
+                                         add_scaled_component(state, Real(charge), 0, rhs);
+                                       });
 
   const std::string field = "screened";
   ASSERT_TRUE(runtime.solve_named_fields(&field).solved());

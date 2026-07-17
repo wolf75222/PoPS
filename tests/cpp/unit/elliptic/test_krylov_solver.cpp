@@ -97,8 +97,8 @@ static void fill_affine_operator_offset(GeometricMG& op, MultiFab& offset) {
   zero.set_val(Real(0));
   device_fence();
   fill_ghosts(zero, op.geom().domain, op.bc());
-  apply_laplacian(zero, op.geom(), offset, op.op_coef(), op.op_eps(), op.op_kappa(),
-                  op.op_eps_y(), op.op_a_xy(), op.op_a_yx());
+  apply_laplacian(zero, op.geom(), offset, op.op_coef(), op.op_eps(), op.op_kappa(), op.op_eps_y(),
+                  op.op_a_xy(), op.op_a_yx());
 }
 
 struct AffineForcingReport {
@@ -207,7 +207,7 @@ static TensorSolveCaseReport solve_case(int n, double c, bool non_sym) {
       (rn < 1e-6 * r0) ? "CONVERGE" : (rn < r0 ? "stagne (incomplet)" : "DIVERGE/STAGNE");
 
   return TensorSolveCaseReport{kr.iters, kr.solved(), static_cast<double>(kr.rel_residual), r0, rn,
-                               cyc, st};
+                               cyc,      st};
 }
 
 // (A) A = I : ecart MAX phi_krylov vs phi_mg (Poisson canonique), reduit sur tous les rangs.
@@ -369,8 +369,7 @@ TEST(test_krylov_solver, zero_forcing_requires_exact_zero_without_absolute_toler
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
 
   GeometricMG op(geometry, boxes, bc);
-  op.set_cross_terms([](Real, Real) { return Real(0); },
-                     [](Real, Real) { return Real(0); });
+  op.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
   GeometricMG precond(geometry, boxes, bc);
   TensorKrylovSolver solver(op, precond);
   solver.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
@@ -380,14 +379,13 @@ TEST(test_krylov_solver, zero_forcing_requires_exact_zero_without_absolute_toler
   ASSERT_LT(initial_residual, Real(1));
 
   // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
-  const SolveReport exact_only =
-      solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
+  const SolveReport exact_only = solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
   EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
 
   solver.phi().set_val(Real(1e-6));
   const Real reset_residual = solver.residual();
-  const SolveReport absolute = solver.solve(
-      Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
+  const SolveReport absolute =
+      solver.solve(Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
   EXPECT_TRUE(absolute.solved());
   EXPECT_EQ(absolute.iters, 0);
   EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));

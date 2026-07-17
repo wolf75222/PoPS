@@ -13,7 +13,6 @@ import tempfile
 import time
 from typing import Any
 
-from .toolchain import _pops_module  # noqa: F401 -- used by _native_mpi_flags
 
 
 # Optimization flags shared by generated libraries on the sole production path.
@@ -230,27 +229,3 @@ def _record_artifact_identity(so_path: Any, spec_identity: Any) -> None:
 
     with _process_so_identity_lock:
         _process_so_identity[os.path.abspath(os.fspath(so_path))] = str(spec_identity)
-
-
-def _native_mpi_flags() -> list:
-    """Compile flags so the production DSL loader uses comm.hpp's REAL MPI seam (ADC-319).
-
-    The loader inlines the runtime templates (System / AmrSystem coupler), which call pops::n_ranks() /
-    my_rank() from comm.hpp to lay out the distributed grid (DistributionMapping over n_ranks()).
-    Compiled WITHOUT POPS_HAS_MPI while _pops is built WITH MPI, comm.hpp falls back to its SERIAL stubs
-    (n_ranks()=1, my_rank()=0): any distributed layout built INSIDE the loader then collapses to a
-    single owner on EVERY rank -- e.g. AmrSystem(distribute_coarse=True) replicates the coarse
-    transport on all ranks (no MPI strong-scaling, ADC-319). We compile WITH -DPOPS_HAS_MPI + the SAME
-    MPI include dir as _pops (baked as __mpi_include__) and leave the MPI symbols UNDEFINED, resolved at
-    load time against the libmpi already loaded by _pops / mpi4py (RTLD_GLOBAL) -- no 2nd libmpi linked,
-    exactly like the Kokkos runtime. Empty (no flag) when _pops is a serial build (__has_mpi__ False),
-    so the serial loader path stays bit-identical."""
-    mod = _pops_module()
-    if mod is None or not getattr(mod, "__has_mpi__", False):
-        return []
-    flags = ["-DPOPS_HAS_MPI"]
-    inc = getattr(mod, "__mpi_include__", "") or ""
-    for d in inc.split("|"):  # CMake bakes the include dirs joined by '|' (paths may contain ';')
-        if d:
-            flags += ["-I", d]
-    return flags

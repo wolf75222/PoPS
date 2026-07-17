@@ -98,7 +98,8 @@ TEST(test_amr_system_contract, Runs) {
     EXPECT_NO_THROW({
       AmrSystem s(cfg);
       s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", method, 1);
-    }) << "add_block accepte le schema temporel cable '" << method << "'";
+    }) << "add_block accepte le schema temporel cable '"
+       << method << "'";
   }
   EXPECT_THROW(
       {

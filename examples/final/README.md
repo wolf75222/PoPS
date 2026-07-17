@@ -49,11 +49,13 @@ These are requirements of the final public protocols, not invitations to use pri
    `BindArray()` instead declares a complete conservative value supplied exactly once through
    `pops.bind(initial_values={block[U]: array})` and prolonged by the resolved AMR transfer.
 4. `ConsumerGraph.from_consumers` lowers direct `ScientificOutput`, `Checkpoint`, and diagnostic
-   descriptors to the exact layout-qualified runtime graph. Parallel I/O is derived from the format
-   (`HDF5(parallel=True)`), so no second switch can disagree with it. `case.consumers(graph)` is the
-   only Case attachment. The shipped final provider is serial, so the normative scripts use
-   `HDF5(parallel=False)`; a collective descriptor requires a proved non-serial `ExecutionContext`
-   and is otherwise refused during planning.
+   descriptors to the exact layout-qualified runtime graph. The format owns one typed
+   `ParallelMode`: `SERIAL`, `ROOT`, `COLLECTIVE`, or `PER_RANK`; no boolean or runtime inference can
+   select another route. `case.consumers(graph)` is the only Case attachment. The normative scripts
+   use `HDF5(mode=ParallelMode.SERIAL)` with the proved serial context. Distributed runs must choose
+   `ROOT` (collect then rank-0 writer), `COLLECTIVE` (exact local hyperslabs), or `PER_RANK` (local
+   pieces and rank-qualified targets); incompatible providers/contexts are refused during
+   planning/install.
 5. Named component handles select multi-component boundary, initial-data, AMR and
    diagnostic selection. A symbolic component expression cannot be used as a dictionary key because
    `Expr` is intentionally non-hashable; this scalar target safely addresses the whole

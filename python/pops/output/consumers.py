@@ -44,8 +44,8 @@ def _diagnostic(value: Any, *, index: int) -> None:
 class ScientificOutput(Descriptor):
     """One direct writer consumer: exact format, schedule, quantities and target.
 
-    Parallel mode is derived from the selected format requirements. There is no second
-    ``require_parallel`` switch that can disagree with ``HDF5(parallel=True)``.
+    Parallel mode is owned by the selected typed format. There is no second boolean switch or
+    runtime inference that can disagree with ``HDF5(mode=ParallelMode.COLLECTIVE)``.
     """
 
     category = "scientific_output"
@@ -108,6 +108,7 @@ class ScientificOutput(Descriptor):
 
         mode = {
             "serial": ParallelMode.SERIAL,
+            "root": ParallelMode.ROOT,
             "collective": ParallelMode.COLLECTIVE,
             "per_rank": ParallelMode.PER_RANK,
         }[self._format_data["parallel_mode"]]

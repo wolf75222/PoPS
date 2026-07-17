@@ -8,7 +8,7 @@ unregistered math object (a board ``local_linear_operator``) still raises when c
 
 Pure Python (no compilation); skips cleanly if pops is not importable. Never fakes the engine.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops._ir.expr import Const, Var
@@ -19,8 +19,7 @@ try:
     from pops.problem import Case
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_families (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_families (pops unavailable: %s)' % exc)
 
 
 def build_model():

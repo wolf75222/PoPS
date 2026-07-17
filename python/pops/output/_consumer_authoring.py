@@ -15,6 +15,7 @@ from ._consumer_contracts import (
     ConsumerKind,
     ConsumerManifest,
     ConsumerQuantity,
+    DiagnosticQuantity,
     FailRun,
     ParallelMode,
     _FAILURE_ACTIONS,
@@ -97,6 +98,7 @@ class ConsumerAuthoringNode:
             _references(value, where=where)
             _protocol(value, "resolve_references", where=where)
             _protocol(value, "consumer_data", where=where)
+            _protocol(value, "diagnostic_execution", where=where)
         object.__setattr__(self, "diagnostics", rows)
         if self.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             from pops.output.provider import consumer_format_data
@@ -169,6 +171,55 @@ class ConsumerAuthoringNode:
         raise TypeError(
             "consumer quantity %s has no materialized layout subject" % reference.qualified_id)
 
+    @staticmethod
+    def _diagnostic_state(
+        diagnostic: Any,
+        references: tuple[Handle, ...],
+        layout_plan: Any,
+        *,
+        where: str,
+    ) -> Handle:
+        """Resolve one diagnostic to the sole exact state it reduces."""
+        declared = _references(diagnostic, where=where)
+        blocks = tuple(reference for reference in declared if reference.kind == "block")
+        states = tuple(reference for reference in declared if reference.kind == "state")
+        if any(reference.kind not in {"block", "state"} for reference in declared):
+            raise TypeError("%s may reference only one block or one state" % where)
+        assigned_states = tuple(
+            assignment.subject
+            for assignment in layout_plan.assignments
+            if assignment.subject_kind == "state"
+        )
+        if states:
+            candidates = states
+        elif blocks:
+            if len(blocks) != 1:
+                raise ValueError("%s must select exactly one block" % where)
+            candidates = tuple(
+                state for state in assigned_states if state.block_ref == blocks[0])
+        else:
+            referenced_states = tuple(
+                reference for reference in references if reference.kind == "state")
+            referenced_blocks = {
+                reference.block_ref for reference in referenced_states
+                if reference.block_ref is not None
+            }
+            if len(referenced_blocks) == 1:
+                block = next(iter(referenced_blocks))
+                candidates = tuple(
+                    state for state in assigned_states if state.block_ref == block)
+            else:
+                candidates = assigned_states
+        unique = {state.canonical_identity()["qualified_id"]: state for state in candidates}
+        if len(unique) != 1:
+            raise ValueError(
+                "%s does not resolve to exactly one conservative state; "
+                "qualify the diagnostic with block=<BlockHandle>" % where)
+        state = next(iter(unique.values()))
+        if state.kind != "state" or not state.is_resolved:
+            raise TypeError("%s resolved to a non-canonical state" % where)
+        return state
+
     def resolve(self, resolver: Any, layout_plan: Any, *, owner: Any) -> ConsumerManifest:
         case_owner = OwnerPath.coerce(owner)
         references = tuple(resolver(reference) for reference in self.references)
@@ -189,6 +240,10 @@ class ConsumerAuthoringNode:
                 "layout": layout.canonical_identity(),
                 "levels": list(levels),
             })
+        resolved_diagnostics = tuple(
+            _protocol(value, "resolve_references", where="consumer diagnostic")(
+                resolver)
+            for value in self.diagnostics)
         seed = self.canonical_data(resolver)
         seed["resolved_layouts"] = layout_rows
         digest = make_identity("consumer-authoring-node", seed).hexdigest[:16]
@@ -198,6 +253,41 @@ class ConsumerAuthoringNode:
             kind="consumer",
             owner=case_owner.child(OwnerKind.CONSUMER, "graph"),
         )
+        diagnostic_quantities = []
+        diagnostic_owner = handle.owner_path.child(
+            OwnerKind.DESCRIPTOR, handle.local_id,
+        ).child(OwnerKind.DESCRIPTOR, "diagnostics")
+        for index, diagnostic in enumerate(resolved_diagnostics):
+            where = "consumer diagnostic %d" % index
+            state = self._diagnostic_state(
+                diagnostic, references, layout_plan, where=where)
+            layout = layout_plan.layout_for(state)
+            normalized = layout_plan.normalized(layout)
+            levels = self.levels.select_levels(normalized)
+            execution = _protocol(
+                diagnostic, "diagnostic_execution", where=where)()
+            diagnostic_seed = {
+                "descriptor": _protocol(
+                    diagnostic, "consumer_data", where=where)(),
+                "state": state.canonical_identity(),
+                "layout": layout.canonical_identity(),
+                "levels": list(levels),
+                "execution": execution,
+            }
+            diagnostic_digest = make_identity(
+                "consumer-diagnostic-authoring", diagnostic_seed).hexdigest[:16]
+            diagnostic_quantities.append(DiagnosticQuantity(
+                Handle(
+                    "diagnostic-%s" % diagnostic_digest,
+                    kind="diagnostic",
+                    owner=diagnostic_owner,
+                ),
+                state,
+                "declaration:%s" % state.qualified_id,
+                layout.qualified_id,
+                levels,
+                execution,
+            ))
         return ConsumerManifest(
             handle=handle,
             kind=self.kind,
@@ -208,10 +298,8 @@ class ConsumerAuthoringNode:
             parallel_mode=self.parallel_mode,
             failure_action=self.failure_action,
             operation=self.operation,
-            diagnostics=tuple(
-                _protocol(value, "resolve_references", where="consumer diagnostic")(
-                    resolver)
-                for value in self.diagnostics),
+            diagnostics=resolved_diagnostics,
+            diagnostic_quantities=tuple(diagnostic_quantities),
         )
 
     def inspect(self) -> dict[str, Any]:

@@ -1,11 +1,11 @@
-"""Typed restart report for the ADC-626 history-persistence replay.
+"""Typed restart report for exact history-persistence restore and replay.
 
 ``System.restart`` recomputes the non-stored ring slots of a selective-persistence checkpoint by
 deterministic replay. This value object (a sibling of
 :class:`pops.runtime.program_report.ProgramRuntimeReport`, metadata-only, JSON-ready) states, per
-history, how many slots were STORED verbatim vs RECOMPUTED and how many replay steps that cost --
-so no heavy replay is silent (the ADC-591 metadata-only inspection house rule). It is attached to the
-System after a restart (``System.last_restart_report()``).
+history, the requested and effective storage mode, how many slots were stored verbatim versus
+recomputed, and how many replay steps that cost. Safety promotion and heavy replay are both visible.
+It is attached to the System after a restart (``System.last_restart_report()``).
 """
 import json
 
@@ -17,19 +17,33 @@ class HistoryReplayReport:
     ``System.restart`` from the counts ``rebuild_history_slots`` returns; a Dense (or v1) restart
     reports every slot stored and zero recomputed."""
 
-    schema_version = 1
+    schema_version = 2
     report_type = "history_replay"
 
     def __init__(self, histories=None):
-        #: list of {name, depth, policy_kind, stored_slots, recomputed_slots, replay_steps}.
+        #: Per-ring requested/effective storage and replay accounting.
         self.histories = [dict(row) for row in (histories or [])]
 
-    def add(self, *, name, depth, policy_kind, stored_slots, recomputed_slots, replay_steps):
+    def add(
+        self,
+        *,
+        name,
+        depth,
+        policy_kind,
+        storage_mode="policy",
+        requested_slots=None,
+        stored_slots,
+        recomputed_slots,
+        replay_steps,
+    ):
         """Record one history's accounting (chains)."""
+        requested_slots = stored_slots if requested_slots is None else requested_slots
         self.histories.append({
             "name": str(name),
             "depth": int(depth),
             "policy_kind": str(policy_kind),
+            "storage_mode": str(storage_mode),
+            "requested_slots": int(requested_slots),
             "stored_slots": int(stored_slots),
             "recomputed_slots": int(recomputed_slots),
             "replay_steps": int(replay_steps),
@@ -77,8 +91,9 @@ class HistoryReplayReport:
         lines.append("  total recomputed: %d slot(s)" % self.total_recomputed)
         lines.append("  total replay    : %d step(s)" % self.total_replay_steps)
         for row in self.histories:
-            lines.append("  - %s: %s stored=%d recomputed=%d replay=%d"
-                         % (row["name"], row["policy_kind"], row["stored_slots"],
+            lines.append("  - %s: %s mode=%s requested=%d stored=%d recomputed=%d replay=%d"
+                         % (row["name"], row["policy_kind"], row["storage_mode"],
+                            row["requested_slots"], row["stored_slots"],
                             row["recomputed_slots"], row["replay_steps"]))
         return "\n".join(lines)
 

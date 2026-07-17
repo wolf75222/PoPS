@@ -1,7 +1,7 @@
 """Final operator-first time factories compose exact typed handles into ordinary Programs."""
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import inspect
-import sys
 
 import pytest
 
@@ -11,8 +11,7 @@ try:
     import pops.lib.time as libtime
     from typed_program_support import fresh_field_refs, state_refs
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_macros (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_macros (pops unavailable: %s)' % exc)
 
 _PHYSICS_TOKENS = ("electric", "lorentz", "poisson", "rho", "grad_x", "grad_y", "B_z")
 
@@ -192,7 +191,7 @@ def test_field_factories_consume_outcomes_with_default_and_custom_actions():
 
 
 def test_field_factories_reject_invalid_solve_actions():
-    for name, build in _field_factory_builders(_model("actions-invalid")).items():
+    for _, build in _field_factory_builders(_model("actions-invalid")).items():
         with pytest.raises(TypeError, match="solve_action"):
             build("reject")
 

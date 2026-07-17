@@ -6,8 +6,8 @@
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/layout/refinement.hpp>                 // coarsen_index
-#include <pops/numerics/spatial_operator.hpp>       // compute_face_fluxes, xface_box, yface_box
+#include <pops/mesh/layout/refinement.hpp>     // coarsen_index
+#include <pops/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source (IMEX implicit step)
 
 #include <stdexcept>

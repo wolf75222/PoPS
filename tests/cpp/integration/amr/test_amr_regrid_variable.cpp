@@ -13,9 +13,9 @@
 //       seed central -> les deux layouts DIFFERENT, preuve que la composante lue a change.
 #include <gtest/gtest.h>
 
-#include <pops/physics/fluids/euler.hpp>          // Euler::conservative_vars (rho, rho_u, rho_v, E)
-#include <pops/core/state/variables.hpp>         // VariableSet, VariableRole, VariableKind
-#include <pops/mesh/layout/patch_box.hpp>         // PatchBox (signature index-espace des patchs fins)
+#include <pops/physics/fluids/euler.hpp>   // Euler::conservative_vars (rho, rho_u, rho_v, E)
+#include <pops/core/state/variables.hpp>   // VariableSet, VariableRole, VariableKind
+#include <pops/mesh/layout/patch_box.hpp>  // PatchBox (signature index-espace des patchs fins)
 #include <pops/runtime/amr_system.hpp>     // AmrSystem, AmrSystemConfig
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::resolve_selected_component (ADC-296)
 #include <pops/runtime/config/model_spec.hpp>
@@ -133,17 +133,14 @@ TEST(test_amr_regrid_variable, Runs) {
         << "resolver_role_density_is_comp0";
     EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "", "momentum_x"), 1)
         << "resolver_role_momentum_x_is_comp1";
-    EXPECT_THROW(
-        detail::resolve_selected_component("set_refinement", "gas", cv, "bogus", ""),
-        std::runtime_error)
+    EXPECT_THROW(detail::resolve_selected_component("set_refinement", "gas", cv, "bogus", ""),
+                 std::runtime_error)
         << "resolver_unknown_name_throws";
-    EXPECT_THROW(
-        detail::resolve_selected_component("set_refinement", "gas", cv, "", "temperature"),
-        std::runtime_error)
+    EXPECT_THROW(detail::resolve_selected_component("set_refinement", "gas", cv, "", "temperature"),
+                 std::runtime_error)
         << "resolver_absent_role_throws";
-    EXPECT_THROW(
-        detail::resolve_selected_component("set_refinement", "gas", cv, "E", "energy"),
-        std::runtime_error)
+    EXPECT_THROW(detail::resolve_selected_component("set_refinement", "gas", cv, "E", "energy"),
+                 std::runtime_error)
         << "resolver_name_and_role_both_set_throws";
 
     // CAS D'ACCEPTATION CLE : densite NON situee a la composante 0. Le selecteur la retrouve par role
@@ -176,7 +173,8 @@ TEST(test_amr_regrid_variable, Runs) {
 
   // Le defaut (densite uniforme < seuil) ne tague rien -> regrid no-op -> seed central conserve
   // (coin fin = n/2 = 32). Refiner sur l'energie deplace le patch vers la bosse bas-gauche (coin << 32).
-  EXPECT_LT(min_fine_corner(byrole), min_fine_corner(def)) << "role_energy_patch_reaches_lower_left";
+  EXPECT_LT(min_fine_corner(byrole), min_fine_corner(def))
+      << "role_energy_patch_reaches_lower_left";
   EXPECT_LT(min_fine_corner(byname), min_fine_corner(def)) << "name_E_patch_reaches_lower_left";
   EXPECT_FALSE(same_boxes(byrole, def)) << "role_energy_layout_differs_from_default";
   EXPECT_FALSE(same_boxes(byname, def)) << "name_E_layout_differs_from_default";

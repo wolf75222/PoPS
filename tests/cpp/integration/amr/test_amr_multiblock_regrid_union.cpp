@@ -32,7 +32,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
@@ -231,16 +231,15 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
   SCOPED_TRACE("three-level bootstrap/regrid/rollback");
   const int N = 32;
-  AmrRuntime rt =
-      make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
+  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.levels(0).size(), 3u);
   EXPECT_EQ(rt.patch_boxes().size(), 2u);
   EXPECT_EQ(rt.n_patches(), 2) << "all fine levels contribute to the patch count";
-  EXPECT_TRUE(same_box_list(rt.levels(0)[1].U.box_array().boxes(),
-                            rt.levels(1)[1].U.box_array().boxes()));
-  EXPECT_TRUE(same_box_list(rt.levels(0)[2].U.box_array().boxes(),
-                            rt.levels(1)[2].U.box_array().boxes()));
+  EXPECT_TRUE(
+      same_box_list(rt.levels(0)[1].U.box_array().boxes(), rt.levels(1)[1].U.box_array().boxes()));
+  EXPECT_TRUE(
+      same_box_list(rt.levels(0)[2].U.box_array().boxes(), rt.levels(1)[2].U.box_array().boxes()));
   {
     SCOPED_TRACE("three-level initial parent/child injection");
     const MultiFab& parent = rt.levels(0)[1].U;
@@ -360,7 +359,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
         << "a_box_hash_rebuilds_equals_copy_misses";
     EXPECT_TRUE(prof.counter("copy_cache_hits") >= 0 && prof.counter("copy_cache_misses") >= 0)
         << "a_copy_cache_counters_nonnegative";
-    EXPECT_TRUE(prof.counter("tag_density") >= 0 && prof.counter("tag_density") <= 1000 * rt.regrid_count())
+    EXPECT_TRUE(prof.counter("tag_density") >= 0 &&
+                prof.counter("tag_density") <= 1000 * rt.regrid_count())
         << "a_tag_density_in_permille_range";
     rt.set_profiler(nullptr);  // detach before rt is destroyed (prof is a local)
     const std::vector<Box2D> fb_now = fine_boxes(rt);
@@ -499,8 +499,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       if (!all_finite(sim.density("a")) || !all_finite(sim.density("b")))
         throw std::runtime_error("etat non fini");
     });
-    EXPECT_TRUE(unlocked_no_throw)
-        << "T7_facade_multiblock_regrid_every_positive_no_longer_throws";
+    EXPECT_TRUE(unlocked_no_throw) << "T7_facade_multiblock_regrid_every_positive_no_longer_throws";
 
     // (T7-b) regrid_every == 0 reste FIGE et BIT-IDENTIQUE a la facade.
     auto run_facade_frozen = [&]() {
@@ -522,13 +521,11 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     };
     const std::vector<double> fa = run_facade_frozen();
     const std::vector<double> fb = run_facade_frozen();
-    EXPECT_EQ(dmax_field(fa, fb), 0.0)
-        << "T7_facade_frozen_regrid_every_zero_bit_identical_dmax0";
+    EXPECT_EQ(dmax_field(fa, fb), 0.0) << "T7_facade_frozen_regrid_every_zero_bit_identical_dmax0";
   }
 }
 
-TEST(test_amr_multiblock_regrid_union,
-     GradientTaggingRefusesUnproducedNonPeriodicGhosts) {
+TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriodicGhosts) {
   constexpr int n = 16;
   AmrBuildParams params;
   params.mesh.n = n;
@@ -540,32 +537,33 @@ TEST(test_amr_multiblock_regrid_union,
   layout.base_per = Periodicity{false, false};
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "a", flat(n, 1.0),
-        /*has_density=*/true, 1.4, 1, false, false, 1));
+    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "a",
+                                                flat(n, 1.0),
+                                                /*has_density=*/true, 1.4, 1, false, false, 1));
   });
   // This is the precise invalid state under test: a non-periodic sampled state with no prepared
   // authority capable of producing its physical ghosts.
   blocks.front().boundary_plan.reset();
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse,
-                     layout.wall);
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
 
   using Program = runtime::amr::PreparedTaggingProgram;
-  const std::vector<Program::Stencil> stencils{Program::Stencil{
-      "test::centered-gradient",
-      POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-      "l2", "inverse_cell_size", "ghost_extension", 2,
-      {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
-       Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
+  const std::vector<Program::Stencil> stencils{
+      Program::Stencil{"test::centered-gradient",
+                       POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
+                       "l2",
+                       "inverse_cell_size",
+                       "ghost_extension",
+                       2,
+                       {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
+                        Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
   try {
-    runtime.set_tagging_program(
-        stencils,
-        {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.1, 0}},
-        {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0,
-        "test::clock", "test::gradient-tagger");
+    runtime.set_tagging_program(stencils,
+                                {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.1, 0}},
+                                {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0,
+                                "test::clock", "test::gradient-tagger");
     FAIL() << "non-periodic gradient tagging accepted unproduced physical ghosts";
   } catch (const std::runtime_error& error) {
     EXPECT_NE(std::string(error.what()).find("complete prepared ghost-production authority"),

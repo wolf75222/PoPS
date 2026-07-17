@@ -68,42 +68,42 @@ static bool tokens_mirror(const RouteInfo (&routes)[NR], const Tag (&tags)[NT]) 
 }  // namespace
 
 TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
-  EXPECT_TRUE(table_round_trip<RiemannRouteId>(
-      kRiemannRoutes, [](const std::string& t) { return parse_riemann_route(t); }))
-      << "riemann round-trip";
-  EXPECT_TRUE(table_round_trip<LimiterRouteId>(
-      kLimiterRoutes, [](const std::string& t) { return parse_limiter_route(t); }))
-      << "limiter round-trip";
-  EXPECT_TRUE(table_round_trip<ReconRouteId>(
-      kReconRoutes, [](const std::string& t) { return parse_recon_route(t); }))
-      << "recon round-trip";
-  EXPECT_TRUE(table_round_trip<TimeRouteId>(
-      kTimeRoutes, [](const std::string& t) { return parse_time_route(t); }))
-      << "time round-trip";
-  EXPECT_TRUE(table_round_trip<FieldSolverRouteId>(
-      kFieldSolverRoutes, [](const std::string& t) { return parse_field_solver_route(t); }))
-      << "field_solver round-trip";
-  EXPECT_TRUE(table_round_trip<PoissonBcRouteId>(
-      kPoissonBcRoutes, [](const std::string& t) { return parse_poisson_bc_route(t); }))
-      << "poisson_bc round-trip";
-  EXPECT_TRUE(table_round_trip<LayoutRouteId>(
-      kLayoutRoutes, [](const std::string& t) { return parse_layout_route(t); }))
-      << "layout round-trip";
-  EXPECT_TRUE(table_round_trip<TransportRouteId>(
-      kTransportRoutes, [](const std::string& t) { return parse_transport_route(t); }))
-      << "transport round-trip";
-  EXPECT_TRUE(table_round_trip<SourceRouteId>(
-      kSourceRoutes, [](const std::string& t) { return parse_source_route(t); }))
-      << "source round-trip";
-  EXPECT_TRUE(table_round_trip<EllipticRouteId>(
-      kEllipticRoutes, [](const std::string& t) { return parse_elliptic_route(t); }))
-      << "elliptic round-trip";
-  EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(
-      kPoissonRhsRoutes, [](const std::string& t) { return parse_poisson_rhs_route(t); }))
-      << "poisson_rhs round-trip";
-  EXPECT_TRUE(table_round_trip<WallRouteId>(
-      kWallRoutes, [](const std::string& t) { return parse_wall_route(t); }))
-      << "wall round-trip";
+  EXPECT_TRUE(table_round_trip<RiemannRouteId>(kRiemannRoutes, [](const std::string& t) {
+    return parse_riemann_route(t);
+  })) << "riemann round-trip";
+  EXPECT_TRUE(table_round_trip<LimiterRouteId>(kLimiterRoutes, [](const std::string& t) {
+    return parse_limiter_route(t);
+  })) << "limiter round-trip";
+  EXPECT_TRUE(table_round_trip<ReconRouteId>(kReconRoutes, [](const std::string& t) {
+    return parse_recon_route(t);
+  })) << "recon round-trip";
+  EXPECT_TRUE(table_round_trip<TimeRouteId>(kTimeRoutes, [](const std::string& t) {
+    return parse_time_route(t);
+  })) << "time round-trip";
+  EXPECT_TRUE(table_round_trip<FieldSolverRouteId>(kFieldSolverRoutes, [](const std::string& t) {
+    return parse_field_solver_route(t);
+  })) << "field_solver round-trip";
+  EXPECT_TRUE(table_round_trip<PoissonBcRouteId>(kPoissonBcRoutes, [](const std::string& t) {
+    return parse_poisson_bc_route(t);
+  })) << "poisson_bc round-trip";
+  EXPECT_TRUE(table_round_trip<LayoutRouteId>(kLayoutRoutes, [](const std::string& t) {
+    return parse_layout_route(t);
+  })) << "layout round-trip";
+  EXPECT_TRUE(table_round_trip<TransportRouteId>(kTransportRoutes, [](const std::string& t) {
+    return parse_transport_route(t);
+  })) << "transport round-trip";
+  EXPECT_TRUE(table_round_trip<SourceRouteId>(kSourceRoutes, [](const std::string& t) {
+    return parse_source_route(t);
+  })) << "source round-trip";
+  EXPECT_TRUE(table_round_trip<EllipticRouteId>(kEllipticRoutes, [](const std::string& t) {
+    return parse_elliptic_route(t);
+  })) << "elliptic round-trip";
+  EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(kPoissonRhsRoutes, [](const std::string& t) {
+    return parse_poisson_rhs_route(t);
+  })) << "poisson_rhs round-trip";
+  EXPECT_TRUE(table_round_trip<WallRouteId>(kWallRoutes, [](const std::string& t) {
+    return parse_wall_route(t);
+  })) << "wall round-trip";
 }
 
 TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
@@ -165,8 +165,7 @@ TEST(RouteIds, HistoricalAliasesAreRefusedAndCanonicalTokensRemainStable) {
 }
 
 TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
-  const std::string unknown =
-      throw_message([] { (void)route_info(static_cast<TimeRouteId>(99)); });
+  const std::string unknown = throw_message([] { (void)route_info(static_cast<TimeRouteId>(99)); });
   EXPECT_TRUE(contains(unknown, "time") && contains(unknown, "99"));
   const std::string reserved =
       throw_message([] { (void)route_info(static_cast<TimeRouteId>(kReservedRouteWireId255)); });
@@ -179,8 +178,10 @@ TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
   EXPECT_TRUE(signature.size() == 67) << "v2: plus complete sha256 catalog digest";
   EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
               std::string::npos);
-  EXPECT_TRUE(throw_message([&] { verify_route_manifest("v2:0000000000000000000000000000000000000000000000000000000000000000", "test"); })
-                  .find("mismatch") != std::string::npos);
+  EXPECT_TRUE(throw_message([&] {
+                verify_route_manifest(
+                    "v2:0000000000000000000000000000000000000000000000000000000000000000", "test");
+              }).find("mismatch") != std::string::npos);
   EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
 }
 
@@ -222,11 +223,10 @@ TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {
 
 TEST(RouteIds, EveryRouteFamilyEnumeratorNamesItself) {
   const RouteFamily fams[] = {
-      RouteFamily::kLimiter,    RouteFamily::kRiemann,   RouteFamily::kRecon,
-      RouteFamily::kTime,       RouteFamily::kFieldSolver,
-      RouteFamily::kPoissonBc,  RouteFamily::kLayout,    RouteFamily::kTransport,
-      RouteFamily::kSource,     RouteFamily::kElliptic,
-      RouteFamily::kPoissonRhs, RouteFamily::kWall,
+      RouteFamily::kLimiter,  RouteFamily::kRiemann,     RouteFamily::kRecon,
+      RouteFamily::kTime,     RouteFamily::kFieldSolver, RouteFamily::kPoissonBc,
+      RouteFamily::kLayout,   RouteFamily::kTransport,   RouteFamily::kSource,
+      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,  RouteFamily::kWall,
   };
   bool ok = true;
   for (RouteFamily f : fams)

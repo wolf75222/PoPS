@@ -27,10 +27,10 @@
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
-#include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
-#include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache, ADC-458)
+#include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
+#include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
-#include <pops/runtime/system.hpp>                 // System (the runtime this facade forwards to)
+#include <pops/runtime/system.hpp>                  // System (the runtime this facade forwards to)
 
 /// @file
 /// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
@@ -93,37 +93,45 @@ class ProgramContext {
     clock_schedule_.configure_primary_clock(clock);
     primary_clock_ = clock;
   }
-  void declare_clock_relation(
-      const std::string& parent, const std::string& child, int count) const {
+  void declare_clock_relation(const std::string& parent, const std::string& child,
+                              int count) const {
     clock_schedule_.declare_relation(parent, child, count);
   }
   bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
                               const std::string& stage_identity, int level) const {
-    return clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, -1, macro_step()).has_value();
+    return clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step())
+        .has_value();
   }
-  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind,
-                       const std::string& clock, const std::string& stage_identity,
-                       int level) const {
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
+                       const std::string& stage_identity, int level) const {
     if (node_id < 0 || every_n <= 0)
       throw std::runtime_error("Program schedule requires a valid node and positive period");
-    const auto coordinate = clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, -1, macro_step());
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
     return coordinate && coordinate->value % every_n == 0;
   }
   bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
                          const std::string& stage_identity, int level) const {
-    const auto coordinate = clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, -1, macro_step());
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
     return coordinate && coordinate->value == 0;
   }
 
-  ClockScheduleState::SubcycleScope subcycle_scope(
-      const std::string& parent, const std::string& child, int count) const {
+  /// Record exactly one decision for a scheduled Program node. The due expression is evaluated by
+  /// the typed domain seam above; this wrapper authenticates the node id and forwards the result to
+  /// the shared Profiler, which distinguishes real cache-backed policies from skip/zero/error.
+  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
+    if (node_id < 0)
+      throw std::runtime_error("Program schedule decision requires a valid node");
+    return sys_->profiler().schedule_decision(due, cache_backed);
+  }
+
+  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
+                                                   const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
   }
-  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
-                                   int step, Real offset) const {
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
+                                   Real offset) const {
     clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
@@ -140,16 +148,15 @@ class ProgramContext {
           "ProgramContext::sys_block: no explicit program-to-system block map is installed; "
           "positional block identity is not supported");
     if (b < 0 || b >= static_cast<int>(m.size()))
-      throw block_map_error_(
-          "ProgramContext::sys_block: program block index " + std::to_string(b) +
-          " is outside the explicit block map [0, " + std::to_string(m.size()) + ")");
+      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
+                             " is outside the explicit block map [0, " + std::to_string(m.size()) +
+                             ")");
     const int mapped = m[static_cast<std::size_t>(b)];
     const int count = sys_->n_blocks();
     if (mapped < 0 || mapped >= count)
-      throw block_map_error_(
-          "ProgramContext::sys_block: program block index " + std::to_string(b) +
-          " maps to invalid system block index " + std::to_string(mapped) +
-          " for a System with " + std::to_string(count) + " blocks");
+      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
+                             " maps to invalid system block index " + std::to_string(mapped) +
+                             " for a System with " + std::to_string(count) + " blocks");
     return mapped;
   }
 
@@ -168,12 +175,11 @@ class ProgramContext {
     count_kernel();
     return sys_->solve_fields_from_state(sys_block(b), u_stage);
   }
-  SolveReport solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                         const std::string& provider_slot, int b,
+                                         MultiFab& u_stage) const {
     count_kernel();
-    return sys_->solve_fields_from_state_at(
-        point, provider_slot, sys_block(b), u_stage);
+    return sys_->solve_fields_from_state_at(point, provider_slot, sys_block(b), u_stage);
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -205,10 +211,10 @@ class ProgramContext {
           "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
           "installed; positional block identity is not supported");
     if (u_stages.size() < m.size())
-      throw block_map_error_(
-          "ProgramContext::solve_fields_from_blocks: received " +
-          std::to_string(u_stages.size()) + " Program stage slots for an explicit block map with " +
-          std::to_string(m.size()) + " entries");
+      throw block_map_error_("ProgramContext::solve_fields_from_blocks: received " +
+                             std::to_string(u_stages.size()) +
+                             " Program stage slots for an explicit block map with " +
+                             std::to_string(m.size()) + " entries");
     std::vector<const MultiFab*> remapped(static_cast<std::size_t>(sys_->n_blocks()), nullptr);
     // Iterate the PROGRAM block indices [0, m.size()) -- NOT u_stages.size(), which is the larger
     // SYSTEM block count. The codegen sizes u_stages to ctx.n_blocks() but only fills Program slots
@@ -255,8 +261,8 @@ class ProgramContext {
         *live[i] = std::move(published[i]);
     };
     try {
-      const SolveReport report = sys_->solve_fields_from_state(
-          field, representative, sys_->block_state(representative));
+      const SolveReport report =
+          sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
       restore();
       return report;
     } catch (...) {
@@ -287,35 +293,31 @@ class ProgramContext {
     count_kernel();
     sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
-  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(
-      int stage_id) const {
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
     return boundary_point_(stage_id);
   }
   bool has_boundary_linearization(int b) const {
     return sys_->block_has_boundary_linearization(sys_block(b));
   }
-  void rhs_core_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, MultiFab& r, bool flux_only) const {
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only) const {
     count_kernel();
     sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
   }
-  void boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, MultiFab& c) const {
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c) const {
     count_kernel();
     sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
   }
-  void boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, const MultiFab& v, MultiFab& j) const {
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
     sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
   }
 
   struct RhsGroupRequest {
-    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value,
-                    int rate_id_value, int flux_only_value)
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
+                    int flux_only_value)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
@@ -540,10 +542,8 @@ class ProgramContext {
     fill_ghosts(in, gc.geom.domain, gc.bc);
     if (sys_->program_is_polar()) {
       if (!polar_unit_rr_) {
-        polar_unit_rr_ = std::make_shared<MultiFab>(
-            in.box_array(), in.dmap(), 1, 1);
-        polar_unit_tt_ = std::make_shared<MultiFab>(
-            in.box_array(), in.dmap(), 1, 1);
+        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
         polar_unit_rr_->set_val(Real(1));
         polar_unit_tt_->set_val(Real(1));
       }
@@ -654,8 +654,7 @@ class ProgramContext {
   /// Publish a complete multi-state commit group only after every target/source pair validates.
   /// The enclosing System step snapshot is the exception-safety boundary: an allocation/copy failure
   /// in this final phase restores the entire accepted group before the exception escapes.
-  void commit_many(
-      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
     std::vector<MultiFab*> targets;
     targets.reserve(commits.size());
     for (const auto& [target, source] : commits) {
@@ -684,13 +683,11 @@ class ProgramContext {
     sys_->register_history(name, lag, ncomp);
   }
   void register_history(const std::string& name, int lag, int ncomp, int owner,
-                        const std::string& state_identity,
-                        const std::string& space_identity,
+                        const std::string& state_identity, const std::string& space_identity,
                         const std::string& clock_identity,
                         const std::string& interpolation_identity) const {
-    sys_->register_history(
-        name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity, space_identity,
-        clock_identity, interpolation_identity);
+    sys_->register_history(name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity,
+                           space_identity, clock_identity, interpolation_identity);
   }
 
   /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
@@ -704,6 +701,13 @@ class ProgramContext {
     sys_->register_history(name, lag);  // idempotent: allocate the ring on first use
     return sys_->read_history(name, lag);
   }
+  /// Owner-qualified mirror used by sources that also contain an AMR entry point.  @p owner is a
+  /// Program block index (never a component index); resolving it here preserves the same topology
+  /// guard as the AMR context before delegating to the System-owned whole-field ring.
+  MultiFab& history(const std::string& name, int lag, int owner) const {
+    (void)sys_block(owner);
+    return history(name, lag);
+  }
 
   /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
   /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
@@ -715,8 +719,13 @@ class ProgramContext {
   MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
     sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
     if (!sys_->history_initialized(name))
-      sys_->set_history_initialized(name, true);  // the zero-filled slots ARE the declared cold start
+      sys_->set_history_initialized(name,
+                                    true);  // the zero-filled slots ARE the declared cold start
     return sys_->read_history(name, lag);
+  }
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
+    (void)sys_block(owner);
+    return history_zero_start(name, lag, ncomp);
   }
 
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
@@ -727,6 +736,10 @@ class ProgramContext {
   void store_history(const std::string& name, const MultiFab& value) const {
     sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
     sys_->store_history(name, value);
+  }
+  void store_history(const std::string& name, const MultiFab& value, int owner) const {
+    (void)sys_block(owner);
+    store_history(name, value);
   }
 
   /// Shift every history ring one macro-step (slot k <- slot k-1). Forwards to
@@ -747,7 +760,9 @@ class ProgramContext {
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
   Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
   /// L1 (absolute-sum) reduction Sum_cells |u(.,.,comp)| over one component -- P.norm1 / Norm(L1).
-  Real abs_sum_component(const MultiFab& u, int comp) const { return pops::reduce_abs_sum(u, comp); }
+  Real abs_sum_component(const MultiFab& u, int comp) const {
+    return pops::reduce_abs_sum(u, comp);
+  }
   Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
   Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
   Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
@@ -855,8 +870,9 @@ class ProgramContext {
   /// installed Program, keyed by the Program node id) so the checkpoint can reach it (Spec 3 section
   /// 30); every ProgramContext copy forwards to that single manager via sys_->program_cache(). The
   /// codegen wraps a held solve_fields in
-  /// ``if (cache_should_update(id, N)) { solve_fields_from_state(...); cache_store_aux(id); }
-  ///  else { cache_restore_aux(id); }``. The runtime cadence/checkpoint is exercised in a compiled
+  /// ``if (schedule_decision(id, schedule_is_due(...), true)) {
+  ///  solve_fields_from_state(...); cache_store_aux(id); } else { cache_restore_aux(id); }``.
+  /// The runtime cadence/checkpoint is exercised in a compiled
   /// .so step loop (validated on ROMEO; not buildable on a host-only Mac).
   /// @{
   /// True if node @p node_id is due to recompute at the current macro step: cold start (never stored),
@@ -938,8 +954,13 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
-    return {primary_clock_, static_cast<std::int64_t>(macro_step()), 0, 0, stage,
-            stage_time_, current_dt_,
+    return {primary_clock_,
+            static_cast<std::int64_t>(macro_step()),
+            0,
+            0,
+            stage,
+            stage_time_,
+            current_dt_,
             static_cast<double>(physical_time()) + stage_time_.value() * current_dt_};
   }
 

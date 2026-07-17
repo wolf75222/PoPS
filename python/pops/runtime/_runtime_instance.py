@@ -5,11 +5,12 @@ import copy
 import json
 import os
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
 from pops.fields import LayoutBinding
-from pops.identity import Identity, make_identity
+from pops.identity import Identity
 from pops.time import TimePoint
 
 from pops.output._consumer_contracts import (
@@ -22,11 +23,11 @@ from pops.output._consumer_contracts import (
 )
 from ._consumer_planning import plan_accepted_side_effects
 from ._consumer_transaction import ConsumerTransaction
+from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
 from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot, _layout_identity
 from ._runtime_executor import install_runtime_executor
 from ._runtime_planning import build_runtime_plans
-from ._runtime_plan_io import thaw_data
 from .run_report import RunReport
 
 
@@ -260,6 +261,7 @@ class RuntimeInstance:
             graph = ConsumerGraph(())
         if type(graph) is not ConsumerGraph:
             raise TypeError("RuntimeInstance requires an exact ConsumerGraph")
+        preflight_consumer_publication(graph, plan.execution_context)
         native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
         if native is None:
             raise TypeError("RuntimeInstance executor cannot be None")
@@ -404,7 +406,14 @@ class RuntimeInstance:
         return int(self._executor.ny())
 
     def n_levels(self) -> int:
-        return int(self._executor.n_levels())
+        provider: Any = getattr(self._executor, "n_levels", None)
+        if callable(provider):
+            return int(cast(Any, provider()))
+        if not any(row.adaptive for row in self._layout_plan.layouts):
+            return 1
+        raise NotImplementedError(
+            "adaptive runtime provider does not expose its native hierarchy level count"
+        )
 
     def patch_boxes(self) -> Any:
         return self._executor.patch_boxes()
@@ -474,8 +483,14 @@ class RuntimeInstance:
                     for component in self._installed_components.values()
                 ],
                 "consumer_graph": self._consumer_graph.to_data(),
+                "restart_authority": (
+                    self._install_plan.artifact.plan.restart_authority.to_data()
+                ),
                 "consumer_cursors": self._consumer_cursors.to_data(),
                 "consumer_reports": [report.to_data() for report in self._consumer_reports],
+                "accepted_diagnostics": [
+                    payload.to_data() for payload in self._publisher.accepted_diagnostics
+                ],
                 "attempt": self._attempt,
                 "output_root": None if self._output_root is None else str(self._output_root),
                 "last_run_identity": _identity_data(self.last_run_identity),
@@ -824,72 +839,173 @@ class RuntimeInstance:
         )
 
     def _checkpoint_payload(self, path: Any) -> str:
-        target = self._executor.checkpoint(str(path))
-        import numpy as np
-        from ._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY, seal_checkpoint_payload
+        from pops.output._checkpoint_collective import (
+            canonical_checkpoint_path,
+            checkpoint_topology,
+            consensus,
+            root_value,
+        )
 
-        with np.load(target, allow_pickle=False) as stored:
-            old_manifest = json.loads(str(stored[MANIFEST_KEY]))
-            payload = {
-                name: np.asarray(stored[name]).copy()
-                for name in stored.files if name not in {MANIFEST_KEY, IDENTITY_KEY}
-            }
-        payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
-        cursors = self._checkpoint_cursor_override or self._consumer_cursors
-        payload["runtime_consumer_cursors"] = np.asarray(json.dumps(
-            cursors.to_data(), sort_keys=True, separators=(",", ":")))
-        seal_checkpoint_payload(self, payload, runtime_kind=old_manifest["runtime_kind"])
-        temporary = str(target) + ".runtime-instance.tmp"
-        with open(temporary, "wb") as stream:
-            np.savez_compressed(stream, **payload)
-        os.replace(temporary, target)
-        return target
+        topology = checkpoint_topology(self)
+        expected = canonical_checkpoint_path(path)
+        target = None
+        capture_error = None
+        try:
+            target = canonical_checkpoint_path(self._executor.checkpoint(str(expected)))
+            if target != expected:
+                raise RuntimeError(
+                    "native checkpoint returned %s for shared staging target %s"
+                    % (target, expected)
+                )
+        except BaseException as error:
+            capture_error = error
+        rows = consensus(
+            topology,
+            "native capture",
+            error=capture_error,
+            value=None if target is None else str(target),
+        )
+        if any(row["value"] != str(expected) for row in rows):
+            raise RuntimeError("native checkpoint ranks returned different staged paths")
+
+        import numpy as np
+        from ._checkpoint_manifest import (
+            IDENTITY_KEY,
+            MANIFEST_KEY,
+            authenticate_checkpoint_payload,
+            seal_checkpoint_payload,
+        )
+
+        def seal_root() -> str:
+            if not expected.is_file():
+                raise RuntimeError("native checkpoint did not create the shared staged file")
+            with np.load(expected, allow_pickle=False) as stored:
+                old_manifest = json.loads(str(stored[MANIFEST_KEY]))
+                runtime_kind = old_manifest.get("runtime_kind")
+                if not isinstance(runtime_kind, str) or not runtime_kind:
+                    raise ValueError("native checkpoint manifest lacks its runtime kind")
+                # Authenticate every native byte before replacing its envelope with the
+                # RuntimeInstance consumer/cursor authority.
+                authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+                payload = {
+                    name: np.asarray(stored[name]).copy()
+                    for name in stored.files if name not in {MANIFEST_KEY, IDENTITY_KEY}
+                }
+            payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
+            cursors = self._checkpoint_cursor_override or self._consumer_cursors
+            payload["runtime_consumer_cursors"] = np.asarray(json.dumps(
+                cursors.to_data(), sort_keys=True, separators=(",", ":")))
+            payload["runtime_consumer_diagnostics"] = np.asarray(json.dumps(
+                self._publisher.diagnostic_restart_state(),
+                sort_keys=True, separators=(",", ":")))
+            seal_checkpoint_payload(self, payload, runtime_kind=runtime_kind)
+            temporary = expected.with_name(expected.name + ".runtime-instance.tmp")
+            try:
+                with open(temporary, "wb") as stream:
+                    np.savez_compressed(stream, **payload)
+                os.replace(temporary, expected)
+            finally:
+                temporary.unlink(missing_ok=True)
+            # A staged checkpoint is not publishable until its final envelope has been read back
+            # and authenticated by the same strict path used during restart.
+            self._inspect_checkpoint_file(expected)
+            return str(expected)
+
+        sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
+        if sealed != expected:
+            raise RuntimeError("rank zero sealed a different checkpoint staging path")
+        return str(expected)
 
     def _restart_operation(self) -> Any:
-        manifests = tuple(
-            row for row in self._consumer_graph.nodes if row.kind is ConsumerKind.CHECKPOINT)
-        if not manifests:
-            from pops.output._restart_provider import RestartV3
+        from pops.output._restart_provider import RestartAuthority
 
-            return RestartV3()
-        evidence = {
-            make_identity("restart-provider", thaw_data(row.operation_data)).token
-            for row in manifests
-        }
-        if len(evidence) != 1:
-            raise ValueError("RuntimeInstance has multiple incompatible restart providers")
-        return manifests[0].operation
+        authority = self._install_plan.artifact.plan.restart_authority
+        if type(authority) is not RestartAuthority:
+            raise TypeError("installed plan has no exact restart authority")
+        return authority.operation
 
     def checkpoint(self, path: Any) -> str:
-        target = str(path)
         operation = self._restart_operation()
         extension = operation.consumer_data()["extension"]
-        if not target.endswith(extension):
-            target += extension
-        snapshot = operation.snapshot(self, os.path.dirname(target) or ".")
-        return str(operation.write(snapshot, target))
+        from pops.output._checkpoint_collective import canonical_checkpoint_path
 
-    def _reopen_checkpoint(self, path: Any) -> tuple[str, ConsumerCursorSet]:
-        import numpy as np
+        target = canonical_checkpoint_path(path, extension=extension)
+        snapshot = operation.snapshot(self, target.parent)
+        operation.validate_snapshot(snapshot)
+        try:
+            return str(operation.write(snapshot, target))
+        except BaseException as error:
+            discard = getattr(snapshot, "discard", None)
+            if callable(discard):
+                try:
+                    discard()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("checkpoint staging cleanup also failed: %s" % cleanup_error)
+            raise
 
-        target = str(path) if str(path).endswith(".npz") else str(path) + ".npz"
-        with np.load(target, allow_pickle=False) as stored:
-            required = {"runtime_consumer_graph", "runtime_consumer_cursors"}
-            if not required <= set(stored.files):
-                raise ValueError("restart checkpoint lacks RuntimeInstance consumer state")
-            if str(stored["runtime_consumer_graph"]) != self._consumer_graph.identity.token:
-                raise ValueError("restart ConsumerGraph identity differs from the installed graph")
-            cursor_data = json.loads(str(stored["runtime_consumer_cursors"]))
-        if set(cursor_data) != {"schema_version", "rows"} or cursor_data["schema_version"] != 1:
+    @staticmethod
+    def _checkpoint_cursors_from_data(cursor_data: Any) -> ConsumerCursorSet:
+        if not isinstance(cursor_data, Mapping) \
+                or set(cursor_data) != {"schema_version", "rows"} \
+                or cursor_data["schema_version"] != 1 \
+                or not isinstance(cursor_data["rows"], list):
             raise ValueError("restart consumer cursor schema is unsupported")
         cursors = ConsumerCursorSet(tuple(ScheduleCursor(
             row["consumer_id"], row["last_occurrence"], row["committed_samples"])
             for row in cursor_data["rows"]))
-        return target, cursors
+        # Reject duplicate/non-canonical input instead of accepting a decoder normalization.
+        if cursors.to_data() != dict(cursor_data):
+            raise ValueError("restart consumer cursor rows are not canonical")
+        return cursors
 
-    def _restore_checkpoint(self, target: Any, cursors: ConsumerCursorSet) -> Any:
-        result = self._executor.restart(str(target))
+    def _inspect_checkpoint_file(self, path: Any) -> ConsumerCursorSet:
+        """Rank-zero-only complete authentication; performs no native mutation."""
+        return self._inspect_checkpoint_payload(Path(path).read_bytes())
+
+    def _inspect_checkpoint_payload(self, payload: bytes) -> ConsumerCursorSet:
+        """Authenticate exact in-memory bytes on rank zero without native mutation."""
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from ._checkpoint_manifest import MANIFEST_KEY, authenticate_checkpoint_payload
+
+        stored = decode_checkpoint_bytes(payload)
+        if MANIFEST_KEY not in stored.files:
+            raise ValueError("checkpoint has no canonical manifest")
+        manifest = json.loads(str(stored[MANIFEST_KEY]))
+        runtime_kind = manifest.get("runtime_kind")
+        if not isinstance(runtime_kind, str) or not runtime_kind:
+            raise ValueError("checkpoint manifest lacks its runtime kind")
+        authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+        required = {
+            "runtime_consumer_graph",
+            "runtime_consumer_cursors",
+            "runtime_consumer_diagnostics",
+        }
+        if not required <= set(stored.files):
+            raise ValueError("restart checkpoint lacks RuntimeInstance consumer state")
+        if str(stored["runtime_consumer_graph"]) != self._consumer_graph.identity.token:
+            raise ValueError("restart ConsumerGraph identity differs from the installed graph")
+        cursor_data = json.loads(str(stored["runtime_consumer_cursors"]))
+        diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
+        self._publisher.validate_diagnostic_restart_state(diagnostic_data)
+        return self._checkpoint_cursors_from_data(cursor_data)
+
+    def _restore_checkpoint(self, payload: bytes, cursors: ConsumerCursorSet) -> Any:
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            restore_checkpoint_payload,
+        )
+
+        stored = decode_checkpoint_bytes(payload)
+        diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
+        canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(
+            diagnostic_data)
+
+        result = restore_checkpoint_payload(
+            self, self._executor, payload, phase_prefix="native restart")
         self._consumer_cursors = cursors
+        self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
         return result
 
     def restart(self, path: Any) -> Any:

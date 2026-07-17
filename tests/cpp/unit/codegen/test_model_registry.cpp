@@ -53,8 +53,8 @@ TEST(test_model_registry, membership_matrix_accepts_and_rejects) {
   EXPECT_TRUE(is_source("none") && is_source("potential") && is_source("gravity") &&
               is_source("magnetic") && is_source("potential_magnetic"))
       << "is_source accepts the five canonical builtin source ids";
-  EXPECT_TRUE(!is_source("lorentz") && !is_source("potential_lorentz") &&
-              !is_source("bogus") && !is_source(""))
+  EXPECT_TRUE(!is_source("lorentz") && !is_source("potential_lorentz") && !is_source("bogus") &&
+              !is_source(""))
       << "parse-only aliases and unknown source ids are not catalog identities";
   EXPECT_TRUE(is_elliptic("charge") && is_elliptic("background") && is_elliptic("gravity"))
       << "is_elliptic accepte les trois elliptiques builtin";
@@ -93,7 +93,8 @@ TEST(test_model_registry, validate_transport_and_elliptic_reject_explicitly) {
       << "message transport inconnu : fragment + tag + liste valide";
   EXPECT_FALSE(throws([] { validate_elliptic("charge"); }, msg))
       << "validate_elliptic(charge) accepte";
-  EXPECT_TRUE(throws([] { validate_elliptic("bogus"); }, msg)) << "validate_elliptic(bogus) rejette";
+  EXPECT_TRUE(throws([] { validate_elliptic("bogus"); }, msg))
+      << "validate_elliptic(bogus) rejette";
   EXPECT_TRUE(contains(msg, "unknown elliptic") && contains(msg, "bogus") &&
               contains(msg, "charge|background|gravity"))
       << "message elliptic inconnu : fragment + tag + liste valide";

@@ -19,6 +19,7 @@ covered host-side by test_name_binding_codegen.py.
 
 Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocation) and under pytest.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import Flux, SourceTerm
@@ -29,8 +30,7 @@ from tests.python.support.typed_program import program_states
 
 
 def _skip(msg):
-    print("skip test_name_binding_runtime (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_name_binding_runtime (%s)' % msg)
 
 
 fails = 0

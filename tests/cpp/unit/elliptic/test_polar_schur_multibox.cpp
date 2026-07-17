@@ -346,8 +346,8 @@ TEST_F(PolarSchurMultibox, tensor_cross_terms_theta_split_matches_mono_box_radia
 
   BoxArray ba8 = theta_split(nr_, nth_, 8);
   MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-  SolveReport kr8 = solve_mb(g, ba8, Problem::Dirichlet, m_, arr, art, atr, att,
-                             PolarPrecond::RadialLine, phi8);
+  SolveReport kr8 =
+      solve_mb(g, ba8, Problem::Dirichlet, m_, arr, art, atr, att, PolarPrecond::RadialLine, phi8);
   const double err8 = err_l2(phi8, g, Problem::Dirichlet, m_);
   const double derr = std::fabs(err8 - err_ref);
   if (me_ == 0)
@@ -381,8 +381,8 @@ TEST_F(PolarSchurMultibox, tiled_2d_split_matches_mono_box_jacobi) {
   const double errt = err_l2(phit, g, Problem::Dirichlet, m_);
   const double derr = std::fabs(errt - err_ref);
   if (me_ == 0)
-    std::printf("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n", kr_ref.iters,
-                err_ref, krt.iters, errt, derr);
+    std::printf("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n",
+                kr_ref.iters, err_ref, krt.iters, errt, derr);
   EXPECT_TRUE(krt.solved()) << "B_tile2d_converge";
   // halos r/theta/diagonale corrects
   EXPECT_TRUE(derr <= 1e-8) << "B_tile2d_err_matches_mono derr=" << derr;
@@ -419,7 +419,8 @@ TEST_F(PolarSchurMultibox, radial_line_rejects_r_cut_layout_jacobi_accepts_it) {
     threw_jac = true;
   }
   if (me_ == 0)
-    std::printf("  Jacobi + coupe-r     : %s\n", threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
+    std::printf("  Jacobi + coupe-r     : %s\n",
+                threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
   EXPECT_TRUE(!threw_jac) << "C_jacobi_rcut_ok";
 }
 
@@ -430,7 +431,8 @@ TEST_F(PolarSchurMultibox, neumann_gauge_theta_split_matches_mono_box_radial_lin
   const PolarGeometry& g = *g_;
   const int mN = 2;
   if (me_ == 0)
-    std::printf("\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
+    std::printf(
+        "\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
 
   BoxArray ba_mono(std::vector<Box2D>{*dom_});
   MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
@@ -441,8 +443,8 @@ TEST_F(PolarSchurMultibox, neumann_gauge_theta_split_matches_mono_box_radial_lin
 
   BoxArray ba8 = theta_split(nr_, nth_, 8);
   MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-  SolveReport kr8 = solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
-                             PolarPrecond::RadialLine, phi8);
+  SolveReport kr8 =
+      solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0, PolarPrecond::RadialLine, phi8);
   const double err8 = err_l2(phi8, g, Problem::Neumann, mN);
   const double derr = std::fabs(err8 - err_ref);
   if (me_ == 0)

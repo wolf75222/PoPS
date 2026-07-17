@@ -82,7 +82,7 @@ struct CompositeModel {
   /// pressure / wave_speeds: without hooks, the composite does not expose them (canonical paths /
   /// explicit rejections unchanged).
   POPS_HD Real contact_speed(const State& ul, const State& ur, Real pl, Real pr, Real sl, Real sr,
-                            int dir) const
+                             int dir) const
     requires requires(const Hyperbolic h, const State a_, const State b_, Real p, Real q, Real x,
                       Real y, int d) { h.contact_speed(a_, b_, p, q, x, y, d); }
   {
@@ -96,7 +96,7 @@ struct CompositeModel {
     return hyp.hllc_star_state(u, p, s, sStar, dir);
   }
   POPS_HD State roe_dissipation(const State& ul, const Aux& al, const State& ur, const Aux& ar,
-                               int dir) const
+                                int dir) const
     requires requires(const Hyperbolic h, const State a_, const Aux x_, const State b_,
                       const Aux y_, int d) { h.roe_dissipation(a_, x_, b_, y_, d); }
   {

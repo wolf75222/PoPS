@@ -13,7 +13,8 @@ using pops::identity::CanonicalValue;
 
 class ActiveContainer {
  public:
-  ActiveContainer(std::unordered_set<PyObject*>& active, PyObject* value) : active_(active), value_(value) {
+  ActiveContainer(std::unordered_set<PyObject*>& active, PyObject* value)
+      : active_(active), value_(value) {
     if (!active_.insert(value_).second)
       throw py::value_error("canonical identity contains a container cycle");
   }
@@ -44,9 +45,9 @@ CanonicalValue from_python(const py::handle& value, std::unordered_set<PyObject*
     Py_ssize_t size = 0;
     if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
       throw py::error_already_set();
-    return CanonicalValue::bytes(CanonicalValue::Bytes(
-        reinterpret_cast<const std::uint8_t*>(data),
-        reinterpret_cast<const std::uint8_t*>(data) + size));
+    return CanonicalValue::bytes(
+        CanonicalValue::Bytes(reinterpret_cast<const std::uint8_t*>(data),
+                              reinterpret_cast<const std::uint8_t*>(data) + size));
   }
   if (PyDict_Check(value.ptr())) {
     ActiveContainer guard(active, value.ptr());
@@ -87,8 +88,7 @@ CanonicalValue from_python(const py::handle& value) {
   return from_python(value, active);
 }
 
-[[noreturn]] void raise_component_manifest_error(
-    const pops::component_manifest::Error& error) {
+[[noreturn]] void raise_component_manifest_error(const pops::component_manifest::Error& error) {
   const py::object error_type =
       py::module_::import("pops.model._component_manifest").attr("ComponentManifestError");
   const py::object instance = error_type(error.code(), error.path(), std::string(error.what()));

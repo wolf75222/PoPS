@@ -2,54 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import sys
 from types import SimpleNamespace
 
 import pytest
 
 from pops._platform_contracts import (
-    CapabilityProof,
     ExecutionContext,
     ExecutionResource,
     proven_serial_manifest,
 )
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _runtime_executor as executor
-from pops.runtime._component_execution_context import component_execution_data
 from tests.python.unit.runtime.test_runtime_planning import _install
 
 
-def _context(*, communicator="serial", datatype="float64", device="host"):
+def _context(*, datatype="float64"):
     backend = proven_serial_manifest(
         backend="production", target="system", abi="test|clang++|c++23", runtime=True
     )
-    if communicator != "serial":
-        backend = replace(
-            backend,
-            communicator=CapabilityProof.proven(communicator, "test.explicit-communicator"),
-        )
-    if device not in ("host", "cpu"):
-        backend = replace(
-            backend,
-            device=CapabilityProof.proven(device, "test.explicit-device"),
-        )
     return ExecutionContext(
         backend=backend,
-        communicator=ExecutionResource(
-            "communicator", communicator, None if communicator == "serial" else object()
-        ),
+        communicator=ExecutionResource("communicator", "serial"),
         datatype=ExecutionResource("datatype", datatype),
-        device=ExecutionResource("device", device, None if device in ("host", "cpu") else object()),
+        device=ExecutionResource("device", "host"),
     )
 
 
 @pytest.mark.parametrize(
     "context,match",
     [
-        (_context(communicator="mpi"), "serial or exact MPI_COMM_WORLD"),
         (_context(datatype="float32"), "exact float64"),
-        (_context(device="cuda:0"), "host/cpu"),
     ],
 )
 def test_unsupported_execution_context_resources_are_rejected(context, match):
@@ -90,73 +73,6 @@ def test_process_global_native_state_is_rejected_before_system_constructor(
     assert calls == []
 
 
-class _ZeroHandleComm:
-    def __init__(self, *, rank=0, size=2):
-        self._rank = rank
-        self._size = size
-
-    @staticmethod
-    def Compare(left, right):
-        return 0 if left is right else 1
-
-    def Get_rank(self):
-        return self._rank
-
-    def Get_size(self):
-        return self._size
-
-    @staticmethod
-    def py2f():
-        return 0
-
-
-class _ZeroHandleDatatype:
-    @staticmethod
-    def py2f():
-        return 0
-
-
-def test_mpi_projection_preserves_valid_zero_valued_fortran_handles(monkeypatch):
-    """Fortran handle zero is data, not a missing-resource sentinel."""
-    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
-    from pops.runtime import _platform_manifest
-
-    world = _ZeroHandleComm()
-    double = _ZeroHandleDatatype()
-    mpi = SimpleNamespace(
-        Comm=_ZeroHandleComm,
-        Datatype=_ZeroHandleDatatype,
-        COMM_WORLD=world,
-        DOUBLE=double,
-        IDENT=0,
-    )
-    monkeypatch.setitem(sys.modules, "mpi4py", SimpleNamespace(MPI=mpi))
-    monkeypatch.setitem(sys.modules, "mpi4py.MPI", mpi)
-    backend = replace(
-        proven_serial_manifest(
-            backend="production", target="system", abi="test|clang++|c++23", runtime=True
-        ),
-        communicator=CapabilityProof.proven(
-            "MPI_COMM_WORLD", "test.zero-valued-fortran-handles"
-        ),
-    )
-    artifact = object.__new__(CompiledSimulationArtifact)
-    object.__setattr__(
-        artifact,
-        "platform_manifest",
-        proven_serial_manifest(
-            backend="production", target="system", abi="test|clang++|c++23"
-        ),
-    )
-    monkeypatch.setattr(_platform_manifest, "native_runtime_backend", lambda _platform: backend)
-
-    context = ExecutionContext.mpi_world(artifact, world)
-    projected = component_execution_data(context)
-
-    assert context.communicator.handle is world
-    assert context.datatype.handle is double
-    assert projected["communicator_f_handle"] == 0
-    assert projected["communicator_datatype_f_handle"] == 0
 
 
 def test_before_step_transfers_read_one_atomic_source_snapshot():

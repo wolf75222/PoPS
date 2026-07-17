@@ -27,6 +27,7 @@ struct ExpectedNativeComponent {
   std::string semantic_identity;
   std::string manifest_identity;
   std::string catalog_sha256;
+  std::string abi_key;
   std::vector<RequiredNativeInterface> interfaces;
   std::string prepare_parameters_json = "{}";
   std::string prepare_target_json = "{}";
@@ -34,7 +35,8 @@ struct ExpectedNativeComponent {
 
 inline std::size_t native_interface_table_size(PopsNativeInterfaceIdV1 id) {
   const auto result = generated_native_interface_table_size(id);
-  if (result == 0) throw std::invalid_argument("unknown native component interface id");
+  if (result == 0)
+    throw std::invalid_argument("unknown native component interface id");
   return result;
 }
 
@@ -45,7 +47,8 @@ class LoadedComponent final {
   LoadedComponent& operator=(const LoadedComponent&) = delete;
 
   LoadedComponent(LoadedComponent&& other) noexcept
-      : handle_(std::exchange(other.handle_, {})), api_(std::exchange(other.api_, nullptr)),
+      : handle_(std::exchange(other.handle_, {})),
+        api_(std::exchange(other.api_, nullptr)),
         prepared_(std::move(other.prepared_)),
         execution_(std::move(other.execution_)),
         prepare_parameters_json_(std::move(other.prepare_parameters_json_)),
@@ -74,18 +77,17 @@ class LoadedComponent final {
   static LoadedComponent load(const std::string& path, const ExpectedNativeComponent& expected) {
     if (expected.component_id.empty() || expected.semantic_identity.empty() ||
         expected.manifest_identity.empty() || expected.catalog_sha256.empty() ||
-        expected.interfaces.empty() || expected.prepare_parameters_json.empty() ||
-        expected.prepare_target_json.empty())
+        expected.abi_key.empty() || expected.interfaces.empty() ||
+        expected.prepare_parameters_json.empty() || expected.prepare_target_json.empty())
       throw std::invalid_argument("native component expectation is incomplete");
     dynlib::handle handle = dynlib::open(path);
     if (!dynlib::valid(handle))
-      throw std::runtime_error("cannot load native component '" + path + "': " +
-                               dynlib::last_error());
+      throw std::runtime_error("cannot load native component '" + path +
+                               "': " + dynlib::last_error());
     try {
       auto* raw = dynlib::sym(handle, POPS_COMPONENT_API_SYMBOL_V1);
       if (raw == nullptr)
-        throw std::runtime_error("native component misses "
-                                 POPS_COMPONENT_API_SYMBOL_V1);
+        throw std::runtime_error("native component misses " POPS_COMPONENT_API_SYMBOL_V1);
       const auto getter = reinterpret_cast<PopsComponentApiGetterV1>(raw);
       const PopsComponentApiV1* api = getter();
       validate(api, expected);
@@ -103,8 +105,8 @@ class LoadedComponent final {
     return *api_;
   }
 
-  [[nodiscard]] const PopsComponentInterfaceEntryV1& interface(
-      PopsNativeInterfaceIdV1 id, std::uint32_t version = 1) const {
+  [[nodiscard]] const PopsComponentInterfaceEntryV1& interface(PopsNativeInterfaceIdV1 id,
+                                                               std::uint32_t version = 1) const {
     const auto& value = api();
     for (std::size_t index = 0; index < value.interface_count; ++index) {
       const auto& row = value.interfaces[index];
@@ -115,8 +117,7 @@ class LoadedComponent final {
   }
 
   template <class Table>
-  [[nodiscard]] const Table& table(PopsNativeInterfaceIdV1 id,
-                                   std::uint32_t version = 1) const {
+  [[nodiscard]] const Table& table(PopsNativeInterfaceIdV1 id, std::uint32_t version = 1) const {
     const auto& row = interface(id, version);
     if (row.table == nullptr || row.table_size < sizeof(PopsComponentTableHeaderV1))
       throw std::runtime_error("native component interface table is truncated");
@@ -131,13 +132,15 @@ class LoadedComponent final {
     return *static_cast<const Table*>(row.table);
   }
 
-  [[nodiscard]] void* prepared_state(
-      PopsNativeInterfaceIdV1 id, std::uint32_t version,
-      const PopsExecutionContextV1& execution,
-      std::string parameters_json = {}, std::string target_json = {}) {
+  [[nodiscard]] void* prepared_state(PopsNativeInterfaceIdV1 id, std::uint32_t version,
+                                     const PopsExecutionContextV1& execution,
+                                     std::string parameters_json = {},
+                                     std::string target_json = {}) {
     validate_execution_context(execution);
-    if (parameters_json.empty()) parameters_json = prepare_parameters_json_;
-    if (target_json.empty()) target_json = prepare_target_json_;
+    if (parameters_json.empty())
+      parameters_json = prepare_parameters_json_;
+    if (target_json.empty())
+      target_json = prepare_target_json_;
     const auto& row = interface(id, version);
     const auto* header = static_cast<const PopsComponentTableHeaderV1*>(row.table);
     if (execution_.has_value()) {
@@ -155,23 +158,24 @@ class LoadedComponent final {
     void* state = nullptr;
     if (header->prepare != nullptr) {
       PopsComponentStatusV1 status = unwritten_component_status();
-      const PopsComponentPrepareRequestV1 request{
-          sizeof(PopsComponentPrepareRequestV1), parameters_json.c_str(),
-          target_json.c_str(), execution};
+      const PopsComponentPrepareRequestV1 request{sizeof(PopsComponentPrepareRequestV1),
+                                                  parameters_json.c_str(), target_json.c_str(),
+                                                  execution};
       const int code = header->prepare(&request, &state, &status);
       if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
           status.action != POPS_COMPONENT_CONTINUE_V1) {
-        if (state != nullptr && header->destroy != nullptr) header->destroy(state);
-        throw std::runtime_error(
-            status.reason == nullptr ? "native component preparation failed" : status.reason);
+        if (state != nullptr && header->destroy != nullptr)
+          header->destroy(state);
+        throw std::runtime_error(status.reason == nullptr ? "native component preparation failed"
+                                                          : status.reason);
       }
     }
     try {
       prepared_.push_back(PreparedInterfaceState{
-          id, version, state, header->destroy, std::move(parameters_json),
-          std::move(target_json)});
+          id, version, state, header->destroy, std::move(parameters_json), std::move(target_json)});
     } catch (...) {
-      if (state != nullptr && header->destroy != nullptr) header->destroy(state);
+      if (state != nullptr && header->destroy != nullptr)
+        header->destroy(state);
       throw;
     }
     return state;
@@ -198,29 +202,28 @@ class LoadedComponent final {
 
     explicit ExecutionIdentity(const PopsExecutionContextV1& value)
         : context_version(value.context_version),
-          execution_identity(
-              value.execution_identity == nullptr ? "" : value.execution_identity),
+          execution_identity(value.execution_identity == nullptr ? "" : value.execution_identity),
           memory_space(value.memory_space),
           backend_identity(value.backend_identity == nullptr ? "" : value.backend_identity),
           device_identity(value.device_identity == nullptr ? "" : value.device_identity),
-          scalar_type(value.scalar_type), storage_precision(value.storage_precision),
+          scalar_type(value.scalar_type),
+          storage_precision(value.storage_precision),
           compute_precision(value.compute_precision),
           accumulation_precision(value.accumulation_precision),
-          reduction_precision(value.reduction_precision), stream_handle(value.stream_handle),
+          reduction_precision(value.reduction_precision),
+          stream_handle(value.stream_handle),
           stream_identity(value.stream_identity == nullptr ? "" : value.stream_identity),
           communicator_f_handle(value.communicator_f_handle),
           communicator_datatype_f_handle(value.communicator_datatype_f_handle),
           communicator_identity(
               value.communicator_identity == nullptr ? "" : value.communicator_identity),
-          communicator_datatype_identity(
-              value.communicator_datatype_identity == nullptr
-                  ? "" : value.communicator_datatype_identity) {}
+          communicator_datatype_identity(value.communicator_datatype_identity == nullptr
+                                             ? ""
+                                             : value.communicator_datatype_identity) {}
 
     [[nodiscard]] bool matches(const PopsExecutionContextV1& value) const {
-      return value.context_version == context_version &&
-             value.execution_identity != nullptr &&
-             execution_identity == value.execution_identity &&
-             value.memory_space == memory_space &&
+      return value.context_version == context_version && value.execution_identity != nullptr &&
+             execution_identity == value.execution_identity && value.memory_space == memory_space &&
              value.backend_identity != nullptr && backend_identity == value.backend_identity &&
              value.device_identity != nullptr && device_identity == value.device_identity &&
              value.scalar_type == scalar_type && value.storage_precision == storage_precision &&
@@ -248,9 +251,9 @@ class LoadedComponent final {
   };
 
   LoadedComponent(dynlib::handle handle, const PopsComponentApiV1* api,
-                  std::string prepare_parameters_json,
-                  std::string prepare_target_json)
-      : handle_(handle), api_(api),
+                  std::string prepare_parameters_json, std::string prepare_target_json)
+      : handle_(handle),
+        api_(api),
         prepare_parameters_json_(std::move(prepare_parameters_json)),
         prepare_target_json_(std::move(prepare_target_json)) {}
 
@@ -260,18 +263,17 @@ class LoadedComponent final {
     return value;
   }
 
-  static void validate(const PopsComponentApiV1* api,
-                       const ExpectedNativeComponent& expected) {
+  static void validate(const PopsComponentApiV1* api, const ExpectedNativeComponent& expected) {
     if (api == nullptr || api->struct_size < sizeof(PopsComponentApiV1))
       throw std::runtime_error("native component API table is null or truncated");
     if (api->protocol_abi != POPS_COMPONENT_PROTOCOL_ABI_V1)
       throw std::runtime_error("native component protocol ABI mismatch");
+    if (require_text(api->abi_key, "abi_key") != expected.abi_key)
+      throw std::runtime_error("native component ABI mismatch");
     if (require_text(api->catalog_sha256, "catalog_sha256") != expected.catalog_sha256 ||
         require_text(api->component_id, "component_id") != expected.component_id ||
-        require_text(api->semantic_identity, "semantic_identity") !=
-            expected.semantic_identity ||
-        require_text(api->manifest_identity, "manifest_identity") !=
-            expected.manifest_identity)
+        require_text(api->semantic_identity, "semantic_identity") != expected.semantic_identity ||
+        require_text(api->manifest_identity, "manifest_identity") != expected.manifest_identity)
       throw std::runtime_error("native component API identity mismatch");
     if (api->interface_count == 0 || api->interfaces == nullptr)
       throw std::runtime_error("native component exports no interface table");
@@ -285,8 +287,7 @@ class LoadedComponent final {
             "native component expectation declares a duplicate interface table");
     }
     if (api->interface_count != expected_identities.size())
-      throw std::runtime_error(
-          "native component exported interface set differs from its manifest");
+      throw std::runtime_error("native component exported interface set differs from its manifest");
     std::unordered_set<std::uint64_t> identities;
     for (std::size_t index = 0; index < api->interface_count; ++index) {
       const auto& row = api->interfaces[index];
@@ -331,7 +332,8 @@ class LoadedComponent final {
 
   void reset() noexcept {
     for (auto row = prepared_.rbegin(); row != prepared_.rend(); ++row)
-      if (row->destroy != nullptr) row->destroy(row->state);
+      if (row->destroy != nullptr)
+        row->destroy(row->state);
     prepared_.clear();
     execution_.reset();
     if (dynlib::valid(handle_))

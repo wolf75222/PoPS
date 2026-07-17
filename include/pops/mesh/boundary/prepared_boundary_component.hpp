@@ -23,8 +23,14 @@ struct PreparedBoundaryRegion {
   std::string identity;
 
   PopsBoundaryRegionV1 view() const {
-    return {sizeof(PopsBoundaryRegionV1), kind, dimension, codimension, axes.size(),
-            axes.data(), sides.data(), identity.c_str()};
+    return {sizeof(PopsBoundaryRegionV1),
+            kind,
+            dimension,
+            codimension,
+            axes.size(),
+            axes.data(),
+            sides.data(),
+            identity.c_str()};
   }
 };
 
@@ -64,9 +70,8 @@ class PreparedBoundaryComponent final {
       : spec_(std::move(spec)), component_(std::move(component)) {
     validate();
     const PopsExecutionContextV1 execution = spec_.execution->view();
-    state_ = component_->prepared_state(
-        native_interface_id_(), spec_.interface_version, execution,
-        spec_.parameters_json, spec_.target_json);
+    state_ = component_->prepared_state(native_interface_id_(), spec_.interface_version, execution,
+                                        spec_.parameters_json, spec_.target_json);
   }
 
   PreparedBoundaryComponent(const PreparedBoundaryComponent&) = delete;
@@ -79,8 +84,8 @@ class PreparedBoundaryComponent final {
 
   const PopsGhostBoundaryApiV1& ghost_api() const {
     static_assert(Operation == PreparedBoundaryOperation::GhostRegion);
-    return component_->table<PopsGhostBoundaryApiV1>(
-        POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, spec_.interface_version);
+    return component_->table<PopsGhostBoundaryApiV1>(POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1,
+                                                     spec_.interface_version);
   }
 
   const PopsFieldBoundaryClosureApiV1& field_api() const {
@@ -91,10 +96,10 @@ class PreparedBoundaryComponent final {
 
   static void require_success(int code, const PopsComponentStatusV1& status,
                               const char* operation) {
-    if (code == 0 && status.code == 0 && status.action == POPS_COMPONENT_CONTINUE_V1) return;
-    throw std::runtime_error(
-        std::string("native boundary component ") + operation + " failed: " +
-        (status.reason == nullptr ? "no reason" : status.reason));
+    if (code == 0 && status.code == 0 && status.action == POPS_COMPONENT_CONTINUE_V1)
+      return;
+    throw std::runtime_error(std::string("native boundary component ") + operation + " failed: " +
+                             (status.reason == nullptr ? "no reason" : status.reason));
   }
 
  private:
@@ -114,10 +119,9 @@ class PreparedBoundaryComponent final {
 
   void validate() const {
     if (!component_ || spec_.target_identity.empty() || spec_.component_id.empty() ||
-        spec_.manifest_identity.empty() ||
-        spec_.producer_identity.empty() || spec_.state_identity.empty() ||
-        spec_.ghost_identity.empty() || spec_.layout_identity.empty() ||
-        spec_.region.identity.empty() ||
+        spec_.manifest_identity.empty() || spec_.producer_identity.empty() ||
+        spec_.state_identity.empty() || spec_.ghost_identity.empty() ||
+        spec_.layout_identity.empty() || spec_.region.identity.empty() ||
         spec_.parameter_ids.size() != spec_.parameter_values.size())
       throw std::invalid_argument("prepared boundary component identity/tables are incomplete");
     if (spec_.interface_version != 1)
@@ -126,13 +130,11 @@ class PreparedBoundaryComponent final {
       throw std::invalid_argument("prepared boundary component lacks ExecutionContext authority");
     component::validate_execution_context(spec_.execution->view());
     if constexpr (Operation == PreparedBoundaryOperation::GhostRegion) {
-      component::require_operation(ghost_api().apply_region_batch != nullptr,
-                                   "apply_region_batch");
+      component::require_operation(ghost_api().apply_region_batch != nullptr, "apply_region_batch");
     } else {
       component::require_operation(
-          Operation == PreparedBoundaryOperation::FieldResidual
-              ? field_api().residual != nullptr
-              : field_api().jvp != nullptr,
+          Operation == PreparedBoundaryOperation::FieldResidual ? field_api().residual != nullptr
+                                                                : field_api().jvp != nullptr,
           Operation == PreparedBoundaryOperation::FieldResidual ? "residual" : "jvp");
       if (spec_.states.empty() || spec_.outputs.empty() ||
           (Operation == PreparedBoundaryOperation::FieldResidual && !spec_.directions.empty()) ||

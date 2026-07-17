@@ -85,7 +85,6 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
         "Checkpoint" + "Policy",
         "bind_operators",
         "linear_combine",
-        "strict=True",
         "RejectOldManifest",
         "add_block(",
         "pops." + "Pro" + "blem",
@@ -96,6 +95,17 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
         assert spelling not in source
 
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    resolve_calls = [
+        node
+        for node in calls
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "resolve"
+    ]
+    assert resolve_calls
+    assert all(
+        keyword.arg != "strict"
+        for node in resolve_calls
+        for keyword in node.keywords
+    )
     state_calls = [
         node
         for node in calls

@@ -158,7 +158,7 @@ def _flag_error_message(feature: str) -> str:
                                        "use IMEX/IMEXRK/Split without partial masks"),
         "supports_custom_communicator": ("communicator != MPI_COMM_WORLD",
                                          "MPI_COMM_WORLD or serial",
-                                         "run on MPI_COMM_WORLD until ParallelContext lands"),
+                                         "use ExecutionContext.mpi_world() or a serial context"),
     }
     requested, available, alternative = requests.get(
         feature, (feature, "no route in this build", None))
@@ -356,7 +356,7 @@ def _support_rows(flags: Any, source: Any) -> list:
              limitation="no C++ route accepts a caller-provided MPI_Comm",
              requested="communicator != MPI_COMM_WORLD",
              available_route="MPI_COMM_WORLD or serial",
-             alternative="run on MPI_COMM_WORLD until ParallelContext lands", source=source),
+             alternative="use ExecutionContext.mpi_world() or a serial context", source=source),
     ]
 
 
@@ -482,22 +482,32 @@ def _inventory_rows(flags: Any, source: Any) -> list:
                          "through elliptic_solve and caches rebuild through patch_topology"),
              source=source),
         _row("parallel:mpi_world_communicator", layout="uniform|amr", backend="production",
-             platform="mpi", mpi=mpi, status="partial",
-             limitation=("MPI collectives use MPI_COMM_WORLD; a caller-provided communicator is not "
-                         "a supported native route yet"),
+             platform="mpi", mpi=mpi, status="available" if mpi else "unavailable",
+             limitation=(
+                 "exact MPI_COMM_WORLD execution is proved by the native module and ExecutionContext"
+                 if mpi else
+                 "this native module was not built with POPS_USE_MPI=ON"
+             ),
+             requested="ExecutionContext.mpi_world()",
+             available_route=(
+                 "ExecutionContext.mpi_world()" if mpi else "serial ExecutionContext"
+             ),
+             alternative=None if mpi else "rebuild with -DPOPS_USE_MPI=ON",
              source=source),
         _row("parallel:custom_communicator", layout="uniform|amr", backend="none",
              platform="mpi", mpi=mpi, status="unavailable",
              limitation="no native route accepts a caller-provided MPI_Comm",
              requested="communicator != MPI_COMM_WORLD",
              available_route="MPI_COMM_WORLD or serial",
-             alternative="run on MPI_COMM_WORLD until ParallelContext lands", source=source),
+             alternative="use ExecutionContext.mpi_world() or a serial context", source=source),
         _row("precision:single_or_mixed", layout="uniform|amr", backend="none",
              platform="host", status="unavailable",
-             limitation="pops::Real is hardcoded to double; no PrecisionPolicy route exists",
+             limitation=("PrecisionPolicy is representable, but the native providers currently "
+                         "instantiate pops::Real as binary64 only"),
              requested="precision=single or precision=mixed",
              available_route="precision=double",
-             alternative="use double precision or implement a native PrecisionPolicy", source=source),
+             alternative="use double precision or implement a non-binary64 native provider",
+             source=source),
         _row("runtime:kokkos_lifecycle", layout="uniform|amr", backend="production",
              platform="host|gpu", mpi=mpi, gpu=gpu, status="partial",
              limitation=("Kokkos is lazily initialized by PoPS on first allocation/kernel unless "
@@ -525,20 +535,27 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row("program_context:amr", layout="amr", backend="production", platform="host",
              flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
              limitation="AMR program install requires target='amr_system'", source=source),
-        _row("output:npz_vtk_hdf5", layout="uniform|amr", backend="runtime", platform="host",
-             mpi=mpi, limitation="runtime output writers; AMR VTK is coarse + patch metadata",
+        _row("output:scientific_v1", layout="uniform|amr", backend="runtime",
+             platform="host|mpi", mpi=mpi,
+             limitation=("typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format "
+                         "advertises its exact supported modes"),
              source=source),
-        _row("checkpoint:system_v1", layout="uniform", backend="runtime", platform="host",
-             mpi=mpi, limitation="npz rank-0 gather checkpoint/restart v1", source=source),
+        _row("checkpoint:accepted_state_v3", layout="uniform|amr", backend="runtime",
+             platform="host|mpi", mpi=mpi,
+             limitation=("single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
+                         "rank-0 publication with collective capture and consensus"),
+             source=source),
         _row("checkpoint:parallel_hdf5", layout="uniform|amr", backend="none",
              platform="mpi", status="unavailable",
              limitation="parallel HDF5 checkpoint is not a native checkpoint route",
-             requested="checkpoint(parallel=True)",
-             available_route="checkpoint(parallel=False) or write(format='hdf5', parallel=True)",
-             alternative="use checkpoint(parallel=False)", source=source),
+             requested="restartable checkpoint encoded as parallel HDF5",
+             available_route="strict accepted-state v3 NPZ checkpoint",
+             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
+             source=source),
         _row("checkpoint:amr_dynamic_regrid", layout="amr", backend="runtime", platform="host",
-             mpi=mpi,
-             limitation="strict v3 accepted-state restart; non-Dense history replay keeps rank count",
+             flags=flags, flag="supports_amr", mpi=mpi,
+             limitation=("strict v3 accepted-state restart; exact rank-local AMR ownership and "
+                         "compiled-Program publications keep the native rank count"),
              source=source),
     ] + _python_contract_rows(flags, source)
 

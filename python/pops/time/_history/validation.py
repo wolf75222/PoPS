@@ -5,8 +5,9 @@ non-stored ring slots at restart by DETERMINISTIC replay of the installed Progra
 bit-identical ONLY if the Program's macro-step is a deterministic function of ``(state, dt,
 params)``. This module runs the compile-time gate the plan's sec.5 describes:
 
-  1. per ring, ``policy.validate_for(depth)`` -- coherence (k / snapshots vs depth), loud;
-  2. if the policy is non-Dense, scan the whole Program op graph; if it reaches a
+  1. every declared ring has exactly one typed policy at the same compiled depth;
+  2. per ring, ``policy.validate_for(depth)`` -- coherence (k / snapshots vs depth), loud;
+  3. if the policy is non-Dense, scan the whole Program op graph; if it reaches a
      NON-DETERMINISTIC op / brick, refuse loudly (never a silent degrade to Dense).
 
 FAIL-CLOSED (plan R3): the built-in time-DSL op vocabulary is entirely deterministic (pure
@@ -84,13 +85,27 @@ def _op_is_nondeterministic(op):
 def validate_history_persistence(program, report: ReportTree) -> ReportTree:
     """Accumulate the ADC-626 compile-time refusals into @p report for @p program.
 
-    For each ``keep_history`` ring (recorded on ``program._history_persistence`` as ``(depth,
-    policy)``): validate the policy coherence against depth (loud), then -- for a non-Dense policy --
-    scan the Program op graph and refuse if any op is (or may be) non-deterministic (the replay would
-    silently drift). @p report is an immutable validation tree; every issue carries the
+    Require an exact one-to-one mapping between declared manual/temporal rings and compiled policy
+    records, validate every policy against the physical ``max_lag + 1`` slot count, then -- for a
+    non-Dense policy -- scan the Program op graph and refuse if any op is (or may be)
+    non-deterministic (the replay would silently drift). @p report is an immutable validation tree;
+    every issue carries the
     source ``"history_persistence"`` and the ring name for a precise, verbatim message.
     Returns @p report (chains)."""
-    persistence = getattr(program, "_history_persistence", None) or {}
+    histories = dict(getattr(program, "_histories", None) or {})
+    persistence = dict(getattr(program, "_history_persistence", None) or {})
+    history_names = set(histories)
+    persistence_names = set(persistence)
+    for name in sorted(history_names - persistence_names):
+        report = report.error(
+            "history_persistence", "missing_policy",
+            "history %r has no compiled persistence policy" % name,
+            context={"history": name})
+    for name in sorted(persistence_names - history_names):
+        report = report.error(
+            "history_persistence", "orphan_policy",
+            "history persistence policy %r has no declared ring" % name,
+            context={"history": name})
     if not persistence:
         return report
     # Scan once: the first non-deterministic op (if any) is shared by every non-Dense ring's replay.
@@ -100,15 +115,40 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
         if reason is not None:
             nondet_reason = reason
             break
-    for name, (depth, policy) in sorted(persistence.items()):
+    from pops.time._history.persistence import HistoryPersistence
+
+    for name, configured in sorted(persistence.items()):
+        if not isinstance(configured, tuple) or len(configured) != 2:
+            report = report.error(
+                "history_persistence", "invalid_policy_record",
+                "history %r has an invalid compiled persistence record" % name,
+                context={"history": name})
+            continue
+        ring_slots, policy = configured
+        declared_lag = histories.get(name)
+        expected_slots = None if declared_lag is None else declared_lag + 1
+        if expected_slots is not None and ring_slots != expected_slots:
+            report = report.error(
+                "history_persistence", "depth_mismatch",
+                "history %r persistence slot count %r differs from declared max lag %r "
+                "(expected %r slots)"
+                % (name, ring_slots, declared_lag, expected_slots),
+                context={"history": name})
+            continue
+        if not isinstance(policy, HistoryPersistence):
+            report = report.error(
+                "history_persistence", "invalid_policy",
+                "history %r persistence policy is not a typed HistoryPersistence" % name,
+                context={"history": name})
+            continue
         try:
-            policy.validate_for(depth)
+            policy.validate_for(ring_slots)
         except (ValueError, TypeError) as exc:
             report = report.error(
                 "history_persistence", "incoherent_policy",
                 "history %r: %s" % (name, exc), context={"history": name})
             continue
-        if policy.degenerate_to_dense(depth):
+        if policy.degenerate_to_dense(ring_slots):
             continue  # Dense (or a budget-covers-all ring): no replay, never refused
         if nondet_reason is not None:
             report = report.error(

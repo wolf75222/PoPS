@@ -11,6 +11,7 @@ from typing import Any
 
 from pops.codegen._plans import require_install_plan
 from pops.model import ComponentManifest
+from pops.output._consumer_contracts import diagnostic_collective_operations
 
 from ._runtime_plan_io import proved_platform
 
@@ -48,20 +49,38 @@ def _consumer_contracts(plan: Any) -> tuple[
 
     names = tuple(block.name for block in plan.artifact.blocks)
     resources: dict[str, set[str]] = {name: set() for name in names}
-    requirements: dict[str, dict[str, dict[str, Any]]] = {name: {} for name in names}
+    requirements: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {
+        name: {} for name in names
+    }
+
+    def require(block: str, resource: str, operation: str, strategy: str) -> None:
+        requirements[block][(resource, operation, strategy)] = {
+            "capability": "collective",
+            "resource": resource,
+            "operation": operation,
+            "strategy": strategy,
+        }
+
     graph = plan.artifact.plan.consumer_graph
     if graph is not None:
         for manifest in graph.nodes:
             for quantity in manifest.quantities:
                 block = _reference_block(quantity.reference, names)
                 resources[block].add(quantity.runtime_resource)
-                if manifest.parallel_mode is ParallelMode.COLLECTIVE:
-                    requirements[block][quantity.runtime_resource] = {
-                        "capability": "collective",
-                        "resource": quantity.runtime_resource,
-                        "operation": "gather",
-                        "strategy": "explicit_communicator",
-                    }
+                if manifest.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE):
+                    require(
+                        block, quantity.runtime_resource,
+                        "gather", "explicit_communicator")
+            for quantity in manifest.diagnostic_quantities:
+                block = _reference_block(quantity.reference, names)
+                resources[block].add(quantity.runtime_resource)
+                for operation in diagnostic_collective_operations(quantity.execution):
+                    require(
+                        block,
+                        quantity.runtime_resource,
+                        operation,
+                        "native_reduction_provider",
+                    )
     block_layouts = _block_layouts(plan)
     for name in names:
         if not resources[name]:

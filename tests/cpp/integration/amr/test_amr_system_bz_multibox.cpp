@@ -169,7 +169,8 @@ TEST(test_amr_system_bz_multibox, Runs) {
   {
     auto sim = build(bz_field, /*use_setter=*/false, /*u0g=*/Real(2));
     EXPECT_EQ(sim->aux_ncomp(), 4) << "shared_aux_width_max_4";
-    EXPECT_GE(ba_coarse.size(), 2) << "coarse_is_multibox";  // garde-fou : le decoupage a bien eu lieu
+    EXPECT_GE(ba_coarse.size(), 2)
+        << "coarse_is_multibox";  // garde-fou : le decoupage a bien eu lieu
     EXPECT_EQ(ba_fine.size(), 2) << "fine_is_multibox";
 
     // grossier : B_z correct sur les 4 boites (valides + ghosts).

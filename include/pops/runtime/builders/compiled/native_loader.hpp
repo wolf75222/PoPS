@@ -24,8 +24,7 @@ inline void verify_block_route_manifest(pops::dynlib::handle handle, const char*
   const char* raw = manifest();
   if (raw == nullptr) {
     pops::dynlib::close(handle);
-    throw std::runtime_error(std::string(context) +
-                             ": pops_compiled_route_manifest returned null");
+    throw std::runtime_error(std::string(context) + ": pops_compiled_route_manifest returned null");
   }
   try {
     pops::verify_route_manifest(raw, context);
@@ -45,13 +44,11 @@ inline int csv_field_count(const char* raw) {
   return count;
 }
 
-inline void verify_runtime_params(pops::dynlib::handle handle,
-                                  const std::vector<double>& values,
+inline void verify_runtime_params(pops::dynlib::handle handle, const std::vector<double>& values,
                                   const char* context) {
-  auto count = reinterpret_cast<int (*)()>(
-      pops::dynlib::sym(handle, "pops_compiled_nparams"));
-  auto names = reinterpret_cast<const char* (*)()>(
-      pops::dynlib::sym(handle, "pops_compiled_param_names"));
+  auto count = reinterpret_cast<int (*)()>(pops::dynlib::sym(handle, "pops_compiled_nparams"));
+  auto names =
+      reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_compiled_param_names"));
   if (count == nullptr || names == nullptr) {
     pops::dynlib::close(handle);
     throw std::runtime_error(std::string(context) +
@@ -61,10 +58,9 @@ inline void verify_runtime_params(pops::dynlib::handle handle,
   const char* raw_names = names();
   if (expected < 0 || expected > kMaxRuntimeParams) {
     pops::dynlib::close(handle);
-    throw std::runtime_error(std::string(context) + ": artifact declares " +
-                             std::to_string(expected) +
-                             " runtime parameters; supported range is 0.." +
-                             std::to_string(kMaxRuntimeParams));
+    throw std::runtime_error(
+        std::string(context) + ": artifact declares " + std::to_string(expected) +
+        " runtime parameters; supported range is 0.." + std::to_string(kMaxRuntimeParams));
   }
   if (raw_names == nullptr || csv_field_count(raw_names) != expected) {
     pops::dynlib::close(handle);
@@ -73,18 +69,15 @@ inline void verify_runtime_params(pops::dynlib::handle handle,
   }
   if (values.size() != static_cast<std::size_t>(expected)) {
     pops::dynlib::close(handle);
-    throw std::runtime_error(std::string(context) + ": received " +
-                             std::to_string(values.size()) +
-                             " bound parameters but artifact requires " +
-                             std::to_string(expected));
+    throw std::runtime_error(std::string(context) + ": received " + std::to_string(values.size()) +
+                             " bound parameters but artifact requires " + std::to_string(expected));
   }
 }
 
 template <typename ImplT>
-void add_native_block(System* system, ImplT*, const std::string& name,
-                      const std::string& so_path, const std::string& limiter,
-                      const std::string& riemann, const std::string& recon,
-                      const std::string& time, double gamma, int substeps,
+void add_native_block(System* system, ImplT*, const std::string& name, const std::string& so_path,
+                      const std::string& limiter, const std::string& riemann,
+                      const std::string& recon, const std::string& time, double gamma, int substeps,
                       bool evolve, int stride, const std::vector<double>& params,
                       double positivity_floor) {
   constexpr const char* context = "System::_install_native_block";
@@ -119,8 +112,7 @@ void add_native_block(System* system, ImplT*, const std::string& name,
   }
 #endif
 
-  auto key = reinterpret_cast<const char* (*)()>(
-      pops::dynlib::sym(handle, "pops_native_abi_key"));
+  auto key = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_native_abi_key"));
   if (key == nullptr) {
     pops::dynlib::close(handle);
     throw std::runtime_error(std::string(context) +
@@ -138,16 +130,15 @@ void add_native_block(System* system, ImplT*, const std::string& name,
 
   using install_fn = void (*)(void*, const char*, const char*, const char*, const char*,
                               const char*, double, int, int, int, const double*, int, double);
-  auto install = reinterpret_cast<install_fn>(
-      pops::dynlib::sym(handle, "pops_install_native"));
+  auto install = reinterpret_cast<install_fn>(pops::dynlib::sym(handle, "pops_install_native"));
   if (install == nullptr) {
     pops::dynlib::close(handle);
     throw std::runtime_error(std::string(context) +
                              ": pops_install_native is missing; rebuild artifact");
   }
   const double* data = params.empty() ? nullptr : params.data();
-  install(static_cast<void*>(system), name.c_str(), limiter.c_str(), riemann.c_str(),
-          recon.c_str(), time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, data,
+  install(static_cast<void*>(system), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
+          time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, data,
           static_cast<int>(params.size()), positivity_floor);
   // The installed closures execute code owned by the package, so the handle stays loaded.
 }

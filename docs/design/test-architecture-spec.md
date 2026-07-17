@@ -206,7 +206,7 @@ pytest owns Python runtime tests:
   registered markers.
 - No Python test file is executed as a standalone script in CI.
 - No global `fails` counters or `chk` helpers are allowed.
-- Tests that need `_pops`, Kokkos, MPI, a native compiler, or h5py MPI declare
+- Tests that need `_pops`, Kokkos, native MPI/parallel HDF5, or a native compiler declare
   that requirement through markers and fixtures.
 
 ### Pyright

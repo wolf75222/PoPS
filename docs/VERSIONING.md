@@ -54,11 +54,11 @@ the compiled cache across toolchains; that is not a SemVer-relevant break.
 - PATCH (`x.y.Z`): bug fixes with no change to the public API.
 - MINOR (`x.Y.0`): backward-compatible additions to the public API (new bricks/catalog rows, new
   options, new Python surface, or a new versioned extension schema).
-- MAJOR (`X.0.0`, post-1.0): a break of the public API or of the production DSL ABI.
+- MAJOR (`X.0.0`): a break of the public API or of the production DSL ABI.
 
-While in `0.y.z` initial development, `0.y` is the compatibility boundary: `0.3.z` may satisfy a
-`0.3` consumer, while `0.4.0` must not. The generated CMake package therefore uses
-`SameMinorVersion` before 1.0 and `SameMajorVersion` from 1.0 onward.
+The released `1.x` line uses `SameMajorVersion` in the generated CMake package. Historical `0.y.z`
+artifacts used `0.y` as their compatibility boundary and `SameMinorVersion`; that pre-1.0 rule is
+retained only so old package metadata can be interpreted, not as the policy of the current release.
 
 Schema and ABI compatibility is exact unless the owning protocol explicitly defines a migration.
 Runtime loaders never infer compatibility from package SemVer. Historical artifacts may be handled

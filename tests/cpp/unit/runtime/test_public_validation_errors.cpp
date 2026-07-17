@@ -31,8 +31,7 @@ template <class F>
     const std::string msg = e.what();
     for (const std::string& needle : needles) {
       if (msg.find(needle) == std::string::npos) {
-        return ::testing::AssertionFailure()
-               << "message missing '" << needle << "': " << msg;
+        return ::testing::AssertionFailure() << "message missing '" << needle << "': " << msg;
       }
     }
     return ::testing::AssertionSuccess();
@@ -46,15 +45,14 @@ using namespace pops;
 
 TEST(PublicValidationErrors, ProgramWireIdsNeverFallback) {
   using namespace pops::runtime::program;
-  EXPECT_TRUE(ThrowsWithMessage(
-      [] { validate_linear_solve_method(99, "test"); }, {"LinearSolveMethod", "99"}));
-  EXPECT_TRUE(ThrowsWithMessage(
-      [] { validate_linear_solve_method(kLinearSolveReserved4, "test"); },
-      {"LinearSolveMethod", "4"}));
-  EXPECT_TRUE(ThrowsWithMessage(
-      [] { validate_assembly_write_role(kPhi, "test"); }, {"AssemblyFieldRole", "6"}));
-  EXPECT_TRUE(ThrowsWithMessage(
-      [] { validate_assembly_read_role(kFlux, "test"); }, {"AssemblyFieldRole", "5"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_linear_solve_method(99, "test"); },
+                                {"LinearSolveMethod", "99"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_linear_solve_method(kLinearSolveReserved4, "test"); },
+                                {"LinearSolveMethod", "4"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_write_role(kPhi, "test"); },
+                                {"AssemblyFieldRole", "6"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_read_role(kFlux, "test"); },
+                                {"AssemblyFieldRole", "5"}));
   EXPECT_NO_THROW(validate_linear_solve_method(kLinearSolveBicgstab, "test"));
   EXPECT_NO_THROW(validate_assembly_write_role(kFlux, "test"));
   EXPECT_NO_THROW(validate_assembly_read_role(kPhi, "test"));
@@ -69,9 +67,8 @@ TEST(PublicValidationErrors, Fab2DRejectsZeroComponents) {
 
 TEST(PublicValidationErrors, Fab2DRejectsNegativeGhostWidth) {
   const Box2D valid = Box2D::from_extents(2, 2);
-  EXPECT_TRUE(ThrowsWithMessage(
-      [&] { Fab2D bad(valid, /*ncomp=*/1, /*ng=*/-1); },
-      {"pops validation error", "Fab2D", "ghost width ng >= 0", "ng=-1"}))
+  EXPECT_TRUE(ThrowsWithMessage([&] { Fab2D bad(valid, /*ncomp=*/1, /*ng=*/-1); },
+                                {"pops validation error", "Fab2D", "ghost width ng >= 0", "ng=-1"}))
       << "Fab2D rejects negative ghost width in release";
 }
 
@@ -107,8 +104,7 @@ TEST(PublicValidationErrors, MultiFabRejectsNegativeGhostWidth) {
 TEST(PublicValidationErrors, MultiFabRejectsDistributionMappingSizeMismatch) {
   EXPECT_TRUE(ThrowsWithMessage(
       [&] {
-        const BoxArray two_boxes(
-            std::vector<Box2D>{Box2D{{0, 0}, {0, 0}}, Box2D{{1, 0}, {1, 0}}});
+        const BoxArray two_boxes(std::vector<Box2D>{Box2D{{0, 0}, {0, 0}}, Box2D{{1, 0}, {1, 0}}});
         const DistributionMapping short_dm(std::vector<int>{0});
         MultiFab bad(two_boxes, short_dm, /*ncomp=*/1, /*ngrow=*/0);
       },

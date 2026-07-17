@@ -9,6 +9,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from pops._native_collectives import (
+    allgather_value,
+    rank as native_rank,
+    require_world,
+    size as native_size,
+)
+from pops._frozen_data import thaw_data
 from pops.identity import Identity, make_identity
 from pops.mesh._layout_plan_contracts import (
     CARTESIAN_CELL_AREA,
@@ -51,17 +58,31 @@ def _block_name(reference: Any, names: tuple[str, ...]) -> str:
     raise ValueError("consumer reference has no exact installed block owner")
 
 
-def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
-    """Read component order from the authenticated compiled artifact authority."""
+def _conservative_metadata(owner: Any, block: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Read exact component names and physical roles from the compiled artifact authority."""
     from pops.codegen._artifact_models import artifact_model_metadata
 
     rows = [
         row for row in artifact_model_metadata(owner._install_plan.artifact)
         if row.block_name == block
     ]
-    if len(rows) != 1 or not rows[0].cons_names:
+    if len(rows) != 1 or not rows[0].cons_names \
+            or len(rows[0].cons_roles) != len(rows[0].cons_names):
         raise ValueError("installed block %r has no exact conservative component order" % block)
-    return rows[0].cons_names
+    return rows[0].cons_names, rows[0].cons_roles
+
+
+def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
+    return _conservative_metadata(owner, block)[0]
+
+
+def _diagnostic_record_name(payload: DiagnosticPayload) -> str:
+    """Exact inspection key; distinct level/role declarations must never overwrite each other."""
+    return "%s:%s:%s" % (
+        payload.key.reference.qualified_id,
+        payload.key.reduction,
+        payload.key.state_id,
+    )
 
 
 def _identity_payload(value: Any, *, path: str = "layout") -> Any:
@@ -102,9 +123,24 @@ def _target(uri: str, format_data: Mapping[str, Any], snapshot: OutputSnapshot,
     if path.suffix:
         if path.suffix != format_data["extension"]:
             raise ValueError("consumer target suffix does not match its exact format")
+        if request.parallel_mode is ParallelMode.PER_RANK:
+            path = path.with_name(
+                "%s.rank%06d%s" % (path.stem, request.rank, path.suffix))
         return path
     return deterministic_target(
         path, consumer_name, request, snapshot, format_data["extension"])
+
+
+def _execution_topology(owner: Any) -> tuple[int, int, Any]:
+    """Return the exact installed rank topology without consulting process globals."""
+    communicator = owner._execution_context.communicator
+    if communicator.identity == "serial":
+        if communicator.handle is not None:
+            raise ValueError("serial ExecutionContext hides a communicator handle")
+        return 0, 1, None
+    handle = communicator.handle
+    native = require_world(handle)
+    return native_rank(native), native_size(native), native
 
 
 class _PreparedDiagnostic(PreparedPublication):
@@ -126,8 +162,19 @@ class _PreparedDiagnostic(PreparedPublication):
         if self._discarded:
             raise RuntimeError("discarded diagnostic cannot be published")
         if not self._published:
-            self._publish(self._effect, self._values)
             self._published = True
+            try:
+                self._publish(self._effect, self._values)
+            except BaseException as error:
+                try:
+                    self._rollback(self._effect, self._values)
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("diagnostic publication rollback also failed: %s" % cleanup_error)
+                self._published = False
+                self._discarded = True
+                raise
         artifact = make_identity("runtime-diagnostic-publication", {
             "effect": self.effect_identity.token,
             "values": [value.to_data() for value in self._values],
@@ -152,22 +199,84 @@ class _PreparedDiagnostic(PreparedPublication):
         self._discarded = True
 
 
+class _PreparedScientificOutput(PreparedPublication):
+    """One atomic output publication carrying its embedded diagnostic reductions."""
+
+    def __init__(self, output: PreparedPublication, diagnostic: _PreparedDiagnostic) -> None:
+        if output.effect_identity != diagnostic.effect_identity \
+                or output.payload_identity != diagnostic.payload_identity:
+            raise ValueError("scientific output and diagnostics prepare different effects")
+        self._output = output
+        self._diagnostic = diagnostic
+        self._published = self._discarded = False
+
+    @property
+    def effect_identity(self) -> Identity:
+        return self._output.effect_identity
+
+    @property
+    def payload_identity(self) -> Identity:
+        return self._output.payload_identity
+
+    def publish(self) -> PublicationReceipt:
+        if self._discarded:
+            raise RuntimeError("discarded scientific output cannot be published")
+        if self._published:
+            raise RuntimeError("scientific output publication is not repeatable")
+        output_receipt = self._output.publish()
+        try:
+            self._diagnostic.publish()
+        except BaseException:
+            self._output.rollback()
+            self._diagnostic.rollback()
+            self._discarded = True
+            raise
+        self._published = True
+        return output_receipt
+
+    def discard(self) -> None:
+        if self._published:
+            self.rollback()
+            return
+        if not self._discarded:
+            try:
+                self._output.discard()
+            finally:
+                self._diagnostic.discard()
+                self._discarded = True
+
+    def rollback(self) -> None:
+        if self._discarded:
+            return
+        error = None
+        try:
+            self._diagnostic.rollback()
+        except BaseException as caught:
+            error = caught
+        try:
+            self._output.rollback()
+        except BaseException as caught:
+            if error is None:
+                error = caught
+            else:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note("scientific output rollback also failed: %s" % caught)
+        self._published = False
+        self._discarded = True
+        if error is not None:
+            raise error
+
+
 class _PreparedCheckpoint(PreparedPublication):
     def __init__(self, effect: AcceptedSideEffect, engine: Any, operation: Any,
                  target: Any) -> None:
-        self._effect, self._target = effect, Path(target)
-        self._target.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(
-            prefix=".%s." % self._target.name, suffix=".npz",
-            dir=str(self._target.parent))
-        os.close(fd)
-        os.unlink(temporary)
-        snapshot = operation.snapshot(engine, self._target.parent)
-        produced = Path(operation.write(snapshot, temporary))
-        if produced != Path(temporary) or not produced.is_file():
-            produced.unlink(missing_ok=True)
-            raise RuntimeError("checkpoint codec did not produce the exact staged target")
-        self._temporary, self._published, self._discarded = produced, False, False
+        self._effect, self._target, self._operation = effect, Path(target), operation
+        # ``snapshot`` is the same collective prepared transaction used by
+        # RuntimeInstance.checkpoint(); it captures now but remains unpublished and compensatable.
+        self._snapshot = operation.snapshot(engine, self._target.parent)
+        operation.validate_snapshot(self._snapshot)
+        self._published = self._discarded = False
 
     @property
     def effect_identity(self) -> Identity:
@@ -181,27 +290,29 @@ class _PreparedCheckpoint(PreparedPublication):
         if self._discarded:
             raise RuntimeError("discarded checkpoint cannot be published")
         if not self._published:
-            if self._target.exists():
-                raise FileExistsError("checkpoint target collision: %s" % self._target)
-            os.replace(self._temporary, self._target)
+            produced = Path(self._operation.write(self._snapshot, self._target))
+            from pops.output._checkpoint_collective import canonical_checkpoint_path
+
+            if produced != canonical_checkpoint_path(self._target):
+                raise RuntimeError("checkpoint codec published a different shared target")
+            self._target = produced
             self._published = True
         artifact = make_identity("restart-checkpoint-artifact", {
             "effect": self.effect_identity.token, "target": str(self._target)})
         return PublicationReceipt(
             self.effect_identity, self.payload_identity,
-            "pops.restart-checkpoint.v3", artifact.token)
+            "pops.restart-checkpoint.v3", artifact.token,
+            self._effect.target.parallel_mode)
 
     def discard(self) -> None:
         if not self._published and not self._discarded:
-            self._temporary.unlink(missing_ok=True)
+            self._snapshot.discard()
             self._discarded = True
 
     def rollback(self) -> None:
         if self._discarded:
             return
-        if self._published:
-            self._target.unlink(missing_ok=True)
-        self._temporary.unlink(missing_ok=True)
+        self._snapshot.rollback()
         self._published = False
         self._discarded = True
 
@@ -306,7 +417,7 @@ def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> d
         "diagnostics": diagnostic_rows,
         "metadata_json": json.dumps(
             dict(snapshot.metadata), sort_keys=True, separators=(",", ":")),
-        "selection_identity": request.identity.token,
+        "selection_identity": request.publication_identity.token,
     }
 
 
@@ -325,21 +436,31 @@ class _PreparedExternalWriter(PreparedPublication):
         if consumer_format_data(
                 preparation.format, where="resolved native Writer format") != dict(target_format):
             raise ValueError("resolved native Writer format differs from its accepted target")
-        if effect.target.parallel_mode is not ParallelMode.SERIAL \
-                or preparation.request.parallel:
-            raise ValueError("native Writer ABI v1 requires one serial complete snapshot")
+        mode = effect.target.parallel_mode
+        if preparation.request.parallel_mode is not mode \
+                or mode not in (ParallelMode.SERIAL, ParallelMode.ROOT):
+            raise ValueError(
+                "native Writer ABI v1 requires one SERIAL or rank-zero ROOT complete snapshot"
+            )
+        if mode is ParallelMode.SERIAL and preparation.communicator is not None:
+            raise ValueError("SERIAL native Writer preparation cannot carry a communicator")
+        if mode is ParallelMode.ROOT and (
+                preparation.communicator is None or preparation.request.rank != 0):
+            raise ValueError("ROOT native Writer preparation may execute only on rank zero")
         self._effect = effect
+        self._parallel_mode = mode
         self._installed = installed
         self._target = Path(preparation.target)
         self._target.parent.mkdir(parents=True, exist_ok=True)
-        if self._target.exists():
-            raise FileExistsError("native Writer target collision: %s" % self._target)
         fd, temporary = tempfile.mkstemp(
             prefix=".%s." % self._target.name, suffix=".writer-stage",
             dir=str(self._target.parent))
         os.close(fd)
-        os.unlink(temporary)
         self._temporary = Path(temporary)
+        self._component_published = self._temporary.with_suffix(
+            self._temporary.suffix + ".component-published")
+        owner = self._temporary.stat()
+        self._stage_owner = (owner.st_dev, owner.st_ino)
         self._wire = _writer_snapshot_data(preparation.snapshot, preparation.request)
         self._execution = component_execution_data(execution_context)
         self._snapshot_identity = make_identity(
@@ -351,7 +472,10 @@ class _PreparedExternalWriter(PreparedPublication):
             "snapshot": self._wire,
             "execution": self._execution,
             "temporary_path": str(self._temporary),
-            "published_path": str(self._target),
+            # The native component owns only this private publication name.  The runtime alone
+            # links the verified inode into the public target namespace, so a component rollback
+            # can never remove a concurrent or pre-existing user artifact.
+            "published_path": str(self._component_published),
             "snapshot_identity": self._snapshot_identity,
             "logical_time": {
                 "clock_identity": clock.clock_id,
@@ -370,10 +494,11 @@ class _PreparedExternalWriter(PreparedPublication):
         self._interface_version = interface["version"]
         self._published = False
         self._discarded = False
+        self._created_target = False
         try:
             receipt = self._invoke("verify")
-            if not self._temporary.is_file():
-                raise RuntimeError("native Writer verify did not create its exact temporary file")
+            if not self._owns(self._temporary):
+                raise RuntimeError("native Writer verify replaced its runtime-owned staging inode")
             if receipt["bytes_written"] != self._temporary.stat().st_size:
                 raise RuntimeError("native Writer verify receipt size differs from its temporary")
             if not receipt["content_digest"]:
@@ -383,8 +508,7 @@ class _PreparedExternalWriter(PreparedPublication):
             try:
                 self._invoke("rollback")
             finally:
-                self._temporary.unlink(missing_ok=True)
-                self._target.unlink(missing_ok=True)
+                self._cleanup_private()
             raise
 
     @property
@@ -408,27 +532,75 @@ class _PreparedExternalWriter(PreparedPublication):
             self._interface_uri, self._interface_version, operation,
             self._request_data)
 
+    @staticmethod
+    def _inode(path: Path) -> tuple[int, int] | None:
+        try:
+            value = path.stat()
+        except FileNotFoundError:
+            return None
+        return value.st_dev, value.st_ino
+
+    def _owns(self, path: Path) -> bool:
+        return self._inode(path) == self._stage_owner
+
+    def _unlink_owned(self, path: Path, *, where: str) -> None:
+        inode = self._inode(path)
+        if inode is None:
+            return
+        if inode != self._stage_owner:
+            raise RuntimeError(
+                "native Writer %s path no longer names its runtime-owned inode: %s"
+                % (where, path))
+        path.unlink()
+
+    def _cleanup_private(self) -> None:
+        errors = []
+        for path, where in (
+            (self._temporary, "temporary"),
+            (self._component_published, "component publication"),
+        ):
+            try:
+                self._unlink_owned(path, where=where)
+            except Exception as exc:
+                errors.append("%s: %s" % (type(exc).__name__, exc))
+        if errors:
+            raise RuntimeError("native Writer private cleanup failed: " + "; ".join(errors))
+
+    def _rollback_runtime_target(self) -> None:
+        if not self._created_target:
+            return
+        self._unlink_owned(self._target, where="public target")
+        self._created_target = False
+
     def publish(self) -> PublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded native Writer preparation cannot be published")
         if not self._published:
-            if self._target.exists():
-                raise FileExistsError("native Writer target collision: %s" % self._target)
             try:
                 receipt = self._invoke("publish")
-                self._published = self._target.is_file()
-                if not self._published or self._temporary.exists():
+                if self._temporary.exists() or not self._owns(self._component_published):
                     raise RuntimeError(
-                        "native Writer publish did not atomically consume its temporary")
+                        "native Writer publish did not move its verified inode into the private "
+                        "publication path")
                 if dict(receipt) != self._verified_receipt:
                     raise RuntimeError(
                         "native Writer publish receipt differs from verified preparation")
+                os.link(self._component_published, self._target)
+                self._created_target = True
+                if not self._owns(self._target):
+                    raise RuntimeError(
+                        "native Writer public target does not name its verified staging inode")
+                self._unlink_owned(
+                    self._component_published, where="component publication")
+                self._published = True
             except BaseException:
                 try:
                     self._invoke("rollback")
                 finally:
-                    self._temporary.unlink(missing_ok=True)
-                    self._target.unlink(missing_ok=True)
+                    try:
+                        self._cleanup_private()
+                    finally:
+                        self._rollback_runtime_target()
                     self._published = False
                     self._discarded = True
                 raise
@@ -440,7 +612,9 @@ class _PreparedExternalWriter(PreparedPublication):
         })
         return PublicationReceipt(
             self.effect_identity, self.payload_identity,
-            "pops.output.external-writer.v1", artifact.token)
+            "pops.output.external-writer.v1", artifact.token,
+            parallel_mode=self._parallel_mode,
+        )
 
     def discard(self) -> None:
         if self._discarded:
@@ -451,7 +625,7 @@ class _PreparedExternalWriter(PreparedPublication):
         try:
             self._invoke("discard")
         finally:
-            self._temporary.unlink(missing_ok=True)
+            self._cleanup_private()
             self._discarded = True
 
     def rollback(self) -> None:
@@ -460,10 +634,145 @@ class _PreparedExternalWriter(PreparedPublication):
         try:
             self._invoke("rollback")
         finally:
-            self._temporary.unlink(missing_ok=True)
-            self._target.unlink(missing_ok=True)
+            try:
+                self._cleanup_private()
+            finally:
+                self._rollback_runtime_target()
             self._published = False
             self._discarded = True
+
+
+class _PreparedRootExternalWriter(PreparedPublication):
+    """Coordinate one rank-zero native Writer transaction over the exact world communicator."""
+
+    def __init__(self, effect: AcceptedSideEffect, preparation: OutputPreparation,
+                 installed: Any, execution_context: Any) -> None:
+        if preparation.request.parallel_mode is not ParallelMode.ROOT:
+            raise ValueError("ROOT native Writer coordinator requires a ROOT request")
+        self._effect = effect
+        self._communicator = require_world(preparation.communicator)
+        self._rank = native_rank(self._communicator)
+        self._size = native_size(self._communicator)
+        if (self._rank, self._size) != (
+                preparation.request.rank, preparation.request.size):
+            raise ValueError("ROOT native Writer request differs from its communicator")
+        self._local: _PreparedExternalWriter | None = None
+        error = None
+        if self._rank == 0:
+            try:
+                self._local = _PreparedExternalWriter(
+                    effect, preparation, installed, execution_context)
+            except Exception as exc:
+                error = "%s: %s" % (type(exc).__name__, exc)
+        try:
+            rows = self._allgather(error=error)
+            self._raise_failures("prepare", rows)
+        except BaseException as failure:
+            # The object is not returned when preparation consensus fails, so no outer consumer
+            # transaction can compensate it. Rank zero must release its verified temporary here.
+            if self._local is not None:
+                try:
+                    self._local.discard()
+                except BaseException as cleanup_error:
+                    add_note = getattr(failure, "add_note", None)
+                    if callable(add_note):
+                        add_note(
+                            "rank-zero native Writer preparation cleanup also failed: %s: %s"
+                            % (type(cleanup_error).__name__, cleanup_error)
+                        )
+            raise
+
+    @property
+    def effect_identity(self) -> Identity:
+        return self._effect.identity
+
+    @property
+    def payload_identity(self) -> Identity:
+        return self._effect.payload.identity
+
+    @property
+    def temporary(self) -> Path | None:
+        return None if self._local is None else self._local.temporary
+
+    @property
+    def target(self) -> Path | None:
+        return None if self._local is None else self._local.target
+
+    def _allgather(
+        self, *, error: str | None, artifact_id: str | None = None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        rows = allgather_value(self._communicator, {
+            "rank": self._rank,
+            "error": error,
+            "artifact_id": artifact_id,
+        })
+        if len(rows) != self._size or any(
+                not isinstance(row, Mapping)
+                or set(row) != {"rank", "error", "artifact_id"}
+                or row["rank"] != rank
+                for rank, row in enumerate(rows)):
+            raise RuntimeError("ROOT native Writer returned a malformed rank envelope")
+        return rows
+
+    @staticmethod
+    def _raise_failures(operation: str, rows: tuple[Mapping[str, Any], ...]) -> None:
+        failures = [
+            "rank %d: %s" % (rank, row["error"])
+            for rank, row in enumerate(rows) if row["error"] is not None
+        ]
+        if failures:
+            raise RuntimeError(
+                "ROOT native Writer %s failed: %s"
+                % (operation, "; ".join(failures))
+            )
+
+    def publish(self) -> PublicationReceipt:
+        artifact_id = error = None
+        if self._rank == 0:
+            if self._local is None:
+                error = "RuntimeError: rank zero has no prepared native Writer"
+            else:
+                try:
+                    receipt = self._local.publish()
+                    if receipt.parallel_mode is not ParallelMode.ROOT:
+                        raise ValueError("rank-zero native Writer returned a non-ROOT receipt")
+                    artifact_id = receipt.artifact_id
+                except Exception as exc:
+                    error = "%s: %s" % (type(exc).__name__, exc)
+        rows = self._allgather(error=error, artifact_id=artifact_id)
+        self._raise_failures("publish", rows)
+        root_artifact = rows[0]["artifact_id"]
+        if not isinstance(root_artifact, str) or not root_artifact \
+                or any(row["artifact_id"] is not None for row in rows[1:]):
+            raise RuntimeError(
+                "ROOT native Writer did not authenticate exactly one rank-zero artifact"
+            )
+        return PublicationReceipt(
+            self.effect_identity,
+            self.payload_identity,
+            "pops.output.external-writer.v1",
+            root_artifact,
+            parallel_mode=ParallelMode.ROOT,
+        )
+
+    def _cleanup(self, operation: str) -> None:
+        error = None
+        if self._rank == 0:
+            if self._local is None:
+                error = "RuntimeError: rank zero has no prepared native Writer"
+            else:
+                try:
+                    getattr(self._local, operation)()
+                except Exception as exc:
+                    error = "%s: %s" % (type(exc).__name__, exc)
+        rows = self._allgather(error=error)
+        self._raise_failures(operation, rows)
+
+    def discard(self) -> None:
+        self._cleanup("discard")
+
+    def rollback(self) -> None:
+        self._cleanup("rollback")
 
 
 class RuntimeConsumerPublisher(ConsumerPublisher):
@@ -471,30 +780,60 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
     def __init__(self, owner: Any) -> None:
         self._owner = owner
+        rank, size, communicator = _execution_topology(owner)
         self._by_id = {row.qualified_id: row for row in owner._consumer_graph.nodes}
         self._pending: dict[str, tuple[DiagnosticPayload, ...]] = {}
+        self._pending_baselines: dict[str, dict[str, float]] = {}
         self._diagnostics: dict[str, DiagnosticPayload] = {}
+        self._baselines: dict[str, float] = {}
         self._output = ConsumerOutputPublisher(self._resolve_output)
         self._external_writers: dict[str, Any] = {}
         exact_targets: dict[str, str] = {}
+        self._validate_diagnostic_providers()
         from pops import interfaces
         for manifest in owner._consumer_graph.nodes:
             if manifest.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
                 continue
             data = manifest.output_format_data
-            if data.get("provider_id") != "pops.output.external-writer.v1":
+            mode = manifest.parallel_mode
+            if mode is ParallelMode.SERIAL:
+                if (rank, size, communicator) != (0, 1, None):
+                    raise ValueError(
+                        "SERIAL ScientificOutput requires a proved serial ExecutionContext")
+            elif communicator is None:
+                raise ValueError(
+                    "%s ScientificOutput requires a proved native MPI ExecutionContext"
+                    % mode.name)
+            if data["parallel_mode"] != mode.value:
+                raise ValueError(
+                    "ScientificOutput format and resolved parallel mode disagree at install")
+            writer = manifest.output_format.writer()
+            requirement_provider = getattr(
+                writer, "installed_component_requirement", None)
+            if not callable(requirement_provider):
                 continue
-            component_id = data.get("component_id")
+            requirement = requirement_provider()
+            required_keys = {
+                "component_id", "component_manifest_identity", "native_interface",
+            }
+            if type(requirement) is not dict or set(requirement) != required_keys:
+                raise TypeError(
+                    "native scientific-output writer returned a malformed component requirement")
+            expected = {key: data.get(key) for key in required_keys}
+            if requirement != expected:
+                raise ValueError(
+                    "native scientific-output writer requirement differs from format evidence")
+            component_id = requirement["component_id"]
             installed = owner._installed_components.get(component_id)
             if installed is None:
                 raise ValueError(
                     "ScientificOutput names native Writer %r but that exact component is not "
                     "installed" % component_id)
-            if installed.component_manifest.token != data.get("component_manifest_identity"):
+            if installed.component_manifest.token != requirement["component_manifest_identity"]:
                 raise ValueError(
                     "ScientificOutput native Writer manifest identity differs from installation")
             if installed.interface != interfaces.Writer \
-                    or dict(data.get("native_interface", {})) != interfaces.Writer.to_data():
+                    or dict(requirement["native_interface"]) != interfaces.Writer.to_data():
                 raise ValueError("ScientificOutput component does not implement exact Writer v1")
             if installed.native_handle is None:
                 raise ValueError("ScientificOutput native Writer was installed but not loaded")
@@ -515,6 +854,137 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return tuple(sorted((*self._diagnostics.values(), *staged),
                             key=lambda value: value.key.identity.token))
 
+    @property
+    def accepted_diagnostics(self) -> tuple[DiagnosticPayload, ...]:
+        """Last committed registry only; staged attempt values are deliberately excluded."""
+        return tuple(sorted(
+            self._diagnostics.values(), key=lambda value: value.key.identity.token))
+
+    def diagnostic_restart_state(self) -> dict[str, Any]:
+        """Return the complete last-accepted typed diagnostic registry."""
+        baselines = dict(self._baselines)
+        for pending in self._pending_baselines.values():
+            for key, value in pending.items():
+                previous = baselines.setdefault(key, value)
+                if previous != value:
+                    raise RuntimeError(
+                        "staged conservation diagnostics disagree on their exact baseline")
+        diagnostics = dict(self._diagnostics)
+        staged_diagnostics: dict[str, DiagnosticPayload] = {}
+        for pending in self._pending.values():
+            for payload in pending:
+                token = payload.key.identity.token
+                previous = staged_diagnostics.get(token)
+                if previous is not None and previous.to_data() != payload.to_data():
+                    raise RuntimeError(
+                        "staged diagnostics disagree on the latest payload for one exact key")
+                staged_diagnostics[token] = payload
+                diagnostics[token] = payload
+        return {
+            "schema_version": 2,
+            "baselines": {
+                key: value.hex() for key, value in sorted(baselines.items())
+            },
+            "diagnostics": [
+                diagnostics[token].to_data() for token in sorted(diagnostics)
+            ],
+        }
+
+    @staticmethod
+    def validate_diagnostic_restart_state(data: Any) -> dict[str, Any]:
+        required = {"schema_version", "baselines", "diagnostics"}
+        if not isinstance(data, Mapping) or set(data) != required \
+                or data["schema_version"] != 2 \
+                or not isinstance(data["baselines"], Mapping) \
+                or not isinstance(data["diagnostics"], list):
+            raise ValueError("restart diagnostic registry schema is unsupported")
+        baselines = {}
+        for key, value in data["baselines"].items():
+            if not isinstance(key, str) or not key or not isinstance(value, str):
+                raise TypeError("restart diagnostic baselines must map text identities to hex")
+            scalar = float.fromhex(value)
+            if not math.isfinite(scalar):
+                raise ValueError("restart diagnostic baseline must be finite")
+            baselines[key] = scalar
+        diagnostics: dict[str, DiagnosticPayload] = {}
+        from pops.model import Handle
+
+        for row in data["diagnostics"]:
+            if not isinstance(row, Mapping) \
+                    or set(row) != {"key", "value", "units", "terms"} \
+                    or not isinstance(row["key"], Mapping) \
+                    or set(row["key"]) != {
+                        "reference", "component_manifest_identity", "layout_identity",
+                        "level", "state_id", "reduction",
+                    } \
+                    or not isinstance(row["value"], str) \
+                    or not isinstance(row["terms"], Mapping):
+                raise TypeError("restart diagnostic payload has an unsupported shape")
+            key_data = row["key"]
+            if any(not isinstance(name, str) or not name or not isinstance(value, str)
+                   for name, value in row["terms"].items()):
+                raise TypeError("restart diagnostic terms must map text names to hex values")
+            payload = DiagnosticPayload(
+                DiagnosticKey(
+                    Handle.from_canonical_identity(key_data["reference"]),
+                    Identity.from_token(key_data["component_manifest_identity"]),
+                    Identity.from_token(key_data["layout_identity"]),
+                    key_data["level"],
+                    key_data["state_id"],
+                    key_data["reduction"],
+                ),
+                float.fromhex(row["value"]),
+                row["units"],
+                {name: float.fromhex(value) for name, value in row["terms"].items()},
+            )
+            if payload.to_data() != dict(row):
+                raise ValueError("restart diagnostic payload is not canonical")
+            token = payload.key.identity.token
+            if token in diagnostics:
+                raise ValueError("restart diagnostic registry contains duplicate exact keys")
+            diagnostics[token] = payload
+        canonical = {
+            "schema_version": 2,
+            "baselines": {key: value.hex() for key, value in sorted(baselines.items())},
+            "diagnostics": [diagnostics[token].to_data() for token in sorted(diagnostics)],
+        }
+        if canonical != dict(data):
+            raise ValueError("restart diagnostic registry is not canonical")
+        return canonical
+
+    def restore_diagnostic_restart_state(self, data: Any) -> None:
+        canonical = self.validate_diagnostic_restart_state(data)
+        baselines = {
+            key: float.fromhex(value)
+            for key, value in canonical["baselines"].items()
+        }
+        diagnostics: dict[str, DiagnosticPayload] = {}
+        from pops.model import Handle
+
+        for row in canonical["diagnostics"]:
+            key_data = row["key"]
+            payload = DiagnosticPayload(
+                DiagnosticKey(
+                    Handle.from_canonical_identity(key_data["reference"]),
+                    Identity.from_token(key_data["component_manifest_identity"]),
+                    Identity.from_token(key_data["layout_identity"]),
+                    key_data["level"], key_data["state_id"], key_data["reduction"],
+                ),
+                float.fromhex(row["value"]), row["units"],
+                {name: float.fromhex(value) for name, value in row["terms"].items()},
+            )
+            diagnostics[payload.key.identity.token] = payload
+        recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
+        if diagnostics and not callable(recorder):
+            raise RuntimeError(
+                "installed runtime cannot restore the accepted diagnostic inspection registry")
+        for payload in diagnostics.values():
+            cast(Any, recorder)(_diagnostic_record_name(payload), payload.value)
+        self._baselines = baselines
+        self._diagnostics = diagnostics
+        self._pending.clear()
+        self._pending_baselines.clear()
+
     def _manifest(self, effect: AcceptedSideEffect) -> Any:
         try:
             manifest = self._by_id[effect.consumer_id]
@@ -524,51 +994,190 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             raise ValueError("accepted effect manifest identity is stale")
         return manifest
 
-    def _diagnostic_values(self, manifest: Any) -> tuple[DiagnosticPayload, ...]:
+    def _validate_diagnostic_providers(self) -> None:
+        """Fail bind before execution when an exact diagnostic route is unavailable."""
+        component_names = tuple(self._owner._component_manifests)
+        layouts = {
+            row.handle.qualified_id: row for row in self._owner._layout_plan.layouts
+        }
+        for manifest in self._owner._consumer_graph.nodes:
+            for quantity in manifest.diagnostic_quantities:
+                block = _block_name(quantity.reference, component_names)
+                names, roles = _conservative_metadata(self._owner, block)
+                self._diagnostic_component(names, roles, quantity.execution["role"])
+                layout = layouts.get(quantity.layout_id)
+                if layout is None:
+                    raise KeyError(
+                        "diagnostic selected unknown layout %s" % quantity.layout_id)
+                engine = self._owner._executor_for_block(block)
+                if layout.adaptive:
+                    if not callable(getattr(engine, "composite_reduce", None)):
+                        raise NotImplementedError(
+                            "adaptive diagnostic levels require native "
+                            "composite_reduce(block, reduction, component, levels)"
+                        )
+                elif quantity.levels != (0,):
+                    raise ValueError(
+                        "uniform diagnostic provider accepts exactly level 0")
+
+    def _diagnostic_metric_factor(self, quantity: Any, *, composite: bool) -> float:
+        if composite:
+            return 1.0
+        rows = [
+            row for row in self._owner._layout_plan.layouts
+            if row.handle.qualified_id == quantity.layout_id
+        ]
+        if len(rows) != 1:
+            raise KeyError("diagnostic selected unknown layout %s" % quantity.layout_id)
+        geometry = rows[0].geometry
+        if type(geometry) is not NormalizedGeometry:
+            raise TypeError("diagnostic requires an exact normalized geometry")
+        if geometry.cell_measure != CARTESIAN_CELL_AREA:
+            raise NotImplementedError(
+                "uniform metric-weighted diagnostics require a native provider for %s"
+                % geometry.cell_measure)
+        factor = 1.0
+        for length, cells in zip(geometry.lengths, geometry.cells, strict=True):
+            factor *= float(length) / int(cells)
+        return factor
+
+    @staticmethod
+    def _diagnostic_component(
+        names: tuple[str, ...], roles: tuple[str, ...], role: Any,
+    ) -> tuple[int, bool]:
+        if role is None:
+            if len(names) != 1:
+                raise ValueError(
+                    "a scalar diagnostic over a multi-component state requires an explicit "
+                    "typed ComponentRole selector"
+                )
+            return 0, False
+        matches = [index for index, candidate in enumerate(roles) if candidate == role]
+        if len(matches) != 1:
+            raise ValueError(
+                "diagnostic role %r must select exactly one conservative component; "
+                "available roles are %r" % (role, roles))
+        return matches[0], False
+
+    def _native_diagnostic_reduction(
+        self,
+        engine: Any,
+        block: str,
+        reduction: str,
+        component: int,
+        full_state: bool,
+        levels: tuple[int, ...],
+    ) -> tuple[float, bool]:
+        composite = getattr(engine, "composite_reduce", None)
+        if callable(composite):
+            kind = reduction + ("_all" if full_state else "")
+            return float(cast(Any, composite)(
+                block, kind, component, list(levels))), True
+        if levels != (0,):
+            raise ValueError("uniform diagnostic reduction accepts exactly level 0")
+        native = getattr(engine, "reduce_component", None)
+        if not callable(native):
+            raise RuntimeError("installed runtime has no native diagnostic reduction provider")
+        if full_state and reduction in {"min", "max"}:
+            count = len(_conservative_names(self._owner, block))
+            values = [
+                float(cast(Any, native)(block, reduction, index))
+                for index in range(count)
+            ]
+            return (min(values) if reduction == "min" else max(values)), False
+        kind = reduction + ("_all" if full_state else "")
+        return float(cast(Any, native)(block, kind, component)), False
+
+    def _diagnostic_values(
+        self, manifest: Any,
+    ) -> tuple[tuple[DiagnosticPayload, ...], dict[str, float]]:
         names = tuple(self._owner._component_manifests)
         values = []
-        for quantity in manifest.quantities:
+        baseline_updates: dict[str, float] = {}
+        for quantity in manifest.diagnostic_quantities:
             block = _block_name(quantity.reference, names)
             engine = self._owner._executor_for_block(block)
-            variables = _conservative_names(self._owner, block)
-            if quantity.reference.local_id in variables:
-                component = variables.index(quantity.reference.local_id)
-            elif len(variables) == 1:
-                component = 0
-            else:
-                raise ValueError(
-                    "diagnostic quantity must select an exact conservative component")
-            reduction = next((part for part in quantity.runtime_resource.split(":")
-                              if part in {"sum", "abs_sum", "sum_sq", "min", "max", "abs_max"}),
-                             "sum")
-            call = getattr(engine, "composite_reduce", None)
-            value = call(block, reduction, component) if callable(call) else \
-                engine.reduce_component(block, reduction, component)
-            key = DiagnosticKey(
-                quantity.reference,
-                self._owner._component_manifests[block].manifest_digest,
-                self._owner.layout_identity(quantity.layout_id),
-                0,
-                "accepted",
-                reduction,
-            )
-            values.append(DiagnosticPayload(key, cast(float, value), "unspecified", {}))
-        return tuple(values)
+            variables, roles = _conservative_metadata(self._owner, block)
+            execution = quantity.execution
+            component, full_state = self._diagnostic_component(
+                variables, roles, execution["role"])
+            for operation in execution["operations"]:
+                value, composite = self._native_diagnostic_reduction(
+                    engine, block, operation["reduction"], component, full_state,
+                    quantity.levels)
+                if operation["metric_weighted"]:
+                    value *= self._diagnostic_metric_factor(
+                        quantity, composite=composite)
+                if operation["transform"] == "sqrt":
+                    if value < 0.0:
+                        raise ValueError("native sum-of-squares diagnostic returned a negative value")
+                    value = math.sqrt(value)
+                elif operation["transform"] != "identity":
+                    raise ValueError("unknown diagnostic scalar transform")
+                reduction_name = operation["name"]
+                terms: dict[str, float] = {}
+                conservation = execution["conservation"]
+                if conservation is not None:
+                    baseline_key = "%s:%s" % (quantity.identity.token, reduction_name)
+                    baseline = self._baselines.get(baseline_key, value)
+                    drift = value - baseline
+                    tolerance_token = conservation["tolerance"]
+                    if not isinstance(tolerance_token, str):
+                        raise TypeError(
+                            "conservation diagnostic tolerance must be canonical float.hex() text")
+                    try:
+                        tolerance = float.fromhex(tolerance_token)
+                    except (OverflowError, ValueError) as exc:
+                        raise ValueError(
+                            "conservation diagnostic tolerance is not valid float.hex() text"
+                        ) from exc
+                    if tolerance.hex() != tolerance_token \
+                            or not math.isfinite(tolerance) or tolerance < 0.0:
+                        raise ValueError(
+                            "conservation diagnostic tolerance is not canonical finite binary64")
+                    terms = {
+                        "quantity": value,
+                        "baseline": baseline,
+                        "absolute_drift": abs(drift),
+                        "tolerance": tolerance,
+                    }
+                    if abs(drift) > tolerance:
+                        raise RuntimeError(
+                            "conservation diagnostic %s drift %.17g exceeds tolerance %.17g"
+                            % (quantity.handle.qualified_id, drift, tolerance))
+                    baseline_updates.setdefault(baseline_key, baseline)
+                    value = drift
+                    reduction_name = "conservation:%s" % reduction_name
+                key = DiagnosticKey(
+                    quantity.handle,
+                    self._owner._component_manifests[block].manifest_digest,
+                    self._owner.layout_identity(quantity.layout_id),
+                    min(quantity.levels) if quantity.levels else 0,
+                    quantity.identity.token,
+                    reduction_name,
+                )
+                values.append(DiagnosticPayload(key, value, "unspecified", terms))
+        return tuple(values), baseline_updates
 
     def _publish_diagnostics(self, effect: AcceptedSideEffect,
                              values: tuple[DiagnosticPayload, ...]) -> None:
+        baseline_updates = self._pending_baselines.get(effect.identity.token, {})
+        for key, value in baseline_updates.items():
+            self._baselines.setdefault(key, value)
         for value in values:
             self._diagnostics[value.key.identity.token] = value
             recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
             if callable(recorder):
-                recorder(effect.consumer_id, value.value)
+                recorder(_diagnostic_record_name(value), value.value)
         self._pending.pop(effect.identity.token, None)
+        self._pending_baselines.pop(effect.identity.token, None)
 
     def _discard_diagnostics(self, effect: AcceptedSideEffect) -> None:
         self._pending.pop(effect.identity.token, None)
+        self._pending_baselines.pop(effect.identity.token, None)
 
     def _prepare_diagnostic(self, effect: AcceptedSideEffect, manifest: Any) -> Any:
-        values = self._diagnostic_values(manifest)
+        values, baseline_updates = self._diagnostic_values(manifest)
         previous = {
             value.key.identity.token: self._diagnostics.get(value.key.identity.token)
             for value in values
@@ -576,6 +1185,12 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         existed = {
             value.key.identity.token: value.key.identity.token in self._diagnostics
             for value in values
+        }
+        previous_baselines = {
+            key: self._baselines.get(key) for key in baseline_updates
+        }
+        baseline_existed = {
+            key: key in self._baselines for key in baseline_updates
         }
 
         def rollback(_effect: AcceptedSideEffect,
@@ -589,21 +1204,33 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     self._diagnostics[token] = previous_value
                 else:
                     self._diagnostics.pop(token, None)
+            for key in baseline_updates:
+                if baseline_existed[key]:
+                    previous_value = previous_baselines[key]
+                    if previous_value is None:
+                        raise RuntimeError("diagnostic rollback lost its prior baseline")
+                    self._baselines[key] = previous_value
+                else:
+                    self._baselines.pop(key, None)
             self._pending.pop(_effect.identity.token, None)
+            self._pending_baselines.pop(_effect.identity.token, None)
 
         self._pending[effect.identity.token] = values
+        self._pending_baselines[effect.identity.token] = baseline_updates
         return _PreparedDiagnostic(
             effect, values, self._publish_diagnostics, self._discard_diagnostics, rollback)
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
-        snapshot, request = self._owner._output_snapshot(manifest, self.diagnostics)
+        snapshot, request = self._owner._output_snapshot(
+            manifest, self._pending.get(effect.identity.token, ()))
         fmt = manifest.output_format
         target = _target(
             effect.target.uri, manifest.output_format_data, snapshot, request,
             manifest.handle.local_id, self._owner._output_root)
-        communicator = self._owner._execution_context.communicator.handle \
-            if effect.target.parallel_mode is not ParallelMode.SERIAL else None
+        _rank, _size, communicator = _execution_topology(self._owner)
+        if effect.target.parallel_mode is ParallelMode.SERIAL:
+            communicator = None
         return OutputPreparation(fmt, snapshot, request, target, communicator)
 
     def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
@@ -613,12 +1240,29 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if manifest.kind in (ConsumerKind.DIAGNOSTIC, ConsumerKind.MONITOR):
             return self._prepare_diagnostic(effect, manifest)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
-            installed = self._external_writers.get(manifest.qualified_id)
-            if installed is not None:
-                return _PreparedExternalWriter(
-                    effect, self._resolve_output(effect), installed,
-                    self._owner._execution_context)
-            return self._output.prepare(effect)
+            diagnostic = self._prepare_diagnostic(effect, manifest) \
+                if manifest.diagnostic_quantities else None
+            try:
+                installed = self._external_writers.get(manifest.qualified_id)
+                if installed is not None:
+                    preparation = self._resolve_output(effect)
+                    if manifest.parallel_mode is ParallelMode.ROOT:
+                        output = _PreparedRootExternalWriter(
+                            effect, preparation, installed,
+                            self._owner._execution_context,
+                        )
+                    else:
+                        output = _PreparedExternalWriter(
+                            effect, preparation, installed,
+                            self._owner._execution_context)
+                else:
+                    output = self._output.prepare(effect)
+            except BaseException:
+                if diagnostic is not None:
+                    diagnostic.discard()
+                raise
+            return output if diagnostic is None else _PreparedScientificOutput(
+                output, diagnostic)
         if manifest.kind is ConsumerKind.CHECKPOINT:
             target = Path(effect.target.uri)
             if self._owner._output_root is not None:
@@ -724,187 +1368,530 @@ class RuntimeOutputSnapshot:
         self._geometry_cache[cache_key] = result
         return result
 
-    def _state(
-        self, block: str, layout: Any, level: int, *, collective: bool
-    ) -> tuple[tuple[ArrayPiece, ...], tuple[str, ...]]:
+    @staticmethod
+    def _local_pieces(
+        native_engine: Any,
+        method_name: str,
+        args: tuple[Any, ...],
+        *,
+        mode: ParallelMode,
+        rank: int,
+        require_local_owner: bool = True,
+    ) -> tuple[ArrayPiece, ...]:
+        """Consume the exact native rank-owned output-piece ABI without reconstruction."""
         import numpy as np
 
-        engine = self._owner._executor_for_block(block)
-        names = _conservative_names(self._owner, block)
-        if layout.adaptive:
-            communicator = self._owner._execution_context.communicator.handle
-            size = 1 if communicator is None else int(communicator.Get_size())
-            if collective and size > 1:
-                raise NotImplementedError(
-                    "collective adaptive output requires native rank-owned patch state; "
-                    "the current AMR facade exposes only full-grid local/global buffers"
-                )
-            # A compiled Program can force the shared AmrRuntime engine for one
-            # block, so block count is not a valid state-access discriminator.
-            multi = bool(engine.uses_runtime_engine())
-            getter = engine.block_level_state if multi else engine.level_state
-            raw = getter(block, level) if multi else getter(level)
-            n = int(engine.nx()) * layout.levels[level].refinement
-            values = np.asarray(raw, dtype=np.float64).reshape(len(names), n, n)
-            pieces = []
-            for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
-                if int(level_index) != level:
-                    continue
-                lower = (int(jlo), int(ilo))
-                upper = (int(jhi) + 1, int(ihi) + 1)
-                pieces.append(ArrayPiece(
-                    lower, upper,
-                    np.ascontiguousarray(values[:, lower[0]:upper[0], lower[1]:upper[1]])))
-            if not pieces:
-                raise ValueError("selected adaptive field has no exact native patch pieces")
-            return tuple(pieces), names
-        if collective:
-            pieces = []
-            for index, (ilo, jlo, ihi, jhi) in enumerate(engine._s.local_boxes(block)):
-                values = np.asarray(
-                    engine._s.local_state(block, index), dtype=np.float64)
-                pieces.append(ArrayPiece(
-                    (int(jlo), int(ilo)), (int(jhi) + 1, int(ihi) + 1), values))
-            return tuple(pieces), names
-        values = np.asarray(engine._s.state_global(block), dtype=np.float64).reshape(
-            len(names), int(engine.ny()), int(engine.nx()))
-        return (ArrayPiece((0, 0), (int(engine.ny()), int(engine.nx())), values),), names
+        method = getattr(native_engine, method_name, None)
+        if not callable(method):
+            raise RuntimeError(
+                "installed native provider lacks required %s() output view" % method_name)
+        rows = method(*args)
+        if not isinstance(rows, (tuple, list)):
+            raise TypeError("%s() must return an ordered sequence of piece mappings" % method_name)
+        pieces = []
+        indices = set()
+        required = {
+            "lower", "upper", "values", "global_box_index", "owner_rank", "replicated",
+        }
+        for position, row in enumerate(rows):
+            if not isinstance(row, Mapping) or set(row) != required:
+                raise TypeError(
+                    "%s()[%d] must contain exactly %s"
+                    % (method_name, position, sorted(required)))
+            box_index = row["global_box_index"]
+            owner_rank = row["owner_rank"]
+            replicated = row["replicated"]
+            if isinstance(box_index, bool) or type(box_index) is not int or box_index < 0:
+                raise TypeError("native output global_box_index must be an integer >= 0")
+            if box_index in indices:
+                raise ValueError("native output view contains a duplicate global_box_index")
+            indices.add(box_index)
+            if isinstance(owner_rank, bool) or type(owner_rank) is not int or owner_rank < 0:
+                raise TypeError("native output owner_rank must be an integer >= 0")
+            if type(replicated) is not bool:
+                raise TypeError("native output replicated must be an exact bool")
+            if require_local_owner and not replicated and owner_rank != rank:
+                raise ValueError("native local output piece is owned by another rank")
+            if mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE) \
+                    and replicated and rank != 0:
+                continue
+            values = np.asarray(row["values"])
+            if values.dtype != np.dtype(np.float64) or not values.flags.c_contiguous:
+                raise TypeError(
+                    "native output pieces must expose exact C-contiguous float64 values")
+            native_bounds = []
+            for name in ("lower", "upper"):
+                bound = row[name]
+                if not isinstance(bound, (tuple, list)) or len(bound) != 2 or any(
+                        type(value) is not int for value in bound):
+                    raise TypeError(
+                        "native output %s must be an exact integer (j, i) pair" % name)
+                native_bounds.append((bound[0], bound[1]))
+            lower: tuple[int, int] = native_bounds[0]
+            upper: tuple[int, int] = native_bounds[1]
+            pieces.append((
+                box_index,
+                ArrayPiece(
+                    lower,
+                    upper,
+                    values,
+                    box_index,
+                    owner_rank,
+                    replicated,
+                ),
+            ))
+        pieces.sort(key=lambda item: item[0])
+        return tuple(piece for _, piece in pieces)
 
-    def _field(
-        self, reference: Any, layout: Any, level: int, *, collective: bool,
-    ) -> tuple[tuple[ArrayPiece, ...], tuple[str, ...]]:
-        """Read one resolved field by its authenticated native provider slot."""
-        import numpy as np
-
-        plans = self._owner._install_plan.artifact.plan.field_plans
-        plan = plans.get(reference.local_id)
-        if plan is None:
-            raise ValueError(
-                "scientific output field %r has no resolved install plan"
-                % reference.local_id
+    @staticmethod
+    def _validate_piece_bounds(
+        pieces: tuple[ArrayPiece, ...], boxes: tuple[tuple[int, int, int, int], ...],
+        *, complete: bool, rank: int | None = None,
+    ) -> None:
+        active: list[ArrayPiece] = []
+        covered = 0
+        for piece in sorted(pieces, key=lambda value: (value.lower, value.upper)):
+            jlo, ilo = piece.lower
+            jhi, ihi = piece.upper
+            if piece.global_box_index >= len(boxes):
+                raise ValueError("native output global_box_index lies outside geometry boxes")
+            if (jlo, ilo, jhi, ihi) != boxes[piece.global_box_index]:
+                raise ValueError(
+                    "native output piece bounds differ from its indexed geometry box")
+            if rank is not None and piece.owner_rank != rank:
+                raise ValueError("rank-local native output piece has a different owner_rank")
+            active = [other for other in active if other.upper[0] > jlo]
+            if any(not (ihi <= other.lower[1] or other.upper[1] <= ilo) for other in active):
+                raise ValueError("native output pieces overlap")
+            active.append(piece)
+            covered += (jhi - jlo) * (ihi - ilo)
+        if complete:
+            expected = sum(
+                (jhi - jlo) * (ihi - ilo)
+                for jlo, ilo, jhi, ihi in boxes
             )
-        engine = self._owner._executor_for_layout(layout.handle.qualified_id)
-        if collective:
-            communicator = self._owner._execution_context.communicator.handle
-            size = 1 if communicator is None else int(communicator.Get_size())
-            if size > 1:
-                raise NotImplementedError(
-                    "collective field output requires native rank-owned field patches"
-                )
-        slot = plan.native_options["provider_slot"]
-        if layout.adaptive:
-            raw = engine._s.field_potential_level_global(slot, level)
-            n = int(engine.nx()) * layout.levels[level].refinement
-        else:
-            if level != 0:
-                raise ValueError("uniform field output has only level zero")
-            raw = engine._s.field_potential_global(slot)
-            n = int(engine.nx())
-        values = np.asarray(raw, dtype=np.float64).reshape(1, n, n)
-        if layout.adaptive:
-            pieces = []
-            for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
-                if int(level_index) != level:
-                    continue
-                lower = (int(jlo), int(ilo))
-                upper = (int(jhi) + 1, int(ihi) + 1)
-                pieces.append(ArrayPiece(
-                    lower, upper,
-                    np.ascontiguousarray(values[:, lower[0]:upper[0], lower[1]:upper[1]])))
-            if not pieces:
-                raise ValueError("selected adaptive field has no exact native patch pieces")
-        else:
-            pieces = [ArrayPiece((0, 0), (n, n), values)]
-        return tuple(pieces), (plan.operator.unknown.local_id,)
+            if covered != expected:
+                raise ValueError("native output pieces do not exactly cover valid geometry boxes")
+            if {piece.global_box_index for piece in pieces} != set(range(len(boxes))):
+                raise ValueError(
+                    "native output pieces do not authenticate every global geometry box")
+            if any(piece.replicated and piece.owner_rank != 0 for piece in pieces):
+                raise ValueError(
+                    "complete native output uses a non-root replicated authority")
+
+    @staticmethod
+    def _piece_metadata(piece: ArrayPiece) -> dict[str, Any]:
+        return {
+            "lower": list(piece.lower),
+            "upper": list(piece.upper),
+            "global_box_index": piece.global_box_index,
+            "owner_rank": piece.owner_rank,
+            "replicated": piece.replicated,
+        }
+
+    @staticmethod
+    def _validate_distributed_piece_metadata(
+        rows: tuple[Mapping[str, Any], ...],
+        *,
+        mode: ParallelMode,
+        boxes: tuple[tuple[int, int, int, int], ...],
+    ) -> None:
+        expected_keys = {"rank", "pieces", "error"}
+        if any(not isinstance(row, Mapping) or set(row) != expected_keys for row in rows):
+            raise TypeError("distributed output-piece envelope schema is not exact")
+        if any(row["rank"] != rank for rank, row in enumerate(rows)):
+            raise ValueError("distributed output-piece envelope rank order is invalid")
+        by_index: dict[int, list[tuple[int, Mapping[str, Any]]]] = {}
+        required_piece_keys = {
+            "lower", "upper", "global_box_index", "owner_rank", "replicated",
+        }
+        for rank, row in enumerate(rows):
+            pieces = row["pieces"]
+            if not isinstance(pieces, (tuple, list)):
+                raise TypeError("distributed output-piece metadata must be an ordered sequence")
+            for piece in pieces:
+                if not isinstance(piece, Mapping) or set(piece) != required_piece_keys:
+                    raise TypeError("distributed output-piece metadata schema is not exact")
+                index = piece["global_box_index"]
+                if isinstance(index, bool) or type(index) is not int \
+                        or index < 0 or index >= len(boxes):
+                    raise ValueError("distributed output-piece global_box_index is invalid")
+                owner = piece["owner_rank"]
+                if isinstance(owner, bool) or type(owner) is not int \
+                        or owner < 0 or owner >= len(rows):
+                    raise ValueError("distributed output-piece owner_rank is invalid")
+                if type(piece["replicated"]) is not bool:
+                    raise TypeError("distributed output-piece replicated must be an exact bool")
+                lower, upper = piece["lower"], piece["upper"]
+                if (
+                    not isinstance(lower, (tuple, list))
+                    or not isinstance(upper, (tuple, list))
+                    or len(lower) != 2
+                    or len(upper) != 2
+                    or any(
+                        isinstance(value, bool) or type(value) is not int
+                        for value in tuple(lower) + tuple(upper)
+                    )
+                ):
+                    raise TypeError(
+                        "distributed output-piece bounds must be exact integer pairs")
+                if piece["owner_rank"] != rank:
+                    raise ValueError(
+                        "distributed output-piece owner differs from contributing rank")
+                if tuple(lower) + tuple(upper) != boxes[index]:
+                    raise ValueError(
+                        "distributed output-piece bounds differ from indexed geometry box")
+                by_index.setdefault(index, []).append((rank, piece))
+        if set(by_index) != set(range(len(boxes))):
+            raise ValueError("distributed output-piece union misses global geometry boxes")
+        for index, contributors in by_index.items():
+            replicated = {piece["replicated"] for _, piece in contributors}
+            if replicated == {False}:
+                if len(contributors) != 1:
+                    raise ValueError(
+                        "non-replicated global geometry box has multiple contributors")
+                continue
+            if replicated != {True}:
+                raise ValueError(
+                    "global geometry box mixes replicated and non-replicated ownership")
+            ranks = tuple(rank for rank, _ in contributors)
+            expected = (
+                tuple(range(len(rows)))
+                if mode is ParallelMode.PER_RANK else (0,)
+            )
+            if ranks != expected:
+                raise ValueError(
+                    "replicated global geometry box %d has an invalid contributor set" % index)
+
+    def _distributed_pieces(
+        self,
+        native_engine: Any,
+        method_name: str,
+        args: tuple[Any, ...],
+        *,
+        mode: ParallelMode,
+        rank: int,
+        communicator: Any,
+        boxes: tuple[tuple[int, int, int, int], ...],
+        components: int,
+    ) -> tuple[ArrayPiece, ...]:
+        local: tuple[ArrayPiece, ...] = ()
+        metadata: tuple[dict[str, Any], ...] = ()
+        error = None
+        selected_method = (
+            method_name.replace("_local_pieces", "_root_pieces")
+            if mode is ParallelMode.ROOT else method_name
+        )
+        try:
+            local = self._local_pieces(
+                native_engine,
+                selected_method,
+                (communicator, *args) if mode is ParallelMode.ROOT else args,
+                mode=mode,
+                rank=rank,
+                require_local_owner=mode is not ParallelMode.ROOT,
+            )
+            if any(
+                piece.values.ndim != 3 or piece.values.shape[0] != components
+                for piece in local
+            ):
+                raise ValueError(
+                    "native output piece component axis differs from the compiled state")
+            self._validate_piece_bounds(
+                local,
+                boxes,
+                complete=mode is ParallelMode.ROOT and rank == 0,
+                rank=rank if mode is not ParallelMode.ROOT else None,
+            )
+            if mode is ParallelMode.ROOT and rank != 0 and local:
+                raise RuntimeError("native ROOT output returned field data on a non-root rank")
+            if mode is not ParallelMode.ROOT:
+                metadata = tuple(self._piece_metadata(piece) for piece in local)
+        except Exception as exc:
+            error = "%s: %s" % (type(exc).__name__, exc)
+        if mode is ParallelMode.ROOT:
+            rows = allgather_value(communicator, {"rank": rank, "error": error})
+            if any(
+                not isinstance(row, Mapping)
+                or set(row) != {"rank", "error"}
+                or row["rank"] != owner
+                for owner, row in enumerate(rows)
+            ):
+                raise RuntimeError("ROOT output-piece status schema/rank is invalid")
+            failures = [
+                "rank %d: %s" % (owner, row["error"])
+                for owner, row in enumerate(rows) if row["error"] is not None
+            ]
+            if failures:
+                raise RuntimeError("ROOT output-piece gather failed: " + "; ".join(failures))
+            return local
+        rows = allgather_value(communicator, {
+            "rank": rank,
+            "pieces": metadata,
+            "error": error,
+        })
+        if any(
+            not isinstance(row, Mapping)
+            or set(row) != {"rank", "pieces", "error"}
+            or row["rank"] != owner
+            for owner, row in enumerate(rows)
+        ):
+            raise RuntimeError(
+                "%s output-piece envelope schema/rank is invalid" % mode.name)
+        failures = [
+            "rank %d: %s" % (owner, row["error"])
+            for owner, row in enumerate(rows) if row["error"] is not None
+        ]
+        if failures:
+            raise RuntimeError(
+                "%s output-piece preflight failed: %s"
+                % (mode.name, "; ".join(failures)))
+        self._validate_distributed_piece_metadata(rows, mode=mode, boxes=boxes)
+        return local
 
     def build(self, manifest: Any, diagnostics: tuple[DiagnosticPayload, ...]) \
             -> tuple[OutputSnapshot, OutputRequest]:
-        geometries, fields, keys = {}, [], []
-        names = tuple(self._owner._component_manifests)
-        from pops.problem.handles import FieldHandle
-        for quantity in manifest.quantities:
-            layout = self._layout(quantity.layout_id)
-            levels = quantity.levels or tuple(row.index for row in layout.levels)
-            block = _block_name(quantity.reference, names)
-            for level in levels:
-                geometry = self._geometry(layout, level)
-                geometries[geometry.key] = geometry
-                if isinstance(quantity.reference, FieldHandle):
-                    pieces, components = self._field(
-                        quantity.reference,
-                        layout,
-                        level,
-                        collective=manifest.parallel_mode is ParallelMode.COLLECTIVE,
-                    )
-                else:
-                    pieces, components = self._state(
-                        block,
-                        layout,
-                        level,
-                        collective=manifest.parallel_mode is ParallelMode.COLLECTIVE,
-                    )
+        import numpy as np
+
+        rank, size, communicator = _execution_topology(self._owner)
+        mode = manifest.parallel_mode
+        if mode is ParallelMode.SERIAL:
+            if (rank, size) != (0, 1):
+                raise ValueError("SERIAL output snapshot requires rank 0 / size 1")
+        elif communicator is None:
+            raise ValueError(
+                "%s output snapshot requires a native MPI ExecutionContext" % mode.name)
+        entries: list[dict[str, Any]] = []
+        geometries: dict[tuple[str, int], LevelGeometry] = {}
+        preflight_error = None
+        preflight_schema: tuple[dict[str, Any], ...] = ()
+        try:
+            component_names = tuple(self._owner._component_manifests)
+            from pops.problem.handles import FieldHandle
+
+            for quantity in manifest.quantities:
+                layout = self._layout(quantity.layout_id)
+                levels = quantity.levels or tuple(row.index for row in layout.levels)
+                block = _block_name(quantity.reference, component_names)
+                component_manifest = self._owner._component_manifests[block].manifest_digest
+                for level in levels:
+                    geometry = self._geometry(layout, level)
+                    geometries[geometry.key] = geometry
+                    if isinstance(quantity.reference, FieldHandle):
+                        plan = self._owner._install_plan.artifact.plan.field_plans.get(
+                            quantity.reference.local_id)
+                        if plan is None:
+                            raise ValueError(
+                                "scientific output field %r has no resolved install plan"
+                                % quantity.reference.local_id)
+                        engine = self._owner._executor_for_layout(
+                            layout.handle.qualified_id)
+                        method_name = "output_field_local_pieces"
+                        args = (plan.native_options["provider_slot"], level)
+                        components = (plan.operator.unknown.local_id,)
+                    else:
+                        engine = self._owner._executor_for_block(block)
+                        method_name = "output_state_local_pieces"
+                        args = (block, level)
+                        components = _conservative_names(self._owner, block)
+                    native_engine = engine._s
+                    if not callable(getattr(native_engine, method_name, None)):
+                        raise RuntimeError(
+                            "installed native provider lacks required %s() output view"
+                            % method_name)
+                    entry = {
+                        "quantity": quantity,
+                        "geometry": geometry,
+                        "component_manifest": component_manifest,
+                        "native_engine": native_engine,
+                        "method_name": method_name,
+                        "args": args,
+                        "components": components,
+                    }
+                    entries.append(entry)
+            diagnostic_schema = []
+            for quantity in manifest.diagnostic_quantities:
+                layout = self._layout(quantity.layout_id)
+                levels = quantity.levels or tuple(row.index for row in layout.levels)
+                for level in levels:
+                    geometry = self._geometry(layout, level)
+                    geometries[geometry.key] = geometry
+                diagnostic_schema.append({
+                    "quantity": quantity.identity.token,
+                    "handle": quantity.handle.qualified_id,
+                    "layout": quantity.layout_id,
+                    "levels": list(levels),
+                    "execution": thaw_data(quantity.execution),
+                })
+            preflight_schema = tuple({
+                "kind": "field",
+                "quantity": entry["quantity"].identity.token,
+                "geometry": entry["geometry"].to_data(),
+                "component_manifest": entry["component_manifest"].token,
+                "method": entry["method_name"],
+                "args": list(entry["args"]),
+                "components": list(entry["components"]),
+            } for entry in entries) + ({
+                "kind": "diagnostics",
+                "quantities": diagnostic_schema,
+            },)
+        except Exception as exc:
+            preflight_error = "%s: %s" % (type(exc).__name__, exc)
+        if communicator is not None:
+            rows = allgather_value(communicator, {
+                "rank": rank,
+                "schema": preflight_schema,
+                "error": preflight_error,
+            })
+            if any(
+                not isinstance(row, Mapping)
+                or set(row) != {"rank", "schema", "error"}
+                or row["rank"] != owner
+                for owner, row in enumerate(rows)
+            ):
+                raise RuntimeError("output snapshot preflight envelope schema/rank is invalid")
+            failures = [
+                "rank %d: %s" % (owner, row["error"])
+                for owner, row in enumerate(rows) if row["error"] is not None
+            ]
+            if failures:
+                raise RuntimeError(
+                    "output snapshot local preflight failed: " + "; ".join(failures))
+            if any(row["schema"] != rows[0]["schema"] for row in rows[1:]):
+                raise RuntimeError("output snapshot plan/geometry differs across ranks")
+        elif preflight_error is not None:
+            raise RuntimeError("output snapshot local preflight failed: " + preflight_error)
+
+        extracted: list[tuple[dict[str, Any], tuple[ArrayPiece, ...]]] = []
+        for entry in entries:
+            geometry = entry["geometry"]
+            if communicator is None:
+                pieces = self._local_pieces(
+                    entry["native_engine"], entry["method_name"], entry["args"],
+                    mode=mode, rank=rank)
+                if any(
+                    piece.values.ndim != 3
+                    or piece.values.shape[0] != len(entry["components"])
+                    for piece in pieces
+                ):
+                    raise ValueError(
+                        "native output piece component axis differs from compiled metadata")
+                self._validate_piece_bounds(
+                    pieces, geometry.boxes, complete=True, rank=rank)
+            else:
+                pieces = self._distributed_pieces(
+                    entry["native_engine"], entry["method_name"], entry["args"],
+                    mode=mode,
+                    rank=rank,
+                    communicator=communicator,
+                    boxes=geometry.boxes,
+                    components=len(entry["components"]),
+                )
+            extracted.append((entry, pieces))
+
+        snapshot = request = None
+        final_error = None
+        canonical = None
+        try:
+            fields, keys = [], []
+            for entry, pieces in extracted:
+                geometry = entry["geometry"]
                 key = FieldKey(
-                    quantity.reference,
-                    self._owner._component_manifests[block].manifest_digest,
+                    entry["quantity"].reference,
+                    entry["component_manifest"],
                     geometry.layout_identity,
-                    level,
+                    geometry.level,
                     "accepted",
                 )
                 fields.append(FieldPayload(
-                    key, "cell", "unspecified", components,
-                    geometry.cell_shape,
-                    pieces,
-                ))
+                    key, "cell", "unspecified", entry["components"],
+                    geometry.cell_shape, pieces, dtype=np.dtype(np.float64).str))
                 keys.append(key)
-        if not geometries:
-            for quantity in manifest.quantities:
-                layout = self._layout(quantity.layout_id)
-                geometry = self._geometry(layout, 0)
-                geometries[geometry.key] = geometry
-        selected_diagnostics = tuple(
-            value for value in diagnostics
-            if value.key.layout_identity.token in {key[0] for key in geometries}
-        )
-        request = OutputRequest(
-            manifest.qualified_id,
-            tuple(keys),
-            manifest.parallel_mode is ParallelMode.COLLECTIVE,
-            tuple(value.key for value in selected_diagnostics),
-        )
-        engine = self._owner._executor
-        logical_clock = manifest.schedule.domain.clock
-        temporal = getattr(engine, "_temporal_restart_state", None)
-        if temporal is None:
-            raise RuntimeError("output snapshot requires accepted qualified temporal state")
-        cursor = temporal.cursor_for_clock(logical_clock)
-        last_dt_hex = temporal.controller_state.get("last_accepted_dt")
-        accepted_dt = 0.0 if last_dt_hex is None else float.fromhex(last_dt_hex)
-        run_identity = getattr(engine, "_last_run_identity", None)
-        if type(run_identity) is not Identity:
-            run_identity = make_identity("run", {
-                "runtime": self._owner._runtime_plan.identity.token,
-                "time": float(engine.time()).hex(),
-                "macro_step": int(engine.macro_step()),
+            selected_handles = {
+                value.handle.qualified_id for value in manifest.diagnostic_quantities
+            }
+            selected_diagnostics = tuple(
+                value for value in diagnostics
+                if value.key.reference.qualified_id in selected_handles
+                and value.key.layout_identity.token in {key[0] for key in geometries}
+            )
+            expected_diagnostic_count = sum(
+                len(value.execution["operations"])
+                for value in manifest.diagnostic_quantities
+            )
+            if len(selected_diagnostics) != expected_diagnostic_count:
+                raise RuntimeError(
+                    "scientific output did not stage every exact diagnostic operation")
+            request = OutputRequest(
+                manifest.qualified_id, tuple(keys), mode, rank, size,
+                tuple(value.key for value in selected_diagnostics))
+            engine = self._owner._executor
+            logical_clock = manifest.schedule.domain.clock
+            temporal = getattr(engine, "_temporal_restart_state", None)
+            if temporal is None:
+                raise RuntimeError(
+                    "output snapshot requires accepted qualified temporal state")
+            cursor = temporal.cursor_for_clock(logical_clock)
+            last_dt_hex = temporal.controller_state.get("last_accepted_dt")
+            accepted_dt = 0.0 if last_dt_hex is None else float.fromhex(last_dt_hex)
+            run_identity = getattr(engine, "_last_run_identity", None)
+            if type(run_identity) is not Identity:
+                run_identity = make_identity("run", {
+                    "runtime": self._owner._runtime_plan.identity.token,
+                    "time": float(engine.time()).hex(),
+                    "macro_step": int(engine.macro_step()),
+                })
+            snapshot = OutputSnapshot(
+                OutputClock.at(
+                    logical_clock.qualified_id, engine.time(), engine.macro_step(),
+                    stage="accepted", tick=int(cursor["tick"]), level=0, substep=0,
+                    stage_index=0, fraction=(1, 1), dt=accepted_dt),
+                OutputProvenance(
+                    self._owner._install_plan.artifact.plan.plan_identity,
+                    self._owner._install_plan.bind_identity,
+                    run_identity,
+                    "runtime-instance-accepted-state",
+                ),
+                tuple(geometries.values()),
+                tuple(fields),
+                {
+                    "consumer_graph": self._owner._consumer_graph.identity.token,
+                    "runtime_plan": self._owner._runtime_plan.identity.token,
+                },
+                diagnostics=selected_diagnostics,
+            )
+            canonical = snapshot.to_data(request)
+            selection = request.to_data()
+            selection.pop("rank")
+            canonical["selection"] = selection
+            canonical["fields"] = [dict(row, pieces=[]) for row in canonical["fields"]]
+        except Exception as exc:
+            if communicator is None:
+                raise
+            final_error = "%s: %s" % (type(exc).__name__, exc)
+        if communicator is not None:
+            rows = allgather_value(communicator, {
+                "rank": rank,
+                "canonical": canonical,
+                "error": final_error,
             })
-        snapshot = OutputSnapshot(
-            OutputClock.at(
-                logical_clock.qualified_id, engine.time(), engine.macro_step(),
-                stage="accepted", tick=int(cursor["tick"]), level=0, substep=0,
-                stage_index=0, fraction=(1, 1), dt=accepted_dt),
-            OutputProvenance(
-                self._owner._install_plan.artifact.plan.plan_identity,
-                self._owner._install_plan.bind_identity,
-                run_identity,
-                "runtime-instance-accepted-state",
-            ),
-            tuple(geometries.values()),
-            tuple(fields),
-            {
-                "consumer_graph": self._owner._consumer_graph.identity.token,
-                "runtime_plan": self._owner._runtime_plan.identity.token,
-            },
-            diagnostics=selected_diagnostics,
-        )
+            if any(
+                not isinstance(row, Mapping)
+                or set(row) != {"rank", "canonical", "error"}
+                or row["rank"] != owner
+                for owner, row in enumerate(rows)
+            ):
+                raise RuntimeError("output snapshot final envelope schema/rank is invalid")
+            failures = [
+                "rank %d: %s" % (owner, row["error"])
+                for owner, row in enumerate(rows) if row["error"] is not None
+            ]
+            if failures:
+                raise RuntimeError("output snapshot finalization failed: " + "; ".join(failures))
+            if any(row["canonical"] != rows[0]["canonical"] for row in rows[1:]):
+                raise RuntimeError("output snapshot canonical metadata differs across ranks")
+        if snapshot is None or request is None:
+            raise RuntimeError("output snapshot finalization returned no exact authority")
         return snapshot, request
 
 

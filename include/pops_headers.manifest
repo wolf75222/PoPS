@@ -112,6 +112,7 @@ test-only pops/numerics/time/schemes/imex.hpp
 api pops/numerics/time/schemes/scheduler.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
 api pops/parallel/comm.hpp
+sdk-support pops/parallel/world_communicator.hpp
 test-only pops/parallel/load_balance.hpp
 api pops/physics/bricks/bricks.hpp
 api pops/physics/bricks/elliptic.hpp
@@ -127,6 +128,7 @@ sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_registry.hpp
+sdk-support pops/runtime/amr/composite_reduction.hpp
 sdk-support pops/runtime/amr/prepared_component_providers.hpp
 api pops/runtime/amr_system.hpp
 sdk-support pops/runtime/builders/block/amr_block_seam.hpp
@@ -168,6 +170,9 @@ api pops/runtime/module_capabilities.hpp
 sdk-support pops/runtime/multiblock/interface_flux_scheduler.hpp
 sdk-support pops/runtime/multiblock/prepared_interface_flux_component.hpp
 api pops/runtime/numerical_defaults.hpp
+sdk-support pops/runtime/output/hdf5_collective.hpp
+sdk-support pops/runtime/output_piece.hpp
+sdk-support pops/runtime/output_piece_collective.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/cache_manager.hpp

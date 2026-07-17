@@ -76,7 +76,8 @@ struct NanModel {
   POPS_HD Real elliptic_rhs(const State&) const { return 0; }
 };
 
-static pops::MultiFab make_mf(const pops::BoxArray& ba, const pops::DistributionMapping& dm, int nc) {
+static pops::MultiFab make_mf(const pops::BoxArray& ba, const pops::DistributionMapping& dm,
+                              int nc) {
   pops::MultiFab m(ba, dm, nc, 0);
   m.set_val(Real(0));
   return m;
@@ -136,7 +137,8 @@ class NewtonRobustnessTest : public ::testing::Test {
   static pops::BoxArray* ba_;
   static pops::DistributionMapping* dm_;
   static pops::MultiFab* aux_;
-  static pops::MultiFab* U0_;  // etat initial commun (verification BE, damping, jacobien, observateur)
+  static pops::MultiFab*
+      U0_;  // etat initial commun (verification BE, damping, jacobien, observateur)
 };
 pops::Box2D* NewtonRobustnessTest::dom_ = nullptr;
 pops::BoxArray* NewtonRobustnessTest::ba_ = nullptr;

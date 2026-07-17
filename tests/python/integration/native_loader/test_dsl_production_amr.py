@@ -379,8 +379,8 @@ def _compile_wrong_abi(model, dst_so, cxx):
     On regenere (pas de patch binaire : sur macOS ARM cela invaliderait la signature et tuerait le
     process). Renvoie le chemin du .so."""
     from pops.codegen.toolchain import pops_loader_build_flags
-    # model est une facade Model : le HyperbolicModel backing (_m) porte emit_cpp_native_loader.
-    src = model._m.emit_cpp_native_loader(target="amr_system")
+    lowering = model.__pops_compiler_lowering__()
+    src = lowering.native_loader_source(target="amr_system")
     # PoPS est Kokkos-only : le loader inclut les en-tetes pops -> Kokkos + (macOS) -undefined
     # dynamic_lookup via pops_loader_build_flags. SIGNATURE D'EN-TETES FAUSSE conservee (le .so compile
     # mais doit etre REJETE a l'ABI par add_native_block).

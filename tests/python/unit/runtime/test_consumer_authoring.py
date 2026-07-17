@@ -35,7 +35,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     diagnostic = Integral(block=block, cadence=output_schedule)
     graph = ConsumerGraph.from_consumers((
         ScientificOutput(
-            format=HDF5(parallel=True),
+            format=HDF5(mode=ParallelMode.COLLECTIVE),
             schedule=output_schedule,
             fields=(state,),
             diagnostics=(diagnostic,),
@@ -74,6 +74,15 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     diagnostic_data, = output.to_data()["diagnostics"]
     assert diagnostic_data["references"] == [case.resolve(block).canonical_identity()]
     assert diagnostic_data["descriptor"]["scheme"] == "integral"
+    diagnostic_quantity, = output.diagnostic_quantities
+    assert diagnostic_quantity.reference == case.resolve(state)
+    assert diagnostic_quantity.levels == (0,)
+    assert diagnostic_quantity.execution["operations"] == ({
+        "name": "integral",
+        "reduction": "sum",
+        "transform": "identity",
+        "metric_weighted": True,
+    },)
     assert checkpoint.output_format is None
     assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v3"
     assert checkpoint.operation_data["bit_identical"] is True
@@ -95,6 +104,42 @@ def test_consumer_protocol_is_required_and_schedule_authority_is_unique():
         )
 
 
+def test_embedded_diagnostic_identity_is_qualified_by_its_consumer():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(10, clock=clock)
+    diagnostic = Integral(block=block, cadence=schedule)
+    graph = ConsumerGraph.from_consumers(tuple(
+        ScientificOutput(
+            format=HDF5(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(diagnostic,),
+            target=target,
+        )
+        for target in ("state/first", "state/second")
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    diagnostics = tuple(node.diagnostic_quantities[0] for node in resolved.nodes)
+    assert len({value.handle.qualified_id for value in diagnostics}) == 2
+    assert all(
+        node.handle.local_id in diagnostic.handle.owner_path.segments
+        for node, diagnostic in zip(resolved.nodes, diagnostics, strict=True)
+    )
+
+
 def test_output_format_options_refuse_python_truthiness_coercion() -> None:
-    with pytest.raises(TypeError, match="exact bool"):
-        HDF5(parallel="false")
+    with pytest.raises(TypeError, match="exact pops.output.ParallelMode"):
+        HDF5(mode="serial")

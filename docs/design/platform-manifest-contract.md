@@ -14,9 +14,10 @@ the corresponding identity instead of selecting a compatibility route.
 ## Execution resources
 
 `ExecutionContext` is the sole runtime resource authority. It owns explicit identities and optional
-opaque handles for the communicator, datatype, and device. A non-serial communicator or non-host
-device requires a handle. The generic launch seam never reads `MPI_COMM_WORLD`, `MPI_DOUBLE`, a
-current device, or a default execution space.
+opaque native handles for the communicator, datatype, and device. A non-serial communicator or
+non-host device requires a handle. MPI handles are created and validated by the C++ runtime; Python
+never imports an MPI implementation, executes a collective, or supplies `MPI_COMM_WORLD` or
+`MPI_DOUBLE`.
 
 The native route currently proves two exact host configurations:
 
@@ -27,10 +28,32 @@ The native route currently proves two exact host configurations:
 - communicator: `serial`, or `MPI_COMM_WORLD` when the authenticated module is MPI-enabled and the
   process is inside an active world launch.
 
-The MPI route requires an explicit `ExecutionContext.mpi_world(artifact, MPI.COMM_WORLD)` at bind;
-the artifact, native backend manifest, Python handle, native rank and native size must all agree.
-Custom communicators, GPU devices, non-cell centerings, three-dimensional kernels, and single/mixed
-precision are not advertised. No fallback or emulation is installed.
+The MPI route requires an explicit `ExecutionContext.mpi_world(artifact)` at bind. That call asks the
+native module to initialize MPI with `MPI_THREAD_MULTIPLE`, or attach to an external world only when
+`MPI_Query_thread` proves the same level, and returns an opaque C++ world resource. Initialization
+must precede worker-thread launch. PoPS finalizes only a world it initialized, after native work has
+ended; an embedding application retains ownership. The artifact, native backend manifest, native
+communicator identity, rank and size must all agree. Custom
+communicators, GPU devices, non-cell centerings, three-dimensional kernels, and single/mixed
+precision are not advertised. No Python MPI adapter, fallback, or emulation is installed.
+
+Every C++ artifact compiled at runtime, including explicit `Program` loaders and authenticated
+external components, inherits this same selected communicator. CMake serializes the complete
+`MPI::MPI_CXX` contract into one private `_pops.__mpi_contract__` manifest: include directories,
+compile options/definitions, link options/libraries, and SHA-256 values for every `mpi.h` and library.
+Codegen re-hashes those files immediately before compilation, replays every flag, and folds the
+manifest digest into both its cache key and `POPS_ABI_KEY_LITERAL`. An in-place MPI upgrade, missing
+path, changed flag, Open MPI/MPICH mismatch, or incomplete manifest therefore fails before compile
+or native installation; PoPS never substitutes a serial loader. On POSIX, `_pops` is promoted once
+to `RTLD_GLOBAL` and its handle is retained for process lifetime before any component is compiled or
+loaded, so plugins share the already-owned Kokkos/MPI runtimes. The external component manifest
+records `MPI_COMM_WORLD` plus the MPI ABI proof and is checked against the explicit execution
+context at installation.
+
+`compile_native` has an explicit PE/COFF command and `_pops.lib` contract. By contrast,
+`compile_problem` and `compile_component` are currently fail-closed on Windows because their final
+authenticated PE/COFF symbol-inspection/publication pipeline does not yet exist. They never run a
+POSIX `-shared -fPIC` command or publish a `.so` under Windows.
 
 ## Field views and pre-launch refusal
 

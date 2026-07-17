@@ -1,8 +1,8 @@
 #pragma once
 
-#include <pops/core/state/variables.hpp>         // VariableSet/VariableRole/role_from_name (resolve mask)
+#include <pops/core/state/variables.hpp>  // VariableSet/VariableRole/role_from_name (resolve mask)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // dispatch_amr_block / dispatch_amr_compiled + AmrBuildParams
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntimeBlock + AmrTimeMethod
+#include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntimeBlock + AmrTimeMethod
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + compiled bricks + ModelSpec
 
 #include <algorithm>

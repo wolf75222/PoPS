@@ -22,6 +22,8 @@ On verifie :
  (5) le hook m.projection sans temoin VP (ADC-177) reste INCHANGE : aucun include dense_eig, aucun
      foncteur emis (extension strictement additive, test_projection_hook reste vert).
 """
+
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -38,14 +40,22 @@ from pops._ir.expr import Const, Var
 from pops._ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
 from pops.physics._model import HyperbolicModel
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-
-dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, sign=sign, eig_lmax=eig_lmax,
-                      eig_lmin=eig_lmin, eig_max_im=eig_max_im, HyperbolicModel=HyperbolicModel)
-
 from tests.python.support.requirements import repo_include
+
+dsl = SimpleNamespace(
+    Const=Const,
+    Var=Var,
+    abs_=abs_,
+    sign=sign,
+    eig_lmax=eig_lmax,
+    eig_lmin=eig_lmin,
+    eig_max_im=eig_max_im,
+    HyperbolicModel=HyperbolicModel,
+)
+
 INCLUDE = repo_include()
-TOL_EVAL = 1e-12   # eval numpy vs np.linalg.eigvals (meme algebre numpy des deux cotes)
-TOL_CPP = 1e-10    # brique C++ (Francis QR sur pile) vs numpy : matrices saines, simples/separees
+TOL_EVAL = 1e-12  # eval numpy vs np.linalg.eigvals (meme algebre numpy des deux cotes)
+TOL_CPP = 1e-10  # brique C++ (Francis QR sur pile) vs numpy : matrices saines, simples/separees
 
 fails = 0
 
@@ -80,19 +90,26 @@ def test_eval_vs_numpy():
                 v = rng.standard_normal(7)
                 env[names[i][j]] = v
                 M[:, i, j] = v
-        for field, fn in (("max_im", dsl.eig_max_im), ("lmin", dsl.eig_lmin),
-                          ("lmax", dsl.eig_lmax)):
+        for field, fn in (
+            ("max_im", dsl.eig_max_im),
+            ("lmin", dsl.eig_lmin),
+            ("lmax", dsl.eig_lmax),
+        ):
             got = fn(rows).eval(env)
             ref = ref_field(M, field)
             d = float(np.max(np.abs(got - ref)))
-            chk(np.allclose(got, ref, rtol=0.0, atol=TOL_EVAL),
-                "%dx%d %s == numpy (ecart max %.2e)" % (k, k, field, d))
+            chk(
+                np.allclose(got, ref, rtol=0.0, atol=TOL_EVAL),
+                "%dx%d %s == numpy (ecart max %.2e)" % (k, k, field, d),
+            )
         # cas scalaire (pas de champ) : matrice de rotation explicite [[c, -s],[s, c]] -> max_im = |s|
         if k == 2:
             c, s = 1.3, 0.8
             wit = dsl.eig_max_im([[dsl.Const(c), dsl.Const(-s)], [dsl.Const(s), dsl.Const(c)]])
-            chk(abs(float(wit.eval({})) - abs(s)) < TOL_EVAL,
-                "scalaire : rotation [[c,-s],[s,c]] -> max_im = |s| = %.3f" % abs(s))
+            chk(
+                abs(float(wit.eval({})) - abs(s)) < TOL_EVAL,
+                "scalaire : rotation [[c,-s],[s,c]] -> max_im = |s| = %.3f" % abs(s),
+            )
 
 
 def build_eig_model(tag):
@@ -117,14 +134,19 @@ def test_codegen():
     m, _, _ = build_eig_model("cg")
     src = m.emit_cpp_brick(name="ToyEigCg")
     chk("#include <pops/numerics/linalg/dense_eig.hpp>" in src, "brique inclut dense_eig.hpp")
-    chk("static POPS_HD pops::Real pops_eig_max_im_2x2(" in src, "foncteur nomme pops_eig_max_im_2x2 declare")
+    chk(
+        "static POPS_HD pops::Real pops_eig_max_im_2x2(" in src,
+        "foncteur nomme pops_eig_max_im_2x2 declare",
+    )
     chk("pops::real_eig_minmax(M).max_im" in src, "le foncteur appelle real_eig_minmax(M).max_im")
     chk("[&]" not in src and "[=]" not in src, "aucune lambda etendue (device-clean)")
     chk("pops_eig_max_im_2x2(" in src.split("State project")[1], "project() appelle le foncteur")
 
 
 def test_cpp_brick_vs_numpy(cxx, tmp):
-    print("== (3) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) ==")
+    print(
+        "== (3) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) =="
+    )
     m, tol, target = build_eig_model("cpp")
     hpp = os.path.join(tmp, "eig_brick.hpp")
     with open(hpp, "w") as f:
@@ -148,18 +170,20 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "int main(int argc, char** argv) {\n"
             "  pops_generated::ToyEigCpp m;\n"
             "  pops::Aux a{};\n"
-            "  std::FILE* fp = std::fopen(argv[1], \"w\");\n"
+            '  std::FILE* fp = std::fopen(argv[1], "w");\n'
             "  for (int i = 2; i < argc; i += 3) {\n"
             "    pops::StateVec<3> U{atof(argv[i]), atof(argv[i+1]), atof(argv[i+2])};\n"
             "    auto P = m.project(U, a);\n"
-            "    std::fprintf(fp, \"%.17g\\n\", (double)P[2]);\n"
+            '    std::fprintf(fp, "%.17g\\n", (double)P[2]);\n'
             "  }\n"
             "  std::fclose(fp);\n"
             "  return 0;\n"
-            "}\n")
+            "}\n"
+        )
     exe = os.path.join(tmp, "eig_main")
-    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
-                        capture_output=True, text=True)
+    cp = subprocess.run(
+        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+    )
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")
         print(cp.stderr[:2000])
@@ -175,21 +199,30 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
 
     # reference numpy : max_im du MEME champ de matrices, puis le MEME masque branchless.
     M = np.zeros((n, 2, 2))
-    M[:, 0, 0] = q0; M[:, 0, 1] = -q1; M[:, 1, 0] = q1; M[:, 1, 1] = q0
+    M[:, 0, 0] = q0
+    M[:, 0, 1] = -q1
+    M[:, 1, 0] = q1
+    M[:, 1, 1] = q0
     max_im = ref_field(M, "max_im")
     mask = 0.5 * (np.sign(max_im - tol) + 1.0)
     q2_ref = q2_in * (1.0 - mask) + target * mask
     d = float(np.max(np.abs(q2_cpp - q2_ref)))
-    chk(np.allclose(q2_cpp, q2_ref, rtol=0.0, atol=TOL_CPP),
-        "project(U) C++ == numpy sur %d cellules (ecart max %.2e)" % (n, d))
+    chk(
+        np.allclose(q2_cpp, q2_ref, rtol=0.0, atol=TOL_CPP),
+        "project(U) C++ == numpy sur %d cellules (ecart max %.2e)" % (n, d),
+    )
     # les DEUX branches sont exercees (sinon le test est trivial).
-    chk(np.any(mask > 0.5) and np.any(mask < 0.5),
+    chk(
+        np.any(mask > 0.5) and np.any(mask < 0.5),
         "les deux branches (VP complexe / reelle) sont exercees (%d/%d corrigees)"
-        % (int(np.sum(mask > 0.5)), n))
+        % (int(np.sum(mask > 0.5)), n),
+    )
     # la reference numpy max_im == |q1| (rotation) : le foncteur calcule bien la PARTIE IMAGINAIRE.
-    chk(np.allclose(max_im, np.abs(q1), atol=TOL_CPP),
+    chk(
+        np.allclose(max_im, np.abs(q1), atol=TOL_CPP),
         "temoin = |Im| : max_im == |q1| de la rotation (ecart %.2e)"
-        % float(np.max(np.abs(max_im - np.abs(q1)))))
+        % float(np.max(np.abs(max_im - np.abs(q1)))),
+    )
 
 
 def test_additive():
@@ -223,12 +256,22 @@ def test_system_end_to_end():
         from pops.physics._model import HyperbolicModel
         import pops.runtime._engine_descriptors as engine
     except Exception as ex:  # noqa: BLE001
-        print("  skip  extension _pops absente (%s) -- (3) couvre deja la numerique compilee"
-              % type(ex).__name__)
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            ) from None
+        require_native_or_skip(
+            "  skip  extension _pops absente (%s) -- (3) couvre deja la numerique compilee"
+            % type(ex).__name__
+        )
         return
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx:
-        print("  skip  pas de compilateur C++")
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            )
+        require_native_or_skip("  skip  pas de compilateur C++")
         return
 
     N, L, DT, NSTEPS = 24, 1.0, 1e-3, 3
@@ -250,7 +293,7 @@ def test_system_end_to_end():
         xs = (np.arange(n) + 0.5) / n
         X, Y = np.meshgrid(xs, xs, indexing="ij")
         q0 = np.sin(2 * np.pi * X)
-        q1 = 0.9 * np.cos(2 * np.pi * Y)   # |q1| traverse tol -> les deux branches actives
+        q1 = 0.9 * np.cos(2 * np.pi * Y)  # |q1| traverse tol -> les deux branches actives
         q2 = np.zeros((n, n))
         return np.stack([q0, q1, q2])
 
@@ -280,8 +323,7 @@ def test_system_end_to_end():
         s.add_equation(
             "toy",
             component,
-            spatial=engine.Spatial(
-                limiter=Minmod(), flux=Rusanov(), recon=Conservative()),
+            spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov(), recon=Conservative()),
             time=engine.Explicit(),
         )
         s.set_state("toy", init(N))
@@ -292,10 +334,12 @@ def test_system_end_to_end():
         m_eig = build_pkg("e")
         m_none = build_pkg("n")  # meme transport ; on neutralise sa projection pour la reference
         m_none._proj = None
-        so = m_eig.compile(os.path.join(tmp, "eig_production.so"), INCLUDE,
-                           backend="production", cxx=cxx)
-        so_n = m_none.compile(os.path.join(tmp, "none_production.so"), INCLUDE,
-                              backend="production", cxx=cxx)
+        so = m_eig.compile(
+            os.path.join(tmp, "eig_production.so"), INCLUDE, backend="production", cxx=cxx
+        )
+        so_n = m_none.compile(
+            os.path.join(tmp, "none_production.so"), INCLUDE, backend="production", cxx=cxx
+        )
         eig_component = compiled_component(m_eig, so)
         plain_component = compiled_component(m_none, so_n)
         # run AVEC hook
@@ -312,13 +356,17 @@ def test_system_end_to_end():
             sr.step(DT)
             cur = m_eig.projection_value(np.array(sr.get_state("toy")).reshape(3, N, N))
             ref.append(cur)
-        d = max(float(np.max(np.abs(a - b))) for a, b in zip(run, ref))
-        chk(all(np.allclose(a, b, rtol=0.0, atol=1e-10) for a, b in zip(run, ref)),
+        d = max(float(np.max(np.abs(a - b))) for a, b in zip(run, ref, strict=True))
+        chk(
+            all(np.allclose(a, b, rtol=0.0, atol=1e-10) for a, b in zip(run, ref, strict=True)),
             "production : etat post-pas == transport puis projection(temoin VP) numpy "
-            "(ecart %.2e)" % d)
+            "(ecart %.2e)" % d,
+        )
         # Le temoin VP est ACTIF : q2 est mis a la cible dans au moins une cellule.
-        chk(any(np.any(np.isclose(a[2], target)) for a in run),
-            "production : la branche VP complexe corrige q2 (cible atteinte)")
+        chk(
+            any(np.any(np.isclose(a[2], target)) for a in run),
+            "production : la branche VP complexe corrige q2 (cible atteinte)",
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -336,7 +384,11 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
-        print("== (3) skip : compilateur ou en-tetes pops absents ==")
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            )
+        require_native_or_skip("== (3) skip : compilateur ou en-tetes pops absents ==")
 
     test_system_end_to_end()
 

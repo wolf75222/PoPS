@@ -12,15 +12,12 @@ namespace pops::amr {
 /// branch before the complete refine/coarsen roots have been evaluated.
 enum class TagTruth : std::uint8_t { False = 0, True = 1, Unknown = 2 };
 
-[[nodiscard]] inline TagTruth tag_comparison(
-    double sample, double threshold, bool greater) {
+[[nodiscard]] inline TagTruth tag_comparison(double sample, double threshold, bool greater) {
   if (!std::isfinite(sample) || !std::isfinite(threshold))
     throw std::domain_error("AMR Tagger rejected a non-finite indicator sample");
   if (sample == threshold)
     return TagTruth::Unknown;
-  return (greater ? sample > threshold : sample < threshold)
-             ? TagTruth::True
-             : TagTruth::False;
+  return (greater ? sample > threshold : sample < threshold) ? TagTruth::True : TagTruth::False;
 }
 
 [[nodiscard]] constexpr TagTruth tag_not(TagTruth value) noexcept {
@@ -71,8 +68,7 @@ struct TagDecision {
     TagTruth refine_root, TagTruth coarsen_root, TagEqualityPolicy equality_policy,
     TagConflictPolicy conflict_policy) noexcept {
   TagDecision decision{refine_root == TagTruth::True, coarsen_root == TagTruth::True, false};
-  const bool has_unknown =
-      refine_root == TagTruth::Unknown || coarsen_root == TagTruth::Unknown;
+  const bool has_unknown = refine_root == TagTruth::Unknown || coarsen_root == TagTruth::Unknown;
   if (has_unknown && equality_policy == TagEqualityPolicy::Refine)
     decision.refine = true;
   else if (has_unknown && equality_policy == TagEqualityPolicy::Coarsen)

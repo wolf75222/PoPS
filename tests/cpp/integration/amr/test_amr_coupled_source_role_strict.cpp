@@ -24,7 +24,7 @@
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -70,8 +70,8 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {

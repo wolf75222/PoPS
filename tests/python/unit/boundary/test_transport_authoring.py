@@ -94,6 +94,20 @@ def test_transport_set_resolves_exact_ports_values_and_derived_stencil_requireme
     assert data["authority_type"] == "transport_boundary_set"
     assert {row["condition_type"] for row in data["conditions"]} == {"inflow", "outflow"}
     assert data["plan"]["plan_type"] == "boundary_providers"
+    compiled = authority.compile_boundary_data()
+    inflow_values = [
+        face["values"][0] for face in compiled["faces"] if face["type"] == "dirichlet"
+    ]
+    assert inflow_values == [
+        ["handle_value", canonical_inlet.qualified_id],
+        ["handle_value", canonical_inlet.qualified_id],
+    ]
+    from pops.model._bind_expression import expression_reference_keys
+
+    assert expression_reference_keys(
+        inflow_values[0], where="compiled inflow") == {
+            ("qid", canonical_inlet.qualified_id)
+        }
 
 
 def test_transport_set_rejects_incomplete_geometry_at_resolution():

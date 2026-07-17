@@ -4,7 +4,7 @@
     "default_parallel_share_seconds": 2.0,
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 185,
+    "target_count": 186,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -191,5 +191,6 @@
   "test_wave_speed_cache_engagement": 2.0,
   "test_weno5_compiled_model": 24.29,
   "test_weno5_ssprk3": 2.0,
-  "test_weno_convergence": 2.0
+  "test_weno_convergence": 2.0,
+  "test_world_communicator": 2.0
 }

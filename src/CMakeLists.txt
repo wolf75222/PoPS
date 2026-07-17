@@ -37,9 +37,13 @@ set(POPS_RUNTIME_AMR_SOURCES
     runtime/builders/amr/compiled/compressible/amr_compiled_compressible.cpp
     ${POPS_RUNTIME_AMR_GENERATED_SEAMS})
 
+set(POPS_RUNTIME_OUTPUT_SOURCES
+    runtime/output/hdf5_collective.cpp)
+
 add_library(pops_runtime_system OBJECT ${POPS_RUNTIME_SYSTEM_SOURCES})
 add_library(pops_runtime_amr OBJECT ${POPS_RUNTIME_AMR_SOURCES})
-set(POPS_RUNTIME_TARGETS pops_runtime_system pops_runtime_amr)
+add_library(pops_runtime_output OBJECT ${POPS_RUNTIME_OUTPUT_SOURCES})
+set(POPS_RUNTIME_TARGETS pops_runtime_system pops_runtime_amr pops_runtime_output)
 
 foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
   target_link_libraries(${_runtime_target} PUBLIC pops::pops ${CMAKE_DL_LIBS})
@@ -78,14 +82,6 @@ if(POPS_BUILD_PYTHON)
 
   pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)
 
-  set(POPS_NATIVE_MPI_INCLUDE "")
-  if(TARGET MPI::MPI_CXX)
-    get_target_property(POPS_NATIVE_MPI_INCLUDE MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
-    if(POPS_NATIVE_MPI_INCLUDE)
-      string(REPLACE ";" "|" POPS_NATIVE_MPI_INCLUDE "${POPS_NATIVE_MPI_INCLUDE}")
-    endif()
-  endif()
-
   foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
     target_compile_definitions(${_runtime_target} PRIVATE
       # Mirrors the DEFINE_SYMBOL CMake adds when these files are direct _pops MODULE sources.
@@ -94,15 +90,23 @@ if(POPS_BUILD_PYTHON)
       POPS_VERSION="${PROJECT_VERSION}"
       POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
       POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
-    if(POPS_NATIVE_MPI_INCLUDE)
-      target_compile_definitions(
-        ${_runtime_target} PRIVATE POPS_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}")
-    endif()
   endforeach()
 
   # Make the exact native facts available to the pybind-only adapter TUs in python/CMakeLists.txt.
   set(POPS_NATIVE_HEADER_SIGNATURE "${POPS_NATIVE_HEADER_SIGNATURE}" PARENT_SCOPE)
   set(POPS_NATIVE_MPI_INCLUDE "${POPS_NATIVE_MPI_INCLUDE}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_ABI "${POPS_NATIVE_MPI_ABI}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_COMPILER "${POPS_NATIVE_MPI_COMPILER}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_STANDARD "${POPS_NATIVE_MPI_STANDARD}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_COMPILE_OPTIONS "${POPS_NATIVE_MPI_COMPILE_OPTIONS}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_COMPILE_DEFINITIONS
+      "${POPS_NATIVE_MPI_COMPILE_DEFINITIONS}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_LINK_OPTIONS "${POPS_NATIVE_MPI_LINK_OPTIONS}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_LINK_LIBRARIES "${POPS_NATIVE_MPI_LINK_LIBRARIES}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_HEADER_PATHS "${POPS_NATIVE_MPI_HEADER_PATHS}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_HEADER_HASHES "${POPS_NATIVE_MPI_HEADER_HASHES}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_LIBRARY_PATHS "${POPS_NATIVE_MPI_LIBRARY_PATHS}" PARENT_SCOPE)
+  set(POPS_NATIVE_MPI_LIBRARY_HASHES "${POPS_NATIVE_MPI_LIBRARY_HASHES}" PARENT_SCOPE)
 endif()
 
 # Called after pybind11 has been discovered.  Keeping this operation here ensures that enabling
@@ -112,7 +116,7 @@ function(pops_runtime_enable_python_thin_lto)
   if(NOT TARGET pybind11::thin_lto)
     message(FATAL_ERROR "POPS_PY_LTO requires the pybind11::thin_lto target")
   endif()
-  foreach(_runtime_target pops_runtime_system pops_runtime_amr)
+  foreach(_runtime_target pops_runtime_system pops_runtime_amr pops_runtime_output)
     target_link_libraries(${_runtime_target} PRIVATE pybind11::thin_lto)
   endforeach()
 endfunction()

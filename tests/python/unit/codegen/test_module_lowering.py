@@ -234,6 +234,8 @@ def _final_trace_artifact(compiled):
         cxx = compiled.cxx
         std = compiled.std
         model_hash = "trace-model"
+        module_manifest = compiled.module_manifest
+        module_hash = compiled.module_hash()
         gamma = None
         caps = {"cpu": True, "mpi": False, "amr": False, "gpu": False}
         artifact_identity = make_identity("artifact", {"component": "trace-model"})
@@ -241,9 +243,10 @@ def _final_trace_artifact(compiled):
         @staticmethod
         def __pops_artifact_model_metadata__():
             return {
-                "schema_version": 2,
+                "schema_version": 3,
                 "state_spaces": ("U",),
                 "cons_names": ("rho", "mx", "my"),
+                "cons_roles": ("Density", "MomentumX", "MomentumY"),
                 "n_vars": 3,
                 "params": {},
                 "aux_names": (),

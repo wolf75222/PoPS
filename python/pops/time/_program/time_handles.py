@@ -260,25 +260,13 @@ class _ProgramTimeHandles(_ProgramBase):
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError("keep_history: depth must be a Python int >= 1 (got %r)" % (depth,))
         from pops.time._history.policy import CopyCurrent
-        from pops.time._history.persistence import (
-            HistoryPersistence, resolve_history_persistence,
-        )
         cold_start = CopyCurrent() if cold_start is None else cold_start
         if not isinstance(cold_start, CopyCurrent):
             raise TypeError(
                 "keep_history: cold_start must be CopyCurrent(); no other cold-start "
                 "policy is implemented by the runtime")
-        # Program history configuration owns an immutable descriptor snapshot.  Retaining the
-        # caller's mutable object would let a post-validation ``policy.k = ...`` change checkpoint
-        # semantics and the Program hash behind the builder's back.
         cold_start = CopyCurrent()
-        supplied_policy = resolve_history_persistence(checkpoint_policy)
-        policy = HistoryPersistence.from_manifest(supplied_policy.to_manifest())
-        policy.validate_for(depth)
-        if hasattr(policy, "freeze"):
-            policy.freeze()
         prior = self._time_history_configs.get(state)
-        config = (depth, cold_start, policy)
         if prior is not None:
             raise ValueError("keep_history: history for %s.%s is already configured"
                              % (block_name(state.block), state_name(state.state)))
@@ -303,11 +291,19 @@ class _ProgramTimeHandles(_ProgramBase):
         # Lower the store before publishing the configuration.  If an existing manual ring has
         # incompatible block/StateSpace provenance, ``store_history`` fails and no temporal
         # configuration is left half-installed on the Program.
-        store = self.store_history(name, self._current_time_value(state))
+        store = self._store_history(
+            name,
+            self._current_time_value(state),
+            checkpoint_policy=checkpoint_policy,
+            history_depth=depth,
+        )
         if store.point != state.point:
             store = self._replace_value(store, point=state.point)
+        installed_slots, policy = self._history_persistence[name]
+        if installed_slots != depth + 1:
+            raise RuntimeError("keep_history installed an inconsistent persistence depth")
+        config = (depth, cold_start, policy)
         self._time_history_configs[state] = config
-        self._history_persistence[name] = (depth, policy)
         self._time_history_stores[state] = store
         return store
 

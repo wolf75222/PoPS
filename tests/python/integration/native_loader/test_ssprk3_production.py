@@ -15,7 +15,7 @@ import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from tests.python.support.requirements import (
     missing_compiler_requirement,
-    skip_process_test,
+    require_native_or_skip,
 )
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -79,7 +79,7 @@ if missing:
     if fails:
         print(f"test_ssprk3_production : {fails} ECHEC(S)")
         sys.exit(1)
-    skip_process_test(f"(2)/(3) test_ssprk3_production : {missing}")
+    require_native_or_skip(f"(2)/(3) test_ssprk3_production : {missing}")
 
 n, L = 48, 1.0
 U = _initial_state(n)

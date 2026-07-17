@@ -76,11 +76,16 @@ ALLOWED = {
 }
 LAYERS = set(ALLOWED)
 
-NATIVE_IMPORT_ALLOWLIST = {
-    "pops._bootstrap",
-    "pops.codegen.toolchain",
-    "pops.external.artifacts",
-    "pops.runtime_environment",
+NATIVE_IMPORT_PHASE_OWNERS = {
+    "pops._bootstrap": "package-bootstrap",
+    "pops._native_collectives": "runtime-collective-call",
+    "pops._platform_contracts": "platform-contract-resolution",
+    "pops.codegen._compiled_artifact": "compiled-artifact-sealing",
+    "pops.codegen.toolchain": "runtime-compiler-probe",
+    "pops.external.artifacts": "external-artifact-authentication",
+    "pops.external.compiler": "external-component-compilation",
+    "pops.output._writers.hdf5": "collective-output-write",
+    "pops.runtime_environment": "runtime-environment-resolution",
 }
 
 
@@ -160,14 +165,19 @@ def _native_import_lines(tree):
 
 def test_native_extension_loads_have_explicit_phase_owners_at_every_scope():
     violations = []
+    observed_declared_owners = set()
     for path in _source_paths():
         module = _module_name(path)
         lines = tuple(_native_import_lines(ast.parse(path.read_text(), str(path))))
         allowed = module == "pops.runtime" or module.startswith("pops.runtime.") \
-            or module in NATIVE_IMPORT_ALLOWLIST
+            or module in NATIVE_IMPORT_PHASE_OWNERS
+        if lines and module in NATIVE_IMPORT_PHASE_OWNERS:
+            observed_declared_owners.add(module)
         if lines and not allowed:
             violations.append("%s:%s" % (module, ",".join(map(str, lines))))
     assert not violations, "unowned native-extension load(s): " + ", ".join(violations)
+    stale = sorted(set(NATIVE_IMPORT_PHASE_OWNERS) - observed_declared_owners)
+    assert not stale, "native phase-owner declaration(s) without a native load: " + ", ".join(stale)
 
 
 def _build_edges():

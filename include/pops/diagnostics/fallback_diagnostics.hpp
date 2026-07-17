@@ -72,13 +72,11 @@ struct FallbackDiagnosticsReport {
   std::vector<FallbackDiagnosticEntry> entries;
 };
 
-inline FallbackDiagnosticEntry fallback_entry(std::string key, std::string route,
-                                              std::string cause, std::string policy,
-                                              std::string default_action, std::string impact,
-                                              std::string frequency, std::size_t count,
-                                              bool explicit_opt_in,
-                                              bool performance_degraded,
-                                              bool semantics_changed) {
+inline FallbackDiagnosticEntry fallback_entry(std::string key, std::string route, std::string cause,
+                                              std::string policy, std::string default_action,
+                                              std::string impact, std::string frequency,
+                                              std::size_t count, bool explicit_opt_in,
+                                              bool performance_degraded, bool semantics_changed) {
   FallbackDiagnosticEntry entry;
   entry.key = std::move(key);
   entry.route = std::move(route);
@@ -97,17 +95,16 @@ inline FallbackDiagnosticEntry fallback_entry(std::string key, std::string route
 inline FallbackDiagnosticsReport fallback_diagnostics_report() {
   FallbackDiagnosticsReport report;
   report.entries.push_back(fallback_entry(
-      "elliptic.fft.direct_dft", "PoissonFFT::fft1d",
-      "FFT extent is not a power of two", "allowed_with_counter", "allow",
-      "correct O(n^2) transform replaces the radix-2 FFT", "per 1D transform",
-      fallback_count(FallbackCounter::kFftDirectDft), false, true, false));
+      "elliptic.fft.direct_dft", "PoissonFFT::fft1d", "FFT extent is not a power of two",
+      "allowed_with_counter", "allow", "correct O(n^2) transform replaces the radix-2 FFT",
+      "per 1D transform", fallback_count(FallbackCounter::kFftDirectDft), false, true, false));
   report.entries.push_back(fallback_entry(
       "linalg.dense_eig.gershgorin", "real_eig_minmax",
       "QR iteration cap reached before convergence", "allowed_with_counter",
       "return_bound_not_spectrum",
       "returns an enclosing Gershgorin bound; callers must not treat it as eigenvalues",
-      "per dense block solve", fallback_count(FallbackCounter::kDenseEigGershgorin), false,
-      false, true));
+      "per dense block solve", fallback_count(FallbackCounter::kDenseEigGershgorin), false, false,
+      true));
   report.entries.push_back(fallback_entry(
       "mesh.for_each.serial_small_box", "for_each_cell",
       "host execution space and cell count below POPS_FOREACH_SERIAL_THRESHOLD",
@@ -128,8 +125,7 @@ inline FallbackDiagnosticsReport fallback_diagnostics_report() {
       "per polar tensor solve configured with Jacobi", 0, true, true, false));
   report.entries.push_back(fallback_entry(
       "runtime.limiter_unknown_muscl_ghost", "limiter_n_ghost",
-      "unknown limiter reaches the halo-width helper", "refuse_final_route",
-      "validate_then_throw",
+      "unknown limiter reaches the halo-width helper", "refuse_final_route", "validate_then_throw",
       "temporary MUSCL-width allocation compatibility only; final dispatch rejects the limiter",
       "per invalid limiter validation attempt", 0, false, false, false));
   return report;

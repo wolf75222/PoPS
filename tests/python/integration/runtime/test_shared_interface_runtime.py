@@ -116,6 +116,7 @@ const PopsComponentInterfaceEntryV1 entry = {{
 }};
 const PopsComponentApiV1 api = {{
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   {json.dumps(manifest.component_id)},
   {json.dumps(manifest.semantic_digest.token)},
@@ -213,6 +214,11 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         endpoint_interfaces[1].canonical_identity()
     interface = endpoint_interfaces[0]
     assert interface.left.boundary.owner_path != interface.right.boundary.owner_path
+    for resolved_block, authored_block in zip(
+            resolved.blocks, (core.tracer, right), strict=True):
+        expected = core.case.resolve(core.inlet_x_param, block=authored_block)
+        x_min = resolved_block.numerics.boundaries[0].compile_boundary_data()["faces"][0]
+        assert x_min["values"] == [["handle_value", expected.qualified_id]]
     artifact = pops.compile(resolved)
     initial = {
         "tracer": np.ones((1, 8, 8), dtype=np.float64),
@@ -232,7 +238,14 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         core.case.resolve(core.refine_threshold): 0.10,
         core.case.resolve(core.coarsen_threshold): 0.04,
     })
-    runtime = pops.bind(
+    compiled_endpoint_owners = {
+        block.name: block.boundaries[0].runtime_boundary_data(params)[
+            "interface_endpoints"
+        ][0]["owned_sides"]
+        for block in artifact.plan.blocks
+    }
+    assert compiled_endpoint_owners == {"tracer": ["left"], "right": ["right"]}
+    runtime = example._bind_artifact(
         artifact, initial_state=initial, params=params)
 
     pops.run(runtime, t_end=1.0e-3, max_steps=1)

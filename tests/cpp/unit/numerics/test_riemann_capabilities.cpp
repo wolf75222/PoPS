@@ -34,7 +34,7 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 struct HookedEuler : pops::Euler {
   POPS_HD Real contact_speed(const State& UL, const State& UR, Real pL, Real pR, Real sL, Real sR,
-                            int dir) const {
+                             int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real rL = UL[0], rR = UR[0];
     const Real unL = UL[in] / rL, unR = UR[in] / rR;
@@ -55,7 +55,7 @@ struct HookedEuler : pops::Euler {
     return Us;
   }
   POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
-                               int dir) const {
+                                int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
     const Real rL = UL[0], rR = UR[0];
@@ -130,7 +130,7 @@ struct IsoHLLC {
   }
   POPS_HD Real pressure(const State& u) const { return cs2 * u[0]; }
   POPS_HD Real contact_speed(const State& UL, const State& UR, Real pL, Real pR, Real sL, Real sR,
-                            int dir) const {
+                             int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real rL = UL[0], rR = UR[0];
     const Real unL = UL[in] / rL, unR = UR[in] / rR;
@@ -185,8 +185,7 @@ typename Model::State face_density(const Policy& policy, const Model& model,
   right_values[2] = right_providers.grad_y;
   return pops::evaluate_numerical_flux(
              policy, model, left, pops::bind_flux_providers<Model>(left_values), right,
-             pops::bind_flux_providers<Model>(right_values),
-             pops::FaceContext::axis_aligned(axis))
+             pops::bind_flux_providers<Model>(right_values), pops::FaceContext::axis_aligned(axis))
       .checked_density()
       .value;
 }
@@ -199,7 +198,8 @@ TEST(test_riemann_capabilities, compile_time_detection) {
                 "Euler doit satisfaire HasHLLCStructure (ADC-590 : brique a-capabilites)");
   static_assert(pops::HasRoeDissipation<pops::Euler>,
                 "Euler doit satisfaire HasRoeDissipation (ADC-590 : brique a-capabilites)");
-  static_assert(pops::HasHLLCStructure<HookedEuler>, "HookedEuler doit satisfaire HasHLLCStructure");
+  static_assert(pops::HasHLLCStructure<HookedEuler>,
+                "HookedEuler doit satisfaire HasHLLCStructure");
   static_assert(pops::HasRoeDissipation<HookedEuler>,
                 "HookedEuler doit satisfaire HasRoeDissipation");
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");

@@ -193,8 +193,7 @@ TEST(CompositeFacPoissonTest, constant_reaction_matches_screened_mms_on_both_fac
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
   const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
-  const Box2D fine_box{{r * Ic0, r * Ic0},
-                       {r * Ic1 + r - 1, r * Ic1 + r - 1}};
+  const Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
 
   auto solve_screened = [&](bool force_general) {
     CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
@@ -231,12 +230,11 @@ TEST(CompositeFacPoissonTest, constant_reaction_matches_screened_mms_on_both_fac
       const Box2D box = fac.phi_fine().box(li);
       for (int j = box.lo[1] + r * guard; j <= box.hi[1] - r * guard; ++j)
         for (int i = box.lo[0] + r * guard; i <= box.hi[0] - r * guard; ++i)
-          error = std::fmax(
-              error,
-              std::fabs(phi(i, j, 0) - u_exact(geom_f.x_cell(i), geom_f.y_cell(j))));
+          error = std::fmax(error,
+                            std::fabs(phi(i, j, 0) - u_exact(geom_f.x_cell(i), geom_f.y_cell(j))));
     }
-    return std::pair<double, double>{
-        all_reduce_max(static_cast<double>(residual)), all_reduce_max(error)};
+    return std::pair<double, double>{all_reduce_max(static_cast<double>(residual)),
+                                     all_reduce_max(error)};
   };
 
   const auto legacy = solve_screened(/*force_general=*/false);
@@ -284,14 +282,13 @@ TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) 
 
   CompositeFacPoisson explicit_fac(geom_c, ba_c, bc, fine_box, r);
   fill(explicit_fac);
-  const Real r_explicit =
-      explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultRelTol,
-                         kFACDefaultAbsTol);
+  const Real r_explicit = explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps,
+                                             kFACDefaultRelTol, kFACDefaultAbsTol);
 
   CompositeFacPoisson installed_fac(geom_c, ba_c, bc, fine_box, r);
   fill(installed_fac);
   installed_fac.set_options(CompositeFacOptions{});  // defaults = kFAC*
-  const Real r_installed = installed_fac.solve();     // no-argument overload reads the options
+  const Real r_installed = installed_fac.solve();    // no-argument overload reads the options
 
   EXPECT_EQ(r_explicit, r_installed) << "default installed options must match the explicit solve";
 

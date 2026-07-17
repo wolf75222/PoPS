@@ -1,7 +1,6 @@
 """Exact Python projection of the generated PopsExecutionContextV1 resource identity."""
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 
@@ -52,22 +51,14 @@ def component_execution_data(context: Any) -> dict[str, Any]:
         communicator_datatype_f_handle = 0
         communicator_datatype_identity = "none"
     elif communicator.identity == "MPI_COMM_WORLD":
-        try:
-            MPI = importlib.import_module("mpi4py.MPI")
-        except ImportError as exc:
-            raise RuntimeError(
-                "MPI component execution requires mpi4py for the explicit communicator and "
-                "datatype handles"
-            ) from exc
-        if not isinstance(communicator.handle, MPI.Comm) or MPI.Comm.Compare(
-                communicator.handle, MPI.COMM_WORLD) != MPI.IDENT:
+        from pops._native_collectives import require_world
+
+        native = require_world(communicator.handle)
+        if not native.is_float64_datatype(context.datatype.handle):
             raise ValueError(
-                "MPI component execution requires the exact mpi4py.MPI.COMM_WORLD handle")
-        if context.datatype.handle is not MPI.DOUBLE:
-            raise ValueError(
-                "MPI component execution requires the exact mpi4py.MPI.DOUBLE datatype handle")
-        communicator_f_handle = int(communicator.handle.py2f())
-        communicator_datatype_f_handle = int(context.datatype.handle.py2f())
+                "MPI component execution requires the native float64 datatype resource")
+        communicator_f_handle = int(native.fortran_handle)
+        communicator_datatype_f_handle = int(context.datatype.handle.fortran_handle)
         communicator_datatype_identity = "MPI_DOUBLE"
     else:
         raise TypeError(

@@ -108,7 +108,8 @@ TEST(SystemLifecycle, NewStatesNeverSurfaceWithoutTheExplicitTransition) {
   lc.to_bound();
   for (int step = 0; step <= 3; ++step) {
     const std::string s = lc.state(step);
-    EXPECT_TRUE(s == "bound" || s == "running") << "unexpected state for step " << step << ": " << s;
+    EXPECT_TRUE(s == "bound" || s == "running")
+        << "unexpected state for step " << step << ": " << s;
   }
 }
 
@@ -126,7 +127,8 @@ TEST(SystemDiagnosticsRegistry, OptionsAndNewtonReportsRoundTrip) {
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_EQ(rows[0].name, "ions");
 
-  EXPECT_EQ(reg.newton_report_ptr("ions"), nullptr) << "absent -> nullptr, not a silently empty report";
+  EXPECT_EQ(reg.newton_report_ptr("ions"), nullptr)
+      << "absent -> nullptr, not a silently empty report";
   auto rep = std::make_shared<pops::NewtonReport>();
   rep->enabled = true;
   reg.newton_reports["ions"] = rep;

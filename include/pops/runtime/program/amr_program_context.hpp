@@ -14,22 +14,22 @@
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>     // Real, POPS_HD
-#include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts
-#include <pops/mesh/execution/for_each.hpp>    // for_each_cell, device_fence
-#include <pops/mesh/geometry/geometry.hpp>     // Geometry
-#include <pops/mesh/storage/mf_arith.hpp>      // saxpy / lincomb
-#include <pops/mesh/storage/multifab.hpp>      // MultiFab
+#include <pops/core/foundation/types.hpp>                         // Real, POPS_HD
+#include <pops/mesh/boundary/physical_bc.hpp>                     // fill_ghosts
+#include <pops/mesh/execution/for_each.hpp>                       // for_each_cell, device_fence
+#include <pops/mesh/geometry/geometry.hpp>                        // Geometry
+#include <pops/mesh/storage/mf_arith.hpp>                         // saxpy / lincomb
+#include <pops/mesh/storage/multifab.hpp>                         // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (flat solve_linear_matfree)
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>           // GeometricMG (Krylov precond)
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
+#include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine the driver wraps)
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite solver
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
-#include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
+#include <pops/runtime/amr_system.hpp>  // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
@@ -71,7 +71,8 @@ class AmrProgramContext {
     if (eng_ == nullptr)
       throw std::runtime_error(
           "AmrProgramContext: the AMR runtime engine is not built; install_program must force the "
-          "multi-block AmrRuntime build before installing a compiled time Program over the hierarchy");
+          "multi-block AmrRuntime build before installing a compiled time Program over the "
+          "hierarchy");
   }
   /// Direct ctor (C++ tests / the driver): an engine + the facade carrying the param / block-map stores.
   AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {}
@@ -80,9 +81,7 @@ class AmrProgramContext {
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   int nlev() const { return eng_->nlev(); }
-  bool has_refined_hierarchy() const {
-    return configured_tensor_elliptic().has_fine_patches();
-  }
+  bool has_refined_hierarchy() const { return configured_tensor_elliptic().has_fine_patches(); }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
@@ -146,36 +145,44 @@ class AmrProgramContext {
     clock_schedule_.configure_primary_clock(clock);
     primary_clock_ = clock;
   }
-  void declare_clock_relation(
-      const std::string& parent, const std::string& child, int count) const {
+  void declare_clock_relation(const std::string& parent, const std::string& child,
+                              int count) const {
     clock_schedule_.declare_relation(parent, child, count);
   }
   bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
                               const std::string& stage_identity, int level) const {
-    return clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, level_, macro_step()).has_value();
+    return clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step())
+        .has_value();
   }
-  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind,
-                       const std::string& clock, const std::string& stage_identity,
-                       int level) const {
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
+                       const std::string& stage_identity, int level) const {
     if (node_id < 0 || every_n <= 0)
       throw std::runtime_error("AMR Program schedule requires a valid node and positive period");
-    const auto coordinate = clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, level_, macro_step());
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step());
     return coordinate && coordinate->value % every_n == 0;
   }
   bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
                          const std::string& stage_identity, int level) const {
-    const auto coordinate = clock_schedule_.coordinate(
-        kind, clock, stage_identity, level, level_, macro_step());
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step());
     return coordinate && coordinate->value == 0;
   }
-  ClockScheduleState::SubcycleScope subcycle_scope(
-      const std::string& parent, const std::string& child, int count) const {
+
+  /// Exact parity with ProgramContext: record one typed scheduler decision. Cache-backed AMR
+  /// policies still fail loud at their cache action seams below; this counter never pretends that
+  /// an AMR cache exists, it only reports the decision that was actually reached.
+  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
+    if (node_id < 0)
+      throw std::runtime_error("AMR Program schedule decision requires a valid node");
+    return facade_->profiler_handle().schedule_decision(due, cache_backed);
+  }
+  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
+                                                   const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
   }
-  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
-                                   int step, Real offset) const {
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
+                                   Real offset) const {
     clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
@@ -198,16 +205,16 @@ class AmrProgramContext {
           "AmrProgramContext::sys_block: no explicit program-to-AMR block map is installed; "
           "positional block identity is not supported");
     if (b < 0 || b >= static_cast<int>(m.size()))
-      throw block_map_error_(
-          "AmrProgramContext::sys_block: program block index " + std::to_string(b) +
-          " is outside the explicit block map [0, " + std::to_string(m.size()) + ")");
+      throw block_map_error_("AmrProgramContext::sys_block: program block index " +
+                             std::to_string(b) + " is outside the explicit block map [0, " +
+                             std::to_string(m.size()) + ")");
     const int mapped = m[static_cast<std::size_t>(b)];
     const int count = static_cast<int>(eng_->n_blocks());
     if (mapped < 0 || mapped >= count)
-      throw block_map_error_(
-          "AmrProgramContext::sys_block: program block index " + std::to_string(b) +
-          " maps to invalid AMR block index " + std::to_string(mapped) +
-          " for an AmrRuntime with " + std::to_string(count) + " blocks");
+      throw block_map_error_("AmrProgramContext::sys_block: program block index " +
+                             std::to_string(b) + " maps to invalid AMR block index " +
+                             std::to_string(mapped) + " for an AmrRuntime with " +
+                             std::to_string(count) + " blocks");
     return mapped;
   }
   int n_blocks() const { return static_cast<int>(eng_->n_blocks()); }
@@ -285,42 +292,36 @@ class AmrProgramContext {
       capture_into_(b, u, r, ResidualCapture::FullRate, rate_id);
       return;
     }
-    eng_->level_rhs_into_at(
-        static_cast<std::size_t>(sys_block(b)), level_, boundary_point_(rate_id), u, r);
+    eng_->level_rhs_into_at(static_cast<std::size_t>(sys_block(b)), level_,
+                            boundary_point_(rate_id), u, r);
   }
-  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(
-      int stage_id) const {
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
     return boundary_point_(stage_id);
   }
   bool has_boundary_linearization(int b) const {
-    return eng_->has_boundary_linearization(
-        static_cast<std::size_t>(sys_block(b)));
+    return eng_->has_boundary_linearization(static_cast<std::size_t>(sys_block(b)));
   }
-  void rhs_core_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, MultiFab& r, bool flux_only) const {
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only) const {
     count_kernel();
-    eng_->level_rhs_core_into_at(
-        static_cast<std::size_t>(sys_block(b)), point.level, point,
-        u, r, flux_only);
+    eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
+                                 flux_only);
   }
-  void boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, MultiFab& c) const {
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c) const {
     count_kernel();
-    eng_->level_boundary_residual_into_at(
-        static_cast<std::size_t>(sys_block(b)), point.level, point, u, c);
+    eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
+                                          point, u, c);
   }
-  void boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& u, const MultiFab& v, MultiFab& j) const {
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
-    eng_->level_boundary_jvp_into_at(
-        static_cast<std::size_t>(sys_block(b)), point.level, point, u, v, j);
+    eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
+                                     v, j);
   }
   struct RhsGroupRequest {
-    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value,
-                    int rate_id_value, int flux_only_value)
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
+                    int flux_only_value)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
@@ -354,10 +355,9 @@ class AmrProgramContext {
     }
     if (capturing()) {
       if (eng_->has_level_interfaces(level_))
-        deferred_op(
-            "refined_shared_block_interfaces",
-            "shared block interfaces across a refined hierarchy require a prepared "
-            "interface-flux reflux ledger; coarse-only execution is supported");
+        deferred_op("refined_shared_block_interfaces",
+                    "shared block interfaces across a refined hierarchy require a prepared "
+                    "interface-flux reflux ledger; coarse-only execution is supported");
       for (const auto& request : requests) {
         count_kernel();
         capture_into_(request.block, *request.state, *request.rhs,
@@ -381,8 +381,7 @@ class AmrProgramContext {
       rhs.push_back(request.rhs);
       flux_only.push_back(request.flux_only);
     }
-    eng_->level_rhs_group(
-        level_, boundary_point_(group_id), blocks, states, rhs, flux_only);
+    eng_->level_rhs_group(level_, boundary_point_(group_id), blocks, states, rhs, flux_only);
   }
   void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
     require_rate_identity_(rate_id);
@@ -391,8 +390,8 @@ class AmrProgramContext {
       capture_into_(b, u, r, ResidualCapture::FluxOnly, rate_id);
       return;
     }
-    eng_->level_neg_div_flux_into_at(
-        static_cast<std::size_t>(sys_block(b)), level_, boundary_point_(rate_id), u, r);
+    eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(sys_block(b)), level_,
+                                     boundary_point_(rate_id), u, r);
   }
   void source_default_into(int b, MultiFab& u, MultiFab& r) const {
     count_kernel();
@@ -448,9 +447,9 @@ class AmrProgramContext {
         "the default per-stage fine-level field re-solve requires a composite stage solver; use "
         "OncePerStep field cadence or an exact named field provider");
   }
-  SolveReport solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                         const std::string& provider_slot, int b,
+                                         MultiFab& u_stage) const {
     if (provider_slot.empty())
       throw std::invalid_argument(
           "AmrProgramContext::solve_fields_from_state_at requires an exact provider slot");
@@ -458,12 +457,10 @@ class AmrProgramContext {
       throw std::out_of_range(
           "AmrProgramContext::solve_fields_from_state_at level is out of range");
     if (point.level != 0)
-      deferred_op(
-          "solve_fields_from_state_at_fine_level",
-          "a fine-level stage perturbation requires a composite field solver");
+      deferred_op("solve_fields_from_state_at_fine_level",
+                  "a fine-level stage perturbation requires a composite field solver");
     named_solve_reports_.erase(provider_slot);
-    MultiFab& live = eng_->level_state(
-        static_cast<std::size_t>(sys_block(b)), point.level);
+    MultiFab& live = eng_->level_state(static_cast<std::size_t>(sys_block(b)), point.level);
     MultiFab saved = live;
     SolveReport report;
     try {
@@ -474,13 +471,13 @@ class AmrProgramContext {
       live = std::move(saved);
       throw;
     }
-    if (report.solved()) named_solve_reports_[provider_slot] = report;
+    if (report.solved())
+      named_solve_reports_[provider_slot] = report;
     return report;
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
-  SolveReport solve_fields_from_state(const std::string& field, int b,
-                                      MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     if (level_ != 0) {
       const auto cached = named_solve_reports_.find(field);
       if (cached == named_solve_reports_.end())
@@ -507,8 +504,7 @@ class AmrProgramContext {
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.
-  SolveReport solve_fields_from_blocks(
-      const std::vector<const MultiFab*>& /*u_stages*/) const {
+  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
     deferred_op(
         "solve_fields_from_blocks_default",
         "an unqualified coupled multi-block field solve has no AMR provider authority; use the "
@@ -602,8 +598,11 @@ class AmrProgramContext {
     count_kernel();
     pops::saxpy(u, a, r);
     if (capturing()) {
-      ledger_axpy_(u, a, r);  // shadow the state combine on the effective-flux strip: ledger[u] += a*ledger[r]
-      note_live_write_(&u);   // a write to the live state invalidates any earlier live-state ring snapshot
+      ledger_axpy_(
+          u, a,
+          r);  // shadow the state combine on the effective-flux strip: ledger[u] += a*ledger[r]
+      note_live_write_(
+          &u);  // a write to the live state invalidates any earlier live-state ring snapshot
     }
   }
   void axpy(MultiFab& u, Real a, const MultiFab& r, Real dt,
@@ -633,8 +632,7 @@ class AmrProgramContext {
       note_live_write_(&z);
     }
   }
-  void commit_many(
-      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
     std::vector<MultiFab*> targets;
     targets.reserve(commits.size());
     for (const auto& [target, source] : commits) {
@@ -693,7 +691,9 @@ class AmrProgramContext {
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
   Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
-  Real abs_sum_component(const MultiFab& u, int comp) const { return pops::reduce_abs_sum(u, comp); }
+  Real abs_sum_component(const MultiFab& u, int comp) const {
+    return pops::reduce_abs_sum(u, comp);
+  }
   Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
   Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
   Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
@@ -715,8 +715,7 @@ class AmrProgramContext {
   // explicit ncomp >= 1 (the 1-component condensed-Schur phi^n carry) narrows the per-level ring, which
   // rides the same alloc / remap / replay machinery (each slot is sized by ncomp internally).
   void register_history(const std::string& name, int lag, int ncomp, int owner,
-                        const std::string& state_identity,
-                        const std::string& space_identity,
+                        const std::string& state_identity, const std::string& space_identity,
                         const std::string& clock_identity,
                         const std::string& interpolation_identity) const {
     if (state_identity.empty() || space_identity.empty())
@@ -737,8 +736,8 @@ class AmrProgramContext {
          prior_interpolation->second != interpolation_identity))
       throw std::runtime_error("AMR history '" + name +
                                "' cannot be re-registered with a different identity");
-    pops::detail::AmrHistoryOps::register_history(
-        *eng_, static_cast<std::size_t>(sys_block(owner)), name, lag, ncomp);
+    pops::detail::AmrHistoryOps::register_history(*eng_, static_cast<std::size_t>(sys_block(owner)),
+                                                  name, lag, ncomp);
     history_owners_[name] = owner;
     history_state_ids_[name] = state_identity;
     history_space_ids_[name] = space_identity;
@@ -750,7 +749,8 @@ class AmrProgramContext {
     validate_history_clock_(name, lag);
     MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
     if (capturing())
-      restore_ring_flux_(name, lag, mf);  // re-publish the lagged buffer's flux strip into the live ledger
+      restore_ring_flux_(name, lag,
+                         mf);  // re-publish the lagged buffer's flux strip into the live ledger
     return mf;
   }
   // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
@@ -763,8 +763,8 @@ class AmrProgramContext {
     if (history_state_ids_.find(name) == history_state_ids_.end() ||
         history_space_ids_.find(name) == history_space_ids_.end())
       throw std::runtime_error("AMR history '" + name + "' has no registered state/space identity");
-    pops::detail::AmrHistoryOps::register_history(
-        *eng_, static_cast<std::size_t>(sys_block(owner)), name, lag, ncomp);
+    pops::detail::AmrHistoryOps::register_history(*eng_, static_cast<std::size_t>(sys_block(owner)),
+                                                  name, lag, ncomp);
     if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
       pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
     MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
@@ -774,8 +774,24 @@ class AmrProgramContext {
   }
   void store_history(const std::string& name, const MultiFab& value, int owner) const {
     require_history_owner_(name, owner);
+    // The supported AMR histories belong to the primary macro clock.  The generated body is
+    // evaluated at every child substep, but that implementation detail must not overwrite the same
+    // logical ring slot at progressively later fine-level phases: doing so creates a "hierarchy
+    // snapshot" whose coarse and fine slices denote different physical times and cannot be replayed
+    // from one anchor.  Publish each level exactly once, at the first child window of the macro tick.
+    // Explicit child-clock histories are rejected by the AMR lowering until they have their own
+    // independently rotating provider.
+    if (current_window_ && current_window_->begin.phase != amr::Rational(0, 1))
+      return;
+    // A primary-clock AMR ring rotates once per accepted MACRO step, even though its fine-level
+    // value is stored once per child substep.  Its one scalar slot_dt therefore belongs to that
+    // macro-step, not to whichever level happened to store last.  Using current_level_dt_ let the
+    // finest level overwrite dt with dt/ref_ratio; selective restart then replayed only that
+    // fraction of a macro-step.  AMR child-clock histories are rejected by the lowering until a
+    // distinct per-clock ring provider exists, so the facade's installed-Program dt is the exact
+    // clock authority for every supported ring here.
     pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value,
-                                               static_cast<Real>(current_level_dt_));
+                                               static_cast<Real>(facade_->program_last_dt()));
     record_history_clock_(name);
     if (capturing())
       save_ring_flux_(name, value, owner);
@@ -835,8 +851,7 @@ class AmrProgramContext {
   }
   void profile_record(const std::string& name, std::chrono::steady_clock::time_point t0) const {
     const auto t1 = std::chrono::steady_clock::now();
-    facade_->profiler_handle().record(name,
-                                      std::chrono::duration<double>(t1 - t0).count());
+    facade_->profiler_handle().record(name, std::chrono::duration<double>(t1 - t0).count());
   }
 
   int macro_step() const { return facade_->macro_step(); }
@@ -857,7 +872,8 @@ class AmrProgramContext {
   /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& assembly_target(MultiFab& field, int role) const {
     validate_assembly_write_role(role, "AmrProgramContext::assembly_target");
-    if (!tensor_elliptic_) return field;
+    if (!tensor_elliptic_)
+      return field;
     AmrTensorElliptic& s = *tensor_elliptic_;
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
@@ -868,7 +884,8 @@ class AmrProgramContext {
   /// patch: identity (returns the emitted solution). @p role is kPhi.
   MultiFab& assembly_source(MultiFab& field, int role) const {
     validate_assembly_read_role(role, "AmrProgramContext::assembly_source");
-    if (!tensor_elliptic_) return field;
+    if (!tensor_elliptic_)
+      return field;
     AmrTensorElliptic& s = *tensor_elliptic_;
     if (!s.has_fine_patches())
       return field;
@@ -877,7 +894,8 @@ class AmrProgramContext {
   /// Resolve a hierarchy-scoped solve value for the current publish/reconstruct pass.  Flat AMR is
   /// the identity; a refined hierarchy returns the level solution published by the one composite solve.
   MultiFab& linear_solution(MultiFab& field) const {
-    if (!tensor_elliptic_) return field;
+    if (!tensor_elliptic_)
+      return field;
     AmrTensorElliptic& s = *tensor_elliptic_;
     return s.has_fine_patches() ? s.phi(level_) : field;
   }
@@ -897,18 +915,15 @@ class AmrProgramContext {
                                       int verbose) const {
     if (ncomp != 1)
       throw std::invalid_argument("composite tensor FAC requires exactly one component");
-    if (tensor_elliptic_ &&
-        (tensor_program_block_ != program_block || tensor_ncomp_ != ncomp))
-      throw std::logic_error(
-          "composite tensor FAC is already configured for another block");
+    if (tensor_elliptic_ && (tensor_program_block_ != program_block || tensor_ncomp_ != ncomp))
+      throw std::logic_error("composite tensor FAC is already configured for another block");
     if (!tensor_elliptic_) {
-      tensor_elliptic_ =
-          std::make_shared<AmrTensorElliptic>(eng_, sys_block(program_block), ncomp);
+      tensor_elliptic_ = std::make_shared<AmrTensorElliptic>(eng_, sys_block(program_block), ncomp);
       tensor_program_block_ = program_block;
       tensor_ncomp_ = ncomp;
     }
-    tensor_elliptic_->configure_composite_tensor_fac(
-        fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose);
+    tensor_elliptic_->configure_composite_tensor_fac(fine_sweeps, coarse_rel_tol, coarse_abs_tol,
+                                                     coarse_cycles, verbose);
   }
   /// Solve an authored matrix-free operator. This seam is always Krylov; direct composite hierarchy
   /// solves use solve_composite_tensor_fac so no accepted apply/preconditioner/method is ignored.
@@ -1030,14 +1045,12 @@ class AmrProgramContext {
   /// value member would delete the context copy constructor the [=] install lambda needs.
   AmrTensorElliptic& configured_tensor_elliptic() const {
     if (!tensor_elliptic_)
-      throw std::logic_error(
-          "composite tensor FAC must be configured before hierarchy access");
+      throw std::logic_error("composite tensor FAC must be configured before hierarchy access");
     return *tensor_elliptic_;
   }
 
   void require_tensor_binding(int program_block, int ncomp) const {
-    if (!tensor_elliptic_ || tensor_program_block_ != program_block ||
-        tensor_ncomp_ != ncomp)
+    if (!tensor_elliptic_ || tensor_program_block_ != program_block || tensor_ncomp_ != ncomp)
       throw std::logic_error(
           "composite tensor FAC block/component binding does not match the configured solver");
   }
@@ -1063,10 +1076,9 @@ class AmrProgramContext {
     MultiFab Fx(BoxArray(std::move(fxb)), ref.dmap(), nc, 0);
     MultiFab Fy(BoxArray(std::move(fyb)), ref.dmap(), nc, 0);
     if (active_parent_ && active_parent_->child_level == level_) {
-      const amr::Rational target_phase =
-          active_parent_->child_window.begin.phase +
-          stage_time_ * (active_parent_->child_window.end.phase -
-                         active_parent_->child_window.begin.phase);
+      const amr::Rational target_phase = active_parent_->child_window.begin.phase +
+                                         stage_time_ * (active_parent_->child_window.end.phase -
+                                                        active_parent_->child_window.begin.phase);
       const amr::Rational alpha =
           (target_phase - active_parent_->parent_window.begin.phase) /
           (active_parent_->parent_window.end.phase - active_parent_->parent_window.begin.phase);
@@ -1076,8 +1088,10 @@ class AmrProgramContext {
                            active_parent_->parent_window.begin.physical_time);
       runtime::amr::TemporalTransferContext target{
           {0, active_parent_->parent_window.begin.physical_time},
-          {1, active_parent_->parent_window.end.physical_time}, {0, target_physical},
-          alpha.numerator, alpha.denominator};
+          {1, active_parent_->parent_window.end.physical_time},
+          {0, target_physical},
+          alpha.numerator,
+          alpha.denominator};
       const MultiFab& old_parent = active_parent_->old_states.at(static_cast<std::size_t>(b));
       const MultiFab& new_parent = active_parent_->new_states.at(static_cast<std::size_t>(b));
       if (mode == ResidualCapture::FluxOnly)
@@ -1093,16 +1107,18 @@ class AmrProgramContext {
     }
     EdgeFlux ef;
     // COARSE role: the level-k coarse flux at the faces bordering each level-(k+1) patch (a child exists).
-    if (level_ + 1 < nlev())
-      pops::detail::sample_coarse_role_strip(Fx, Fy,
-                                             eng_->level_state(sb, level_ + 1).box_array(), nc, ef);
+    if (level_ + 1 < nlev()) {
+      const MultiFab& child = eng_->level_state(sb, level_ + 1);
+      pops::detail::CoarseRoleScratch& scratch = coarse_role_scratch_[{sb, level_}];
+      pops::detail::sample_coarse_role_strip(ref, Fx, Fy, child, eng_->level_is_replicated(level_),
+                                             eng_->topology_epoch(), nc, scratch, ef);
+    }
     // FINE role: the coarse-face-averaged level-k flux at level-k's own patch edges (level_ borders k-1).
     if (level_ >= 1)
-      pops::detail::sample_fine_role_strip(Fx, Fy, ba, nc, ef);
+      pops::detail::sample_fine_role_strip(ref, Fx, Fy, nc, ef);
     flux_ledger_[key_(&r)] = ef;  // OVERWRITE-set (a residual op initialises the strip)
     flux_contributions_[key_(&r)] = {
-        FluxContribution{rate_id, amr::Rational(1, 1), 0, 0.0,
-                         evaluation_clock_(), std::move(ef)}};
+        FluxContribution{rate_id, amr::Rational(1, 1), 0, 0.0, evaluation_clock_(), std::move(ef)}};
     rate_provenance_[key_(&r)] = {rate_id};
   }
 
@@ -1170,8 +1186,8 @@ class AmrProgramContext {
       for (int k = 0; k < nlev(); ++k)
         level_clocks_[static_cast<std::size_t>(k)] =
             amr::ClockStamp{k, macro_step() + 1, amr::Rational(0, 1), t0 + dt};
-      clock_schedule_.restore_accepted_ticks(
-          clock_schedule_.accepted_ticks(macro_step() + 1), macro_step() + 1);
+      clock_schedule_.restore_accepted_ticks(clock_schedule_.accepted_ticks(macro_step() + 1),
+                                             macro_step() + 1);
       conservative_ledger_.commit();
       accepted_flux_report_.clear();
       accepted_flux_report_.reserve(conservative_ledger_.entries().size());
@@ -1180,9 +1196,8 @@ class AmrProgramContext {
       accepted_sync_report_.clear();
       accepted_sync_report_.reserve(sync_report_.size());
       for (const SyncEvent& event : sync_report_)
-        accepted_sync_report_.push_back(
-            {event.parent_level, event.child_level, event.block,
-             event.phase == SyncPhase::Reflux ? 0 : 1, event.clock});
+        accepted_sync_report_.push_back({event.parent_level, event.child_level, event.block,
+                                         event.phase == SyncPhase::Reflux ? 0 : 1, event.clock});
       conservative_ledger_.clear();
       level_ = saved_level;
       stage_time_ = saved_stage_time;
@@ -1237,8 +1252,8 @@ class AmrProgramContext {
           "AMR Program accepted state does not match the restored hierarchy level count");
     for (int level = 0; level < nlev(); ++level) {
       const amr::ClockStamp& clock = state.level_clocks[static_cast<std::size_t>(level)];
-      if (clock.level != level || clock.macro_step < 0 ||
-          clock.phase != amr::Rational(0, 1) || !std::isfinite(clock.physical_time))
+      if (clock.level != level || clock.macro_step < 0 || clock.phase != amr::Rational(0, 1) ||
+          !std::isfinite(clock.physical_time))
         throw std::runtime_error(
             "AMR Program accepted state contains a non-accepted or misqualified level clock");
     }
@@ -1265,11 +1280,9 @@ class AmrProgramContext {
       const auto contributions = state.ring_flux_contributions.find(name);
       const auto initialized = state.ring_flux_initialized.find(name);
       if (state.history_states.count(name) == 0 || state.history_spaces.count(name) == 0 ||
-          state.history_clocks.count(name) == 0 ||
-          state.history_interpolations.count(name) == 0 ||
+          state.history_clocks.count(name) == 0 || state.history_interpolations.count(name) == 0 ||
           clocks == state.ring_clocks.end() || identities == state.ring_identities.end() ||
-          fluxes == state.ring_flux.end() ||
-          contributions == state.ring_flux_contributions.end() ||
+          fluxes == state.ring_flux.end() || contributions == state.ring_flux_contributions.end() ||
           initialized == state.ring_flux_initialized.end())
         throw std::runtime_error("AMR Program accepted state lacks history qualification for '" +
                                  name + "'");
@@ -1286,8 +1299,7 @@ class AmrProgramContext {
         const auto& slot_clocks = clocks->second[static_cast<std::size_t>(slot)];
         const auto& slot_identities = identities->second[static_cast<std::size_t>(slot)];
         const auto& slot_fluxes = fluxes->second[static_cast<std::size_t>(slot)];
-        const auto& slot_contributions =
-            contributions->second[static_cast<std::size_t>(slot)];
+        const auto& slot_contributions = contributions->second[static_cast<std::size_t>(slot)];
         if (slot_clocks.size() != static_cast<std::size_t>(nlev()) ||
             slot_identities.size() != static_cast<std::size_t>(nlev()) ||
             slot_fluxes.size() != static_cast<std::size_t>(nlev()) ||
@@ -1296,8 +1308,7 @@ class AmrProgramContext {
                                    name + "'");
         for (int level = 0; level < nlev(); ++level) {
           const auto& identity = slot_identities[static_cast<std::size_t>(level)];
-          const auto& exact_contributions =
-              slot_contributions[static_cast<std::size_t>(level)];
+          const auto& exact_contributions = slot_contributions[static_cast<std::size_t>(level)];
           if (!identity) {
             if (!exact_contributions.empty())
               throw std::runtime_error(
@@ -1309,15 +1320,14 @@ class AmrProgramContext {
               identity->state != state.history_states.at(name) ||
               identity->space != state.history_spaces.at(name) || identity->level != level ||
               !(identity->clock == clock))
-            throw std::runtime_error("AMR Program accepted state has mismatched identity for history '" +
-                                     name + "'");
+            throw std::runtime_error(
+                "AMR Program accepted state has mismatched identity for history '" + name + "'");
           for (const FluxContribution& contribution : exact_contributions)
             if (contribution.rate_id < 0 || contribution.dt_power < 0 ||
                 contribution.dt_power > 1 ||
                 (contribution.dt_power == 0 && contribution.duration != 0.0) ||
                 (contribution.dt_power == 1 &&
-                 (!(contribution.duration > 0.0) ||
-                  !std::isfinite(contribution.duration))) ||
+                 (!(contribution.duration > 0.0) || !std::isfinite(contribution.duration))) ||
                 contribution.evaluation_clock.level != level ||
                 !std::isfinite(contribution.evaluation_clock.physical_time))
               throw std::runtime_error(
@@ -1328,19 +1338,17 @@ class AmrProgramContext {
     for (const AmrProgramFluxAuditEntry& entry : state.accepted_flux_ledger)
       if (entry.key.owner.empty() || entry.key.state.empty() || entry.key.rate.empty() ||
           entry.key.flux.empty() || entry.key.level < 0 ||
-          entry.key.clock.level != entry.key.level ||
-          !(entry.measure.face_measure > 0.0) ||
-          !std::isfinite(entry.measure.face_measure) ||
-          !(entry.measure.substep_duration > 0.0) ||
+          entry.key.clock.level != entry.key.level || !(entry.measure.face_measure > 0.0) ||
+          !std::isfinite(entry.measure.face_measure) || !(entry.measure.substep_duration > 0.0) ||
           !std::isfinite(entry.measure.substep_duration) ||
           !std::isfinite(entry.key.clock.physical_time))
         throw std::runtime_error("AMR Program accepted state has an invalid flux-ledger report");
     for (const AmrProgramSyncEvent& event : state.accepted_sync)
       if (event.parent_level < 0 || event.child_level != event.parent_level + 1 ||
           event.block < 0 || (event.phase != 0 && event.phase != 1) ||
-          event.clock.level != event.parent_level ||
-          !std::isfinite(event.clock.physical_time))
-        throw std::runtime_error("AMR Program accepted state has an invalid synchronization report");
+          event.clock.level != event.parent_level || !std::isfinite(event.clock.physical_time))
+        throw std::runtime_error(
+            "AMR Program accepted state has an invalid synchronization report");
   }
 
   AmrProgramAcceptedState accepted_state_() const {
@@ -1379,8 +1387,7 @@ class AmrProgramContext {
         clocks[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
         identities[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
         fluxes[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
-        contributions[static_cast<std::size_t>(slot)].resize(
-            static_cast<std::size_t>(nlev()));
+        contributions[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
       }
       state.ring_flux_initialized[name].resize(static_cast<std::size_t>(nlev()), 0);
     }
@@ -1464,11 +1471,11 @@ class AmrProgramContext {
     for (int b = 0; b < n_blocks(); ++b)
       new_states.push_back(eng_->level_state(static_cast<std::size_t>(sys_block(b)), level));
 
-    const amr::ParentChildClockRelation& relation =
-        eng_->parent_child_temporal_relation(level + 1);
+    const amr::ParentChildClockRelation& relation = eng_->parent_child_temporal_relation(level + 1);
     const std::optional<ActiveParentWindow> saved_parent = active_parent_;
     for (const amr::ChildSubstep& substep : relation.partition(window)) {
-      active_parent_ = ActiveParentWindow{level + 1, window, substep.window, old_states, new_states};
+      active_parent_ =
+          ActiveParentWindow{level + 1, window, substep.window, old_states, new_states};
       advance_level_(level + 1, substep.window, body);
     }
     active_parent_ = saved_parent;
@@ -1511,8 +1518,7 @@ class AmrProgramContext {
       const auto found = flux_ledger_.find({level, static_cast<const void*>(state)});
       if (found == flux_ledger_.end())
         continue;
-      const auto contributions =
-          flux_contributions_.find({level, static_cast<const void*>(state)});
+      const auto contributions = flux_contributions_.find({level, static_cast<const void*>(state)});
       if (contributions == flux_contributions_.end() || contributions->second.empty())
         throw std::runtime_error(
             "AMR conservative state has numerical flux but no exact Program contribution ledger");
@@ -1564,8 +1570,7 @@ class AmrProgramContext {
     EdgeFlux result;
     for (const auto& entry : conservative_ledger_.entries()) {
       if (entry.key.owner != owner || entry.key.state != "conservative_state" ||
-          entry.key.level != level ||
-          entry.key.flux.rfind("default_flux.orientation.", 0) != 0)
+          entry.key.level != level || entry.key.flux.rfind("default_flux.orientation.", 0) != 0)
         continue;
       pops::detail::edge_flux_axpy(
           result, static_cast<Real>(amr::numerical_reflux_scale(entry.measure)), entry.payload);
@@ -1583,9 +1588,8 @@ class AmrProgramContext {
     const amr::Rational span = current_window_->end.phase - current_window_->begin.phase;
     const amr::Rational phase = current_window_->begin.phase + stage_time_ * span;
     const double physical = current_window_->begin.physical_time +
-                            stage_time_.value() *
-                                (current_window_->end.physical_time -
-                                 current_window_->begin.physical_time);
+                            stage_time_.value() * (current_window_->end.physical_time -
+                                                   current_window_->begin.physical_time);
     return {level_, current_window_->begin.macro_step, phase, physical};
   }
 
@@ -1599,8 +1603,14 @@ class AmrProgramContext {
     if (phase.numerator < std::numeric_limits<int>::min() ||
         phase.numerator > std::numeric_limits<int>::max())
       throw std::overflow_error("AMR boundary substep identity exceeds int range");
-    return {primary_clock_, stamp.macro_step, level_, static_cast<int>(phase.numerator), stage,
-            stage_time_, current_level_dt_, stamp.physical_time};
+    return {primary_clock_,
+            stamp.macro_step,
+            level_,
+            static_cast<int>(phase.numerator),
+            stage,
+            stage_time_,
+            current_level_dt_,
+            stamp.physical_time};
   }
 
   static void require_rate_identity_(int rate_id) {
@@ -1656,15 +1666,14 @@ class AmrProgramContext {
     return scale_contributions_(source, Real(1), {term});
   }
 
-  void append_scaled_contributions_(
-      std::vector<FluxContribution>& destination, const MultiFab& source, Real dt,
-      std::initializer_list<ExactCoefficientTerm> exact) const {
+  void append_scaled_contributions_(std::vector<FluxContribution>& destination,
+                                    const MultiFab& source, Real dt,
+                                    std::initializer_list<ExactCoefficientTerm> exact) const {
     const auto found = flux_contributions_.find(key_(&source));
     if (found == flux_contributions_.end())
       return;
     std::vector<FluxContribution> scaled = scale_contributions_(found->second, dt, exact);
-    destination.insert(destination.end(),
-                       std::make_move_iterator(scaled.begin()),
+    destination.insert(destination.end(), std::make_move_iterator(scaled.begin()),
                        std::make_move_iterator(scaled.end()));
   }
 
@@ -1734,10 +1743,8 @@ class AmrProgramContext {
     flux_contributions_[key_(&z)] = std::move(contributions);
   }
 
-
-  void ledger_lincomb_exact_(MultiFab& z, Real a, const MultiFab& x, Real b,
-                             const MultiFab& y, Real dt,
-                             std::initializer_list<ExactCoefficientTerm> exact_a,
+  void ledger_lincomb_exact_(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y,
+                             Real dt, std::initializer_list<ExactCoefficientTerm> exact_a,
                              std::initializer_list<ExactCoefficientTerm> exact_b) const {
     EdgeFlux out;
     const auto itx = flux_ledger_.find(key_(&x));
@@ -1781,9 +1788,9 @@ class AmrProgramContext {
     const auto it = flux_ledger_.find(key_(&value));
     EdgeFlux ef = (it != flux_ledger_.end()) ? it->second : EdgeFlux{};
     const auto contribution = flux_contributions_.find(key_(&value));
-    const std::vector<FluxContribution> exact =
-        contribution == flux_contributions_.end()
-            ? std::vector<FluxContribution>{} : contribution->second;
+    const std::vector<FluxContribution> exact = contribution == flux_contributions_.end()
+                                                    ? std::vector<FluxContribution>{}
+                                                    : contribution->second;
     // PER-RING PER-LEVEL COLD START (mirror of AmrHistoryOps::store_history): the FIRST store of a (name,
     // level) broadcasts into EVERY deeper slot, so a multistep step 0 reads the same flux at each lag; from
     // then on only slot 0 is written (the ring rotate carries the older slots). Tracked with our own flag
@@ -1868,8 +1875,9 @@ class AmrProgramContext {
         *identities->second[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)];
     const int owner = history_owners_.at(name);
     if (identity.owner != "program.block." + std::to_string(owner) ||
-        identity.state != history_state_ids_.at(name) || identity.space != history_space_ids_.at(name) ||
-        identity.level != level_ || !(identity.clock == clock))
+        identity.state != history_state_ids_.at(name) ||
+        identity.space != history_space_ids_.at(name) || identity.level != level_ ||
+        !(identity.clock == clock))
       throw std::runtime_error("history '" + name + "' identity does not match its qualified slot");
   }
   void record_history_clock_(const std::string& name) const {
@@ -1884,9 +1892,9 @@ class AmrProgramContext {
       if (static_cast<int>(slot.size()) != nlev())
         slot.resize(static_cast<std::size_t>(nlev()));
     const int owner = history_owners_.at(name);
-    const amr::HistoryIdentity identity{
-        "program.block." + std::to_string(owner), history_state_ids_.at(name),
-        history_space_ids_.at(name), level_, current_window_->end};
+    const amr::HistoryIdentity identity{"program.block." + std::to_string(owner),
+                                        history_state_ids_.at(name), history_space_ids_.at(name),
+                                        level_, current_window_->end};
     auto& identities = ring_identities_[name];
     if (static_cast<int>(identities.size()) != depth)
       identities.assign(
@@ -1927,9 +1935,9 @@ class AmrProgramContext {
     live_state_rings_.erase(
         std::remove_if(live_state_rings_.begin(), live_state_rings_.end(),
                        [&](const LiveStateRing& ring) {
-                         return dst == &eng_->level_state(
-                                           static_cast<std::size_t>(sys_block(ring.owner)),
-                                           ring.level);
+                         return dst ==
+                                &eng_->level_state(static_cast<std::size_t>(sys_block(ring.owner)),
+                                                   ring.level);
                        }),
         live_state_rings_.end());
   }
@@ -1944,10 +1952,10 @@ class AmrProgramContext {
       if (ring.level >= nlev())
         continue;
       const std::size_t sb = static_cast<std::size_t>(sys_block(ring.owner));
-      const Real stored_dt = static_cast<Real>(
-          pops::detail::AmrHistoryOps::slot_dt(*eng_, ring.name, 0));
-      pops::detail::AmrHistoryOps::store_history(
-          *eng_, ring.name, ring.level, eng_->level_state(sb, ring.level), stored_dt);
+      const Real stored_dt =
+          static_cast<Real>(pops::detail::AmrHistoryOps::slot_dt(*eng_, ring.name, 0));
+      pops::detail::AmrHistoryOps::store_history(*eng_, ring.name, ring.level,
+                                                 eng_->level_state(sb, ring.level), stored_dt);
     }
   }
 
@@ -1962,6 +1970,11 @@ class AmrProgramContext {
   mutable int tensor_ncomp_{0};
 
   // --- ADC-639 conservative-reflux state -----------------------------------------------------------
+  // Persistent per-(runtime block,parent level) coarse-role redistribution targets. Their own
+  // parallel_copy schedules survive across Program stages and macro-steps; CoarseRoleScratch rejects
+  // and rebuilds them on topology-epoch, exact layout/ownership, or component-width changes.
+  mutable std::map<std::pair<std::size_t, int>, pops::detail::CoarseRoleScratch>
+      coarse_role_scratch_;
   // The effective-flux LEDGER: for each tracked MultiFab (keyed by (level, address)) the interface-strip
   // effective flux (EdgeFlux: coarse-role per child patch + fine-role per this-level patch). The Program's
   // linear combination is SHADOWED on these strips (axpy / lincomb mirror), so a commit's strip holds
@@ -1969,8 +1982,7 @@ class AmrProgramContext {
   // per macro-step by reset_step(); populated ONLY when capturing() (nlev > 1). On a coarse-only / flat
   // Program it stays EMPTY (the capture branch is never reached) -- the bit-identical parity gate.
   mutable std::map<std::pair<int, const void*>, EdgeFlux> flux_ledger_;
-  mutable std::map<std::pair<int, const void*>, std::vector<FluxContribution>>
-      flux_contributions_;
+  mutable std::map<std::pair<int, const void*>, std::vector<FluxContribution>> flux_contributions_;
   mutable std::map<std::pair<int, const void*>, std::set<int>> rate_provenance_;
   mutable std::vector<SyncEvent> sync_report_;
   mutable amr::TransactionalFluxLedger<EdgeFlux> conservative_ledger_;
@@ -1989,9 +2001,8 @@ class AmrProgramContext {
   // history() restores it into the live ledger so the commit combine carries the lagged flux's weight --
   // the reflux stays conservative for a multistep Program across steps (acceptance e).
   mutable std::map<std::string, std::vector<std::vector<EdgeFlux>>> ring_flux_;
-  mutable std::map<
-      std::string,
-      std::vector<std::vector<std::vector<FluxContribution>>>> ring_flux_contributions_;
+  mutable std::map<std::string, std::vector<std::vector<std::vector<FluxContribution>>>>
+      ring_flux_contributions_;
   // Per-ring per-level cold-start flags for ring_flux_ (mirror of the engine hist_init_), so the first
   // store of a (name, level) broadcasts its strip into every slot. PERSISTENT (not cleared per step).
   mutable std::map<std::string, std::vector<char>> ring_flux_init_;
@@ -2001,9 +2012,8 @@ class AmrProgramContext {
   mutable std::map<std::string, std::string> history_clock_ids_;
   mutable std::map<std::string, std::string> history_interpolation_ids_;
   mutable std::map<std::string, std::vector<std::vector<amr::ClockStamp>>> ring_clocks_;
-  mutable std::map<
-      std::string,
-      std::vector<std::vector<std::optional<amr::HistoryIdentity>>>> ring_identities_;
+  mutable std::map<std::string, std::vector<std::vector<std::optional<amr::HistoryIdentity>>>>
+      ring_identities_;
   // Deferred-rotate flag (ADC-631 consistency, section 2c): the body's terminal rotate_histories() fires
   // inside the recursive level advance, before couple_levels reflux modifies the coarse live state. We defer the
   // rotate to couple_levels (after the reflux + slot-0 resync), so a multistep Program never reads a

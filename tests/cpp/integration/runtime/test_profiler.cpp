@@ -71,6 +71,23 @@ TEST(Profiler, CountersAccumulateAndUnknownReadsZero) {
   EXPECT_TRUE(p.counter("never") == 0) << "counter_absent_zero";
 }
 
+TEST(Profiler, ScheduleDecisionCountsOnlyRealCacheTraffic) {
+  Profiler p;
+  // Disabled profiling preserves the decision and materializes no counters.
+  EXPECT_TRUE(p.schedule_decision(true, true));
+  EXPECT_TRUE(p.counter("nodes_due") == 0 && p.counter("cache_misses") == 0);
+
+  p.enable();
+  EXPECT_TRUE(p.schedule_decision(true, true));
+  EXPECT_FALSE(p.schedule_decision(false, true));
+  EXPECT_TRUE(p.schedule_decision(true, false));
+  EXPECT_FALSE(p.schedule_decision(false, false));
+  EXPECT_TRUE(p.counter("nodes_due") == 2);
+  EXPECT_TRUE(p.counter("nodes_skipped") == 2);
+  EXPECT_TRUE(p.counter("cache_misses") == 1);
+  EXPECT_TRUE(p.counter("cache_hits") == 1);
+}
+
 TEST(Profiler, CountMaxTracksPeakNotSum) {
   // count_max tracks a PEAK, not a sum (scratch peak memory, ADC-459).
   Profiler p;

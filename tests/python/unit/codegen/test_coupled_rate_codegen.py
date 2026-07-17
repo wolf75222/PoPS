@@ -19,7 +19,6 @@ pytest (the test_* functions take no args and importorskip pops.time).
 """
 from pops.codegen.program_codegen import _check_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
-import sys
 
 import pytest
 
@@ -273,4 +272,3 @@ def _run():
 
 if __name__ == "__main__":
     _run()
-    sys.exit(0)

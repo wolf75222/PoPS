@@ -8,7 +8,7 @@ codegen sensitivity to a formula change stays with the existing Model._model_has
 the operator-spec layer.
 Pure Python; skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 import pytest
 
@@ -19,8 +19,7 @@ try:
     from pops.physics._facade import Model
     from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_module_hash (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_module_hash (pops unavailable: %s)' % exc)
 
 
 def test_deterministic():

@@ -23,6 +23,7 @@ from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledSimulationArtifact,
 )
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
+from pops.codegen._phases import bind as bind_phase  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 from pops.model import Module  # noqa: E402
@@ -148,6 +149,15 @@ def test_bind_creates_exact_install_plan_without_mutating_compiled_components():
     assert install.target == "amr_system"
     assert install.block_models["block"] is artifact.blocks[0].model
     install.verify()
+
+
+def test_public_amr_bind_refuses_the_retired_initial_state_compatibility_route():
+    artifact = _amr_artifact(runtime_param=False)
+    with pytest.raises(ValueError, match="requires a resolved InitialConditionPlan"):
+        bind_phase(
+            artifact,
+            BindInputs(initial_state={"block": np.ones((3, 8, 8), dtype=np.float64)}),
+        )
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>     // reconstruct_pp, require_reconstruction_ghosts
+#include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux
 
@@ -88,13 +88,13 @@ struct AssembleRhsMaskedKernel {
     const FaceContext xface = FaceContext::axis_aligned(0);
     typename Model::State Fxm{}, Fxp{};
     if (mask_active(mask, i - 1, j)) {
-      const auto evaluation = evaluate_numerical_flux_at(
-          nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
       Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
     }
     if (mask_active(mask, i + 1, j)) {
-      const auto evaluation = evaluate_numerical_flux_at(
-          nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
       Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
     }
 
@@ -110,13 +110,13 @@ struct AssembleRhsMaskedKernel {
     const FaceContext yface = FaceContext::axis_aligned(1);
     typename Model::State Fym{}, Fyp{};
     if (mask_active(mask, i, j - 1)) {
-      const auto evaluation = evaluate_numerical_flux_at(
-          nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
       Fym = apply_face_measure(evaluation.checked_density(), yface).value;
     }
     if (mask_active(mask, i, j + 1)) {
-      const auto evaluation = evaluate_numerical_flux_at(
-          nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
       Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
     }
 

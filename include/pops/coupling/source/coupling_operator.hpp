@@ -47,7 +47,7 @@ namespace pops {
 /// that declares nothing keeps its historical, unvalidated behavior).
 struct ConservationContract {
   std::vector<std::string> conserved_roles;  // roles whose terms structurally cancel (net == 0)
-  std::vector<std::string> created_roles;     // roles the coupling legally net-sources (net != 0 ok)
+  std::vector<std::string> created_roles;    // roles the coupling legally net-sources (net != 0 ok)
 
   /// True when the author declared no contract at all (both lists empty) -> validation is skipped and
   /// the coupling keeps the historical unchecked behavior.
@@ -60,7 +60,7 @@ struct ConservationContract {
 /// POD also carries a per-cell program mu(U) (freq_prog_* non-empty), reduced by MAX at each step.
 struct FrequencyBound {
   double constant_mu = 0.0;  // scalar mu [1/s]; dt <= cfl / mu; 0 = no constant bound
-  bool per_cell = false;      // true -> the program carries a per-cell mu(U) (freq_prog_* non-empty)
+  bool per_cell = false;     // true -> the program carries a per-cell mu(U) (freq_prog_* non-empty)
 };
 
 /// A TYPED coupling operator: the flat coupled-source program PLUS its declared, inspectable contracts
@@ -69,9 +69,10 @@ struct FrequencyBound {
 /// operators. `label` names the operator in the inspect view and in the step-bound diagnostics.
 struct CouplingOperator {
   std::string label;
-  CoupledSourceProgram program;         // inputs/outputs (block+role handles), consts, term/freq bytecode
-  ConservationContract conservation;    // DECLARED; validated at registration; never inferred silently
-  FrequencyBound frequency;             // DECLARED macro-step bound (constant and/or per-cell)
+  CoupledSourceProgram program;  // inputs/outputs (block+role handles), consts, term/freq bytecode
+  ConservationContract
+      conservation;          // DECLARED; validated at registration; never inferred silently
+  FrequencyBound frequency;  // DECLARED macro-step bound (constant and/or per-cell)
 };
 
 /// Read-only view of a registered coupling operator (ADC-595): its label plus its declared contracts.
@@ -100,8 +101,8 @@ inline bool coupling_role_terms_cancel(const CoupledSourceProgram& p, const std:
   int off = 0;
   const int n_terms = static_cast<int>(p.out_roles.size());
   for (int t = 0; t < n_terms; ++t) {
-    const int len = t < static_cast<int>(p.prog_lens.size()) ? p.prog_lens[static_cast<std::size_t>(t)]
-                                                             : 0;
+    const int len =
+        t < static_cast<int>(p.prog_lens.size()) ? p.prog_lens[static_cast<std::size_t>(t)] : 0;
     if (p.out_roles[static_cast<std::size_t>(t)] == role) {
       std::vector<int> ops(p.prog_ops.begin() + off, p.prog_ops.begin() + off + len);
       term_ops.push_back(std::move(ops));
@@ -127,11 +128,11 @@ inline bool coupling_role_terms_cancel(const CoupledSourceProgram& p, const std:
       const std::vector<int>& a = term_ops[i];
       const std::vector<int>& b = term_ops[j];
       // b is +Neg of a: b == a followed by a single Neg opcode.
-      const bool b_is_neg_a =
-          b.size() == a.size() + 1 && std::equal(a.begin(), a.end(), b.begin()) && b.back() == kNegOp;
+      const bool b_is_neg_a = b.size() == a.size() + 1 &&
+                              std::equal(a.begin(), a.end(), b.begin()) && b.back() == kNegOp;
       // a is +Neg of b: a == b followed by a single Neg opcode.
-      const bool a_is_neg_b =
-          a.size() == b.size() + 1 && std::equal(b.begin(), b.end(), a.begin()) && a.back() == kNegOp;
+      const bool a_is_neg_b = a.size() == b.size() + 1 &&
+                              std::equal(b.begin(), b.end(), a.begin()) && a.back() == kNegOp;
       if (b_is_neg_a || a_is_neg_b) {
         used[i] = used[j] = true;
         paired = true;
@@ -166,18 +167,18 @@ inline void validate_coupling_contract(const CouplingOperator& op, const std::st
       throw std::runtime_error(where + " : coupling '" + op.label + "' declares role '" + r +
                                "' as BOTH conserved and created (a role is one or the other)");
     if (!role_present(r))
-      throw std::runtime_error(where + " : coupling '" + op.label + "' declares conserved role '" + r +
-                               "' but no source term targets it");
+      throw std::runtime_error(where + " : coupling '" + op.label + "' declares conserved role '" +
+                               r + "' but no source term targets it");
     if (!coupling_role_terms_cancel(op.program, r))
-      throw std::runtime_error(
-          where + " : coupling '" + op.label + "' declares role '" + r +
-          "' conserved but its source terms do not cancel (each +expr on one block must be balanced by "
-          "-expr on another; use add_pair or declare the role created)");
+      throw std::runtime_error(where + " : coupling '" + op.label + "' declares role '" + r +
+                               "' conserved but its source terms do not cancel (each +expr on one "
+                               "block must be balanced by "
+                               "-expr on another; use add_pair or declare the role created)");
   }
   for (const std::string& r : c.created_roles) {
     if (!role_present(r))
-      throw std::runtime_error(where + " : coupling '" + op.label + "' declares created role '" + r +
-                               "' but no source term targets it");
+      throw std::runtime_error(where + " : coupling '" + op.label + "' declares created role '" +
+                               r + "' but no source term targets it");
   }
 }
 

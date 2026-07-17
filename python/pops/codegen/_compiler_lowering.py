@@ -12,6 +12,10 @@ class _CompilerEmitter(Protocol):
     """Minimal executable half of a compiler lowering."""
 
     def check(self) -> object: ...
+    def __pops_native_loader_source__(
+        self, *, name: Any = None, target: str = "system",
+        hoist_reciprocals: bool = False,
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +25,17 @@ class CompilerLowering:
     emit_model: _CompilerEmitter
     source_module: Module
     facade: object
+
+    def native_loader_source(
+        self, *, name: Any = None, target: str = "system",
+        hoist_reciprocals: bool = False,
+    ) -> str:
+        """Emit the native package through the emitter's explicit typed protocol."""
+        source = self.emit_model.__pops_native_loader_source__(
+            name=name, target=target, hoist_reciprocals=hoist_reciprocals)
+        if not isinstance(source, str) or not source:
+            raise TypeError("native loader source protocol must return non-empty text")
+        return source
 
 
 @runtime_checkable
@@ -41,7 +56,12 @@ def require_compiler_lowering(value: Any) -> CompilerLowering:
     if type(lowering) is not CompilerLowering:
         raise TypeError("__pops_compiler_lowering__() must return an exact CompilerLowering")
     if not isinstance(lowering.emit_model, _CompilerEmitter):
-        raise TypeError("CompilerLowering.emit_model must implement check()")
+        if not callable(getattr(lowering.emit_model, "check", None)):
+            raise TypeError("CompilerLowering.emit_model must implement check()")
+        raise TypeError(
+            "CompilerLowering.emit_model must implement "
+            "__pops_native_loader_source__()"
+        )
     # Physics authoring seals a Module by moving the same object to a framework-owned,
     # layout-compatible frozen subclass.  The canonical IR boundary is therefore nominal
     # (Module and its immutable framework subtype), not an exact-type check.  We deliberately do

@@ -138,14 +138,12 @@ TEST(test_block_builder, generic_flux_bit_identical_to_explicit_on_composite_eul
   double dh = 0, dr = 0;
   for (int d = 0; d < 2; ++d) {
     const FaceContext face = FaceContext::axis_aligned(d);
-    const auto fh_g =
-        evaluate_numerical_flux(ghllc, model, UL, providers, UR, providers, face)
-            .checked_density()
-            .value;
-    const auto fh_e =
-        evaluate_numerical_flux(ehllc, model, UL, providers, UR, providers, face)
-            .checked_density()
-            .value;
+    const auto fh_g = evaluate_numerical_flux(ghllc, model, UL, providers, UR, providers, face)
+                          .checked_density()
+                          .value;
+    const auto fh_e = evaluate_numerical_flux(ehllc, model, UL, providers, UR, providers, face)
+                          .checked_density()
+                          .value;
     const auto fr_g = evaluate_numerical_flux(groe, model, UL, providers, UR, providers, face)
                           .checked_density()
                           .value;

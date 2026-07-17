@@ -55,7 +55,8 @@ TEST(test_dispatch_tags, validate_limiter_accepts_and_rejects) {
   EXPECT_TRUE(throws([] { validate_limiter(""); }, msg)) << "limiter vide rejete";
   // contexte explicite preserve (parite avec les anciens throws inline des dispatchs).
   (void)throws([] { validate_limiter("x", "add_block(AmrSystem, multi-blocs)"); }, msg);
-  EXPECT_TRUE(contains(msg, "add_block(AmrSystem, multi-blocs)") && contains(msg, "unknown limiter"))
+  EXPECT_TRUE(contains(msg, "add_block(AmrSystem, multi-blocs)") &&
+              contains(msg, "unknown limiter"))
       << "contexte AMR present dans le message limiter";
 }
 
@@ -108,7 +109,8 @@ TEST(test_dispatch_tags, limiter_n_ghost_widths) {
 }
 
 TEST(test_dispatch_tags, klimiters_kriemanns_tables) {
-  EXPECT_TRUE(std::string(kLimiters[0].name) == "none" && kLimiters[0].n_ghost == 1) << "kLimiters[0]";
+  EXPECT_TRUE(std::string(kLimiters[0].name) == "none" && kLimiters[0].n_ghost == 1)
+      << "kLimiters[0]";
   EXPECT_TRUE(std::string(kLimiters[3].name) == "weno5" && kLimiters[3].n_ghost == 3)
       << "kLimiters[3]";
   EXPECT_TRUE(std::string(kRiemanns[0].name) == "rusanov" && kRiemanns[0].polar_ok)

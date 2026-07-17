@@ -11,8 +11,7 @@ namespace pops {
 
 inline std::string validation_message(const std::string& where, const std::string& expected,
                                       const std::string& received) {
-  return "pops validation error [" + where + "]: expected " + expected + "; received " +
-         received;
+  return "pops validation error [" + where + "]: expected " + expected + "; received " + received;
 }
 
 class ValidationError : public std::runtime_error {

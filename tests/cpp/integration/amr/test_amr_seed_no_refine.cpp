@@ -50,8 +50,7 @@ bool same_patch_boxes(const std::vector<PatchBox>& lhs, const std::vector<PatchB
   for (std::size_t k = 0; k < lhs.size(); ++k) {
     const PatchBox& a = lhs[k];
     const PatchBox& b = rhs[k];
-    if (a.level != b.level || a.ilo != b.ilo || a.jlo != b.jlo || a.ihi != b.ihi ||
-        a.jhi != b.jhi)
+    if (a.level != b.level || a.ilo != b.ilo || a.jlo != b.jlo || a.ihi != b.ihi || a.jhi != b.jhi)
       return false;
   }
   return true;
@@ -68,8 +67,7 @@ std::vector<PatchRectangle> physical_rectangles(const std::vector<PatchBox>& box
     // ldexp avoids an undefined integer shift if a broken provider ever returns a nonsensical level;
     // the test below then reports that contract violation explicitly.
     const double dx = length / std::ldexp(static_cast<double>(n), box.level);
-    rectangles.push_back(PatchRectangle{box.ilo * dx, box.jlo * dx,
-                                        (box.ihi - box.ilo + 1) * dx,
+    rectangles.push_back(PatchRectangle{box.ilo * dx, box.jlo * dx, (box.ihi - box.ilo + 1) * dx,
                                         (box.jhi - box.jlo + 1) * dx});
   }
   return rectangles;
@@ -215,8 +213,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     const int levels_before = D.n_levels();
 
     const std::vector<PatchBox> boxes_second = D.patch_boxes();
-    const std::vector<PatchRectangle> rectangles_second =
-        physical_rectangles(boxes_second, n, c.L);
+    const std::vector<PatchRectangle> rectangles_second = physical_rectangles(boxes_second, n, c.L);
     EXPECT_TRUE(same_patch_boxes(boxes_first, boxes_second))
         << "native_patch_geometry_read_is_idempotent";
     EXPECT_EQ(rectangles_second, rectangles_first)

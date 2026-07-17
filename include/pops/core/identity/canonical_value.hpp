@@ -200,9 +200,8 @@ inline void encode_into(const CanonicalValue& value, CanonicalValue::Bytes& out)
         append_text(key, pair.first);
         entries.push_back({std::move(key), &pair.second});
       }
-      std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
-        return length_first_less(a.key, b.key);
-      });
+      std::sort(entries.begin(), entries.end(),
+                [](const Entry& a, const Entry& b) { return length_first_less(a.key, b.key); });
       for (std::size_t i = 1; i < entries.size(); ++i) {
         if (entries[i - 1].key == entries[i].key)
           throw std::invalid_argument("canonical identity map has a duplicate key");

@@ -172,7 +172,8 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
   s.solve_fields_from_blocks(stages_null);
   const std::vector<double> phi_null = s.potential();
   chk(max_abs_diff(phi_null, phi_blocks) <= tol,
-      "an all-nullptr U_stages falls back to every block's live state (== the all-live coupled solve)");
+      "an all-nullptr U_stages falls back to every block's live state (== the all-live coupled "
+      "solve)");
 
   // (d) eps != 1: the coupled path scales the system RHS by 1/eps just like solve_fields -------------
   // The constant-permittivity branch (p_eps_ != 1) is the one RHS-scaling branch the eps=1 cases above
@@ -223,18 +224,14 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   const int n = 32;
   System system(SystemConfig{n, 1.0, true});
   const std::string slot = "signed-gradient-provider";
-  system.set_field_solver_plan(
-      slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
-      "test:plasma", "plasma", "potential",
-      {"test:plasma/potential/rhs"}, {"plasma"}, {"potential"}, {1.0},
-      "geometric_mg", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0);
-  system.set_field_topology_authority(
-      slot, "builtin_rectangular_cell_graph_v1", "test:periodic-cartesian",
-      "test:periodic-cartesian:v1");
-  system.set_field_boundary_plan(
-      slot, {"periodic", "periodic", "periodic", "periodic"},
-      {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
-      {0.0, 0.0, 0.0, 0.0});
+  system.set_field_solver_plan(slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
+                               "test:plasma", "plasma", "potential", {"test:plasma/potential/rhs"},
+                               {"plasma"}, {"potential"}, {1.0}, "geometric_mg", 0.0, 1.0e-8, 50, 2,
+                               2, 2, 50, 0);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test:periodic-cartesian", "test:periodic-cartesian:v1");
+  system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
+                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0});
   system.set_field_nullspace(slot, true, true);
 
   ModelSpec spec;
@@ -243,25 +240,19 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   spec.elliptic = "charge";
   spec.q = 1.0;
   spec.B0 = 1.0;
-  system.add_block(
-      "plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+  system.add_block("plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   system.ensure_aux_width(kAuxNamedBase + 3);
-  EXPECT_THROW(
-      system.register_elliptic_field(
-          "plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
-          kAuxNamedBase + 2, 0),
-      std::invalid_argument);
-  system.register_elliptic_field(
-      "plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
-      kAuxNamedBase + 2, -1);
-  system.set_block_elliptic_field(
-      "plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
-        add_scaled_component(state, Real(1), 0, rhs);
-      });
+  EXPECT_THROW(system.register_elliptic_field("plasma", "potential", kAuxNamedBase,
+                                              kAuxNamedBase + 1, kAuxNamedBase + 2, 0),
+               std::invalid_argument);
+  system.register_elliptic_field("plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
+                                 kAuxNamedBase + 2, -1);
+  system.set_block_elliptic_field("plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(1), 0, rhs);
+  });
   system.set_density("plasma", charge_density(n, 1.0, 0.0));
 
-  const SolveReport report =
-      system.solve_fields_from_state(slot, 0, system.block_state(0));
+  const SolveReport report = system.solve_fields_from_state(slot, 0, system.block_state(0));
   ASSERT_TRUE(report.solved()) << report.status_name();
   const std::vector<double> phi = system.field_potential_global(slot);
   const std::vector<double> gx = system.aux_field_component(kAuxNamedBase + 1);
@@ -279,12 +270,10 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
       const int im = (i + n - 1) % n, ip = (i + 1) % n;
       const int jm = (j + n - 1) % n, jp = (j + 1) % n;
       const std::size_t cell = static_cast<std::size_t>(j) * n + i;
-      const double unsigned_x = unsigned_scale *
-          (phi[static_cast<std::size_t>(j) * n + ip] -
-           phi[static_cast<std::size_t>(j) * n + im]);
-      const double unsigned_y = unsigned_scale *
-          (phi[static_cast<std::size_t>(jp) * n + i] -
-           phi[static_cast<std::size_t>(jm) * n + i]);
+      const double unsigned_x = unsigned_scale * (phi[static_cast<std::size_t>(j) * n + ip] -
+                                                  phi[static_cast<std::size_t>(j) * n + im]);
+      const double unsigned_y = unsigned_scale * (phi[static_cast<std::size_t>(jp) * n + i] -
+                                                  phi[static_cast<std::size_t>(jm) * n + i]);
       const double expected_x = -unsigned_x;
       const double expected_y = -unsigned_y;
       error = std::fmax(error, std::fabs(gx[cell] - expected_x));

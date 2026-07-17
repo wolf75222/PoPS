@@ -1,21 +1,21 @@
 #pragma once
 
-#include <pops/core/state/state.hpp>        // kAuxBaseComps (base component of the aux channel)
-#include <pops/core/foundation/types.hpp>        // Real
+#include <pops/core/state/state.hpp>       // kAuxBaseComps (base component of the aux channel)
+#include <pops/core/foundation/types.hpp>  // Real
 #include <pops/diagnostics/runtime_diagnostics.hpp>
-#include <pops/mesh/storage/multifab.hpp>     // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/multifab.hpp>  // MultiFab, Array4, ConstArray4
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/index/box2d.hpp>        // Box2D
-#include <pops/mesh/execution/for_each.hpp>     // device_fence
+#include <pops/mesh/index/box2d.hpp>           // Box2D
+#include <pops/mesh/execution/for_each.hpp>    // device_fence
 #include <pops/mesh/boundary/physical_bc.hpp>  // BCRec, fill_ghosts, fill_boundary
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson)
-#include <pops/parallel/comm.hpp>                           // n_ranks() (FFT MPI guard)
+#include <pops/parallel/comm.hpp>                                 // n_ranks() (FFT MPI guard)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
-#include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
+#include <pops/runtime/context/wall_predicate.hpp>              // detail::wall_predicate
 #include <pops/runtime/config/generated_component_catalog.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
@@ -323,8 +323,7 @@ class SystemFieldSolver {
     BCRec explicit_bc{};
     bool has_boundary_kernel = false;
     CompiledFieldBoundaryKernel boundary_kernel{};
-    std::shared_ptr<std::vector<Real>> boundary_parameters =
-        std::make_shared<std::vector<Real>>();
+    std::shared_ptr<std::vector<Real>> boundary_parameters = std::make_shared<std::vector<Real>>();
     std::vector<std::string> boundary_state_blocks;
     std::vector<int> boundary_state_components;
     std::vector<std::string> boundary_field_blocks;
@@ -355,8 +354,8 @@ class SystemFieldSolver {
     virtual void prepare_rhs(SystemFieldSolver&, MultiFab&, const FieldSolveConfig&) = 0;
     virtual SolveReport solve(SystemFieldSolver&, const FieldSolveConfig&) = 0;
     virtual void finalize(SystemFieldSolver&, const FieldSolveConfig&) = 0;
-    [[nodiscard]] virtual std::vector<runtime::field::FieldTopologyReportRow>
-    topology_report() const = 0;
+    [[nodiscard]] virtual std::vector<runtime::field::FieldTopologyReportRow> topology_report()
+        const = 0;
   };
 
   class BuiltinNamedFieldBackend final : public NamedFieldBackend {
@@ -364,10 +363,9 @@ class SystemFieldSolver {
     using Solver = std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>;
 
     template <class T, class... Args>
-    BuiltinNamedFieldBackend(
-        std::in_place_type_t<T> type, std::string topology_digest,
-        std::string topology_provenance, std::size_t material_points,
-        Args&&... args)
+    BuiltinNamedFieldBackend(std::in_place_type_t<T> type, std::string topology_digest,
+                             std::string topology_provenance, std::size_t material_points,
+                             Args&&... args)
         : solver_(type, std::forward<Args>(args)...),
           topology_digest_(std::move(topology_digest)),
           topology_provenance_(std::move(topology_provenance)),
@@ -384,16 +382,15 @@ class SystemFieldSolver {
     }
     void restore(const MultiFab& value) override { phi() = value; }
     void configure_boundary(FieldSolveConfig& plan) override {
-      if (!plan.has_boundary_kernel) return;
+      if (!plan.has_boundary_kernel)
+        return;
       auto* geometric = std::get_if<GeometricMG>(&solver_);
       if (geometric == nullptr)
-        throw std::runtime_error(
-            "System: prepared boundary providers require GeometricMG");
+        throw std::runtime_error("System: prepared boundary providers require GeometricMG");
       geometric->set_boundary_context(plan.boundary_context);
     }
-    void prepare_rhs(
-        SystemFieldSolver& owner, MultiFab& value,
-        const FieldSolveConfig& plan) override {
+    void prepare_rhs(SystemFieldSolver& owner, MultiFab& value,
+                     const FieldSolveConfig& plan) override {
       require_field_nullspace_compatible(value, plan.nullspace);
       // FieldOperator authoring uses the physical ``-div(A grad phi)+kappa*phi=rhs``
       // convention. GeometricMG/FFT carry the historical internal
@@ -409,8 +406,7 @@ class SystemFieldSolver {
               if (plan.has_boundary_kernel && plan.boundary_kernel.observes_iteration)
                 solver.solve();
               else
-                solver.solve(plan.mg_opts.rel_tol, plan.mg_opts.max_cycles,
-                             plan.mg_opts.abs_tol);
+                solver.solve(plan.mg_opts.rel_tol, plan.mg_opts.max_cycles, plan.mg_opts.abs_tol);
               return solver.last_solve_report();
             } else {
               solver.solve();
@@ -424,11 +420,11 @@ class SystemFieldSolver {
     void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan) override {
       apply_field_gauge(phi(), plan.nullspace);
     }
-    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow>
-    topology_report() const override {
-      if (topology_digest_.empty() || topology_provenance_.empty()) return {};
-      return {{"builtin:domain", topology_digest_, topology_provenance_,
-               material_points_, 1}};
+    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow> topology_report()
+        const override {
+      if (topology_digest_.empty() || topology_provenance_.empty())
+        return {};
+      return {{"builtin:domain", topology_digest_, topology_provenance_, material_points_, 1}};
     }
     GeometricMG* geometric() { return std::get_if<GeometricMG>(&solver_); }
 
@@ -444,8 +440,7 @@ class SystemFieldSolver {
     ExternalNamedFieldBackend(
         const BoxArray& boxes, const DistributionMapping& mapping,
         std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component)
-        : rhs_(boxes, mapping, 1, 1), phi_(boxes, mapping, 1, 1),
-          component_(std::move(component)) {
+        : rhs_(boxes, mapping, 1, 1), phi_(boxes, mapping, 1, 1), component_(std::move(component)) {
       if (!component_)
         throw std::invalid_argument("external named field backend has no component pair");
     }
@@ -459,11 +454,11 @@ class SystemFieldSolver {
         throw std::runtime_error(
             "System: external FieldSolver v2 cannot consume generated dynamic boundary kernels");
     }
-    void prepare_rhs(
-        SystemFieldSolver& owner, MultiFab& value,
-        const FieldSolveConfig& plan) override {
+    void prepare_rhs(SystemFieldSolver& owner, MultiFab& value,
+                     const FieldSolveConfig& plan) override {
       require_field_nullspace_compatible(value, plan.nullspace);
-      if (owner.p_eps_ != Real(1)) scale(value, Real(1) / owner.p_eps_);
+      if (owner.p_eps_ != Real(1))
+        scale(value, Real(1) / owner.p_eps_);
     }
     SolveReport solve(SystemFieldSolver& owner, const FieldSolveConfig&) override {
       return component_->solve(rhs_, phi_, owner.owner_->geom, owner.owner_->per_);
@@ -475,8 +470,8 @@ class SystemFieldSolver {
       else
         fill_ghosts(phi_, owner.owner_->dom, owner.named_field_bc(plan));
     }
-    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow>
-    topology_report() const override {
+    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow> topology_report()
+        const override {
       return component_->topology_report();
     }
 
@@ -524,8 +519,7 @@ class SystemFieldSolver {
     for (const auto& [slot, plan] : named_field_plans_)
       identities.emplace_back(slot, plan.plan_identity);
     if (!all_ranks_agree_exact_ordered_byte_pairs(identities))
-      throw std::runtime_error(
-          "System: ordered resolved field plans differ across MPI ranks");
+      throw std::runtime_error("System: ordered resolved field plans differ across MPI ranks");
     field_plan_consensus_verified_ = true;
   }
 
@@ -581,10 +575,10 @@ class SystemFieldSolver {
     }
   }
 
-  void install_external_solver(
-      const std::string& slot, runtime::field::PreparedFieldSolverSpec spec,
-      std::shared_ptr<component::LoadedComponent> topology,
-      std::shared_ptr<component::LoadedComponent> solver) {
+  void install_external_solver(const std::string& slot,
+                               runtime::field::PreparedFieldSolverSpec spec,
+                               std::shared_ptr<component::LoadedComponent> topology,
+                               std::shared_ptr<component::LoadedComponent> solver) {
     auto found = named_field_plans_.find(slot);
     if (found == named_field_plans_.end() || found->second.solver != "external_component_v1")
       throw std::runtime_error(
@@ -635,8 +629,8 @@ class SystemFieldSolver {
     plan.boundary_field_buffers.clear();
     plan.boundary_field_buffers.reserve(plan.boundary_field_keys.size());
     for (std::size_t index = 0; index < plan.boundary_field_keys.size(); ++index) {
-      auto dependency = std::find_if(
-          named_fields_.begin(), named_fields_.end(), [&](const auto& item) {
+      auto dependency =
+          std::find_if(named_fields_.begin(), named_fields_.end(), [&](const auto& item) {
             return item.second.plan.output_block == plan.boundary_field_blocks[index] &&
                    item.second.plan.output_key == plan.boundary_field_keys[index];
           });
@@ -649,13 +643,11 @@ class SystemFieldSolver {
         throw std::runtime_error("System: boundary field dependency component is out of range");
       plan.boundary_field_buffers.push_back(&value);
     }
-    plan.boundary_context.states = plan.boundary_state_buffers.empty()
-                                       ? nullptr
-                                       : plan.boundary_state_buffers.data();
+    plan.boundary_context.states =
+        plan.boundary_state_buffers.empty() ? nullptr : plan.boundary_state_buffers.data();
     plan.boundary_context.state_count = static_cast<int>(plan.boundary_state_buffers.size());
-    plan.boundary_context.fields = plan.boundary_field_buffers.empty()
-                                       ? nullptr
-                                       : plan.boundary_field_buffers.data();
+    plan.boundary_context.fields =
+        plan.boundary_field_buffers.empty() ? nullptr : plan.boundary_field_buffers.data();
     plan.boundary_context.field_count = static_cast<int>(plan.boundary_field_buffers.size());
   }
 
@@ -681,14 +673,12 @@ class SystemFieldSolver {
   /// (re-register overwrites the
   /// component map, drops the lazily-built solver so the next solve rebuilds it). The DEDICATED solver
   /// is built on first solve, never here.
-  void register_named_field(const std::string& block, const std::string& provider_key,
-                            int phi_comp, int gx_comp, int gy_comp,
-                            int gradient_sign) {
+  void register_named_field(const std::string& block, const std::string& provider_key, int phi_comp,
+                            int gx_comp, int gy_comp, int gradient_sign) {
     const bool has_gradient = gx_comp >= 0 && gy_comp >= 0;
     const bool has_no_gradient = gx_comp == -1 && gy_comp == -1;
     if (phi_comp < 0 || (!has_gradient && !has_no_gradient) ||
-        (has_gradient &&
-         (phi_comp == gx_comp || phi_comp == gy_comp || gx_comp == gy_comp)))
+        (has_gradient && (phi_comp == gx_comp || phi_comp == gy_comp || gx_comp == gy_comp)))
       throw std::invalid_argument(
           "System: named elliptic field output components must be one potential or "
           "three distinct potential/gradient components");
@@ -917,10 +907,11 @@ class SystemFieldSolver {
       // ADC-644: the trailing cut_cell / levelset / cut_theta_min are spelled at their defaults so the
       // new coarse_threshold (total-cell coarsening ceiling; 0 = disabled = the historical hierarchy)
       // reaches the ctor. Passing the EB defaults keeps this construction byte-identical.
-      ell_.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active),
-                   /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1, p_mg_opts_.nu2,
-                   p_mg_opts_.nbottom, /*cut_cell=*/false, /*levelset=*/std::function<Real(Real, Real)>{},
-                   kEbCutFractionFloor, p_mg_opts_.coarse_threshold);
+      ell_.emplace(
+          std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active),
+          /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1, p_mg_opts_.nu2,
+          p_mg_opts_.nbottom, /*cut_cell=*/false, /*levelset=*/std::function<Real(Real, Real)>{},
+          kEbCutFractionFloor, p_mg_opts_.coarse_threshold);
       std::get<GeometricMG>(*ell_).set_abs_tol(
           p_mg_opts_.abs_tol);  // absolute floor of the V-cycle (0 = relative only)
       if (has_eps_field_)
@@ -1061,8 +1052,8 @@ class SystemFieldSolver {
       return;
     const Real signed_sum = reduce_sum(rhs, 0);
     const Real scale = reduce_abs_sum(rhs, 0);
-    const Real tolerance = Real(128) * std::numeric_limits<Real>::epsilon() *
-                           (scale > Real(1) ? scale : Real(1));
+    const Real tolerance =
+        Real(128) * std::numeric_limits<Real>::epsilon() * (scale > Real(1) ? scale : Real(1));
     if (std::abs(signed_sum) > tolerance)
       throw std::runtime_error(
           "field RHS is incompatible with the declared constant nullspace; silent projection "
@@ -1081,14 +1072,11 @@ class SystemFieldSolver {
     }
   }
 
-
   void require_nullspace_compatible(const MultiFab& rhs) const {
     require_nullspace_compatible(rhs, p_nullspace_const);
   }
 
-  void apply_mean_zero_gauge(MultiFab& phi) const {
-    apply_mean_zero_gauge(phi, p_mean_zero_gauge);
-  }
+  void apply_mean_zero_gauge(MultiFab& phi) const { apply_mean_zero_gauge(phi, p_mean_zero_gauge); }
 
   // --- ELLIPTIC-SOLVER PROFILING COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43) ----------
   // Read-back accessors for the per-solve stats of the ACTIVE cartesian elliptic solver, queried at
@@ -1285,24 +1273,24 @@ class SystemFieldSolver {
     lincomb(published_phi, Real(1), phi_before, Real(0), phi_before);
     trace_mark("solve_fields: after ensure_elliptic");
     MultiFab& rhs = ell_rhs();
-      // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
-      // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
-      assemble_poisson_rhs(rhs, target_block, U_stage);
-      require_nullspace_compatible(rhs);
-      trace_mark("solve_fields: after add_poisson_rhs");
-      // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
-      // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
-      // operator carries eps directly (apply_epsilon_field / apply_epsilon_anisotropic_field), the
-      // rhs stays f as is.
-      if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
-        scale(rhs, Real(1) / p_eps_);
-      }
-      trace_mark("solve_fields: before ell_solve");
-      SolveReport report = ell_solve();
-      if (!report.solved_value_available()) {
-        lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
-        return report;
-      }
+    // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
+    // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
+    assemble_poisson_rhs(rhs, target_block, U_stage);
+    require_nullspace_compatible(rhs);
+    trace_mark("solve_fields: after add_poisson_rhs");
+    // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
+    // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
+    // operator carries eps directly (apply_epsilon_field / apply_epsilon_anisotropic_field), the
+    // rhs stays f as is.
+    if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
+      scale(rhs, Real(1) / p_eps_);
+    }
+    trace_mark("solve_fields: before ell_solve");
+    SolveReport report = ell_solve();
+    if (!report.solved_value_available()) {
+      lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
+      return report;
+    }
     trace_mark("solve_fields: after ell_solve, before device_fence");
     device_fence();
     trace_mark("solve_fields: after device_fence (aux derivation)");
@@ -1443,7 +1431,8 @@ class SystemFieldSolver {
   /// field. A named field may carry its own resolved scalar reaction coefficient; it is installed
   /// only on GeometricMG. Built lazily; no-op if already built.
   void ensure_named_backend(NamedField& nf, const std::string& slot) {
-    if (nf.backend) return;
+    if (nf.backend)
+      return;
     require_field_plan_consensus();
     if (nf.plan.solver == "external_component_v1") {
       if (nf.plan.has_reaction)
@@ -1453,20 +1442,18 @@ class SystemFieldSolver {
       if (by_slot == external_field_components_.end())
         throw std::runtime_error(
             "System: external field provider has no installed topology+solver component pair");
-      nf.backend = std::make_unique<ExternalNamedFieldBackend>(
-          owner_->ba, owner_->dm, by_slot->second);
+      nf.backend =
+          std::make_unique<ExternalNamedFieldBackend>(owner_->ba, owner_->dm, by_slot->second);
       return;
     }
     const std::string& solver = nf.has_plan ? nf.plan.solver : p_solver;
     const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
     const BCRec pbc = nf.has_plan ? named_field_bc(nf.plan) : poisson_bc();
-    std::function<bool(Real, Real)> active = nf.has_plan
-        ? std::function<bool(Real, Real)>{}
-        : wall_active();
+    std::function<bool(Real, Real)> active =
+        nf.has_plan ? std::function<bool(Real, Real)>{} : wall_active();
     if (solver == "fft" || solver == "fft_spectral") {
       if (nf.plan.has_reaction)
-        throw std::runtime_error(
-            "System: FFT field solvers cannot consume a reaction coefficient");
+        throw std::runtime_error("System: FFT field solvers cannot consume a reaction coefficient");
       if (nf.plan.has_boundary_kernel)
         throw std::runtime_error(
             "System: generated field boundary kernels require a residual/JVP solver route; "
@@ -1487,10 +1474,10 @@ class SystemFieldSolver {
             owner_->geom, owner_->ba, pbc, active, spectral);
     } else if (solver == "geometric_mg") {
       auto backend = std::make_unique<BuiltinNamedFieldBackend>(
-          std::in_place_type<GeometricMG>, nf.plan.topology_digest,
-          nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
-          owner_->geom, owner_->ba, pbc, std::move(active), /*replicated=*/false,
-          mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom, /*cut_cell=*/false,
+          std::in_place_type<GeometricMG>, nf.plan.topology_digest, nf.plan.topology_provenance,
+          static_cast<std::size_t>(owner_->dom.num_cells()), owner_->geom, owner_->ba, pbc,
+          std::move(active), /*replicated=*/false, mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom,
+          /*cut_cell=*/false,
           /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
           mg.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
       auto* geometric = backend->geometric();
@@ -1499,8 +1486,7 @@ class SystemFieldSolver {
       geometric->set_abs_tol(mg.abs_tol);
       if (nf.plan.has_reaction) {
         const Real reaction = nf.plan.reaction;
-        geometric->set_reaction(
-            [reaction](Real, Real) { return reaction; });
+        geometric->set_reaction([reaction](Real, Real) { return reaction; });
       }
       if (nf.plan.has_boundary_kernel) {
         geometric->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
@@ -1569,12 +1555,10 @@ class SystemFieldSolver {
           "' aux component out of the channel width (add the block that declares "
           "its aux fields before solving)");
     if (nf.gradient_sign != -1 && nf.gradient_sign != 1)
-      throw std::runtime_error(
-          "System: named elliptic field has no valid gradient sign");
+      throw std::runtime_error("System: named elliptic field has no valid gradient sign");
     const bool has_gradient = nf.gx_comp >= 0 && nf.gy_comp >= 0;
     if (nf.phi_comp >= owner_->aux_ncomp_ ||
-        (has_gradient &&
-         (nf.gx_comp >= owner_->aux_ncomp_ || nf.gy_comp >= owner_->aux_ncomp_)))
+        (has_gradient && (nf.gx_comp >= owner_->aux_ncomp_ || nf.gy_comp >= owner_->aux_ncomp_)))
       throw std::runtime_error(
           "System: named elliptic field output components exceed the aux channel width");
     prepare_boundary_dependencies(nf, block_idx, &U_stage);
@@ -1611,8 +1595,8 @@ class SystemFieldSolver {
       const ConstArray4 p = phi_mf.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for_each_cell(v, detail::SystemNamedFieldPostprocessKernel{
-                           a, p, cphi, cgx, cgy, gradient_scale, dx, dy, grad});
+      for_each_cell(v, detail::SystemNamedFieldPostprocessKernel{a, p, cphi, cgx, cgy,
+                                                                 gradient_scale, dx, dy, grad});
     }
     // Ghost-fill the named field's aux components: the shared aux fill (same routing as solve_fields)
     // then the per-field halo override (ADC-369). This re-fills ALL components -- the shared phi/grad

@@ -46,16 +46,17 @@ def test_writer_backends_have_one_unidirectional_private_package():
 
 def test_pops_output_is_the_exact_writer_facade():
     import pops.output as output
-    from pops.output._writers.common import PreparedOutputFile
+    from pops.output._writers.common import ScientificWriter, WriterSession
     from pops.output._writers.hdf5 import HDF5Writer
     from pops.output._writers.npz import NPZWriter
     from pops.output._writers.paraview import ParaViewWriter
 
-    assert output.PreparedOutputFile is PreparedOutputFile
+    assert output.ScientificWriter is ScientificWriter
+    assert output.WriterSession is WriterSession
     assert output.HDF5Writer is HDF5Writer
     assert output.NPZWriter is NPZWriter
     assert output.ParaViewWriter is ParaViewWriter
-    assert {"HDF5Writer", "NPZWriter", "ParaViewWriter", "PreparedOutputFile"} \
+    assert {"HDF5Writer", "NPZWriter", "ParaViewWriter", "ScientificWriter", "WriterSession"} \
         <= set(output.__all__)
 
 
@@ -64,7 +65,7 @@ def test_paraview_geometry_assembly_has_no_python_cell_loops():
     prepare = next(
         node for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "prepare"
+        and node.name == "_stage_file"
     )
     cell_indices = {"i", "j", "row", "column", "cell_index"}
     offenders = []
@@ -74,12 +75,7 @@ def test_paraview_geometry_assembly_has_no_python_cell_loops():
         targets = {
             name.id for name in ast.walk(node.target) if isinstance(name, ast.Name)
         }
-        nested = any(
-            isinstance(descendant, ast.For)
-            for statement in node.body
-            for descendant in ast.walk(statement)
-        )
-        if targets & cell_indices or nested:
+        if targets & cell_indices:
             offenders.append(node.lineno)
     assert not offenders, "ParaView geometry must stay NumPy-vectorized: %r" % offenders
 

@@ -32,6 +32,10 @@ class _SourceModel:
     def check(self):
         return None
 
+    def __pops_native_loader_source__(
+            self, *, name=None, target="system", hoist_reciprocals=False):
+        return "// compiled-model-boundary fixture\n"
+
     def __pops_compiler_lowering__(self):
         return CompilerLowering(
             emit_model=self,

@@ -2,6 +2,7 @@
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
 #include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
 #include <pops/runtime/dynamic/abi_key.hpp>
@@ -9,6 +10,41 @@
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
 #include <utility>
+#include <vector>
+
+#ifndef POPS_MPI_INCLUDE
+#define POPS_MPI_INCLUDE ""
+#endif
+#ifndef POPS_MPI_COMPILER
+#define POPS_MPI_COMPILER ""
+#endif
+#ifndef POPS_MPI_STANDARD
+#define POPS_MPI_STANDARD ""
+#endif
+#ifndef POPS_MPI_COMPILE_OPTIONS
+#define POPS_MPI_COMPILE_OPTIONS ""
+#endif
+#ifndef POPS_MPI_COMPILE_DEFINITIONS
+#define POPS_MPI_COMPILE_DEFINITIONS ""
+#endif
+#ifndef POPS_MPI_LINK_OPTIONS
+#define POPS_MPI_LINK_OPTIONS ""
+#endif
+#ifndef POPS_MPI_LINK_LIBRARIES
+#define POPS_MPI_LINK_LIBRARIES ""
+#endif
+#ifndef POPS_MPI_HEADER_PATHS
+#define POPS_MPI_HEADER_PATHS ""
+#endif
+#ifndef POPS_MPI_HEADER_HASHES
+#define POPS_MPI_HEADER_HASHES ""
+#endif
+#ifndef POPS_MPI_LIBRARY_PATHS
+#define POPS_MPI_LIBRARY_PATHS ""
+#endif
+#ifndef POPS_MPI_LIBRARY_HASHES
+#define POPS_MPI_LIBRARY_HASHES ""
+#endif
 
 namespace pops::detail {
 
@@ -25,6 +61,24 @@ struct ModelSpecFreezeTransactionAccess {
 }  // namespace pops::detail
 
 namespace {
+
+py::tuple pipe_tuple(const std::string& serialized) {
+  if (serialized.empty())
+    return py::tuple(0);
+  std::vector<std::string> values;
+  std::size_t begin = 0;
+  while (begin <= serialized.size()) {
+    const auto end = serialized.find('|', begin);
+    values.emplace_back(serialized.substr(begin, end - begin));
+    if (end == std::string::npos)
+      break;
+    begin = end + 1;
+  }
+  py::tuple result(values.size());
+  for (std::size_t index = 0; index < values.size(); ++index)
+    result[index] = values[index];
+  return result;
+}
 
 void require_freeze_transaction_capability(const py::handle& capability) {
   const py::object expected =
@@ -74,14 +128,17 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["mpi_ranks"] = r.mpi_ranks;
   d["communicator"] = r.communicator;
   d["supports_custom_communicator"] = r.supports_custom_communicator;
+  d["mpi_initialized_by_pops"] = r.mpi_initialized_by_pops;
+  d["mpi_atexit_finalize_registered"] = r.mpi_atexit_finalize_registered;
+  d["mpi_thread_level"] = r.mpi_thread_level;
+  d["mpi_ownership"] = r.mpi_ownership;
   d["allocator_mode"] = r.allocator_mode;
   d["comm_allocator_mode"] = r.comm_allocator_mode;
   d["allocator_lifetime"] = r.allocator_lifetime;
   return d;
 }
 
-py::dict runtime_backend_manifest_to_dict(const std::string& backend,
-                                          const std::string& target,
+py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std::string& target,
                                           const std::string& communicator) {
   const auto runtime = pops::runtime_environment_report();
   std::string evidence;
@@ -92,28 +149,26 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend,
     }
     evidence = "pops.native.2d-float64-host.v1";
   } else if (communicator == "MPI_COMM_WORLD") {
-    if (!runtime.mpi_compiled || !runtime.mpi_active ||
-        runtime.communicator != "MPI_COMM_WORLD") {
+    if (!runtime.mpi_compiled || !runtime.mpi_active || runtime.communicator != "MPI_COMM_WORLD") {
       throw std::runtime_error(
           "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
           "MPI world launch");
     }
     evidence = "pops.native.2d-float64-host-mpi-world.v1";
   } else {
-    throw std::invalid_argument(
-        "runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
+    throw std::invalid_argument("runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
   }
-  const auto manifest = pops::platform::proven_host_backend(
-      backend, target, pops::abi_key(), communicator, evidence);
+  const auto manifest =
+      pops::platform::proven_host_backend(backend, target, pops::abi_key(), communicator, evidence);
   py::dict precision;
-  precision["storage"] = pops::platform::require_text(
-      manifest.precision.storage, "precision.storage");
-  precision["compute"] = pops::platform::require_text(
-      manifest.precision.compute, "precision.compute");
-  precision["accumulation"] = pops::platform::require_text(
-      manifest.precision.accumulation, "precision.accumulation");
-  precision["reduction"] = pops::platform::require_text(
-      manifest.precision.reduction, "precision.reduction");
+  precision["storage"] =
+      pops::platform::require_text(manifest.precision.storage, "precision.storage");
+  precision["compute"] =
+      pops::platform::require_text(manifest.precision.compute, "precision.compute");
+  precision["accumulation"] =
+      pops::platform::require_text(manifest.precision.accumulation, "precision.accumulation");
+  precision["reduction"] =
+      pops::platform::require_text(manifest.precision.reduction, "precision.reduction");
   py::dict capabilities;
   capabilities["dimensions"] = pops::platform::require_int_set(
       pops::platform::capability(manifest, "dimensions"), "capabilities.dimensions");
@@ -133,14 +188,12 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend,
   result["abi"] = pops::platform::require_text(manifest.abi, "abi");
   result["precision"] = std::move(precision);
   result["device"] = pops::platform::require_text(manifest.device, "device");
-  result["memory_spaces"] = pops::platform::require_text_set(
-      manifest.memory_spaces, "memory_spaces");
-  result["communicator"] = pops::platform::require_text(
-      manifest.communicator, "communicator");
+  result["memory_spaces"] =
+      pops::platform::require_text_set(manifest.memory_spaces, "memory_spaces");
+  result["communicator"] = pops::platform::require_text(manifest.communicator, "communicator");
   result["capabilities"] = std::move(capabilities);
   result["evidence"] = evidence;
-  result["identity"] = pops::platform::identity_token(
-      "runtime-backend-manifest", manifest);
+  result["identity"] = pops::platform::identity_token("runtime-backend-manifest", manifest);
   return result;
 }
 
@@ -204,9 +257,105 @@ py::dict native_capability_report_to_dict(const pops::NativeCapabilityReport& re
 // ADC-365: module attributes/globals + SystemConfig + ModelSpec (registered first so System/
 // AmrSystem signatures resolve them).
 void init_core(py::module_& m) {
+#ifdef POPS_HAS_MPI
+  // An MPI-enabled module is an explicitly distributed runtime.  Initialize/attach from C++ while
+  // the module is imported so compile-time platform discovery sees the real world topology before
+  // ExecutionContext is materialized.  WorldCommunicator owns finalization only when it performed
+  // MPI_Init_thread itself; an externally initialized MPI remains externally owned.
+  (void)pops::WorldCommunicator::world();
+#endif
+
   m.doc() =
       "PoPS (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
+
+  // Exact native distributed resources.  Neither class has a Python constructor: all consumers
+  // receive the same process-world singleton and the singleton-owned MPI_DOUBLE identity.  The
+  // byte-only collective methods release the GIL while C++ executes MPI.
+  py::class_<pops::NativeMpiDatatype>(m, "_NativeMpiDatatype")
+      .def_property_readonly(
+          "identity",
+          [](const pops::NativeMpiDatatype& datatype) { return std::string(datatype.identity()); })
+      .def_property_readonly("fortran_handle", &pops::NativeMpiDatatype::fortran_handle);
+
+  py::class_<pops::WorldCommunicator>(m, "_NativeWorldCommunicator")
+      .def_property_readonly("rank", &pops::WorldCommunicator::rank)
+      .def_property_readonly("size", &pops::WorldCommunicator::size)
+      .def_property_readonly("active", &pops::WorldCommunicator::active)
+      .def_property_readonly(
+          "identity",
+          [](const pops::WorldCommunicator& world) { return std::string(world.identity()); })
+      .def_property_readonly("initialized_by_pops", &pops::WorldCommunicator::initialized_by_pops)
+      .def_property_readonly("atexit_finalize_registered",
+                             &pops::WorldCommunicator::atexit_finalize_registered)
+      .def_property_readonly("thread_level", &pops::WorldCommunicator::thread_level)
+      .def_property_readonly("fortran_handle", &pops::WorldCommunicator::fortran_handle)
+      .def_property_readonly("datatype_float64", &pops::WorldCommunicator::datatype_float64,
+                             py::return_value_policy::reference_internal)
+      .def(
+          "is_float64_datatype",
+          [](const pops::WorldCommunicator& world, const py::handle& candidate) {
+            try {
+              return world.owns_float64_datatype(candidate.cast<const pops::NativeMpiDatatype&>());
+            } catch (const py::cast_error&) {
+              return false;
+            }
+          },
+          py::arg("candidate"))
+      .def("barrier",
+           [](const pops::WorldCommunicator& world) {
+             py::gil_scoped_release release;
+             world.barrier();
+           })
+      .def(
+          "broadcast_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload, int root) {
+            std::string native = payload.cast<std::string>();
+            {
+              py::gil_scoped_release release;
+              native = world.broadcast_bytes(std::move(native), root);
+            }
+            return py::bytes(native);
+          },
+          py::arg("payload"), py::arg("root") = 0)
+      .def(
+          "allgather_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload) {
+            const std::string native = payload.cast<std::string>();
+            std::vector<std::string> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = world.allgather_bytes(native);
+            }
+            py::tuple result(gathered.size());
+            for (std::size_t index = 0; index < gathered.size(); ++index)
+              result[index] = py::bytes(gathered[index]);
+            return result;
+          },
+          py::arg("payload"))
+      .def(
+          "gather_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload,
+             int root) -> py::object {
+            const std::string native = payload.cast<std::string>();
+            std::optional<std::vector<std::string>> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = world.gather_bytes(native, root);
+            }
+            if (!gathered)
+              return py::none();
+            py::tuple result(gathered->size());
+            for (std::size_t index = 0; index < gathered->size(); ++index)
+              result[index] = py::bytes((*gathered)[index]);
+            return result;
+          },
+          py::arg("payload"), py::arg("root") = 0);
+
+  m.def(
+      "mpi_world", []() -> pops::WorldCommunicator& { return pops::WorldCommunicator::world(); },
+      py::return_value_policy::reference,
+      "Return the exact native process-world authority (serial singleton in a non-MPI build).");
 
   // Native iterative solves have one authoritative result contract.  Register it before System so
   // every method returning SolveReport (notably System::solve_fields) has a concrete Python value
@@ -233,8 +382,8 @@ void init_core(py::module_& m) {
         "Module ABI key (compiler, C++ standard, signature of the pops headers).");
 
   // MPI rank / rank count of the communicator (0 / 1 in serial or when MPI is not initialized, cf.
-  // pops/parallel/comm.hpp). Exposed so the IO facade (sim.write / sim.checkpoint) writes the file
-  // only on rank 0 after a collective gather (state_global / potential_global).
+  // pops/parallel/comm.hpp). The private runtime uses these values to authenticate the exact
+  // ExecutionContext topology; publication and checkpoint ownership live in RuntimeInstance.
   m.def("my_rank", &pops::my_rank, "MPI rank of the process (0 in serial).");
   m.def("n_ranks", &pops::n_ranks, "Number of MPI ranks (1 in serial).");
 
@@ -260,22 +409,28 @@ void init_core(py::module_& m) {
   m.attr("__has_kokkos__") = false;
 #endif
 
-  // MPI seam COMPILED into the module (POPS_HAS_MPI via the pops INTERFACE under -DPOPS_USE_MPI=ON) plus
-  // the MPI include dir(s) used by the build (POPS_MPI_INCLUDE, baked by CMake; '|'-joined). The DSL
-  // Production packages are compiled OUTSIDE CMake and inherit none of this: codegen reads these
-  // attributes (_native_mpi_flags) to re-bake -DPOPS_HAS_MPI + -I<inc> so the loader uses comm.hpp's
-  // REAL MPI rather than its serial stubs (n_ranks()=1). Without it a distributed layout built inside
-  // the loader replicates on every rank (ADC-319). A serial module exposes False / empty.
+  // Exact, replayable MPI::MPI_CXX build manifest.  Codegen re-hashes every path immediately before
+  // compilation, so an in-place MPI upgrade cannot reuse the cached ABI digest with different bytes.
 #if defined(POPS_HAS_MPI)
   m.attr("__has_mpi__") = true;
-#if defined(POPS_MPI_INCLUDE)
-  m.attr("__mpi_include__") = POPS_MPI_INCLUDE;
-#else
-  m.attr("__mpi_include__") = "";
-#endif
+  py::dict mpi_contract;
+  mpi_contract["schema_version"] = 1;
+  mpi_contract["abi_sha256"] = POPS_MPI_ABI;
+  mpi_contract["compiler"] = POPS_MPI_COMPILER;
+  mpi_contract["standard"] = POPS_MPI_STANDARD;
+  mpi_contract["include_dirs"] = pipe_tuple(POPS_MPI_INCLUDE);
+  mpi_contract["compile_options"] = pipe_tuple(POPS_MPI_COMPILE_OPTIONS);
+  mpi_contract["compile_definitions"] = pipe_tuple(POPS_MPI_COMPILE_DEFINITIONS);
+  mpi_contract["link_options"] = pipe_tuple(POPS_MPI_LINK_OPTIONS);
+  mpi_contract["link_libraries"] = pipe_tuple(POPS_MPI_LINK_LIBRARIES);
+  mpi_contract["header_paths"] = pipe_tuple(POPS_MPI_HEADER_PATHS);
+  mpi_contract["header_sha256"] = pipe_tuple(POPS_MPI_HEADER_HASHES);
+  mpi_contract["library_paths"] = pipe_tuple(POPS_MPI_LIBRARY_PATHS);
+  mpi_contract["library_sha256"] = pipe_tuple(POPS_MPI_LIBRARY_HASHES);
+  m.attr("__mpi_contract__") = std::move(mpi_contract);
 #else
   m.attr("__has_mpi__") = false;
-  m.attr("__mpi_include__") = "";
+  m.attr("__mpi_contract__") = py::none();
 #endif
 
   // Path of the COMPILER that built this module (POPS_CXX_COMPILER, injected by CMake). Since the ABI
@@ -344,11 +499,10 @@ void init_core(py::module_& m) {
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
-  m.def(
-      "runtime_backend_manifest", &runtime_backend_manifest_to_dict,
-      py::arg("backend"), py::arg("target"), py::arg("communicator"),
-      "Explicit 2D/float64/host RuntimeBackendManifest for serial or the active exact "
-      "MPI_COMM_WORLD route. Custom communicators are rejected.");
+  m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
+        py::arg("target"), py::arg("communicator"),
+        "Explicit 2D/float64/host RuntimeBackendManifest for serial or the active exact "
+        "MPI_COMM_WORLD route. Custom communicators are rejected.");
 
   m.def(
       "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },

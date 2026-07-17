@@ -72,22 +72,18 @@ TEST(BrickCatalog, CatalogCsvMatchesCanonicalIdListPerCategory) {
 TEST(BrickCatalog, JsonListsEveryIdWithExternalBrickGrammar) {
   const std::string j = brick_catalog_json();
   bool ok = contains(j, "{\"catalog_digest\":\"") &&
-            contains(j, "\"catalog_semantic_digest\":\"") &&
-            contains(j, "\"bricks\":[");
+            contains(j, "\"catalog_semantic_digest\":\"") && contains(j, "\"bricks\":[");
   for (const BrickCatalogEntry& e : kBrickCatalog) {
     const std::string id_field = std::string("\"id\":\"") + e.id + "\"";
     ok = ok && contains(j, id_field.c_str());
   }
   EXPECT_TRUE(ok) << "brick_catalog_json() exposes both digests and every catalog id";
-  EXPECT_TRUE(contains(j, "\"catalog_digest\":\"") &&
-              contains(j, "\"catalog_semantic_digest\":\"") &&
-              contains(j, "\"category\":\"transport\"") &&
-              contains(j, "\"requirements\":[]") &&
-              contains(j, "\"limitations\":[") &&
-              contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
-              contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") &&
-              contains(j, "\"route_index\":") &&
-              contains(j, "\"n_vars\":") && contains(j, "\"polar_ok\":true"))
+  EXPECT_TRUE(
+      contains(j, "\"catalog_digest\":\"") && contains(j, "\"catalog_semantic_digest\":\"") &&
+      contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":[]") &&
+      contains(j, "\"limitations\":[") && contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
+      contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") && contains(j, "\"route_index\":") &&
+      contains(j, "\"n_vars\":") && contains(j, "\"polar_ok\":true"))
       << "brick_catalog_json() exposes structured generated component facts";
 }
 
@@ -109,7 +105,8 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
            std::string(e.limitations) == r.limitations;
       ++i;
     }
-    EXPECT_TRUE(i == 3 && ok) << "transport : catalog == kTransports == kTransportRoutes (3 lignes)";
+    EXPECT_TRUE(i == 3 && ok)
+        << "transport : catalog == kTransports == kTransportRoutes (3 lignes)";
   }
   // Sources : the generated registry contains canonical rows only, in route order.
   {

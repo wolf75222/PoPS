@@ -25,8 +25,6 @@ from pops.mesh import (
 from pops.model import ComponentManifest
 from pops.time import FixedDt, StagePoint, TimePoint
 from tests.python.support.layout_plan import cartesian_grid
-
-
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 DT = 1.0e-3
@@ -115,6 +113,7 @@ const PopsComponentInterfaceEntryV1 interface_entry = {
 };
 const PopsComponentApiV1 component_api = {
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   __COMPONENT_ID__, __SEMANTIC_ID__, __MANIFEST_ID__, 1, &interface_entry
 };
@@ -342,6 +341,8 @@ def test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count
     assert instance._executor.mapping_report() == expected_count
     for name, values in expected.items():
         np.testing.assert_array_equal(np.asarray(instance.get_state(name)), values)
+
+
 
 
 def test_mid_step_child_failure_preserves_root_error_and_rolls_back_composite(

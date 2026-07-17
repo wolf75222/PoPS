@@ -355,6 +355,7 @@ class InstalledComponent:
                 "semantic_identity": self.runtime_contract.manifest_data["digests"]["semantic"],
                 "manifest_identity": self.component_manifest.token,
                 "catalog_sha256": self.interface.to_data()["catalog_sha256"],
+                "abi_key": self.platform_manifest.abi.require("component.abi"),
             }
             for name, value in expected.items():
                 if report[name] != value:
@@ -372,6 +373,12 @@ class InstalledComponent:
         except ImportError as exc:
             raise RuntimeError(
                 "installed component loading requires the matching PoPS native module") from exc
+        from pops.codegen._native_host import ensure_native_host_global
+        ensure_native_host_global(_pops)
+        from pops._platform_contracts import validate_component_runtime
+        from pops.runtime._platform_manifest import native_runtime_backend
+        validate_component_runtime(
+            self.platform_manifest, native_runtime_backend(self.platform_manifest))
         loader = getattr(_pops, "_load_component", None)
         if not callable(loader):
             raise RuntimeError(
@@ -380,6 +387,7 @@ class InstalledComponent:
             str(self.path), self.component_id,
             self.runtime_contract.manifest_data["digests"]["semantic"],
             self.component_manifest.token, self.interface.to_data()["catalog_sha256"],
+            self.platform_manifest.abi.require("component.abi"),
             [(self.interface.abi_id, self.interface.version, self.interface.cpp_table)],
             _canonical_runtime_json(self.runtime_contract.manifest_data["parameters"]),
             _canonical_runtime_json(self.runtime_contract.manifest_data["target"]),

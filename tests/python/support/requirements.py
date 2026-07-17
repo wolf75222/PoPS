@@ -58,6 +58,11 @@ def native_tests_required() -> bool:
     return os.environ.get("POPS_REQUIRE_NATIVE_TESTS") == "1"
 
 
+def mpi_tests_required() -> bool:
+    """Return whether missing MPI prerequisites are release-gate failures."""
+    return os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
+
+
 def require_native_or_skip(
     reason: str,
     *,
@@ -73,6 +78,26 @@ def require_native_or_skip(
     """
     if native_tests_required():
         raise RuntimeError(f"required native test unavailable: {reason}")
+    if optional_skip is not None:
+        optional_skip(reason)
+        return
+    skip_process_test(reason)
+
+
+def require_mpi_or_skip(
+    reason: str,
+    *,
+    optional_skip: Callable[[str], object] | None = None,
+) -> None:
+    """Fail a required MPI acceptance, otherwise report one canonical optional skip.
+
+    The dedicated MPI lane sets ``POPS_REQUIRE_MPI_TESTS=1``.  Its manifest-owned entrypoints must
+    therefore never turn a missing native MPI build, launcher, rank count, or parallel-HDF5
+    capability into a successful process exit.  Developer runs retain an explicit ``POPS_SKIP:``
+    result through the same process protocol as native-only tests.
+    """
+    if mpi_tests_required():
+        raise RuntimeError(f"required MPI test unavailable: {reason}")
     if optional_skip is not None:
         optional_skip(reason)
         return

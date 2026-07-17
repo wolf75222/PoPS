@@ -34,10 +34,11 @@ des détails internes. Ils ne constituent ni une seconde API, ni une voie de sec
 
 `pops.ExecutionContext` est l'unique valeur racine supplémentaire parce qu'elle matérialise une
 ressource de lancement, pas un second moteur. La route MPI actuelle se construit par
-`pops.ExecutionContext.mpi_world(artifact, MPI.COMM_WORLD)` après compilation et se transmet à
-`pops.bind(..., resources={"execution_context": context})`. Elle refuse tout communicateur custom,
-toute extension non-MPI et toute divergence de rang/taille ; aucune exécution série de repli n'est
-autorisée.
+`pops.ExecutionContext.mpi_world(artifact)` après compilation et se transmet à
+`pops.bind(..., resources={"execution_context": context})`. Le contexte obtient exclusivement du
+module C++ le `MPI_COMM_WORLD` natif, son rang, sa taille et ses handles ABI ; aucun objet MPI Python
+n'entre dans le contrat public ou privé. Elle refuse tout communicateur custom, toute extension
+non-MPI et toute divergence de rang/taille ; aucune exécution série de repli n'est autorisée.
 
 ### 1.1 Objectifs
 
@@ -702,6 +703,13 @@ paramètres. Une interface, orientation, projection, corner policy ou closure sa
 qualifié est refusée à `compile` : un callback Python ou un handle sans implémentation n'est jamais une
 route d'exécution.
 
+Sous `MPI_COMM_WORLD`, chaque rang compacte uniquement les cellules de face qu'il possède, le runtime
+C++ reconstruit collectivement les deux traces complètes, puis exécute le `NumericalFlux` natif avec le
+même batch qualifié sur tous les rangs. Le flux partagé doit être fini et bit-identique entre rangs avant
+toute écriture ; seuls les fragments locaux des deux résidus sont ensuite modifiés. Une erreur de
+préparation, de trace, de composant ou de consensus est décidée collectivement avant la phase suivante,
+afin qu'un échec propre à un rang ne puisse ni publier un demi-flux ni bloquer ses pairs.
+
 Pour un `rhs_jacvec`, le `BoundaryEvaluationPoint` exact du RHS de base est capturé dans le corps du
 pas puis transporté jusque dans l'`ApplyFn`; la copie de contexte créée avant `begin_step` ne
 reconstruit jamais le temps. Le volume sans contribution additive de frontière est différencié, puis
@@ -757,8 +765,9 @@ par le sujet canonique exact du plan ; une clé homonyme provenant d'un autre `C
 Pour un bootstrap AMR, reprojection analytique et prolongation sont donc des choix explicites portés
 par la brique de donnée. `initial_values` doit couvrir exactement les sources non analytiques et chaque
 `BindArray` doit avoir la forme conservatrice complète `(n_components, ny, nx)` et la précision de
-l'artefact. Le bind refuse deux autorités concurrentes (`initial_state` et plan IC AMR), un tableau de
-densité qui prétend satisfaire `BindArray`, une source analytique surchargée et toute valeur manquante.
+l'artefact. Pour tout artefact AMR, le bind refuse `initial_state` sans condition : le plan IC AMR et
+ses `initial_values` typées sont l'unique autorité. Il refuse aussi un tableau de densité qui prétend
+satisfaire `BindArray`, une source analytique surchargée et toute valeur manquante.
 
 ## 7. Programme de temps
 
@@ -768,11 +777,27 @@ densité qui prétend satisfaire `BindArray`, une source analytique surchargée 
 
 - `state`, `value`, appel d'opérateur et appel de champ ;
 - `solve(problem, solver=...)` puis consommation explicite de l'outcome ;
-- `keep_history` et lecture qualifiée de l'historique ;
+- `keep_history`, `history` et `store_history` pour les historiques qualifiés ;
 - `subcycle` et `synchronize` pour les domaines d'horloge ;
 - contrôle structuré typé ;
 - `commit` et `commit_many` ;
 - `step_strategy` pour le contrôleur et le contrat transactionnel.
+
+Chaque anneau d'historique possède dès l'authoring une politique de persistance typée et compilée.
+`store_history(name, value, depth=..., checkpoint_policy=...)` couvre les anneaux génériques ;
+`keep_history(..., checkpoint_policy=...)` réutilise exactement la même autorité. Une politique
+omise devient explicitement `Dense()` dans le graphe compilé. Une politique sélective exige une
+profondeur finale connue, et la validation refuse toute politique manquante, orpheline, mal typée ou
+dont la profondeur diverge de celle des lectures. Le checkpoint ne devine jamais de fallback.
+Dans ces deux méthodes, `depth` est le lag maximal lisible ; l'anneau natif possède donc exactement
+`depth + 1` slots en incluant le slot courant `0`. La politique de persistance est toujours validée
+contre ce nombre physique de slots, jamais contre le seul lag maximal.
+Le plan de checkpoint sépare les slots demandés par la politique des slots effectivement stockés.
+Si une regrille est planifiée dans la fenêtre qu'un replay sélectif devrait reconstruire, le plan
+effectif est promu en `dense_regrid_safety` : tous les slots sont persistés et le manifeste authentifié
+enregistre la demande, la promotion et l'empreinte de calendrier. PoPS ne prétend donc jamais qu'un
+replay sur une hiérarchie déjà remappée est bit-identique ; hors d'une telle fenêtre, le plan reste
+`policy` et reconstruit uniquement les slots omis.
 
 Écriture SSPRK2 normative, uniquement avec les opérations génériques de `Program` :
 
@@ -1032,8 +1057,9 @@ pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldM
 
 `pops.bind` accepte exactement cinq familles : `initial_state`, `params`, `aux`, `resources` et
 `initial_values`. L'enregistrement interne qui les authentifie n'est pas importé par l'utilisateur.
-`initial_state` est la table de blocs du layout uniforme (et la route de compatibilité AMR sans plan
-d'initialisation) ; `initial_values` est la table typée par `Handle` du plan `InitialCondition` AMR.
+`initial_state` est exclusivement la table de blocs d'un layout uniforme ; `initial_values` est la
+table typée par `Handle` du plan `InitialCondition` AMR. Tout artefact AMR exige ce plan résolu : il
+n'existe ni table de blocs AMR parallèle ni route de compatibilité sans autorité d'initialisation.
 Elles ne constituent jamais deux autorités pour le même artefact.
 Dans cette release, `resources` est vide ou contient uniquement `execution_context`, valeur typée qui
 porte toute l'autorité de lancement. Les clés libres `communicator`, `device`, `stream` ou `allocator`
@@ -1076,9 +1102,24 @@ des entrées effectivement liés ; cette lecture explicite ne donne aucun accès
 diagnostics planifiés. Chaque consommateur déclare schedule, handles qualifiés, sélection de niveaux,
 format, cible déterministe et comportement d'échec.
 
+Un diagnostic embarqué est abaissé exactement une fois vers une `DiagnosticQuantity` : handle propre,
+état conservatif unique, layout/niveaux et instruction fermée de réduction native. Une sélection
+ambiguë entre plusieurs états est refusée. Parcours des cellules, masque composite AMR et collectifs
+MPI restent en C++/Kokkos ; Python n'applique que la transformation scalaire déclarée au résultat
+réduit. La pondération métrique uniforme vient de la géométrie normalisée, tandis qu'une réduction
+composite AMR déjà pondérée ne l'est jamais une seconde fois. Un `ConservationCheck` ne vaut que pour
+une quantité réellement fermée : son baseline accepté est transactionnel et restauré par checkpoint.
+Un domaine ouvert doit exposer séparément stockage, flux sortant, sources, reflux et projection, pas
+être présenté comme un invariant.
+
 Le graphe est résolu avec le layout, authentifié dans le plan et l'artefact, puis détenu par
 `RuntimeInstance`. Le snapshot de bind ne possède aucun registre parallèle `outputs` ou `diagnostics` :
 les recréer à ce niveau constituerait une seconde autorité et est interdit.
+L'autorité de restart manuel est elle aussi matérialisée pendant `resolve` puis conservée dans le
+plan compilé : soit le provider unique d'un nœud `Checkpoint`, soit le builtin v3 identifié quand le
+graphe n'en déclare aucun. `RuntimeInstance` ne construit jamais un provider de repli tardif. Tout
+provider déclare aussi `validate_snapshot()` et doit produire une préparation compensatable portant
+`discard()` et `rollback()` ; ce protocole est vérifié avant qu'un effet accepté puisse être publié.
 
 Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés vers des writers réels.
 La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
@@ -1107,6 +1148,25 @@ Un checkpoint strict conserve au minimum : identités du plan/programme/composan
 états, champs matériels requis, histories, clocks/schedules, contrôleur, hiérarchie AMR, cursors des
 consommateurs et contrat de plateforme. Un restart refuse toute divergence non autorisée. La garantie
 bit-identique est prouvée par continuation indépendante, pas par comparaison du manifest seul.
+
+Le restart v3 MPI est un protocole collectif du `RuntimeInstance`, jamais une lecture concurrente du
+fichier par les moteurs. Tous les rangs authentifient d'abord la même cible ; le rang 0 lit une seule
+fois l'artefact, authentifie son enveloppe et diffuse ses bytes exacts ainsi que les cursors via le
+communicator porté par `ExecutionContext`. Chaque rang décode alors le payload en mémoire et termine
+le préflight complet Uniform, AMR ou multi-layout. Un consensus sans erreur est obligatoire avant la
+première mutation native. L'application conserve un snapshot accepté sur chaque rang jusqu'aux
+consensus `apply` et `commit` ; toute erreur ou divergence déclenche le rollback de tous les moteurs.
+Le multi-layout encapsule les payloads enfants dans le container v3 et les rejoue directement en
+mémoire, sans fichiers enfants temporaires ni `np.load` concurrent sur un filesystem partagé.
+
+La capture suit le contrat symétrique avant tout `*_global` natif : chaque rang construit sans
+collective le plan complet et ordonné (blocs, niveaux, fields, histories, caches et provenance), puis
+un consensus compare son identité. Les accessors collectifs ne démarrent qu'après cet accord. Les
+payloads scellés atteignent un second consensus d'identité avant toute écriture rang 0. La publication
+finale crée atomiquement un hard-link staging-vers-cible avec sémantique no-clobber, authentifie ce
+lien puis retire le staging ; une cible créée concurremment n'est jamais écrasée. Discard et rollback
+ne suppriment un chemin qu'après vérification de l'identité `(st_dev, st_ino)` enregistrée : un chemin
+remplacé par un tiers est laissé intact et l'échec de compensation est signalé.
 
 ## 10. Extension et C++
 
@@ -1195,7 +1255,8 @@ La release est conforme uniquement pour les lignes prouvées par la matrice nati
 - programmes explicites, solves locaux, IMEX et solve global matrix-free par `LinearProblem` avec
   `GMRES`/`BiCGStab`, plus `CompositeTensorFAC` pour la portée hiérarchique ;
 - HDF5, NPZ, ParaView et checkpoint/restart transactionnels ;
-- C++20/Kokkos sur la route host/`float64`/communicator série explicitement authentifiée ;
+- C++20/Kokkos sur les routes host/`float64` avec communicator série ou
+  `ExecutionContext.mpi_world()` explicitement authentifié ;
 - packages C++ externes conformes au manifest et à l'ABI courants.
 
 Les dimensions, ratios, nombres de niveaux, géométries, solveurs et combinaisons device réellement
@@ -1205,11 +1266,26 @@ Il exécute un seul `StateSpace` par bloc, le coeur de stockage 2D et les transi
 toute demande hors de cette enveloppe est un refus avant construction du moteur, pas une
 normalisation du plan.
 
-L'ABI et les manifests savent décrire un communicator, un datatype, un stream et un device explicites.
-La route finale installée dans cette release ne transporte toutefois que host/`float64`/série. Un
-processus MPI actif, un communicator non série, un backend Kokkos GPU ou un device handle est refusé
-avant le constructeur de `System`/`AmrSystem`. Être compilé avec MPI ou Kokkos ne constitue pas à lui
-seul une autorisation d'exécution.
+L'ABI et les manifests décrivent un communicator, un datatype, un stream et un device explicites.
+La route finale transporte host/`float64` avec le communicator série ou exactement
+`MPI_COMM_WORLD`, acquis et authentifié par le runtime C++ lorsque
+`ExecutionContext.mpi_world()` est appelé ; un communicator dupliqué, splitté ou personnalisé reste
+refusé parce que les moteurs natifs ne disposent pas encore d'une ABI d'injection de communicator.
+Le module appelle `MPI_Init_thread(MPI_THREAD_MULTIPLE)` avant la création de threads de travail, ou
+se rattache à un monde externe uniquement si `MPI_Query_thread` prouve ce même niveau. Il ne finalise
+que le monde qu'il a lui-même initialisé, après la fin du travail natif ; une application hôte conserve
+la propriété de son lifecycle MPI.
+Python ne possède, n'initialise et n'exécute aucune ressource ou collective MPI. Les sorties
+scientifiques choisissent obligatoirement un `ParallelMode` typé :
+`SERIAL` pour le contexte série, `ROOT` pour un rassemblement auquel tous les rangs participent suivi
+d'un unique writer rang 0, `COLLECTIVE` pour les hyperslabs HDF5 MPIO exacts, ou `PER_RANK` pour des
+artefacts locaux qualifiés par rang et un reçu agrégé. Le mode, le format, la sélection, la cible et
+l'identité de chaque pièce native (`global_box_index`, `owner_rank`, `replicated`) sont authentifiés
+entre rangs avant toute écriture. La route `COLLECTIVE` appelle le backend C++ HDF5 parallèle sur
+`MPI_COMM_WORLD`; `h5py` reste uniquement un lecteur/écrivain série optionnel et n'est jamais un
+transport MPI. Une dépendance HDF5 parallèle native absente, un mode incompatible ou un backend
+Kokkos GPU/device handle non supporté est refusé avant le
+constructeur de `System`/`AmrSystem`; aucune route série implicite ne remplace une demande MPI.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
 stockage, la 3D sur ces routes et une algèbre d'unités ne font pas partie de la release. Ils sont refusés,

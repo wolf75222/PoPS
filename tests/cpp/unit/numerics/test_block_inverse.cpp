@@ -23,7 +23,9 @@ using pops::Real;
 using pops::detail::block_inverse;
 using pops::detail::mat_inverse;
 
-static inline double dabs(double x) { return x < 0.0 ? -x : x; }
+static inline double dabs(double x) {
+  return x < 0.0 ? -x : x;
+}
 
 static constexpr double EPS_MACHINE = 1e-14;
 
@@ -53,12 +55,9 @@ struct BzCase {
   const char* name;
 };
 static const BzCase kBz[] = {
-    {1.0, 0.1, 1.0, "theta=1 dt=0.1 Bz=1"},
-    {0.5, 0.2, 2.5, "theta=0.5 dt=0.2 Bz=2.5"},
-    {1.0, 1.0, 10.0, "strong w=10"},
-    {0.75, 0.05, 0.01, "weak field small dt"},
-    {1.0, 0.01, 1e6, "very large w"},
-    {1.0, 0.1, 0.0, "degenerate Bz=0"},
+    {1.0, 0.1, 1.0, "theta=1 dt=0.1 Bz=1"}, {0.5, 0.2, 2.5, "theta=0.5 dt=0.2 Bz=2.5"},
+    {1.0, 1.0, 10.0, "strong w=10"},        {0.75, 0.05, 0.01, "weak field small dt"},
+    {1.0, 0.01, 1e6, "very large w"},       {1.0, 0.1, 0.0, "degenerate Bz=0"},
 };
 
 // Test 1 (THE GATE): block_inverse<2> of the Lorentz rotation block == RotationInverseOracle, BIT-EXACT.
@@ -130,7 +129,8 @@ TEST(test_block_inverse, RoundTrip2x2) {
   for (int i = 0; i < 2; ++i)
     for (int j = 0; j < 2; ++j) {
       Real p = Real(0);
-      for (int k = 0; k < 2; ++k) p += M[i][k] * Mi[k][j];
+      for (int k = 0; k < 2; ++k)
+        p += M[i][k] * Mi[k][j];
       const Real want = (i == j) ? Real(1) : Real(0);
       EXPECT_TRUE(dabs(p - want) < EPS_MACHINE) << "M*Minv[" << i << "][" << j << "]";
     }
@@ -147,7 +147,8 @@ TEST(test_block_inverse, ClosedForm3x3MatchesMatInverse) {
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
       Real p = Real(0);
-      for (int k = 0; k < 3; ++k) p += M[i][k] * Mi[k][j];
+      for (int k = 0; k < 3; ++k)
+        p += M[i][k] * Mi[k][j];
       const Real want = (i == j) ? Real(1) : Real(0);
       EXPECT_TRUE(dabs(p - want) < EPS_MACHINE) << "M*Minv[" << i << "][" << j << "]";
     }
@@ -211,8 +212,11 @@ TEST(test_block_inverse, SingularReturnsFalse) {
 TEST(test_block_inverse, ApplyInverseMatchesApplyBinvBitForBit) {
   using pops::detail::block_apply_inverse;
   // A spread of input vectors: axis-aligned, mixed sign, and large magnitude.
-  const Real vs[][2] = {{Real(1), Real(0)},       {Real(0), Real(1)},   {Real(0.4), Real(-0.2)},
-                        {Real(-3.7), Real(2.1)},  {Real(1e3), Real(-7)}};
+  const Real vs[][2] = {{Real(1), Real(0)},
+                        {Real(0), Real(1)},
+                        {Real(0.4), Real(-0.2)},
+                        {Real(-3.7), Real(2.1)},
+                        {Real(1e3), Real(-7)}};
   for (const auto& cc : kBz) {
     const Real th_dt = cc.theta * cc.dt;
     const RotationInverseOracle le(th_dt, Real(1), cc.Bz);
@@ -243,11 +247,13 @@ TEST(test_block_inverse, ApplyInverse3x3AndSingular) {
   ASSERT_TRUE(block_inverse<3>(M, Mi));
   for (int r = 0; r < 3; ++r) {
     Real ref = Real(0);
-    for (int c = 0; c < 3; ++c) ref += Mi[r][c] * v[c];
+    for (int c = 0; c < 3; ++c)
+      ref += Mi[r][c] * v[c];
     const Real scale = Real(1) + dabs(ref);
     EXPECT_TRUE(dabs(got[r] - ref) < EPS_MACHINE * scale) << "apply vs Minv.v [" << r << "]";
   }
-  const Real S[3][3] = {{Real(1), Real(2), Real(3)}, {Real(2), Real(4), Real(6)}, {Real(0), Real(1), Real(1)}};
+  const Real S[3][3] = {
+      {Real(1), Real(2), Real(3)}, {Real(2), Real(4), Real(6)}, {Real(0), Real(1), Real(1)}};
   Real out[3] = {Real(-9), Real(-9), Real(-9)};  // sentinel
   EXPECT_FALSE(block_apply_inverse<3>(S, v, out)) << "singular 3x3 -> false";
   EXPECT_EQ(out[0], Real(-9)) << "out untouched on singular";

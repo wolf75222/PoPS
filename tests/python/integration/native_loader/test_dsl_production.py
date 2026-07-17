@@ -146,7 +146,7 @@ def main():
             )
         except RuntimeError as ex:
             raised = True
-            assert "incompatible ABI" in str(ex), "message inattendu : %s" % ex
+            assert "incompatible native ABI" in str(ex), "message inattendu : %s" % ex
         assert raised, "add_native_block a accepte un loader a cle d'ABI fausse (UB silencieux)"
         print("OK  cle d'ABI divergente REJETEE explicitement par add_native_block")
 
@@ -161,10 +161,9 @@ def _compile_wrong_abi(model, dst_so, cxx):
     ce qui doit declencher le rejet d'add_native_block. Renvoie le chemin du .so."""
     import subprocess
     import tempfile
-    from pops.codegen._compile import emit_cpp_native_loader
     from pops.codegen.toolchain import pops_loader_build_flags
     lowering = model.__pops_compiler_lowering__()
-    src = emit_cpp_native_loader(lowering.emit_model)
+    src = lowering.native_loader_source()
     # PoPS est Kokkos-only : le loader inclut les en-tetes pops (for_each), il faut donc Kokkos +
     # (macOS) -undefined dynamic_lookup. pops_loader_build_flags fournit compilateur + flags ; on garde
     # une SIGNATURE D'EN-TETES FAUSSE (-DPOPS_HEADER_SIG bidon) pour que le .so compile mais soit REJETE

@@ -12,9 +12,21 @@ An AB2 Program on a 2-level AMR system with ``regrid_every>0``. Two precise asse
        conserved to round-off) and after the regrids EVERY prev(k) global buffer is defined on the NEW
        layout (its flat size == the current sum_k ncomp*nf_k*nf_k) -- the layout-consistency invariant.
 
-Self-skips (exit 0) without pops / a built _pops / a compiler / a visible Kokkos. Pytest + __main__.
+Missing native prerequisites are explicit local skips and required-lane failures. Pytest + __main__.
 """
 import sys
+
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+
+_native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
+if _native_missing:
+    require_native_or_skip("test_amr_history_regrid: %s" % _native_missing)
 
 try:
     import numpy as np
@@ -32,8 +44,8 @@ try:
         scalar_advection_field_model,
     )
 except Exception as exc:  # noqa: BLE001
-    print("skip test_amr_history_regrid (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip(
+        "test_amr_history_regrid cannot import pops/numpy: %s" % exc)
 
 N = 16
 NSTEPS = 6
@@ -81,30 +93,25 @@ def _blob(amp=0.5, w=0.12):
 def _build(regrid_every, refine_thr, u0, tag):
     amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
-        return None, None
-    try:
-        model = _euler_model("rg_blk_%s" % tag)
-        plan = _ab2_plan(model, "rg_ab2_%s" % tag)
-        compiled = compile_problem(
-            model=model,
-            time=plan.time,
-            target="amr_system",
-            field_plans=plan.field_plans,
-            problem_snapshot=plan.snapshot,
-        )
-        block_cm = compile_block_model(model, target="amr_system")
-    except RuntimeError as exc:
-        return None, "compile: %s" % str(exc)[:180]
-    try:
-        amr.add_equation("blk", block_cm,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit(method="ssprk2"))
-        if refine_thr is not None:
-            amr.set_refinement(refine_thr)  # 2-level hierarchy tagging density > thr
-        amr.set_density("blk", u0)
-        amr.install_program(compiled.so_path)
-    except RuntimeError as exc:
-        return None, "install: %s" % str(exc)[:240]
+        require_native_or_skip(
+            "test_amr_history_regrid requires install_program/history_names bindings")
+    model = _euler_model("rg_blk_%s" % tag)
+    plan = _ab2_plan(model, "rg_ab2_%s" % tag)
+    compiled = compile_problem(
+        model=model,
+        time=plan.time,
+        target="amr_system",
+        field_plans=plan.field_plans,
+        problem_snapshot=plan.snapshot,
+    )
+    block_cm = compile_block_model(model, target="amr_system")
+    amr.add_equation("blk", block_cm,
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="ssprk2"))
+    if refine_thr is not None:
+        amr.set_refinement(refine_thr)  # 2-level hierarchy tagging density > thr
+    amr.set_density("blk", u0)
+    amr.install_program(compiled.so_path)
     return amr, None
 
 
@@ -115,13 +122,9 @@ def test_null_regrid_matches_no_regrid_to_roundoff():
     print("== null-regrid: trajectory == no-regrid to round-off ==")
     u0 = _blob(amp=0.2)  # peak 1.2 < the 1e9 threshold everywhere, forever
     a, err = _build(regrid_every=2, refine_thr=1.0e9, u0=u0, tag="null_a")
-    if a is None:
-        print("skip (%s)" % (err or "no engine"))
-        return
+    assert a is not None, err
     b, err2 = _build(regrid_every=0, refine_thr=1.0e9, u0=u0, tag="null_b")
-    if b is None:
-        print("skip (%s)" % (err2 or "no engine"))
-        return
+    assert b is not None, err2
     for _ in range(NSTEPS):
         a.step(DT)
         b.step(DT)
@@ -151,9 +154,7 @@ def test_real_regrid_stable_and_layout_consistent():
     print("== real regrid: conservative (mass 1e-8) + prev(k) layout-consistent on the new hierarchy ==")
     u0 = _blob(amp=0.5)
     a, err = _build(regrid_every=2, refine_thr=1.2, u0=u0, tag="real")
-    if a is None:
-        print("skip (%s)" % (err or "no engine"))
-        return
+    assert a is not None, err
     m0 = float(a.mass("blk"))
     for _ in range(NSTEPS):
         a.step(DT)
@@ -179,8 +180,12 @@ def test_real_regrid_stable_and_layout_consistent():
         "every prev(k) buffer is on the NEW layout (size == sum_k ncomp*nf_k*nf_k, nlev=%d)" % nlev)
 
 
-if __name__ == "__main__":
+def main():
     test_null_regrid_matches_no_regrid_to_roundoff()
     test_real_regrid_stable_and_layout_consistent()
     print("FAILURES:", _fails)
     sys.exit(1 if _fails else 0)
+
+
+if __name__ == "__main__":
+    main()

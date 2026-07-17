@@ -132,6 +132,7 @@ const PopsComponentInterfaceEntryV1 entry = {{
 }};
 const PopsComponentApiV1 component = {{
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   {json.dumps(manifest.component_id)},
   {json.dumps(manifest.semantic_digest.token)},
@@ -245,6 +246,7 @@ const PopsComponentInterfaceEntryV1 entry = {{
 }};
 const PopsComponentApiV1 component = {{
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   {json.dumps(manifest.component_id)},
   {json.dumps(manifest.semantic_digest.token)},

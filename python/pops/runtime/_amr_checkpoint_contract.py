@@ -6,6 +6,13 @@ import json
 
 _SCHEMA = 2
 _GUARANTEE = "bit_identical_accepted_state"
+_CONTRACT_KEYS = {
+    "schema_version", "guarantee", "program_state", "ledger", "clocks",
+    "synchronization", "history_qualifications", "level_relations", "transfer_routes",
+}
+_PREFLIGHT_KEYS = {
+    "schema_version", "guarantee", "program_state", "level_relations", "transfer_routes",
+}
 
 
 def _rows(values):
@@ -48,28 +55,34 @@ def encode_contract(sim):
     return json.dumps(contract_for(sim), sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _decode_contract(payload):
+    from pops._manifest_protocol import strict_json_loads
+
+    contract = strict_json_loads(
+        str(payload["amr_accepted_contract"]), where="AMR accepted-state contract")
+    if not isinstance(contract, dict) or set(contract) != _CONTRACT_KEYS:
+        raise TypeError("restart: AMR accepted-state contract has an invalid exact schema")
+    return contract
+
+
 def preflight_contract(sim, payload):
     """Authenticate shape and static provenance before the native restart transaction."""
     import numpy as np
-    from pops._manifest_protocol import strict_json_loads
-
     required = {
         "amr_accepted_contract", "program_accepted_state", "regrid_count", "topology_epoch",
     }
     missing = sorted(required.difference(getattr(payload, "files", payload.keys())))
     if missing:
         raise ValueError("restart: AMR checkpoint lacks accepted-state keys %r" % missing)
-    contract = strict_json_loads(str(payload["amr_accepted_contract"]),
-                                 where="AMR accepted-state contract")
-    if not isinstance(contract, dict):
-        raise TypeError("restart: AMR accepted-state contract must be a mapping")
+    contract = _decode_contract(payload)
     current = contract_for(sim)
     if contract != current:
         mismatched = sorted(
-            key for key in set(contract).union(current) if contract.get(key) != current.get(key))
-        raise ValueError(
-            "restart: AMR accepted-state provenance differs from the installed owners, spaces, "
-            "level relations, or transfer plans (mismatched sections: %r)" % mismatched)
+            key for key in _PREFLIGHT_KEYS if contract.get(key) != current.get(key))
+        if mismatched:
+            raise ValueError(
+                "restart: AMR static accepted-state provenance differs from the installed "
+                "composition (mismatched sections: %r)" % mismatched)
     state = np.asarray(payload["program_accepted_state"])
     if state.dtype != np.dtype("uint8") or state.ndim != 1:
         raise ValueError("restart: AMR Program accepted state must be a uint8 vector")
@@ -84,4 +97,18 @@ def preflight_contract(sim, payload):
     return state.tobytes(), regrid_count, topology_epoch
 
 
-__all__ = ["contract_for", "encode_contract", "preflight_contract"]
+def validate_restored_contract(sim, payload):
+    """Validate the dynamic contract after the opaque Program image is installed transactionally."""
+    contract = _decode_contract(payload)
+    current = contract_for(sim)
+    if contract != current:
+        mismatched = sorted(
+            key for key in _CONTRACT_KEYS if contract.get(key) != current.get(key))
+        raise ValueError(
+            "restart: restored AMR accepted-state image differs from its authenticated contract "
+            "(mismatched sections: %r)" % mismatched)
+
+
+__all__ = [
+    "contract_for", "encode_contract", "preflight_contract", "validate_restored_contract",
+]

@@ -55,7 +55,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
     _physics_mutators = frozenset({
-        "state", "species", "primitive", "primitive_state", "scalar", "param", "aux", "field",
+        "state", "species", "primitive", "primitive_state", "scalar", "aux", "field",
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
@@ -511,7 +511,13 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     def param(self, declaration: Any) -> Any:
         """Register a typed parameter declaration and return its ParamHandle."""
-        return self._dsl.param(declaration)
+        self._guard_mutable("declare a parameter")
+        handle = self._dsl.param(declaration)
+        if getattr(declaration, "name", None) == "gamma":
+            # Gamma changes native model metadata. Other parameters live in the
+            # ParamRegistry already shared by a materialized Module projection.
+            self._invalidate_authoring_views()
+        return handle
 
     def value(self, parameter: Any) -> Any:
         """Return the symbolic Expr read of a registered ParamHandle."""

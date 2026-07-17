@@ -209,8 +209,8 @@ bool compile_loader(const std::string& src_path, const std::string& so_path) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src_path + " -o " + so_path;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
 #if defined(__APPLE__)
   cmd += " -undefined dynamic_lookup";
 #endif

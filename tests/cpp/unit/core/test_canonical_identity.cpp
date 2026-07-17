@@ -44,9 +44,9 @@ TEST(CanonicalIdentity, OrdersMapsAndSetsByEncodedLengthThenBytes) {
   });
   EXPECT_EQ(hex(mapping), "a36162016261610262c3a903");
 
-  const auto set = CanonicalValue::set({CanonicalValue(std::int64_t{3}),
-                                        CanonicalValue(std::int64_t{1}),
-                                        CanonicalValue(std::int64_t{2})});
+  const auto set =
+      CanonicalValue::set({CanonicalValue(std::int64_t{3}), CanonicalValue(std::int64_t{1}),
+                           CanonicalValue(std::int64_t{2})});
   EXPECT_EQ(hex(set), "d9010283010203");
 }
 

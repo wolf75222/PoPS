@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from pops.runtime._component_execution_context import component_execution_data
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedMultiLayoutRestart:
+    restart_identity: Any
+    mapping: dict[str, int]
+    children: tuple[Any, ...]
 
 
 def _common_exact(values: Any, *, where: str) -> Any:
@@ -234,6 +244,7 @@ class _MultiLayoutUniformExecutor:
         self, plan: Any, runtime_plan: Any, engines: dict[str, Any], blocks: dict[str, str]
     ) -> None:
         self._plan = plan
+        self._execution_context = plan.execution_context
         self._runtime_plan = runtime_plan
         self._engines = dict(engines)
         self._block_layouts = dict(blocks)
@@ -499,124 +510,280 @@ class _MultiLayoutUniformExecutor:
         self._common_clock("time")
         self._common_clock("macro_step")
 
-    def _checkpoint_children(self, root: str, prefix: str) -> tuple[bytes, ...]:
-        self._synchronize_child_temporal_states()
+    @staticmethod
+    def _result_evidence(result: Any) -> Any:
+        to_data = getattr(result, "to_data", None)
+        return to_data() if callable(to_data) else result
+
+    def _checkpoint_children(
+        self, root: str, prefix: str, topology: Any, *, retain_payloads: bool,
+    ) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
+        """Capture every child collectively; only rank zero may read the resulting files."""
+        from pops.output._checkpoint_collective import (
+            canonical_checkpoint_path,
+            consensus,
+            root_effect,
+        )
+        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        import numpy as np
+
+        sync_error = None
+        try:
+            self._synchronize_child_temporal_states()
+        except BaseException as error:
+            sync_error = error
+        consensus(topology, "%s temporal synchronization" % prefix, error=sync_error)
+        paths = []
         payloads = []
         for index, engine in enumerate(self._engines.values()):
             engine._last_run_manifest = self._last_run_manifest
             engine._last_run_identity = self._last_run_identity
-            target = engine.checkpoint(os.path.join(root, "%s-%d" % (prefix, index)))
-            with open(target, "rb") as stream:
-                payloads.append(stream.read())
-        return tuple(payloads)
+            expected = canonical_checkpoint_path(
+                os.path.join(root, "%s-%d" % (prefix, index)))
+            produced = None
+            capture_error = None
+            try:
+                produced = canonical_checkpoint_path(engine.checkpoint(str(expected)))
+                if produced != expected:
+                    raise RuntimeError(
+                        "layout %d checkpoint returned %s, expected %s"
+                        % (index, produced, expected)
+                    )
+            except BaseException as error:
+                capture_error = error
+            rows = consensus(
+                topology,
+                "%s layout %d capture" % (prefix, index),
+                error=capture_error,
+                value=None if produced is None else str(produced),
+            )
+            if any(row["value"] != str(expected) for row in rows):
+                raise RuntimeError(
+                    "%s layout %d ranks returned different checkpoint paths" % (prefix, index)
+                )
+
+            def authenticate_root(
+                child_engine: Any = engine, child_path: Path = expected,
+            ) -> bytes | None:
+                with np.load(child_path, allow_pickle=False) as stored:
+                    authenticate_checkpoint_payload(
+                        child_engine, stored, runtime_kind="uniform")
+                return child_path.read_bytes() if retain_payloads else None
+
+            payload = root_effect(
+                topology, "%s layout %d authentication" % (prefix, index),
+                authenticate_root,
+            )
+            paths.append(str(expected))
+            if topology.rank == 0 and retain_payloads:
+                if not isinstance(payload, bytes):
+                    raise RuntimeError("rank zero lost an authenticated child checkpoint payload")
+                payloads.append(payload)
+        return tuple(paths), tuple(payloads)
+
+    @staticmethod
+    def _shared_checkpoint_root(target: Any, topology: Any, purpose: str) -> str:
+        from pops.output._checkpoint_collective import root_value
+
+        def create_root() -> str:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            return tempfile.mkdtemp(
+                prefix=".%s.%s." % (target.name, purpose), dir=target.parent)
+
+        return str(root_value(topology, "%s workspace selection" % purpose, create_root))
+
+    @staticmethod
+    def _cleanup_checkpoint_root(root: str, topology: Any, purpose: str) -> None:
+        from pops.output._checkpoint_collective import root_effect
+
+        root_effect(
+            topology, "%s workspace cleanup" % purpose,
+            lambda: shutil.rmtree(root, ignore_errors=False),
+        )
 
     def checkpoint(self, path: Any) -> str:
         import numpy as np
         from pops.runtime._engine_descriptors import abi_key
-        from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
+        from pops.runtime._checkpoint_manifest import (
+            authenticate_checkpoint_payload,
+            seal_checkpoint_payload,
+        )
+        from pops.output._checkpoint_collective import (
+            canonical_checkpoint_path,
+            checkpoint_topology,
+            consensus,
+            root_effect,
+        )
 
-        target = str(path)
-        if not target.endswith(".npz"):
-            target += ".npz"
-        with tempfile.TemporaryDirectory(prefix="pops-multilayout-checkpoint-") as root:
-            children = self._checkpoint_children(root, "child")
-        payload = {
-            "t": np.asarray(self.time()),
-            "macro_step": np.asarray(self.macro_step()),
-            "abi_key": np.asarray(abi_key()),
-            "layout_ids": np.asarray(tuple(self._engines), dtype=np.str_),
-            "mapping_evaluations": np.asarray(
-                json.dumps(self._mapping_evaluations, sort_keys=True, separators=(",", ":"))
-            ),
-        }
-        for index, child in enumerate(children):
-            payload["layout_checkpoint_%d" % index] = np.frombuffer(child, dtype=np.uint8).copy()
-        seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
-        temporary = target + ".tmp"
-        with open(temporary, "wb") as stream:
-            np.savez_compressed(stream, **payload)
-        os.replace(temporary, target)
-        return target
+        topology = checkpoint_topology(self)
+        target = canonical_checkpoint_path(path)
+        rows = consensus(topology, "multi-layout target", value=str(target))
+        if any(row["value"] != str(target) for row in rows):
+            raise ValueError("multi-layout checkpoint target differs across ranks")
+        root = self._shared_checkpoint_root(target, topology, "capture")
+        try:
+            _paths, children = self._checkpoint_children(
+                root, "child", topology, retain_payloads=True)
 
-    @staticmethod
-    def _write_child_payload(root: str, index: int, values: Any, *, prefix: str) -> str:
-        target = os.path.join(root, "%s-%d.npz" % (prefix, index))
-        with open(target, "wb") as stream:
-            stream.write(memoryview(values).cast("B"))
-        return target
+            def write_root() -> None:
+                if len(children) != len(self._engines):
+                    raise RuntimeError("rank zero did not retain every child checkpoint")
+                payload = {
+                    "t": np.asarray(self.time()),
+                    "macro_step": np.asarray(self.macro_step()),
+                    "abi_key": np.asarray(abi_key()),
+                    "layout_ids": np.asarray(tuple(self._engines), dtype=np.str_),
+                    "mapping_evaluations": np.asarray(json.dumps(
+                        self._mapping_evaluations,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )),
+                }
+                for index, child in enumerate(children):
+                    payload["layout_checkpoint_%d" % index] = np.frombuffer(
+                        child, dtype=np.uint8).copy()
+                seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
+                fd, temporary_name = tempfile.mkstemp(
+                    prefix=".%s." % target.name, suffix=".tmp", dir=target.parent)
+                os.close(fd)
+                temporary = os.fspath(temporary_name)
+                try:
+                    with open(temporary, "wb") as stream:
+                        np.savez_compressed(stream, **payload)
+                    os.replace(temporary, target)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+                with np.load(target, allow_pickle=False) as stored:
+                    authenticate_checkpoint_payload(
+                        self, stored, runtime_kind="multi_layout_uniform")
 
-    def restart(self, path: Any) -> str:
+            root_effect(topology, "multi-layout container sealing", write_root)
+        finally:
+            self._cleanup_checkpoint_root(root, topology, "capture")
+        return str(target)
+
+    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedMultiLayoutRestart:
         import numpy as np
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
-        target = str(path)
-        if not target.endswith(".npz"):
-            target += ".npz"
-        with np.load(target, allow_pickle=False) as stored:
-            restart_identity = authenticate_checkpoint_payload(
-                self, stored, runtime_kind="multi_layout_uniform"
-            )
-            layout_ids = tuple(str(value) for value in stored["layout_ids"])
-            if layout_ids != tuple(self._engines):
-                raise ValueError("checkpoint layout identities differ from RuntimeInstance")
-            expected_children = tuple(
-                "layout_checkpoint_%d" % index for index in range(len(layout_ids))
-            )
-            if any(name not in stored.files for name in expected_children):
-                raise ValueError("checkpoint lacks a per-layout native payload")
-            children = tuple(
-                np.asarray(stored[name], dtype=np.uint8).copy() for name in expected_children
-            )
-            mapping = json.loads(str(stored["mapping_evaluations"]))
-            if set(mapping) != set(self._mapping_evaluations) or any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in mapping.values()
-            ):
-                raise ValueError("checkpoint mapping counters differ from RuntimeInstance plan")
-        with tempfile.TemporaryDirectory(prefix="pops-multilayout-restart-") as root:
-            child_paths = tuple(
-                self._write_child_payload(root, index, values, prefix="incoming")
-                for index, values in enumerate(children)
-            )
-            # Authenticate every child byte before the first native mutation.
-            from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        stored = decode_checkpoint_bytes(payload)
+        identity = authenticate_checkpoint_payload(
+            self, stored, runtime_kind="multi_layout_uniform")
+        layout_ids = tuple(str(value) for value in stored["layout_ids"])
+        if layout_ids != tuple(self._engines):
+            raise ValueError("checkpoint layout identities differ from RuntimeInstance")
+        child_names = tuple(
+            "layout_checkpoint_%d" % index for index in range(len(layout_ids)))
+        if any(name not in stored.files for name in child_names):
+            raise ValueError("checkpoint lacks a per-layout native payload")
+        mapping = json.loads(str(stored["mapping_evaluations"]))
+        if set(mapping) != set(self._mapping_evaluations) or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in mapping.values()
+        ):
+            raise ValueError("checkpoint mapping counters differ from RuntimeInstance plan")
+        prepared_children = []
+        for index, (engine, name) in enumerate(zip(
+            self._engines.values(), child_names, strict=True
+        )):
+            prepare = getattr(engine, "_prepare_checkpoint_restart", None)
+            if not callable(prepare):
+                raise TypeError(
+                    "layout %d engine lacks the in-memory restart preflight protocol" % index)
+            child_bytes = np.asarray(stored[name], dtype=np.uint8).tobytes()
+            prepared_children.append(prepare(child_bytes))
+        return _PreparedMultiLayoutRestart(identity, dict(mapping), tuple(prepared_children))
 
-            for engine, child_path in zip(self._engines.values(), child_paths, strict=True):
-                with np.load(child_path, allow_pickle=False) as child:
-                    authenticate_checkpoint_payload(engine, child, runtime_kind="uniform")
-            rollback = self._checkpoint_children(root, "rollback")
-            rollback_paths = tuple(
-                self._write_child_payload(root, index, values, prefix="rollback-copy")
-                for index, values in enumerate(rollback)
-            )
-            previous_mapping = dict(self._mapping_evaluations)
-            previous_restart_identity = self._last_restart_identity
-            try:
-                for engine, child_path in zip(self._engines.values(), child_paths, strict=True):
-                    engine.restart(child_path)
-                self._mapping_evaluations = dict(mapping)
-                self._rebuild_composite_temporal_state()
-                self._last_restart_identity = restart_identity
-            except BaseException as error:
-                rollback_error = None
-                for engine, rollback_path in zip(
-                    self._engines.values(), rollback_paths, strict=True
-                ):
-                    try:
-                        engine.restart(rollback_path)
-                    except BaseException as caught:
-                        rollback_error = rollback_error or caught
-                self._mapping_evaluations = previous_mapping
-                self._last_restart_identity = previous_restart_identity
+    def _begin_checkpoint_restart(self) -> None:
+        if "_checkpoint_restart_snapshot" in self.__dict__:
+            raise RuntimeError("multi-layout checkpoint restart transaction is already active")
+        self._checkpoint_restart_snapshot = (
+            dict(self._mapping_evaluations), self._last_restart_identity,
+            self._temporal_restart_state, getattr(self, "_step_controller", None),
+        )
+        begun = []
+        try:
+            for engine in self._engines.values():
+                begun.append(engine)
+                engine._begin_checkpoint_restart()
+        except BaseException as begin_error:
+            rollback_errors = []
+            for engine in reversed(begun):
                 try:
-                    self._rebuild_composite_temporal_state()
-                except BaseException as caught:
-                    rollback_error = rollback_error or caught
-                add_note = getattr(error, "add_note", None)
-                if rollback_error is not None and callable(add_note):
-                    add_note("multi-layout restart rollback failed: %s" % rollback_error)
-                raise
-        return target
+                    engine._rollback_checkpoint_restart()
+                except BaseException as rollback_error:
+                    rollback_errors.append(rollback_error)
+            mapping, identity, temporal, controller = self.__dict__.pop(
+                "_checkpoint_restart_snapshot")
+            self._mapping_evaluations = mapping
+            self._last_restart_identity = identity
+            self._temporal_restart_state = temporal
+            self._step_controller = controller
+            if rollback_errors:
+                raise RuntimeError(
+                    "multi-layout child begin rollback failed after %s: %s"
+                    % (begin_error, "; ".join(map(str, rollback_errors)))
+                ) from begin_error
+            raise
+
+    def _apply_checkpoint_restart(self, prepared: _PreparedMultiLayoutRestart) -> Any:
+        if type(prepared) is not _PreparedMultiLayoutRestart:
+            raise TypeError("multi-layout restart requires its exact prepared payload")
+        if len(prepared.children) != len(self._engines):
+            raise RuntimeError("multi-layout prepared child count is incomplete")
+        for engine, child in zip(self._engines.values(), prepared.children, strict=True):
+            engine._apply_checkpoint_restart(child)
+        self._mapping_evaluations = dict(prepared.mapping)
+        self._rebuild_composite_temporal_state()
+        self._last_restart_identity = prepared.restart_identity
+        return prepared.restart_identity
+
+    def _commit_checkpoint_restart(self) -> None:
+        for engine in self._engines.values():
+            engine._commit_checkpoint_restart()
+
+    def _finalize_checkpoint_restart(self) -> None:
+        for engine in self._engines.values():
+            engine._finalize_checkpoint_restart()
+        del self._checkpoint_restart_snapshot
+
+    def _rollback_checkpoint_restart(self) -> None:
+        errors = []
+        for engine in reversed(tuple(self._engines.values())):
+            try:
+                engine._rollback_checkpoint_restart()
+            except BaseException as error:
+                errors.append(error)
+        mapping, identity, temporal, controller = self._checkpoint_restart_snapshot
+        self._mapping_evaluations = mapping
+        self._last_restart_identity = identity
+        self._temporal_restart_state = temporal
+        self._step_controller = controller
+        del self._checkpoint_restart_snapshot
+        if errors:
+            raise RuntimeError(
+                "multi-layout child rollback failed: %s" % "; ".join(map(str, errors)))
+
+    def restart(self, path: Any) -> str:
+        from pops.output._checkpoint_collective import (
+            canonical_checkpoint_path,
+            checkpoint_topology,
+            consensus,
+            restore_checkpoint_payload,
+            root_bytes,
+        )
+
+        topology = checkpoint_topology(self)
+        target = canonical_checkpoint_path(path)
+        rows = consensus(topology, "multi-layout restart target", value=str(target))
+        if any(row["value"] != str(target) for row in rows):
+            raise ValueError("multi-layout restart target differs across ranks")
+        payload = root_bytes(
+            topology, "multi-layout restart read", target.read_bytes)
+        restore_checkpoint_payload(
+            self, self, payload, phase_prefix="multi-layout restart")
+        return str(target)
 
 
 def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:

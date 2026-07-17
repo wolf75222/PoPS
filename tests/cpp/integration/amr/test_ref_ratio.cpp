@@ -50,7 +50,8 @@ TEST(test_ref_ratio, Runs) {
 
   EXPECT_TRUE(throws([] { require_supported_ref_ratio(3); }, msg))
       << "require_supported_ref_ratio(3) throws";
-  EXPECT_TRUE(msg.find('3') != std::string::npos && msg.find("refinement_ratio.hpp") != std::string::npos)
+  EXPECT_TRUE(msg.find('3') != std::string::npos &&
+              msg.find("refinement_ratio.hpp") != std::string::npos)
       << "rejection message names the ratio and the home header";
 
   EXPECT_TRUE(throws([] { require_supported_ref_ratio(1); }, msg))

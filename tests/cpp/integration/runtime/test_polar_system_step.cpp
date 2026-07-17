@@ -184,8 +184,8 @@ TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) 
 
   // (A) Un pas couple modifie reellement la densite (champ non gele).
   EXPECT_TRUE(std::isfinite(dmax) && std::isfinite(minrho_A))
-      << "(A) champ non fini apres 1 pas (blow-up : Poisson/aux/transport instable) : dmax="
-      << dmax << " minrho=" << minrho_A;
+      << "(A) champ non fini apres 1 pas (blow-up : Poisson/aux/transport instable) : dmax=" << dmax
+      << " minrho=" << minrho_A;
   EXPECT_TRUE(dmax > 1e-9) << "(A) le pas couple ne modifie pas la densite (Poisson/aux/transport "
                               "inertes ?) : dmax="
                            << dmax;

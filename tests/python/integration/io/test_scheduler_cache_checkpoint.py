@@ -21,9 +21,7 @@ CacheManager serialize/restore round-trip + both verbatim messages are unit-test
 `tests/cpp/integration/runtime/test_checkpoint_cache.cpp`.
 """
 import os
-import sys
 import tempfile
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 # ---- (A) NPZ facade keys + the missing-cache guard: pure numpy, always runs when numpy is present ----
@@ -31,8 +29,7 @@ def test_cache_npz_key_scheme_roundtrips():
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
-        print("-- (A) skipped: numpy unavailable: %s --" % exc)
-        return
+        raise RuntimeError("test_scheduler_cache_checkpoint requires NumPy") from exc
 
     # Mirror EXACTLY the keys + dtypes System.checkpoint writes for one held node.
     nid = 5
@@ -94,4 +91,3 @@ def test_cache_npz_key_scheme_roundtrips():
 if __name__ == "__main__":
     test_cache_npz_key_scheme_roundtrips()
     print("OK test_scheduler_cache_checkpoint")
-    sys.exit(0)

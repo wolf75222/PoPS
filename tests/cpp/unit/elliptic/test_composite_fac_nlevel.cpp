@@ -123,14 +123,14 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
   BoxArray ba_c = BoxArray::from_domain(dom, n);
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const Geometry geom_1 = geom_c.refine(r);        // level 1: refined once
-  const Geometry geom_2 = geom_c.refine(r * r);    // level 2: refined twice
+  const Geometry geom_1 = geom_c.refine(r);      // level 1: refined once
+  const Geometry geom_2 = geom_c.refine(r * r);  // level 2: refined twice
 
   // level-1 patch = central half [n/4, 3n/4) in coarse -> fine box.
-  const int A0 = n / 4, A1 = 3 * n / 4 - 1;              // coarse footprint of level 1
+  const int A0 = n / 4, A1 = 3 * n / 4 - 1;  // coarse footprint of level 1
   Box2D box1{{r * A0, r * A0}, {r * A1 + r - 1, r * A1 + r - 1}};
   // level-2 patch = central quarter of the coarse [3n/8, 5n/8) -> level-2 index space (refined x4).
-  const int B0 = 3 * n / 8, B1 = 5 * n / 8 - 1;          // coarse footprint of level 2
+  const int B0 = 3 * n / 8, B1 = 5 * n / 8 - 1;  // coarse footprint of level 2
   Box2D box2{{r * r * B0, r * r * B0}, {r * r * B1 + r * r - 1, r * r * B1 + r * r - 1}};
 
   std::vector<BoxArray> level_boxes = {BoxArray(std::vector<Box2D>{box1}),
@@ -173,7 +173,8 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
           const double xf = geom_2.x_cell(i2), yf = geom_2.y_cell(j2);
           const double ue = u_exact(xf, yf);
           e_l2 = std::fmax(e_l2, std::fabs(P2(i2, j2, 0) - ue));
-          e_coarse = std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, i2, j2, r * r) - ue));
+          e_coarse =
+              std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, i2, j2, r * r) - ue));
         }
       // level-1 error sampled at the level-1 cells covering (I,J): 2x2 fine cells.
       for (int tj = 0; tj < r; ++tj)
@@ -187,15 +188,17 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
   e_l1 = all_reduce_max(e_l1);
   e_l2 = all_reduce_max(e_l2);
   if (my_rank() == 0)
-    std::printf("  [3-level] e_coarse=%.3e e_level1=%.3e e_level2=%.3e (l1/l2=%.2f l2/coarse=%.2f) rfac=%.2e\n",
-                e_coarse, e_l1, e_l2, e_l1 / std::fmax(e_l2, 1e-30),
-                e_l2 / std::fmax(e_coarse, 1e-30), rfac);
+    std::printf(
+        "  [3-level] e_coarse=%.3e e_level1=%.3e e_level2=%.3e (l1/l2=%.2f l2/coarse=%.2f) "
+        "rfac=%.2e\n",
+        e_coarse, e_l1, e_l2, e_l1 / std::fmax(e_l2, 1e-30), e_l2 / std::fmax(e_coarse, 1e-30),
+        rfac);
   EXPECT_TRUE(std::isfinite(e_l1) && std::isfinite(e_l2) && std::isfinite(e_coarse));
   // each refinement reduces the error; the deepest level is the most accurate.
   EXPECT_TRUE(e_l1 < 0.7 * e_coarse)
       << "(order 2) level 1 improves over coarse-only: e_l1=" << e_l1 << " e_coarse=" << e_coarse;
-  EXPECT_TRUE(e_l2 < 0.7 * e_l1)
-      << "(order 2) level 2 improves over level 1: e_l2=" << e_l2 << " e_l1=" << e_l1;
+  EXPECT_TRUE(e_l2 < 0.7 * e_l1) << "(order 2) level 2 improves over level 1: e_l2=" << e_l2
+                                 << " e_l1=" << e_l1;
 
   // (iii) C/F CONSERVATION to ulp at BOTH interfaces (covered coarse = 2x2 average of the child).
   auto avgdown_defect = [&](const MultiFab& parent, const MultiFab& child, const Box2D& foot) {
@@ -211,16 +214,19 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
     return d;
   };
   // 0-1 interface: coarse covered = 2x2 average of level 1 over [A0,A1]^2.
-  const double d01 = all_reduce_max(avgdown_defect(fac.phi_level(0), fac.phi_level(1),
-                                                   Box2D{{A0, A0}, {A1, A1}}));
+  const double d01 =
+      all_reduce_max(avgdown_defect(fac.phi_level(0), fac.phi_level(1), Box2D{{A0, A0}, {A1, A1}}));
   // 1-2 interface: level-1 covered = 2x2 average of level 2 over the level-1 footprint of box2
   // (level-1 index space: [2*B0, 2*B1+1]).
-  const double d12 = all_reduce_max(avgdown_defect(fac.phi_level(1), fac.phi_level(2),
-                                                   Box2D{{r * B0, r * B0}, {r * B1 + r - 1, r * B1 + r - 1}}));
+  const double d12 =
+      all_reduce_max(avgdown_defect(fac.phi_level(1), fac.phi_level(2),
+                                    Box2D{{r * B0, r * B0}, {r * B1 + r - 1, r * B1 + r - 1}}));
   if (my_rank() == 0)
     std::printf("  [3-level] avgdown defect: 0-1=%.3e  1-2=%.3e (ulp conservation)\n", d01, d12);
-  EXPECT_TRUE(d01 < 1e-12) << "(conservation) 0-1 covered coarse = fine average to ulp: d01=" << d01;
-  EXPECT_TRUE(d12 < 1e-12) << "(conservation) 1-2 covered level-1 = level-2 average to ulp: d12=" << d12;
+  EXPECT_TRUE(d01 < 1e-12) << "(conservation) 0-1 covered coarse = fine average to ulp: d01="
+                           << d01;
+  EXPECT_TRUE(d12 < 1e-12) << "(conservation) 1-2 covered level-1 = level-2 average to ulp: d12="
+                           << d12;
 
   if (my_rank() == 0)
     std::printf("OK test_composite_fac_nlevel\n");

@@ -278,13 +278,15 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
       ++r) {  // non-blocking posting; MPI receives PINNED HOST pointers (seen HOST, no GPUDirect/CUDA IPC)
     if (!h.sbuf[r].empty()) {
       h.reqs.emplace_back();
-      MPI_Isend(h.sbuf[r].data(), static_cast<int>(h.sbuf[r].size()), MPI_DOUBLE, r, 0,
-                MPI_COMM_WORLD, &h.reqs.back());
+      detail::require_mpi_success(MPI_Isend(h.sbuf[r].data(), static_cast<int>(h.sbuf[r].size()),
+                                            MPI_DOUBLE, r, 0, MPI_COMM_WORLD, &h.reqs.back()),
+                                  "MPI_Isend(fill_boundary)");
     }
     if (!h.rbuf[r].empty()) {
       h.reqs.emplace_back();
-      MPI_Irecv(h.rbuf[r].data(), static_cast<int>(h.rbuf[r].size()), MPI_DOUBLE, r, 0,
-                MPI_COMM_WORLD, &h.reqs.back());
+      detail::require_mpi_success(MPI_Irecv(h.rbuf[r].data(), static_cast<int>(h.rbuf[r].size()),
+                                            MPI_DOUBLE, r, 0, MPI_COMM_WORLD, &h.reqs.back()),
+                                  "MPI_Irecv(fill_boundary)");
     }
   }
 #endif
@@ -298,7 +300,9 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #ifdef POPS_HAS_MPI
   if (h.reqs.empty())
     return;
-  MPI_Waitall(static_cast<int>(h.reqs.size()), h.reqs.data(), MPI_STATUSES_IGNORE);
+  detail::require_mpi_success(
+      MPI_Waitall(static_cast<int>(h.reqs.size()), h.reqs.data(), MPI_STATUSES_IGNORE),
+      "MPI_Waitall(fill_boundary)");
   // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer is
   // complete; the kernel launched next reads the pinned host (device-accessible, coherent). Replayed
   // from the SAME cached recv list begin used (h.sched), so base offsets match the sender's layout.

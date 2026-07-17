@@ -12,15 +12,13 @@ stage) and the Python-collection refusals (``len(value)`` / ``range(value)``) AD
 
 Pure Python IR construction (no numerics / no _pops); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
-    from pops import time as adctime
     from pops.numerics.terms import DefaultSource, Flux
     from tests.python.unit.runtime._typed_program import solve_field, typed_program_state
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_program_ir_nodes (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_program_ir_nodes (pops unavailable: %s)' % exc)
 
 
 def _euler(scale=1.0):

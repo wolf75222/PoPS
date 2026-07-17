@@ -9,6 +9,7 @@ explicit ctor ``GeometricMgPreconditioner(nu1, nu2, nbottom, min_coarse, n_vcycl
 Source-only: the emit + IR hash are exercised at the authoring/lowering layer (no _pops runtime, no
 compile). Runs under pytest AND standalone. Skips (never fakes) if pops is not importable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
@@ -90,7 +91,7 @@ def main():
         import pops  # noqa: F401
         import pops.time  # noqa: F401
     except Exception as exc:  # pragma: no cover - no built extension here
-        print("SKIP  ADC-644 precond IR hash (pops not importable: %s)" % exc)
+        require_native_or_skip('SKIP  ADC-644 precond IR hash (pops not importable: %s)' % exc)
         return 0
     test_default_geometric_mg_precond_leaves_ir_hash_byte_identical()
     test_configured_precond_busts_ir_hash_and_adds_attr()

@@ -145,7 +145,8 @@ class GenericKrylov : public ::testing::Test {
       // same contract the solver loops rely on; the valid data of `in` is unchanged.
       MultiFab& in_mut = const_cast<MultiFab&>(in);
       fill_ghosts(in_mut, geom.domain, bc);
-      apply_laplacian(in_mut, geom, lap_tmp);  // lap_tmp = Lap(in) (all coeffs null -> bare Laplacian)
+      apply_laplacian(in_mut, geom,
+                      lap_tmp);  // lap_tmp = Lap(in) (all coeffs null -> bare Laplacian)
       for (int li = 0; li < out.local_size(); ++li) {
         Array4 ov = out.fab(li).array();
         const ConstArray4 iv = in.fab(li).const_array();
@@ -161,13 +162,15 @@ class GenericKrylov : public ::testing::Test {
       for_each_cell(phi_exact_mf_->box(li), SampleExactKernel{af, geom});
     }
     rhs_ = new MultiFab(*ba_, *dm_, 1, 0);
-    (*A_)(*rhs_, *phi_exact_mf_);  // rhs <- A(phi_exact): discrete RHS (tests the SOLVER, not the scheme)
+    (*A_)(*rhs_,
+          *phi_exact_mf_);  // rhs <- A(phi_exact): discrete RHS (tests the SOLVER, not the scheme)
 
     // NON-symmetric operator A_ns(in) = in - alpha*Lap(in) + beta * upwind dx(in): the Helmholtz
     // part is SPD, the one-sided advection term breaks symmetry. beta is large enough that the
     // operator is strongly non-self-adjoint (CG stagnates), but the spectrum stays in the right
     // half-plane so GMRES converges. Reuses lap_tmp; `in`'s periodic ghosts feed the upwind in(i-1).
-    constexpr Real kBeta = 2.0;  // advection strength (CFL-irrelevant: this is a linear solve, not a step)
+    constexpr Real kBeta =
+        2.0;  // advection strength (CFL-irrelevant: this is a linear solve, not a step)
     const Real inv_h = Real(1) / geom.dx();
     A_ns_ = new ApplyFn([&geom, &bc, &lap_tmp, inv_h](MultiFab& out, const MultiFab& in) {
       MultiFab& in_mut = const_cast<MultiFab&>(in);
@@ -181,7 +184,9 @@ class GenericKrylov : public ::testing::Test {
       }
     });
     rhs_ns_ = new MultiFab(*ba_, *dm_, 1, 0);
-    (*A_ns_)(*rhs_ns_, *phi_exact_mf_);  // rhs_ns <- A_ns(phi_exact): discrete RHS for the non-symmetric solve
+    (*A_ns_)(
+        *rhs_ns_,
+        *phi_exact_mf_);  // rhs_ns <- A_ns(phi_exact): discrete RHS for the non-symmetric solve
   }
 
   static void TearDownTestSuite() {
@@ -244,9 +249,8 @@ TEST(test_solve_report, rejects_incoherent_status_action_pairs) {
   EXPECT_FALSE(report.solved());
   EXPECT_FALSE(report.solved_value_available());
   EXPECT_THROW(report.mark_failed(SolveStatus::kSolved), std::invalid_argument);
-  EXPECT_THROW(
-      report.mark_failed(SolveStatus::kBreakdown, SolveAction::kNone),
-      std::invalid_argument);
+  EXPECT_THROW(report.mark_failed(SolveStatus::kBreakdown, SolveAction::kNone),
+               std::invalid_argument);
 }
 
 // --- CG (SPD operator) ---
@@ -259,7 +263,8 @@ TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
   EXPECT_TRUE(r.solved()) << "cg_converged";
   EXPECT_TRUE(r.iters > 1) << "cg_iters_gt_1 iters=" << r.iters;
-  EXPECT_TRUE(r.rel_residual <= kRelTol * 10) << "cg_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
+      << "cg_residual_small rel_residual=" << r.rel_residual;
   EXPECT_TRUE(err < kRecoverTol) << "cg_recovers_exact err=" << err;
 }
 

@@ -16,8 +16,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime + detail::AmrHistoryOps
 #include <pops/runtime/amr_system.hpp>                       // facade transaction boundary
-#include <pops/runtime/program/step_transaction.hpp>         // StepAttemptRejected fault signal
-#include <pops/runtime/builders/factory/model_factory.hpp>   // detail::dispatch_model
+#include <pops/runtime/program/step_transaction.hpp>        // StepAttemptRejected fault signal
+#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <cmath>
@@ -47,7 +47,8 @@ struct TagDensityAbove {
   bool operator()(const ConstArray4& a, int i, int j) const { return a(i, j, 0) > thr; }
 };
 
-static std::vector<double> blob(int n, double cx, double cy, double amp, double base, double width) {
+static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
+                                double width) {
   std::vector<double> rho(static_cast<std::size_t>(n) * n, base);
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
@@ -118,7 +119,6 @@ static std::vector<double> block0_all_levels(AmrRuntime& rt) {
   return out;
 }
 
-
 #if defined(POPS_HAS_KOKKOS)
 // Every TEST in this binary builds an AmrRuntime (Kokkos-dependent), so Kokkos is initialized once
 // for the whole process via a GoogleTest global environment (ScopeGuard aborts if re-constructed
@@ -187,7 +187,8 @@ TEST(test_amr_history_ring, CheckpointRoundTrip) {
   detail::AmrHistoryOps::restore(rt2, "R", 1, flat);
   detail::AmrHistoryOps::restore_slot_dt(rt2, "R", 1, 0.03);
   detail::AmrHistoryOps::set_initialized(rt2, "R", true);
-  EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt2, "R", 1, false), flat), 0.0) << "flat_round_trip";
+  EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt2, "R", 1, false), flat), 0.0)
+      << "flat_round_trip";
   EXPECT_EQ(detail::AmrHistoryOps::slot_dt(rt2, "R", 1), 0.03) << "slot_dt_round_trip";
 }
 
@@ -340,7 +341,8 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
     detail::AmrHistoryOps::rotate_histories(*rt);
     sim.record_program_diagnostic("provisional", 42.0);
     throw runtime::program::StepAttemptRejected(
-        SolveStatus::kIterationLimit, "solve", "AMR fault after regrid and provisional publications");
+        SolveStatus::kIterationLimit, "solve",
+        "AMR fault after regrid and provisional publications");
   });
 
   EXPECT_THROW(sim.step(0.01), runtime::program::StepAttemptRejected);

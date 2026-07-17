@@ -34,7 +34,9 @@ static constexpr double kPi = 3.14159265358979323846;
 static double u_exact(double x, double y) {
   return std::sin(3.0 * kPi * x) * std::sin(3.0 * kPi * y);
 }
-static double f_rhs(double x, double y) { return -18.0 * kPi * kPi * u_exact(x, y); }
+static double f_rhs(double x, double y) {
+  return -18.0 * kPi * kPi * u_exact(x, y);
+}
 
 static void fill_f(MultiFab& f, const Geometry& g) {
   for (int li = 0; li < f.local_size(); ++li) {
@@ -117,8 +119,8 @@ TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
   // B's first column at the same rows; the jump must be far below the coarse discretization error.
   const ConstArray4 PA = fac.phi_fine().fab(0).const_array();  // patch A (first box)
   const ConstArray4 PB = fac.phi_fine().fab(1).const_array();  // patch B (second box)
-  const int iA = r * Ax1 + r - 1;  // A rightmost valid column
-  const int iB = r * Bx0;          // B leftmost valid column (== iA + 1)
+  const int iA = r * Ax1 + r - 1;                              // A rightmost valid column
+  const int iB = r * Bx0;  // B leftmost valid column (== iA + 1)
   double jump = 0, uscale = 0;
   for (int j = r * Jy0; j <= r * Jy1 + r - 1; ++j) {
     // exact continuity reference: |u at the two adjacent fine centers| difference is O(h); the SOLVED
@@ -148,7 +150,8 @@ TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
           const int iff = r * J + ti, jff = r * I + tj;
           const double ue = u_exact(geom_f.x_cell(iff), geom_f.y_cell(jff));
           e_comp = std::fmax(e_comp, std::fabs(PA(iff, jff, 0) - ue));
-          e_coarse = std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, iff, jff, r) - ue));
+          e_coarse =
+              std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, iff, jff, r) - ue));
         }
   e_coarse = all_reduce_max(e_coarse);
   e_comp = all_reduce_max(e_comp);
@@ -156,7 +159,8 @@ TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
     std::printf("  [adjacent] mms e_coarse=%.3e e_composite=%.3e (x%.2f)\n", e_coarse, e_comp,
                 e_coarse / std::fmax(e_comp, 1e-30));
   EXPECT_TRUE(e_comp < 0.7 * e_coarse)
-      << "(mms) adjacent composite beats coarse-only: e_comp=" << e_comp << " e_coarse=" << e_coarse;
+      << "(mms) adjacent composite beats coarse-only: e_comp=" << e_comp
+      << " e_coarse=" << e_coarse;
 
   if (my_rank() == 0)
     std::printf("OK test_composite_fac_adjacent\n");

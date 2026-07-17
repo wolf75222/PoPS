@@ -25,6 +25,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
@@ -34,7 +35,6 @@ from pops.numerics.riemann import Rusanov
 from pops.linalg import LinearProblem
 from pops.solvers import krylov
 from pops.time import FailRun
-import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
@@ -42,8 +42,7 @@ def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_divergence (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_divergence (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -228,13 +227,13 @@ def _run_section_b(t):
 
         import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
     from pops.physics._facade import Model
@@ -258,7 +257,7 @@ def _run_section_b(t):
                 solver=krylov.BiCGStab(max_iter=200, rel_tol=tol),
                 tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:200])
         return None
 
     assert compiled.program_name == "divgrad_step", "handle carries the program name"
@@ -266,7 +265,7 @@ def _run_section_b(t):
     try:
         compiled_model = passive_model("divgrad_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:200])
         return None
     sim.add_equation("blk", compiled_model,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),

@@ -22,18 +22,16 @@ using namespace pops;
 namespace {
 
 void install(System& system, const std::string& slot, const std::string& plan_identity) {
-  system.set_field_solver_plan(
-      slot, plan_identity, "provider:" + slot, "output-owner", "plasma", "potential",
-      {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0}, "geometric_mg",
-      0.0, 1.0e-8, 50, 2, 2, 2, 50, 0);
+  system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
+                               "potential", {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0},
+                               "geometric_mg", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0);
 }
 
-void install(AmrSystem& system, const std::string& slot,
-             const std::string& plan_identity) {
-  system.set_field_solver_plan(
-      slot, plan_identity, "provider:" + slot, "output-owner", "plasma", "potential",
-      {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0}, "geometric_mg", "composite",
-      0.0, 1.0e-8, 50, 2, 2, 2, 50, 0, CompositeFacOptions{});
+void install(AmrSystem& system, const std::string& slot, const std::string& plan_identity) {
+  system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
+                               "potential", {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0},
+                               "geometric_mg", "composite", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0,
+                               CompositeFacOptions{});
 }
 
 template <class SystemType>
@@ -173,10 +171,10 @@ int run_field_plan_consensus(int argc, char** argv) {
     System system(SystemConfig{16, 1.0, true});
     bool rejected = false;
     try {
-      system.set_field_solver_plan(
-          "field-slot", "plan", "provider", "output-owner", "plasma", "potential",
-          {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0}, "geometric_mg",
-          0.0, std::numeric_limits<double>::infinity(), 50, 2, 2, 2, 50, 0);
+      system.set_field_solver_plan("field-slot", "plan", "provider", "output-owner", "plasma",
+                                   "potential", {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0},
+                                   "geometric_mg", 0.0, std::numeric_limits<double>::infinity(), 50,
+                                   2, 2, 2, 50, 0);
     } catch (const std::runtime_error&) {
       rejected = true;
     }
@@ -188,10 +186,10 @@ int run_field_plan_consensus(int argc, char** argv) {
     invalid.coarse_abs_tol = std::numeric_limits<Real>::quiet_NaN();
     bool rejected = false;
     try {
-      system.set_field_solver_plan(
-          "field-slot", "plan", "provider", "output-owner", "plasma", "potential",
-          {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0}, "geometric_mg", "composite",
-          0.0, 1.0e-8, 50, 2, 2, 2, 50, 0, invalid);
+      system.set_field_solver_plan("field-slot", "plan", "provider", "output-owner", "plasma",
+                                   "potential", {"rhs-provider"}, {"plasma"}, {"potential"}, {1.0},
+                                   "geometric_mg", "composite", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0,
+                                   invalid);
     } catch (const std::runtime_error&) {
       rejected = true;
     }
@@ -206,6 +204,5 @@ int run_field_plan_consensus(int argc, char** argv) {
 }  // namespace
 
 TEST(test_mpi_field_plan_consensus, CanonicalRegistryRefusesDivergenceWithoutDeadlock) {
-  EXPECT_EQ(
-      pops::test::RunTestBody(&run_field_plan_consensus, "test_mpi_field_plan_consensus"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&run_field_plan_consensus, "test_mpi_field_plan_consensus"), 0);
 }

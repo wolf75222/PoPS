@@ -223,8 +223,8 @@ inline int require_role_index(const VariableSet& vs, VariableRole role, const ch
       (!vs.user_roles.empty() && vs.user_roles.size() != vs.names.size()))
     throw std::runtime_error(std::string(origin) + " : '" + subject +
                              "' must declare exactly one role per state component (names=" +
-                             std::to_string(vs.names.size()) + ", roles=" +
-                             std::to_string(vs.roles.size()) + ")");
+                             std::to_string(vs.names.size()) +
+                             ", roles=" + std::to_string(vs.roles.size()) + ")");
   int resolved = -1;
   for (int component = 0; component < vs.size; ++component) {
     if (vs.roles[static_cast<std::size_t>(component)] != role)
@@ -238,8 +238,7 @@ inline int require_role_index(const VariableSet& vs, VariableRole role, const ch
   if (resolved >= 0)
     return resolved;
   throw std::runtime_error(std::string(origin) + " : '" + subject + "' declares roles (" +
-                           roles_csv(vs) + ") but not the required role '" + role_name(role) +
-                           "'");
+                           roles_csv(vs) + ") but not the required role '" + role_name(role) + "'");
 }
 
 /// A model's "names" metadata: "cons_csv|prim_csv" (separator '|' between the two sets). Read
@@ -267,11 +266,11 @@ using Variables = VariableSet;
 #define POPS_EXPORT_BLOCK_METADATA(MODEL)                       \
   extern "C" const char* pops_compiled_var_names() {            \
     static const std::string s = pops::var_names_meta<MODEL>(); \
-    return s.c_str();                                          \
-  }                                                            \
+    return s.c_str();                                           \
+  }                                                             \
   extern "C" const char* pops_compiled_roles() {                \
     static const std::string s = pops::roles_meta<MODEL>();     \
-    return s.c_str();                                          \
+    return s.c_str();                                           \
   }
 
 /// Exports the block's gamma (adiabatic index) via the optional symbol pops_compiled_gamma, read by
@@ -279,5 +278,5 @@ using Variables = VariableSet;
 /// model declares a gamma: otherwise the symbol stays absent and the System keeps its default 1.4.
 #define POPS_EXPORT_BLOCK_GAMMA(GAMMA)      \
   extern "C" double pops_compiled_gamma() { \
-    return (GAMMA);                        \
+    return (GAMMA);                         \
   }

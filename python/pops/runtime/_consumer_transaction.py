@@ -10,6 +10,7 @@ from pops.identity import Identity, make_identity
 
 from pops.output._consumer_contracts import (
     ConsumerCursorSet,
+    ParallelMode,
     Retry,
     SkipSampleReported,
 )
@@ -36,6 +37,8 @@ class PublicationReceipt:
     payload_identity: Identity
     publisher_id: str
     artifact_id: str
+    parallel_mode: ParallelMode = ParallelMode.SERIAL
+    rank_artifacts: tuple[tuple[int, str], ...] = ()
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -43,6 +46,33 @@ class PublicationReceipt:
         _identity(self.payload_identity, "consumer-payload", "PublicationReceipt.payload_identity")
         _text(self.publisher_id, "PublicationReceipt.publisher_id")
         _text(self.artifact_id, "PublicationReceipt.artifact_id")
+        if type(self.parallel_mode) is not ParallelMode:
+            raise TypeError("PublicationReceipt.parallel_mode must be an exact ParallelMode")
+        rows = self.rank_artifacts or ((0, self.artifact_id),)
+        if not isinstance(rows, tuple):
+            raise TypeError("PublicationReceipt.rank_artifacts must be a tuple")
+        normalized = []
+        for row in rows:
+            if not isinstance(row, tuple) or len(row) != 2:
+                raise TypeError("PublicationReceipt rank artifact must be a (rank, id) tuple")
+            rank, artifact = row
+            if isinstance(rank, bool) or type(rank) is not int or rank < 0:
+                raise TypeError("PublicationReceipt artifact rank must be an integer >= 0")
+            _text(artifact, "PublicationReceipt.rank_artifacts[].artifact_id")
+            normalized.append((rank, artifact))
+        normalized = sorted(normalized)
+        if len({rank for rank, _ in normalized}) != len(normalized):
+            raise ValueError("PublicationReceipt contains duplicate rank artifacts")
+        ranks = tuple(rank for rank, _ in normalized)
+        if self.parallel_mode is ParallelMode.PER_RANK:
+            if len(ranks) < 2 or ranks != tuple(range(len(ranks))):
+                raise ValueError(
+                    "PER_RANK receipt must aggregate one artifact for every contiguous rank")
+        elif normalized != [(0, self.artifact_id)]:
+            raise ValueError(
+                "%s receipt must authenticate the sole shared rank-0 artifact"
+                % self.parallel_mode.name)
+        object.__setattr__(self, "rank_artifacts", tuple(normalized))
         object.__setattr__(self, "identity", make_identity("consumer-publication-receipt", self._payload()))
 
     def _payload(self) -> dict[str, Any]:
@@ -51,6 +81,11 @@ class PublicationReceipt:
             "payload_identity": self.payload_identity.to_data(),
             "publisher_id": self.publisher_id,
             "artifact_id": self.artifact_id,
+            "parallel_mode": self.parallel_mode.value,
+            "rank_artifacts": [
+                {"rank": rank, "artifact_id": artifact}
+                for rank, artifact in self.rank_artifacts
+            ],
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -339,6 +374,9 @@ class ConsumerTransaction:
                 if receipt.effect_identity != effect.identity \
                         or receipt.payload_identity != effect.payload.identity:
                     raise ValueError("PublicationReceipt does not authenticate its exact effect payload")
+                if receipt.parallel_mode is not effect.target.parallel_mode:
+                    raise ValueError(
+                        "PublicationReceipt parallel mode differs from its accepted target")
             except Exception as exc:
                 error = exc
                 cleanup = self._rollback(prepared)

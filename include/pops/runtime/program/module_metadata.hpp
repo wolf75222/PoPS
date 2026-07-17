@@ -32,7 +32,7 @@ using SpaceId = std::uint32_t;
 /// One operator's metadata, as exported by the .so.
 struct OperatorMetadata {
   OperatorId id = 0;
-  std::string owner;         ///< canonical model owner
+  std::string owner;  ///< canonical model owner
   std::string name;
   std::string kind;          ///< one of the Spec-2 operator kinds (local_rate, field_operator, ...)
   std::string signature;     ///< human-readable typed signature
@@ -62,7 +62,8 @@ struct ModuleMetadata {
     const OperatorMetadata* result = nullptr;
     for (const auto& op : operators) {
       if (op.name == name) {
-        if (result != nullptr) return nullptr;
+        if (result != nullptr)
+          return nullptr;
         result = &op;
       }
     }
@@ -136,16 +137,16 @@ inline ModuleMetadata read_module_metadata(pops::dynlib::handle dl_handle) {
   ModuleMetadata meta;
   using StringFn = const char* (*)(int);
   const int n = detail::require_module_count(dl_handle, "pops_module_operator_count");
-  const StringFn owner = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_module_operator_owner");
-  const StringFn name = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_module_operator_name");
-  const StringFn kind = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_module_operator_kind");
-  const StringFn signature = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_module_operator_signature");
-  const StringFn requirements = detail::require_module_symbol<StringFn>(
-      dl_handle, "pops_module_operator_requirements");
+  const StringFn owner =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_owner");
+  const StringFn name =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_name");
+  const StringFn kind =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_kind");
+  const StringFn signature =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_signature");
+  const StringFn requirements =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_requirements");
   if (n > 0) {
     meta.operators.reserve(static_cast<std::size_t>(n));
   }
@@ -157,8 +158,8 @@ inline ModuleMetadata read_module_metadata(pops::dynlib::handle dl_handle) {
     op.name = detail::require_module_string(name, "pops_module_operator_name", i);
     op.kind = detail::require_module_string(kind, "pops_module_operator_kind", i);
     op.signature = detail::require_module_string(signature, "pops_module_operator_signature", i);
-    op.requirements = detail::require_module_string(
-        requirements, "pops_module_operator_requirements", i);
+    op.requirements =
+        detail::require_module_string(requirements, "pops_module_operator_requirements", i);
     if (op.requirements.front() != '{' || op.requirements.back() != '}')
       throw std::runtime_error("compiled Program operator '" + op.owner + "." + op.name +
                                "' has malformed requirements metadata");
@@ -167,14 +168,14 @@ inline ModuleMetadata read_module_metadata(pops::dynlib::handle dl_handle) {
                                op.owner + "." + op.name + "'");
     meta.operators.push_back(std::move(op));
   }
-  auto states = detail::module_spaces(
-      dl_handle, "pops_module_state_space_count", "pops_module_state_space_name",
-      "pops_module_state_space_owner");
+  auto states =
+      detail::module_spaces(dl_handle, "pops_module_state_space_count",
+                            "pops_module_state_space_name", "pops_module_state_space_owner");
   meta.state_spaces = std::move(states.first);
   meta.state_space_owners = std::move(states.second);
-  auto fields = detail::module_spaces(
-      dl_handle, "pops_module_field_space_count", "pops_module_field_space_name",
-      "pops_module_field_space_owner");
+  auto fields =
+      detail::module_spaces(dl_handle, "pops_module_field_space_count",
+                            "pops_module_field_space_name", "pops_module_field_space_owner");
   meta.field_spaces = std::move(fields.first);
   meta.field_space_owners = std::move(fields.second);
   return meta;
@@ -223,7 +224,8 @@ inline std::vector<std::string> required_string_list(const std::string& requirem
 /// "geometric_mg". Returns "" when the key is absent. Dependency-free, same closed-vocabulary scan as
 /// required_string_list; used for the scalar requirement kinds (solver, capability, schedule) of
 /// Spec criterion 24.
-inline std::string requirement_string(const std::string& requirements_json, const std::string& key) {
+inline std::string requirement_string(const std::string& requirements_json,
+                                      const std::string& key) {
   auto is_space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
   // @p key is the quoted JSON key (e.g. "\"solver\""). Match it as a genuine KEY, not as an array
   // element or a value substring: the first non-space char before it must be '{' or ',', and the

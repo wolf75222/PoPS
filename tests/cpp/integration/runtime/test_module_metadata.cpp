@@ -19,7 +19,8 @@ TEST(ModuleMetadata, DefaultDescriptorIsEmpty) {
 
 TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   ModuleMetadata m;
-  m.operators.push_back({0U, "model/a", "fields_from_state", "field_operator", "(U) -> Fields", "{}"});
+  m.operators.push_back(
+      {0U, "model/a", "fields_from_state", "field_operator", "(U) -> Fields", "{}"});
   m.operators.push_back({1U, "model/a", "explicit_rhs", "local_rate", "(U, Fields) -> Rate(U)",
                          "{\"kind\":\"local_rate\"}"});
   m.state_spaces.push_back("U");

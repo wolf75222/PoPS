@@ -95,9 +95,10 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # an explicit P.history(ncomp=1) appear here (the condensed-Schur phi^n carry); a full-state
         # multistep ring is absent (the codegen emits the historical 2-arg register_history for it).
         self._histories_ncomp = {}
-        # name -> (depth, HistoryPersistence) per keep_history ring (ADC-626). The checkpoint persists
-        # the policy-selected slots; the compile-time pass validates coherence + program-determinism per
-        # ring. Empty -> every ring persists Dense (the historical whole ring, no recomputation).
+        # name -> (depth, HistoryPersistence) for every declared history ring (ADC-626). Both manual
+        # store_history/history rings and keep_history rings materialize a typed policy; the compile-time
+        # pass validates the exact one-to-one mapping, depth coherence and replay determinism. An omitted
+        # checkpoint_policy is resolved during authoring to Dense (whole ring, no recomputation).
         self._history_persistence = {}
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
         # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).

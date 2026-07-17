@@ -23,15 +23,13 @@ make_component_execution_context(const py::dict& row) {
       py::cast<std::string>(row["execution_identity"]),
       py::cast<std::uint32_t>(row["context_version"]),
       static_cast<PopsMemorySpaceV1>(py::cast<std::int32_t>(row["memory_space"])),
-      py::cast<std::string>(row["backend_identity"]),
-      py::cast<std::string>(row["device_identity"]),
+      py::cast<std::string>(row["backend_identity"]), py::cast<std::string>(row["device_identity"]),
       static_cast<PopsScalarTypeV1>(py::cast<std::int32_t>(row["scalar_type"])),
       static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["storage_precision"])),
       static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["compute_precision"])),
       static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["accumulation_precision"])),
       static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["reduction_precision"])),
-      py::cast<std::uint64_t>(row["stream_handle"]),
-      py::cast<std::string>(row["stream_identity"]),
+      py::cast<std::uint64_t>(row["stream_handle"]), py::cast<std::string>(row["stream_identity"]),
       py::cast<std::int64_t>(row["communicator_f_handle"]),
       py::cast<std::int64_t>(row["communicator_datatype_f_handle"]),
       py::cast<std::string>(row["communicator_identity"]),
@@ -42,23 +40,17 @@ inline runtime::field::PreparedFieldSolverSpec field_solver_spec_from_python(
     std::string provider_slot, const py::dict& topology, const py::dict& solver,
     std::string topology_parameters_json, std::string solver_parameters_json,
     std::string source_layout_identity, std::string topology_recipe_identity,
-    std::string boundary_contract_json,
-    double relative_tolerance, double absolute_tolerance, std::int32_t max_iterations,
-    const py::dict& execution_data) {
+    std::string boundary_contract_json, double relative_tolerance, double absolute_tolerance,
+    std::int32_t max_iterations, const py::dict& execution_data) {
   runtime::field::PreparedFieldSolverSpec spec;
   spec.provider_slot = std::move(provider_slot);
-  spec.topology_component_id =
-      py::cast<std::string>(topology["component_id"]);
-  spec.topology_manifest_identity =
-      py::cast<std::string>(topology["component_manifest_identity"]);
-  spec.topology_interface_version =
-      py::cast<std::uint32_t>(topology["interface_version"]);
+  spec.topology_component_id = py::cast<std::string>(topology["component_id"]);
+  spec.topology_manifest_identity = py::cast<std::string>(topology["component_manifest_identity"]);
+  spec.topology_interface_version = py::cast<std::uint32_t>(topology["interface_version"]);
   spec.topology_parameters_json = std::move(topology_parameters_json);
   spec.solver_component_id = py::cast<std::string>(solver["component_id"]);
-  spec.solver_manifest_identity =
-      py::cast<std::string>(solver["component_manifest_identity"]);
-  spec.solver_interface_version =
-      py::cast<std::uint32_t>(solver["interface_version"]);
+  spec.solver_manifest_identity = py::cast<std::string>(solver["component_manifest_identity"]);
+  spec.solver_interface_version = py::cast<std::uint32_t>(solver["interface_version"]);
   spec.solver_parameters_json = std::move(solver_parameters_json);
   spec.source_layout_identity = std::move(source_layout_identity);
   spec.topology_recipe_identity = std::move(topology_recipe_identity);
@@ -71,23 +63,24 @@ inline runtime::field::PreparedFieldSolverSpec field_solver_spec_from_python(
 }
 
 inline PopsBoundaryRegionKindV1 boundary_region_kind(const std::string& kind) {
-  if (kind == "face") return POPS_BOUNDARY_FACE_V1;
-  if (kind == "edge") return POPS_BOUNDARY_EDGE_V1;
-  if (kind == "corner") return POPS_BOUNDARY_CORNER_V1;
+  if (kind == "face")
+    return POPS_BOUNDARY_FACE_V1;
+  if (kind == "edge")
+    return POPS_BOUNDARY_EDGE_V1;
+  if (kind == "corner")
+    return POPS_BOUNDARY_CORNER_V1;
   throw std::invalid_argument("native boundary component region kind is unknown");
 }
 
 inline PreparedBoundaryComponentSpec make_boundary_component_spec(
-    std::string target_identity, std::string component_id,
-    std::string manifest_identity, std::uint32_t interface_version,
-    std::string producer_identity, std::string state_identity, std::string ghost_identity,
-    std::string layout_identity,
-    std::string region_kind, int dimension, int codimension, std::vector<int> axes,
-    std::vector<int> sides, std::string region_identity, std::vector<std::string> states,
-    std::vector<std::string> directions, std::vector<std::string> fields,
-    std::vector<std::string> parameter_ids, std::vector<double> parameter_values,
-    std::vector<std::string> outputs, std::string rate, std::string nonlinear_iterate,
-    std::string parameters_json, std::string target_json,
+    std::string target_identity, std::string component_id, std::string manifest_identity,
+    std::uint32_t interface_version, std::string producer_identity, std::string state_identity,
+    std::string ghost_identity, std::string layout_identity, std::string region_kind, int dimension,
+    int codimension, std::vector<int> axes, std::vector<int> sides, std::string region_identity,
+    std::vector<std::string> states, std::vector<std::string> directions,
+    std::vector<std::string> fields, std::vector<std::string> parameter_ids,
+    std::vector<double> parameter_values, std::vector<std::string> outputs, std::string rate,
+    std::string nonlinear_iterate, std::string parameters_json, std::string target_json,
     std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
   PreparedBoundaryComponentSpec spec;
   spec.target_identity = std::move(target_identity);
@@ -119,8 +112,8 @@ inline PreparedBoundaryComponentSpec make_boundary_component_spec(
 }
 
 inline PreparedBoundaryComponentSpec boundary_component_spec_from_python(
-    const py::dict& row, const std::string& parameters_json,
-    const std::string& target_json, const py::dict& execution_data) {
+    const py::dict& row, const std::string& parameters_json, const std::string& target_json,
+    const py::dict& execution_data) {
   const py::dict target = py::cast<py::dict>(row["target"]);
   const py::dict region = py::cast<py::dict>(row["region"]);
   std::vector<std::string> parameter_ids;
@@ -134,37 +127,36 @@ inline PreparedBoundaryComponentSpec boundary_component_spec_from_python(
     return value.is_none() ? std::string() : py::cast<std::string>(value);
   };
   return make_boundary_component_spec(
-      py::cast<std::string>(target["qualified_id"]),
-      py::cast<std::string>(row["component_id"]),
+      py::cast<std::string>(target["qualified_id"]), py::cast<std::string>(row["component_id"]),
       py::cast<std::string>(row["component_manifest_identity"]),
       py::cast<std::uint32_t>(row["interface_version"]),
-      py::cast<std::string>(row["producer_identity"]),
-      py::cast<std::string>(row["state_identity"]),
+      py::cast<std::string>(row["producer_identity"]), py::cast<std::string>(row["state_identity"]),
       py::cast<std::string>(row["ghost_identity"]),
-      py::cast<std::string>(region["layout_identity"]),
-      py::cast<std::string>(region["kind"]), py::cast<int>(region["dimension"]),
-      py::cast<int>(region["codimension"]),
-      py::cast<std::vector<int>>(region["axes"]),
-      py::cast<std::vector<int>>(region["sides"]),
+      py::cast<std::string>(region["layout_identity"]), py::cast<std::string>(region["kind"]),
+      py::cast<int>(region["dimension"]), py::cast<int>(region["codimension"]),
+      py::cast<std::vector<int>>(region["axes"]), py::cast<std::vector<int>>(region["sides"]),
       py::cast<std::string>(region["region_identity"]),
       py::cast<std::vector<std::string>>(row["states"]),
       py::cast<std::vector<std::string>>(row["directions"]),
-      py::cast<std::vector<std::string>>(row["fields"]),
-      std::move(parameter_ids), std::move(parameter_values),
-      py::cast<std::vector<std::string>>(row["outputs"]),
-      optional_identity(row["rate"]), optional_identity(row["nonlinear_iterate"]),
-      parameters_json, target_json, make_component_execution_context(execution_data));
+      py::cast<std::vector<std::string>>(row["fields"]), std::move(parameter_ids),
+      std::move(parameter_values), py::cast<std::vector<std::string>>(row["outputs"]),
+      optional_identity(row["rate"]), optional_identity(row["nonlinear_iterate"]), parameters_json,
+      target_json, make_component_execution_context(execution_data));
 }
 
 inline runtime::multiblock::InterfaceAxis interface_axis(int axis) {
-  if (axis == 0) return runtime::multiblock::InterfaceAxis::X;
-  if (axis == 1) return runtime::multiblock::InterfaceAxis::Y;
+  if (axis == 0)
+    return runtime::multiblock::InterfaceAxis::X;
+  if (axis == 1)
+    return runtime::multiblock::InterfaceAxis::Y;
   throw std::invalid_argument("native shared interface requires a 2-D axis (0 or 1)");
 }
 
 inline runtime::multiblock::InterfaceSide interface_side(const std::string& side) {
-  if (side == "lower") return runtime::multiblock::InterfaceSide::Low;
-  if (side == "upper") return runtime::multiblock::InterfaceSide::High;
+  if (side == "lower")
+    return runtime::multiblock::InterfaceSide::Low;
+  if (side == "upper")
+    return runtime::multiblock::InterfaceSide::High;
   throw std::invalid_argument("native shared interface side must be lower or upper");
 }
 
@@ -199,8 +191,7 @@ inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
   route.tangential_orientation = orientation;
   route.right_component_for_left =
       py::cast<std::vector<int>>(permutation["right_component_for_left"]);
-  route.affine_mapping_identity =
-      py::cast<std::string>(mapping_handle["qualified_id"]);
+  route.affine_mapping_identity = py::cast<std::string>(mapping_handle["qualified_id"]);
   route.right_normal_translation =
       static_cast<Real>(py::cast<double>(mapping["right_normal_translation"]));
   route.right_tangential_scale =
@@ -221,8 +212,7 @@ inline runtime::multiblock::PreparedInterfaceFluxSpec interface_flux_spec_from_p
   runtime::multiblock::PreparedInterfaceFluxSpec spec;
   spec.interface_identity = identity;
   spec.component_id = py::cast<std::string>(binding["component_id"]);
-  spec.manifest_identity =
-      py::cast<std::string>(binding["component_manifest_identity"]);
+  spec.manifest_identity = py::cast<std::string>(binding["component_manifest_identity"]);
   spec.interface_version = py::cast<std::uint32_t>(binding["interface_version"]);
   spec.canonical_layout_identity = identity + "::canonical-face-layout@1";
   spec.parameters_json = parameters_json;

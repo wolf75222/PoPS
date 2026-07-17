@@ -6,7 +6,7 @@ from pops.diagnostics import Integral
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.output import ConsumerGraph, HDF5, ScientificOutput
+from pops.output import ConsumerGraph, HDF5, ParallelMode, ScientificOutput
 from pops.output._consumer_contracts import ConsumerKind
 from pops.representations import Conservative
 from pops.spaces import CellState
@@ -32,7 +32,7 @@ def test_block_time_and_diagnostics_never_drop_from_resolved_plan():
     schedule = every(4, clock=program.clock)
     graph = ConsumerGraph.from_consumers((
         ScientificOutput(
-            format=HDF5(parallel=False),
+            format=HDF5(mode=ParallelMode.SERIAL),
             schedule=schedule,
             fields=(qualified_state,),
             diagnostics=(Integral(block=block, cadence=schedule),),
@@ -54,5 +54,8 @@ def test_block_time_and_diagnostics_never_drop_from_resolved_plan():
     assert output.output_format_data["provider_id"] == "pops.output.hdf5.v1"
     diagnostic, = output.to_data()["diagnostics"]
     assert diagnostic["references"] == [case.resolve(block).canonical_identity()]
+    diagnostic_quantity, = output.diagnostic_quantities
+    assert diagnostic_quantity.reference == case.resolve(qualified_state)
+    assert diagnostic_quantity.execution["operations"][0]["reduction"] == "sum"
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
     resolved.verify()

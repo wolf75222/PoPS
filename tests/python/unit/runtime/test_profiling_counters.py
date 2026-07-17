@@ -12,6 +12,7 @@ Kokkos/ROMEO, so here we assert those lines simply EXIST and read 0 on the nativ
 
 Real engine only: it builds a real System and self-skips only if _pops/numpy is unavailable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -19,8 +20,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
-    print("skip test_profiling_counters (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_profiling_counters (%s)' % msg)
 
 
 try:

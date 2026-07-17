@@ -12,7 +12,7 @@
 namespace pops {
 class AmrRuntime;
 class MultiFab;
-}
+}  // namespace pops
 
 namespace pops::runtime::amr {
 
@@ -57,8 +57,7 @@ struct TemporalTransferContext {
   std::int64_t exact_alpha_denominator = 0;
 
   double alpha() const {
-    if (old_point.step >= new_point.step ||
-        !(old_point.physical_time < new_point.physical_time) ||
+    if (old_point.step >= new_point.step || !(old_point.physical_time < new_point.physical_time) ||
         target_point.step < old_point.step || target_point.step > new_point.step ||
         target_point.physical_time < old_point.physical_time ||
         target_point.physical_time > new_point.physical_time)
@@ -86,9 +85,10 @@ struct PreparedTransferKernel {
   std::function<void(const MultiFab&, MultiFab&, const SpatialTransferContext&)> spatial;
   std::function<void(const MultiFab&, MultiFab&, const SpatialTransferContext&)> coarse_fine;
   std::function<void(const MultiFab&, const MultiFab&, MultiFab&, MultiFab&,
-                     const SpatialTransferContext&)> face_vector;
-  std::function<void(const MultiFab&, const MultiFab&, MultiFab&,
-                     const TemporalTransferContext&)> temporal;
+                     const SpatialTransferContext&)>
+      face_vector;
+  std::function<void(const MultiFab&, const MultiFab&, MultiFab&, const TemporalTransferContext&)>
+      temporal;
   std::function<std::int64_t(AmrRuntime&, const MaterializationContext&)> materialize;
 };
 
@@ -109,8 +109,8 @@ class TransferKernelRegistry {
     manifests_.emplace(manifest.qualified_id, std::move(manifest));
   }
 
-  PreparedTransferKernel prepare(
-      const std::string& qualified_id, const TransferRouteDescriptor& descriptor) const {
+  PreparedTransferKernel prepare(const std::string& qualified_id,
+                                 const TransferRouteDescriptor& descriptor) const {
     const auto found = manifests_.find(qualified_id);
     if (found == manifests_.end())
       throw std::runtime_error("unregistered native AMR transfer kernel '" + qualified_id + "'");
@@ -131,17 +131,18 @@ struct TransferRoute {
   PreparedTransferKernel executable;
 
   auto exact_key() const {
-    return std::tuple{provider_identity, kernel_identity, descriptor.space,
-                      descriptor.centering, descriptor.representation, descriptor.storage,
-                      descriptor.operation, descriptor.order, descriptor.ghost_depth,
-                      descriptor.dimension, descriptor.refinement_ratio};
+    return std::tuple{provider_identity,          kernel_identity,
+                      descriptor.space,           descriptor.centering,
+                      descriptor.representation,  descriptor.storage,
+                      descriptor.operation,       descriptor.order,
+                      descriptor.ghost_depth,     descriptor.dimension,
+                      descriptor.refinement_ratio};
   }
 };
 
 class TransferRouteRegistry {
  public:
-  explicit TransferRouteRegistry(TransferKernelRegistry kernels)
-      : kernels_(std::move(kernels)) {}
+  explicit TransferRouteRegistry(TransferKernelRegistry kernels) : kernels_(std::move(kernels)) {}
 
   void add(std::string identity, TransferRoute route) {
     if (identity.empty() || route.provider_identity.empty())

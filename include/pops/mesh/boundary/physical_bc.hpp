@@ -165,48 +165,44 @@ inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRe
     // 5-point) change -> bit-identical for any stencil <= 9-point including the 5-point Cartesian
     // (the new corner value is only read by a 9-point).
     const int jglo = v.lo[1] - ng, jghi = v.hi[1] + ng;
-      if (bc.xlo != BCType::Periodic && bc.xlo != BCType::External &&
-          v.lo[0] == domain.lo[0]) {
+    if (bc.xlo != BCType::Periodic && bc.xlo != BCType::External && v.lo[0] == domain.lo[0]) {
       const int lo = domain.lo[0];
       const bool foe = bc.xlo == BCType::Foextrap;
       const bool robin = bc.xlo == BCType::Robin;
       const Real val = bc.xlo_val;
       for_each_cell(Box2D{{lo - ng, jglo}, {lo - 1, jghi}},
-                    detail::BCFaceXLoKernel{a, c0, c1, lo, foe, robin, val,
-                                            bc.xlo_alpha, bc.xlo_beta, bc.dx});
+                    detail::BCFaceXLoKernel{a, c0, c1, lo, foe, robin, val, bc.xlo_alpha,
+                                            bc.xlo_beta, bc.dx});
     }
-      if (bc.xhi != BCType::Periodic && bc.xhi != BCType::External &&
-          v.hi[0] == domain.hi[0]) {
+    if (bc.xhi != BCType::Periodic && bc.xhi != BCType::External && v.hi[0] == domain.hi[0]) {
       const int hi = domain.hi[0];
       const bool foe = bc.xhi == BCType::Foextrap;
       const bool robin = bc.xhi == BCType::Robin;
       const Real val = bc.xhi_val;
       for_each_cell(Box2D{{hi + 1, jglo}, {hi + ng, jghi}},
-                    detail::BCFaceXHiKernel{a, c0, c1, hi, foe, robin, val,
-                                            bc.xhi_alpha, bc.xhi_beta, bc.dx});
+                    detail::BCFaceXHiKernel{a, c0, c1, hi, foe, robin, val, bc.xhi_alpha,
+                                            bc.xhi_beta, bc.dx});
     }
 
     // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
     const int iglo = v.lo[0] - ng, ighi = v.hi[0] + ng;
-      if (bc.ylo != BCType::Periodic && bc.ylo != BCType::External &&
-          v.lo[1] == domain.lo[1]) {
+    if (bc.ylo != BCType::Periodic && bc.ylo != BCType::External && v.lo[1] == domain.lo[1]) {
       const int lo = domain.lo[1];
       const bool foe = bc.ylo == BCType::Foextrap;
       const bool robin = bc.ylo == BCType::Robin;
       const Real val = bc.ylo_val;
       for_each_cell(Box2D{{iglo, lo - ng}, {ighi, lo - 1}},
-                    detail::BCFaceYLoKernel{a, c0, c1, lo, foe, robin, val,
-                                            bc.ylo_alpha, bc.ylo_beta, bc.dy});
+                    detail::BCFaceYLoKernel{a, c0, c1, lo, foe, robin, val, bc.ylo_alpha,
+                                            bc.ylo_beta, bc.dy});
     }
-      if (bc.yhi != BCType::Periodic && bc.yhi != BCType::External &&
-          v.hi[1] == domain.hi[1]) {
+    if (bc.yhi != BCType::Periodic && bc.yhi != BCType::External && v.hi[1] == domain.hi[1]) {
       const int hi = domain.hi[1];
       const bool foe = bc.yhi == BCType::Foextrap;
       const bool robin = bc.yhi == BCType::Robin;
       const Real val = bc.yhi_val;
       for_each_cell(Box2D{{iglo, hi + 1}, {ighi, hi + ng}},
-                    detail::BCFaceYHiKernel{a, c0, c1, hi, foe, robin, val,
-                                            bc.yhi_alpha, bc.yhi_beta, bc.dy});
+                    detail::BCFaceYHiKernel{a, c0, c1, hi, foe, robin, val, bc.yhi_alpha,
+                                            bc.yhi_beta, bc.dy});
     }
   }
 }

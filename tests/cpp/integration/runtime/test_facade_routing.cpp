@@ -223,8 +223,8 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     const std::vector<double> eb1 = eb.get_state("n");
 
     const double d_enclosing = max_abs_diff(sq1, eb1);
-    EXPECT_TRUE(d_enclosing == 0.0)
-        << "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, alpha=1 partout) : max|diff| = "
-        << d_enclosing << " (attendu 0)";
+    EXPECT_TRUE(d_enclosing == 0.0) << "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, "
+                                       "alpha=1 partout) : max|diff| = "
+                                    << d_enclosing << " (attendu 0)";
   }
 }

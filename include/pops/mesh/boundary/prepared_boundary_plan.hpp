@@ -38,10 +38,11 @@ class PreparedBoundaryPlan {
   PreparedBoundaryPlan() = default;
 
   PreparedBoundaryPlan(std::string identity, int required_depth, std::vector<BCRec> component_bc,
-                       std::vector<int> omitted_face_ordinals = {},
-                       std::string state_identity = {})
-      : identity_(std::move(identity)), required_depth_(required_depth),
-        component_bc_(std::move(component_bc)), state_identity_(std::move(state_identity)) {
+                       std::vector<int> omitted_face_ordinals = {}, std::string state_identity = {})
+      : identity_(std::move(identity)),
+        required_depth_(required_depth),
+        component_bc_(std::move(component_bc)),
+        state_identity_(std::move(state_identity)) {
     for (const int face : omitted_face_ordinals) {
       if (face < 0 || face >= 4 || omitted_faces_[static_cast<std::size_t>(face)])
         throw std::invalid_argument(
@@ -59,9 +60,8 @@ class PreparedBoundaryPlan {
   /// consumers use the same invariant as the fill path, without performing or probing a fill.
   void validate_state_layout(const MultiFab& state) const { validate_for(state); }
   bool has_omitted_faces() const {
-    return std::any_of(omitted_faces_.begin(), omitted_faces_.end(), [](bool value) {
-      return value;
-    });
+    return std::any_of(omitted_faces_.begin(), omitted_faces_.end(),
+                       [](bool value) { return value; });
   }
   bool omits_face(int axis, int side) const {
     if (axis < 0 || axis >= 2 || (side != -1 && side != 1))
@@ -89,20 +89,22 @@ class PreparedBoundaryPlan {
   }
 
   bool has_component_boundaries() const {
-    return !ghost_components_.empty() || !residual_components_.empty() ||
-           !jvp_components_.empty();
+    return !ghost_components_.empty() || !residual_components_.empty() || !jvp_components_.empty();
   }
 
   /// Whether this plan owns an executable residual/JVP pair for an implicit operator.  A partial
   /// installation is an invalid native state, never a false capability that can be silently ignored.
   bool has_boundary_linearization() const {
-    if (residual_components_.empty() && jvp_components_.empty()) return false;
+    if (residual_components_.empty() && jvp_components_.empty())
+      return false;
     std::vector<PreparedBoundaryComponentSpec> residuals;
     std::vector<PreparedBoundaryComponentSpec> jvps;
     residuals.reserve(residual_components_.size());
     jvps.reserve(jvp_components_.size());
-    for (const auto& component : residual_components_) residuals.push_back(component->spec());
-    for (const auto& component : jvp_components_) jvps.push_back(component->spec());
+    for (const auto& component : residual_components_)
+      residuals.push_back(component->spec());
+    for (const auto& component : jvp_components_)
+      jvps.push_back(component->spec());
     validate_linearization_bijection(residuals, jvps);
     return true;
   }
@@ -115,14 +117,14 @@ class PreparedBoundaryPlan {
       const std::vector<PreparedBoundaryComponentSpec>& residuals,
       const std::vector<PreparedBoundaryComponentSpec>& jvps) {
     if (residuals.size() != jvps.size())
-      throw std::runtime_error(
-          "PreparedBoundaryPlan has an unpaired residual/JVP installation");
+      throw std::runtime_error("PreparedBoundaryPlan has an unpaired residual/JVP installation");
     std::vector<bool> consumed(jvps.size(), false);
     for (const auto& residual : residuals) {
       validate_linearization_endpoint_(residual, false);
       std::size_t match = jvps.size();
       for (std::size_t index = 0; index < jvps.size(); ++index) {
-        if (!same_linearization_contract_(residual, jvps[index])) continue;
+        if (!same_linearization_contract_(residual, jvps[index]))
+          continue;
         if (match != jvps.size())
           throw std::runtime_error(
               "PreparedBoundaryPlan has duplicate JVPs for one exact residual contract");
@@ -133,8 +135,7 @@ class PreparedBoundaryPlan {
             "PreparedBoundaryPlan residual/JVP identities do not form executable pairs");
       validate_linearization_endpoint_(jvps[match], true);
       if (consumed[match])
-        throw std::runtime_error(
-            "PreparedBoundaryPlan reuses one JVP for multiple residuals");
+        throw std::runtime_error("PreparedBoundaryPlan reuses one JVP for multiple residuals");
       if (residual.target_identity == jvps[match].target_identity)
         throw std::runtime_error(
             "PreparedBoundaryPlan residual/JVP targets must be distinct typed identities");
@@ -205,56 +206,50 @@ class PreparedBoundaryPlan {
     for (int comp = 0; comp < state.ncomp(); ++comp)
       fill_physical_bc(state, geometry.domain, component_bc(comp), comp);
     for (const auto& component : ghost_components_)
-      detail::apply_ghost_component(
-          *component, state, auxiliary, geometry, required_depth_, point);
+      detail::apply_ghost_component(*component, state, auxiliary, geometry, required_depth_, point);
   }
 
   /// N-ary twin: every qualified dependency is supplied by exact Handle identity.  This is the
   /// extension seam for multi-state/multi-field providers; the one-state overload above is merely a
   /// convenience adapter and never fabricates aliases for missing identities.
   void fill_same_level_and_physical(
-      MultiFab& state, const detail::BoundaryFieldRegistry& fields,
-      const Geometry& geometry,
+      MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
       const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     validate_for(state);
     fill_boundary(state, geometry.domain, periodicity());
     for (int comp = 0; comp < state.ncomp(); ++comp)
       fill_physical_bc(state, geometry.domain, component_bc(comp), comp);
     for (const auto& component : ghost_components_)
-      detail::apply_ghost_component(
-          *component, state, fields, geometry, required_depth_, point);
+      detail::apply_ghost_component(*component, state, fields, geometry, required_depth_, point);
   }
 
   /// Add every qualified residual contribution after the volume/face residual has been assembled.
   void add_residual(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                    const MultiFab& state, const MultiFab* auxiliary,
-                    const Geometry& geometry, MultiFab& residual) const {
+                    const MultiFab& state, const MultiFab* auxiliary, const Geometry& geometry,
+                    MultiFab& residual) const {
     for (const auto& component : residual_components_)
-      detail::apply_field_component(
-          *component, state, nullptr, auxiliary, geometry, residual, point);
+      detail::apply_field_component(*component, state, nullptr, auxiliary, geometry, residual,
+                                    point);
   }
 
   void add_residual(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                    const detail::BoundaryFieldRegistry& fields,
-                    const Geometry& geometry) const {
+                    const detail::BoundaryFieldRegistry& fields, const Geometry& geometry) const {
     for (const auto& component : residual_components_)
       detail::apply_field_component(*component, fields, geometry, point);
   }
 
   /// Exact JVP twin used by implicit solvers; residual/JVP bindings are authenticated as a pair by
   /// the resolved Python IR before either reaches this plan.
-  void apply_jvp(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                 const MultiFab& state, const MultiFab& direction,
-                 const MultiFab* auxiliary, const Geometry& geometry,
+  void apply_jvp(const runtime::multiblock::BoundaryEvaluationPoint& point, const MultiFab& state,
+                 const MultiFab& direction, const MultiFab* auxiliary, const Geometry& geometry,
                  MultiFab& output) const {
     for (const auto& component : jvp_components_)
-      detail::apply_field_component(
-          *component, state, &direction, auxiliary, geometry, output, point);
+      detail::apply_field_component(*component, state, &direction, auxiliary, geometry, output,
+                                    point);
   }
 
   void apply_jvp(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                 const detail::BoundaryFieldRegistry& fields,
-                 const Geometry& geometry) const {
+                 const detail::BoundaryFieldRegistry& fields, const Geometry& geometry) const {
     for (const auto& component : jvp_components_)
       detail::apply_field_component(*component, fields, geometry, point);
   }
@@ -270,17 +265,15 @@ class PreparedBoundaryPlan {
   std::vector<std::shared_ptr<PreparedFieldBoundaryJvpComponent>> jvp_components_;
 
   template <class Component>
-  static void install_typed_(
-      std::vector<std::shared_ptr<Component>>& destination,
-      PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component) {
+  static void install_typed_(std::vector<std::shared_ptr<Component>>& destination,
+                             PreparedBoundaryComponentSpec spec,
+                             std::shared_ptr<component::LoadedComponent> component) {
     for (const auto& installed : destination)
       if (installed->spec().target_identity == spec.target_identity &&
           installed->spec().region.identity == spec.region.identity)
         throw std::runtime_error(
             "PreparedBoundaryPlan duplicate typed target/region component binding");
-    destination.push_back(std::make_shared<Component>(
-        std::move(spec), std::move(component)));
+    destination.push_back(std::make_shared<Component>(std::move(spec), std::move(component)));
   }
 
   static void append_unique_(std::vector<std::string>& destination,
@@ -319,7 +312,8 @@ class PreparedBoundaryPlan {
   static bool same_execution_(
       const std::shared_ptr<const component::PreparedExecutionContextV1>& left,
       const std::shared_ptr<const component::PreparedExecutionContextV1>& right) {
-    if (!left || !right) return !left && !right;
+    if (!left || !right)
+      return !left && !right;
     const PopsExecutionContextV1 a = left->view();
     const PopsExecutionContextV1 b = right->view();
     const auto same_text = [](const char* x, const char* y) {
@@ -327,14 +321,12 @@ class PreparedBoundaryPlan {
     };
     return a.context_version == b.context_version &&
            same_text(a.execution_identity, b.execution_identity) &&
-           a.memory_space == b.memory_space &&
-           same_text(a.backend_identity, b.backend_identity) &&
-           same_text(a.device_identity, b.device_identity) &&
-           a.scalar_type == b.scalar_type && a.storage_precision == b.storage_precision &&
+           a.memory_space == b.memory_space && same_text(a.backend_identity, b.backend_identity) &&
+           same_text(a.device_identity, b.device_identity) && a.scalar_type == b.scalar_type &&
+           a.storage_precision == b.storage_precision &&
            a.compute_precision == b.compute_precision &&
            a.accumulation_precision == b.accumulation_precision &&
-           a.reduction_precision == b.reduction_precision &&
-           a.stream_handle == b.stream_handle &&
+           a.reduction_precision == b.reduction_precision && a.stream_handle == b.stream_handle &&
            same_text(a.stream_identity, b.stream_identity) &&
            a.communicator_f_handle == b.communicator_f_handle &&
            a.communicator_datatype_f_handle == b.communicator_datatype_f_handle &&
@@ -344,8 +336,7 @@ class PreparedBoundaryPlan {
 
   static void validate_linearization_endpoint_(const PreparedBoundaryComponentSpec& spec,
                                                bool jvp) {
-    if (spec.target_identity.empty() || spec.outputs.size() != 1 ||
-        spec.outputs.front().empty())
+    if (spec.target_identity.empty() || spec.outputs.size() != 1 || spec.outputs.front().empty())
       throw std::runtime_error(
           "PreparedBoundaryPlan residual/JVP target and output identities must be exact");
     const std::vector<std::string> expected_directions =

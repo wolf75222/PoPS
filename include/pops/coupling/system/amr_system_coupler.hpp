@@ -10,9 +10,9 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>     // AmrLevelMP, advance_amr, mf_average_down_mb
+#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr, mf_average_down_mb
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source
-#include <pops/numerics/time/schemes/scheduler.hpp>         // block_substeps_v, block_time_treatment_v
+#include <pops/numerics/time/schemes/scheduler.hpp>  // block_substeps_v, block_time_treatment_v
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>

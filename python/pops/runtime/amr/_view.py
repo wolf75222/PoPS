@@ -70,8 +70,10 @@ class AmrRuntimeView:
     def _block_names(self) -> Any:
         try:
             return list(self._sim._s.block_names())
-        except RuntimeError:
-            return []
+        except RuntimeError as exc:
+            if _NOT_BUILT in str(exc):
+                return []
+            raise
 
     def _per_level(self) -> Any:
         """Per-level patch census from patch_boxes() + patch_rectangles(), level 0 = base box."""
@@ -161,7 +163,7 @@ class AmrRuntimeView:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
         constraints = ["same bound composition and compiled Program",
                        "authenticated v3 accepted-state payload",
-                       "same rank count when a non-Dense history policy requires replay"]
+                       "same native rank count for exact rank-local ownership and Program state"]
         violations = []
         try:
             n_blocks = int(self._sim._s.n_blocks())

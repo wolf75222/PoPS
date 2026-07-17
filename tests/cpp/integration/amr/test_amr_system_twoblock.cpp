@@ -22,8 +22,8 @@
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>     // facade AmrSystem
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
@@ -91,8 +91,8 @@ TEST(test_amr_system_twoblock, Runs) {
     AmrBuildParams bp;
     bp.mesh.n = N;
     bp.mesh.L = L;
-    bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs PR1)
-    bp.poisson.bc = BCRec{};  // periodique
+    bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs PR1)
+    bp.poisson.bc = BCRec{};   // periodique
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
     std::vector<AmrRuntimeBlock> blocks;

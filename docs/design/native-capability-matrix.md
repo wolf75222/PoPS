@@ -81,6 +81,9 @@ Supported native routes include:
 - Conservative two-block interfaces through one authenticated native `NumericalFlux` evaluation
   and opposite residual scattering. Endpoints must be co-located on one layout and their explicit
   default-flux RHS evaluations must be simultaneous and contiguous in one Program point.
+  `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
+  collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
+  then scatter only into locally owned residual cells.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP, and
   refined or dynamically regridded AMR interfaces are unavailable; AMR accepts only one frozen
   level.
@@ -103,18 +106,29 @@ Supported native routes include:
   conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
   until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
   exact provider route only on AMR level 0.
-- Runtime output routes: npz, VTK, HDF5, plus AMR coarse/patch metadata output.
-- Runtime checkpoints: Uniform v1 and strict AMR v3. AMR v3 preserves multi-block/multi-level accepted
-  state under active regridding, including topology ownership, clocks, histories and transfer provenance.
+- Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
+  exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
+- Runtime accepted-state checkpoint v3 for Uniform and AMR. The single-file MPI route captures
+  collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
+  sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
+  authority is resolved into the compiled plan, including the builtin v3 manual route. Restart reads
+  and authenticates that file once on rank
+  zero, broadcasts the exact bytes through the installed `ExecutionContext` communicator, preflights
+  every rank before mutation, and keeps a rollback snapshot until apply/commit consensus. Multi-layout
+  child payloads are decoded and replayed in memory without shared child files. AMR preserves
+  multi-block/multi-level accepted state under active regridding, including topology ownership,
+  clocks, histories and transfer provenance.
 
 Explicit unsupported rows include:
 
 - `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
-- `output:plotfile_uniform`: Plotfile is an AMR per-level format, not a Uniform System writer.
-- `checkpoint:parallel_hdf5`: parallel HDF5 is an output route, not a restartable checkpoint route.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v3 accepted-state route. A non-Dense
-  history policy that reconstructs omitted slots by replay requires the restart to keep the rank count.
+- `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
+  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v3.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v3 accepted-state route. The single
+  authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
+  per native rank, so AMR restart currently requires the same rank count; rank redistribution is never
+  inferred from opaque local publications.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
@@ -144,8 +158,12 @@ future validators:
 - `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
   must match an exact native transfer/materialization provider contract.
 - `parallel:mpi_world_communicator`: the native `RuntimeInstance` providers consume the exact
-  `MPI_COMM_WORLD` carried by its validated `ExecutionContext`; the native module, artifact and
-  mpi4py handle must prove the same rank and size.
+  `MPI_COMM_WORLD` carried by its validated `ExecutionContext`; the C++ module owns initialization,
+  collectives, ABI handles, rank and size. It calls `MPI_Init_thread(MPI_THREAD_MULTIPLE)` before
+  worker threads exist, or attaches only to an externally initialized world whose queried level is
+  already `MPI_THREAD_MULTIPLE`. PoPS finalizes only a world it initialized itself, after native work
+  has ended; an embedding application retains its lifecycle. Python carries only the opaque native
+  resource identity.
 - `parallel:custom_communicator`: caller-provided custom MPI communicators remain representable but
   unavailable because the native engines expose no communicator-injection ABI.
 - `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.

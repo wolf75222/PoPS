@@ -286,13 +286,22 @@ struct WriterRequestStorage {
         execution(py::cast<py::dict>(request["execution"])),
         logical_time(py::cast<py::dict>(request["logical_time"])) {
     const auto snapshot = py::cast<py::dict>(request["snapshot"]);
-    for (const auto raw : py::cast<py::list>(snapshot["geometries"]))
+    const auto raw_geometries = py::cast<py::list>(snapshot["geometries"]);
+    geometry_storage.reserve(raw_geometries.size());
+    geometries.reserve(raw_geometries.size());
+    for (const auto raw : raw_geometries)
       geometry_storage.emplace_back(py::cast<py::dict>(raw));
     for (const auto& row : geometry_storage) geometries.push_back(row.value);
-    for (const auto raw : py::cast<py::list>(snapshot["fields"]))
+    const auto raw_fields = py::cast<py::list>(snapshot["fields"]);
+    field_storage.reserve(raw_fields.size());
+    fields.reserve(raw_fields.size());
+    for (const auto raw : raw_fields)
       field_storage.emplace_back(py::cast<py::dict>(raw));
     for (const auto& row : field_storage) fields.push_back(row.value);
-    for (const auto raw : py::cast<py::list>(snapshot["diagnostics"]))
+    const auto raw_diagnostics = py::cast<py::list>(snapshot["diagnostics"]);
+    diagnostic_storage.reserve(raw_diagnostics.size());
+    diagnostics.reserve(raw_diagnostics.size());
+    for (const auto raw : raw_diagnostics)
       diagnostic_storage.emplace_back(py::cast<py::dict>(raw));
     for (const auto& row : diagnostic_storage) diagnostics.push_back(row.value);
     value = {sizeof(PopsWriterRequestV1), geometries.size(), geometries.data(),

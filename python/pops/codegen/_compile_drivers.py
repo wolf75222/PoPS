@@ -14,7 +14,6 @@ from pops.codegen.toolchain import (
     _check_headers_match_module,
     _warn_kokkos_parity,
     _native_kokkos_compiler,
-    _native_kokkos_flags,
     _run_compile,
     _pops_import_lib,
     pops_header_signature,
@@ -27,7 +26,6 @@ from pops.codegen.cache import (
     _artifact_distinct_so_path,
     _record_artifact_identity,
     _registry_cache_key,
-    _native_mpi_flags,
     _dsl_optflags,
 )
 from pops.codegen.compile_provenance import (
@@ -56,20 +54,20 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
     Returns so_path.
     """
     import tempfile
+    from pops.codegen._compile_platform import require_shared_library_compile_platform
+    require_shared_library_compile_platform("compile_native", windows_supported=True)
     if include is None:
         include = pops_include()
     sig = _check_headers_match_module(include)
     _warn_kokkos_parity()
     src = emit_cpp_native_loader(model, name=name, target=target,
                                  hoist_reciprocals=hoist_reciprocals)
-    cc = _native_kokkos_compiler(cxx)
+    cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     if not cc:
         raise RuntimeError(
             "compile_native: no C++ compiler found. The PRODUCTION native route is REQUIRED for "
             "the compile/bind target surface; the prototype/host routes are NOT a fallback (ADC-600).")
     std = _probe_cxx_std(cc, std)
-    kokkos_compile_flags, kokkos_link_flags = _native_kokkos_flags()
-    mpi_compile_flags = _native_mpi_flags()
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "model_native.cpp")
         src_eff = ('#define POPS_HEADER_SIG "%s"\n' % sig + src) if sys.platform == "win32" else src
@@ -85,17 +83,15 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
                     "prototype/host routes are NOT a fallback (ADC-600).")
             cl_flags = (["/nologo", "/LD", "/std:" + std, "/O2", "/DNDEBUG", "/EHsc",
                          "/permissive-", "/Zc:preprocessor", "/DNOMINMAX", "/bigobj"]
-                        + kokkos_compile_flags + mpi_compile_flags)
+                        + native_compile_flags)
             cmd = ([cc] + cl_flags + ["-I", include, cpp,
                     "/Fe:" + so_path, "/Fo" + tmp + os.sep,
-                    "/link"] + kokkos_link_flags + [pops_lib])
+                    "/link"] + native_link_flags + [pops_lib])
         else:
             optflags = _dsl_optflags()
             flags = ["-shared", "-fPIC", "-std=" + std, *optflags,
-                     "-DPOPS_HEADER_SIG=\"%s\"" % sig, *kokkos_compile_flags, *mpi_compile_flags]
-            if sys.platform == "darwin":
-                flags += ["-undefined", "dynamic_lookup"]
-            cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *kokkos_link_flags]
+                     "-DPOPS_HEADER_SIG=\"%s\"" % sig, *native_compile_flags]
+            cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *native_link_flags]
         _run_compile(cmd, "backend production, compile_native")
     return so_path
 
@@ -197,6 +193,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     The returned ``CompiledProblem`` carries the validated physical model and compile metadata.
     """
     import tempfile
+    from pops.codegen._compile_platform import require_shared_library_compile_platform
+    require_shared_library_compile_platform("compile_problem", windows_supported=False)
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
     if problem_snapshot is not None:

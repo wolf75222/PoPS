@@ -18,7 +18,8 @@ __all__ = (
     "__cxx_compiler__",
     "__has_kokkos__",
     "__has_mpi__",
-    "__mpi_include__",
+    "__has_parallel_hdf5__",
+    "__mpi_contract__",
     "__aux_named_base__",
     "__aux_max_extra__",
     "__aux_base_comps__",
@@ -28,6 +29,7 @@ __all__ = (
     "abi_key",
     "my_rank",
     "n_ranks",
+    "mpi_world",
     "module_capabilities",
     "capability_report",
     "runtime_environment_report",
@@ -51,7 +53,8 @@ __cxx_std__: int
 __cxx_compiler__: str
 __has_kokkos__: bool
 __has_mpi__: bool
-__mpi_include__: str
+__has_parallel_hdf5__: bool
+__mpi_contract__: dict[str, object] | None
 __aux_named_base__: int
 __aux_max_extra__: int
 __aux_base_comps__: int
@@ -61,6 +64,34 @@ __aux_canonical__: dict[str, int]
 
 
 class StepAttemptRejected(RuntimeError): ...
+
+
+class _NativeMpiDatatype:
+    """Non-constructible native MPI datatype identity owned by the process world."""
+
+    identity: str
+    fortran_handle: int
+
+
+class _NativeWorldCommunicator:
+    """Non-constructible exact native process-world authority."""
+
+    rank: int
+    size: int
+    active: bool
+    identity: str
+    initialized_by_pops: bool
+    atexit_finalize_registered: bool
+    thread_level: int
+    fortran_handle: int
+    datatype_float64: _NativeMpiDatatype
+    def is_float64_datatype(self, candidate: object) -> bool: ...
+    def barrier(self) -> None: ...
+    def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
+    def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
+    def gather_bytes(
+        self, payload: bytes, root: int = 0
+    ) -> tuple[bytes, ...] | None: ...
 
 
 class _SolveReport:
@@ -137,15 +168,47 @@ class ModelSpec:
 class System:
     def __init__(self, config: SystemConfig) -> None: ...
     def solve_fields(self) -> _SolveReport: ...
+    def output_state_local_pieces(
+        self, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_field_local_pieces(
+        self, provider_slot: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_state_root_pieces(
+        self, world: _NativeWorldCommunicator, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_field_root_pieces(
+        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
 
 
 class AmrSystem:
     def __init__(self, config: AmrSystemConfig) -> None: ...
+    def materialize_program_restart_histories(
+        self,
+        payload: bytes,
+        names: list[str],
+        depths: list[int],
+        ncomps: list[int],
+    ) -> None: ...
+    def output_state_local_pieces(
+        self, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_field_local_pieces(
+        self, provider_slot: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_state_root_pieces(
+        self, world: _NativeWorldCommunicator, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_field_root_pieces(
+        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
 
 
 def abi_key() -> str: ...
 def my_rank() -> int: ...
 def n_ranks() -> int: ...
+def mpi_world() -> _NativeWorldCommunicator: ...
 def module_capabilities(target: str = "module") -> dict[str, object]: ...
 def capability_report(target: str = "module") -> dict[str, object]: ...
 def runtime_environment_report() -> dict[str, object]: ...
@@ -156,6 +219,18 @@ def numerical_defaults_report() -> dict[str, object]: ...
 def fallback_diagnostics_report() -> dict[str, object]: ...
 def reset_fallback_diagnostics() -> None: ...
 def kokkos_is_initialized() -> bool: ...
+
+
+# Private native parallel-HDF5 provider.  The world argument is the exact non-fabricable native
+# authority; manifest/array descriptors are validated by the binding before the C API is entered.
+def _parallel_hdf5_capability() -> dict[str, object]: ...
+def _write_parallel_hdf5(
+    world: _NativeWorldCommunicator,
+    path: str,
+    manifest_json: str,
+    root_arrays: dict[str, object],
+    fields: tuple[dict[str, object], ...],
+) -> None: ...
 
 
 # Private native identity helpers used by the Python implementation and its

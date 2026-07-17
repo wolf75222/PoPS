@@ -225,8 +225,9 @@ class PoissonFFT {
       return;
     }
 #ifdef POPS_HAS_MPI
-    MPI_Alltoall(send.data(), 2 * blk, MPI_DOUBLE, recv.data(), 2 * blk, MPI_DOUBLE,
-                 MPI_COMM_WORLD);
+    detail::require_mpi_success(MPI_Alltoall(send.data(), 2 * blk, MPI_DOUBLE, recv.data(), 2 * blk,
+                                             MPI_DOUBLE, MPI_COMM_WORLD),
+                                "MPI_Alltoall(PoissonFFT)");
 #else
     recv = send;
 #endif

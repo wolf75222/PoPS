@@ -1,7 +1,8 @@
 """Structural scientific-output provider contract.
 
 Providers are extension objects, not members of a central format registry.  The runtime retains the
-immutable provider for behavior and authenticates only its canonical ``consumer_data`` projection.
+immutable provider for behavior, authenticates its canonical ``consumer_data`` projection, and
+requires the returned writer to preflight its own execution dependencies before native install.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from pops.identity import canonical_bytes
 
 
 _REQUIRED = frozenset({"schema_version", "provider_id", "extension", "parallel_mode"})
-_MODES = frozenset({"serial", "collective", "per_rank"})
+_MODES = frozenset({"serial", "root", "collective", "per_rank"})
 
 
 def consumer_format_data(provider: Any, *, where: str = "output format") -> dict[str, Any]:
@@ -25,10 +26,11 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
     first, second = consumer_data(), consumer_data()
     if type(first) is not dict or type(second) is not dict or first != second:
         raise TypeError("%s consumer_data() must return one deterministic dict" % where)
-    if set(first) < _REQUIRED:
+    missing = _REQUIRED - set(first)
+    if missing:
         raise ValueError(
             "%s consumer_data() lacks required keys %s"
-            % (where, sorted(_REQUIRED - set(first)))
+            % (where, sorted(missing))
         )
     if first["schema_version"] != 1:
         raise ValueError("%s consumer_data schema_version must be 1" % where)
@@ -40,12 +42,14 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
             or extension.strip() != extension or "/" in extension:
         raise TypeError("%s extension must be a canonical file suffix" % where)
     if mode not in _MODES:
-        raise ValueError("%s parallel_mode must be serial, collective, or per_rank" % where)
+        raise ValueError(
+            "%s parallel_mode must be serial, root, collective, or per_rank" % where)
     # The canonical encoder refuses opaque provider state and proves deterministic serialization.
     canonical_bytes(first)
-    writer = writer_factory()
-    if not callable(getattr(writer, "prepare", None)):
-        raise TypeError("%s writer() must return an object implementing prepare()" % where)
+    # Do not instantiate the writer while projecting semantic data.  ``consumer_format_data`` is
+    # used in local constructors as well as distributed runtime paths; a rank-local factory failure
+    # here could let peers enter a collective writer.  Runtime preflight and publication construct
+    # the writer inside explicit all-rank error consensus before any backend collective begins.
     return first
 
 

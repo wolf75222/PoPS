@@ -50,7 +50,7 @@ static constexpr int kFullWidth = [] {
 static Real aux_member(const Aux& a, int idx) {
   Real v = 0;
 #define POPS_AUX_GET(name, ix) \
-  if ((idx) == (ix))          \
+  if ((idx) == (ix))           \
     v = a.name;
   POPS_AUX_FIELDS(POPS_AUX_GET)
 #undef POPS_AUX_GET
@@ -96,7 +96,7 @@ TEST(AuxSingleSource, DeviceAndHostMarshalingAgree) {
     host.phi = AUX[k];
     host.grad_x = AUX[nn + k];
     host.grad_y = AUX[2 * nn + k];
-#define POPS_AUX_MARSHAL(name, idx)    \
+#define POPS_AUX_MARSHAL(name, idx)   \
   if (AUX.size() >= ((idx) + 1) * nn) \
     host.name = AUX[(idx) * nn + k];
     POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
@@ -104,7 +104,8 @@ TEST(AuxSingleSource, DeviceAndHostMarshalingAgree) {
     const Aux dev = load_aux<kFullWidth>(a, 0, 0);
     EXPECT_TRUE(host.phi == dev.phi && host.grad_x == dev.grad_x && host.grad_y == dev.grad_y)
         << "host_base_egal_device";
-#define POPS_AUX_CHECK_EQ(name, idx) EXPECT_TRUE(host.name == dev.name) << "host_egal_device_" #name;
+#define POPS_AUX_CHECK_EQ(name, idx) \
+  EXPECT_TRUE(host.name == dev.name) << "host_egal_device_" #name;
     POPS_AUX_FIELDS(POPS_AUX_CHECK_EQ)
 #undef POPS_AUX_CHECK_EQ
   }

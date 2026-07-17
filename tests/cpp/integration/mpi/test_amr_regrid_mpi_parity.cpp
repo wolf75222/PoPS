@@ -192,5 +192,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
 }
 
 TEST(test_amr_regrid_mpi_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_regrid_mpi_parity, "test_amr_regrid_mpi_parity"), 0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&pops_run_test_amr_regrid_mpi_parity, "test_amr_regrid_mpi_parity"),
+      0);
 }

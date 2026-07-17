@@ -65,10 +65,27 @@ class _AmrSystemInstall(_AmrSystem):
         # and is refused explicitly -- the compiled artifact is bound exactly once.
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "_install_compiled")
-        instances = instances or {}
-        params = {} if params is None else params
-        aux = aux or {}
-        field_plans = field_plans or {}
+        if install_plan is not None:
+            from pops.runtime._bound_snapshot import _require_exact_install_inputs
+
+            install_plan = _require_exact_install_inputs(
+                self, compiled, instances, field_plans, aux, params, install_plan)
+            if bind_schema is not install_plan.artifact.bind_schema:
+                raise ValueError("AMR bind schema must be the exact value from the InstallPlan")
+            if bootstrap_plan is not install_plan.bootstrap_plan:
+                raise ValueError("AMR bootstrap plan must be the exact value from the InstallPlan")
+            if amr_transfer is not install_plan.amr_transfer:
+                raise ValueError("AMR transfer must be the exact value from the InstallPlan")
+            compiled = install_plan.artifact
+            instances = install_plan.instances
+            params = install_plan.params
+            aux = install_plan.aux
+            field_plans = install_plan.artifact.plan.field_plans
+        else:
+            instances = instances or {}
+            params = {} if params is None else params
+            aux = aux or {}
+            field_plans = field_plans or {}
 
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
@@ -144,19 +161,14 @@ class _AmrSystemInstall(_AmrSystem):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) INITIAL state: compatibility block values dispatch by validated shape; typed
-        # InitialCondition values below always carry the canonical full conservative state.
+        # (4) INITIAL state: AMR has one typed InitialConditionPlan authority. Uniform
+        # ``initial_state`` block tables never enter this installer.
         initial_rows = tuple(initial_values)
-        if initial_rows and any(spec.get("initial") is not None for spec in instances.values()):
-            raise ValueError("pops.bind: duplicate legacy and InitialConditionPlan state authorities")
-        for name, spec in instances.items():
-            initial = spec.get("initial")
-            if initial is not None:
-                shape = tuple(int(value) for value in getattr(initial, "shape", ()) or ())
-                if len(shape) == 3:
-                    self.set_conservative_state(name, initial)
-                else:
-                    self.set_density(name, initial)
+        if any(spec.get("initial") is not None for spec in instances.values()):
+            raise ValueError(
+                "AMR installation accepts no initial_state block table; use the resolved "
+                "InitialConditionPlan and initial_values"
+            )
         seen_initial = set()
         for subject_id, name, initial, space, centering, method, source in initial_rows:
             if method == "analytic":
@@ -244,7 +256,8 @@ class _AmrSystemInstall(_AmrSystem):
         # program/cache/ABI identity and transaction plan are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
         snapshot = build_amr_snapshot(
-            self, compiled, instances, field_plans, aux, params
+            self, compiled, instances, field_plans, aux, params,
+            install_plan=install_plan,
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 

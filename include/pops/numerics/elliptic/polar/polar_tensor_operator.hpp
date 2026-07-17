@@ -133,8 +133,8 @@ namespace detail {
 /// Cross terms absent (hrt=false) -> only the diagonal radial term contributes, bit-identical to the
 /// scalar polar stencil with a_rr=1.
 POPS_HD inline Real polar_radial_div(const ConstArray4& p, const ConstArray4& arr, bool hrt,
-                                    const ConstArray4& art, int i, int j, Real ri, Real rfm,
-                                    Real rfp, Real idr, Real idth) {
+                                     const ConstArray4& art, int i, int j, Real ri, Real rfm,
+                                     Real rfp, Real idr, Real idth) {
   // Face a_rr coefficients (arithmetic mean of the adjacent centers).
   const Real arr_p = Real(0.5) * (arr(i, j) + arr(i + 1, j));
   const Real arr_m = Real(0.5) * (arr(i, j) + arr(i - 1, j));
@@ -160,8 +160,8 @@ POPS_HD inline Real polar_radial_div(const ConstArray4& p, const ConstArray4& ar
 /// the azimuthal term. Face a_tt coefficients (arithmetic); metric 1/(r_i^2); cross term a_tr d_r phi
 /// at face j+-1/2 (d_r averaged over 4 corners).
 POPS_HD inline Real polar_azimuthal_div(const ConstArray4& p, const ConstArray4& att, bool htr,
-                                       const ConstArray4& atr, int i, int j, Real ri, Real idr,
-                                       Real idth) {
+                                        const ConstArray4& atr, int i, int j, Real ri, Real idr,
+                                        Real idth) {
   const Real inv_r2 = Real(1) / (ri * ri);
   const Real att_p = Real(0.5) * (att(i, j) + att(i, j + 1));
   const Real att_m = Real(0.5) * (att(i, j) + att(i, j - 1));
@@ -185,8 +185,8 @@ POPS_HD inline Real polar_azimuthal_div(const ConstArray4& p, const ConstArray4&
 /// Jacobi preconditioner. Cross terms EXCLUDED from the diagonal (they do not touch phi_{i,j}: the
 /// corners i+-1, j+-1 are off-diagonal). Returns the (NEGATIVE) value of the diagonal coefficient of
 /// L_int (sum of -face weights), like the scalar stencil (diag < 0).
-POPS_HD inline Real polar_diag(const ConstArray4& arr, const ConstArray4& att, int i, int j, Real ri,
-                              Real rfm, Real rfp, Real idr, Real idth) {
+POPS_HD inline Real polar_diag(const ConstArray4& arr, const ConstArray4& att, int i, int j,
+                               Real ri, Real rfm, Real rfp, Real idr, Real idth) {
   const Real arr_p = Real(0.5) * (arr(i, j) + arr(i + 1, j));
   const Real arr_m = Real(0.5) * (arr(i, j) + arr(i - 1, j));
   const Real att_p = Real(0.5) * (att(i, j) + att(i, j + 1));
@@ -418,9 +418,8 @@ class PolarTensorKrylovSolver {
   /// Returns the shared linear-solve report.
   SolveReport solve(Real rel_tol, int max_iters, Real abs_tol = Real(0)) {
     SolveReport res;
-    if (max_iters <= 0 || !(rel_tol > Real(0)) ||
-        !std::isfinite(static_cast<double>(rel_tol)) || abs_tol < Real(0) ||
-        !std::isfinite(static_cast<double>(abs_tol))) {
+    if (max_iters <= 0 || !(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) ||
+        abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol))) {
       res.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
       return res;
     }
@@ -467,8 +466,7 @@ class PolarTensorKrylovSolver {
       forcing_norm = l2_norm(rhs_);
     }
     const Real report_denom = forcing_norm > Real(0) ? forcing_norm : Real(1);
-    const Real stop =
-        (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
+    const Real stop = (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
     Real rnorm = l2_norm(r_);
     res.rel_residual = rnorm / report_denom;
     if (!std::isfinite(static_cast<double>(forcing_norm)) ||
@@ -488,8 +486,7 @@ class PolarTensorKrylovSolver {
 
     for (int k = 1; k <= max_iters; ++k) {
       const Real rho = dot(rhat_, r_);  // COLLECTIVE
-      if (!std::isfinite(static_cast<double>(rho)) ||
-          !std::isfinite(static_cast<double>(omega))) {
+      if (!std::isfinite(static_cast<double>(rho)) || !std::isfinite(static_cast<double>(omega))) {
         res.iters = k - 1;
         res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);
@@ -797,9 +794,8 @@ class PolarTensorKrylovSolver {
   /// Foextrap and pure-flux Robin (alpha=0) do not.
   void prepare_offset() {
     has_op_offset_ = detail::polar_tensor_has_affine_boundary_offset(bc_);
-    pin_gauge_ =
-        !detail::polar_tensor_boundary_fixes_gauge(bc_.xlo, bc_.xlo_alpha) &&
-        !detail::polar_tensor_boundary_fixes_gauge(bc_.xhi, bc_.xhi_alpha);
+    pin_gauge_ = !detail::polar_tensor_boundary_fixes_gauge(bc_.xlo, bc_.xlo_alpha) &&
+                 !detail::polar_tensor_boundary_fixes_gauge(bc_.xhi, bc_.xhi_alpha);
     if (has_op_offset_) {
       // Called on ALL ranks (apply_operator is a no-op on an empty rank except for the pairwise
       // fill_ghosts): no local_size() branch that would unpair the cross-rank halo exchange.

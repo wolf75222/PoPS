@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import heapq
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -29,6 +30,29 @@ def _index(value: Any, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise TypeError("%s must be an integer >= 0" % where)
     return value
+
+
+def _nonnegative_binary64_hex(value: Any, where: str) -> str:
+    """Normalize an exact finite binary64 value for identity-bearing manifests."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be a finite number >= 0" % where)
+    if isinstance(value, str):
+        try:
+            number = float.fromhex(value)
+        except (OverflowError, ValueError) as exc:
+            raise TypeError("%s must be a canonical float.hex() string" % where) from exc
+        if number.hex() != value:
+            raise ValueError("%s must be a canonical float.hex() string" % where)
+    elif isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except OverflowError as exc:
+            raise ValueError("%s must be a finite number >= 0" % where) from exc
+    else:
+        raise TypeError("%s must be a finite number >= 0" % where)
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError("%s must be a finite number >= 0" % where)
+    return number.hex()
 
 
 def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
@@ -60,6 +84,19 @@ def _provider_data(value: Any, *, where: str, methods: tuple[str, ...]) -> Mappi
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def validate_checkpoint_snapshot(value: Any, *, where: str = "checkpoint snapshot") -> Any:
+    """Require the compensating protocol used before and after checkpoint publication."""
+    missing = tuple(
+        name for name in ("discard", "rollback")
+        if not callable(getattr(value, name, None))
+    )
+    if missing:
+        raise TypeError(
+            "%s must implement compensating %s()"
+            % (where, "/".join(missing)))
+    return value
+
+
 class ConsumerKind(Enum):
     DIAGNOSTIC = "diagnostic"
     SCIENTIFIC_OUTPUT = "scientific_output"
@@ -69,6 +106,7 @@ class ConsumerKind(Enum):
 
 class ParallelMode(Enum):
     SERIAL = "serial"
+    ROOT = "root"
     COLLECTIVE = "collective"
     PER_RANK = "per_rank"
 
@@ -163,6 +201,130 @@ class ConsumerQuantity:
         return {**self._payload(), "identity": self.identity.to_data()}
 
 
+_DIAGNOSTIC_REDUCTIONS = frozenset({"sum", "abs_sum", "sum_sq", "min", "max", "abs_max"})
+_DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
+_DIAGNOSTIC_COLLECTIVES = {
+    "sum": "global_sum",
+    "abs_sum": "global_sum",
+    "sum_sq": "global_sum",
+    "min": "global_min",
+    "max": "global_max",
+    "abs_max": "global_max",
+}
+
+
+def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
+    """Validate and freeze the closed diagnostic reduction instruction schema."""
+    if not isinstance(value, Mapping) or set(value) != {
+            "schema_version", "role", "operations", "conservation"}:
+        raise TypeError("DiagnosticQuantity.execution has an unknown schema")
+    if value["schema_version"] != 1:
+        raise ValueError("DiagnosticQuantity.execution schema_version must be 1")
+    role = value["role"]
+    if role is not None:
+        _text(role, "DiagnosticQuantity.execution.role")
+    operations = value["operations"]
+    if not isinstance(operations, (tuple, list)) or not operations:
+        raise TypeError("DiagnosticQuantity.execution.operations must be a non-empty sequence")
+    normalized = []
+    for index, operation in enumerate(operations):
+        where = "DiagnosticQuantity.execution.operations[%d]" % index
+        if not isinstance(operation, Mapping) or set(operation) != {
+                "name", "reduction", "transform", "metric_weighted"}:
+            raise TypeError("%s has an unknown schema" % where)
+        name = _text(operation["name"], "%s.name" % where)
+        reduction = operation["reduction"]
+        if reduction not in _DIAGNOSTIC_REDUCTIONS:
+            raise ValueError("%s.reduction is not a supported native reduction" % where)
+        transform = operation["transform"]
+        if transform not in _DIAGNOSTIC_TRANSFORMS:
+            raise ValueError("%s.transform is not a supported scalar transform" % where)
+        weighted = operation["metric_weighted"]
+        if type(weighted) is not bool:
+            raise TypeError("%s.metric_weighted must be an exact bool" % where)
+        if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
+            raise ValueError("only additive diagnostic reductions may be metric-weighted")
+        normalized.append({
+            "name": name,
+            "reduction": reduction,
+            "transform": transform,
+            "metric_weighted": weighted,
+        })
+    if len({row["name"] for row in normalized}) != len(normalized):
+        raise ValueError("DiagnosticQuantity execution operation names must be unique")
+    conservation = value["conservation"]
+    normalized_conservation = None
+    if conservation is not None:
+        if not isinstance(conservation, Mapping) or set(conservation) != {"tolerance"}:
+            raise TypeError("DiagnosticQuantity.execution.conservation has an unknown schema")
+        tolerance = _nonnegative_binary64_hex(
+            conservation["tolerance"], "diagnostic conservation tolerance")
+        if len(normalized) != 1:
+            raise ValueError("a conservation check requires exactly one scalar operation")
+        normalized_conservation = {"tolerance": tolerance}
+    return freeze_data({
+        "schema_version": 1,
+        "role": role,
+        "operations": normalized,
+        "conservation": normalized_conservation,
+    }, "DiagnosticQuantity.execution")
+
+
+def diagnostic_collective_operations(execution: Any) -> tuple[str, ...]:
+    """Project one closed execution plan onto its exact global-reduction semantics."""
+    canonical = _diagnostic_execution(execution)
+    return tuple(sorted({
+        _DIAGNOSTIC_COLLECTIVES[operation["reduction"]]
+        for operation in canonical["operations"]
+    }))
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticQuantity:
+    """One exact typed native reduction embedded in a scientific-output consumer."""
+
+    handle: Handle
+    reference: Handle
+    runtime_resource: str
+    layout_id: str
+    levels: tuple[int, ...]
+    execution: Mapping[str, Any]
+    identity: Identity = field(init=False)
+
+    def __post_init__(self) -> None:
+        _exact_handle(self.handle, "diagnostic", "DiagnosticQuantity.handle")
+        _exact_handle(self.reference, "state", "DiagnosticQuantity.reference")
+        _text(self.runtime_resource, "DiagnosticQuantity.runtime_resource")
+        _text(self.layout_id, "DiagnosticQuantity.layout_id")
+        if not isinstance(self.levels, tuple):
+            raise TypeError("DiagnosticQuantity.levels must be a tuple")
+        levels = tuple(_index(value, "DiagnosticQuantity.levels[]") for value in self.levels)
+        if levels != tuple(sorted(set(levels))):
+            raise ValueError("DiagnosticQuantity.levels must be sorted and unique")
+        object.__setattr__(self, "levels", levels)
+        object.__setattr__(self, "execution", _diagnostic_execution(self.execution))
+        # Diagnostics are executable consumer quantities, not a second resource
+        # namespace.  ConsumerResourceBinding and ConsumerFieldResolution use the
+        # shared ``consumer-quantity`` domain to authenticate every field read;
+        # keeping a diagnostic-only domain here would make the exact value
+        # impossible to install without an alias or identity rewrite.
+        object.__setattr__(self, "identity", make_identity(
+            "consumer-quantity", self._payload()))
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "handle": self.handle.canonical_identity(),
+            "reference": self.reference.canonical_identity(),
+            "runtime_resource": self.runtime_resource,
+            "layout_id": self.layout_id,
+            "levels": list(self.levels),
+            "execution": thaw_data(self.execution),
+        }
+
+    def to_data(self) -> dict[str, Any]:
+        return {**self._payload(), "identity": self.identity.to_data()}
+
+
 @dataclass(frozen=True, slots=True)
 class ConsumerManifest:
     """Semantic declaration of one distinct ConsumerGraph node."""
@@ -175,6 +337,7 @@ class ConsumerManifest:
     output_format: Any
     parallel_mode: ParallelMode
     diagnostics: tuple[Any, ...] = ()
+    diagnostic_quantities: tuple[DiagnosticQuantity, ...] = ()
     dependencies: tuple[Handle, ...] = ()
     failure_action: ConsumerFailureAction = field(default_factory=FailRun)
     operation: Any = None
@@ -220,7 +383,7 @@ class ConsumerManifest:
             operation_data = _provider_data(
                 self.operation,
                 where="ConsumerManifest.operation",
-                methods=("snapshot", "write", "reopen", "restore"),
+                methods=("snapshot", "validate_snapshot", "write", "reopen", "restore"),
             )
         else:
             if self.output_format is not None or self.operation is not None:
@@ -253,6 +416,24 @@ class ConsumerManifest:
         if diagnostic_rows and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
             raise ValueError("only ScientificOutput can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
+        if not isinstance(self.diagnostic_quantities, tuple) or any(
+                type(value) is not DiagnosticQuantity
+                for value in self.diagnostic_quantities):
+            raise TypeError(
+                "ConsumerManifest.diagnostic_quantities must contain exact "
+                "DiagnosticQuantity values")
+        diagnostic_quantities = tuple(sorted(
+            self.diagnostic_quantities, key=lambda value: value.identity.token))
+        if len({value.identity for value in diagnostic_quantities}) \
+                != len(diagnostic_quantities):
+            raise ValueError("ConsumerManifest contains duplicate diagnostic quantities")
+        if len(diagnostic_quantities) != len(self.diagnostics):
+            raise ValueError(
+                "ConsumerManifest must lower every diagnostic descriptor exactly once")
+        if diagnostic_quantities and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
+            raise ValueError(
+                "only ScientificOutput can carry embedded diagnostic quantities")
+        object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")
         dependencies = tuple(sorted(
@@ -284,6 +465,8 @@ class ConsumerManifest:
             "operation": None if self.operation_data is None
             else thaw_data(self.operation_data),
             "diagnostics": [thaw_data(value) for value in self.diagnostics_data],
+            "diagnostic_quantities": [
+                value.to_data() for value in self.diagnostic_quantities],
             "parallel_mode": self.parallel_mode.value,
             "dependencies": [value.canonical_identity() for value in self.dependencies],
             "failure_action": self.failure_action.to_data(),
@@ -591,6 +774,7 @@ class ConsumerCursorSet:
 
 __all__ = [
     "ConsumerCursorSet", "ConsumerFailureAction", "ConsumerGraph", "ConsumerKind",
-    "ConsumerManifest", "ConsumerMoment", "ConsumerQuantity", "FailRun", "ParallelMode",
-    "Retry", "ScheduleCursor", "SkipSampleReported",
+    "ConsumerManifest", "ConsumerMoment", "ConsumerQuantity", "DiagnosticQuantity", "FailRun", "ParallelMode",
+    "Retry", "ScheduleCursor", "SkipSampleReported", "diagnostic_collective_operations",
+    "validate_checkpoint_snapshot",
 ]

@@ -173,25 +173,25 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   int observed_a_group = -1;
   int observed_b_group = -1;
   BlockClosures a_closures;
-  a_closures.rhs_at_point = [factory = a_context.boundary_field_registry, b_state,
-                             &observed_a_group](
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      MultiFab& U, MultiFab& R) {
-    observed_a_group = point.stage;
-    const auto fields = factory(point, U, nullptr, nullptr);
-    const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
-    R.set_val(observed);
-  };
+  a_closures.rhs_at_point =
+      [factory = a_context.boundary_field_registry, b_state, &observed_a_group](
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, MultiFab& R) {
+        observed_a_group = point.stage;
+        const auto fields = factory(point, U, nullptr, nullptr);
+        const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
+        R.set_val(observed);
+      };
   BlockClosures b_closures;
   b_closures.rhs_at_point = [&observed_b_group](
-      const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab&, MultiFab& R) {
+                                const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                MultiFab&, MultiFab& R) {
     observed_b_group = point.stage;
     R.set_val(Real(0));
   };
-  sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0,
-                    std::move(a_closures), {}, {}, 1, true, 1);
-  sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0,
-                    std::move(b_closures), {}, {}, 1, true, 1);
+  sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0, std::move(a_closures), {}, {}, 1,
+                    true, 1);
+  sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0, std::move(b_closures), {}, {}, 1,
+                    true, 1);
   sim.block_state(0).set_val(Real(1));
   sim.block_state(1).set_val(Real(2));
   MultiFab stage_a = sim.block_state(0);
@@ -205,18 +205,15 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   ctx.configure_primary_clock("clock.stage");
   ctx.begin_step(0.1);
   ctx.set_stage_time(1, 2);
-  ctx.rhs_group(kGroupIdentity,
-                {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}});
+  ctx.rhs_group(kGroupIdentity, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}});
 
   EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(9));
   EXPECT_EQ(sim.block_state(1).fab(0).const_array()(0, 0, 0), Real(2));
   EXPECT_EQ(observed_a_group, kGroupIdentity);
   EXPECT_EQ(observed_b_group, kGroupIdentity);
   EXPECT_NE(observed_a_group, 11) << "the group point must not borrow the first rate identity";
-  EXPECT_THROW(
-      ctx.rhs_group(11,
-                    {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
-      std::invalid_argument)
+  EXPECT_THROW(ctx.rhs_group(11, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
+               std::invalid_argument)
       << "an atomic group identity must never alias one of its member rate nodes";
 }
 
@@ -369,11 +366,16 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   ctx.register_history("h", 1);
   MultiFab hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
-  ctx.store_history("h", hv);
+  ctx.store_history("h", hv, 0);  // owner is a Program block, never component zero
   {
-    MultiFab& r = ctx.history("h", 1);  // cold-start fill -> lag 1 == the stored value
+    MultiFab& r = ctx.history("h", 1, 0);  // cold-start fill -> lag 1 == the stored value
+    EXPECT_TRUE(r.ncomp() == U.ncomp()) << "owner-qualified history preserves the whole field";
     EXPECT_TRUE(std::fabs(ctx.sum_component(r, 0) - Real(3) * n * n) < 1e-9) << "history lag1 read";
   }
+  MultiFab& scalar_history = ctx.history_zero_start("scalar_h", 1, 1, 0);
+  EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar MultiFab";
+  EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
+      << "owner-qualified zero-start history preserves its declared cold start";
   ctx.rotate_histories();  // no throw
 
   // diagnostics: record_scalar -> program_diagnostic round-trip.

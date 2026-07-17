@@ -36,7 +36,9 @@ static constexpr double kPi = 3.14159265358979323846;
 static double u_exact(double x, double y) {
   return std::sin(3.0 * kPi * x) * std::sin(3.0 * kPi * y);
 }
-static double f_rhs(double x, double y) { return -18.0 * kPi * kPi * u_exact(x, y); }
+static double f_rhs(double x, double y) {
+  return -18.0 * kPi * kPi * u_exact(x, y);
+}
 
 static void fill_f(MultiFab& f, const Geometry& g) {
   for (int li = 0; li < f.local_size(); ++li) {
@@ -54,9 +56,8 @@ static void fill_screened_f(MultiFab& f, const Geometry& g, Real reaction) {
     const Box2D b = f.box(li);
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) =
-            -(Real(18) * Real(kPi) * Real(kPi) + reaction) *
-            Real(u_exact(g.x_cell(i), g.y_cell(j)));
+        a(i, j, 0) = -(Real(18) * Real(kPi) * Real(kPi) + reaction) *
+                     Real(u_exact(g.x_cell(i), g.y_cell(j)));
   }
 }
 
@@ -96,7 +97,9 @@ static double fine_checksum(MultiFab& phi) {
   return total;
 }
 
-static double spread(double x) { return all_reduce_max(x) - (-all_reduce_max(-x)); }
+static double spread(double x) {
+  return all_reduce_max(x) - (-all_reduce_max(-x));
+}
 
 static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
   comm_init(&argc, &argv);
@@ -131,11 +134,13 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
       std::printf("FAC2 np=%d rfac=%.17e csum_c=%.17e csum_f=%.17e spread=%.3e\n", np, rf, cc, fc,
                   sp);
     if (!(std::isfinite(rf) && rf < 1e-2)) {
-      if (me == 0) std::printf("FAIL 2-level not converged\n");
+      if (me == 0)
+        std::printf("FAIL 2-level not converged\n");
       ++fails;
     }
     if (!(sp == 0.0)) {
-      if (me == 0) std::printf("FAIL 2-level not bit-identical cross-rank\n");
+      if (me == 0)
+        std::printf("FAIL 2-level not bit-identical cross-rank\n");
       ++fails;
     }
   }
@@ -159,11 +164,13 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
       std::printf("FAC3 np=%d rfac=%.17e csum_c=%.17e csum_1=%.17e csum_2=%.17e spread=%.3e\n", np,
                   rf, cc, f1, f2, sp);
     if (!(std::isfinite(rf) && rf < 1e-2)) {
-      if (me == 0) std::printf("FAIL 3-level not converged\n");
+      if (me == 0)
+        std::printf("FAIL 3-level not converged\n");
       ++fails;
     }
     if (!(sp == 0.0)) {
-      if (me == 0) std::printf("FAIL 3-level not bit-identical cross-rank\n");
+      if (me == 0)
+        std::printf("FAIL 3-level not bit-identical cross-rank\n");
       ++fails;
     }
   }
@@ -185,11 +192,13 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
       std::printf("FACADJ np=%d rfac=%.17e csum_c=%.17e csum_f=%.17e spread=%.3e\n", np, rf, cc, fc,
                   sp);
     if (!(std::isfinite(rf) && rf < 1e-2)) {
-      if (me == 0) std::printf("FAIL adjacent not converged\n");
+      if (me == 0)
+        std::printf("FAIL adjacent not converged\n");
       ++fails;
     }
     if (!(sp == 0.0)) {
-      if (me == 0) std::printf("FAIL adjacent not bit-identical cross-rank\n");
+      if (me == 0)
+        std::printf("FAIL adjacent not bit-identical cross-rank\n");
       ++fails;
     }
   }
@@ -207,22 +216,25 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     const double cc = coarse_checksum(fac), fc = fine_checksum(fac.phi_fine());
     const double sp = std::fmax(spread(cc), spread(rf));
     if (me == 0)
-      std::printf("FACSCREEN np=%d rfac=%.17e csum_c=%.17e csum_f=%.17e spread=%.3e\n",
-                  np, rf, cc, fc, sp);
+      std::printf("FACSCREEN np=%d rfac=%.17e csum_c=%.17e csum_f=%.17e spread=%.3e\n", np, rf, cc,
+                  fc, sp);
     if (!(std::isfinite(rf) && rf < 1e-2)) {
-      if (me == 0) std::printf("FAIL screened 2-level not converged\n");
+      if (me == 0)
+        std::printf("FAIL screened 2-level not converged\n");
       ++fails;
     }
     if (!(sp == 0.0)) {
-      if (me == 0) std::printf("FAIL screened 2-level not bit-identical cross-rank\n");
+      if (me == 0)
+        std::printf("FAIL screened 2-level not bit-identical cross-rank\n");
       ++fails;
     }
   }
 
   if (me == 0 && fails == 0)
-    std::printf("OK test_mpi_composite_fac np=%d (replicated coarse + distributed fine, "
-                "bit-identical cross-rank)\n",
-                np);
+    std::printf(
+        "OK test_mpi_composite_fac np=%d (replicated coarse + distributed fine, "
+        "bit-identical cross-rank)\n",
+        np);
   comm_finalize();
   return fails ? 1 : 0;
 }

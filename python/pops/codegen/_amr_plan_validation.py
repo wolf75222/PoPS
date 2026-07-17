@@ -81,10 +81,25 @@ def validate_amr_authorities(plan: Any) -> None:
         "clustering": interfaces.Clustering.to_data(),
         "tagger": interfaces.Tagger.to_data(),
     }
-    component_inputs = {
-        component.component_manifest.component_id: component.to_data()
-        for component in plan.component_inputs
-    }
+    # Component inputs deliberately admit both source authorities and already-compiled
+    # artifacts.  Their representations differ, but both expose the same authenticated
+    # projection protocol.  Index that projection instead of reaching through the source-only
+    # ``ComponentManifest`` shape: unrelated compiled consumers (for example a Writer) must not
+    # make an otherwise builtin AMR plan impossible to validate.
+    component_inputs = {}
+    for component in plan.component_inputs:
+        projection = getattr(component, "to_data", None)
+        if not callable(projection):
+            raise TypeError("AMR component input lacks its authenticated data projection")
+        component_data = projection()
+        if not isinstance(component_data, Mapping):
+            raise TypeError("AMR component input projection must be a canonical mapping")
+        component_id = component_data.get("component_id")
+        if not isinstance(component_id, str) or not component_id:
+            raise TypeError("AMR component input projection has no canonical component_id")
+        if component_id in component_inputs:
+            raise ValueError("AMR component inputs contain a duplicate component authority")
+        component_inputs[component_id] = dict(component_data)
     for slot, binding in providers.items():
         if not isinstance(binding, Mapping) or binding.get("schema_version") != 1 \
                 or not isinstance(binding.get("provider_identity"), str) \

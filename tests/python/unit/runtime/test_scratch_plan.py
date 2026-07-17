@@ -16,6 +16,7 @@ compile, NO .so on disk -- and assert that
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
 ``buffer_reuse_report`` (the same liveness ADC-465 ships). Pytest + __main__ guard (CI runs
 ``python3 <file>``)."""
+from tests.python.support.requirements import require_native_or_skip
 import json
 import os
 import sys
@@ -27,8 +28,7 @@ try:
     from pops.codegen.scratch_plan import ScratchPlan, build_scratch_plan
     from pops.codegen.loader import CompiledModel, CompiledProblem
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
-    print("skip test_scratch_plan (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_scratch_plan (pops unavailable: %s)' % exc)
 
 from tests.python.unit.runtime._typed_program import (
     solve_field,

@@ -26,8 +26,7 @@ struct RegLite {
 
 TEST(test_cf_interface, Runs) {
   // --- SubcyclingSchedule : cadence Berger-Oliger ratio 2 ---
-  SubcyclingSchedule s2(
-      0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
+  SubcyclingSchedule s2(0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
   EXPECT_EQ(s2.count(), 2) << "sched_count";
   EXPECT_EQ(s2.dt_sub(Real(1)), Real(1) / 2) << "sched_dt_sub";  // bit-identique a dt / r
   EXPECT_TRUE(s2.frac(0) == Real(0) / 2 && s2.frac(1) == Real(1) / 2) << "sched_frac";

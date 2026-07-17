@@ -3,7 +3,7 @@
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>  // mf_advance_faces, mf_apply_source*, mf_average_down, fill_cf_ghost_cell, mf_fill_fine_ghosts_t
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, FluxRegister, CoverageMask, SubcyclingSchedule, CoarseFineInterface, fill_periodic_local, mf_fill_fine_ghosts_multi, mf_average_down_multi
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>  // AmrLevelMP, RegMP, mf_find_box, coarsen_grown, mf_fill_fine_ghosts_mb, mf_average_down_mb, amr_step_2level_multipatch, detail::subcycle_level_mp, detail::amr_step_multilevel_multipatch
-#include <pops/numerics/time/amr/advance/amr_advance.hpp>     // OwnershipPolicy, LevelHierarchy, advance_amr
+#include <pops/numerics/time/amr/advance/amr_advance.hpp>  // OwnershipPolicy, LevelHierarchy, advance_amr
 
 /// @file
 /// @brief Umbrella for the AMR MultiFab stack: includes the numerics/time sub-headers in

@@ -102,8 +102,7 @@ TEST(test_regrid, Runs) {
 }
 
 TEST(test_regrid, RejectsAProviderLayoutThatBreaksProperNesting) {
-  const BoxArray parents(std::vector<Box2D>{
-      Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
+  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
   // Coarse footprint [14..17] crosses the parent-patch join. No single parent can supply the
   // resolved one-cell stencil halo, even though the two parent patches are adjacent.
   const BoxArray invalid(std::vector<Box2D>{Box2D{{28, 16}, {35, 31}}});
@@ -114,8 +113,7 @@ TEST(test_regrid, RejectsAProviderLayoutThatBreaksProperNesting) {
 
 TEST(test_regrid, ThirdLevelClusteringStaysInsideOneParentPatch) {
   const Box2D parent_domain = Box2D::from_extents(32, 32);
-  const BoxArray parents(std::vector<Box2D>{
-      Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
+  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
   TagBox tags(parent_domain);
   // Tags touch both sides of the join. A domain-wide cluster would bridge the patches; the
   // provider must instead return independently nested children.
@@ -129,6 +127,6 @@ TEST(test_regrid, ThirdLevelClusteringStaysInsideOneParentPatch) {
 
   ASSERT_GT(children.size(), 0);
   EXPECT_EQ(mapping.size(), children.size());
-  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
-      children, parents, /*refinement_ratio=*/2, /*margin=*/1));
+  EXPECT_NO_THROW(
+      validate_fine_layout_proper_nesting(children, parents, /*refinement_ratio=*/2, /*margin=*/1));
 }

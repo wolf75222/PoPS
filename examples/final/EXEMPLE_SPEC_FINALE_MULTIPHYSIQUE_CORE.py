@@ -41,6 +41,39 @@ DEFAULT_CELLS = 8
 DEFAULT_DT = 1.0e-3
 
 
+def _native_output_mode() -> Any:
+    """Return the portable shared-file topology for the loaded native backend."""
+
+    from pops.output import ParallelMode
+    from pops.runtime_environment import runtime_environment_report
+
+    communicator = runtime_environment_report().get("communicator")
+    if communicator == "serial":
+        return ParallelMode.SERIAL
+    if communicator == "MPI_COMM_WORLD":
+        return ParallelMode.ROOT
+    raise RuntimeError(
+        "the final multiphysics example requires a proved serial or MPI_COMM_WORLD backend"
+    )
+
+
+def _bind_artifact(artifact: Any, **inputs: Any) -> Any:
+    """Bind against the exact serial or native MPI world authority compiled into the artifact."""
+
+    communicator = artifact.platform_manifest.communicator.require(
+        "multiphysics artifact communicator"
+    )
+    if communicator == "serial":
+        return pops.bind(artifact, **inputs)
+    if communicator == "MPI_COMM_WORLD":
+        return pops.bind(
+            artifact,
+            resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)},
+            **inputs,
+        )
+    raise RuntimeError("unsupported multiphysics artifact communicator %r" % communicator)
+
+
 @dataclass(frozen=True, slots=True)
 class MultiphysicsAuthoring:
     """Typed declarations retained across every public lifecycle phase."""
@@ -102,7 +135,7 @@ class ExecutionEvidence:
     restarted: RuntimeSnapshot
 
 
-def build_authoring() -> MultiphysicsAuthoring:
+def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
     """Build the complete two-state transactional Program and accepted-side-effect graph."""
 
     frame = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
@@ -307,18 +340,23 @@ def build_authoring() -> MultiphysicsAuthoring:
     program.step_strategy(FixedDt(DEFAULT_DT))
     case.program(program)
 
-    from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
+    from pops.output import (
+        Checkpoint, ConsumerGraph, HDF5, ParallelMode, ParaView, ScientificOutput,
+    )
     from pops.time import every, on_end, on_start
+
+    if output_mode is None:
+        output_mode = ParallelMode.SERIAL
 
     case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
-            format=ParaView(),
+            format=ParaView(mode=output_mode),
             schedule=on_start(clock=program.clock),
             fields=(electron_state, ion_state),
             target="visualization/two_fluid.vtu",
         ),
         ScientificOutput(
-            format=HDF5(parallel=False),
+            format=HDF5(mode=output_mode),
             schedule=on_end(clock=program.clock),
             fields=(electron_state, ion_state),
             target="state/two_fluid.h5",
@@ -350,7 +388,9 @@ def build_authoring() -> MultiphysicsAuthoring:
     )
 
 
-def build_final_case(*, cells: int = DEFAULT_CELLS) -> FinalMultiphysicsCase:
+def build_final_case(
+    *, cells: int = DEFAULT_CELLS, output_mode: Any = None,
+) -> FinalMultiphysicsCase:
     """Validate all declarations, then assign every block/state/field exactly once."""
 
     if isinstance(cells, bool) or not isinstance(cells, int) or cells < 4:
@@ -358,7 +398,7 @@ def build_final_case(*, cells: int = DEFAULT_CELLS) -> FinalMultiphysicsCase:
     from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
     from pops.layouts import Uniform
 
-    authoring = build_authoring()
+    authoring = build_authoring(output_mode=output_mode)
     pops.validate(authoring.case)
     subjects = authoring.case.layout_subjects()
     frame = authoring.model.frame
@@ -410,7 +450,7 @@ def compile_final_case(*, cells: int = DEFAULT_CELLS) -> tuple[FinalMultiphysics
 
     from pops.codegen import Production
 
-    target = build_final_case(cells=cells)
+    target = build_final_case(cells=cells, output_mode=_native_output_mode())
     resolved = pops.resolve(
         target.authoring.case,
         layout=target.layout_plan,
@@ -490,7 +530,7 @@ def run_and_restart(
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     _target, artifact = compile_final_case(cells=cells)
-    simulation = pops.bind(
+    simulation = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
         aux=build_initial_fields(cells=cells),
@@ -511,7 +551,7 @@ def run_and_restart(
     checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
     accepted = _snapshot(simulation)
 
-    resumed = pops.bind(
+    resumed = _bind_artifact(
         artifact,
         initial_state=build_initial_state(cells=cells),
         aux=build_initial_fields(cells=cells),

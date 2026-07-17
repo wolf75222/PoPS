@@ -67,7 +67,7 @@ concept PolarHasSource = requires(const M m, const typename M::State u, const Au
 /// if constexpr guard: zero extra codegen for bricks without a source. POPS_HD.
 template <class Model>
 POPS_HD inline typename Model::State polar_source(const Model& m, const typename Model::State& u,
-                                                 const Aux& a) {
+                                                  const Aux& a) {
   if constexpr (PolarHasSource<Model>)
     return m.source(u, a);
   else
@@ -91,7 +91,7 @@ concept PolarHasGeomSource = requires(const M m, const typename M::State u, Real
 /// ExB path stays strictly bit-identical). POPS_HD. r > 0 (annulus) enforced upstream.
 template <class Model>
 POPS_HD inline typename Model::State polar_geom_source(const Model& m,
-                                                      const typename Model::State& u, Real r) {
+                                                       const typename Model::State& u, Real r) {
   if constexpr (PolarHasGeomSource<Model>)
     return m.polar_geom_source(u, r);
   else

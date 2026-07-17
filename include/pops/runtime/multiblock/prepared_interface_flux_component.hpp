@@ -36,15 +36,14 @@ struct PreparedInterfaceFluxSpec {
 /// one canonical batch and writes the one shared outward-left flux; neither block owns a callback.
 class PreparedInterfaceFluxComponent final {
  public:
-  PreparedInterfaceFluxComponent(
-      PreparedInterfaceFluxSpec spec,
-      std::shared_ptr<component::LoadedComponent> component)
+  PreparedInterfaceFluxComponent(PreparedInterfaceFluxSpec spec,
+                                 std::shared_ptr<component::LoadedComponent> component)
       : spec_(std::move(spec)), component_(std::move(component)) {
     validate_();
     const PopsExecutionContextV1 execution = spec_.execution->view();
-    state_ = component_->prepared_state(
-        POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, spec_.interface_version, execution,
-        spec_.parameters_json, spec_.target_json);
+    state_ =
+        component_->prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, spec_.interface_version,
+                                   execution, spec_.parameters_json, spec_.target_json);
   }
 
   void evaluate(const BoundaryEvaluationPoint& point, const InterfaceFluxBatch& batch) const {
@@ -56,44 +55,51 @@ class PreparedInterfaceFluxComponent final {
     const auto faces = static_cast<std::size_t>(batch.face_count);
     const auto components = static_cast<std::size_t>(batch.component_count);
     const std::string& patch = spec_.interface_identity;
-    const PopsConstFieldViewV1 left = const_view_(
-        batch.left_state, faces, components, spec_.canonical_layout_identity, patch);
-    const PopsConstFieldViewV1 right = const_view_(
-        batch.right_state, faces, components, spec_.canonical_layout_identity, patch);
+    const PopsConstFieldViewV1 left =
+        const_view_(batch.left_state, faces, components, spec_.canonical_layout_identity, patch);
+    const PopsConstFieldViewV1 right =
+        const_view_(batch.right_state, faces, components, spec_.canonical_layout_identity, patch);
     std::vector<double> normals(faces * 2u, 0.0);
     for (std::size_t face = 0; face < faces; ++face)
       normals[face * 2u + static_cast<std::size_t>(spec_.normal_axis)] =
           static_cast<double>(spec_.outward_sign);
-    const PopsConstFieldViewV1 normal_view = const_view_(
-        normals.data(), faces, 2u, spec_.canonical_layout_identity, patch);
+    const PopsConstFieldViewV1 normal_view =
+        const_view_(normals.data(), faces, 2u, spec_.canonical_layout_identity, patch);
     std::vector<double> measures(faces, spec_.face_measure);
-    const PopsLogicalTimeV1 time{
-        sizeof(PopsLogicalTimeV1), point.clock.c_str(), point.tick, point.level,
-        point.substep, point.stage, point.stage_fraction.numerator,
-        point.stage_fraction.denominator, point.dt, point.physical_time};
-    const PopsNumericalFluxRequestV1 request{
-        sizeof(PopsNumericalFluxRequestV1), left, right, normal_view, measures.data(),
-        time, spec_.execution->view()};
+    const PopsLogicalTimeV1 time{sizeof(PopsLogicalTimeV1),
+                                 point.clock.c_str(),
+                                 point.tick,
+                                 point.level,
+                                 point.substep,
+                                 point.stage,
+                                 point.stage_fraction.numerator,
+                                 point.stage_fraction.denominator,
+                                 point.dt,
+                                 point.physical_time};
+    const PopsNumericalFluxRequestV1 request{sizeof(PopsNumericalFluxRequestV1),
+                                             left,
+                                             right,
+                                             normal_view,
+                                             measures.data(),
+                                             time,
+                                             spec_.execution->view()};
     std::vector<double> stability(faces, std::numeric_limits<double>::quiet_NaN());
     std::vector<PopsComponentActionV1> actions(faces, POPS_COMPONENT_CONTINUE_V1);
     PopsNumericalFluxResultV1 result{
         sizeof(PopsNumericalFluxResultV1),
-        field_view_(batch.shared_flux, faces, components,
-                    spec_.canonical_layout_identity, patch),
-        stability.data(), actions.data(),
+        field_view_(batch.shared_flux, faces, components, spec_.canonical_layout_identity, patch),
+        stability.data(),
+        actions.data(),
         {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
     const auto& api = component_->table<PopsNumericalFluxApiV1>(
         POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, spec_.interface_version);
     const int code = component::evaluate_faces(api, state_, request, result);
-    if (code != 0 || result.status.code != 0 ||
-        result.status.action != POPS_COMPONENT_CONTINUE_V1)
-      throw std::runtime_error(
-          result.status.reason == nullptr ? "native NumericalFlux failed"
-                                          : result.status.reason);
+    if (code != 0 || result.status.code != 0 || result.status.action != POPS_COMPONENT_CONTINUE_V1)
+      throw std::runtime_error(result.status.reason == nullptr ? "native NumericalFlux failed"
+                                                               : result.status.reason);
     for (std::size_t face = 0; face < faces; ++face) {
       if (actions[face] != POPS_COMPONENT_CONTINUE_V1)
-        throw std::runtime_error(
-            "native NumericalFlux returned a non-continue per-face action");
+        throw std::runtime_error("native NumericalFlux returned a non-continue per-face action");
       if (!std::isfinite(stability[face]) || stability[face] < 0.0)
         throw std::runtime_error(
             "native NumericalFlux returned an invalid per-face stability bound");
@@ -105,28 +111,45 @@ class PreparedInterfaceFluxComponent final {
   }
 
  private:
-  static PopsConstFieldViewV1 const_view_(
-      const void* data, std::size_t faces, std::size_t components,
-      const std::string& layout, const std::string& patch) {
-    return {
-        sizeof(PopsConstFieldViewV1), data, 2, {faces, 1, 1},
-        {static_cast<std::ptrdiff_t>(components),
-         static_cast<std::ptrdiff_t>(components), 0},
-        components, 1, POPS_FIELD_CENTERING_CELL_V1, 0, {0, 0, 0}, {0, 0, 0},
-        POPS_SCALAR_FLOAT64_V1, POPS_MEMORY_SPACE_HOST_V1, layout.c_str(), patch.c_str(),
-        POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+  static PopsConstFieldViewV1 const_view_(const void* data, std::size_t faces,
+                                          std::size_t components, const std::string& layout,
+                                          const std::string& patch) {
+    return {sizeof(PopsConstFieldViewV1),
+            data,
+            2,
+            {faces, 1, 1},
+            {static_cast<std::ptrdiff_t>(components), static_cast<std::ptrdiff_t>(components), 0},
+            components,
+            1,
+            POPS_FIELD_CENTERING_CELL_V1,
+            0,
+            {0, 0, 0},
+            {0, 0, 0},
+            POPS_SCALAR_FLOAT64_V1,
+            POPS_MEMORY_SPACE_HOST_V1,
+            layout.c_str(),
+            patch.c_str(),
+            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
   }
 
-  static PopsFieldViewV1 field_view_(
-      void* data, std::size_t faces, std::size_t components,
-      const std::string& layout, const std::string& patch) {
-    return {
-        sizeof(PopsFieldViewV1), data, 2, {faces, 1, 1},
-        {static_cast<std::ptrdiff_t>(components),
-         static_cast<std::ptrdiff_t>(components), 0},
-        components, 1, POPS_FIELD_CENTERING_CELL_V1, 0, {0, 0, 0}, {0, 0, 0},
-        POPS_SCALAR_FLOAT64_V1, POPS_MEMORY_SPACE_HOST_V1, layout.c_str(), patch.c_str(),
-        POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+  static PopsFieldViewV1 field_view_(void* data, std::size_t faces, std::size_t components,
+                                     const std::string& layout, const std::string& patch) {
+    return {sizeof(PopsFieldViewV1),
+            data,
+            2,
+            {faces, 1, 1},
+            {static_cast<std::ptrdiff_t>(components), static_cast<std::ptrdiff_t>(components), 0},
+            components,
+            1,
+            POPS_FIELD_CENTERING_CELL_V1,
+            0,
+            {0, 0, 0},
+            {0, 0, 0},
+            POPS_SCALAR_FLOAT64_V1,
+            POPS_MEMORY_SPACE_HOST_V1,
+            layout.c_str(),
+            patch.c_str(),
+            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
   }
 
   void validate_() const {
@@ -134,14 +157,12 @@ class PreparedInterfaceFluxComponent final {
         spec_.component_id.empty() || spec_.manifest_identity.empty() ||
         spec_.canonical_layout_identity.empty() || spec_.interface_version != 1 ||
         spec_.normal_axis < 0 || spec_.normal_axis >= 2 ||
-        (spec_.outward_sign != -1 && spec_.outward_sign != 1) ||
-        !(spec_.face_measure > 0.0))
+        (spec_.outward_sign != -1 && spec_.outward_sign != 1) || !(spec_.face_measure > 0.0))
       throw std::invalid_argument("prepared NumericalFlux specification is incomplete");
     component::validate_execution_context(spec_.execution->view());
     const auto& api = component_->api();
     if (api.component_id == nullptr || api.manifest_identity == nullptr ||
-        spec_.component_id != api.component_id ||
-        spec_.manifest_identity != api.manifest_identity)
+        spec_.component_id != api.component_id || spec_.manifest_identity != api.manifest_identity)
       throw std::invalid_argument("prepared NumericalFlux changed native component identity");
     const auto& table = component_->table<PopsNumericalFluxApiV1>(
         POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, spec_.interface_version);

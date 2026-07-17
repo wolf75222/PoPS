@@ -36,6 +36,8 @@ On verifie :
  (7) CSE : deux eig_all_real de la MEME matrice mais im_tol DIFFERENT ne partagent PAS la locale (la
      cle CSE inclut im_tol) ; im_tol identique -> partagee.
 """
+
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -52,11 +54,17 @@ from pops._ir.expr import Const, Var
 from pops._ir.ops import abs_, eig_all_real
 from pops._ir.visitors import _key
 from pops.physics._model import HyperbolicModel
-
-dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, eig_all_real=eig_all_real, _key=_key,
-                      HyperbolicModel=HyperbolicModel)
-
 from tests.python.support.requirements import repo_include
+
+dsl = SimpleNamespace(
+    Const=Const,
+    Var=Var,
+    abs_=abs_,
+    eig_all_real=eig_all_real,
+    _key=_key,
+    HyperbolicModel=HyperbolicModel,
+)
+
 INCLUDE = repo_include()
 TOL_EVAL = 1e-12
 TOL_CPP = 1e-10
@@ -88,18 +96,26 @@ def test_eval_real_vs_complex():
     # paire complexe : rotation [[c,-s],[s,c]] -> VP c +- i s, |Im| = |s| > 0 -> complexe.
     c, s = 0.3, 0.8
     rot = [[dsl.Const(c), dsl.Const(-s)], [dsl.Const(s), dsl.Const(c)]]
-    chk(float(dsl.eig_all_real(rot).eval({})) == 0.0,
-        "scalaire : rotation (VP complexes) -> eig_all_real = 0.0")
+    chk(
+        float(dsl.eig_all_real(rot).eval({})) == 0.0,
+        "scalaire : rotation (VP complexes) -> eig_all_real = 0.0",
+    )
     # spectre reel : matrice symetrique 2x2 -> VP reelles -> 1.0.
     sym = [[dsl.Const(2.0), dsl.Const(1.0)], [dsl.Const(1.0), dsl.Const(3.0)]]
-    chk(float(dsl.eig_all_real(sym).eval({})) == 1.0,
-        "scalaire : symetrique (VP reelles) -> eig_all_real = 1.0")
+    chk(
+        float(dsl.eig_all_real(sym).eval({})) == 1.0,
+        "scalaire : symetrique (VP reelles) -> eig_all_real = 1.0",
+    )
     # spectre reel : triangulaire 3x3 (VP = diagonale, reelles) -> 1.0.
-    tri = [[dsl.Const(1.0), dsl.Const(5.0), dsl.Const(-2.0)],
-           [dsl.Const(0.0), dsl.Const(2.0), dsl.Const(4.0)],
-           [dsl.Const(0.0), dsl.Const(0.0), dsl.Const(3.0)]]
-    chk(float(dsl.eig_all_real(tri).eval({})) == 1.0,
-        "scalaire : triangulaire 3x3 (VP reelles) -> eig_all_real = 1.0")
+    tri = [
+        [dsl.Const(1.0), dsl.Const(5.0), dsl.Const(-2.0)],
+        [dsl.Const(0.0), dsl.Const(2.0), dsl.Const(4.0)],
+        [dsl.Const(0.0), dsl.Const(0.0), dsl.Const(3.0)],
+    ]
+    chk(
+        float(dsl.eig_all_real(tri).eval({})) == 1.0,
+        "scalaire : triangulaire 3x3 (VP reelles) -> eig_all_real = 1.0",
+    )
 
     # champ vectorise : [[q0,-q1],[q1,q0]] -> VP q0 +- i|q1| ; reel ssi |q1| <= im_tol*max(|q0|,1).
     # q0 aleatoire (exerce le scale = max(|q0|,1) par cellule) ; q1 alterne minuscule (reel a coup sur)
@@ -109,31 +125,43 @@ def test_eval_real_vs_complex():
     q0 = rng.standard_normal(n)
     q1 = np.where(np.arange(n) % 2 == 0, 1e-9, 10.0 * (1.0 + np.abs(q0)))
     env = {"q0": q0, "q1": q1}
-    rows = [[dsl.Var("q0", "cons"), -dsl.Var("q1", "cons")],
-            [dsl.Var("q1", "cons"), dsl.Var("q0", "cons")]]
+    rows = [
+        [dsl.Var("q0", "cons"), -dsl.Var("q1", "cons")],
+        [dsl.Var("q1", "cons"), dsl.Var("q0", "cons")],
+    ]
     got = dsl.eig_all_real(rows, im_tol=im_tol).eval(env)
     M = np.zeros((n, 2, 2))
-    M[:, 0, 0] = q0; M[:, 0, 1] = -q1; M[:, 1, 0] = q1; M[:, 1, 1] = q0
+    M[:, 0, 0] = q0
+    M[:, 0, 1] = -q1
+    M[:, 1, 0] = q1
+    M[:, 1, 1] = q0
     ref = ref_all_real(M, im_tol)
-    chk(np.array_equal(got, ref),
-        "champ 2x2 : eig_all_real == reference numpy all_real (n=%d)" % n)
-    chk(np.any(got == 0.0) and np.any(got == 1.0),
-        "champ : les deux verdicts (reel / complexe) apparaissent")
+    chk(np.array_equal(got, ref), "champ 2x2 : eig_all_real == reference numpy all_real (n=%d)" % n)
+    chk(
+        np.any(got == 0.0) and np.any(got == 1.0),
+        "champ : les deux verdicts (reel / complexe) apparaissent",
+    )
 
 
 def test_im_tol_relative_asymmetry():
     print("== (2) tolerance RELATIVE + parametre im_tol (asymetrie all_real) ==")
     # grande echelle : VP 1e8 +- i, |Im| = 1 <= 1e-5*1e8 = 1e3 -> rendu REEL par design.
     big = [[dsl.Const(1e8), dsl.Const(-1.0)], [dsl.Const(1.0), dsl.Const(1e8)]]
-    chk(float(dsl.eig_all_real(big).eval({})) == 1.0,
-        "1e8 +- i au seuil 1e-5 : paire complexe sous im_tol*scale -> reel (asymetrie)")
+    chk(
+        float(dsl.eig_all_real(big).eval({})) == 1.0,
+        "1e8 +- i au seuil 1e-5 : paire complexe sous im_tol*scale -> reel (asymetrie)",
+    )
     # petite echelle : VP +- 1e-3 i, scale = 1 ; im_tol = 1e-5 -> 1e-3 > 1e-5 -> complexe (0.0).
     small = [[dsl.Const(0.0), dsl.Const(-1e-3)], [dsl.Const(1e-3), dsl.Const(0.0)]]
-    chk(float(dsl.eig_all_real(small, im_tol=1e-5).eval({})) == 0.0,
-        "+- 1e-3 i au seuil 1e-5 -> complexe (0.0)")
+    chk(
+        float(dsl.eig_all_real(small, im_tol=1e-5).eval({})) == 0.0,
+        "+- 1e-3 i au seuil 1e-5 -> complexe (0.0)",
+    )
     # meme matrice, im_tol releve a 1.0 -> 1e-3 <= 1.0 -> reel (1.0) : im_tol fait basculer le verdict.
-    chk(float(dsl.eig_all_real(small, im_tol=1.0).eval({})) == 1.0,
-        "meme matrice, im_tol=1.0 -> reel (1.0) : im_tol fait basculer le verdict")
+    chk(
+        float(dsl.eig_all_real(small, im_tol=1.0).eval({})) == 1.0,
+        "meme matrice, im_tol=1.0 -> reel (1.0) : im_tol fait basculer le verdict",
+    )
     # im_tol invalide -> rejet explicite (pas de seuil <= 0).
     for bad in (0.0, -1e-3):
         try:
@@ -163,12 +191,18 @@ def test_codegen():
     m, im_tol, _ = build_pred_model("cg")
     src = m.emit_cpp_brick(name="ToyPredCg")
     chk("#include <pops/numerics/linalg/dense_eig.hpp>" in src, "brique inclut dense_eig.hpp")
-    chk("static POPS_HD pops::Real pops_eig_all_real_2x2(" in src,
-        "foncteur nomme pops_eig_all_real_2x2 declare")
-    chk("pops::real_eig_minmax(M).all_real(" in src,
-        "le foncteur abaisse sur EigBounds::all_real (verrou de surete : converged)")
-    chk(".max_im" not in src,
-        "le predicat n'est PAS abaisse sur un comparatif .max_im (repli => 0.0, jamais reel)")
+    chk(
+        "static POPS_HD pops::Real pops_eig_all_real_2x2(" in src,
+        "foncteur nomme pops_eig_all_real_2x2 declare",
+    )
+    chk(
+        "pops::real_eig_minmax(M).all_real(" in src,
+        "le foncteur abaisse sur EigBounds::all_real (verrou de surete : converged)",
+    )
+    chk(
+        ".max_im" not in src,
+        "le predicat n'est PAS abaisse sur un comparatif .max_im (repli => 0.0, jamais reel)",
+    )
     chk(repr(float(im_tol)) in src, "im_tol passe en argument du foncteur (seuil relatif)")
     chk("[&]" not in src and "[=]" not in src, "aucune lambda etendue (device-clean)")
     chk("pops_eig_all_real_2x2(" in src.split("State project")[1], "project() appelle le foncteur")
@@ -176,7 +210,8 @@ def test_codegen():
 
 def test_cse_im_tol():
     print("== (7) CSE : im_tol DIFFERENT -> locales distinctes ; im_tol identique -> partagee ==")
-    q0 = dsl.Var("q0", "cons"); q1 = dsl.Var("q1", "cons")
+    q0 = dsl.Var("q0", "cons")
+    q1 = dsl.Var("q1", "cons")
     mat = [[q0, -q1], [q1, q0]]
     a = dsl.eig_all_real(mat, im_tol=1e-5)
     b = dsl.eig_all_real(mat, im_tol=1e-3)
@@ -210,16 +245,19 @@ def test_fallback_conservative(cxx, tmp):
             # companion 3x3 plein (ne deflate pas en 1x1/2x2) -> cap QR 0 force le repli Gershgorin.
             "  const pops::Real A[3][3] = {{0,0,-6},{1,0,11},{0,1,-6}};\n"
             "  const pops::EigBounds b = pops::real_eig_minmax(A, /*max_iter=*/0);\n"
-            "  std::printf(\"%d %d %d\\n\", (int)b.converged,\n"
+            '  std::printf("%d %d %d\\n", (int)b.converged,\n'
             "              (int)(b.max_im == pops::Real(0)), (int)b.all_real());\n"
             "  return 0;\n"
-            "}\n")
+            "}\n"
+        )
     exe = os.path.join(tmp, "fallback_main")
-    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
-                        capture_output=True, text=True)
+    cp = subprocess.run(
+        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+    )
     if cp.returncode != 0:
         chk(False, "compilation du test de repli (voir stderr)")
-        print(cp.stderr[:2000]); return
+        print(cp.stderr[:2000])
+        return
     out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout.split()
     converged, maxim_zero, all_real = (v == "1" for v in out)
     chk(not converged, "repli declenche (converged == false) au cap QR 0")
@@ -228,7 +266,9 @@ def test_fallback_conservative(cxx, tmp):
 
 
 def test_cpp_brick_vs_numpy(cxx, tmp):
-    print("== (5) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) ==")
+    print(
+        "== (5) [compilateur] brique generee project(U) == reference numpy (cellule par cellule) =="
+    )
     # q0 == 0 sur tout le champ -> scale = 1, seuil = im_tol : les deux branches exercees a coup sur.
     m, im_tol, target = build_pred_model("cpp", im_tol=0.5, target=9.0)
     hpp = os.path.join(tmp, "pred_brick.hpp")
@@ -252,21 +292,24 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "int main(int argc, char** argv) {\n"
             "  pops_generated::ToyPredCpp m;\n"
             "  pops::Aux a{};\n"
-            "  std::FILE* fp = std::fopen(argv[1], \"w\");\n"
+            '  std::FILE* fp = std::fopen(argv[1], "w");\n'
             "  for (int i = 2; i < argc; i += 3) {\n"
             "    pops::StateVec<3> U{atof(argv[i]), atof(argv[i+1]), atof(argv[i+2])};\n"
             "    auto P = m.project(U, a);\n"
-            "    std::fprintf(fp, \"%.17g\\n\", (double)P[2]);\n"
+            '    std::fprintf(fp, "%.17g\\n", (double)P[2]);\n'
             "  }\n"
             "  std::fclose(fp);\n"
             "  return 0;\n"
-            "}\n")
+            "}\n"
+        )
     exe = os.path.join(tmp, "pred_main")
-    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
-                        capture_output=True, text=True)
+    cp = subprocess.run(
+        [cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe], capture_output=True, text=True
+    )
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")
-        print(cp.stderr[:2000]); return
+        print(cp.stderr[:2000])
+        return
     chk(True, "la brique generee compile contre les en-tetes pops")
 
     out = os.path.join(tmp, "q2.txt")
@@ -277,15 +320,22 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
     q2_cpp = np.loadtxt(out)
 
     M = np.zeros((n, 2, 2))
-    M[:, 0, 0] = q0; M[:, 0, 1] = -q1; M[:, 1, 0] = q1; M[:, 1, 1] = q0
+    M[:, 0, 0] = q0
+    M[:, 0, 1] = -q1
+    M[:, 1, 0] = q1
+    M[:, 1, 1] = q0
     is_real = ref_all_real(M, im_tol)
     q2_ref = q2_in * is_real + target * (1.0 - is_real)
     d = float(np.max(np.abs(q2_cpp - q2_ref)))
-    chk(np.allclose(q2_cpp, q2_ref, rtol=0.0, atol=TOL_CPP),
-        "project(U) C++ == numpy sur %d cellules (ecart max %.2e)" % (n, d))
-    chk(np.any(is_real > 0.5) and np.any(is_real < 0.5),
+    chk(
+        np.allclose(q2_cpp, q2_ref, rtol=0.0, atol=TOL_CPP),
+        "project(U) C++ == numpy sur %d cellules (ecart max %.2e)" % (n, d),
+    )
+    chk(
+        np.any(is_real > 0.5) and np.any(is_real < 0.5),
         "les deux branches (reel / complexe) exercees (%d reelles / %d)"
-        % (int(np.sum(is_real > 0.5)), n))
+        % (int(np.sum(is_real > 0.5)), n),
+    )
 
 
 def main():
@@ -304,7 +354,11 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
-        print("== (4)+(5) skip : compilateur ou en-tetes pops absents ==")
+        if fails:
+            raise AssertionError(
+                "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+            )
+        require_native_or_skip("== (4)+(5) skip : compilateur ou en-tetes pops absents ==")
 
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)

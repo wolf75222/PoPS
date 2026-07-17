@@ -1,9 +1,9 @@
 #pragma once
 
-#include <pops/core/foundation/cold.hpp>            // POPS_COLD_FN
-#include <pops/numerics/fv/reconstruction.hpp>      // NoSlope / Minmod / VanLeer / Weno5
-#include <pops/runtime/config/dispatch_tags.hpp>    // throw_registry_dispatch_mismatch
-#include <pops/runtime/config/route_ids.hpp>        // LimiterRouteId, route_token, kLimiterRoutes
+#include <pops/core/foundation/cold.hpp>          // POPS_COLD_FN
+#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/runtime/config/dispatch_tags.hpp>  // throw_registry_dispatch_mismatch
+#include <pops/runtime/config/route_ids.hpp>      // LimiterRouteId, route_token, kLimiterRoutes
 
 #include <string>
 #include <type_traits>  // std::type_identity
@@ -38,8 +38,8 @@ namespace pops {
 /// forgotten row is a BUILD ERROR (this repo compiles without -Werror, so -Wswitch alone would only warn).
 #define POPS_FOR_EACH_LIMITER(X) \
   X(kNone, NoSlope)              \
-  X(kMinmod, Minmod)            \
-  X(kVanLeer, VanLeer)          \
+  X(kMinmod, Minmod)             \
+  X(kVanLeer, VanLeer)           \
   X(kWeno5, Weno5)
 
 namespace detail {

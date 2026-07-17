@@ -11,14 +11,14 @@ each coupled block at its stage state into the one shared phi/aux.
 
 Pure-Python codegen check (always runs when pops.time imports; skips cleanly if _pops is absent). The
 .so that runs the coupled solve is validated on ROMEO (Kokkos-only AOT, not buildable host-only)."""
+from tests.python.support.requirements import require_native_or_skip
 
 import sys
 from types import SimpleNamespace
 
 
 def _skip(msg):
-    print("skip test_coupled_fieldsolve_codegen (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_coupled_fieldsolve_codegen (%s)' % msg)
 
 
 def _pops_time():

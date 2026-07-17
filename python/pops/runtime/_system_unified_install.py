@@ -73,10 +73,21 @@ class _SystemUnifiedInstall(_System):
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound engine is refused explicitly.
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "_install_compiled")
-        instances = instances or {}
-        params = {} if params is None else params
-        aux = aux or {}
-        field_plans = field_plans or {}
+        if install_plan is not None:
+            from pops.runtime._bound_snapshot import _require_exact_install_inputs
+
+            install_plan = _require_exact_install_inputs(
+                self, compiled, instances, field_plans, aux, params, install_plan)
+            compiled = install_plan.artifact
+            instances = install_plan.instances
+            params = install_plan.params
+            aux = install_plan.aux
+            field_plans = install_plan.artifact.plan.field_plans
+        else:
+            instances = instances or {}
+            params = {} if params is None else params
+            aux = aux or {}
+            field_plans = field_plans or {}
 
         # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED bind
         # inputs (compiled.arguments()) and reject BEFORE any native call an install missing a REQUIRED
@@ -198,7 +209,7 @@ class _SystemUnifiedInstall(_System):
         from pops.runtime._bound_snapshot import build_uniform_snapshot
         snapshot = build_uniform_snapshot(
             self, compiled, resolved_models, instances, field_plans,
-            aux, params)
+            aux, params, install_plan=install_plan)
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
     def explain_bind(self, compiled: Any) -> Any:

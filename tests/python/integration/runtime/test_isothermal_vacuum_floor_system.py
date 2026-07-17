@@ -11,10 +11,10 @@ Builds two identical isothermal Systems that differ ONLY by vacuum_floor and sho
 Native bricks only (no DSL / no compiler). source=NoSource isolates the transport (where the floor
 lives): phi is identical between the two runs, so any difference comes from the velocity bound.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
-import sys
 
 import numpy as np
 
@@ -23,8 +23,7 @@ try:
     from pops.runtime._engine_descriptors import Dirichlet
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:
-    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
 
 def chk(cond, label):

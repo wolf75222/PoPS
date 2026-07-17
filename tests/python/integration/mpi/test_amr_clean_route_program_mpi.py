@@ -15,21 +15,22 @@ from __future__ import annotations
 from collections.abc import Callable
 from fractions import Fraction
 import hashlib
-import os
+import inspect
 from pathlib import Path
 import sys
 from typing import Any
 
 from _compile_once import compile_resolved_plan_once
+from tests.python.support.requirements import require_mpi_or_skip
 
-
-_REQUIRE_MPI = os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
 
 try:
     import numpy as np
-    from mpi4py import MPI
 
     import pops
+    from pops import _pops
+    from pops._native_collectives import allgather_value
+    from pops.runtime._component_execution_context import component_execution_data
     from pops.amr import (
         AMRExecution,
         AMRHierarchy,
@@ -59,10 +60,7 @@ try:
     from pops.projection import ConservativeCellAverage
     from pops.time import FixedDt, StagePoint, TimePoint, every
 except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
-    if _REQUIRE_MPI:
-        raise RuntimeError("required Python MPI contract could not import its runtime") from exc
-    print("skip test_amr_clean_route_program_mpi (MPI runtime unavailable: %s)" % exc)
-    sys.exit(0)
+    require_mpi_or_skip("Python MPI runtime import failed: %s" % exc)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -70,31 +68,27 @@ N = 16
 NSTEPS = 4
 DT = 1.0e-3
 _fails = 0
-_COMM = MPI.COMM_WORLD
+_COMM = _pops.mpi_world()
 
 
 def _phase(label: str) -> None:
     """Emit an unbuffered per-rank marker around potentially collective phases."""
-    print("[rank %d] %s" % (int(_COMM.Get_rank()), label), flush=True)
+    print("[rank %d] %s" % (int(_COMM.rank), label), flush=True)
 
 
 def chk(cond: Any, label: str) -> None:
     global _fails
-    if _COMM.Get_rank() == 0:
+    if _COMM.rank == 0:
         print("  [%s] %s" % ("OK " if cond else "XX ", label))
     if not cond:
         _fails += 1
 
 
-def _require_world() -> bool:
-    size = int(_COMM.Get_size())
+def _require_world() -> None:
+    size = int(_COMM.size)
     if size >= 2:
-        return True
-    if _REQUIRE_MPI:
-        raise RuntimeError("required Python MPI contract did not enter MPI_COMM_WORLD size >= 2")
-    if _COMM.Get_rank() == 0:
-        print("skip (needs mpiexec -n 2; MPI_COMM_WORLD size=%d)" % size)
-    return False
+        return
+    require_mpi_or_skip("needs mpiexec -n 2; MPI_COMM_WORLD size=%d" % size)
 
 
 def _world_identical(array: np.ndarray) -> bool:
@@ -104,7 +98,7 @@ def _world_identical(array: np.ndarray) -> bool:
         contiguous.dtype.str,
         hashlib.sha256(contiguous.tobytes(order="C")).hexdigest(),
     )
-    return len(set(_COMM.allgather(witness))) == 1
+    return len(set(allgather_value(_COMM, witness))) == 1
 
 
 def _explicit_ssprk2(state: Any, rate: Any) -> pops.Program:
@@ -238,7 +232,29 @@ def _execute(
     )
 
     _phase(route + ": execution-context bind start")
-    context = pops.ExecutionContext.mpi_world(artifact, _COMM)
+    context = pops.ExecutionContext.mpi_world(artifact)
+    projected = component_execution_data(context)
+    chk(
+        type(context.communicator.handle) is _pops._NativeWorldCommunicator
+        and context.communicator.handle is _COMM,
+        "ExecutionContext carries the exact native MPI_COMM_WORLD handle",
+    )
+    chk(
+        type(context.datatype.handle) is _pops._NativeMpiDatatype
+        and _COMM.is_float64_datatype(context.datatype.handle),
+        "ExecutionContext carries the exact native MPI_DOUBLE datatype",
+    )
+    chk(
+        projected["communicator_f_handle"] == int(_COMM.fortran_handle)
+        and projected["communicator_datatype_f_handle"]
+        == int(context.datatype.handle.fortran_handle),
+        "component execution data exposes native C++ MPI Fortran handles",
+    )
+    chk(
+        tuple(inspect.signature(pops.ExecutionContext.mpi_world).parameters)
+        == ("artifact",),
+        "MPI context construction accepts only the compiled artifact",
+    )
     runtime = pops.bind(artifact, resources={"execution_context": context})
     _phase(route + ": execution-context bind done")
     # AMR global state is level-qualified in the final contract; the old unqualified accessor is
@@ -262,9 +278,8 @@ def _execute(
 
 
 def test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical() -> None:
-    if not _require_world():
-        return
-    if _COMM.Get_rank() == 0:
+    _require_world()
+    if _COMM.rank == 0:
         print("== final public AMR lifecycle under MPI: explicit SSPRK2 == preset SSPRK2 ==")
 
     manual_initial, manual, manual_report, manual_regrid, manual_patches = _execute(
@@ -280,7 +295,7 @@ def test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical() -> None:
     chk(
         np.array_equal(manual, preset),
         "np=%d: explicit and preset SSPRK2 global states are BIT-IDENTICAL (max|d|=%.3e)"
-        % (int(_COMM.Get_size()), float(np.max(np.abs(manual - preset)))),
+        % (int(_COMM.size), float(np.max(np.abs(manual - preset)))),
     )
     chk(
         _world_identical(manual) and _world_identical(preset),
@@ -310,8 +325,7 @@ def test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical() -> None:
 
 def test_public_mpi_distributed_equals_replicated_coarse() -> None:
     """The public PatchLayout authority must preserve the historical MPI layout oracle."""
-    if not _require_world():
-        return
+    _require_world()
     replicated_initial, replicated, _, replicated_regrid, replicated_patches = _execute(
         _explicit_ssprk2, distribute_coarse=False
     )
@@ -325,7 +339,7 @@ def test_public_mpi_distributed_equals_replicated_coarse() -> None:
     chk(
         np.array_equal(replicated, distributed),
         "np=%d: distributed coarse == replicated coarse BIT-IDENTICALLY (max|d|=%.3e)"
-        % (int(_COMM.Get_size()), float(np.max(np.abs(replicated - distributed)))),
+        % (int(_COMM.size), float(np.max(np.abs(replicated - distributed)))),
     )
     chk(
         _world_identical(replicated) and _world_identical(distributed),
@@ -336,16 +350,12 @@ def test_public_mpi_distributed_equals_replicated_coarse() -> None:
         "both coarse-layout policies complete the same nonzero number of regrids",
     )
     chk(
-        not bool(
-            _COMM.allreduce(
-                bool(replicated_patches.coarse_is_distributed), op=MPI.LOR
-            )
-        )
-        and bool(
-            _COMM.allreduce(
-                bool(distributed_patches.coarse_is_distributed), op=MPI.LAND
-            )
-        ),
+        not any(allgather_value(
+            _COMM, bool(replicated_patches.coarse_is_distributed)
+        ))
+        and all(allgather_value(
+            _COMM, bool(distributed_patches.coarse_is_distributed)
+        )),
         "public PatchLayout selects replicated versus genuinely distributed coarse ownership",
     )
 
@@ -358,7 +368,7 @@ def _run_all() -> int:
     ]
     for function in functions:
         function()
-    if _COMM.Get_rank() == 0:
+    if _COMM.rank == 0:
         print(
             "\n%s test_amr_clean_route_program_mpi (%d check failures)"
             % ("FAIL" if _fails else "PASS", _fails)

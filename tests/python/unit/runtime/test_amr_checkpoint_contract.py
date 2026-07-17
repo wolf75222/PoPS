@@ -6,7 +6,12 @@ import json
 import numpy as np
 import pytest
 
-from pops.runtime._amr_checkpoint_contract import contract_for, encode_contract, preflight_contract
+from pops.runtime._amr_checkpoint_contract import (
+    contract_for,
+    encode_contract,
+    preflight_contract,
+    validate_restored_contract,
+)
 from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
 
 
@@ -86,13 +91,11 @@ def test_preflight_returns_exact_native_payload_and_counters():
     assert (regrids, epoch) == (4, 7)
 
 
-@pytest.mark.parametrize("mutation", ["owner", "ratio", "route", "guarantee"])
+@pytest.mark.parametrize("mutation", ["ratio", "route", "guarantee"])
 def test_preflight_refuses_any_static_provenance_mismatch(mutation):
     payload = _payload()
     data = json.loads(str(payload["amr_accepted_contract"]))
-    if mutation == "owner":
-        data["history_qualifications"][0][1] = "program.block.1"
-    elif mutation == "ratio":
+    if mutation == "ratio":
         data["level_relations"][0]["temporal_ratio"]["numerator"] = 4
     elif mutation == "route":
         data["transfer_routes"][0][3] = "provider.other"
@@ -101,6 +104,22 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
     payload["amr_accepted_contract"] = np.array(json.dumps(data))
     with pytest.raises(ValueError, match="provenance differs"):
         preflight_contract(_Sim(), payload)
+
+
+@pytest.mark.parametrize("section", ["history_qualifications", "clocks", "ledger", "synchronization"])
+def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section):
+    payload = _payload()
+    data = json.loads(str(payload["amr_accepted_contract"]))
+    if section == "history_qualifications":
+        data[section][0][1] = "program.block.1"
+    elif section == "ledger":
+        data[section]["accepted_entries"] += 1
+    else:
+        data[section].append(["tampered"])
+    payload["amr_accepted_contract"] = np.array(json.dumps(data))
+    preflight_contract(_Sim(), payload)
+    with pytest.raises(ValueError, match="restored AMR accepted-state image differs"):
+        validate_restored_contract(_Sim(), payload)
 
 
 def test_native_route_requires_no_program_blob_and_compiled_route_requires_one():

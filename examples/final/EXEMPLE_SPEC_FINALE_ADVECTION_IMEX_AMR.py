@@ -51,6 +51,39 @@ from pops.time import (
 
 OUTPUT_ROOT = Path("outputs/advection_imex_amr")
 
+
+def _native_output_mode() -> Any:
+    """Return the shared-file topology proved by the loaded native backend."""
+
+    from pops.output import ParallelMode
+    from pops.runtime_environment import runtime_environment_report
+
+    communicator = runtime_environment_report().get("communicator")
+    if communicator == "serial":
+        return ParallelMode.SERIAL
+    if communicator == "MPI_COMM_WORLD":
+        return ParallelMode.ROOT
+    raise RuntimeError(
+        "the final IMEX example requires a proved serial or MPI_COMM_WORLD backend"
+    )
+
+
+def _bind_artifact(artifact: Any, **inputs: Any) -> Any:
+    """Bind serial artifacts directly and MPI artifacts with their native world authority."""
+
+    communicator = artifact.platform_manifest.communicator.require(
+        "IMEX artifact communicator"
+    )
+    if communicator == "serial":
+        return pops.bind(artifact, **inputs)
+    if communicator == "MPI_COMM_WORLD":
+        return pops.bind(
+            artifact,
+            resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)},
+            **inputs,
+        )
+    raise RuntimeError("unsupported IMEX artifact communicator %r" % communicator)
+
 # Rational CN/Heun IMEX: both partitions and every abscissa retain their exact authoring domain.
 IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     RungeKuttaTableau(
@@ -464,22 +497,30 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
     )
 
 
-def build_consumers(core: IMEXAMRAuthoring) -> Any:
+def build_consumers(core: IMEXAMRAuthoring, *, output_mode: Any = None) -> Any:
     from pops.diagnostics import Integral
-    from pops.output import ConsumerGraph, Checkpoint, HDF5, NPZ, ParaView, ScientificOutput
+    from pops.output import (
+        Checkpoint, ConsumerGraph, HDF5, NPZ, ParallelMode, ParaView, ScientificOutput,
+    )
     from pops.time import every
+
+    if output_mode is None:
+        output_mode = ParallelMode.SERIAL
 
     fields = (core.tracer_state, core.diagnostic_field)
     diagnostic = Integral(block=core.tracer, cadence=every(1, clock=core.program.clock))
     return ConsumerGraph.from_consumers((
         ScientificOutput(
-            format=HDF5(), schedule=every(1, clock=core.program.clock), fields=fields,
+            format=HDF5(mode=output_mode),
+            schedule=every(1, clock=core.program.clock), fields=fields,
             diagnostics=(diagnostic,), target="hdf5/state"),
         ScientificOutput(
-            format=NPZ(), schedule=every(1, clock=core.program.clock), fields=fields,
+            format=NPZ(mode=output_mode),
+            schedule=every(1, clock=core.program.clock), fields=fields,
             target="npz/state"),
         ScientificOutput(
-            format=ParaView(), schedule=every(1, clock=core.program.clock), fields=fields,
+            format=ParaView(mode=output_mode),
+            schedule=every(1, clock=core.program.clock), fields=fields,
             target="paraview/state"),
         Checkpoint(
             schedule=every(1, clock=core.program.clock),
@@ -490,6 +531,7 @@ def build_consumers(core: IMEXAMRAuthoring) -> Any:
 def build_final_case(
     *, use_preset: bool = False, field_solver: Any | None = None,
     initial_background: float = 0.05, initial_amplitude: float = 0.95,
+    output_mode: Any = None,
 ) -> FinalIMEXAMRCase:
     core = build_authoring(use_preset=use_preset, field_solver=field_solver)
     core.numerics.boundaries.add(build_boundaries(core))
@@ -497,7 +539,7 @@ def build_final_case(
     core.case.initials.add(build_initial(
         core, background=initial_background, amplitude=initial_amplitude))
     core.case.program(core.program)
-    core.case.consumers(build_consumers(core))
+    core.case.consumers(build_consumers(core, output_mode=output_mode))
     return FinalIMEXAMRCase(core, build_layout(core))
 
 
@@ -519,7 +561,9 @@ def compile_final_case(
 ) -> tuple[FinalIMEXAMRCase, Any, Any]:
     """Compile one exact manual or preset-authored target through the public lifecycle."""
 
-    target = build_final_case(use_preset=use_preset)
+    target = build_final_case(
+        use_preset=use_preset, output_mode=_native_output_mode()
+    )
     resolved = pops.resolve(pops.validate(target.authoring.case), layout=target.layout)
     return target, resolved, pops.compile(resolved)
 
@@ -742,7 +786,7 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
     accepted_root = root / "accepted"
     target, resolved, artifact = compile_final_case(use_preset=False)
     params = build_bind_params(target.authoring)
-    simulation = pops.bind(artifact, params=params)
+    simulation = _bind_artifact(artifact, params=params)
     controls = dict(target.authoring.run_controls)
     controls["output_dir"] = accepted_root
     if pops.run(simulation, **controls).accepted_steps <= 0:
@@ -750,12 +794,15 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
 
     hdf5_path, paraview_path, hdf5_identity, paraview_identity = \
         _reopen_scientific_outputs(accepted_root)
-    checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
+    # Keep the explicit API checkpoint in its own deterministic namespace.  The accepted-step
+    # consumer publishes below ``accepted/checkpoints``; this independent restart proof must never
+    # reuse that consumer-owned target or depend on its cadence.
+    checkpoint_path = Path(simulation.checkpoint(root / "manual_restart"))
     if not checkpoint_path.is_file():
         raise RuntimeError("checkpoint API returned a missing artifact: %s" % checkpoint_path)
     accepted = _snapshot(simulation)
 
-    resumed = pops.bind(artifact, params=params)
+    resumed = _bind_artifact(artifact, params=params)
     resumed.restart(checkpoint_path)
     restored = _snapshot(resumed)
     _require_same_snapshot(accepted, restored, where="independent strict restart")
@@ -829,7 +876,7 @@ def run_preset_parity(
     ):
         raise RuntimeError("pops.lib.time.IMEX changed the semantic Program identity")
 
-    simulation = pops.bind(
+    simulation = _bind_artifact(
         artifact,
         params=build_bind_params(preset.authoring),
     )

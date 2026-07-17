@@ -79,6 +79,7 @@ class CompiledPlanRecord:
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
     consumer_graph: Any = None
+    restart_authority: Any = None
     component_contracts: tuple[Any, ...] = ()
     resolved_hierarchy: Any = None
     amr_transfer: Any = None
@@ -105,6 +106,7 @@ class CompiledPlanRecord:
             compile_values=plan.compile_values,
             field_plans=plan.field_plans,
             consumer_graph=plan.consumer_graph,
+            restart_authority=plan.restart_authority,
             component_contracts=tuple(
                 _deep_freeze(item.to_data()) for item in plan.component_inputs),
             requirements=plan.requirements,
@@ -160,6 +162,14 @@ class CompiledPlanRecord:
             if type(self.consumer_graph) is not ConsumerGraph:
                 raise TypeError(
                     "CompiledPlanRecord.consumer_graph must be an exact ConsumerGraph or None")
+        from pops.output._restart_provider import RestartAuthority
+        if type(self.restart_authority) is not RestartAuthority:
+            raise TypeError(
+                "CompiledPlanRecord.restart_authority must be an exact RestartAuthority")
+        expected_restart = RestartAuthority.from_consumer_graph(self.consumer_graph)
+        if self.restart_authority.identity != expected_restart.identity:
+            raise ValueError(
+                "CompiledPlanRecord.restart_authority differs from its ConsumerGraph")
         object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
         object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
         object.__setattr__(self, "amr_providers", _deep_freeze(self.amr_providers))
@@ -226,6 +236,7 @@ class CompiledPlanRecord:
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),
+            "restart_authority": self.restart_authority.to_data(),
             "requirements": _evidence(
                 self.requirements, where="compiled plan requirements"),
             "capabilities": _evidence(
@@ -313,18 +324,14 @@ def _common_platform_manifest(
     external: tuple[Any, ...],
 ) -> Any:
     """Prove one platform contract from every executable binary, never a representative."""
-    from pops._platform_contracts import (
-        artifact_platform_manifest, serial_execution_context, validate_component_launch)
+    from pops import _pops
+    from pops._platform_contracts import artifact_platform_manifest
+    from pops.codegen._native_mpi import native_mpi_communicator
 
-    from pops.runtime_environment import runtime_environment_report
-
-    runtime = runtime_environment_report()
-    communicator = (
-        "MPI_COMM_WORLD"
-        if runtime.get("mpi_active") is True
-        and runtime.get("communicator") == "MPI_COMM_WORLD"
-        else "serial"
-    )
+    # Compilation selects the communicator seam baked into the host module, independently of world
+    # size or whether a report happened to observe an initialized process.  A size-one MPI job still
+    # produces an MPI_COMM_WORLD artifact and must not alias a genuinely serial binary.
+    communicator = native_mpi_communicator(_pops)
     components = tuple(block.model for block in blocks)
     components += tuple(programs)
     manifests = tuple(
@@ -342,14 +349,15 @@ def _common_platform_manifest(
             "compiled executable components do not prove one common PlatformManifest; "
             "mismatching component indices=%s" % mismatch)
     if external:
-        if communicator != "serial":
-            raise NotImplementedError(
-                "external native components do not yet authenticate MPI_COMM_WORLD execution; "
-                "compile this Case for the serial route or provide an MPI-aware component ABI"
-            )
-        context = serial_execution_context(baseline)
         for component in external:
-            validate_component_launch(component.platform_manifest, context, ())
+            component_communicator = component.platform_manifest.communicator.require(
+                "external component communicator")
+            if component_communicator != communicator:
+                raise ValueError(
+                    "external native component communicator differs from the compiled host route: "
+                    "expected %r, got %r" % (communicator, component_communicator))
+        # The complete ABI/device/precision gate runs against the explicit ExecutionContext in
+        # InstallPlan.  Compilation has no authority to fabricate that runtime resource.
     return baseline
 
 

@@ -190,6 +190,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_program_reflux"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_twoblock_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -226,6 +232,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_external_lifecycle"
+sources = ["tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
 name = "test_mpi_field_plan_consensus"
 sources = ["tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -244,6 +256,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_hdf5_collective"
+sources = ["tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
 name = "test_mpi_hybrid_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -254,6 +272,12 @@ name = "test_mpi_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_multiblock_interface_scheduler"
+sources = ["tests/cpp/integration/mpi/test_mpi_multiblock_interface_scheduler.cpp"]
+labels = ["backend", "mpi", "runtime", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_mpi_poisson"
@@ -477,6 +501,12 @@ labels = ["integration", "runtime", "medium"]
 name = "test_runtime_environment"
 sources = ["tests/cpp/integration/runtime/test_runtime_environment.cpp"]
 labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_world_communicator"
+sources = ["tests/cpp/unit/parallel/test_world_communicator.cpp"]
+labels = ["unit", "parallel", "fast"]
+mpi_variants = [1, 2]
 
 [[cpp.suite]]
 name = "test_platform_manifest"
@@ -1086,7 +1116,10 @@ labels = ["integration", "python", "physics", "numerics", "codegen", "native_loa
 [[python.suite]]
 name = "pops_python_integration_io"
 path = "tests/python/integration/io"
-labels = ["integration", "python", "io", "medium"]
+labels = ["integration", "python", "io", "mpi", "amr", "runtime", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/io/test_hdf5_parallel.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_integration_mpi"
@@ -1095,7 +1128,8 @@ labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
-  { path = "tests/python/integration/mpi/test_execution_context_mpi_world.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
 ]
 
 [[python.suite]]

@@ -26,16 +26,15 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource, Flux
 from pops.time import TimePoint
-import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import require_native_or_skip
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_control_flow_b (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip("test_time_control_flow_b pops.time unavailable: %s" % exc)
     return t
 
 
@@ -206,14 +205,16 @@ def _run_section_b(t):
 
         import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip(
+            "test_time_control_flow_b compiled parity unavailable: %s" % exc
+        )
 
     n = 8
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
-        return None
+        require_native_or_skip(
+            "test_time_control_flow_b _pops lacks install_program (rebuild _pops)"
+        )
 
 
     count = 3
@@ -227,16 +228,19 @@ def _run_section_b(t):
         compiled_branch_t = compile_drivers.compile_problem(model=_passive_model("cf_brancht"),
                                             time=_branch_program(t, name="cf_brancht", threshold=0.0))  # TRUE
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build a .so: %s --" % str(exc)[:160])
-        return None
+        require_native_or_skip(
+            "test_time_control_flow_b compile_problem could not build a .so: %s"
+            % str(exc)[:160]
+        )
 
     def run(handle):
         s = System(n=n, L=1.0, periodic=True)
         try:
             cm = _passive_model("blk_" + handle.program_name).compile(backend="production")
         except RuntimeError as exc:
-            print("-- (B) skipped: model compile failed: %s --" % str(exc)[:140])
-            return None
+            require_native_or_skip(
+                "test_time_control_flow_b model compile failed: %s" % str(exc)[:140]
+            )
         s.add_equation("blk", cm, spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                        time=engine.Explicit(method="euler"))
         x = (np.arange(n) + 0.5) / n
@@ -249,8 +253,7 @@ def _run_section_b(t):
 
     # OFFLINE reference for the contraction: x_{k+1} = 0.5 x_k + 0.5 target, target = 2 rho0.
     res = run(compiled)
-    if res is None:
-        return None
+    assert res is not None, "compiled contraction run returned no result"
     rho0, out_rg = res
     target = 2.0 * rho0
     xk = rho0.copy()

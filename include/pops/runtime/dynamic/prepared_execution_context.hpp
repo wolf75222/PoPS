@@ -17,17 +17,16 @@ namespace pops::component {
 /// used by prepare and every scientific invocation.  It is never synthesized from process globals.
 class PreparedExecutionContextV1 final {
  public:
-  PreparedExecutionContextV1(
-      std::string execution_identity, std::uint32_t context_version,
-      PopsMemorySpaceV1 memory_space, std::string backend_identity,
-      std::string device_identity, PopsScalarTypeV1 scalar_type,
-      PopsPrecisionV1 storage_precision, PopsPrecisionV1 compute_precision,
-      PopsPrecisionV1 accumulation_precision, PopsPrecisionV1 reduction_precision,
-      std::uint64_t stream_handle, std::string stream_identity,
-      std::int64_t communicator_f_handle,
-      std::int64_t communicator_datatype_f_handle,
-      std::string communicator_identity,
-      std::string communicator_datatype_identity)
+  PreparedExecutionContextV1(std::string execution_identity, std::uint32_t context_version,
+                             PopsMemorySpaceV1 memory_space, std::string backend_identity,
+                             std::string device_identity, PopsScalarTypeV1 scalar_type,
+                             PopsPrecisionV1 storage_precision, PopsPrecisionV1 compute_precision,
+                             PopsPrecisionV1 accumulation_precision,
+                             PopsPrecisionV1 reduction_precision, std::uint64_t stream_handle,
+                             std::string stream_identity, std::int64_t communicator_f_handle,
+                             std::int64_t communicator_datatype_f_handle,
+                             std::string communicator_identity,
+                             std::string communicator_datatype_identity)
       : execution_identity_(std::move(execution_identity)),
         context_version_(context_version),
         memory_space_(memory_space),
@@ -50,19 +49,26 @@ class PreparedExecutionContextV1 final {
     component::validate_execution_context(view());
   }
 
-  [[nodiscard]] const std::string& identity() const noexcept {
-    return execution_identity_;
-  }
+  [[nodiscard]] const std::string& identity() const noexcept { return execution_identity_; }
 
   [[nodiscard]] PopsExecutionContextV1 view() const noexcept {
-    return {
-        sizeof(PopsExecutionContextV1), context_version_, execution_identity_.c_str(),
-        memory_space_,
-        backend_identity_.c_str(), device_identity_.c_str(), scalar_type_,
-        storage_precision_, compute_precision_, accumulation_precision_, reduction_precision_,
-        stream_handle_, stream_identity_.c_str(), communicator_f_handle_,
-        communicator_datatype_f_handle_, communicator_identity_.c_str(),
-        communicator_datatype_identity_.c_str()};
+    return {sizeof(PopsExecutionContextV1),
+            context_version_,
+            execution_identity_.c_str(),
+            memory_space_,
+            backend_identity_.c_str(),
+            device_identity_.c_str(),
+            scalar_type_,
+            storage_precision_,
+            compute_precision_,
+            accumulation_precision_,
+            reduction_precision_,
+            stream_handle_,
+            stream_identity_.c_str(),
+            communicator_f_handle_,
+            communicator_datatype_f_handle_,
+            communicator_identity_.c_str(),
+            communicator_datatype_identity_.c_str()};
   }
 
  private:

@@ -346,8 +346,7 @@ class SystemStepper {
   /// cfl = 0.4 (case default) stays < 1 (safe), this is also the convention of the sweep
   /// references (HLL step); cfl >= 0.5 in unsplit 2D is MARGINAL -- to avoid without study.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
-                  double max_dt = std::numeric_limits<double>::infinity(),
-                  double min_dt = 0.0) {
+                  double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0) {
     Impl* P = owner_;
     P->solve_fields();
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
@@ -578,7 +577,7 @@ class SystemStepper {
 
  private:
   Impl* owner_;
-  std::string last_dt_reason_;             // active bound of the last step_cfl (diagnostic)
+  std::string last_dt_reason_;  // active bound of the last step_cfl (diagnostic)
 };
 
 }  // namespace stepper

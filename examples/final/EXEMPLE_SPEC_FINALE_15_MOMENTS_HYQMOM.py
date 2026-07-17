@@ -35,7 +35,9 @@ from pops.moments import RealizabilityProjection
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
-from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
+from pops.output import (
+    Checkpoint, ConsumerGraph, HDF5, ParallelMode, ParaView, ScientificOutput,
+)
 from pops.params import ConstParam
 from pops.solvers import DenseLU
 from pops.solvers.elliptic import GeometricMG
@@ -52,6 +54,38 @@ from pops.time import (
 
 DEFAULT_CELLS = 8
 DEFAULT_T_END = 1.0e-5
+
+
+def _native_output_mode() -> ParallelMode:
+    """Return the portable shared-file topology for the loaded native backend."""
+
+    from pops.runtime_environment import runtime_environment_report
+
+    communicator = runtime_environment_report().get("communicator")
+    if communicator == "serial":
+        return ParallelMode.SERIAL
+    if communicator == "MPI_COMM_WORLD":
+        return ParallelMode.ROOT
+    raise RuntimeError(
+        "the final HyQMOM15 example requires a proved serial or MPI_COMM_WORLD backend"
+    )
+
+
+def _bind_artifact(artifact: Any, **inputs: Any) -> Any:
+    """Bind with the exact communicator resource compiled into the artifact."""
+
+    communicator = artifact.platform_manifest.communicator.require(
+        "HyQMOM15 artifact communicator"
+    )
+    if communicator == "serial":
+        return pops.bind(artifact, **inputs)
+    if communicator == "MPI_COMM_WORLD":
+        return pops.bind(
+            artifact,
+            resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)},
+            **inputs,
+        )
+    raise RuntimeError("unsupported HyQMOM15 artifact communicator %r" % communicator)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,11 +206,15 @@ def _guarded_imex_program(
     return program
 
 
-def build_authoring(*, inject_nonrealizable: bool = False) -> HyQMOM15Authoring:
+def build_authoring(
+    *, inject_nonrealizable: bool = False, output_mode: ParallelMode | None = None,
+) -> HyQMOM15Authoring:
     """Compose provided physics with generic field, numerical and time interfaces."""
 
     if type(inject_nonrealizable) is not bool:
         raise TypeError("inject_nonrealizable must be a bool")
+    if output_mode is None:
+        output_mode = ParallelMode.SERIAL
     realizability = RealizabilityProjection()
     frame = Rectangle(
         "unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0),
@@ -247,10 +285,10 @@ def build_authoring(*, inject_nonrealizable: bool = False) -> HyQMOM15Authoring:
     schedule = every(1, clock=program.clock)
     case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
-            format=HDF5(), schedule=schedule,
+            format=HDF5(mode=output_mode), schedule=schedule,
             fields=(state_instance, field_instance), target="state/hyqmom15.h5"),
         ScientificOutput(
-            format=ParaView(), schedule=schedule,
+            format=ParaView(mode=output_mode), schedule=schedule,
             fields=(state_instance, field_instance), target="visualization/hyqmom15.vtu"),
         Checkpoint(
             schedule=schedule, target="checkpoints/hyqmom15", bit_identical=True),
@@ -298,7 +336,10 @@ def compile_final_case(
 
     if isinstance(cells, bool) or not isinstance(cells, int) or cells < 4:
         raise ValueError("cells must be an integer >= 4")
-    target = build_authoring(inject_nonrealizable=inject_nonrealizable)
+    target = build_authoring(
+        inject_nonrealizable=inject_nonrealizable,
+        output_mode=_native_output_mode(),
+    )
     validated = pops.validate(target.case)
     frame = target.model.frame
     grid = CartesianGrid(
@@ -368,7 +409,9 @@ def _run_rejected_nonrealizable_attempt(
     _target, _resolved, artifact = compile_final_case(
         cells=cells, inject_nonrealizable=True,
     )
-    simulation = pops.bind(artifact, initial_state=build_initial_state(cells=cells))
+    simulation = _bind_artifact(
+        artifact, initial_state=build_initial_state(cells=cells)
+    )
     before = _snapshot(simulation)
     fault_root = root / "rejected_nonrealizable"
     try:
@@ -420,7 +463,7 @@ def run_and_restart(
         _run_rejected_nonrealizable_attempt(root, cells=cells)
     _target, _resolved, artifact = compile_final_case(cells=cells)
     initial = build_initial_state(cells=cells)
-    simulation = pops.bind(artifact, initial_state=initial)
+    simulation = _bind_artifact(artifact, initial_state=initial)
     accepted_root = root / "accepted"
     run_report = pops.run(
         simulation, t_end=DEFAULT_T_END, max_steps=1, output_dir=accepted_root,
@@ -440,7 +483,9 @@ def run_and_restart(
 
     manual_checkpoint_path = Path(simulation.checkpoint(root / "manual_restart"))
     accepted = _snapshot(simulation)
-    resumed = pops.bind(artifact, initial_state=build_initial_state(cells=cells))
+    resumed = _bind_artifact(
+        artifact, initial_state=build_initial_state(cells=cells)
+    )
     resumed.restart(manual_checkpoint_path)
     restored = _snapshot(resumed)
     _require_same_snapshot(accepted, restored, where="independent reopen")

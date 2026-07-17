@@ -11,6 +11,10 @@ include(FetchContent)
 find_package(GTest 1.17 CONFIG QUIET)
 if(NOT GTest_FOUND)
   message(STATUS "GoogleTest not found in the environment; fetching v1.17.0")
+  # GoogleTest is a build-only test dependency.  Its upstream install rules must never leak into
+  # `cmake --install` for the PoPS SDK (and must not require unbuilt gmock archives when a package
+  # consumer smoke installs the header-only core).
+  set(INSTALL_GTEST OFF CACHE BOOL "Do not install PoPS' private GoogleTest dependency" FORCE)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
@@ -78,7 +82,7 @@ function(pops_infer_test_labels out source)
 endfunction()
 
 function(pops_add_gtest_suite)
-  set(options ENABLE_EXPORTS NO_DISCOVER)
+  set(options ENABLE_EXPORTS NO_DISCOVER RUNTIME_DISCOVERY)
   set(oneValueArgs NAME TIMEOUT RESOURCE_LOCK)
   set(multiValueArgs SOURCES EXTRA_LIBS LABELS COMPILE_DEFINITIONS RESOURCE_GROUPS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -116,45 +120,81 @@ function(pops_add_gtest_suite)
     target_compile_definitions(${ARG_NAME} PRIVATE ${ARG_COMPILE_DEFINITIONS})
   endif()
 
-  # ``gtest_discover_tests(PROPERTIES ...)`` transports an alternating
-  # property/value list through a generated CMake script.  A list-valued
-  # property cannot survive that transport faithfully: unescaped semicolons
-  # become extra property/value arguments, while escaped semicolons reach CTest
-  # as one literal LABELS element.  Keep scalar properties on the normal path,
-  # then assign list-valued LABELS/RESOURCE_GROUPS from a CTest include after
-  # discovery, using the documented TEST_LIST variable.
   set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
-  set(_pops_test_properties
-    TIMEOUT ${ARG_TIMEOUT})
-  if(ARG_RESOURCE_LOCK)
-    list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
-  endif()
 
   if(NOT ARG_NO_DISCOVER)
-    set(_pops_test_list "${ARG_NAME}_TESTS")
-    gtest_discover_tests(${ARG_NAME}
-      DISCOVERY_MODE POST_BUILD
-      DISCOVERY_TIMEOUT 60
-      XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
-      TEST_LIST "${_pops_test_list}"
-      PROPERTIES ${_pops_test_properties})
+    if(ARG_RUNTIME_DISCOVERY)
+      # Runtime discovery is an explicit escape hatch for a future suite whose
+      # parameterized or generated names cannot be recovered from its sources.
+      # Keep it POST_BUILD: PRE_TEST would enumerate every executable on each
+      # CTest inventory and again on execution, which is especially costly for
+      # CI's label-authenticated shards.
+      set(_pops_test_list "${ARG_NAME}_TESTS")
+      set(_pops_test_properties TIMEOUT ${ARG_TIMEOUT})
+      if(ARG_RESOURCE_LOCK)
+        list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+      endif()
+      gtest_discover_tests(${ARG_NAME}
+        DISCOVERY_MODE POST_BUILD
+        DISCOVERY_TIMEOUT 60
+        XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
+        TEST_LIST "${_pops_test_list}"
+        PROPERTIES ${_pops_test_properties})
 
-    set(_pops_list_properties_file
-      "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}_list_properties.cmake")
-    set(_pops_resource_groups_assignment "")
-    if(ARG_RESOURCE_GROUPS)
-      set(_pops_resource_groups_assignment
-        "    RESOURCE_GROUPS [==[${ARG_RESOURCE_GROUPS}]==]\n")
-    endif()
-    file(GENERATE OUTPUT "${_pops_list_properties_file}" CONTENT
+      # ``gtest_discover_tests(PROPERTIES ...)`` transports an alternating
+      # property/value list through a generated CMake script.  Assign list-valued
+      # LABELS/RESOURCE_GROUPS after discovery so CTest receives atomic labels.
+      set(_pops_list_properties_file
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}_list_properties.cmake")
+      set(_pops_resource_groups_assignment "")
+      if(ARG_RESOURCE_GROUPS)
+        set(_pops_resource_groups_assignment
+          "    RESOURCE_GROUPS [==[${ARG_RESOURCE_GROUPS}]==]\n")
+      endif()
+      file(GENERATE OUTPUT "${_pops_list_properties_file}" CONTENT
 "foreach(_pops_discovered_test IN LISTS ${_pops_test_list})
   set_tests_properties(\"\${_pops_discovered_test}\" PROPERTIES
     LABELS [==[${_pops_test_labels}]==]
 ${_pops_resource_groups_assignment}  )
 endforeach()
 ")
-    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
-      "${_pops_list_properties_file}")
+      set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+        "${_pops_list_properties_file}")
+    else()
+      # All current PoPS suites use ordinary TEST/TEST_F declarations.  Register
+      # them at configure time so CTest reads one CTestTestfile.cmake instead of
+      # two generated include scripts per executable on every inventory/run.
+      # Omitting SKIP_DEPENDENCY intentionally makes CMake reconfigure whenever
+      # a test declaration changes.
+      gtest_add_tests(
+        TARGET ${ARG_NAME}
+        SOURCES ${ARG_SOURCES}
+        TEST_LIST _pops_discovered_tests)
+      if(NOT _pops_discovered_tests)
+        message(FATAL_ERROR
+          "No GoogleTest cases found in ${ARG_NAME}; use NO_DISCOVER for a manually registered suite")
+      endif()
+
+      set_tests_properties(${_pops_discovered_tests} PROPERTIES
+        LABELS "${_pops_test_labels}"
+        TIMEOUT "${ARG_TIMEOUT}")
+      if(ARG_RESOURCE_LOCK)
+        set_tests_properties(${_pops_discovered_tests} PROPERTIES
+          RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+      endif()
+      if(ARG_RESOURCE_GROUPS)
+        set_tests_properties(${_pops_discovered_tests} PROPERTIES
+          RESOURCE_GROUPS "${ARG_RESOURCE_GROUPS}")
+      endif()
+
+      # Preserve the per-case GoogleTest XML artifacts previously provided by
+      # gtest_discover_tests(XML_OUTPUT_DIR) without adding CTest include files.
+      file(MAKE_DIRECTORY "${_pops_gtest_xml_dir}/${ARG_NAME}")
+      foreach(_pops_discovered_test IN LISTS _pops_discovered_tests)
+        set_property(TEST "${_pops_discovered_test}" APPEND PROPERTY ENVIRONMENT
+          "GTEST_OUTPUT=xml:${_pops_gtest_xml_dir}/${ARG_NAME}/${_pops_discovered_test}.xml")
+      endforeach()
+    endif()
   endif()
 endfunction()
 
@@ -194,6 +234,36 @@ function(pops_add_mpi_gtest_suite name)
     NO_DISCOVER)
   foreach(_np IN LISTS ARG_RANKS)
     pops_add_mpi_rank_test(${name} ${_np})
+  endforeach()
+endfunction()
+
+# A lifecycle test needs complete control over main(): its first executable statement must be the
+# embedding application's MPI_Init_thread, before PoPS or a test framework can touch MPI.  Keep this
+# registration separate from the GoogleTest wrapper so that ownership and finalization are proved by
+# a real process lifecycle rather than by a fixture or mocked state.
+function(pops_add_mpi_standalone_suite name)
+  set(options)
+  set(oneValueArgs)
+  set(multiValueArgs RANKS)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(NOT ARG_RANKS)
+    set(ARG_RANKS 1 2)
+  endif()
+
+  pops_test_source(_src ${name})
+  add_executable(${name} "${_src}")
+  set_target_properties(${name} PROPERTIES NO_SYSTEM_FROM_IMPORTED ON)
+  target_link_libraries(${name} PRIVATE pops::pops pops_dev_options)
+  target_compile_features(${name} PRIVATE cxx_std_${POPS_CXX_STD})
+
+  foreach(_np IN LISTS ARG_RANKS)
+    add_test(NAME ${name}_np${_np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${_np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(${name}_np${_np} PROPERTIES
+      LABELS "backend;mpi;medium"
+      PROCESSORS ${_np}
+      TIMEOUT 60)
   endforeach()
 endfunction()
 
@@ -248,6 +318,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_external_brick
   test_external_brick_json
   test_runtime_environment
+  test_world_communicator
   test_residual_operator
   test_capability_report
   test_canonical_identity
@@ -577,6 +648,8 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 
 
 if(POPS_HAS_MPI)
+  pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
+
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_hybrid_mbox_parity 1 2 4)
@@ -584,6 +657,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_distributed_coarse 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
@@ -593,6 +667,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
+  set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
@@ -603,6 +678,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
+  set(POPS_MPI_RANKS_test_world_communicator 1 2)
 
   set(POPS_CPP_MPI_ONLY_TESTS
     test_mpi_polar_schur
@@ -612,6 +688,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
+    test_mpi_amr_program_reflux
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_system_solve_fields
@@ -621,6 +698,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
     test_mpi_array_reduce
+    test_mpi_multiblock_interface_scheduler
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary
@@ -629,6 +707,14 @@ if(POPS_HAS_MPI)
     test_mpi_smoke
   )
 
+  # The HDF5 proof exists only when the collective native backend was actually configured.  The
+  # standard `mpi` and `ci-mpi` presets request that backend strictly; a custom MPI-only consumer
+  # does not receive a green skipped target that would pretend to validate absent HDF5 code.
+  if(POPS_HAS_PARALLEL_HDF5)
+    set(POPS_MPI_RANKS_test_mpi_hdf5_collective 1 2)
+    list(APPEND POPS_CPP_MPI_ONLY_TESTS test_mpi_hdf5_collective)
+  endif()
+
   foreach(_test IN LISTS POPS_CPP_MPI_ONLY_TESTS)
     set(_extra_libs)
     # test_mpi_system_* + test_mpi_coupled_source need the System runtime; test_mpi_amr_* +
@@ -636,7 +722,9 @@ if(POPS_HAS_MPI)
     # a `$`-anchored pattern would only match the bare prefix and leave e.g.
     # test_mpi_amr_twoblock_parity / test_mpi_system_solve_fields without their runtime object
     # lib, so the link fails with undefined AmrSystem/System symbols.
-    if(_test STREQUAL "test_mpi_field_plan_consensus")
+    if(_test STREQUAL "test_mpi_hdf5_collective")
+      list(APPEND _extra_libs pops_runtime_output)
+    elseif(_test STREQUAL "test_mpi_field_plan_consensus")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
@@ -646,6 +734,15 @@ if(POPS_HAS_MPI)
     pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  # This regression consumes two MPI processor slots and exercises transport, not on-node
+  # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
+  set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1")
+  # This regression proves MPI trace transport and intentionally does not exercise on-node
+  # threading.  One Kokkos worker per rank avoids OpenMP oversubscription and matches CTest's
+  # PROCESSORS=2 accounting.
+  set_tests_properties(test_mpi_multiblock_interface_scheduler_np2 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1")
 
   # These are ordinary serial suites with additional MPI launch variants. Their rank sets are
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
@@ -655,6 +752,7 @@ if(POPS_HAS_MPI)
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
+    test_world_communicator
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})

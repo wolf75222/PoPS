@@ -309,8 +309,10 @@ class RemappedFFTSolver {
                 f(v.lo[0] + i, v.lo[1] + r * nyl_ + jl);
     }
     const int cnt = nyl_ * Nx_;
-    MPI_Scatter(my_rank() == owner_rank_ ? sendbuf.data() : nullptr, cnt, MPI_DOUBLE,
-                rho_local.data(), cnt, MPI_DOUBLE, owner_rank_, MPI_COMM_WORLD);
+    detail::require_mpi_success(
+        MPI_Scatter(my_rank() == owner_rank_ ? sendbuf.data() : nullptr, cnt, MPI_DOUBLE,
+                    rho_local.data(), cnt, MPI_DOUBLE, owner_rank_, MPI_COMM_WORLD),
+        "MPI_Scatter(RemappedFFTSolver)");
 #else
     {
       const ConstArray4 f = rhs_.fab(0).const_array();
@@ -325,9 +327,10 @@ class RemappedFFTSolver {
     std::vector<double> recvbuf;
     if (my_rank() == owner_rank_)
       recvbuf.resize(static_cast<std::size_t>(Nx_) * Ny_);
-    MPI_Gather(phi_local.data(), cnt, MPI_DOUBLE,
-               my_rank() == owner_rank_ ? recvbuf.data() : nullptr, cnt, MPI_DOUBLE, owner_rank_,
-               MPI_COMM_WORLD);
+    detail::require_mpi_success(MPI_Gather(phi_local.data(), cnt, MPI_DOUBLE,
+                                           my_rank() == owner_rank_ ? recvbuf.data() : nullptr, cnt,
+                                           MPI_DOUBLE, owner_rank_, MPI_COMM_WORLD),
+                                "MPI_Gather(RemappedFFTSolver)");
     if (my_rank() == owner_rank_) {
       Array4 p = phi_.fab(0).array();
       const Box2D v = phi_.box(0);

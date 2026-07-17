@@ -50,7 +50,7 @@ from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 
 
@@ -59,7 +59,7 @@ CXX = default_cxx()
 
 
 def _skip(msg):
-    skip_process_test("test_time_solve_fields_from_state: %s" % msg)
+    require_native_or_skip("test_time_solve_fields_from_state: %s" % msg)
 
 
 try:

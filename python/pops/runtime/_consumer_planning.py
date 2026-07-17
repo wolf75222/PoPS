@@ -17,6 +17,7 @@ from pops.output._consumer_contracts import (
     ConsumerQuantity,
     ParallelMode,
     ScheduleCursor,
+    diagnostic_collective_operations,
 )
 from ._consumer_effects import (
     AcceptedSideEffect,
@@ -91,19 +92,43 @@ def _resource_bindings(
         manifest.operation_data is not None
         and manifest.operation_data.get("supports_singleton_collective") is True
     )
-    if (manifest.parallel_mode is ParallelMode.COLLECTIVE
-            and runtime.communication.communicator_id == "serial"
+    communicator = runtime.communication.communicator_id
+    if (manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+            and manifest.parallel_mode is ParallelMode.SERIAL
+            and communicator != "serial"):
+        refuse(
+            "serial_consumer_requires_serial_context",
+            "consumer[%s].parallel_mode" % manifest.qualified_id,
+            "SERIAL output is valid only in a proved serial ExecutionContext; select ROOT, "
+            "COLLECTIVE, or PER_RANK explicitly for distributed execution",
+            evidence={"communicator": communicator},
+        )
+    if (manifest.parallel_mode is not ParallelMode.SERIAL
+            and communicator == "serial"
             and not supports_singleton_collective):
         refuse(
-            "collective_consumer_requires_distributed_context",
+            "distributed_consumer_requires_distributed_context",
             "consumer[%s].parallel_mode" % manifest.qualified_id,
-            "a collective consumer requires an explicit non-serial ExecutionContext; "
-            "the runtime must not defer this mismatch until publication unless the exact "
-            "consumer provider supports a singleton collective",
-            evidence={"communicator": runtime.communication.communicator_id},
+            "%s output requires an explicit non-serial ExecutionContext; the runtime must "
+            "not defer this mismatch until publication unless the exact operation provider "
+            "supports a singleton collective" % manifest.parallel_mode.name,
+            evidence={"communicator": communicator},
         )
-    result = []
+    rows = []
     for quantity in manifest.quantities:
+        expected = (
+            frozenset({"gather"})
+            if manifest.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE)
+            else frozenset()
+        )
+        rows.append((quantity, expected))
+    for quantity in manifest.diagnostic_quantities:
+        rows.append((quantity, frozenset(
+            diagnostic_collective_operations(quantity.execution)
+        )))
+
+    result = []
+    for quantity, expected_collectives in rows:
         accesses = [
             access
             for call in runtime.calls
@@ -122,18 +147,26 @@ def _resource_bindings(
                     "layout_id": quantity.layout_id,
                 },
             )
-        collective_ids = tuple(sorted(
-            row.identity.token for row in runtime.communication.collectives
+        collective_rows = tuple(
+            row for row in runtime.communication.collectives
             if row.resource == quantity.runtime_resource
-        ))
-        if manifest.parallel_mode is ParallelMode.COLLECTIVE and not collective_ids:
+            and row.operation in expected_collectives
+        )
+        available_collectives = {row.operation for row in collective_rows}
+        missing_collectives = expected_collectives - available_collectives
+        if missing_collectives:
             refuse(
                 "consumer_collective_unavailable",
                 "consumer[%s].quantity[%s]" % (
                     manifest.qualified_id, quantity.identity.token),
-                "collective consumer quantity lacks an authenticated collective plan",
-                evidence=quantity.runtime_resource,
+                "consumer quantity lacks exact authenticated collective operation(s) %r"
+                % sorted(missing_collectives),
+                evidence={
+                    "resource": quantity.runtime_resource,
+                    "available": sorted(available_collectives),
+                },
             )
+        collective_ids = tuple(sorted(row.identity.token for row in collective_rows))
         result.append(ConsumerResourceBinding(
             quantity.identity,
             quantity.reference.qualified_id,

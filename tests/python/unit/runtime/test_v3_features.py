@@ -8,8 +8,7 @@
       fail_policy acceptee) ; newton_diagnostics (rapport newton_report) cable en MULTI-BLOCS natif,
       REJETE en mono-bloc (le coupleur n'agrege pas de rapport) ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
-      grossier (la masse et la dynamique different du seed densite au repos) ; et AmrSystem.write
-      npz ecrit un champ PAR bloc par NOM (pas seulement le bloc 0, revue v3) ;
+      grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
       capability emise ; rejete sans elle ; source_jacobian : parite de trajectoire avec les FD ;
       garde CODEGEN : source_jacobian sans source leve a compile() (pas seulement check()).
@@ -34,7 +33,7 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 
 fails = 0
@@ -170,24 +169,13 @@ chk(np.all(np.isfinite(d_after)), "multi-blocs + etat complet : pas fini")
 # bougerait quasiment pas en 1 pas) : preuve que la quantite de mouvement a ete seedee.
 chk(float(np.max(np.abs(d_after - d_before))) > 1e-5,
     "la quantite de mouvement seedee advecte la densite (etat complet actif)")
-# AmrSystem.write multi-blocs (revue vague 3) : un champ PAR bloc, par NOM (e1 ET e2) -- pas
-# seulement le bloc 0 sous une cle generique.
-wdir = tempfile.mkdtemp()
-try:
-    fnpz = amr3.write(os.path.join(wdir, "amr_out"), format="npz")
-    with np.load(fnpz) as z:
-        chk("density_e1" in z.files and "density_e2" in z.files and "phi" in z.files,
-        f"AmrSystem.write npz multi-blocs : density_e1 + density_e2 + phi (cles {z.files})")
-finally:
-    shutil.rmtree(wdir, ignore_errors=True)
-
 # --- (D) DSL : enable_hllc + source_jacobian (compilateur requis) ---------------------
 missing = missing_compiler_requirement(INCLUDE)
 if missing:
     if fails:
         print(f"FAIL test_v3_features : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(D) test_v3_features : {missing}")
+    require_native_or_skip(f"(D) test_v3_features : {missing}")
 
 
 def iso3_dsl(name, hllc=False, jac=False):

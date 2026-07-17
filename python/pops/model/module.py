@@ -364,7 +364,7 @@ class Module(ModuleFreezable):
         return self
 
     def operator_registry(self) -> Any:
-        """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
+        """The Module's :class:`OperatorRegistry`, consumed by resolve/compile."""
         return self._registry
 
     def operator_handle(self, name: Any) -> OperatorHandle:

@@ -96,12 +96,14 @@ void advance_amr_with_temporal_relations(
 /// Allocation-free counterpart used by AmrRuntime after relation installation prepared the clock
 /// partitions once.  The immutable plan is safe to share across blocks and their explicit substeps.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void advance_amr_with_temporal_plan(
-    const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
-    const detail::PreparedAmrTemporalPlan& temporal_plan,
-    Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true,
-    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
-    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+void advance_amr_with_temporal_plan(const Model& m, std::vector<AmrLevelMP>& levels,
+                                    const Box2D& base_dom, Real dt,
+                                    const detail::PreparedAmrTemporalPlan& temporal_plan,
+                                    Periodicity base_per = Periodicity{true, true},
+                                    bool coarse_replicated = true, bool recon_prim = false,
+                                    bool imex = false, const NewtonOptions& nopts = {},
+                                    AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+                                    Real pos_floor = Real(0)) {
   detail::amr_step_multilevel_multipatch_with_temporal_plan<Limiter, NumericalFlux>(
       m, levels, base_dom, dt, temporal_plan, base_per, coarse_replicated, recon_prim, imex, nopts,
       tmethod, pos_floor);
@@ -119,8 +121,8 @@ void advance_amr_with_temporal_relations(
     const Model& m, LevelHierarchy& h, Real dt,
     const std::vector<amr::ParentChildClockRelation>& temporal_relations) {
   advance_amr_with_temporal_relations<Limiter, NumericalFlux>(
-      m, h.levels, h.base_dom, dt, temporal_relations, h.base_per, h.coarse_replicated, h.recon_prim,
-      h.imex, h.newton_options, h.time_method, h.pos_floor);
+      m, h.levels, h.base_dom, dt, temporal_relations, h.base_per, h.coarse_replicated,
+      h.recon_prim, h.imex, h.newton_options, h.time_method, h.pos_floor);
 }
 
 }  // namespace pops

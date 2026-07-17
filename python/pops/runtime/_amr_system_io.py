@@ -1,6 +1,7 @@
-"""AMR visualization and the single strict content-addressed checkpoint route."""
+"""Strict accepted-state checkpoint/restart mixin for the AMR engine."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -9,8 +10,14 @@ else:
     _AmrSystem = object
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedAMRSystemRestart:
+    restart_identity: Any
+    codec: Any
+
+
 class _AmrSystemIO(_AmrSystem):
-    """Output / checkpoint / restart methods of AmrSystem."""
+    """Private accepted-state codec and transactional restore adapter for ``AmrSystem``."""
 
     def set_history_persistence(self, mapping: Any) -> Any:
         self._history_persistence = dict(mapping or {})
@@ -19,85 +26,84 @@ class _AmrSystemIO(_AmrSystem):
     def last_restart_report(self) -> Any:
         return getattr(self, "_last_restart_report", None)
 
-    def write(self, path: Any, format: str = "npz", step: Any = None) -> Any:
-        """Write coarse visualization fields; this output is not a restart artifact."""
-        import os
-        import numpy as np
-
-        n = self._s.nx()
-        suffix = ("_%06d" % int(step)) if step is not None else ""
-        names = list(self._s.block_names()) or [""]
-        if format == "npz":
-            out = {
-                "t": self._s.time(), "n": n,
-                "patch_rectangles": np.array(self.patch_rectangles(), dtype=np.float64)
-                if self.patch_rectangles() else np.zeros((0, 4)),
-            }
-            for block in names:
-                key = block or "block"
-                out["density_" + key] = np.asarray(
-                    self.density(block) if block else self.density(), dtype=np.float64)
-            out["phi"] = np.asarray(self.potential(), dtype=np.float64)
-            target = path + suffix + ".npz"
-            tmp = target + ".tmp"
-            with open(tmp, "wb") as handle:
-                np.savez_compressed(handle, **out)
-            os.replace(tmp, target)
-            return target
-        if format == "vtk":
-            target = path + suffix + ".vti"
-            arrays, labels = [], []
-            for block in names:
-                key = block or "block"
-                arrays.append(np.asarray(
-                    self.density(block) if block else self.density(),
-                    dtype=np.float64).reshape(n, n))
-                labels.append("%s_density" % key)
-            arrays.append(np.asarray(self.potential(), dtype=np.float64).reshape(n, n))
-            labels.append("phi")
-            lines = [
-                '<?xml version="1.0"?>',
-                '<VTKFile type="ImageData" version="0.1" byte_order="LittleEndian">',
-                '  <ImageData WholeExtent="0 %d 0 %d 0 0" Origin="0 0 0" '
-                'Spacing="%.17g %.17g 1">' % (n, n, self._L / n, self._L / n),
-                '    <Piece Extent="0 %d 0 %d 0 0">' % (n, n), '      <CellData>',
-            ]
-            for name, array in zip(labels, arrays, strict=True):
-                lines.append('        <DataArray type="Float64" Name="%s" format="ascii">' % name)
-                lines.append("          " + " ".join("%.17g" % value for value in array.ravel()))
-                lines.append("        </DataArray>")
-            lines += ["      </CellData>", "    </Piece>", "  </ImageData>", "</VTKFile>", ""]
-            tmp = target + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines))
-            os.replace(tmp, target)
-            return target
-        raise ValueError("AmrSystem.write: format must be 'npz' or 'vtk'")
-
     def checkpoint(self, path: Any) -> Any:
-        """Write the only supported AMR checkpoint schema, for frozen or active regridding."""
+        """Encode the complete accepted AMR state for the RuntimeInstance checkpoint provider.
+
+        The provider owns collective publication; this adapter serializes the installed hierarchy,
+        temporal state, histories, and regrid state for frozen or active regridding.
+        """
         from pops.runtime._amr_checkpoint_v3 import write_v3
 
         return write_v3(
             self, self._s, path, self._L, self._regrid_every,
             getattr(self, "_history_persistence", None) or {})
 
-    def restart(self, path: Any) -> Any:
-        """Authenticate and restore the current AMR checkpoint schema; no historical fallback."""
-        import numpy as np
-
-        target = path if path.endswith(".npz") else path + ".npz"
-        data = np.load(target, allow_pickle=False)
+    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
+        """Authenticate and preflight the complete AMR payload without native mutation."""
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
-        self._last_restart_identity = authenticate_checkpoint_payload(
-            self, data, runtime_kind="amr")
+        from pops.runtime._amr_checkpoint_v3 import prepare_v3
+
+        data = decode_checkpoint_bytes(payload)
+        identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         version = int(data["pops_amr_checkpoint_version"])
         if version != 3:
             raise ValueError(
                 "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
-        from pops.runtime._amr_checkpoint_v3 import restart_v3
+        return _PreparedAMRSystemRestart(
+            identity, prepare_v3(self, self._s, data, self._L))
 
-        self._last_restart_report = restart_v3(self, self._s, data, self._L)
+    def _begin_checkpoint_restart(self) -> None:
+        if "_checkpoint_restart_python_snapshot" in self.__dict__:
+            raise RuntimeError("AMR checkpoint restart transaction is already active")
+        self._checkpoint_restart_python_snapshot = (
+            getattr(self, "_last_restart_identity", None),
+            getattr(self, "_last_restart_report", None),
+            getattr(self, "_temporal_restart_state", None),
+            getattr(self, "_step_controller", None),
+        )
+        try:
+            self._s.begin_restart_transaction()
+        except BaseException:
+            del self._checkpoint_restart_python_snapshot
+            raise
+
+    def _apply_checkpoint_restart(self, prepared: _PreparedAMRSystemRestart) -> Any:
+        if type(prepared) is not _PreparedAMRSystemRestart:
+            raise TypeError("AMR restart requires its exact prepared payload")
+        from pops.runtime._amr_checkpoint_v3 import apply_v3
+
+        self._last_restart_report = apply_v3(self, self._s, prepared.codec)
+        self._last_restart_identity = prepared.restart_identity
+        return prepared.restart_identity
+
+    def _commit_checkpoint_restart(self) -> None:
+        # Keep the native AcceptedSnapshot live through the all-rank commit consensus.
+        self._checkpoint_restart_committed = True
+
+    def _finalize_checkpoint_restart(self) -> None:
+        if not self.__dict__.get("_checkpoint_restart_committed", False):
+            raise RuntimeError("AMR checkpoint restart transaction was not committed")
+        self._s.commit_restart_transaction()
+        del self._checkpoint_restart_committed
+        del self._checkpoint_restart_python_snapshot
+
+    def _rollback_checkpoint_restart(self) -> None:
+        snapshot = self._checkpoint_restart_python_snapshot
+        try:
+            self._s.rollback_restart_transaction()
+        finally:
+            (self._last_restart_identity, self._last_restart_report,
+             self._temporal_restart_state, self._step_controller) = snapshot
+            self.__dict__.pop("_checkpoint_restart_committed", None)
+            del self._checkpoint_restart_python_snapshot
+
+    def restart(self, path: Any) -> Any:
+        """Restore the direct AMR engine through the native collective transaction protocol."""
+        from pops.output._checkpoint_collective import restore_checkpoint_path
+
+        return restore_checkpoint_path(
+            self, self, path, phase_prefix="AMR direct-engine restart")
 
 
 __all__ = ["_AmrSystemIO"]

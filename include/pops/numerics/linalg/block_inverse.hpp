@@ -39,8 +39,8 @@
 
 #pragma once
 
-#include <pops/core/foundation/types.hpp>       // Real, POPS_HD
-#include <pops/numerics/linalg/dense_eig.hpp>    // pops::detail::mat_inverse<N> (N>3 fallback)
+#include <pops/core/foundation/types.hpp>      // Real, POPS_HD
+#include <pops/numerics/linalg/dense_eig.hpp>  // pops::detail::mat_inverse<N> (N>3 fallback)
 
 namespace pops {
 namespace detail {
@@ -55,7 +55,8 @@ namespace detail {
 template <int N>
 POPS_HD inline bool block_inverse(const Real (&A)[N][N], Real (&inv)[N][N],
                                   Real tol = Real(1e-300)) {
-  return mat_inverse<N>(A, inv, tol);  // N != 2, 3: the generic dense solve (specializations below).
+  return mat_inverse<N>(A, inv,
+                        tol);  // N != 2, 3: the generic dense solve (specializations below).
 }
 
 /// 2x2 closed form. A = [[a, b], [c, d]], det = a*d - b*c, A^{-1} = (1/det) [[d, -b], [-c, a]].
@@ -75,7 +76,7 @@ POPS_HD inline bool block_inverse<2>(const Real (&A)[2][2], Real (&inv)[2][2], R
   const Real b = A[0][1];
   const Real c = A[1][0];
   const Real d = A[1][1];
-  const Real t = a * d;        // hoisted: exact for the rotation block (1*1), own rounding otherwise
+  const Real t = a * d;  // hoisted: exact for the rotation block (1*1), own rounding otherwise
   const Real det = t - b * c;  // = 1 - (-w)*w == 1 + w*w (fma pairs on b*c, matching 1 + w*w)
   if (det < tol && det > -tol)
     return false;
@@ -135,7 +136,8 @@ POPS_HD inline bool block_apply_inverse(const Real (&M)[N][N], const Real (&v)[N
     return false;
   for (int r = 0; r < N; ++r) {
     Real acc = Real(0);
-    for (int c = 0; c < N; ++c) acc += inv[r][c] * v[c];
+    for (int c = 0; c < N; ++c)
+      acc += inv[r][c] * v[c];
     out[r] = acc;
   }
   return true;
@@ -156,8 +158,8 @@ POPS_HD inline bool block_apply_inverse(const Real (&M)[N][N], const Real (&v)[N
 /// apply_Binv under BOTH regimes: fused -> fma(-b, v1, t0) == fma(w, vy, vx); unfused -> round(-b*v1)
 /// then the add == apply_Binv compiled unfused. Same pinned shape for out[1] (hoist a*v[1]).
 template <>
-POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v)[2], Real (&out)[2],
-                                           Real tol) {
+POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v)[2],
+                                           Real (&out)[2], Real tol) {
   const Real a = M[0][0];
   const Real b = M[0][1];
   const Real c = M[1][0];
@@ -167,7 +169,8 @@ POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v
   if (det < tol && det > -tol)
     return false;
   const Real inv = Real(1) / det;
-  const Real t0 = d * v[0];  // hoisted: exact for the rotation block (d = 1), own rounding otherwise
+  const Real t0 =
+      d * v[0];  // hoisted: exact for the rotation block (d = 1), own rounding otherwise
   const Real t1 = a * v[1];
   out[0] = inv * (t0 + (-b) * v[1]);  // inv*(vx + w*vy) for the rotation block (fma pairs on -b*v1)
   out[1] = inv * ((-c) * v[0] + t1);  // inv*(vy - w*vx)                       (fma pairs on -c*v0)
@@ -177,8 +180,8 @@ POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v
 /// 3x3 factored apply: out = (1/det) * (adj . v), adj = cofactor^T (same cofactors / det as
 /// block_inverse<3>, pinned order), the single reciprocal factored out of each row bracket.
 template <>
-POPS_HD inline bool block_apply_inverse<3>(const Real (&M)[3][3], const Real (&v)[3], Real (&out)[3],
-                                           Real tol) {
+POPS_HD inline bool block_apply_inverse<3>(const Real (&M)[3][3], const Real (&v)[3],
+                                           Real (&out)[3], Real tol) {
   const Real a00 = M[0][0], a01 = M[0][1], a02 = M[0][2];
   const Real a10 = M[1][0], a11 = M[1][1], a12 = M[1][2];
   const Real a20 = M[2][0], a21 = M[2][1], a22 = M[2][2];

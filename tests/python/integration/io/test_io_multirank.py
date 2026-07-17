@@ -1,12 +1,11 @@
-"""IO v1 multi-rangs (audit 2026-06, section 10 / PR-IO-2) : accesseurs GLOBAUX collectifs
-(state_global / density_global / potential_global) + ecriture rang-0 de sim.write / sim.checkpoint.
+"""Low-level multi-rank global accessors and strict checkpoint refusal.
 
 CONTEXTE. Le System construit UNE box couvrant tout le domaine (mono-box ; cf. system.cpp ctor :
 ba = {index_domain}, dm round-robin -> box 0 sur le rang 0). Sous MPI np>1, les accesseurs
 non-globaux (density / get_state / potential) lisent fab(0) : valides sur le rang proprietaire, mais
-HORS BORNES sur un rang sans box. Les variantes _global rassemblent le champ par all_reduce_sum
-(chaque rang detient le champ complet) ; sim.write / sim.checkpoint les utilisent puis n'ecrivent le
-fichier que sur le rang 0.
+HORS BORNES sur un rang sans box. Les variantes _global rassemblent le champ par all_reduce_sum.
+La publication scientifique est couverte exclusivement par ConsumerGraph ; ce fichier ne teste que
+le seam natif et le refus d'un checkpoint direct sans identite compilee.
 
 CE TEST tourne en MONO-RANG (la batterie pytest n'a pas de harnais MPI ; le cas np>1 -- gather
 bit-identique a np=1/2/4 et aller-retour checkpoint/restart -- est couvert par le test C++
@@ -16,16 +15,17 @@ l'invariant CENTRAL :
   T1 - EQUIVALENCE GLOBAL == LOCAL en mono-rang : state_global == get_state, density_global ==
        density, potential_global == potential, BIT-IDENTIQUE (all_reduce = identite, box = domaine
        complet). C'est la garantie que la facade IO multi-rangs n'a RIEN change au mono-rang.
-  T2 - ROUND-TRIP write npz via le chemin global : le fichier relu redonne exactement get_state.
-  T3 - CHECKPOINT/RESTART bit-identique via le chemin global (mono-rang ; la semantique np>1 est la
-       meme : tout l'etat vit sur le rang 0).
-  T4 - my_rank / n_ranks exposes (0 / 1 en serie).
+  T2 - CHECKPOINT direct refuse sans ExecutionContext installe par pops.bind. Le round-trip
+       authentifie et l'identite du Program compile sont couverts par les tests du lifecycle public
+       et le test C++ MPI ; ce test bas niveau ne fabrique jamais une fausse autorite.
+  T3 - my_rank / n_ranks exposes (0 / 1 en serie).
 """
 from pops.numerics.reconstruction.limiters import Minmod
 import os
 import tempfile
 
 import numpy as np
+import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
@@ -60,39 +60,22 @@ def test_io_global_equals_local_mono_rank():
                           np.asarray(sim.potential())), "potential_global != potential (mono-rang)"
 
 
-def test_io_write_npz_roundtrip_global():
-    """T2 : write(npz) (chemin global) relu redonne get_state."""
-    sim = _build()
-    for _ in range(3):
-        sim.step(2e-3)
-    tmp = tempfile.mkdtemp()
-    p = sim.write(os.path.join(tmp, "out"), format="npz", step=2)
-    d = np.load(p)
-    ref = np.asarray(sim.get_state("ions")).reshape(3, sim.ny(), sim.nx())
-    assert np.array_equal(d["state_ions"], ref), "npz (global) != get_state"
-    assert int(d["macro_step"]) == 3, "macro_step absent/incoherent dans le npz"
-
-
-def test_io_checkpoint_restart_global():
-    """T3 : checkpoint (gather global) -> restart (scatter MPI-safe) bit-identique en mono-rang."""
+def test_io_checkpoint_requires_installed_execution_context():
+    """T2 : le chemin direct ne publie pas sans l'autorite installee par pops.bind."""
     tmp = tempfile.mkdtemp()
     sim = _build()
     for _ in range(3):
         sim.step(2e-3)
-    sim.checkpoint(os.path.join(tmp, "chk"))
-    for _ in range(4):
-        sim.step(2e-3)
-    ref = np.asarray(sim.get_state("ions"))
-
-    sim2 = _build()
-    sim2.restart(os.path.join(tmp, "chk"))
-    for _ in range(4):
-        sim2.step(2e-3)
-    assert np.array_equal(np.asarray(sim2.get_state("ions")), ref), "restart (global) non bit-identique"
+    checkpoint = os.path.join(tmp, "chk")
+    with pytest.raises(
+        ValueError, match="authenticated ExecutionContext installed by pops.bind"
+    ):
+        sim.checkpoint(checkpoint)
+    assert not os.path.exists(checkpoint + ".npz")
 
 
 def test_mpi_helpers_exposed():
-    """T4 : my_rank / n_ranks exposes au module (0 / 1 en serie)."""
+    """T3 : my_rank / n_ranks exposes au module (0 / 1 en serie)."""
     from pops import _pops
     assert _pops.my_rank() == 0
     assert _pops.n_ranks() >= 1
@@ -101,10 +84,8 @@ def test_mpi_helpers_exposed():
 if __name__ == "__main__":
     test_io_global_equals_local_mono_rank()
     print("OK T1 : global == local (mono-rang)")
-    test_io_write_npz_roundtrip_global()
-    print("OK T2 : write npz round-trip (global)")
-    test_io_checkpoint_restart_global()
-    print("OK T3 : checkpoint/restart bit-identique (global)")
+    test_io_checkpoint_requires_installed_execution_context()
+    print("OK T2 : checkpoint direct refuse sans ExecutionContext installe")
     test_mpi_helpers_exposed()
-    print("OK T4 : my_rank/n_ranks exposes")
+    print("OK T3 : my_rank/n_ranks exposes")
     print("test_io_multirank : OK")

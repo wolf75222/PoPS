@@ -8,14 +8,14 @@
 #include <vector>
 
 #include <pops/amr/hierarchy/refinement_ratio.hpp>  // kAmrRefRatio (ratio 2)
-#include <pops/core/foundation/kokkos_env.hpp>       // device_fence
-#include <pops/mesh/layout/box_array.hpp>            // BoxArray / Box2D
-#include <pops/mesh/storage/mf_arith.hpp>            // pops::lincomb (device-clean copy / negate)
-#include <pops/mesh/storage/multifab.hpp>            // MultiFab / DistributionMapping
+#include <pops/core/foundation/kokkos_env.hpp>      // device_fence
+#include <pops/mesh/layout/box_array.hpp>           // BoxArray / Box2D
+#include <pops/mesh/storage/mf_arith.hpp>           // pops::lincomb (device-clean copy / negate)
+#include <pops/mesh/storage/multifab.hpp>           // MultiFab / DistributionMapping
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>  // CompositeFacPoisson (composite FAC elliptic)
-#include <pops/numerics/elliptic/linear/solve_report.hpp>       // SolveReport
-#include <pops/parallel/comm.hpp>                    // pops::n_ranks (MPI-multilevel refusal)
-#include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine this helper reads)
+#include <pops/numerics/elliptic/linear/solve_report.hpp>  // SolveReport
+#include <pops/parallel/comm.hpp>                          // pops::n_ranks (MPI-multilevel refusal)
+#include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (the engine this helper reads)
 
 /// @file
 /// @brief AmrTensorElliptic -- the composite tensor-coefficient elliptic driver a compiled
@@ -71,16 +71,15 @@ inline void validate_tensor_fac_controls(const TensorFacControls& options) {
       (!std::isfinite(static_cast<double>(*options.coarse_rel_tol)) ||
        *options.coarse_rel_tol <= Real(0) || *options.coarse_rel_tol >= Real(1)))
     throw std::invalid_argument("CompositeTensorFAC coarse_rel_tol must be finite and in (0, 1)");
-  if (options.coarse_abs_tol &&
-      (!std::isfinite(static_cast<double>(*options.coarse_abs_tol)) ||
-       *options.coarse_abs_tol < Real(0)))
+  if (options.coarse_abs_tol && (!std::isfinite(static_cast<double>(*options.coarse_abs_tol)) ||
+                                 *options.coarse_abs_tol < Real(0)))
     throw std::invalid_argument("CompositeTensorFAC coarse_abs_tol must be finite and nonnegative");
   if (options.coarse_cycles && *options.coarse_cycles <= 0)
     throw std::invalid_argument("CompositeTensorFAC coarse_cycles must be positive");
 }
 
-inline TensorFacControls tensor_fac_controls(int fine_sweeps, Real coarse_rel_tol, Real coarse_abs_tol,
-                                             int coarse_cycles, int verbose) {
+inline TensorFacControls tensor_fac_controls(int fine_sweeps, Real coarse_rel_tol,
+                                             Real coarse_abs_tol, int coarse_cycles, int verbose) {
   if (fine_sweeps < 0 || coarse_rel_tol < Real(0) || coarse_abs_tol < Real(0) || coarse_cycles < 0)
     throw std::invalid_argument(
         "CompositeTensorFAC wire options use zero for native default or a positive override");
@@ -146,8 +145,8 @@ class AmrTensorElliptic {
   /// verbosity; those values resolve from CompositeFacOptions, the sole native defaults authority.
   void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, Real coarse_abs_tol,
                                       int coarse_cycles, int verbose) {
-    fac_controls_ = detail::tensor_fac_controls(
-        fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose);
+    fac_controls_ = detail::tensor_fac_controls(fine_sweeps, coarse_rel_tol, coarse_abs_tol,
+                                                coarse_cycles, verbose);
   }
 
   /// Join native controls with CompositeTensorFAC tolerances / iteration budget. Public on this
@@ -175,12 +174,18 @@ class AmrTensorElliptic {
     ensure_level_buffers(k);
     LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
     switch (role) {
-      case 0: return lb.eps_x;   // kEpsX
-      case 1: return lb.eps_y;   // kEpsY
-      case 2: return lb.a_xy;    // kAxy
-      case 3: return lb.a_yx;    // kAyx
-      case 4: return lb.rhs;     // kRhs
-      case 5: return lb.flux;    // kFlux (transient explicit-flux scratch)
+      case 0:
+        return lb.eps_x;  // kEpsX
+      case 1:
+        return lb.eps_y;  // kEpsY
+      case 2:
+        return lb.a_xy;  // kAxy
+      case 3:
+        return lb.a_yx;  // kAyx
+      case 4:
+        return lb.rhs;  // kRhs
+      case 5:
+        return lb.flux;  // kFlux (transient explicit-flux scratch)
       default:
         throw std::runtime_error("AmrTensorElliptic::target: unknown AssemblyFieldRole wire id " +
                                  std::to_string(role));
@@ -278,11 +283,11 @@ class AmrTensorElliptic {
  private:
   struct LevelBuffers {
     MultiFab eps_x, eps_y, a_xy, a_yx;  ///< tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]]
-    MultiFab rhs;                        ///< condensed right-hand side (-Lap phi^n - g div F)
-    MultiFab flux;                       ///< transient explicit-flux scratch (2-comp, if the body uses it)
-    MultiFab diagonal_delta;             ///< persistent diagonal-anisotropy capability check scratch
-    MultiFab initial_guess;              ///< gathered per-level initial guess for the next solve attempt
-    MultiFab phi;                        ///< published composite potential of this level
+    MultiFab rhs;                       ///< condensed right-hand side (-Lap phi^n - g div F)
+    MultiFab flux;            ///< transient explicit-flux scratch (2-comp, if the body uses it)
+    MultiFab diagonal_delta;  ///< persistent diagonal-anisotropy capability check scratch
+    MultiFab initial_guess;   ///< gathered per-level initial guess for the next solve attempt
+    MultiFab phi;             ///< published composite potential of this level
     bool built = false;
   };
 
@@ -334,14 +339,13 @@ class AmrTensorElliptic {
     if (fac_ && fac_level_boxes_ == key)
       return;
     const Geometry geom_c = eng_->level_geom(0);
-    const BoxArray coarse_ba =
-        eng_->level_state(static_cast<std::size_t>(block_), 0).box_array();
+    const BoxArray coarse_ba = eng_->level_state(static_cast<std::size_t>(block_), 0).box_array();
     if (level_boxes.size() == 1)
       fac_ = std::make_unique<CompositeFacPoisson>(geom_c, coarse_ba, eng_->poisson_bc(),
                                                    level_boxes[0], kAmrRefRatio);
     else
-      fac_ = std::make_unique<CompositeFacPoisson>(geom_c, coarse_ba, eng_->poisson_bc(), level_boxes,
-                                                   kAmrRefRatio);
+      fac_ = std::make_unique<CompositeFacPoisson>(geom_c, coarse_ba, eng_->poisson_bc(),
+                                                   level_boxes, kAmrRefRatio);
     fac_level_boxes_ = std::move(key);
   }
 

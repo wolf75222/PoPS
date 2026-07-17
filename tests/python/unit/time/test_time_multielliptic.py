@@ -55,7 +55,7 @@ from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 
 
@@ -69,7 +69,7 @@ def _pops_mods():
         from pops.physics._facade import Model
         from pops import time as adctime
     except ImportError as exc:  # a genuinely absent installed package is an environment skip
-        skip_process_test("test_time_multielliptic: pops unavailable: %s" % exc)
+        require_native_or_skip("test_time_multielliptic: pops unavailable: %s" % exc)
     return Model, sqrt, adctime
 
 
@@ -329,11 +329,10 @@ print("== (B) named second elliptic solve == default Poisson solve (public runti
 
 
 def _skipB(msg):
-    print("-- (B) skipped: %s --" % msg)
     print("%s test_time_multielliptic (A only)" % ("FAIL" if fails else "PASS"))
     if fails:
         sys.exit(1)
-    skip_process_test("test_time_multielliptic native section: %s" % msg)
+    require_native_or_skip("test_time_multielliptic native section: %s" % msg)
 
 
 try:

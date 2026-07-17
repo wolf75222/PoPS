@@ -325,6 +325,9 @@ class ArrayPiece:
     lower: tuple[int, int]
     upper: tuple[int, int]
     values: Any = field(repr=False, compare=False)
+    global_box_index: int
+    owner_rank: int
+    replicated: bool
 
     def __post_init__(self) -> None:
         lower, upper = tuple(self.lower), tuple(self.upper)
@@ -337,6 +340,12 @@ class ArrayPiece:
         if values.ndim not in (2, 3) or values.shape[-2:] != (
                 upper[0] - lower[0], upper[1] - lower[1]):
             raise ValueError("array piece values do not match its spatial bounds")
+        for name in ("global_box_index", "owner_rank"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or type(value) is not int or value < 0:
+                raise TypeError("array piece %s must be an integer >= 0" % name)
+        if type(self.replicated) is not bool:
+            raise TypeError("array piece replicated must be an exact bool")
         object.__setattr__(self, "lower", lower)
         object.__setattr__(self, "upper", upper)
         object.__setattr__(self, "values", values)
@@ -344,6 +353,9 @@ class ArrayPiece:
     def to_data(self) -> dict[str, Any]:
         return {
             "lower": list(self.lower), "upper": list(self.upper),
+            "global_box_index": self.global_box_index,
+            "owner_rank": self.owner_rank,
+            "replicated": self.replicated,
             "array": array_evidence(self.values),
         }
 
@@ -399,6 +411,9 @@ class FieldPayload:
                 if not (left.upper[0] <= right.lower[0] or right.upper[0] <= left.lower[0]
                         or left.upper[1] <= right.lower[1] or right.upper[1] <= left.lower[1]):
                     raise ValueError("array pieces overlap")
+        box_indices = [piece.global_box_index for piece in pieces]
+        if len(box_indices) != len(set(box_indices)):
+            raise ValueError("field payload contains duplicate global_box_index values")
         object.__setattr__(self, "component_names", names)
         object.__setattr__(self, "global_shape", shape)
         object.__setattr__(self, "pieces", pieces)
@@ -511,7 +526,9 @@ class DiagnosticPayload:
 class OutputRequest:
     consumer_id: str
     selection: tuple[FieldKey, ...]
-    parallel: bool
+    parallel_mode: Any
+    rank: int = 0
+    size: int = 1
     diagnostics: tuple[DiagnosticKey, ...] = ()
 
     def __post_init__(self) -> None:
@@ -524,8 +541,20 @@ class OutputRequest:
             raise ValueError("output request selection contains duplicates")
         object.__setattr__(self, "selection", tuple(
             item for _, item in sorted(zip(tokens, selection, strict=True))))
-        if type(self.parallel) is not bool:
-            raise TypeError("output request parallel flag must be a bool")
+        from ._consumer_contracts import ParallelMode
+
+        if type(self.parallel_mode) is not ParallelMode:
+            raise TypeError(
+                "output request parallel_mode must be an exact pops.output.ParallelMode")
+        for name in ("rank", "size"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or type(value) is not int:
+                raise TypeError("output request %s must be an exact int" % name)
+        if self.size < 1 or self.rank < 0 or self.rank >= self.size:
+            raise ValueError("output request rank/size are not a valid execution topology")
+        if self.parallel_mode is ParallelMode.SERIAL:
+            if (self.rank, self.size) != (0, 1):
+                raise ValueError("SERIAL output requires the exact rank 0 / size 1 topology")
         diagnostics = tuple(self.diagnostics)
         if any(type(item) is not DiagnosticKey for item in diagnostics):
             raise TypeError("output request diagnostics must be exact DiagnosticKey values")
@@ -541,11 +570,29 @@ class OutputRequest:
     def identity(self) -> Identity:
         return make_identity("output-selection", self.to_data())
 
+    @property
+    def publication_identity(self) -> Identity:
+        """Identity shared by one artifact, or rank-qualified for PER_RANK artifacts."""
+        return make_identity("output-publication-selection", self.publication_data())
+
+    def publication_data(self) -> dict[str, Any]:
+        """Canonical artifact selection with every participating rank made explicit."""
+        from ._consumer_contracts import ParallelMode
+
+        data = self.to_data()
+        if self.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE):
+            data = dict(data)
+            data.pop("rank")
+            data["ranks"] = list(range(self.size))
+        return data
+
     def to_data(self) -> dict[str, Any]:
         return {
             "consumer_id": self.consumer_id,
             "selection": [item.to_data() for item in self.selection],
-            "parallel": self.parallel,
+            "parallel_mode": self.parallel_mode.value,
+            "rank": self.rank,
+            "size": self.size,
             "diagnostics": [item.to_data() for item in self.diagnostics],
         }
 
@@ -644,7 +691,7 @@ class OutputSnapshot:
                            if item.layout_identity.token in diagnostic_layouts})
         return {
             "clock": self.clock.to_data(), "provenance": self.provenance.to_data(),
-            "selection": request.to_data(),
+            "selection": request.publication_data(),
             "geometries": [item.to_data() for item in sorted(geometries.values(), key=lambda x: x.key)],
             "fields": [item.to_data() for item in fields],
             "diagnostics": [item.to_data() for item in self.select_diagnostics(request)],

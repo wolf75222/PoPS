@@ -361,28 +361,20 @@ def _assumption(name: str, context: ExecutionContext, communication: Communicati
     if name == "rank_count":
         if context.communicator.identity == "serial":
             return 1
-        # A non-serial ExecutionContext owns an explicit communicator handle.  MPI rank count is a
-        # property of that concrete communicator, not a static backend capability; querying the
-        # already authenticated handle is therefore the strongest available runtime proof.
-        get_size = getattr(context.communicator.handle, "Get_size", None)
-        if callable(get_size):
-            try:
-                size = get_size()
-            except Exception:
-                refuse(
-                    "unknown_determinism_assumption",
-                    "determinism.scope[rank_count]",
-                    "explicit communicator failed to prove its runtime rank count",
-                    evidence=context.communicator.identity,
-                )
-            if type(size) is not int or size < 1:
-                refuse(
-                    "unknown_determinism_assumption",
-                    "determinism.scope[rank_count]",
-                    "explicit communicator returned an invalid runtime rank count",
-                    evidence=size,
-                )
-            return size
+        from pops._native_collectives import require_world
+
+        # The native singleton is the runtime proof; Python neither manufactures nor queries an
+        # independent MPI communicator.
+        try:
+            native = require_world(context.communicator.handle)
+        except (TypeError, ValueError) as error:
+            refuse(
+                "unknown_determinism_assumption",
+                "determinism.scope[rank_count]",
+                "rank count requires the exact native MPI world authority",
+                evidence=str(error),
+            )
+        return int(native.size)
     proof = context.backend.capabilities.get(name)
     if proof is None or not proof.known:
         refuse(

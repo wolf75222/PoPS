@@ -18,24 +18,14 @@
 /// ring slot's own inherited ghost width), so `prev(k)` reads stay layout-consistent with the current
 /// U. The coarse slot is stable; finer slots are prolonged/restricted from it exactly like U.
 ///
-/// NATIVE REPLAY (section 5, ADC-631/ADC-635): rebuild_history_slots reconstructs the policy-recomputed
-/// slots as ONE continuous forward sweep of the installed Program (passed as a closure -- it lives on
-/// the AmrSystem facade, not the engine) from the OLDEST stored slot. Regrid stays ACTIVE during the
-/// re-steps: the closure drives the facade cursor to m-1-j for the re-step producing slot j, so the
-/// head-of-step ctx.regrid_if_due(ctx.macro_step()) reproduces the ORIGINAL in-window regrid schedule,
-/// and each regrid remaps every live ring slot (remap_history_rings_) exactly as the original run did.
-/// Because the stored anchors are REMAPPED onto the checkpoint hierarchy, an exact reconstruction must
-/// ride the SAME incremental remap chain: the re-stepped program's OWN store/rotate mechanics rebuild
-/// the ring in place, so the rebuilt values ride every later in-window regrid forward onto the
-/// checkpoint grid (a frozen one-shot re-step could not -- that was the ADC-631 straddle refusal, now
-/// lifted). A coherence guard refuses
-/// any regrid completed OFF the due schedule derived from (depth, m, regrid_every) -- broken cursor
-/// driving or a divergent restart build fails LOUD, never silently wrong (a due step whose regrid
-/// no-ops deterministically is legitimate: the original run no-oped there identically). The live block
-/// states, the shared aux, the warm start, the ring store and the regrid count are SAVE/RESTORE
-/// bracketed so replay is identity on them (parity System::rebuild_history_slots, ADC-626). A
+/// NATIVE REPLAY (section 5, ADC-631): rebuild_history_slots reconstructs every policy-omitted gap
+/// from its exact older stored anchor and publishes each accepted post-step state by logical slot
+/// index. This is exact only while the replay window retains one hierarchy. The authenticated Python
+/// capture plan promotes a selective policy to dense storage when a regrid is scheduled in that
+/// window; the native seam also refuses such a call defensively. A complete StepSnapshot brackets
+/// every gap so replay is identity on live states, fields, caches, diagnostics, hierarchy and rings.
 /// Every ring re-seeds only its authenticated block owner; independent rings may target independent
-/// blocks without a representative-block convention.
+/// blocks.
 
 #pragma once
 
@@ -72,8 +62,8 @@ struct AmrHistoryOps {
 
   // --- AmrProgramContext-facing seams (register / read / store / rotate) --------------------------
 
-  static void register_history(AmrRuntime& eng, std::size_t block, const std::string& name,
-                               int lag, int ncomp = -1) {
+  static void register_history(AmrRuntime& eng, std::size_t block, const std::string& name, int lag,
+                               int ncomp = -1) {
     if (block >= eng.blocks_.size())
       throw std::runtime_error("AmrRuntime::register_history: block owner out of bounds");
     if (lag < 1)
@@ -83,8 +73,8 @@ struct AmrHistoryOps {
     auto it = eng.hist_rings_.find(name);
     if (it != eng.hist_rings_.end()) {
       if (eng.hist_block_owner_.at(name) != block)
-        throw std::runtime_error(
-            "AmrRuntime::register_history: owner mismatch for history '" + name + "'");
+        throw std::runtime_error("AmrRuntime::register_history: owner mismatch for history '" +
+                                 name + "'");
       // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A larger lag
       // grows the ring (append zero-filled deeper slots on the CURRENT layout, all levels); a smaller
       // one is a no-op. The already-stored slots and the current slot [0] are preserved. The @p ncomp
@@ -277,9 +267,8 @@ struct AmrHistoryOps {
                                name + "'");
     auto it = eng.hist_rings_.find(name);
     if (it == eng.hist_rings_.end()) {
-      throw std::runtime_error(
-          "AmrRuntime::restore_history: history '" + name +
-          "' has no owner-qualified registration in the installed Program");
+      throw std::runtime_error("AmrRuntime::restore_history: history '" + name +
+                               "' has no owner-qualified registration in the installed Program");
     }
     std::vector<std::vector<MultiFab>>& ring = it->second;
     if (slot >= static_cast<int>(ring.size())) {
@@ -361,24 +350,23 @@ struct AmrHistoryOps {
     }
   }
 
-  // --- native selective-persistence replay (ADC-626 on AMR, ADC-635 through in-window regrids) -----
+  // --- native selective-persistence replay on a stable AMR hierarchy -------------------------------
 
-  // Outcome of a ring replay: how many slots were recomputed and, for the coherence guard, the sorted
-  // macro-step cursors at which an in-window regrid actually fired during the internal re-steps. The
-  // v3 reader asserts this fired schedule against the WRITE-time fingerprint (history_regrid_steps_).
+  // Outcome of a ring replay. A non-empty fired schedule is a hard contract violation: the resolved
+  // checkpoint plan must promote a replay window containing a scheduled regrid to dense storage.
   struct ReplayOutcome {
     int recomputed = 0;
     std::vector<int> fired_regrid_steps;
   };
 
-  // The macro-step cursors at which the replay of a depth-@p d ring (checkpointed at macro-step @p m,
-  // cadence @p regrid_every) is EXPECTED to fire a head-of-step regrid. The replay is ONE continuous
-  // forward sweep from the oldest anchor (slot d-1) to slot 0, re-stepping slot by slot; the re-step
-  // producing slot j runs at cursor m-1-j (the ORIGINAL step that landed the ring on macro-step m-j ran
-  // with ctx.macro_step()==m-j-1, pre-increment). A regrid is due when that cursor is > 0 and divisible
-  // by regrid_every. This is exactly the set the correct replay drives -- the fingerprint the v3 write
-  // records (matching python replay_regrid_steps over the single full gap [0, d-1)).
-  static std::vector<int> expected_regrid_steps(int d, int m, int regrid_every) {
+  // Scheduled head-of-step regrid cursors inside the prospective replay window of a depth-@p d ring
+  // checkpointed at macro-step @p m. Replay starts independently from each exact older anchor and
+  // sweeps its gap toward the newer anchor; across those gaps the re-step producing slot j runs at
+  // cursor m-1-j (the ORIGINAL step that landed the ring on macro-step m-j ran with
+  // ctx.macro_step()==m-j-1, pre-increment). A regrid is due when that cursor is > 0 and divisible by
+  // regrid_every. A non-empty set makes selective replay unsafe and forces dense safety storage. The
+  // v3 payload records the same fingerprint (matching Python ``replay_regrid_steps``).
+  static std::vector<int> scheduled_regrid_steps(int d, int m, int regrid_every) {
     std::vector<int> steps;
     if (regrid_every <= 0 || d < 2)
       return steps;
@@ -392,19 +380,9 @@ struct AmrHistoryOps {
     return steps;
   }
 
-  // ADC-635: reconstruct the policy-recomputed slots of ring @p name by re-stepping the installed
-  // Program with regrid ACTIVE, as ONE continuous forward sweep from the oldest stored anchor (slot
-  // d-1) to slot 0. @p m is the checkpoint macro-step (the facade's cursor, primed by the reader); @p
-  // program_step(dt, cursor) drives one re-step at the given facade macro-step so the head-of-step
-  // ctx.regrid_if_due(ctx.macro_step()) reproduces the ORIGINAL in-window regrid schedule (cursor =
-  // m-1-j for the re-step producing slot j). Each regrid remaps EVERY live ring slot through
-  // remap_history_rings_; the ring is rebuilt by the re-stepped program's OWN store/rotate mechanics
-  // (each re-step stores and rotates exactly like the original macro-step), so every rebuilt value
-  // rides the SAME incremental remap chain the stored anchors rode (that chain -- not a frozen one-shot
-  // re-step -- is what makes the straddling window reconstructable) and the sweep ends at cursor m-1,
-  // back on the checkpoint hierarchy H_m. The single-seed sweep reconstructs a single-step recurrence
-  // bit-for-bit (the documented replay class); the stored anchors are restored pristine at the end, so
-  // only the recomputed slots survive on H_m.
+  // Reconstruct a clean-window ring by re-stepping the installed Program independently between each
+  // pair of stored anchors. A scheduled regrid is refused: stored anchors already live on the
+  // checkpoint hierarchy, so replaying a historical remap from that future layout is not exact.
   static ReplayOutcome rebuild_slots(AmrRuntime& eng, const std::string& name,
                                      const std::vector<int>& stored_slots, int m,
                                      const std::function<void(double, int)>& program_step) {
@@ -421,121 +399,103 @@ struct AmrHistoryOps {
     std::sort(anchors.begin(), anchors.end());
     anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
     if (anchors.empty() || anchors.back() != d - 1)
-      throw std::runtime_error(
-          "AmrRuntime::rebuild_history_slots: the oldest slot " + std::to_string(d - 1) +
-          " of history '" + name + "' is not stored; the ring is unreconstructable (the persistence "
-          "policy must store the oldest slot).");
+      throw std::runtime_error("AmrRuntime::rebuild_history_slots: the oldest slot " +
+                               std::to_string(d - 1) + " of history '" + name +
+                               "' is not stored; the ring is unreconstructable (the persistence "
+                               "policy must store the oldest slot).");
     if (static_cast<int>(anchors.size()) == d)
       return {};  // Dense: nothing to recompute.
 
-    // The regrid cursors the replay MUST fire (a pure function of the ring depth, m and the cadence).
+    // Resolve the structural schedule defensively even when a handcrafted caller bypasses Python.
     ReplayOutcome outcome;
-    const std::vector<int> expected = expected_regrid_steps(d, m, eng.regrid_every_);
+    const std::vector<int> scheduled = scheduled_regrid_steps(d, m, eng.regrid_every_);
+    if (!scheduled.empty())
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_history_slots: selective replay window contains scheduled regrid "
+          "steps; the resolved checkpoint plan must use dense_regrid_safety storage");
 
-    // SAVE bracket (extended for AMR): deep-copy every block's per-level U (all levels), the shared
-    // aux (all levels), the multigrid warm start, the WHOLE ring store, and the regrid cadence + count.
-    // Regrid is NOT frozen (ADC-635): the internal re-steps regrid exactly as the original run did, so
-    // every reconstructed slot rides the same remap chain onto the checkpoint hierarchy. All state is
-    // undone below; only the missing ring slots survive.
-    std::vector<std::vector<MultiFab>> saved_states;  // [block][level]
-    saved_states.reserve(eng.blocks_.size());
-    for (auto& b : eng.blocks_) {
-      std::vector<MultiFab> per_level;
-      per_level.reserve(b.levels->size());
-      for (auto& lvl : *b.levels)
-        per_level.push_back(lvl.U);  // deep copy
-      saved_states.push_back(std::move(per_level));
-    }
-    std::vector<MultiFab> saved_aux = eng.aux_;  // deep copy (all levels)
-    // The multigrid warm-start iterate (mg_.phi()) is STATEFUL across solve_fields: a re-step reads it
-    // as the seed of the next Poisson solve, so leaving it in the replayed state would perturb the
-    // post-restart continuation (the solver converges to a slightly different residual). Bracket it too
-    // so replay is a true identity on every stateful buffer the macro-step touches.
-    MultiFab saved_phi = eng.mg_.phi();  // deep copy of the warm-start iterate
-    const std::map<std::string, std::vector<std::vector<MultiFab>>> saved_rings = eng.hist_rings_;
-    const std::map<std::string, std::vector<char>> saved_init = eng.hist_init_;
-    const std::map<std::string, std::vector<Real>> saved_slot_dt = eng.hist_slot_dt_;
-    const int saved_regrid_count = eng.regrid_count_;  // ADC-635: in-window regrid() bumps it
+    // SAVE bracket: use the accepted-state snapshot rather than a partial hand-maintained list.
+    // Besides all block states and rings it carries aux, every default/named elliptic warm start,
+    // bootstrap caches, hierarchy/cadence counters and diagnostics.  Each anchor gap starts from
+    // this same image, and every replay side effect is undone before the reconstructed slots are
+    // published.  This keeps restart replay aligned with the ordinary step-transaction boundary.
+    const AmrRuntime::StepSnapshot saved = eng.step_snapshot();
 
     // Per-slot dt each store produced (from the SAVED snapshot -- the replay MUTATES hist_slot_dt_).
     std::vector<Real> dts(static_cast<std::size_t>(d), Real(0));
-    auto sd_it = saved_slot_dt.find(name);
-    if (sd_it != saved_slot_dt.end())
+    auto sd_it = saved.history_slot_dt.find(name);
+    if (sd_it != saved.history_slot_dt.end())
       for (int k = 0; k < d && k < static_cast<int>(sd_it->second.size()); ++k)
         dts[static_cast<std::size_t>(k)] = sd_it->second[static_cast<std::size_t>(k)];
 
-    // Reconstruct block-0's per-level trajectory as ONE continuous forward sweep: seed every level from
-    // the OLDEST stored slot (d-1), then re-step slot by slot down to slot 0. The re-step producing slot
-    // j runs at cursor m-1-j so its head-of-step regrid_if_due reproduces the original in-window regrid.
-    // The ring itself is rebuilt by the RE-STEPPED PROGRAM'S OWN store/rotate mechanics (each re-step's
-    // body stores the committed state and rotates the ring exactly as the original macro-step did), so
-    // every rebuilt slot sits in the LIVE ring and rides the in-window regrids' remap_history_rings_
-    // through the SAME incremental chain the original values rode, landing back on H_m at the sweep's
-    // end (cursor m-1). No side placement: writing slots by index would fight the rotation (the ADC-635
-    // depth-5 corruption). Every regrid that completes is recorded (regrid_count_ delta) for the guard.
+    // Reconstruct every gap independently from its exact older stored anchor.  The Program's own
+    // store/rotate operations are replay side effects, not the output: trusting their final rotated
+    // positions shifts omitted slots by one and bypasses intermediate anchors.  Capture the accepted
+    // block state after each historical step and publish it explicitly at its logical slot index,
+    // exactly like the Uniform engine's replay.
     std::vector<char> is_stored(static_cast<std::size_t>(d), 0);
     for (int s : anchors)
       is_stored[static_cast<std::size_t>(s)] = 1;
-    const auto owner = eng.hist_block_owner_.at(name);
-    for (int k = 0; k < eng.nlev_; ++k)
-      pops::lincomb(
-          (*eng.blocks_[owner].levels)[static_cast<std::size_t>(k)].U, Real(1),
-          saved_rings.at(name)[static_cast<std::size_t>(d - 1)][static_cast<std::size_t>(k)], Real(0),
-          (*eng.blocks_[owner].levels)[static_cast<std::size_t>(k)].U);
-    for (int j = d - 2; j >= 0; --j) {
-      const int cursor = m - 1 - j;
-      const int rc_before = eng.regrid_count_;
-      program_step(static_cast<double>(dts[static_cast<std::size_t>(j)]), cursor);
-      if (eng.regrid_count_ != rc_before)
-        outcome.fired_regrid_steps.push_back(cursor);  // a regrid completed at this cursor
+    const auto owner = saved.history_block_owner.at(name);
+    std::vector<std::vector<MultiFab>> reconstructed(static_cast<std::size_t>(d));
+    const auto restore_saved = [&] { eng.restore_step_snapshot(saved); };
+    try {
+      for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor) {
+        const int newer = anchors[anchor];
+        const int older = anchors[anchor + 1];
+        restore_saved();
+        for (int level = 0; level < eng.nlev_; ++level) {
+          MultiFab& state = (*eng.blocks_[owner].levels)[static_cast<std::size_t>(level)].U;
+          pops::lincomb(state, Real(1),
+                        saved.history_rings.at(
+                            name)[static_cast<std::size_t>(older)][static_cast<std::size_t>(level)],
+                        Real(0), state);
+        }
+        for (int j = older - 1; j >= newer; --j) {
+          const int cursor = m - 1 - j;
+          const int rc_before = eng.regrid_count_;
+          program_step(static_cast<double>(dts[static_cast<std::size_t>(j)]), cursor);
+          if (eng.regrid_count_ != rc_before)
+            outcome.fired_regrid_steps.push_back(cursor);
+          if (is_stored[static_cast<std::size_t>(j)])
+            continue;
+          auto& slot = reconstructed[static_cast<std::size_t>(j)];
+          slot.reserve(static_cast<std::size_t>(eng.nlev_));
+          for (int level = 0; level < eng.nlev_; ++level)
+            slot.push_back((*eng.blocks_[owner].levels)[static_cast<std::size_t>(level)].U);
+        }
+      }
+    } catch (...) {
+      restore_saved();
+      throw;
     }
+    restore_saved();
     std::sort(outcome.fired_regrid_steps.begin(), outcome.fired_regrid_steps.end());
     outcome.fired_regrid_steps.erase(
         std::unique(outcome.fired_regrid_steps.begin(), outcome.fired_regrid_steps.end()),
         outcome.fired_regrid_steps.end());
 
-    // COHERENCE GUARD (ADC-635): every regrid the replay COMPLETED must sit on the due schedule
-    // derived from (depth, m, regrid_every) -- a completed regrid at an off-schedule cursor means the
-    // cursor driving or the cadence is wrong; hard error, never silent. The converse is legitimate: a
-    // due cursor whose regrid() no-ops (single-level hierarchy, no wired predicate, empty tags)
-    // completes nothing, and by determinism the ORIGINAL run no-oped there identically, so the
-    // reconstruction is unharmed (the v3 reader still asserts the recorded fingerprint separately).
-    for (int s : outcome.fired_regrid_steps)
-      if (std::find(expected.begin(), expected.end(), s) == expected.end())
-        throw std::runtime_error(
-            "AmrRuntime::rebuild_history_slots: the replay of history '" + name +
-            "' completed a regrid at macro-step " + std::to_string(s) +
-            " which is OFF the due schedule (checkpoint macro-step " + std::to_string(m) +
-            ", regrid_every " + std::to_string(eng.regrid_every_) +
-            "); the replay cursor driving or the restart composition is inconsistent with the "
-            "recorded in-window regrid schedule.");
+    if (!outcome.fired_regrid_steps.empty())
+      throw std::runtime_error("AmrRuntime::rebuild_history_slots: history '" + name +
+                               "' changed hierarchy during a stable-window replay; the resolved "
+                               "checkpoint plan must use "
+                               "dense_regrid_safety storage");
 
-    // Extract the recomputed slots (already remapped through the in-window chain onto the live layout),
-    // then RESTORE every replay side effect: block states, aux, warm start, regrid count. The saved ring
-    // supplies the pristine anchors; the recomputed slots keep the values they rode to.
-    std::map<std::string, std::vector<std::vector<MultiFab>>> replayed_rings = eng.hist_rings_;
-    for (std::size_t b = 0; b < eng.blocks_.size(); ++b)
-      for (int k = 0; k < static_cast<int>(eng.blocks_[b].levels->size()); ++k)
-        (*eng.blocks_[b].levels)[static_cast<std::size_t>(k)].U =
-            std::move(saved_states[b][static_cast<std::size_t>(k)]);
-    eng.aux_ = std::move(saved_aux);
-    eng.mg_.phi() = std::move(saved_phi);  // restore the multigrid warm-start iterate
-    eng.hist_rings_ = saved_rings;         // pristine anchors on the checkpoint hierarchy
-    eng.hist_init_ = saved_init;
-    eng.hist_slot_dt_ = saved_slot_dt;
-    eng.regrid_count_ = saved_regrid_count;
-
-    // Copy ONLY the recomputed slots back from the replayed ring (the anchors keep their restored
-    // values), all levels. The recomputed slots share the checkpoint hierarchy's layout: they rode the
-    // in-window remap chain back onto it (the last re-step lands on macro-step m, the checkpoint grid).
+    // The snapshot restore above reinstated every accepted value and the pristine stored anchors.
+    // Publish only the explicitly reconstructed gaps; all slots share the unchanged checkpoint
+    // hierarchy and every stored anchor remains byte-for-byte the payload value.
     std::vector<std::vector<MultiFab>>& out_ring = eng.hist_rings_.at(name);
-    const std::vector<std::vector<MultiFab>>& src = replayed_rings.at(name);
     for (int j = 0; j < d; ++j) {
       if (is_stored[static_cast<std::size_t>(j)])
         continue;
+      const auto& slot = reconstructed[static_cast<std::size_t>(j)];
+      if (slot.size() != static_cast<std::size_t>(eng.nlev_))
+        throw std::runtime_error(
+            "AmrRuntime::rebuild_history_slots: stored anchors do not bracket omitted slot " +
+            std::to_string(j) + " of history '" + name + "'");
       for (int k = 0; k < eng.nlev_; ++k)
         out_ring[static_cast<std::size_t>(j)][static_cast<std::size_t>(k)] =
-            src[static_cast<std::size_t>(j)][static_cast<std::size_t>(k)];  // deep copy (rode the chain)
+            slot[static_cast<std::size_t>(k)];
       ++outcome.recomputed;
     }
     return outcome;

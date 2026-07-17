@@ -6,7 +6,7 @@ from operator import index
 from typing import Any
 
 from pops.solvers import DenseLU
-from pops.time import LocalLinear
+from pops.time import Dense, LocalLinear
 
 from ._factory import (
     call_at, call_field_at, field_handle, instance_state, operator_handle,
@@ -71,7 +71,8 @@ def _build_adams_bashforth(
     expression = initial + program.dt * _AB_WEIGHTS[order][0] * current
     if order > 1:
         history_name = _block_label(temporal) + ".rate"
-        program.store_history(history_name, current)
+        program.store_history(
+            history_name, current, depth=order - 1, checkpoint_policy=Dense())
         for lag, coefficient in enumerate(_AB_WEIGHTS[order][1:], start=1):
             previous = _history(
                 program, temporal, history_name, lag, current.space)
@@ -144,7 +145,7 @@ def _build_bdf(
         operator = program.I - program.dt * linear
     else:
         history_name = _block_label(temporal) + ".state"
-        program.store_history(history_name, initial)
+        program.store_history(history_name, initial, depth=1, checkpoint_policy=Dense())
         previous = _history(
             program, temporal, history_name, 1, initial.space)
         rhs_expression = Fraction(4, 3) * initial - Fraction(1, 3) * previous

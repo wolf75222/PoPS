@@ -14,7 +14,7 @@ import pytest
 
 from pops import time as adctime
 from pops.time._history.persistence import Dense, Interval, Revolve
-from pops.time._history.validation import check_program
+from pops.time._history.validation import check_program, validate_history_persistence
 
 
 def _expect(exc_type, fn, needle):
@@ -31,7 +31,7 @@ def test_keep_history_no_longer_raises_not_implemented():
     P = adctime.Program("k")
     U = typed_state(P, "plasma", state_name="U")
     # This exact call raised NotImplementedError before ADC-626; now it is accepted.
-    node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    node = P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
 
 
@@ -39,9 +39,9 @@ def test_keep_history_records_depth_and_policy_on_program():
     P = adctime.Program("k")
     U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=5, checkpoint_policy=Revolve(3))
-    depth, policy = P._history_persistence["plasma.U"]
-    assert depth == 5 and isinstance(policy, Revolve)
-    assert policy.stored_slots(5) == (0, 2, 4)
+    ring_slots, policy = P._history_persistence["plasma.U"]
+    assert ring_slots == 6 and isinstance(policy, Revolve)
+    assert policy.stored_slots(ring_slots) == (0, 2, 5)
 
 
 def test_multiple_histories_distinct_policies_one_program():
@@ -49,17 +49,56 @@ def test_multiple_histories_distinct_policies_one_program():
     P = adctime.Program("multi")
     U = typed_state(P, "plasma", state_name="U")
     W = typed_state(P, "neutral", state_name="W")
-    P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     P.keep_history(W, depth=5, checkpoint_policy=Revolve(3))
     assert isinstance(P._history_persistence["plasma.U"][1], Interval)
     assert isinstance(P._history_persistence["neutral.W"][1], Revolve)
+
+
+def _persistence_report(program):
+    from pops._report import ReportTree
+
+    root = ReportTree(
+        phase="validation",
+        severity="info",
+        code="validation.history_persistence.report",
+        source="history_persistence",
+        owner=program,
+    )
+    return validate_history_persistence(program, root)
+
+
+def test_compile_gate_refuses_a_ring_without_its_compiled_policy():
+    P = adctime.Program("missing_policy")
+    U = typed_state(P, "plasma", state_name="U")
+    P.keep_history(U, depth=2)
+    del P._history_persistence["plasma.U"]
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("missing_policy") for issue in report.issues)
+
+
+def test_compile_gate_refuses_an_orphan_policy_and_a_depth_mismatch():
+    orphan = adctime.Program("orphan_policy")
+    orphan._history_persistence["ghost.U"] = (1, Dense())
+    orphan_report = _persistence_report(orphan)
+    assert not orphan_report.ok
+    assert any(issue.code.endswith("orphan_policy") for issue in orphan_report.issues)
+
+    mismatch = adctime.Program("depth_mismatch")
+    state = typed_state(mismatch, "plasma", state_name="U")
+    mismatch.keep_history(state, depth=3)
+    mismatch._history_persistence["plasma.U"] = (2, Dense())
+    mismatch_report = _persistence_report(mismatch)
+    assert not mismatch_report.ok
+    assert any(issue.code.endswith("depth_mismatch") for issue in mismatch_report.issues)
 
 
 # --- author-time coherence refusals -------------------------------------------------------------
 def test_incoherent_interval_refused_at_author_time():
     P = adctime.Program("k")
     U = typed_state(P, "plasma", state_name="U")
-    _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
+    _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Interval(2)),
             "oldest slot")
 
 
@@ -74,7 +113,7 @@ def test_oversized_revolve_refused_at_author_time():
 def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
     P = adctime.Program("det")
     U = typed_state(P, "plasma", state_name="U")
-    P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     # A deterministic combine reading the ring, committed as the new state (a valid State value).
     nxt = P.value(
         "U_next", 1.0 * U.n + 0.5 * U.prev(1), at=U.next.point)
@@ -92,7 +131,8 @@ def test_dense_policy_never_refused_even_with_unknown_op():
         attrs = {}
 
     class FakeProg:
-        _history_persistence = {"plasma.U": (4, Dense())}
+        _histories = {"plasma.U": 4}
+        _history_persistence = {"plasma.U": (5, Dense())}
         _values = [FakeOp()]
 
     root = ReportTree(
@@ -111,7 +151,8 @@ def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
         attrs = {}
 
     class FakeProg:
-        _history_persistence = {"plasma.U": (4, Interval(3))}
+        _histories = {"plasma.U": 4}
+        _history_persistence = {"plasma.U": (5, Interval(2))}
         _values = [FakeOp()]
 
     root = ReportTree(

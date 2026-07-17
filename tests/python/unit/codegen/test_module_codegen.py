@@ -6,8 +6,8 @@ by integer OperatorId. The descriptor is read once at install (introspection + r
 validation, module_metadata.hpp); it must NOT appear in the step body, so operators stay inlined and
 there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
-import sys
 from types import SimpleNamespace
 
 try:
@@ -18,8 +18,7 @@ try:
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
     from typed_program_support import fresh_field_refs, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_module_codegen (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_module_codegen (pops unavailable: %s)' % exc)
 
 
 def _op(m, name):

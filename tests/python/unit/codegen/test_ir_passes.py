@@ -29,7 +29,7 @@ from pops.codegen.program_codegen import emit_cpp_program
 import pytest
 from pops.numerics.terms import DefaultSource, Flux
 
-from typed_program_support import commits_by_block, solve_field, state_refs, typed_state
+from typed_program_support import commits_by_block, solve_field, typed_state
 
 adctime = pytest.importorskip("pops.time")
 
@@ -237,7 +237,7 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
 
     program = adctime.Program("metadata_rebuild")
     tracked = typed_state(program, "tracked", state_name="U")
-    program.keep_history(tracked, depth=4, checkpoint_policy=Interval(3))
+    program.keep_history(tracked, depth=3, checkpoint_policy=Interval(3))
     program.value("dead", 2 * tracked.n)
     advanced = typed_state(program, "advanced", state_name="U")
     solve_field(program, advanced.n)
@@ -250,9 +250,9 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
         v for v in rebuilt._values
         if v.op == "state" and v.block.local_id == "advanced")
     rebuilt_fields = next(v for v in rebuilt._values if v.op == "solve_fields")
-    depth, policy = rebuilt._history_persistence["tracked.U"]
+    ring_slots, policy = rebuilt._history_persistence["tracked.U"]
 
-    assert depth == 4
+    assert ring_slots == 4
     assert policy.to_manifest() == {
         "protocol": "pops.manifest", "kind": "history-persistence", "schema_version": 1,
         "payload": {"policy": "interval", "k": 3},

@@ -10,6 +10,7 @@ _METADATA_KEYS = frozenset({
     "schema_version",
     "state_spaces",
     "cons_names",
+    "cons_roles",
     "n_vars",
     "params",
     "aux_names",
@@ -35,6 +36,7 @@ class ArtifactModelMetadata:
     block_name: str | None
     model: Any
     cons_names: tuple[str, ...]
+    cons_roles: tuple[str, ...]
     n_vars: int
     params: dict[str, Any]
     aux_names: tuple[str, ...]
@@ -142,7 +144,7 @@ def _metadata(
     data = model.__pops_artifact_model_metadata__()
     if not isinstance(data, dict) or set(data) != _METADATA_KEYS:
         raise TypeError("artifact model metadata provider returned an unknown schema")
-    if data["schema_version"] != 2:
+    if data["schema_version"] != 3:
         raise ValueError("artifact model metadata provider uses an unsupported schema")
     state_spaces = _strings(data["state_spaces"], where="state_spaces")
     if len(state_spaces) != 1:
@@ -150,6 +152,9 @@ def _metadata(
     if expected_state_spaces is not None and state_spaces != tuple(expected_state_spaces):
         raise ValueError("compiled model metadata disagrees with the resolved state-space route")
     cons_names = _strings(data["cons_names"], where="cons_names")
+    cons_roles = _strings(data["cons_roles"], where="cons_roles")
+    if len(cons_roles) != len(cons_names):
+        raise ValueError("compiled model cons_roles must exactly match cons_names")
     n_vars = data["n_vars"]
     if not isinstance(n_vars, int) or isinstance(n_vars, bool) or n_vars != len(cons_names):
         raise ValueError("compiled model n_vars must exactly match cons_names")
@@ -178,6 +183,7 @@ def _metadata(
         block_name=block_name,
         model=model,
         cons_names=cons_names,
+        cons_roles=cons_roles,
         n_vars=n_vars,
         params=params,
         aux_names=aux_names,

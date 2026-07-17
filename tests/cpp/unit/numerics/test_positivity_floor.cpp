@@ -261,8 +261,8 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     MultiFab Uf(ba, dm, EulerNoSrc::n_vars, ng);
     init_tophat(Uf, dom, model, /*spike=*/false);
     fill_ghosts(Uf, dom, bc);
-    BlockClosures cpp =
-        make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {}, nullptr, floor);
+    BlockClosures cpp = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
+                                   nullptr, floor);
     cpp.advance(Uf, dt * nsteps, nsteps);
     sync_host();
     Real min_pp = Real(1e30);

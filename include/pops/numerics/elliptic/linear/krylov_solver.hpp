@@ -57,9 +57,9 @@ inline GeometricMG& validate_tensor_krylov_preconditioner(GeometricMG& op, Geome
 
 inline int validate_tensor_krylov_vcycles(int n_precond_vcycles) {
   if (n_precond_vcycles < 1)
-    throw_validation_error(
-        "pops/numerics/elliptic/linear/krylov_solver.hpp: TensorKrylovSolver",
-        "n_precond_vcycles >= 1", "n_precond_vcycles=" + std::to_string(n_precond_vcycles));
+    throw_validation_error("pops/numerics/elliptic/linear/krylov_solver.hpp: TensorKrylovSolver",
+                           "n_precond_vcycles >= 1",
+                           "n_precond_vcycles=" + std::to_string(n_precond_vcycles));
   return n_precond_vcycles;
 }
 
@@ -67,8 +67,8 @@ inline bool tensor_krylov_has_affine_boundary_offset(const BCRec& bc) {
   auto face = [](BCType type, Real value) {
     return (type == BCType::Dirichlet || type == BCType::Robin) && value != Real(0);
   };
-  return face(bc.xlo, bc.xlo_val) || face(bc.xhi, bc.xhi_val) ||
-         face(bc.ylo, bc.ylo_val) || face(bc.yhi, bc.yhi_val);
+  return face(bc.xlo, bc.xlo_val) || face(bc.xhi, bc.xhi_val) || face(bc.ylo, bc.ylo_val) ||
+         face(bc.yhi, bc.yhi_val);
 }
 }  // namespace detail
 
@@ -103,8 +103,7 @@ class TensorKrylovSolver {
         phat_(ba_, dm_, 1, 1),
         shat_(ba_, dm_, 1, 1),
         op_offset_(ba_, dm_, 1, 0),
-        bc_offset_(ba_, dm_, 1, 0) {
-  }
+        bc_offset_(ba_, dm_, 1, 0) {}
 
   // --- EllipticSolver concept ---
   MultiFab& phi() { return op_.phi(); }
@@ -150,8 +149,7 @@ class TensorKrylovSolver {
       forcing_norm = l2_norm(rhs());
     }
     const Real report_denom = forcing_norm > Real(0) ? forcing_norm : Real(1);
-    const Real stop =
-        (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
+    const Real stop = (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
     Real rnorm = l2_norm(r_);
     SolveReport res;
     res.rel_residual = rnorm / report_denom;
@@ -174,8 +172,7 @@ class TensorKrylovSolver {
     for (int k = 1; k <= max_iters; ++k) {
       const Real rho = dot(rhat_, r_);  // COLLECTIVE (all ranks)
       // guard: BiCGStab breakdown (rho or omega ~ 0). We return an explicit failed report.
-      if (!std::isfinite(static_cast<double>(rho)) ||
-          !std::isfinite(static_cast<double>(omega))) {
+      if (!std::isfinite(static_cast<double>(rho)) || !std::isfinite(static_cast<double>(omega))) {
         res.iters = k - 1;
         res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);

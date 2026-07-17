@@ -74,17 +74,16 @@ inline const char* solve_action_name(SolveAction action) {
 /// ratio, and one authoritative status/action/reason triple. Callers query `solved()`; no mutable
 /// boolean can contradict the status.
 struct SolveReport {
-  int iters = 0;                         ///< number of iterations performed
-  Real rel_residual = 0;                 ///< residual_norm / declared reference denominator
-  Real reference_residual_norm = 0;      ///< exact reference norm used by the solver
-  Real residual_norm = 0;                ///< exact final norm tested for convergence
+  int iters = 0;                     ///< number of iterations performed
+  Real rel_residual = 0;             ///< residual_norm / declared reference denominator
+  Real reference_residual_norm = 0;  ///< exact reference norm used by the solver
+  Real residual_norm = 0;            ///< exact final norm tested for convergence
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
   std::string reason = "iteration_limit";
 
   bool valid() const {
-    return !reason.empty() &&
-           (status == SolveStatus::kSolved) == (action == SolveAction::kNone);
+    return !reason.empty() && (status == SolveStatus::kSolved) == (action == SolveAction::kNone);
   }
   bool solved() const { return valid() && status == SolveStatus::kSolved; }
   bool solved_value_available() const { return solved(); }
@@ -97,8 +96,7 @@ struct SolveReport {
     action = SolveAction::kNone;
     reason = solve_reason.empty() ? solve_status_name(status) : std::move(solve_reason);
   }
-  void mark_failed(SolveStatus failed_status,
-                   SolveAction failed_action = SolveAction::kFailRun,
+  void mark_failed(SolveStatus failed_status, SolveAction failed_action = SolveAction::kFailRun,
                    std::string failure_reason = {}) {
     if (failed_status == SolveStatus::kSolved)
       throw std::invalid_argument("SolveReport::mark_failed requires a failure status");

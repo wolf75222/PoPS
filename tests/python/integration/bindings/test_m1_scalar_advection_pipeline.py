@@ -48,7 +48,7 @@ def _load_example():
 
 def test_scalar_advection_completes_typed_phase_pipeline():
     example = _load_example()
-    target = example.build_final_case()
+    target = example.build_final_case(output_mode=example._native_output_mode())
 
     validated = pops.validate(target.authoring.case)
     resolved = pops.resolve(validated, layout=target.layout)
@@ -76,7 +76,7 @@ def test_scalar_advection_completes_typed_phase_pipeline():
             )
         )["producer_order"]
     artifact = pops.compile(resolved)
-    simulation = pops.bind(
+    simulation = example._bind_artifact(
         artifact,
         params=example.build_bind_params(target.authoring),
     )
@@ -88,5 +88,35 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     assert simulation._executor.lifecycle_state() == "bound"
     installed = simulation._executor._boundary_authorities["tracer"]
     assert installed["ghost_plan_identity"] == boundary_plan.canonical_id
-    assert installed["required_depth"] == target.authoring.numerics.primary_spatial().ghost_depth
+    assert installed["required_depth"] == \
+        resolved.blocks[0].numerics.primary_spatial().ghost_depth
     assert simulation.bind_identity.domain == "bind"
+
+
+def test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart(tmp_path):
+    example = _load_example()
+
+    evidence = example.run_manual_and_restart(tmp_path / "final-scalar-acceptance")
+    preset = example.run_preset_parity(
+        tmp_path / "final-scalar-preset", evidence.continuous)
+
+    assert evidence.hdf5_path.is_file()
+    assert evidence.paraview_path.is_file()
+    assert evidence.checkpoint_path.is_file()
+    assert evidence.accepted.macro_step > 0
+    assert evidence.restored.macro_step == evidence.accepted.macro_step
+    assert evidence.continuous.macro_step == evidence.restarted.macro_step
+    assert preset.macro_step == evidence.continuous.macro_step
+    assert preset.program_hash == evidence.continuous.program_hash
+    from pops.output import read_paraview
+
+    reopened = read_paraview(evidence.paraview_path)
+    diagnostics = reopened.manifest["snapshot"]["diagnostics"]
+    assert {row["key"]["reduction"] for row in diagnostics} == {
+        "integral",
+        "l1",
+        "l2",
+        "linf",
+        "min",
+        "max",
+    }

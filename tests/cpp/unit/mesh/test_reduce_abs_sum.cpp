@@ -118,8 +118,9 @@ TEST(test_reduce_abs_sum, is_idempotent) {
   MultiFab mf(ba, dm, 1, 0);
   for (int li = 0; li < mf.local_size(); ++li) {
     Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li),
-                  [a] POPS_HD(int i, int j) { a(i, j, 0) = std::sin(0.1 * i) - std::cos(0.07 * j); });
+    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) {
+      a(i, j, 0) = std::sin(0.1 * i) - std::cos(0.07 * j);
+    });
   }
   device_fence();
   EXPECT_EQ(reduce_abs_sum(mf, 0), reduce_abs_sum(mf, 0)) << "abs_sum_idempotent";

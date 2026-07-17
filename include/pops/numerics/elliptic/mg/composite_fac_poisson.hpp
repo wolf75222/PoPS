@@ -9,7 +9,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/mesh/layout/refinement.hpp>                    // average_down, coarsen_index
+#include <pops/mesh/layout/refinement.hpp>  // average_down, coarsen_index
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
@@ -87,9 +87,7 @@ struct FacApplyConstantReactionKernel {
   ConstArray4 phi;
   Real reaction;
 
-  POPS_HD void operator()(int i, int j) const {
-    value(i, j, 0) -= reaction * phi(i, j, 0);
-  }
+  POPS_HD void operator()(int i, int j) const { value(i, j, 0) -= reaction * phi(i, j, 0); }
 };
 
 /// BILINEAR interpolation of the coarse potential (cell-centered, @p C with ghosts) at the CENTER of the
@@ -328,8 +326,8 @@ class CompositeFacPoisson {
                                  last_solve_report_.status_name());
       return last_residual_;
     }
-    const Real result = solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol,
-                              options_.abs_tol);
+    const Real result =
+        solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
     if (!last_solve_report_.solved()) {
       throw std::runtime_error(std::string("field composite solve failed: ") +
                                last_solve_report_.status_name());
@@ -370,11 +368,10 @@ class CompositeFacPoisson {
 
     const Real forcing_norm = exact_zero_composite_residual_(general);
     if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error(
-          "composite field boundary evaluation failed at face " +
-          std::to_string(boundary_failure_.face) + " cell (" +
-          std::to_string(boundary_failure_.i) + "," +
-          std::to_string(boundary_failure_.j) + ")");
+      throw std::runtime_error("composite field boundary evaluation failed at face " +
+                               std::to_string(boundary_failure_.face) + " cell (" +
+                               std::to_string(boundary_failure_.i) + "," +
+                               std::to_string(boundary_failure_.j) + ")");
     if (!std::isfinite(static_cast<double>(forcing_norm)))
       return mark_invalid_linear_solve_(0);
 
@@ -391,11 +388,10 @@ class CompositeFacPoisson {
       boundary_failure_.reset();
     const Real incoming_residual = composite_residual_norm_(general, /*prepare_cf=*/true);
     if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error(
-          "composite field boundary evaluation failed at face " +
-          std::to_string(boundary_failure_.face) + " cell (" +
-          std::to_string(boundary_failure_.i) + "," +
-          std::to_string(boundary_failure_.j) + ")");
+      throw std::runtime_error("composite field boundary evaluation failed at face " +
+                               std::to_string(boundary_failure_.face) + " cell (" +
+                               std::to_string(boundary_failure_.i) + "," +
+                               std::to_string(boundary_failure_.j) + ")");
     if (!std::isfinite(static_cast<double>(incoming_residual)))
       return mark_invalid_linear_solve_(0);
     record_residual(-1, incoming_residual);
@@ -415,11 +411,10 @@ class CompositeFacPoisson {
                                           ? solve_composite_nlevel_(max_iters, fine_sweeps, stop)
                                           : solve_two_level_legacy_(max_iters, fine_sweeps, stop);
     if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error(
-          "composite field boundary evaluation failed at face " +
-          std::to_string(boundary_failure_.face) + " cell (" +
-          std::to_string(boundary_failure_.i) + "," +
-          std::to_string(boundary_failure_.j) + ")");
+      throw std::runtime_error("composite field boundary evaluation failed at face " +
+                               std::to_string(boundary_failure_.face) + " cell (" +
+                               std::to_string(boundary_failure_.i) + "," +
+                               std::to_string(boundary_failure_.j) + ")");
     if (!std::isfinite(static_cast<double>(outcome.residual)))
       return mark_invalid_linear_solve_(outcome.iterations);
 
@@ -431,8 +426,7 @@ class CompositeFacPoisson {
     if (outcome.residual <= stop)
       last_solve_report_.mark_solved();
     else
-      last_solve_report_.mark_failed(SolveStatus::kIterationLimit,
-                                     SolveAction::kRejectAttempt);
+      last_solve_report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
     return outcome.residual;
   }
 
@@ -484,8 +478,7 @@ class CompositeFacPoisson {
       }
     }
     const Real norm = general ? composite_residual_(0) : composite_coarse_residual();
-    return std::isfinite(static_cast<double>(norm)) ? norm
-                                                    : std::numeric_limits<Real>::infinity();
+    return std::isfinite(static_cast<double>(norm)) ? norm : std::numeric_limits<Real>::infinity();
   }
 
   static void copy_all_cells_(MultiFab& dst, const MultiFab& src) {
@@ -533,8 +526,7 @@ class CompositeFacPoisson {
       copy_all_cells_(boundary_probe_snapshot_, boundary_view_c_);
     auto restore = [&]() {
       for (int level = 0; level < n_levels_; ++level)
-        copy_all_cells_(phi_level(level),
-                        phi_probe_snapshot_[static_cast<std::size_t>(level)]);
+        copy_all_cells_(phi_level(level), phi_probe_snapshot_[static_cast<std::size_t>(level)]);
       if (has_boundary_kernel_)
         copy_all_cells_(boundary_view_c_, boundary_probe_snapshot_);
     };
@@ -554,8 +546,7 @@ class CompositeFacPoisson {
     last_residual_ = std::numeric_limits<Real>::infinity();
     last_solve_report_.iters = iterations;
     last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
-    last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation,
-                                   SolveAction::kRejectAttempt);
+    last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
     return last_residual_;
   }
 
@@ -618,8 +609,7 @@ class CompositeFacPoisson {
     }
     auto restore = [&]() {
       for (int level = 0; level < n_levels_; ++level)
-        copy_all_cells_(phi_level(level),
-                        phi_published_snapshot_[static_cast<std::size_t>(level)]);
+        copy_all_cells_(phi_level(level), phi_published_snapshot_[static_cast<std::size_t>(level)]);
     };
 
     SolveReport report;
@@ -629,8 +619,8 @@ class CompositeFacPoisson {
         boundary_context_.point.iteration = iteration;
         mg_.set_boundary_context(boundary_context_);
         boundary_failure_.reset();
-        const Real residual = solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol,
-                                    options_.abs_tol);
+        const Real residual =
+            solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
         const bool failed = boundary_failure_.synchronize_across_ranks();
         if (failed || !std::isfinite(static_cast<double>(residual))) {
           report.iters = iteration + 1;
@@ -691,8 +681,8 @@ class CompositeFacPoisson {
     const int N = boxes.size();
     for (int g = 0; g < N; ++g) {
       const Box2D& fb = boxes[g];
-      if ((fb.lo[0] % ratio_) != 0 || (fb.lo[1] % ratio_) != 0 ||
-          ((fb.hi[0] + 1) % ratio_) != 0 || ((fb.hi[1] + 1) % ratio_) != 0)
+      if ((fb.lo[0] % ratio_) != 0 || (fb.lo[1] % ratio_) != 0 || ((fb.hi[0] + 1) % ratio_) != 0 ||
+          ((fb.hi[1] + 1) % ratio_) != 0)
         throw std::runtime_error(
             "CompositeFacPoisson: misaligned fine patch (require lo even / hi odd under ratio 2).");
     }
@@ -835,8 +825,8 @@ class CompositeFacPoisson {
               const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
               const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
               const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
-              const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 +
-                                (has_reaction_ ? reaction_ : Real(0));
+              const Real diag =
+                  (exm + exp) * idx2 + (eym + eyp) * idy2 + (has_reaction_ ? reaction_ : Real(0));
               const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
                               (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
               // EXPLICIT cross terms (9 points, read from the current P): div(A grad phi) =
@@ -1009,9 +999,12 @@ class CompositeFacPoisson {
   bool verbose_ = false;
   bool two_way_ = true;
   CompositeFacOptions options_;  ///< Installed FAC budgets, mixed tolerances and diagnostics knobs.
-  int n_levels_ = 2;      ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
-  bool adjacent_ = false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
-  bool force_general_ = false;  ///< ADC-636 test hook: route the 2-level input through the general path.
+  int n_levels_ =
+      2;  ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
+  bool adjacent_ =
+      false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
+  bool force_general_ =
+      false;  ///< ADC-636 test hook: route the 2-level input through the general path.
   static constexpr Real kPi_ = Real(3.14159265358979323846);
 
   // ADC-636 N-level storage (levels k >= 2; levels 0/1 keep the members above). One entry per
@@ -1019,9 +1012,10 @@ class CompositeFacPoisson {
   // so the historical allocation is untouched. geom_lv_[k-2] = geom_c_.refine(2^k); cov_lv_[k-2] is
   // the coverage of level k by level k+1 (empty for the finest); foot_lv_[k-2][g] is the coarse
   // (level k-1) footprint of patch g. mg_lv_[k-2] serves the intermediate-level correction solve.
-  MultiFab res_f_;  ///< level-1 composite residual buffer (report/stop norm and N-level correction).
-  std::vector<Geometry> geom_lv_;   ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
-  std::vector<BoxArray> ba_lv_;     ///< ba_lv_[k-2] = the level-k patch tiling
+  MultiFab
+      res_f_;  ///< level-1 composite residual buffer (report/stop norm and N-level correction).
+  std::vector<Geometry> geom_lv_;  ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
+  std::vector<BoxArray> ba_lv_;    ///< ba_lv_[k-2] = the level-k patch tiling
   std::vector<DistributionMapping> dm_lv_;
   std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, lap_lv_, eps_lv_, axy_lv_, ayx_lv_;
   // Uniform per-level metadata, index m in [0, L-1] (covers level 0/1 as well as k >= 2 so the driver
@@ -1050,12 +1044,13 @@ class CompositeFacPoisson {
   // for any shape, including a 2-level input via the test hook.
   void finalize_hierarchy_metadata_();
   void setup_level_coeffs_();
-  void fill_cf_field_(int k, MultiFab& fine, const MultiFab& parent);  // C-F bilerp parent -> level k
-  void fill_cf_phi_(int k);                       // ghost order 3b for phi_level(k)
-  void relax_level_(int m, int sweeps);           // C-F ghost + fill_boundary + SOR (no avgdown)
-  void cascade_avgdown_();                         // fine-to-coarse average-down of the whole tower
-  void correct_level_(int m);                     // L_m e_m = res_m; phi_m += e_m on uncovered
-  Real composite_residual_(int m);                // res_m + C/F flux correction; return ||.||_inf
+  void fill_cf_field_(int k, MultiFab& fine,
+                      const MultiFab& parent);  // C-F bilerp parent -> level k
+  void fill_cf_phi_(int k);                     // ghost order 3b for phi_level(k)
+  void relax_level_(int m, int sweeps);         // C-F ghost + fill_boundary + SOR (no avgdown)
+  void cascade_avgdown_();                      // fine-to-coarse average-down of the whole tower
+  void correct_level_(int m);                   // L_m e_m = res_m; phi_m += e_m on uncovered
+  Real composite_residual_(int m);              // res_m + C/F flux correction; return ||.||_inf
   void fine_sor_level_(int m, const MultiFab& f_eff, int sweeps);  // red-black SOR on level m
   // Accumulate the level-m/level-(m+1) two-way C-F flux correction into dst (level-m residual or
   // effective RHS), enumerated from the uncovered coarse side (design 4c). single_writer_gather
@@ -1063,20 +1058,21 @@ class CompositeFacPoisson {
   void add_flux_correction_(int m, MultiFab& dst);
   MultiFab& res_level_(int m) { return m == 0 ? res_c_ : (m == 1 ? res_f_ : res_lv_[m - 2]); }
   MultiFab& lap_level_(int m) { return m == 0 ? lap_c_ : (m == 1 ? lap_f_ : lap_lv_[m - 2]); }
-  void add_uncovered_level_(int m, MultiFab& phi, const MultiFab& e);  // phi += e on uncovered cells
-  void copy0_(MultiFab& dst, const MultiFab& src);                     // dst <- src (comp 0, valid)
+  void add_uncovered_level_(int m, MultiFab& phi,
+                            const MultiFab& e);     // phi += e on uncovered cells
+  void copy0_(MultiFab& dst, const MultiFab& src);  // dst <- src (comp 0, valid)
   void apply_constant_reaction_(MultiFab& value, const MultiFab& phi) const {
     for (int li = 0; li < value.local_size(); ++li)
-      for_each_cell(value.box(li), detail::FacApplyConstantReactionKernel{
-                                          value.fab(li).array(),
-                                          phi.fab(li).const_array(), reaction_});
+      for_each_cell(value.box(li),
+                    detail::FacApplyConstantReactionKernel{value.fab(li).array(),
+                                                           phi.fab(li).const_array(), reaction_});
   }
   // Average-down phi_level(m) -> phi_level(m-1). When the parent (m-1) is the REPLICATED coarse under
   // MPI, parallel_copy would only update the src-owner rank; this routes the covered-cell averages
   // through a single-writer FluxRegister so every rank's replicated parent gets the same values
   // (identity at np=1, so mono-rank stays bit-identical to the legacy average_down).
   void average_down_level_(int m);
-  Real sor_omega_(const Box2D& b) const {         // per-patch over-relaxation (== legacy sor_omega)
+  Real sor_omega_(const Box2D& b) const {  // per-patch over-relaxation (== legacy sor_omega)
     const int N = std::max(b.nx(), b.ny());
     return Real(2) / (Real(1) + std::sin(Real(kPi_) / Real(N)));
   }

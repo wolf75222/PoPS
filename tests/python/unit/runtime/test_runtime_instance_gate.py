@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,7 +11,10 @@ import pops
 import pytest
 
 from pops.codegen._plans import BindInputs, InstallPlan
-from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+from pops.codegen._compiled_artifact import (
+    CompiledLayoutProgram,
+    CompiledSimulationArtifact,
+)
 from pops.model import Handle, OwnerPath
 from pops.output import NPZ, NPZWriter, read_npz
 from pops.output._consumer_contracts import (
@@ -23,7 +28,52 @@ from pops.output._restart_provider import RestartV3
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AcceptedStep, AtEnd, Clock, Every, FixedDt, Schedule
-from tests.python.unit.runtime.test_runtime_planning import _install
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.unit.runtime.test_runtime_planning import _artifact as _planning_artifact
+
+
+def _install(
+    names=("fluid",), *, heterogeneous=False, memory_spaces=("host",)
+):
+    """Build the planning fixture against the exact loaded native ABI and resources."""
+    from pops import _pops
+
+    template = _planning_artifact(
+        names, heterogeneous=heterogeneous, memory_spaces=memory_spaces
+    )
+    native_abi = _pops.abi_key()
+    if not isinstance(native_abi, str) or not native_abi:
+        raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
+    for block in template.blocks:
+        block.model.abi_key = native_abi
+    for row in template.layout_programs:
+        row.program.abi_key = native_abi
+    layout_programs = tuple(
+        CompiledLayoutProgram(row.layout_id, row.target, row.block_names, row.program)
+        for row in template.layout_programs
+    )
+    program = layout_programs[0].program if len(layout_programs) == 1 else None
+    artifact = CompiledSimulationArtifact(
+        template.plan,
+        program,
+        template.blocks,
+        layout_programs,
+        template.component_artifacts,
+    )
+    inputs = BindInputs()
+    return InstallPlan(
+        artifact=artifact,
+        bind_inputs=inputs,
+        instances={
+            block.name: {"model": block.model, "spatial": block.spatial}
+            for block in artifact.blocks
+        },
+        params=artifact.bind_schema.resolve_bind(
+            {}, compile_values=artifact.plan.compile_values
+        ),
+        aux={},
+        execution_context=artifact_execution_context(artifact),
+    )
 
 
 class _Executor:
@@ -156,6 +206,34 @@ class _Executor:
         assert block == "fluid" and index == 0
         return self.state_global(block).reshape(1, self._ny, self._nx)
 
+    def output_state_local_pieces(self, block, level):
+        assert block == "fluid" and level == 0
+        return ({
+            "lower": (0, 0),
+            "upper": (self._ny, self._nx),
+            "values": np.ascontiguousarray(
+                self.state_global(block).reshape(1, self._ny, self._nx),
+                dtype=np.float64,
+            ),
+            "global_box_index": 0,
+            "owner_rank": 0,
+            "replicated": False,
+        },)
+
+    def output_state_root_pieces(self, communicator, block, level):
+        """Expose the exact singleton-world gather required by ROOT publication tests."""
+        from pops._native_collectives import require_world, size
+
+        expected = self._plan.execution_context.communicator
+        if communicator is not expected.handle:
+            raise ValueError("ROOT gather did not receive the installed communicator handle")
+        native = require_world(communicator)
+        if size(native) != 1:
+            raise RuntimeError(
+                "runtime-instance unit executor only implements a singleton ROOT gather"
+            )
+        return self.output_state_local_pieces(block, level)
+
     def reduce_component(self, block, kind, component):
         assert (block, kind, component) == ("fluid", "sum", 0)
         return float(np.sum(self.state_global(block)))
@@ -176,34 +254,81 @@ class _Executor:
         return target
 
     def restart(self, path):
+        prepared = self._prepare_checkpoint_restart(Path(path).read_bytes())
+        self._begin_checkpoint_restart()
+        result = self._apply_checkpoint_restart(prepared)
+        self._commit_checkpoint_restart()
+        self._finalize_checkpoint_restart()
+        return result
+
+    def _prepare_checkpoint_restart(self, payload):
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
-        with np.load(path, allow_pickle=False) as payload:
-            self._last_restart_identity = authenticate_checkpoint_payload(
-                self, payload, runtime_kind="uniform")
-            self._time = float(payload["t"])
-            self._step = int(payload["macro_step"])
-        return self._last_restart_identity
+        stored = decode_checkpoint_bytes(payload)
+        identity = authenticate_checkpoint_payload(self, stored, runtime_kind="uniform")
+        return identity, float(stored["t"]), int(stored["macro_step"])
+
+    def _begin_checkpoint_restart(self):
+        self._begin_step_transaction()
+        self._restart_identity_snapshot = self._last_restart_identity
+
+    def _apply_checkpoint_restart(self, prepared):
+        identity, self._time, self._step = prepared
+        self._last_restart_identity = identity
+        return identity
+
+    def _commit_checkpoint_restart(self):
+        self._commit_step_transaction()
+
+    def _finalize_checkpoint_restart(self):
+        self._finalize_step_transaction()
+        del self._restart_identity_snapshot
+
+    def _rollback_checkpoint_restart(self):
+        self._rollback_step_transaction()
+        self._last_restart_identity = self._restart_identity_snapshot
+        del self._restart_identity_snapshot
 
 
 class _CustomNPZ:
     __pops_ir_immutable__ = True
+
+    def __init__(self, mode: ParallelMode) -> None:
+        if type(mode) is not ParallelMode:
+            raise TypeError("custom NPZ test provider requires an exact ParallelMode")
+        self._mode = mode
 
     def consumer_data(self):
         return {
             "schema_version": 1,
             "provider_id": "pops.test.custom-npz.v1",
             "extension": ".npz",
-            "parallel_mode": "serial",
+            "parallel_mode": self._mode.value,
         }
 
     def writer(self):
-        return NPZWriter()
+        return NPZWriter(self._mode)
+
+
+def _scientific_output_mode(artifact: CompiledSimulationArtifact) -> ParallelMode:
+    """Select an explicit publication mode compatible with the sealed native artifact."""
+    communicator = artifact.platform_manifest.communicator.require(
+        "runtime-instance fixture communicator"
+    )
+    if communicator == "serial":
+        return ParallelMode.SERIAL
+    if communicator == "MPI_COMM_WORLD":
+        return ParallelMode.ROOT
+    raise ValueError("unsupported runtime-instance fixture communicator %r" % communicator)
 
 
 def _with_graph(tmp_path, *, kind=ConsumerKind.SCIENTIFIC_OUTPUT,
                 output_format=None, target_uri=None, operation=None, schedule=None):
     base = _install()
+    parallel_mode = _scientific_output_mode(base.artifact)
+    if isinstance(output_format, type):
+        output_format = output_format(parallel_mode)
     layout = base.artifact.layout_plan.layouts[0].handle
     clock = Clock("solution", owner=OwnerPath.consumer("adc-687"))
     quantity = ConsumerQuantity(
@@ -217,13 +342,19 @@ def _with_graph(tmp_path, *, kind=ConsumerKind.SCIENTIFIC_OUTPUT,
         (quantity,),
         Schedule(Every(AcceptedStep(clock), 1)) if schedule is None else schedule(clock),
         str(tmp_path) if target_uri is None else str(target_uri),
-        NPZ() if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
+        NPZ(mode=parallel_mode)
+        if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
         else output_format,
-        ParallelMode.SERIAL,
+        parallel_mode if kind is ConsumerKind.SCIENTIFIC_OUTPUT else ParallelMode.SERIAL,
         operation=operation,
     )
     graph = ConsumerGraph((manifest,))
-    record = replace(base.artifact.plan, consumer_graph=graph)
+    from pops.output._restart_provider import RestartAuthority
+    record = replace(
+        base.artifact.plan,
+        consumer_graph=graph,
+        restart_authority=RestartAuthority.from_consumer_graph(graph),
+    )
     artifact = CompiledSimulationArtifact(record, base.artifact.program, base.artifact.blocks)
     inputs = BindInputs()
     plan = InstallPlan(
@@ -234,6 +365,7 @@ def _with_graph(tmp_path, *, kind=ConsumerKind.SCIENTIFIC_OUTPUT,
         params=artifact.bind_schema.resolve_bind(
             {}, compile_values=artifact.plan.compile_values),
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
     return plan, graph, manifest
 
@@ -250,6 +382,24 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
         runtime._layout_plan.mappings[0].provider_id
 
 
+def test_private_engines_expose_no_scientific_output_policy_surface():
+    import ast
+
+    root = Path(__file__).resolve().parents[4]
+    for relative in (
+        "python/pops/runtime/_system_io.py",
+        "python/pops/runtime/_amr_system_io.py",
+    ):
+        tree = ast.parse((root / relative).read_text(encoding="utf-8"))
+        methods = {
+            node.name
+            for statement in tree.body if isinstance(statement, ast.ClassDef)
+            for node in statement.body if isinstance(node, ast.FunctionDef)
+        }
+        assert "write" not in methods
+        assert "_write_hdf5_parallel" not in methods
+
+
 def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     plan = _install()
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
@@ -260,8 +410,28 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["instance"]["bind_identity"] == plan.bind_identity.to_data()
     assert payload["instance"]["plan_identity"] == plan.artifact.plan.plan_identity.to_data()
     assert payload["instance"]["consumer_graph"] == runtime.consumer_graph.to_data()
+    assert payload["instance"]["restart_authority"] == \
+        plan.artifact.plan.restart_authority.to_data()
+    assert runtime._restart_operation() is plan.artifact.plan.restart_authority.operation
     assert payload["instance"]["consumer_cursors"]["rows"] == []
     assert pops.inspect(runtime) == payload
+
+
+def test_checkpoint_graph_provider_is_the_resolved_restart_authority(tmp_path):
+    plan, graph, manifest = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(bit_identical=True),
+    )
+    authority = plan.artifact.plan.restart_authority
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    assert authority.source == "consumer-graph"
+    assert authority.operation is manifest.operation
+    assert authority.to_data()["operation"] == dict(manifest.operation_data)
+    assert runtime._restart_operation() is authority.operation
+    assert graph.to_data()["identity"] == runtime.consumer_graph.to_data()["identity"]
 
 
 def test_runtime_instance_has_one_authored_execution_route():
@@ -302,6 +472,13 @@ def test_runtime_instance_refuses_ambiguous_global_state_without_provider_capabi
     with pytest.raises(NotImplementedError, match="block_level_state_global"):
         runtime.state_global("fluid")
     assert np.all(runtime.block_level_state_global("fluid", 0) == 3.0)
+
+
+def test_uniform_runtime_instance_exposes_one_level_without_an_amr_provider():
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    assert runtime.n_levels() == 1
 
 
 @pytest.mark.parametrize(
@@ -408,7 +585,7 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
 
 
 def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_path):
-    plan, _, _ = _with_graph(tmp_path, output_format=_CustomNPZ())
+    plan, _, _ = _with_graph(tmp_path, output_format=_CustomNPZ)
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     runtime._run(t_end=1.0, max_steps=1)
@@ -430,6 +607,45 @@ def test_malformed_format_provider_is_refused_before_an_effect_exists(tmp_path):
         _with_graph(tmp_path, output_format=_Malformed())
 
 
+def test_checkpoint_provider_requires_a_compensatable_snapshot_protocol(tmp_path):
+    class _MalformedCheckpoint:
+        __pops_ir_immutable__ = True
+
+        @staticmethod
+        def consumer_data():
+            return {
+                "schema_version": 1,
+                "provider_id": "pops.test.malformed-checkpoint",
+                "extension": ".npz",
+            }
+
+        @staticmethod
+        def snapshot(_runtime, _directory):
+            return object()
+
+        @staticmethod
+        def write(_snapshot, _target):
+            raise AssertionError("unreachable")
+
+        @staticmethod
+        def reopen(_runtime, _path):
+            raise AssertionError("unreachable")
+
+        @staticmethod
+        def restore(_runtime, _reopened):
+            raise AssertionError("unreachable")
+
+    with pytest.raises(TypeError, match="validate_snapshot"):
+        _with_graph(
+            tmp_path,
+            kind=ConsumerKind.CHECKPOINT,
+            output_format=None,
+            operation=_MalformedCheckpoint(),
+        )
+    with pytest.raises(TypeError, match="discard/rollback"):
+        RestartV3().validate_snapshot(object())
+
+
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):
     plan, _, manifest = _with_graph(tmp_path / "outputs")
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
@@ -445,6 +661,131 @@ def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path
     with np.load(checkpoint, allow_pickle=False) as payload:
         assert str(payload["runtime_consumer_graph"]) == runtime.consumer_graph.identity.token
         assert "runtime_consumer_cursors" in payload.files
+        diagnostic_state = json.loads(str(payload["runtime_consumer_diagnostics"]))
+    assert diagnostic_state == {
+        "schema_version": 2, "baselines": {}, "diagnostics": [],
+    }
+
+
+def test_checkpoint_diagnostic_baseline_schema_is_finite_and_canonical():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    canonical = {
+        "schema_version": 2,
+        "baselines": {"diagnostic:integral": 1.25.hex()},
+        "diagnostics": [],
+    }
+    assert RuntimeConsumerPublisher.validate_diagnostic_restart_state(canonical) == canonical
+    with pytest.raises(ValueError, match="finite"):
+        RuntimeConsumerPublisher.validate_diagnostic_restart_state({
+            "schema_version": 2,
+            "baselines": {"diagnostic:integral": "nan"},
+            "diagnostics": [],
+        })
+    with pytest.raises(ValueError, match="canonical"):
+        RuntimeConsumerPublisher.validate_diagnostic_restart_state({
+            "schema_version": 2,
+            "baselines": {"diagnostic:integral": "0x1.4p+0"},
+            "diagnostics": [],
+        })
+
+
+def test_diagnostic_component_requires_one_explicit_role_for_multicomponent_state():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    with pytest.raises(ValueError, match="explicit typed ComponentRole"):
+        RuntimeConsumerPublisher._diagnostic_component(
+            ("rho", "momentum_x"), ("Density", "MomentumX"), None)
+    assert RuntimeConsumerPublisher._diagnostic_component(
+        ("rho", "momentum_x"), ("Density", "MomentumX"), "Density") == (0, False)
+
+
+def test_adaptive_diagnostic_passes_the_exact_selected_levels_to_native_provider():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    calls = []
+
+    class _AdaptiveProvider:
+        def composite_reduce(self, block, reduction, component, levels):
+            calls.append((block, reduction, component, levels))
+            return 4.5
+
+    value, composite = RuntimeConsumerPublisher._native_diagnostic_reduction(
+        SimpleNamespace(), _AdaptiveProvider(), "fluid", "sum", 1, False, (0, 2))
+    assert (value, composite) == (4.5, True)
+    assert calls == [("fluid", "sum", 1, [0, 2])]
+
+
+def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():
+    from pops.identity import make_identity
+    from pops.output.data import DiagnosticKey, DiagnosticPayload
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    payload = DiagnosticPayload(
+        DiagnosticKey(
+            Handle("mass", kind="diagnostic", owner=OwnerPath.consumer("restart-test")),
+            make_identity("component-manifest", {"name": "fluid"}),
+            make_identity("layout", {"name": "mesh"}),
+            0, make_identity("consumer-diagnostic-quantity", {"name": "mass"}).token,
+            "conservation:integral",
+        ),
+        0.125,
+        "kg",
+        {"quantity": 4.0, "baseline": 3.875},
+    )
+    source = object.__new__(RuntimeConsumerPublisher)
+    source._baselines = {"baseline": 3.875}
+    source._pending_baselines = {}
+    source._diagnostics = {payload.key.identity.token: payload}
+    source._pending = {}
+    state = source.diagnostic_restart_state()
+
+    recorded = {}
+    executor = SimpleNamespace(record_program_diagnostic=recorded.__setitem__)
+    restored = object.__new__(RuntimeConsumerPublisher)
+    restored._owner = SimpleNamespace(_executor=executor)
+    restored._baselines = {}
+    restored._pending_baselines = {}
+    restored._diagnostics = {}
+    restored._pending = {}
+    restored.restore_diagnostic_restart_state(state)
+
+    assert restored.diagnostics == (payload,)
+    assert restored._baselines == {"baseline": 3.875}
+    assert recorded == {
+        "%s:%s:%s" % (
+            payload.key.reference.qualified_id, payload.key.reduction, payload.key.state_id,
+        ): 0.125,
+    }
+
+
+def test_partial_diagnostic_publication_rolls_back_before_reporting_failure():
+    from pops.identity import make_identity
+    from pops.runtime._runtime_consumers import _PreparedDiagnostic
+
+    effect = SimpleNamespace(
+        identity=make_identity("accepted-side-effect-test", {"sample": 1}),
+        payload=SimpleNamespace(
+            identity=make_identity("consumer-payload-test", {"sample": 1})),
+    )
+    calls = []
+
+    def publish(_effect, _values):
+        calls.append("publish-partial")
+        raise RuntimeError("recorder failed")
+
+    prepared = _PreparedDiagnostic(
+        effect,
+        (),
+        publish,
+        lambda _effect: calls.append("discard"),
+        lambda _effect, _values: calls.append("rollback"),
+    )
+    with pytest.raises(RuntimeError, match="recorder failed"):
+        prepared.publish()
+    assert calls == ["publish-partial", "rollback"]
+    prepared.rollback()
+    assert calls == ["publish-partial", "rollback"]
 
 
 def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
@@ -474,7 +815,13 @@ def test_checkpoint_refuses_a_different_consumer_graph_before_native_restore(tmp
     runtime._run(t_end=1.0, max_steps=1)
     checkpoint = runtime.checkpoint(tmp_path / "restart")
 
-    empty_record = replace(plan.artifact.plan, consumer_graph=ConsumerGraph(()))
+    empty_graph = ConsumerGraph(())
+    from pops.output._restart_provider import RestartAuthority
+    empty_record = replace(
+        plan.artifact.plan,
+        consumer_graph=empty_graph,
+        restart_authority=RestartAuthority.from_consumer_graph(empty_graph),
+    )
     empty_artifact = CompiledSimulationArtifact(
         empty_record, plan.artifact.program, plan.artifact.blocks)
     inputs = BindInputs()
@@ -486,6 +833,7 @@ def test_checkpoint_refuses_a_different_consumer_graph_before_native_restore(tmp
         params=empty_artifact.bind_schema.resolve_bind(
             {}, compile_values=empty_artifact.plan.compile_values),
         aux={},
+        execution_context=artifact_execution_context(empty_artifact),
     )
     other = RuntimeInstance(empty_plan, executor=_Executor(empty_plan))
     try:

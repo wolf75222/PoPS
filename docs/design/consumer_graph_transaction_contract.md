@@ -30,13 +30,47 @@ the authenticated manifest, a `PublicationTarget`, a deduplicated `ConsumerPaylo
 action, and the cursor transition that may be applied after publication. Planning does not prepare
 files, publish artifacts, or mutate cursors.
 
+## Typed diagnostic execution
+
+Every diagnostic embedded in `ScientificOutput` lowers exactly once to a `DiagnosticQuantity`.
+That value owns a qualified diagnostic handle, exactly one resolved conservative state, its layout
+and level selection, and a closed native instruction containing the reduction, scalar transform,
+metric-weighting rule, optional physical role, and optional conservation tolerance. An unqualified
+diagnostic is accepted only when the selected output resolves to exactly one conservative state;
+multi-state ambiguity is an error, never a first-field convention. A diagnostic cadence, when
+provided, must equal its parent `ScientificOutput` schedule.
+
+Cell traversal, AMR coverage masking and MPI reduction execute in the C++ runtime. Python applies
+only the declared scalar post-transform (for example the square root after a native sum of squares)
+and stages the resulting immutable `DiagnosticPayload` in the same accepted-side-effect transaction
+as the writer. Uniform metric weighting is derived from the authenticated normalized geometry; AMR
+composite reductions already include level metrics and covered-cell exclusion and are not weighted a
+second time.
+
+`ConservationCheck` is an invariant check for a genuinely closed conservative quantity, not a
+substitute for an open-domain balance. Its first accepted sample establishes a non-zero baseline;
+later samples compare against that same baseline. Baseline creation, diagnostic publication and
+cursor advancement commit or roll back together, and the canonical baseline map is part of the
+checkpoint/restart payload. An open system must instead report its storage, outward-boundary, source,
+reflux and projection terms explicitly.
+
 ## Writer boundary and acceptance
 
 The author-facing extension seam stays under `pops.output`: a custom scientific format subclasses
 `pops.output.FormatInterface`, provides deterministic `consumer_data()`, and returns a writer from
-`writer()`. That writer's `prepare(snapshot, request, target, communicator=...)` must return a
-verified `pops.output.PreparedOutputFile`. No runtime package import is required or supported by a
-format provider.
+`writer()`. The writer implements the public structural `pops.output.ScientificWriter` protocol:
+`preflight(execution_context)` returns canonical capability evidence and effect-free
+`prepare_session(snapshot, request, target, communicator=...)` returns a
+`pops.output.WriterSession` on every rank. No inheritance or runtime-package import is required.
+
+The session exposes deterministic `authority` plus its authenticated `identity`, then `stage()`,
+idempotent `abort_prepare()`, `publish()`, and `rollback()`. `prepare_session()` cannot create a
+temporary or enter backend I/O. The runtime first compares session authority across communicator
+rank order and only then calls `stage()` on every session. `ROOT` therefore has an active rank-zero
+session and a no-op participant session on every non-root rank; `COLLECTIVE` has an active session on
+every rank; `PER_RANK` has one active local session and target on every rank. If any stage fails,
+every rank calls `abort_prepare()` before the failure escapes, including ranks whose own stage
+succeeded. The runtime never tests a concrete session class or selects behavior from a provider id.
 
 After resolution, private execution code adapts accepted effects to two runtime-owned nominal
 interfaces:
@@ -54,11 +88,12 @@ class PreparedPublication(ABC):
     def discard(self) -> None: ...
 ```
 
-These interfaces are implementation details, not extension base classes. `prepare()` creates only
-an incomplete temporary. `publish()` must make that one artifact visible
-atomically (normally commit/rename) and returns `PublicationReceipt` only after success. `discard()`
-is idempotent and removes all preparation residue. HDF5, NPZ, ParaView, external native writers and
-checkpoint providers all live behind this boundary.
+These runtime interfaces are implementation details, not extension base classes. Their private
+`prepare()` adapts the already staged public writer session to an accepted effect. `publish()` must
+make that one artifact visible atomically (normally no-clobber link/commit) and returns
+`PublicationReceipt` only after success. Runtime `discard()` delegates to the session's idempotent
+`abort_prepare()`; compensation delegates to `rollback()`. HDF5, NPZ, ParaView, external native
+writers and checkpoint providers all live behind this boundary.
 
 `ConsumerTransaction` prepares every effect while the step attempt is provisional. `reject()`
 discards all temporaries, publishes nothing, and returns the original cursor set. `accept()` is the
@@ -73,6 +108,9 @@ Failure actions are exact:
 - `SkipSampleReported()` returns a structured skipped-sample report, no receipt, and no cursor
   advancement.
 
-Already published artifacts from an earlier consumer are not rolled back if a later independent
-publication fails. No artifact is considered complete without its receipt, and no failed or skipped
-sample advances its scheduling cursor.
+Receipted artifacts remain compensatable until the enclosing accepted-step transaction seals. If a
+later publication in that transaction fails, the runtime rolls earlier artifacts back in reverse
+dependency order and restores the original cursor set; after the outer transaction seals, those
+receipts are final and are never removed by a later independent transaction. No artifact is
+considered complete without its receipt, and no failed or skipped sample advances its scheduling
+cursor.

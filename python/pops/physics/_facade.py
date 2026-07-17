@@ -31,7 +31,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         "local_linear_map", "source_frequency", "source_jacobian", "projection",
         "implicit_source", "enable_hllc", "set_riemann_hooks", "enable_roe",
         "roe_dissipation", "roe_from_jacobian", "elliptic_rhs", "elliptic_field",
-        "gamma", "param",
+        "gamma",
     })
 
     def __init__(self, name: Any) -> None:
@@ -400,7 +400,12 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         handle = self._param_registry.register(declaration)
         if declaration.name == "gamma":
             self._m.set_gamma(declaration.value)
-        self._invalidate_authoring_views()
+            # ``set_gamma`` changes model-source metadata and rebuilds the derived
+            # operator registry, so the Module projection must be rebuilt as well.
+            self._invalidate_authoring_views()
+        # Every other parameter is carried by the ParamRegistry already shared with
+        # an existing Module projection.  Rebuilding that projection here would try
+        # to attach the same OperatorRegistry to a second mutation authority.
         return handle
 
     def value(self, parameter: Any) -> Any:

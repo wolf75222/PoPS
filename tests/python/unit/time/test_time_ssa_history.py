@@ -43,21 +43,21 @@ def test_keep_history_default_resolves_to_dense():
     _, cold_start, configured_policy = P._time_history_configs[U]
     assert isinstance(cold_start, CopyCurrent)
     assert isinstance(configured_policy, Dense)
-    # The resolved policy is recorded on the Program keyed by the ring name (depth, policy).
-    depth, policy = P._history_persistence["plasma.U"]
-    assert depth == 2 and isinstance(policy, Dense)
+    # The resolved policy is recorded against the physical slot count (max lag + current slot).
+    ring_slots, policy = P._history_persistence["plasma.U"]
+    assert ring_slots == 3 and isinstance(policy, Dense)
 
 
 def test_keep_history_accepts_typed_policy():
     P = adctime.Program("h")
     U = typed_state(P, "plasma", state_name="U")
-    # depth 4 with Interval(3): (depth-1)=3 divisible by 3 -> stores {0, 3}, coherent.
-    node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    # max lag 3 creates four slots; Interval(3) stores both anchors {0, 3}.
+    node = P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
     _, _, configured_policy = P._time_history_configs[U]
     assert isinstance(configured_policy, Interval) and configured_policy.k == 3
-    depth, policy = P._history_persistence["plasma.U"]
-    assert depth == 4 and policy.stored_slots(4) == (0, 3)
+    ring_slots, policy = P._history_persistence["plasma.U"]
+    assert ring_slots == 4 and policy.stored_slots(ring_slots) == (0, 3)
 
 
 def test_keep_history_bad_string_policy_refused():
@@ -70,8 +70,8 @@ def test_keep_history_bad_string_policy_refused():
 def test_keep_history_incoherent_policy_refused_at_author_time():
     P = adctime.Program("h")
     U = typed_state(P, "plasma", state_name="U")
-    # Interval(2) on depth 4: (depth-1)=3 not divisible by 2 -> the oldest lag is unreconstructable.
-    _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
+    # Max lag 3 creates four slots; Interval(2) misses oldest slot 3.
+    _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Interval(2)),
             "oldest slot")
 
 

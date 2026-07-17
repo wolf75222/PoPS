@@ -6,21 +6,20 @@ build typed IR (validated structurally); the codegen that LOWERS them is a later
 `emit_cpp_program` still refuses a Program that uses them with a clear NotImplementedError (never a
 mis-lowering). Pure Python (no compile / no _pops runtime); skips if pops is unavailable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from types import SimpleNamespace
 
 from typed_program_support import solve_field, typed_state
 from pops.numerics.terms import Flux
 from pops.solvers import DenseLU
 
-import sys
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_local_solve (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_local_solve (pops.time unavailable: %s)' % exc)
     return t
 
 

@@ -125,16 +125,16 @@ inline std::string json_unescape(const std::string& s) {
 // supported_platforms feed the compile-time layout/platform gates; exported_symbols drives the
 // dlsym gate (the extern "C" symbols the .so MUST export). Empty CSV strings explicitly mean empty.
 struct BrickManifestEntry {
-  std::string id;                    // the brick id a user selects (e.g. "my_hllc")
-  std::string category;              // the catalog slot ("riemann", "preconditioner", ...)
-  std::string requirements;          // CSV of required model capabilities ("pressure,wave_speeds")
-  std::string capabilities;          // CSV of capabilities the brick PROVIDES, or ""
-  std::string native_id;             // required exported numerical symbol base
-  std::string supported_layouts;     // CSV of supported layouts ("uniform,amr"), or "" (unconstrained)
-  std::string supported_platforms;   // CSV of supported platforms ("cpu,mpi,gpu"), or "" (unknown)
-  std::string params;                // CSV of runtime param names the brick reads, or ""
-  std::string options;               // CSV of compile-time option keys, or ""
-  std::string exported_symbols;      // CSV of extern "C" symbols the .so MUST export, or ""
+  std::string id;                 // the brick id a user selects (e.g. "my_hllc")
+  std::string category;           // the catalog slot ("riemann", "preconditioner", ...)
+  std::string requirements;       // CSV of required model capabilities ("pressure,wave_speeds")
+  std::string capabilities;       // CSV of capabilities the brick PROVIDES, or ""
+  std::string native_id;          // required exported numerical symbol base
+  std::string supported_layouts;  // CSV of supported layouts ("uniform,amr"), or "" (unconstrained)
+  std::string supported_platforms;  // CSV of supported platforms ("cpu,mpi,gpu"), or "" (unknown)
+  std::string params;               // CSV of runtime param names the brick reads, or ""
+  std::string options;              // CSV of compile-time option keys, or ""
+  std::string exported_symbols;     // CSV of extern "C" symbols the .so MUST export, or ""
 };
 
 // A PER-IMAGE catalog of registered external bricks, keyed by id. Populated at static-init time by
@@ -264,11 +264,11 @@ class POPS_BRICK_LOCAL BrickRegistry {
 // declares richer fields calls `BrickRegistry::instance().register_brick({...})` directly. The
 // trailing static is a unique dummy whose initializer performs the registration (zero-cost at runtime,
 // runs once before main).
-#define POPS_REGISTER_BRICK(brick_id, brick_category, brick_requirements)            \
+#define POPS_REGISTER_BRICK(brick_id, brick_category, brick_requirements)             \
   static const bool POPS_REGISTER_BRICK_CAT_(pops_brick_registered_, __LINE__) = [] { \
-    ::pops::runtime::program::BrickRegistry::instance().register_brick(              \
-        {(brick_id), (brick_category), (brick_requirements), "", (brick_id)});      \
-    return true;                                                                    \
+    ::pops::runtime::program::BrickRegistry::instance().register_brick(               \
+        {(brick_id), (brick_category), (brick_requirements), "", (brick_id)});        \
+    return true;                                                                      \
   }()
 
 // Token-paste helpers so several POPS_REGISTER_BRICK uses in one TU get distinct static names.
@@ -285,9 +285,9 @@ class POPS_BRICK_LOCAL BrickRegistry {
 // static initializers ran before any host call), so the `const char*` stays valid for the process.
 #define POPS_DEFINE_BRICK_MANIFEST()                                   \
   extern "C" const char* pops_brick_manifest() {                       \
-    static const std::string manifest =                               \
+    static const std::string manifest =                                \
         ::pops::runtime::program::BrickRegistry::instance().to_json(); \
-    return manifest.c_str();                                          \
+    return manifest.c_str();                                           \
   }
 
 }  // namespace pops::runtime::program

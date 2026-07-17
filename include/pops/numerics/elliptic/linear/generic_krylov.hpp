@@ -124,7 +124,7 @@ inline void require_gmres_restart(int restart) {
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
 inline SolveReport richardson_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs,
-                                     Real omega, Real rel_tol, int max_iters) {
+                                    Real omega, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
   // Scratch allocated ONCE, co-distributed with phi; reused every iteration (no in-loop alloc).
@@ -181,7 +181,7 @@ inline SolveReport richardson_solve(const ApplyFn& A, MultiFab& phi, const Multi
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
 inline SolveReport cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs, Real rel_tol,
-                             int max_iters) {
+                            int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
   // Scratch allocated ONCE, co-distributed with phi; reused every iteration. p carries phi's ghost
@@ -232,8 +232,7 @@ inline SolveReport cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs
     rnorm = std::sqrt(rs_new);
     res.iters = k;
     res.rel_residual = rnorm / norm0;
-    if (!std::isfinite(static_cast<double>(rs_new)) ||
-        !std::isfinite(static_cast<double>(rnorm))) {
+    if (!std::isfinite(static_cast<double>(rs_new)) || !std::isfinite(static_cast<double>(rnorm))) {
       res.mark_failed(SolveStatus::kInvalidEvaluation);
       return res;
     }
@@ -267,7 +266,7 @@ inline SolveReport cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
 inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
-                                   const MultiFab& rhs, Real rel_tol, int max_iters) {
+                                  const MultiFab& rhs, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
   const bool has_precond = static_cast<bool>(precond);
@@ -312,8 +311,7 @@ inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mult
 
   for (int k = 1; k <= max_iters; ++k) {
     const Real rho = detail::krylov_dot(rhat, r);  // COLLECTIVE (all components if ncomp>1)
-    if (!std::isfinite(static_cast<double>(rho)) ||
-        !std::isfinite(static_cast<double>(omega))) {
+    if (!std::isfinite(static_cast<double>(rho)) || !std::isfinite(static_cast<double>(omega))) {
       res.iters = k - 1;
       res.rel_residual = rnorm / norm0;
       res.mark_failed(SolveStatus::kInvalidEvaluation);
@@ -355,7 +353,7 @@ inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mult
       res.mark_failed(SolveStatus::kInvalidEvaluation);
       return res;
     }
-    if (snorm <= rel_tol * norm0) {                // mid-iteration convergence
+    if (snorm <= rel_tol * norm0) {  // mid-iteration convergence
       rnorm = snorm;
       res.iters = k;
       res.rel_residual = rnorm / norm0;
@@ -379,8 +377,7 @@ inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mult
     rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
     res.iters = k;
     res.rel_residual = rnorm / norm0;
-    if (!std::isfinite(static_cast<double>(omega)) ||
-        !std::isfinite(static_cast<double>(rnorm))) {
+    if (!std::isfinite(static_cast<double>(omega)) || !std::isfinite(static_cast<double>(rnorm))) {
       res.mark_failed(SolveStatus::kInvalidEvaluation);
       return res;
     }
@@ -426,8 +423,7 @@ inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mult
 /// @param restart   GMRES restart length m (basis size); must be in [1, kGmresRestartMax]. Default 30.
 /// @return iterations, relative residual, convergence flag.
 inline SolveReport gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
-                                const MultiFab& rhs, Real rel_tol, int max_iters,
-                                int restart = 30) {
+                               const MultiFab& rhs, Real rel_tol, int max_iters, int restart = 30) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
   detail::require_gmres_restart(restart);

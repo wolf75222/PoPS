@@ -4,7 +4,7 @@
 
 #include <pops/core/foundation/types.hpp>      // Real
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
-#include <pops/mesh/storage/multifab.hpp>       // MultiFab
+#include <pops/mesh/storage/multifab.hpp>      // MultiFab
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/runtime/context/grid_context.hpp>                // GridContext (System aux seam)
@@ -62,8 +62,8 @@ struct GeometricMgPreconditioner {
   /// the historical single-V-cycle preconditioner bit-for-bit (nu1=nu2=2, nbottom=50, min_coarse=2, one
   /// vcycle -- the same emplace args and loop count as before ADC-644).
   GeometricMgPreconditioner(int nu1 = kMGDefaultPreSmooth, int nu2 = kMGDefaultPostSmooth,
-                            int nbottom = kMGDefaultBottomSweeps, int min_coarse = kMGDefaultMinCoarse,
-                            int n_vcycles = 1)
+                            int nbottom = kMGDefaultBottomSweeps,
+                            int min_coarse = kMGDefaultMinCoarse, int n_vcycles = 1)
       : nu1_(nu1), nu2_(nu2), nbottom_(nbottom), min_coarse_(min_coarse), n_vcycles_(n_vcycles) {}
 
   /// out <- M^{-1}(in): ONE geometric-multigrid V-cycle of the bare 5-point Laplacian, used as a
@@ -111,12 +111,12 @@ struct GeometricMgPreconditioner {
     ctx.lincomb(out, Real(1), m.phi(), Real(0), out);  // out <- phi
   }
 
-  int nu1_ = kMGDefaultPreSmooth;      ///< ADC-644: pre-smoothing sweeps (V-cycle shape).
-  int nu2_ = kMGDefaultPostSmooth;     ///< ADC-644: post-smoothing sweeps.
+  int nu1_ = kMGDefaultPreSmooth;         ///< ADC-644: pre-smoothing sweeps (V-cycle shape).
+  int nu2_ = kMGDefaultPostSmooth;        ///< ADC-644: post-smoothing sweeps.
   int nbottom_ = kMGDefaultBottomSweeps;  ///< ADC-644: coarsest-grid (bottom) sweeps.
   int min_coarse_ = kMGDefaultMinCoarse;  ///< ADC-644: per-axis coarsening floor.
-  int n_vcycles_ = 1;                  ///< ADC-644: composed fixed V-cycles forming the map.
-  std::optional<GeometricMG> mg;  ///< the cached V-cycle (built lazily on the first apply)
+  int n_vcycles_ = 1;                     ///< ADC-644: composed fixed V-cycles forming the map.
+  std::optional<GeometricMG> mg;          ///< the cached V-cycle (built lazily on the first apply)
 };
 
 }  // namespace program

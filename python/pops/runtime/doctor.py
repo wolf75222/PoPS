@@ -352,19 +352,15 @@ def capabilities() -> Any:
                            "stability_hooks": True, "bind_params": "fixed at install"},
         },
         "io": {
-            "write": ["vtk (.vti cartesian)", "npz",
-                      "hdf5 (h5py optional, rank-0 gather aggregation by default)",
-                      "parallel hdf5 (write(parallel=True) : hyperslabs per rank via h5py mpio + "
-                      "mpi4py ; opt-in, clear error if h5py without MPI ; true parallelism in "
-                      "MULTI-BOX, mono-box cartesian System)",
-                      "AmrSystem.write npz/vtk (coarse + patch rectangles)"],
-            "checkpoint_restart": "v1 npz mono-rank/rank-0 gather (System ; states + phi + t/macro_step ; "
-                                  "composition replayed by the script ; bit-identical resume ; "
-                                  "checkpoint(parallel=True) raises, stays rank-0 gather npz) ; "
-                                  "AMR mono-block mono-rank regrid_every=0 (ADC-65 : complete "
-                                  "conservative state per level + phi warm-start + imposed hierarchy ; resume "
-                                  "bit-identical) ; AMR multi-block / np>1 and parallel HDF5 "
-                                  "CHECKPOINT = follow-up (docs/IO_CHECKPOINT_PLAN.md ; explicit rejections)",
+            "scientific_output": (
+                "typed NPZ/ParaView/HDF5 providers with explicit SERIAL, ROOT, COLLECTIVE or "
+                "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
+            ),
+            "checkpoint_restart": (
+                "strict accepted-state v3 for Uniform and AMR, including multi-block, active "
+                "regridding, fields, histories, clocks and consumer cursors; exact MPI_COMM_WORLD "
+                "captures collectively and publishes one rank-0 NPZ artifact"
+            ),
         },
         "amr_layout": {
             "set_conservative_state": "mono-block, native multi-block, and compiled multi-block "

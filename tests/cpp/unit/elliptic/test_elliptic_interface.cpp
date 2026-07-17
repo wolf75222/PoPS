@@ -13,11 +13,11 @@
 
 #include <pops/numerics/elliptic/interface/elliptic_interface.hpp>
 
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>      // field_postprocess, FieldPostProcess
-#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>       // EllipticSolver
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>          // GeometricMG
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>         // TensorKrylovSolver, SolveReport
-#include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>    // PoissonFFTSolver, DistributedFFTSolver
+#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>  // EllipticSolver
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>            // GeometricMG
+#include <pops/numerics/elliptic/linear/krylov_solver.hpp>       // TensorKrylovSolver, SolveReport
+#include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>  // PoissonFFTSolver, DistributedFFTSolver
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver, PolarEllipticSolver
 
 #include <pops/mesh/layout/box_array.hpp>
@@ -168,8 +168,8 @@ TEST(test_elliptic_interface, linear_solver_report_is_bounded_int) {
   for_each_cell(v, [=] POPS_HD(int i, int j) { f(i, j) = fr(geom, i, j); });
   mg.phi().set_val(0.0);
   const int cycles = mg.solve(Real(1e-8), 50);  // variante LinearSolver (tol, iters)
-  EXPECT_TRUE(cycles >= 0 && cycles <= 50) << "LinearSolver_GeometricMG_compte_rendu_borne cycles="
-                                            << cycles;
+  EXPECT_TRUE(cycles >= 0 && cycles <= 50)
+      << "LinearSolver_GeometricMG_compte_rendu_borne cycles=" << cycles;
   static_assert(std::is_same_v<decltype(cycles), const int>,
                 "GeometricMG::solve(tol, iters) rend int (nombre de V-cycles)");
 }

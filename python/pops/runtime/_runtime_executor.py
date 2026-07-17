@@ -9,7 +9,6 @@ provider selection and the single-layout native installation seams.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import importlib
 from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
@@ -81,24 +80,15 @@ def _require_supported_execution_context(plan: Any) -> None:
                 "MPI_COMM_WORLD execution requires an MPI-enabled native module in an active "
                 "MPI world launch"
             )
-        try:
-            MPI = importlib.import_module("mpi4py.MPI")
-        except ImportError as exc:
-            raise RuntimeError(
-                "MPI_COMM_WORLD execution requires mpi4py for the explicit communicator handle"
-            ) from exc
-        if not isinstance(communicator.handle, MPI.Comm) or MPI.Comm.Compare(
-                communicator.handle, MPI.COMM_WORLD) != MPI.IDENT:
+        from pops._native_collectives import require_world
+
+        native = require_world(communicator.handle)
+        if not native.is_float64_datatype(context.datatype.handle):
             raise ValueError(
-                "the native provider consumes only the exact mpi4py.MPI.COMM_WORLD handle; "
-                "custom communicators are unsupported"
+                "MPI_COMM_WORLD execution requires the native float64 datatype resource"
             )
-        if context.datatype.handle is not MPI.DOUBLE:
-            raise ValueError(
-                "MPI_COMM_WORLD execution requires the exact mpi4py.MPI.DOUBLE datatype handle"
-            )
-        if int(communicator.handle.Get_rank()) != int(facts.get("mpi_rank", -1)) or int(
-                communicator.handle.Get_size()) != int(facts.get("mpi_ranks", -1)):
+        if int(native.rank) != int(facts.get("mpi_rank", -1)) or int(
+                native.size) != int(facts.get("mpi_ranks", -1)):
             raise ValueError(
                 "ExecutionContext MPI_COMM_WORLD does not match the native runtime rank/size"
             )
@@ -164,8 +154,12 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         del runtime_plan
         plan = require_install_plan(install_plan)
         _require_native_geometry(plan)
+        if plan.initial_condition_plan is None or plan.bootstrap_plan is None:
+            raise ValueError(
+                "adaptive runtime installation requires the resolved InitialConditionPlan and "
+                "its authenticated AMR bootstrap plan"
+            )
         from pops.runtime._amr_bind_lowering import amr_config_from_layout
-        from pops.runtime._runtime_mesh_lowering import flow_amr_layout
         from pops.runtime._system import AmrSystem
 
         artifact = plan.artifact
@@ -179,47 +173,38 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         schema = artifact.bind_schema
         by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
         initial_rows = []
-        if plan.initial_condition_plan is not None:
-            from pops.mesh._amr import AnalyticReprojection
+        from pops.mesh._amr import AnalyticReprojection
 
-            selections = {
-                row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
-            }
-            physical = {
-                requirement.subject.qualified_id: requirement
-                for entry in plan.amr_transfer.entries
-                for requirement in entry.requirements
-                if requirement.materialization == "physical"
-            }
-            for binding in plan.initial_condition_plan.bindings:
-                subject = binding.subject
-                if subject.kind != "state":
-                    raise NotImplementedError(
-                        "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
-                    )
-                requirement = physical[subject.qualified_id]
-                key = requirement.key.to_data()
-                block = subject.block_ref.local_id if subject.block_ref is not None else None
-                initial_rows.append(
-                    (
-                        subject.qualified_id,
-                        block,
-                        by_id.get(subject.qualified_id),
-                        key["space"]["name"],
-                        key["centering"]["name"],
-                        "analytic"
-                        if type(selections[subject.qualified_id]) is AnalyticReprojection
-                        else "prolong",
-                        binding.source.options.to_data(),
-                    )
+        selections = {
+            row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
+        }
+        physical = {
+            requirement.subject.qualified_id: requirement
+            for entry in plan.amr_transfer.entries
+            for requirement in entry.requirements
+            if requirement.materialization == "physical"
+        }
+        for binding in plan.initial_condition_plan.bindings:
+            subject = binding.subject
+            if subject.kind != "state":
+                raise NotImplementedError(
+                    "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
                 )
-        if plan.bootstrap_plan is None:
-            flow_amr_layout(
-                engine,
-                plan.layout,
-                n_blocks=len(plan.instances),
-                bind_schema=schema,
-                params=plan.params,
+            requirement = physical[subject.qualified_id]
+            key = requirement.key.to_data()
+            block = subject.block_ref.local_id if subject.block_ref is not None else None
+            initial_rows.append(
+                (
+                    subject.qualified_id,
+                    block,
+                    by_id.get(subject.qualified_id),
+                    key["space"]["name"],
+                    key["centering"]["name"],
+                    "analytic"
+                    if type(selections[subject.qualified_id]) is AnalyticReprojection
+                    else "prolong",
+                    binding.source.options.to_data(),
+                )
             )
         engine._install_compiled(
             compiled=artifact,

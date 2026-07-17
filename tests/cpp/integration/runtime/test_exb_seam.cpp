@@ -72,7 +72,8 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   double n0 = 0;
   for (double v : rho)
     n0 += v;
-  n0 /= (static_cast<double>(n) * n);  // background = mean density -> neutral source (periodic Poisson)
+  n0 /= (static_cast<double>(n) *
+         n);  // background = mean density -> neutral source (periodic Poisson)
 
   SystemConfig cfg;
   cfg.n = n;
@@ -103,8 +104,9 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   std::printf("EXBSEAM dt=%.3e m0=%.17e m1=%.17e dm=%.3e\n", dt, m0, m1, dm);
 
   if (chk.fails() == 0)
-    std::printf("OK test_exb_seam (System + ModelSpec exb/none/background: step_cfl advances, mass "
-               "conserved)\n");
+    std::printf(
+        "OK test_exb_seam (System + ModelSpec exb/none/background: step_cfl advances, mass "
+        "conserved)\n");
   return chk.failed();
 }
 

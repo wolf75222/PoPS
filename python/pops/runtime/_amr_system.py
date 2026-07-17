@@ -1,11 +1,10 @@
 """AmrSystem : the refined runtime coupler (Spec-4 PR-F composed class).
 
 ``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
-``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (write / checkpoint /
-restart), ``_amr_system_program`` (compiled time-Program install / params / transaction)
+``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (private accepted-state
+codec and restore transaction), ``_amr_system_program`` (compiled time-Program install / params / transaction)
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
-mixins to satisfy the <=500-line cap ; this module composes them and keeps the constructor + the
-native-add_block / coupling / diagnostics glue.
+mixins; this module composes them and keeps the constructor plus native block/coupling glue.
 """
 from __future__ import annotations
 

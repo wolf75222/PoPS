@@ -50,9 +50,10 @@ class CompiledComponent:
 
     def __pops_artifact_model_metadata__(self):
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "state_spaces": ("U",),
             "cons_names": ("u",),
+            "cons_roles": ("VelocityX",),
             "n_vars": 1,
             "params": {},
             "aux_names": (),

@@ -40,6 +40,29 @@ def test_capability_report_does_not_hide_native_call_failure(monkeypatch):
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
+@pytest.mark.parametrize(
+    ("supports_mpi", "expected"),
+    ((False, "unavailable"), (True, "available")),
+)
+def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, expected):
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": supports_mpi, "supports_amr": True}, source="test-manifest")
+    routes = {row.feature: row for row in report.routes}
+    route = routes["parallel:mpi_world_communicator"]
+    assert route.status == expected
+    assert route.mpi is supports_mpi
+    assert route.available_route == (
+        "ExecutionContext.mpi_world()" if supports_mpi else "serial ExecutionContext"
+    )
+    assert bool(route.alternative) is (not supports_mpi)
+    assert "ParallelContext" not in routes["parallel:custom_communicator"].alternative
+    assert "PrecisionPolicy is representable" in routes["precision:single_or_mixed"].limitation
+    assert routes["checkpoint:accepted_state_v3"].status == "available"
+    assert routes["checkpoint:accepted_state_v3"].layout == "uniform|amr"
+    assert routes["checkpoint:amr_dynamic_regrid"].status == "available"
+    assert "checkpoint:system_v1" not in routes
+
+
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
     monkeypatch.setattr(defaults, "_native_extension", lambda: None)
     assert defaults.numerical_defaults_report()["source"] == "source-only"

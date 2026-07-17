@@ -187,7 +187,8 @@ struct IsothermalFlux {
     return e;
   }
   /// Signed speeds (HLL/HLLC): v_dir -+ c_s.
-  POPS_HD void wave_speeds(const StateVec<3>& u, const Aux&, int dir, Real& smin, Real& smax) const {
+  POPS_HD void wave_speeds(const StateVec<3>& u, const Aux&, int dir, Real& smin,
+                           Real& smax) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(cs2);

@@ -3,8 +3,8 @@
 #include <pops/amr/tagging/cluster.hpp>  // berger_rigoutsos, ClusterParams
 #include <pops/amr/tagging/clustering_provider.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
-#include <pops/amr/regridding/regrid.hpp>   // tag_cells, grow_tags
-#include <pops/amr/tagging/tag_box.hpp>  // TagBox
+#include <pops/amr/regridding/regrid.hpp>  // tag_cells, grow_tags
+#include <pops/amr/tagging/tag_box.hpp>    // TagBox
 #include <pops/core/foundation/types.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_find_box
 #include <pops/mesh/index/box2d.hpp>
@@ -13,7 +13,7 @@
 #include <pops/mesh/execution/for_each.hpp>  // device_fence (barrier after async parallel_copy under Cuda)
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
-#include <pops/parallel/comm.hpp>    // n_ranks (explicit include, no longer an indirect path)
+#include <pops/parallel/comm.hpp>  // n_ranks (explicit include, no longer an indirect path)
 
 #include <algorithm>
 #include <limits>
@@ -56,12 +56,10 @@ namespace pops {
 /// clustering so every rank constructs the identical layout. When @p proper_nesting_parents is
 /// supplied, each child cluster is built inside one parent patch shrunk by @p margin: a provider
 /// cannot return a geometrically non-nested layout and leave the failure to a downstream stencil.
-inline void validate_fine_layout_proper_nesting(const BoxArray& fine,
-                                                const BoxArray& parents,
+inline void validate_fine_layout_proper_nesting(const BoxArray& fine, const BoxArray& parents,
                                                 int refinement_ratio, int margin) {
   if (refinement_ratio < 2)
-    throw std::runtime_error(
-        "validate_fine_layout_proper_nesting: refinement_ratio must be >= 2");
+    throw std::runtime_error("validate_fine_layout_proper_nesting: refinement_ratio must be >= 2");
   if (margin < 0)
     throw std::runtime_error("validate_fine_layout_proper_nesting: margin must be >= 0");
   for (int child = 0; child < fine.size(); ++child) {
@@ -81,8 +79,7 @@ inline void validate_fine_layout_proper_nesting(const BoxArray& fine,
 
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_provider(
     TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated,
-    const amr::ClusteringProvider& clustering,
-    int refinement_ratio = kAmrRefRatio,
+    const amr::ClusteringProvider& clustering, int refinement_ratio = kAmrRefRatio,
     const BoxArray* proper_nesting_parents = nullptr) {
   if (refinement_ratio < 2)
     throw std::runtime_error("regrid_compute_fine_layout: refinement_ratio must be >= 2");
@@ -100,7 +97,8 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
   if (proper_nesting_parents != nullptr) {
     admissible.reserve(static_cast<std::size_t>(proper_nesting_parents->size()));
     for (int parent = 0; parent < proper_nesting_parents->size(); ++parent) {
-      const Box2D region = (*proper_nesting_parents)[parent].grow(-margin).intersect(domain_interior);
+      const Box2D region =
+          (*proper_nesting_parents)[parent].grow(-margin).intersect(domain_interior);
       if (!region.empty())
         admissible.push_back(region);
     }
@@ -123,16 +121,15 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
   });
   std::vector<Box2D> fb;  // fine patches (fine level coords = parent x2)
   for (const Box2D& b : cl) {
-    fb.push_back(Box2D{{refinement_ratio * b.lo[0], refinement_ratio * b.lo[1]},
-                       {refinement_ratio * (b.hi[0] + 1) - 1,
-                        refinement_ratio * (b.hi[1] + 1) - 1}});
+    fb.push_back(
+        Box2D{{refinement_ratio * b.lo[0], refinement_ratio * b.lo[1]},
+              {refinement_ratio * (b.hi[0] + 1) - 1, refinement_ratio * (b.hi[1] + 1) - 1}});
   }
   if (fb.empty())
     return {BoxArray{}, DistributionMapping{}};  // nothing to refine
   BoxArray ba(fb);
   if (proper_nesting_parents != nullptr)
-    validate_fine_layout_proper_nesting(
-        ba, *proper_nesting_parents, refinement_ratio, margin);
+    validate_fine_layout_proper_nesting(ba, *proper_nesting_parents, refinement_ratio, margin);
   return {ba, DistributionMapping(static_cast<int>(ba.size()), n_ranks())};
 }
 
@@ -141,9 +138,9 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     const ClusterParams& cluster = ClusterParams{}, int refinement_ratio = kAmrRefRatio,
     const BoxArray* proper_nesting_parents = nullptr) {
   const amr::BergerRigoutsosProvider provider(cluster);
-  return regrid_compute_fine_layout_with_provider(
-      std::move(grown), pdom, pk, margin, coarse_replicated, provider,
-      refinement_ratio, proper_nesting_parents);
+  return regrid_compute_fine_layout_with_provider(std::move(grown), pdom, pk, margin,
+                                                  coarse_replicated, provider, refinement_ratio,
+                                                  proper_nesting_parents);
 }
 
 /// Rebuild ONE fine MultiFab on the IMPOSED layout @p fb / @p dmap (the same one for all blocks in
@@ -179,23 +176,22 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
     if (par_replicated) {
       for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)  // 1) interp from the parent (local)
         for (int i = nb.lo[0]; i <= nb.hi[0]; ++i) {
-          const int pb =
-              mf_find_box(par, coarsen_index(i, refinement_ratio),
-                          coarsen_index(j, refinement_ratio));
+          const int pb = mf_find_box(par, coarsen_index(i, refinement_ratio),
+                                     coarsen_index(j, refinement_ratio));
           if (pb < 0)
             continue;
           const ConstArray4 pp = par.fab(pb).const_array();
           for (int k = 0; k < ncf; ++k)
-            a(i, j, k) = pp(coarsen_index(i, refinement_ratio),
-                            coarsen_index(j, refinement_ratio), k);
+            a(i, j, k) =
+                pp(coarsen_index(i, refinement_ratio), coarsen_index(j, refinement_ratio), k);
         }
     } else {
       const ConstArray4 pp = parloc.fab(li).const_array();  // local child-coarsen grid
       for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)
         for (int i = nb.lo[0]; i <= nb.hi[0]; ++i)
           for (int k = 0; k < ncf; ++k)
-            a(i, j, k) = pp(coarsen_index(i, refinement_ratio),
-                            coarsen_index(j, refinement_ratio), k);
+            a(i, j, k) =
+                pp(coarsen_index(i, refinement_ratio), coarsen_index(j, refinement_ratio), k);
     }
     for (int ol = 0; ol < old.local_size(); ++ol) {  // 2) carry-over of the fine data
       const ConstArray4 o = old.fab(ol).const_array();
@@ -235,9 +231,9 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
   TagBox grown = grow_tags(tags, grow, pdom);
   // (1) Compute the fine layout (tags -> grow [already done] -> all_reduce_or -> clustering -> clamp).
   const BoxArray* parents = pk > 0 ? &L[pk].U.box_array() : nullptr;
-  auto [fb, dmap] = regrid_compute_fine_layout(
-      std::move(grown), pdom, pk, margin, coarse_replicated, ClusterParams{}, kAmrRefRatio,
-      parents);
+  auto [fb, dmap] =
+      regrid_compute_fine_layout(std::move(grown), pdom, pk, margin, coarse_replicated,
+                                 ClusterParams{}, kAmrRefRatio, parents);
   if (fb.size() == 0)
     return;  // nothing to refine: keep the current grid
   // The new patches INHERIT the ghost width of the level being replaced (not a frozen 1): a

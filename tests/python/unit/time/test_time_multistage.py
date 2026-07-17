@@ -15,6 +15,7 @@ nothing, so re-solving from a stage state vs the current state is bit-identical 
 field-coupled case is exercised by test_time_solve_fields_from_state). Skips cleanly (exit 0)
 without the install_program binding / numpy / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
 import pops
 from pops.codegen import Production
 from pops.domain import Rectangle
@@ -36,8 +37,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
-    print("skip test_time_multistage (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_time_multistage (%s)' % msg)
 
 
 try:

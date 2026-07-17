@@ -239,9 +239,9 @@ POPS_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
 // by the caller (reused as is by the finite differences).
 template <class Model, int N>
 POPS_HD inline void assemble_newton_jacobian(const Model& m, const typename Model::State& W,
-                                            const Aux& a, Real dt, const NewtonOptions& opts,
-                                            const int impl[N], int m_impl,
-                                            const typename Model::State& S0, Real J[N][N]) {
+                                             const Aux& a, Real dt, const NewtonOptions& opts,
+                                             const int impl[N], int m_impl,
+                                             const typename Model::State& S0, Real J[N][N]) {
   if constexpr (HasSourceJacobian<Model>) {
     // ANALYTIC JACOBIAN (trait, wave 3): J = I - dt * dS/dU restricted to the implicit ones.
     Real dS[N][N];
@@ -564,8 +564,7 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
           opts.fail_policy == NewtonOptions::kFailThrow ? "newton.fail_policy.throw"
                                                         : "newton.fail_policy.warn",
           "ImplicitSourceNewton",
-          opts.fail_policy == NewtonOptions::kFailThrow ? "error" : "warning", msg, -1,
-          nfail_g);
+          opts.fail_policy == NewtonOptions::kFailThrow ? "error" : "warning", msg, -1, nfail_g);
     }
     if (opts.fail_policy == NewtonOptions::kFailThrow)
       throw std::runtime_error(msg);

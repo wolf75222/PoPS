@@ -32,15 +32,14 @@ from pops._ir.lowering import diff
 from pops._ir.ops import left, right, sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-
-fails = 0
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 INCLUDE = repo_include()
 CS2 = 0.5  # vitesse du son au carre (isotherme / pseudo-pression p = cs2 rho)
+fails = 0
 
 
 def chk(cond, label):
@@ -228,7 +227,7 @@ if missing:
     if fails:
         print(f"FAIL test_dsl_autodiff_roe : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(c) test_dsl_autodiff_roe : {missing}")
+    require_native_or_skip(f"(c) test_dsl_autodiff_roe : {missing}")
 
 
 def iso_roe_hand(name):

@@ -49,7 +49,7 @@
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // ADC-327 : contrat generique (DiscDomain + HalfPlaneDomain + concept)
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial_operator.hpp>     // assemble_rhs, assemble_rhs_masked
+#include <pops/numerics/spatial_operator.hpp>  // assemble_rhs, assemble_rhs_masked
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb
 
 #include <algorithm>
@@ -102,10 +102,8 @@ TEST(EmbeddedBoundaryGeneric, LevelSetContract) {
   // franchement non-axiale, non-disque.
   const detail::HalfPlaneDomain hp{1.0, 1.0, 1.0};  // x + y < 1 actif
   // Convention de signe : (0.1, 0.1) dedans (0.2 < 1), (0.9, 0.9) dehors (1.8 > 1).
-  EXPECT_TRUE(double(hp.level_set(Real(0.1), Real(0.1))) < 0.0)
-      << "demi-plan : interieur ls < 0";
-  EXPECT_TRUE(double(hp.level_set(Real(0.9), Real(0.9))) > 0.0)
-      << "demi-plan : exterieur ls > 0";
+  EXPECT_TRUE(double(hp.level_set(Real(0.1), Real(0.1))) < 0.0) << "demi-plan : interieur ls < 0";
+  EXPECT_TRUE(double(hp.level_set(Real(0.9), Real(0.9))) > 0.0) << "demi-plan : exterieur ls > 0";
   EXPECT_TRUE(hp.cell_active(Real(0.1), Real(0.1)) && !hp.cell_active(Real(0.9), Real(0.9)))
       << "demi-plan : cell_active == (ls < 0)";
   // operator() (forme callable consommee par les operateurs) == level_set (alias nomme).

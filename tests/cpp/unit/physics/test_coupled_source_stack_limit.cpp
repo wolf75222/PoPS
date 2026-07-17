@@ -24,7 +24,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include "test_harness.hpp"  // pops::test::Checker, raises
+#include "test_harness.hpp"                                 // pops::test::Checker, raises
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp, kCsMaxStack
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalar 1-var block, role Density)
 #include <pops/physics/bricks/source.hpp>      // NoSource
@@ -65,7 +65,8 @@ CoupledSourceProgram all_pushes_program(int n_pushes) {
   prog.out_roles = {"density"};
   const int push = static_cast<int>(CsOp::PushReg);
   std::vector<int> ops(static_cast<std::size_t>(n_pushes), push);
-  std::vector<int> args(static_cast<std::size_t>(n_pushes), 0);  // always read register 0 (the input)
+  std::vector<int> args(static_cast<std::size_t>(n_pushes),
+                        0);  // always read register 0 (the input)
   prog.prog_ops = ops;
   prog.prog_args = args;
   prog.prog_lens = {n_pushes};

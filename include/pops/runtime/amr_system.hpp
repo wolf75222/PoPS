@@ -4,7 +4,7 @@
 
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
-#include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
+#include <pops/mesh/boundary/physical_bc.hpp>  // BCRec
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
@@ -15,6 +15,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
@@ -52,6 +53,8 @@
 
 namespace pops {
 
+class WorldCommunicator;
+
 /// Exact read-only backend configuration retained for one resolved AMR field solver.
 struct AmrFieldSolverConfiguration {
   std::string plan_identity;
@@ -77,13 +80,15 @@ struct AmrRuntimeBlock;
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
 class MultiFab;
 class PreparedBoundaryPlan;
-class AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
+class
+    AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
 namespace detail {
 struct SharedAmrLayout;
 }
 namespace runtime {
 namespace program {
-class Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
+class
+    Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
 }  // namespace program
 namespace multiblock {
 struct AxisAlignedInterface;
@@ -93,14 +98,14 @@ struct PreparedInterfaceFluxSpec;
 
 /// AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
 struct AmrSystemConfig {
-  int n = 128;            ///< coarse-level cells per direction
-  double L = 1.0;         ///< size of the square domain [0,L]^2
-  int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
-  int level_count = 2;    ///< exact materialized hierarchy depth (>= 1)
-  int regrid_grow = 2;    ///< tag lookahead/dilation from the resolved hierarchy
-  int regrid_margin = 2;  ///< proper-nesting buffer from the resolved hierarchy
+  int n = 128;                      ///< coarse-level cells per direction
+  double L = 1.0;                   ///< size of the square domain [0,L]^2
+  int regrid_every = 20;            ///< re-refinement every N steps (0 = never after init)
+  int level_count = 2;              ///< exact materialized hierarchy depth (>= 1)
+  int regrid_grow = 2;              ///< tag lookahead/dilation from the resolved hierarchy
+  int regrid_margin = 2;            ///< proper-nesting buffer from the resolved hierarchy
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
-  bool periodic = true;   ///< periodic domain
+  bool periodic = true;             ///< periodic domain
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
   ///   and the coarse transport are REDUNDANT on each GPU (zero communication,
@@ -182,8 +187,8 @@ struct AmrBuildParams {
     double fac_abs_tol = 0.0;         ///< absolute composite floor (0 = kFACDefaultAbsTol)
     double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = kFACInitialCoarseRelTol)
     double fac_coarse_abs_tol = 0.0;  ///< internal coarse abs_tol (0 = kFACInitialCoarseAbsTol)
-    int fac_coarse_cycles = 0;        ///< internal coarse cycles (<= 0 = kFACInitialCoarseMaxCycles)
-    bool fac_verbose = false;         ///< record the FAC per-iteration residual trace
+    int fac_coarse_cycles = 0;  ///< internal coarse cycles (<= 0 = kFACInitialCoarseMaxCycles)
+    bool fac_verbose = false;   ///< record the FAC per-iteration residual trace
   } poisson;
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
@@ -198,7 +203,8 @@ struct AmrBuildParams {
   /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
   /// regrid). Both empty -> bit-identical.
   struct NamedAux {
-    std::map<int, std::vector<double>> fields;   ///< component (>= kAuxNamedBase) -> coarse field (n*n)
+    std::map<int, std::vector<double>>
+        fields;  ///< component (>= kAuxNamedBase) -> coarse field (n*n)
     std::map<int, AuxHaloPolicy> halo_policies;  ///< component -> uniform boundary policy
   } named_aux;
 };
@@ -206,7 +212,7 @@ struct AmrBuildParams {
 /// Type-erased closures of a compiled AMR block, produced by amr_dsl_block::build_amr_compiled and
 /// installed via AmrSystem::set_compiled_block. Symmetric with the std::function hooks of AmrSystem::Impl.
 ///
-/// STRUCTURE (ADC-610). The 22 closures are grouped into the FIVE named tiers documented in the design
+/// STRUCTURE (ADC-610). The closures are grouped into SIX named tiers documented in the design
 /// (lifetime, base, stability, checkpoint, MPI gather) instead of one flat append-only list. A new
 /// closure goes INTO its tier -- the historical "add at the tail" idiom is retired (a regroup or add
 /// shifts POPS_HEADER_SIG anyway, which re-keys pops_native_abi_key, so a stale .so is REJECTED at
@@ -236,10 +242,11 @@ struct AmrCompiledHooks {
   /// CHECKPOINT tier (ADC-65 mono-rank restart): cadence phase + per-level state/phi + hierarchy.
   struct Checkpoint {
     std::function<void(int)>
-        set_macro_step;  ///< restores the cadence (regrid) phase of the mono-block
-    std::function<int()> n_levels;                        ///< number of levels (>= 1)
-    std::function<int()> n_vars;                          ///< conserved components of the block
-    std::function<std::vector<double>(int)> level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
+        set_macro_step;             ///< restores the cadence (regrid) phase of the mono-block
+    std::function<int()> n_levels;  ///< number of levels (>= 1)
+    std::function<int()> n_vars;    ///< conserved components of the block
+    std::function<std::vector<double>(int)>
+        level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
     std::function<void(int, const std::vector<double>&)>
         set_level_state;                                      ///< restores the state of level k
     std::function<std::vector<double>(int)> level_potential;  ///< phi of level k (nf*nf row-major)
@@ -256,6 +263,19 @@ struct AmrCompiledHooks {
     std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
     std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
   } mpi_gather;
+  /// OUTPUT tier: exact rank-local valid-cell pieces.  This is distinct from checkpoint buffers:
+  /// scientific writers must preserve native patch ownership and must not allocate zeros outside
+  /// fine patches. ``geometry_boxes`` carries every level's GLOBAL BoxArray in native index order;
+  /// OutputPiece.global_box_index is defined against that exact per-level order.
+  struct Output {
+    std::function<std::vector<PatchBox>()> geometry_boxes;
+    std::function<std::vector<OutputPiece>(int)> state_local_pieces;
+  } output;
+  /// DIAGNOSTICS tier: exact selected-level reductions over the live native hierarchy. This avoids
+  /// gathering complete level arrays through the checkpoint ABI for one scalar diagnostic.
+  struct Diagnostics {
+    std::function<double(const std::string&, int, const std::vector<int>&)> composite_reduce;
+  } diagnostics;
 };
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
@@ -272,10 +292,10 @@ struct AmrCompiledHooks {
 /// dispatch_amr_block -> build_amr_block exactly like a native multi-block.
 using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const detail::SharedAmrLayout& layout, const std::string& name,
-    const std::vector<double>& density, bool has_density,
-    const std::vector<double>& state, bool has_state, double gamma, int substeps,
-    bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
-    const std::vector<std::string>& implicit_roles, double pos_floor)>;
+    const std::vector<double>& density, bool has_density, const std::vector<double>& state,
+    bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+    const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
+    double pos_floor)>;
 
 /// Single block carried on an AMR hierarchy, composed at runtime.
 ///
@@ -446,8 +466,7 @@ class AmrSystem {
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_amr_tagger_component(
-      runtime::amr::PreparedTaggerSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
+      runtime::amr::PreparedTaggerSpec spec, std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_amr_clustering_component(
       runtime::amr::PreparedClusteringSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
@@ -460,8 +479,8 @@ class AmrSystem {
       std::shared_ptr<component::LoadedComponent> component);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
-  POPS_EXPORT std::size_t interface_evaluation_count(
-      const std::string& identity, int level = 0) const;
+  POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
+                                                     int level = 0) const;
 
   /// Internal installation seam for a compiled AMR production package. The .so inlines the header template
   /// add_compiled_model(AmrSystem&, ...), which materializes a concrete AmrCouplerMP<Model> at lazy
@@ -500,10 +519,8 @@ class AmrSystem {
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                        int substeps = 1,
-                        const std::vector<double>& params = {},
-                        double positivity_floor = 0.0);
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+                        const std::vector<double>& params = {}, double positivity_floor = 0.0);
 
   /// Refines the cells where the SELECTED conserved variable exceeds @p threshold. By default the
   /// variable is component 0 (historically the density), preserving the bit-identical @c 1e30 no-op.
@@ -523,19 +540,14 @@ class AmrSystem {
   void set_bootstrap_refinement(const std::string& block, const std::string& variable,
                                 double threshold, const std::string& provider_identity);
   void set_bootstrap_tagging(
-      const std::vector<std::string>& leaf_blocks,
-      const std::vector<std::string>& leaf_variables,
-      const std::vector<int>& leaf_ops,
-      const std::vector<double>& leaf_thresholds,
+      const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
+      const std::vector<int>& leaf_ops, const std::vector<double>& leaf_thresholds,
       const std::vector<int>& leaf_stencil_indices,
       const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
-      const std::vector<std::int32_t>& refine_ops,
-      const std::vector<std::int32_t>& refine_args,
-      const std::vector<std::int32_t>& coarsen_ops,
-      const std::vector<std::int32_t>& coarsen_args,
-      int min_cycles, const std::string& equality_policy,
-      const std::string& conflict_policy, const std::string& clock_identity,
-      const std::string& provider_identity);
+      const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
+      const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
+      int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
+      const std::string& clock_identity, const std::string& provider_identity);
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
@@ -583,54 +595,46 @@ class AmrSystem {
   /// resolved semantics. Before lazy runtime materialization, the canonical ordered
   /// (slot, plan_identity) registry must agree exactly on every MPI rank. Duplicate slots are
   /// refused, including exact repeats.
-  void set_field_solver_plan(const std::string& provider_slot,
-                             const std::string& plan_identity,
+  void set_field_solver_plan(const std::string& provider_slot, const std::string& plan_identity,
                              const std::string& provider_identity,
                              const std::string& output_owner_identity,
-                             const std::string& output_block,
-                             const std::string& output_key,
+                             const std::string& output_block, const std::string& output_key,
                              const std::vector<std::string>& provider_identities,
                              const std::vector<std::string>& provider_blocks,
                              const std::vector<std::string>& provider_keys,
                              const std::vector<double>& provider_coefficients,
-                             const std::string& solver,
-                             const std::string& hierarchy, double abs_tol, double rel_tol,
-                             int max_cycles, int min_coarse, int pre_smooth,
-                             int post_smooth, int bottom_sweeps, int coarse_threshold,
-                             const CompositeFacOptions& fac_options);
+                             const std::string& solver, const std::string& hierarchy,
+                             double abs_tol, double rel_tol, int max_cycles, int min_coarse,
+                             int pre_smooth, int post_smooth, int bottom_sweeps,
+                             int coarse_threshold, const CompositeFacOptions& fac_options);
   /// Exact read-only backend configuration retained by one resolved field plan.
-  AmrFieldSolverConfiguration field_solver_configuration(
-      const std::string& provider_slot) const;
+  AmrFieldSolverConfiguration field_solver_configuration(const std::string& provider_slot) const;
   /// Install the resolved scalar reaction coefficient of one named screened field.
   void set_field_reaction(const std::string& provider_slot, double reaction);
   void set_field_topology_authority(const std::string& provider_slot,
-                                    const std::string& provider_kind,
-                                    const std::string& provenance,
+                                    const std::string& provider_kind, const std::string& provenance,
                                     const std::string& topology_digest);
   std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
       const std::string& provider_slot) const;
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,
-                               const std::vector<double>& alpha,
-                               const std::vector<double>& beta,
+                               const std::vector<double>& alpha, const std::vector<double>& beta,
                                const std::vector<double>& value);
-  void set_field_boundary_dependencies(
-      const std::string& provider_slot,
-      const std::vector<std::string>& state_blocks,
-      const std::vector<int>& state_components,
-      const std::vector<std::string>& field_blocks,
-      const std::vector<std::string>& field_keys,
-      const std::vector<int>& field_components);
-  POPS_EXPORT void set_field_boundary_kernel(
-      const std::string& provider_slot, const CompiledFieldBoundaryKernel& kernel);
-  POPS_EXPORT void set_field_logical_timepoint(
-      const std::string& provider_slot, const FieldLogicalTimePoint& point);
-  POPS_EXPORT void set_field_boundary_parameters(
-      const std::string& provider_slot, const std::vector<double>& parameters);
-  void set_field_newton_plan(const std::string& provider_slot, double tolerance,
-                             int max_iterations, double linear_tolerance,
-                             int linear_max_iterations, int restart, double armijo,
-                             double minimum_step);
+  void set_field_boundary_dependencies(const std::string& provider_slot,
+                                       const std::vector<std::string>& state_blocks,
+                                       const std::vector<int>& state_components,
+                                       const std::vector<std::string>& field_blocks,
+                                       const std::vector<std::string>& field_keys,
+                                       const std::vector<int>& field_components);
+  POPS_EXPORT void set_field_boundary_kernel(const std::string& provider_slot,
+                                             const CompiledFieldBoundaryKernel& kernel);
+  POPS_EXPORT void set_field_logical_timepoint(const std::string& provider_slot,
+                                               const FieldLogicalTimePoint& point);
+  POPS_EXPORT void set_field_boundary_parameters(const std::string& provider_slot,
+                                                 const std::vector<double>& parameters);
+  void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
+                             double linear_tolerance, int linear_max_iterations, int restart,
+                             double armijo, double minimum_step);
   void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
                            bool mean_zero_gauge);
 
@@ -656,14 +660,12 @@ class AmrSystem {
   void rollback_bootstrap_level();
   void register_bootstrap_transfer_route(
       const std::string& identity, const std::vector<std::string>& subjects,
-      const std::string& provider_identity, const std::string& space,
-      const std::string& centering, const std::string& representation,
-      const std::string& storage, const std::string& operation,
-      const std::string& kernel, int order, const std::vector<int>& ghost_depth,
-      int dimension, int refinement_ratio);
-  void register_bootstrap_array(const std::string& subject, const std::string& centering,
-                                int ncomp, int ny, int nx,
-                                const std::vector<double>& values);
+      const std::string& provider_identity, const std::string& space, const std::string& centering,
+      const std::string& representation, const std::string& storage, const std::string& operation,
+      const std::string& kernel, int order, const std::vector<int>& ghost_depth, int dimension,
+      int refinement_ratio);
+  void register_bootstrap_array(const std::string& subject, const std::string& centering, int ncomp,
+                                int ny, int nx, const std::vector<double>& values);
   void register_bootstrap_face_vector(const std::vector<std::string>& subjects);
   void bind_bootstrap_block_subject(const std::string& subject, const std::string& block);
   void register_analytic_constant(const std::string& subject, const std::string& block,
@@ -673,10 +675,9 @@ class AmrSystem {
                                   double center_x, double center_y, double background,
                                   double amplitude, double inverse_width);
   std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
-  int apply_bootstrap_component_floor(const std::string& subject, int level,
-                                      int component, double floor);
-  std::int64_t recompute_bootstrap_field(const std::string& subject,
-                                         const std::string& field_name);
+  int apply_bootstrap_component_floor(const std::string& subject, int level, int component,
+                                      double floor);
+  std::int64_t recompute_bootstrap_field(const std::string& subject, const std::string& field_name);
   std::int64_t bootstrap_prolong_array(const std::string& subject, int level);
   void synchronize_bootstrap_state(const std::string& subject, int fine_level);
   std::vector<double> bootstrap_array_level(const std::string& subject, int level) const;
@@ -741,6 +742,11 @@ class AmrSystem {
                                  const std::vector<double>& phi);
   std::vector<double> field_potential_global(const std::string& provider_slot);
   std::vector<double> field_potential_level_global(const std::string& provider_slot, int level);
+  /// Exact rank-local valid-cell pieces for one qualified field provider.  The returned metadata
+  /// explicitly marks replicated level-zero ownership so output modes never infer it from box counts.
+  std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
+  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
+                                                    const std::string& provider_slot, int level);
   /// Transaction bracket used by the v3 reader after complete payload preflight.  Every hierarchy,
   /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
   void begin_restart_transaction();
@@ -864,6 +870,13 @@ class AmrSystem {
   /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
   /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
   POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
+  /// Validate the exact history registry encoded by @p state and materialize its native per-level
+  /// rings on the already rebuilt restart hierarchy. This is a transactional restart seam: it never
+  /// advances the Program and refuses any name/depth/component/owner mismatch before allocation.
+  POPS_EXPORT void materialize_program_restart_histories(const std::vector<std::uint8_t>& state,
+                                                         const std::vector<std::string>& names,
+                                                         const std::vector<int>& depths,
+                                                         const std::vector<int>& ncomps);
   POPS_EXPORT std::uint64_t program_accepted_state_revision() const;
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
@@ -929,11 +942,11 @@ class AmrSystem {
   /// LEVEL-COMPOSITE collective reduction over a named block, the AMR counterpart of
   /// System::reduce_component the diagnostics driver drives (ADC-542). @p kind is per-component
   /// "sum" / "min" / "max" / "abs_sum" / "sum_sq" / "abs_max", or the full-state "*_all" variants.
-  /// Volume-weighted sums exclude covered coarse cells; extrema fold all levels unmasked (a covered
-  /// coarse cell is the average of its children, within their extrema). Multi-block routes to the
-  /// AmrRuntime; single-block composes the native per-level reductions. Unknown block / kind throws.
-  POPS_EXPORT double composite_reduce(const std::string& block, const std::string& kind,
-                                      int comp) const;
+  /// @p levels is the exact strictly-increasing level selection; empty is the low-level C++
+  /// all-level convention. Volume-weighted sums and extrema mask coarser selected cells covered by
+  /// the next selected finer level. Multi-block and single-block both remain native/Kokkos.
+  POPS_EXPORT double composite_reduce(const std::string& block, const std::string& kind, int comp,
+                                      const std::vector<int>& levels = {}) const;
   /// @}
   /// @}
 
@@ -943,7 +956,7 @@ class AmrSystem {
   POPS_EXPORT double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on
-  /// macro_step % stride|regrid_every, not only on t). Prerequisite IO PR-IO-3 (audit 2026-06).
+  /// macro_step % stride|regrid_every, not only on t). Persisted by accepted-state v3.
   /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
   /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
   POPS_EXPORT int macro_step() const;
@@ -1014,7 +1027,7 @@ class AmrSystem {
   /// (bit-identical resumption); level >= 1 = aux comp 0 (recomputed at update). SHARED -> works in
   /// MONO-BLOCK as well as MULTI-BLOCK (single aux). The _global variant gathers under np>1.
   std::vector<double> level_potential(int k);
-  std::vector<double> level_potential_global(int k);             ///< np>1 gather (all ranks call)
+  std::vector<double> level_potential_global(int k);              ///< np>1 gather (all ranks call)
   void set_level_potential(int k, const std::vector<double>& p);  ///< restores phi of level @p k
   /// Imposes the SAVED fine hierarchy (at restart) instead of Berger-Rigoutsos clustering: @p boxes
   /// are the patch_boxes() signatures of the checkpoint (filtered to level 1 in mono-block). MONO-BLOCK.
@@ -1039,6 +1052,13 @@ class AmrSystem {
   std::vector<double> block_level_state_global(const std::string& name,
                                                int k);  ///< np>1 gather (all ranks call)
   void set_block_level_state(const std::string& name, int k, const std::vector<double>& s);
+  /// Unified scientific-output state accessor. Unlike the checkpoint names above, this routes an
+  /// exactly named block through either the mono-block coupler or the multi-block runtime and returns
+  /// compact native valid-cell pieces without allocating a global level buffer.
+  std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int k);
+  std::vector<PatchBox> output_geometry_boxes();
+  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
+                                                    const std::string& name, int k);
   /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order. MULTI-BLOCK / runtime engine; empty on the coupler path.

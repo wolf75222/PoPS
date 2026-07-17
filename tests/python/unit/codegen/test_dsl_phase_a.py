@@ -8,6 +8,7 @@ Deux niveaux :
 (2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) :
     ``Case -> validate -> resolve -> compile -> bind -> run``.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.variables import Primitive
@@ -54,7 +55,10 @@ def build_euler(name="euler_pa"):
         X_AXIS: [u - c, u, u, u + c],
         Y_AXIS: [v - c, v, v, v + c],
     })
-    m.riemann(HLLC(), pressure=p, sound_speed=c)
+    # ``sound_speed`` is a two-state Riemann hook, not a one-state board formula.  Let the
+    # HLLC capability derive it from the typed density/momentum/energy roles; pressure remains
+    # the supported one-state formula override.
+    m.riemann(HLLC(), pressure=p)
     m.rate("transport", equation=ddt(U) == -div(F))
     return m
 
@@ -77,10 +81,26 @@ def expect_raises(exc, fn, label):
     raise AssertionError("%s : %s attendue, non levee" % (label, exc.__name__))
 
 
+def _bind_final_artifact(artifact, **inputs):
+    """Bind through the communicator explicitly authenticated by the final artifact."""
+    communicator = artifact.platform_manifest.communicator.require(
+        "DSL phase-A artifact communicator")
+    if communicator == "serial":
+        return pops.bind(artifact, **inputs)
+    if communicator == "MPI_COMM_WORLD":
+        return pops.bind(
+            artifact,
+            resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)},
+            **inputs,
+        )
+    raise RuntimeError("unsupported DSL phase-A communicator %r" % communicator)
+
+
 def pure_python_checks():
     # Declarations explicites + identites de handles ; runtime supporte (P7-b).
     m = build_euler()
-    g = m.module.params()["gamma"]
+    materialized_module = m.module
+    g = materialized_module.params()["gamma"]
     assert isinstance(g, ConstParam) and g.name == "gamma" and abs(g.value - GAMMA) < 1e-12
     # P7-b : les parametres runtime sont desormais implementes (cf. test_dsl_runtime_params). L'ancienne
     # assertion "runtime rejete -> NotImplementedError" etait perimee depuis l'arrivee de la feature et
@@ -88,6 +108,7 @@ def pure_python_checks():
     kp = m.param(RuntimeParam("kappa", default=1.0))
     assert kp.param_kind == "runtime" and kp.local_id == "kappa"
     assert m.value(kp) is not kp
+    assert m.module is materialized_module
     print("OK  declarations explicites + handles distincts des Expr")
 
     # The final host oracle is typed by an axis, distinct from flux declaration.
@@ -142,7 +163,8 @@ def end_to_end_checks():
     assert "gamma" in component.params, "params porte le Param gamma"
 
     initial = np.asarray(initial_state(n), dtype=np.float64).reshape(4, n, n)
-    simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
+    simulation = _bind_final_artifact(
+        artifact, initial_state={"gas": initial.copy()})
     report = pops.run(simulation, t_end=1.0e-4, max_steps=1)
     assert report.accepted_steps == 1
     final = np.asarray(simulation.get_state("gas"), dtype=np.float64)
@@ -150,7 +172,7 @@ def end_to_end_checks():
 
     # The equivalent board spelling follows the same final transaction and numerical result.
     equivalent = compile_euler_artifact(build_euler_predef("euler_predef"), cells=n)
-    equivalent_simulation = pops.bind(
+    equivalent_simulation = _bind_final_artifact(
         equivalent, initial_state={"gas": initial.copy()}
     )
     equivalent_report = pops.run(
@@ -204,7 +226,7 @@ def main():
     modelspec_substeps_check()
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  bout-en-bout (compilateur ou en-tetes pops absents)")
+        require_native_or_skip('skip  bout-en-bout (compilateur ou en-tetes pops absents)')
     else:
         end_to_end_checks()
     print("test_dsl_phase_a : tout est vert")

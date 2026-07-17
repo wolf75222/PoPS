@@ -368,12 +368,12 @@ def _native_feature_key() -> str:
         except OSError:
             tag = "unknown"
         kk = "kokkos=on;kcfg=%s" % tag
-    # ADC-319: the MPI seam of the loader (POPS_HAS_MPI on/off, cf. _native_mpi_flags) changes the
-    # compiled code (real comm vs serial stubs n_ranks()=1/my_rank()=0) -> it MUST enter the cache,
-    # else a SERIAL-stub .so would be reused on an MPI module and any distributed layout built inside
-    # the loader (e.g. AmrSystem(distribute_coarse=True)) would replicate on every rank (no scaling).
+    # The MPI seam changes both inline code and ABI.  Partition by the concrete CMake-authenticated
+    # mpi.h/library fingerprint, not only an on/off bit: Open MPI and MPICH artifacts must never share
+    # one cache slot merely because both define POPS_HAS_MPI.
     mod = _pops_module()
-    mpi = "mpi=on" if (mod is not None and getattr(mod, "__has_mpi__", False)) else "mpi=off"
+    from pops.codegen._native_mpi import native_mpi_abi_key
+    mpi = native_mpi_abi_key(mod)
     return "%s;%s" % (kk, mpi)
 
 
@@ -488,13 +488,21 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
     against the Kokkos runtime already loaded by _pops (no 2nd copy). Raises if no installed Kokkos is
-    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU)."""
+    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU).  When the host extension
+    has MPI, the same compile flags also select the real MPI seam without linking a second runtime."""
     if _native_kokkos_root() is None:
         raise RuntimeError(
             "pops_loader_build_flags: PoPS is Kokkos-only -- point to an installed Kokkos via "
             "POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos`.")
     cc = _native_kokkos_compiler(cxx)
     cflags, lflags = _native_kokkos_flags()
+    from pops.codegen._native_mpi import native_mpi_build_flags
+    module = _pops_module()
+    from pops.codegen._native_host import ensure_native_host_global
+    ensure_native_host_global(module)
+    mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
+    cflags = [*cflags, *mpi_cflags]
+    lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":
         cflags = list(cflags) + ["-undefined", "dynamic_lookup"]
     return cc, cflags, lflags

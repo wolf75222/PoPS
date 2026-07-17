@@ -7,6 +7,7 @@ C++ report; otherwise it returns the same conservative static facts with unknown
 """
 from __future__ import annotations
 
+from importlib.util import find_spec
 from typing import Any
 
 from pops.params.use_sites import ParamUse, resolve_param_use
@@ -78,13 +79,16 @@ def runtime_environment_report() -> dict:
     conservative: it never claims custom communicators, non-2D, non-ratio-2 AMR, or non-double
     precision support.
     """
-    try:
-        from pops import _pops  # noqa: PLC0415 -- optional runtime extension
-        fn = getattr(_pops, "runtime_environment_report", None)
-        if fn is not None:
-            return dict(fn())
-    except Exception:
-        pass
+    if find_spec("pops._pops") is None:
+        return _static_report()
+    from pops import _pops  # noqa: PLC0415 -- optional runtime extension
+
+    fn = getattr(_pops, "runtime_environment_report", None)
+    if fn is not None:
+        # A present native module is authoritative.  Import/ABI/runtime failures must remain
+        # visible; silently reporting a serial/unknown fallback would let resolve authenticate a
+        # topology different from the loaded binary.
+        return dict(fn())
     return _static_report()
 
 

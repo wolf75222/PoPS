@@ -20,6 +20,8 @@ Self-skips (exit 0) without pops / a built _pops / a compiler / Kokkos. Pytest +
 """
 import sys
 
+from tests.python.support.requirements import require_native_or_skip
+
 try:
     import numpy as np
 
@@ -31,8 +33,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import AmrSystem
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
-    print("skip test_amr_native_params (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip("test_amr_native_params imports unavailable: %s" % exc)
 
 N = 16
 NSTEPS = 4
@@ -85,14 +86,18 @@ def _amr_run(cs2_override, u0, nsteps=NSTEPS, dt=DT):
     BindSchema of its own). Returns (density, None) or (None, reason) on a compile/wire failure."""
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "set_block_params"):
-        return None, "the built _pops lacks AmrSystem.set_block_params (rebuild _pops)"
+        require_native_or_skip(
+            "the built _pops lacks AmrSystem.set_block_params (rebuild _pops)"
+        )
     model = _iso_runtime_model()
     try:
         block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
-        return None, "compile (AMR production): %s" % str(exc)[:200]
+        require_native_or_skip("compile (AMR production): %s" % str(exc)[:200])
     if block_cm.runtime_param_names != ["cs2"]:
-        return None, "runtime_param_names expected ['cs2'], got %r" % block_cm.runtime_param_names
+        raise AssertionError(
+            "runtime_param_names expected ['cs2'], got %r" % block_cm.runtime_param_names
+        )
     try:
         amr.add_equation("gas", block_cm,
                          spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
@@ -103,7 +108,7 @@ def _amr_run(cs2_override, u0, nsteps=NSTEPS, dt=DT):
         for _ in range(nsteps):
             amr.step(dt)
     except RuntimeError as exc:
-        return None, "run (AMR): %s" % str(exc)[:240]
+        require_native_or_skip("run (AMR): %s" % str(exc)[:240])
     return np.array(amr.density("gas")), None
 
 
@@ -113,23 +118,17 @@ def test_amr_set_block_params_changes_trajectory_and_default_is_bit_identical():
     u0 = _init_density()
 
     base, err = _amr_run(cs2_override=None, u0=u0)  # complete direct-install vector: cs2=1.0
-    if base is None:
-        print("skip (%s)" % err)
-        return
+    assert base is not None, err
     # Reinstalling the same complete vector is byte-identical (0 ulp, never allclose).
     same, err = _amr_run(cs2_override=1.0, u0=u0)
-    if same is None:
-        print("skip (%s)" % err)
-        return
+    assert same is not None, err
     chk(np.array_equal(base, same),
         "cs2=1 is BYTE-IDENTICAL to the same complete baseline vector (0 ulp)")
 
     # (1) A DIFFERENT cs2 (4x the sound speed squared) changes the flux + CFL, so the evolved coarse
     # density is a DIFFERENT array WITHOUT recompiling the .so.
     changed, err = _amr_run(cs2_override=4.0, u0=u0)
-    if changed is None:
-        print("skip (%s)" % err)
-        return
+    assert changed is not None, err
     chk(changed.shape == base.shape, "the changed run returns the same-shape coarse density")
     chk(not np.array_equal(changed, base),
         "set_block_params(cs2=4) DIFFERS from the default run (runtime param drives the trajectory)")
@@ -142,8 +141,7 @@ def test_amr_set_block_params_rejects_a_paramless_block():
     print("== AMR set_block_params on a param-free block is rejected ==")
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "set_block_params"):
-        print("skip (the built _pops lacks AmrSystem.set_block_params)")
-        return
+        require_native_or_skip("the built _pops lacks AmrSystem.set_block_params")
     # A native ModelSpec block (composed bricks) carries no runtime param.
     try:
         spec = engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
@@ -152,8 +150,9 @@ def test_amr_set_block_params_rejects_a_paramless_block():
                          spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                          time=engine.Explicit())
     except Exception as exc:  # noqa: BLE001 -- brick/ModelSpec API drift; skip rather than fail
-        print("skip (could not build/add a native ModelSpec block: %s)" % str(exc)[:120])
-        return
+        require_native_or_skip(
+            "could not build/add a native ModelSpec block: %s" % str(exc)[:120]
+        )
     raised = False
     try:
         amr.set_block_params("ne", [1.0])

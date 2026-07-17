@@ -277,6 +277,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_copy_schedule_cache": (1, 2, 4),
         "test_fill_boundary_cache": (1, 2, 4),
         "test_krylov_solver": (1, 2, 4),
+        "test_world_communicator": (1, 2),
     }
     serial_targets = {
         suite["name"] for suite in sel.manifest_cpp_suites(manifest)
@@ -285,10 +286,66 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert set(targets) - set(variant_targets) == {
         suite["name"] for suite in all_suites if "mpi" in suite["labels"]
     }
-    assert sel.cpp_mpi_ctest_count(manifest) == sum(
+    expected_count = sum(
         len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
         for suite in all_suites
-    ) == 61
+    )
+    ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 70
+    assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
+    assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
+    assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
+    assert ctest_plan["test_world_communicator_np2"] == 2
+
+
+def _write_mpi_ctest_inventory(path, plan):
+    path.write_text(json.dumps({
+        "tests": [
+            {
+                "name": name,
+                "properties": [
+                    {"name": "LABELS", "value": ["backend", "mpi", "medium"]},
+                ] + (
+                    [] if nproc == 1
+                    else [{"name": "PROCESSORS", "value": nproc}]
+                ),
+            }
+            for name, nproc in plan.items()
+        ],
+    }))
+
+
+def test_cpp_mpi_ctest_fence_authenticates_exact_names_labels_and_ranks(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "mpi-ctest.json"
+    plan = sel.cpp_mpi_ctest_plan(sel.load_manifest())
+    _write_mpi_ctest_inventory(inventory, plan)
+
+    args = SimpleNamespace(ctest_json=str(inventory))
+    assert sel.verify_cpp_mpi_ctests(args) == 0
+
+
+def test_cpp_mpi_ctest_fence_rejects_same_count_identity_drift(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "mpi-ctest-drift.json"
+    plan = sel.cpp_mpi_ctest_plan(sel.load_manifest())
+    plan.pop("test_mpi_hdf5_collective_np2")
+    plan["test_mpi_hdf5_collective_np4"] = 4
+    _write_mpi_ctest_inventory(inventory, plan)
+
+    with pytest.raises(SystemExit, match="missing=.*np2.*unexpected=.*np4"):
+        sel.verify_cpp_mpi_ctests(SimpleNamespace(ctest_json=str(inventory)))
+
+
+def test_cpp_mpi_ctest_fence_rejects_processors_drift(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "mpi-ctest-rank-drift.json"
+    plan = sel.cpp_mpi_ctest_plan(sel.load_manifest())
+    plan["test_world_communicator_np2"] = 4
+    _write_mpi_ctest_inventory(inventory, plan)
+
+    with pytest.raises(SystemExit, match="PROCESSORS=.*manifest=2:ctest=4"):
+        sel.verify_cpp_mpi_ctests(SimpleNamespace(ctest_json=str(inventory)))
 
 
 def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
@@ -371,6 +428,11 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
     sel = _load("ci_select_tests")
     assert sel.manifest_python_mpi_entrypoints(sel.load_manifest()) == [
         {
+            "suite": "pops_python_integration_io",
+            "path": "tests/python/integration/io/test_hdf5_parallel.py",
+            "nproc": 2,
+        },
+        {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
             "nproc": 2,
@@ -382,7 +444,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
-            "path": "tests/python/integration/mpi/test_execution_context_mpi_world.py",
+            "path": "tests/python/integration/mpi/test_scientific_output_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
             "nproc": 2,
         },
     ]
@@ -408,15 +475,17 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
 
     assert sel.plan_python_mpi(Args()) == 0
     assert (tmp_path / "python-mpi-plan.tsv").read_text().splitlines() == [
+        "2\ttests/python/integration/io/test_hdf5_parallel.py",
         "2\ttests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
-        "2\ttests/python/integration/mpi/test_execution_context_mpi_world.py",
+        "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
+        "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
     ]
     outputs = dict(
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "3"
+    assert outputs["python_mpi_count"] == "5"
 
 
 @pytest.mark.parametrize(
@@ -475,16 +544,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "include/pops/parallel/**",
         "include/pops/runtime/**",
         "src/runtime/**",
-        "python/bindings/core/init/init_amr.cpp",
-        "python/bindings/core/init/init_core.cpp",
-        "python/bindings/core/init/init_system.cpp",
+        "src/CMakeLists.txt",
+        "python/CMakeLists.txt",
+        "python/bindings/**",
+        "python/pops/_native_collectives.py",
         "python/pops/_platform_contracts.py",
-        "python/pops/codegen/_compiled_artifact.py",
-        "python/pops/runtime/_component_execution_context.py",
-        "python/pops/runtime/_platform_manifest.py",
-        "python/pops/runtime/_runtime_authorities.py",
-        "python/pops/runtime/_runtime_executor.py",
-        "python/pops/runtime/_system_unified_install.py",
+        "python/pops/codegen/**",
+        "python/pops/output/**",
+        "python/pops/runtime/**",
+        "python/pops/runtime_environment.py",
         "scripts/ci_select_tests.py",
         "tests/**/mpi/**",
     ):
@@ -577,15 +645,19 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "scripts/ci_select_tests.py python-mpi" in mpi_block
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert '--target _pops "${mpi_targets[@]}"' in mpi_block
-    assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
-    assert '"${mpi_n:-0}" != "${mpi_expected:-0}"' in mpi_block
-    assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 2
+    assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
+    assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
+    assert "cpp_label_ctest_count" not in mpi_block
+    assert "mpi_expected=" not in mpi_block
+    assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 1
+    assert mpi_block.count("-L '^backend$'") == 1
+    assert "ctest --preset ci-mpi --output-on-failure" in mpi_block
     assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
     assert "MPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1" in mpi_block
     assert "grep -Eqi 'Open MPI|OpenRTE'" in mpi_block
     assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
     assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
-    assert 'run_mpi "collective HDF5 writer"' in mpi_block
+    assert 'run_mpi "collective HDF5 writer"' not in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 4m" in mpi_block
     assert "timeout-minutes: 70" in mpi_block
@@ -594,6 +666,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
+    assert "test_scientific_output_mpi.py" not in mpi_block
     assert "cmake --build --preset ci-mpi\n" not in mpi_block
     assert "build-mpi/python-package" in mpi_block
     assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block
@@ -603,21 +676,99 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
     assert "timeout-minutes: 70" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert "lane: [cpp, python]" in openmp_block
-    assert openmp_block.count("if: matrix.lane == 'cpp'") == 2
-    assert openmp_block.count("if: matrix.lane == 'python'") == 3
+    assert openmp_block.count("- lane: cpp-") == 6
+    for shard in range(6):
+        assert (
+            f"- lane: cpp-{shard}\n"
+            "            kind: cpp\n"
+            f"            shard: {shard}\n"
+            "            shard_total: 6\n"
+            "            ccache_maxsize: 512M"
+        ) in openmp_block
+    assert (
+        "- lane: python\n"
+        "            kind: python\n"
+        "            shard: 0\n"
+        "            shard_total: 1\n"
+        "            ccache_maxsize: 2G"
+    ) in openmp_block
+    assert openmp_block.count("if: matrix.kind == 'cpp'") == 4
+    assert openmp_block.count("if: matrix.kind == 'python'") == 6
+    assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block
     assert "github.run_attempt" in openmp_block
+    assert "id: openmp-cpp-plan" in openmp_block
+    assert "scripts/ci_select_tests.py cpp" in openmp_block
+    assert "--changed-files /dev/null" in openmp_block
+    assert "--force-all" in openmp_block
+    assert '--shard-index "${{ matrix.shard }}"' in openmp_block
+    assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
+    assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
-    assert 'run_with_heartbeat "Kokkos OpenMP C++ build" 40m' in openmp_block
+    assert (
+        'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 30m'
+        in openmp_block
+    )
+    assert 'cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"' in openmp_block
+    assert "cmake --build --preset ci-kokkos\n" not in openmp_block
+    assert "ctest --preset ci-kokkos -N --show-only=json-v1" in openmp_block
+    assert "scripts/ci_select_tests.py verify-cpp-target-labels" in openmp_block
+    assert '--targets "${cpp_targets[@]}"' in openmp_block
+    assert "steps.openmp-cpp-plan.outputs.cpp_shard_label_regex" in openmp_block
+    assert "ctest --preset ci-kokkos --parallel 2" in openmp_block
+    assert openmp_block.index("verify-cpp-target-labels") < openmp_block.index(
+        "steps.openmp-cpp-plan.outputs.cpp_shard_label_regex"
+    )
+    assert "test_watchdog=7m" in openmp_block
+    assert 'target" = "test_polar_ring_advection"' in openmp_block
+    assert "test_watchdog=15m" in openmp_block
+    assert 'timeout --signal=TERM --kill-after=30s "$test_watchdog"' in openmp_block
     assert 'run_with_heartbeat "Kokkos OpenMP Python module build" 45m' in openmp_block
-    assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" in openmp_block
-    assert "timeout --signal=TERM --kill-after=30s 8m ctest" in openmp_block
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=2" in openmp_block
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" not in openmp_block
+    assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_block
+    assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in openmp_block
+    assert "name: Cache exact OpenMP Python module" in openmp_block
+    assert "id: openmp-python-module-cache" in openmp_block
+    assert "pops-module-openmp-${{ runner.os }}" in openmp_block
+    assert "id: openmp-python" in openmp_block
+    assert "steps.openmp-python.outputs.python-version" in openmp_block
+    assert "hashFiles('include/**', 'src/**', 'python/bindings/**'" in openmp_block
+    assert "'.github/workflows/ci.yml')" in openmp_block
+    openmp_module_cache_block = openmp_block.split(
+        "\n      - name: Cache exact OpenMP Python module", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "restore-keys:" not in openmp_module_cache_block
+    assert (
+        "if: matrix.kind == 'python' && "
+        "steps.openmp-python-module-cache.outputs.cache-hit == 'true'"
+    ) in openmp_block
+    assert (
+        "if: matrix.kind == 'python' && "
+        "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
+    ) in openmp_block
+    assert "rsync -aI --delete" in openmp_block
+    assert "exact OpenMP module cache hit but no _pops*.so present" in openmp_block
+    assert openmp_block.index("Cache exact OpenMP Python module") < openmp_block.index(
+        "Restore ccache (Kokkos OpenMP"
+    )
+    assert openmp_block.index("Build + install Kokkos (OpenMP)") < openmp_block.index(
+        "Restore ccache (Kokkos OpenMP"
+    )
+    assert (
+        "matrix.kind != 'python' || "
+        "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
+    ) in openmp_block
     assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
     openmp_native_test_block = openmp_block.split(
         "\n      - name: Test ABI natif", 1)[1].split("\n      - name:", 1)[0]
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in openmp_native_test_block
+    assert "cache-hit" not in openmp_native_test_block
+    for native_test in (
+        "test_native_abi_std", "test_dsl_production", "test_dsl_production_amr",
+    ):
+        assert native_test in openmp_native_test_block
 
     set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]

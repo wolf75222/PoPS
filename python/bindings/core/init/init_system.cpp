@@ -1,4 +1,5 @@
 #include "../bindings_detail.hpp"
+#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -81,8 +82,8 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("omitted_interface_faces") = std::vector<int>{},
            py::arg("state_identity") = std::string{},
            "Install one resolved per-block ghost-production plan before block construction.")
-      .def("_install_block_state_route", &System::install_block_state_route,
-           py::arg("name"), py::arg("state_identity"),
+      .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
+           py::arg("state_identity"),
            "Bind one exact state Handle identity to native block storage.")
       .def("_install_boundary_field_route", &System::install_boundary_field_route,
            py::arg("field_identity"), py::arg("provider_slot"),
@@ -92,64 +93,64 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def(
           "_install_ghost_boundary_component",
           [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_ghost_boundary_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_field_boundary_residual_component",
           [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_field_boundary_residual_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_field_boundary_jvp_component",
           [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_field_boundary_jvp_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_interface_flux_component",
           [](System& system, std::size_t left_block, std::size_t right_block, int level,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& interface, const py::dict& binding,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            auto route = pops::python::detail::interface_route_from_python(
-                interface, left_block, right_block, level);
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& interface,
+             const py::dict& binding, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            auto route = pops::python::detail::interface_route_from_python(interface, left_block,
+                                                                           right_block, level);
             auto spec = pops::python::detail::interface_flux_spec_from_python(
                 interface, binding, parameters_json, target_json, execution);
-            system.install_interface_flux_component(
-                std::move(route), std::move(spec), std::move(component));
+            system.install_interface_flux_component(std::move(route), std::move(spec),
+                                                    std::move(component));
           },
-          py::arg("left_block"), py::arg("right_block"), py::arg("level"),
-          py::arg("component"), py::arg("interface"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"),
-          py::arg("execution_context"))
-      .def("_interface_evaluation_count", &System::interface_evaluation_count,
-           py::arg("identity"), py::arg("level") = 0)
-      .def("_discard_interface_flux_components",
-           &System::discard_interface_flux_components,
+          py::arg("left_block"), py::arg("right_block"), py::arg("level"), py::arg("component"),
+          py::arg("interface"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def("_interface_evaluation_count", &System::interface_evaluation_count, py::arg("identity"),
+           py::arg("level") = 0)
+      .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
       // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
       // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
@@ -196,10 +197,9 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_install_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
-           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma),
-           py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1,
-           py::arg("params") = std::vector<double>{},
-           py::arg("positivity_floor") = 0.0)
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
+           py::arg("evolve") = true, py::arg("stride") = 1,
+           py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
@@ -287,7 +287,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       .def("program_cache_name", &System::program_cache_name, py::arg("node_id"))
       .def("program_cache_last_update_step", &System::program_cache_last_update_step,
            py::arg("node_id"))
-      .def("program_cache_accumulated_dt", &System::program_cache_accumulated_dt, py::arg("node_id"))
+      .def("program_cache_accumulated_dt", &System::program_cache_accumulated_dt,
+           py::arg("node_id"))
       .def("program_cache_ncomp", &System::program_cache_ncomp, py::arg("node_id"))
       .def("program_cache_ngrow", &System::program_cache_ngrow, py::arg("node_id"))
       .def(
@@ -331,8 +332,8 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
-      .def("set_field_potential", &System::set_field_potential,
-           py::arg("provider_slot"), py::arg("phi"))
+      .def("set_field_potential", &System::set_field_potential, py::arg("provider_slot"),
+           py::arg("phi"))
       // INTERNAL raw coupled-source ABI (ADC-595): the flat 12-kwarg bytecode form is now an INTERNAL
       // escape hatch (leading underscore), called only by the typed lowering (add_coupling ->
       // add_coupling_operator) and by the low-level ABI-validation tests. End users register a coupling
@@ -421,82 +422,73 @@ void bind_system_physics(py::class_<System>& cls) {
            "'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")
       .def("block_gamma", &System::block_gamma, py::arg("name"))
-      .def("set_poisson", &System::set_poisson,
-           "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
-           "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
-           "historical "
-           "alias). solver: 'geometric_mg' (any case, wall included) | 'fft' (periodic, "
-           "discrete stencil; n = 2^k for the fast FFT, otherwise direct DFT O(n^2)) | "
-           "'fft_spectral' "
-           "(periodic, continuous symbol -(kx^2+ky^2)). bc: 'auto' | 'periodic' | 'dirichlet' | "
-           "'neumann'. wall: 'none' | "
-           "'circle' (conducting wall centered at (L/2, L/2), radius wall_radius). epsilon: "
-           "CONSTANT permittivity of div(eps grad phi) = f (for variable eps(x): "
-           "set_epsilon_field). "
-           "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative "
-           "criterion, "
-           "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
-           "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
-           "the native kMG* constants so an omitting call is bit-identical to the historical "
-           "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
-           "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
-           "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
-           "bit-identical to the historical hierarchy; inert for the FFT solver.",
-           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-           py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
-           py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
-           py::arg("rel_tol") = static_cast<double>(kMGDefaultRelTol),
-           py::arg("max_cycles") = kMGDefaultMaxCycles,
-           py::arg("min_coarse") = kMGDefaultMinCoarse, py::arg("pre_smooth") = kMGDefaultPreSmooth,
-           py::arg("post_smooth") = kMGDefaultPostSmooth,
-           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
-           py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
-      .def("set_field_solver_plan", &System::set_field_solver_plan,
-           py::arg("provider_slot"), py::arg("plan_identity"),
-           py::arg("provider_identity"),
-           py::arg("output_owner_identity"),
-           py::arg("output_block"), py::arg("output_key"),
-           py::arg("provider_identities"), py::arg("provider_blocks"),
-           py::arg("provider_keys"), py::arg("provider_coefficients"),
-           py::arg("solver"), py::arg("abs_tol"), py::arg("rel_tol"),
-           py::arg("max_cycles"), py::arg("min_coarse"), py::arg("pre_smooth"),
-           py::arg("post_smooth"), py::arg("bottom_sweeps"),
-           py::arg("coarse_threshold"))
-      .def("set_field_reaction", &System::set_field_reaction,
-           py::arg("provider_slot"), py::arg("reaction"))
+      .def(
+          "set_poisson", &System::set_poisson,
+          "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
+          "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
+          "historical "
+          "alias). solver: 'geometric_mg' (any case, wall included) | 'fft' (periodic, "
+          "discrete stencil; n = 2^k for the fast FFT, otherwise direct DFT O(n^2)) | "
+          "'fft_spectral' "
+          "(periodic, continuous symbol -(kx^2+ky^2)). bc: 'auto' | 'periodic' | 'dirichlet' | "
+          "'neumann'. wall: 'none' | "
+          "'circle' (conducting wall centered at (L/2, L/2), radius wall_radius). epsilon: "
+          "CONSTANT permittivity of div(eps grad phi) = f (for variable eps(x): "
+          "set_epsilon_field). "
+          "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative "
+          "criterion, "
+          "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
+          "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
+          "the native kMG* constants so an omitting call is bit-identical to the historical "
+          "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
+          "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
+          "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
+          "bit-identical to the historical hierarchy; inert for the FFT solver.",
+          py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
+          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
+          py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
+          py::arg("rel_tol") = static_cast<double>(kMGDefaultRelTol),
+          py::arg("max_cycles") = kMGDefaultMaxCycles, py::arg("min_coarse") = kMGDefaultMinCoarse,
+          py::arg("pre_smooth") = kMGDefaultPreSmooth,
+          py::arg("post_smooth") = kMGDefaultPostSmooth,
+          py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
+          py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
+      .def("set_field_solver_plan", &System::set_field_solver_plan, py::arg("provider_slot"),
+           py::arg("plan_identity"), py::arg("provider_identity"), py::arg("output_owner_identity"),
+           py::arg("output_block"), py::arg("output_key"), py::arg("provider_identities"),
+           py::arg("provider_blocks"), py::arg("provider_keys"), py::arg("provider_coefficients"),
+           py::arg("solver"), py::arg("abs_tol"), py::arg("rel_tol"), py::arg("max_cycles"),
+           py::arg("min_coarse"), py::arg("pre_smooth"), py::arg("post_smooth"),
+           py::arg("bottom_sweeps"), py::arg("coarse_threshold"))
+      .def("set_field_reaction", &System::set_field_reaction, py::arg("provider_slot"),
+           py::arg("reaction"))
       .def(
           "_install_field_solver_components",
           [](System& system, const std::string& provider_slot,
              std::shared_ptr<pops::component::LoadedComponent> topology,
              std::shared_ptr<pops::component::LoadedComponent> solver,
              const py::dict& topology_binding, const py::dict& solver_binding,
-             const std::string& topology_parameters_json,
-             const std::string& solver_parameters_json,
-             const std::string& source_layout_identity,
-             const std::string& topology_recipe_identity,
+             const std::string& topology_parameters_json, const std::string& solver_parameters_json,
+             const std::string& source_layout_identity, const std::string& topology_recipe_identity,
              const std::string& boundary_contract_json, double relative_tolerance,
-             double absolute_tolerance, std::int32_t max_iterations,
-             const py::dict& execution) {
+             double absolute_tolerance, std::int32_t max_iterations, const py::dict& execution) {
             auto spec = pops::python::detail::field_solver_spec_from_python(
-                provider_slot, topology_binding, solver_binding,
-                topology_parameters_json, solver_parameters_json,
-                source_layout_identity, topology_recipe_identity,
-                boundary_contract_json, relative_tolerance,
-                absolute_tolerance, max_iterations, execution);
-            system.install_field_solver_components(
-                provider_slot, std::move(spec), std::move(topology), std::move(solver));
+                provider_slot, topology_binding, solver_binding, topology_parameters_json,
+                solver_parameters_json, source_layout_identity, topology_recipe_identity,
+                boundary_contract_json, relative_tolerance, absolute_tolerance, max_iterations,
+                execution);
+            system.install_field_solver_components(provider_slot, std::move(spec),
+                                                   std::move(topology), std::move(solver));
           },
-          py::arg("provider_slot"), py::arg("topology_component"),
-          py::arg("solver_component"), py::arg("topology_binding"),
-          py::arg("solver_binding"), py::arg("topology_parameters_json"),
-          py::arg("solver_parameters_json"), py::arg("source_layout_identity"),
-          py::arg("topology_recipe_identity"),
+          py::arg("provider_slot"), py::arg("topology_component"), py::arg("solver_component"),
+          py::arg("topology_binding"), py::arg("solver_binding"),
+          py::arg("topology_parameters_json"), py::arg("solver_parameters_json"),
+          py::arg("source_layout_identity"), py::arg("topology_recipe_identity"),
           py::arg("boundary_contract_json"), py::arg("relative_tolerance"),
-          py::arg("absolute_tolerance"), py::arg("max_iterations"),
-          py::arg("execution_context"))
+          py::arg("absolute_tolerance"), py::arg("max_iterations"), py::arg("execution_context"))
       .def("_set_field_topology_authority", &System::set_field_topology_authority,
-           py::arg("provider_slot"), py::arg("provider_kind"),
-           py::arg("provenance"), py::arg("topology_digest"))
+           py::arg("provider_slot"), py::arg("provider_kind"), py::arg("provenance"),
+           py::arg("topology_digest"))
       .def(
           "_field_topology_report",
           [](const System& system, const std::string& provider_slot) {
@@ -515,26 +507,22 @@ void bind_system_physics(py::class_<System>& cls) {
             return report;
           },
           py::arg("provider_slot"))
-      .def("register_elliptic_field", &System::register_elliptic_field,
-           py::arg("block"), py::arg("field"), py::arg("phi_comp"),
-           py::arg("gx_comp"), py::arg("gy_comp"), py::arg("gradient_sign"))
-      .def("set_field_boundary_plan", &System::set_field_boundary_plan,
-           py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
-           py::arg("value"))
+      .def("register_elliptic_field", &System::register_elliptic_field, py::arg("block"),
+           py::arg("field"), py::arg("phi_comp"), py::arg("gx_comp"), py::arg("gy_comp"),
+           py::arg("gradient_sign"))
+      .def("set_field_boundary_plan", &System::set_field_boundary_plan, py::arg("provider_slot"),
+           py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &System::set_field_boundary_dependencies,
-           py::arg("provider_slot"), py::arg("state_blocks"),
-           py::arg("state_components"), py::arg("field_blocks"),
-           py::arg("field_keys"), py::arg("field_components"))
+           py::arg("provider_slot"), py::arg("state_blocks"), py::arg("state_components"),
+           py::arg("field_blocks"), py::arg("field_keys"), py::arg("field_components"))
       .def("set_field_boundary_parameters", &System::set_field_boundary_parameters,
            py::arg("provider_slot"), py::arg("parameters"))
-      .def("set_field_nullspace", &System::set_field_nullspace,
-           py::arg("provider_slot"), py::arg("constant_kernel"),
-           py::arg("mean_zero_gauge"))
-      .def("set_field_newton_plan", &System::set_field_newton_plan,
-           py::arg("provider_slot"), py::arg("tolerance"),
-           py::arg("max_iterations"), py::arg("linear_tolerance"),
-           py::arg("linear_max_iterations"), py::arg("restart"),
-           py::arg("armijo"), py::arg("minimum_step"))
+      .def("set_field_nullspace", &System::set_field_nullspace, py::arg("provider_slot"),
+           py::arg("constant_kernel"), py::arg("mean_zero_gauge"))
+      .def("set_field_newton_plan", &System::set_field_newton_plan, py::arg("provider_slot"),
+           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
+           py::arg("minimum_step"))
       // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
@@ -640,8 +628,7 @@ void bind_system_stepping(py::class_<System>& cls) {
            "(w = max(w, speed_floor), so a quiescent system cannot divide by zero); defaults to "
            "the historical kCflSpeedFloor (1e-30), bit-identical.",
            py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
-           py::arg("max_dt") = std::numeric_limits<double>::infinity(),
-           py::arg("min_dt") = 0.0)
+           py::arg("max_dt") = std::numeric_limits<double>::infinity(), py::arg("min_dt") = 0.0)
       .def("enable_profiling", &System::enable_profiling,
            "Spec 3 profiling (ADC-459): start timing the step phases (step, field_solve). Disabled "
            "by default; off the hot path when off.")
@@ -652,9 +639,10 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("profile_report", &System::profile_report,
            "Per-phase / per-brick wall-clock report (count / total / mean / min / max per scope, "
            "plus counters). Per-rank.")
-      .def("profile_snapshot",
-           [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
-           "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
+      .def(
+          "profile_snapshot",
+          [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
+          "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
       .def(
           "solver_diagnostics",
           [](const System& s) {
@@ -712,9 +700,12 @@ void bind_system_data(py::class_<System>& cls) {
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
-      .def("effective_options_report",
-           [](const System& s) { return effective_options_report_to_dict(s.effective_options_report()); },
-           "Structured effective numerical/solver/physical options for this System.")
+      .def(
+          "effective_options_report",
+          [](const System& s) {
+            return effective_options_report_to_dict(s.effective_options_report());
+          },
+          "Structured effective numerical/solver/physical options for this System.")
       .def("mass", &System::mass, py::arg("name"))
       .def(
           "density",
@@ -723,10 +714,10 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("name"))
       .def("potential", [](System& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
-      // GLOBAL accessors (MPI-safe collectives): multi-rank outputs / checkpoint (IO v1). Each
+      // GLOBAL accessors (MPI-safe collectives): accepted-state checkpoint capture. Each
       // rank MUST call them (internal all_reduce); they return the COMPLETE field (rank-0 gather
       // implicit via all_reduce_sum) -- single-rank: bit-identical to density / get_state / potential.
-      // The sim.write / sim.checkpoint facade uses them then writes the file only on rank 0.
+      // RuntimeInstance seals and publishes the resulting checkpoint only on rank 0.
       .def(
           "density_global",
           [](const System& s, const std::string& name) {
@@ -741,11 +732,51 @@ void bind_system_data(py::class_<System>& cls) {
           py::arg("name"))
       .def("potential_global",
            [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
-      .def("field_potential_global",
-           [](System& s, const std::string& slot) {
-             return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
-           },
-           py::arg("provider_slot"))
+      .def(
+          "field_potential_global",
+          [](System& s, const std::string& slot) {
+            return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
+          },
+          py::arg("provider_slot"))
+      .def(
+          "output_state_local_pieces",
+          [](const System& s, const std::string& block, int level) {
+            return output_pieces_to_python(s.output_state_local_pieces(block, level));
+          },
+          py::arg("block"), py::arg("level"),
+          "Exact compact valid-cell state pieces owned by this rank.")
+      .def(
+          "output_field_local_pieces",
+          [](System& s, const std::string& provider_slot, int level) {
+            return output_pieces_to_python(s.output_field_local_pieces(provider_slot, level));
+          },
+          py::arg("provider_slot"), py::arg("level"),
+          "Exact compact valid-cell field pieces owned by this rank.")
+      .def(
+          "output_state_root_pieces",
+          [](const System& s, const WorldCommunicator& world, const std::string& block, int level) {
+            std::vector<OutputPiece> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_state_root_pieces(world, block, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("world"), py::arg("block"), py::arg("level"),
+          "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
+      .def(
+          "output_field_root_pieces",
+          [](System& s, const WorldCommunicator& world, const std::string& provider_slot,
+             int level) {
+            std::vector<OutputPiece> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_field_root_pieces(world, provider_slot, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
           [](const System& s, const std::array<double, 2>& origin,
@@ -759,8 +790,8 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
           "Private Writer geometry view: native, immutable, and cacheable by the runtime.")
-      // LOCAL per-fab accessors (NOT collective): PARALLEL HDF5 writing by hyperslabs (PR-IO-3,
-      // sim.write(format='hdf5', parallel=True)). local_boxes returns the list of local boxes
+      // LOCAL per-fab accessors (NOT collective): native ownership inspection. ScientificOutput
+      // consumes the typed output_*_local_pieces API above; local_boxes returns the list of boxes
       // (ilo, jlo, ihi, jhi) in GLOBAL indices; local_state returns the state of fab li reshaped
       // (n_vars, bny, bnx) for a hyperslab dset[:, jlo:jhi+1, ilo:ihi+1]. A rank without a box returns an
       // empty list. Since the System is single-box, real parallelism only appears on a multi-box

@@ -89,6 +89,24 @@ def test_patch_table_before_build_reports_unbuilt():
     assert "not built" in str(rep)
 
 
+def test_amr_view_only_converts_the_exact_native_not_built_error():
+    class _Native:
+        def __init__(self, message):
+            self.message = message
+
+        def block_names(self):
+            raise RuntimeError(self.message)
+
+    unbuilt = AmrRuntimeView(type("Sim", (), {"_s": _Native(
+        "AmrSystem : call add_block first")})())
+    assert unbuilt._block_names() == []
+
+    failed = AmrRuntimeView(type("Sim", (), {"_s": _Native(
+        "native AMR block registry corruption")})())
+    with pytest.raises(RuntimeError, match="registry corruption"):
+        failed._block_names()
+
+
 def test_patch_table_on_built_hierarchy_reports_live_patches():
     sim = _built_amr()
     rep = sim.amr.patch_table()

@@ -19,10 +19,12 @@ struct DomainShape {
   std::vector<std::size_t> extents;
 
   std::size_t size() const {
-    if (extents.empty()) return 0;
+    if (extents.empty())
+      return 0;
     std::size_t n = 1;
     for (const auto extent : extents) {
-      if (extent == 0 || n > std::numeric_limits<std::size_t>::max() / extent) return 0;
+      if (extent == 0 || n > std::numeric_limits<std::size_t>::max() / extent)
+        return 0;
       n *= extent;
     }
     return n;
@@ -83,7 +85,8 @@ struct MassDescriptor {
 
 inline SupportDecision validate_domain(const ResidualDomain& domain) {
   const auto n = domain.shape.size();
-  if (n == 0) return {SupportRefusal::kInvalidDomain, "shape must have non-zero finite size"};
+  if (n == 0)
+    return {SupportRefusal::kInvalidDomain, "shape must have non-zero finite size"};
   std::size_t next = 0;
   for (std::size_t i = 0; i < domain.blocks.size(); ++i) {
     const auto& block = domain.blocks[i];
@@ -104,10 +107,9 @@ inline SupportDecision validate_mass(const MassDescriptor& mass, std::size_t n, 
   if (index == DaeIndex::kHigherIndex)
     return {SupportRefusal::kHigherIndex, "only explicitly classified index-1 DAEs are supported"};
   if (mass.kind == MassKind::kIdentity)
-    return mass.diagonal.empty()
-               ? SupportDecision{}
-               : SupportDecision{SupportRefusal::kUnsupportedMass,
-                                 "identity mass must not carry coefficients"};
+    return mass.diagonal.empty() ? SupportDecision{}
+                                 : SupportDecision{SupportRefusal::kUnsupportedMass,
+                                                   "identity mass must not carry coefficients"};
   if (mass.diagonal.size() != n)
     return {SupportRefusal::kUnsupportedMass, "constant/algebraic mass diagonal has wrong size"};
   for (const double value : mass.diagonal)
@@ -133,8 +135,8 @@ inline SupportDecision validate_mass(const MassDescriptor& mass, std::size_t n, 
 }
 
 using ResidualFunction = std::function<void(const std::vector<double>&, std::vector<double>&)>;
-using JvpFunction =
-    std::function<void(const std::vector<double>&, const std::vector<double>&, std::vector<double>&)>;
+using JvpFunction = std::function<void(const std::vector<double>&, const std::vector<double>&,
+                                       std::vector<double>&)>;
 using ConsistentInitializationFunction =
     std::function<SupportDecision(std::vector<double>&, double)>;
 
@@ -146,16 +148,23 @@ class ResidualOperator {
                    ConsistentInitializationPolicy initialization_policy =
                        ConsistentInitializationPolicy::kValidateOnly,
                    ConsistentInitializationFunction consistent_initializer = {})
-      : domain_(std::move(domain)), mass_(std::move(mass)), index_(index), fidelity_(fidelity),
-        residual_(std::move(residual)), exact_jvp_(std::move(exact_jvp)), jvp_(std::move(jvp)),
+      : domain_(std::move(domain)),
+        mass_(std::move(mass)),
+        index_(index),
+        fidelity_(fidelity),
+        residual_(std::move(residual)),
+        exact_jvp_(std::move(exact_jvp)),
+        jvp_(std::move(jvp)),
         initialization_policy_(initialization_policy),
         consistent_initializer_(std::move(consistent_initializer)) {}
 
   SupportDecision support() const {
     auto decision = validate_domain(domain_);
-    if (!decision) return decision;
+    if (!decision)
+      return decision;
     decision = validate_mass(mass_, domain_.shape.size(), index_);
-    if (!decision) return decision;
+    if (!decision)
+      return decision;
     if (!residual_)
       return {SupportRefusal::kUnsupportedLinearization, "residual evaluator is required"};
     if (fidelity_ == LinearizationFidelity::kExact && !exact_jvp_)
@@ -181,7 +190,8 @@ class ResidualOperator {
   std::vector<double> apply_jvp(const std::vector<double>& state,
                                 const std::vector<double>& direction) const {
     require_supported(state);
-    if (direction.size() != state.size()) throw std::invalid_argument("JVP direction has wrong size");
+    if (direction.size() != state.size())
+      throw std::invalid_argument("JVP direction has wrong size");
     std::vector<double> out(state.size());
     if (fidelity_ == LinearizationFidelity::kExact)
       exact_jvp_(state, direction, out);
@@ -196,8 +206,10 @@ class ResidualOperator {
   SupportDecision validate_consistent_initial_state(const std::vector<double>& state,
                                                     double tolerance) const {
     auto decision = support();
-    if (!decision) return decision;
-    if (index_ != DaeIndex::kIndex1) return {};
+    if (!decision)
+      return decision;
+    if (index_ != DaeIndex::kIndex1)
+      return {};
     if (state.size() != domain_.shape.size() || !(tolerance >= 0.0))
       return {SupportRefusal::kInconsistentInitialState, "invalid state size or tolerance"};
     std::vector<double> residual(state.size());
@@ -205,7 +217,8 @@ class ResidualOperator {
     if (residual.size() != state.size())
       return {SupportRefusal::kInconsistentInitialState, "residual evaluator changed output size"};
     for (std::size_t i = 0; i < residual.size(); ++i)
-      if (mass_.diagonal[i] == 0.0 && (!std::isfinite(residual[i]) || std::abs(residual[i]) > tolerance))
+      if (mass_.diagonal[i] == 0.0 &&
+          (!std::isfinite(residual[i]) || std::abs(residual[i]) > tolerance))
         return {SupportRefusal::kInconsistentInitialState,
                 "algebraic residual exceeds consistent-initialization tolerance"};
     return {};
@@ -213,15 +226,18 @@ class ResidualOperator {
 
   SupportDecision consistent_initialize(std::vector<double>& state, double tolerance) const {
     auto decision = support();
-    if (!decision) return decision;
-    if (index_ != DaeIndex::kIndex1) return {};
+    if (!decision)
+      return decision;
+    if (index_ != DaeIndex::kIndex1)
+      return {};
     if (!consistent_initializer_)
       return {SupportRefusal::kInconsistentInitialState,
               "no native index-1 consistent initializer is available"};
     if (state.size() != domain_.shape.size() || !(tolerance >= 0.0))
       return {SupportRefusal::kInconsistentInitialState, "invalid state size or tolerance"};
     decision = consistent_initializer_(state, tolerance);
-    if (!decision) return decision;
+    if (!decision)
+      return decision;
     if (state.size() != domain_.shape.size())
       return {SupportRefusal::kInconsistentInitialState,
               "consistent initializer changed state size"};
@@ -235,8 +251,10 @@ class ResidualOperator {
  private:
   void require_supported(const std::vector<double>& state) const {
     const auto decision = support();
-    if (!decision) throw std::logic_error(decision.detail);
-    if (state.size() != domain_.shape.size()) throw std::invalid_argument("residual state has wrong size");
+    if (!decision)
+      throw std::logic_error(decision.detail);
+    if (state.size() != domain_.shape.size())
+      throw std::invalid_argument("residual state has wrong size");
   }
 
   static void validate_output(const std::vector<double>& output, std::size_t expected,
@@ -244,20 +262,24 @@ class ResidualOperator {
     if (output.size() != expected)
       throw std::runtime_error(std::string(what) + " evaluator changed output size");
     for (const double value : output)
-      if (!std::isfinite(value)) throw std::runtime_error(std::string(what) + " produced non-finite output");
+      if (!std::isfinite(value))
+        throw std::runtime_error(std::string(what) + " produced non-finite output");
   }
 
   void finite_difference_jvp(const std::vector<double>& state, const std::vector<double>& direction,
                              std::vector<double>& out) const {
     double scale = 0.0;
-    for (const double value : state) scale = std::max(scale, std::abs(value));
+    for (const double value : state)
+      scale = std::max(scale, std::abs(value));
     const double eps = std::sqrt(std::numeric_limits<double>::epsilon()) * (1.0 + scale);
     auto perturbed = state;
-    for (std::size_t i = 0; i < state.size(); ++i) perturbed[i] += eps * direction[i];
+    for (std::size_t i = 0; i < state.size(); ++i)
+      perturbed[i] += eps * direction[i];
     std::vector<double> base(state.size()), shifted(state.size());
     residual_(state, base);
     residual_(perturbed, shifted);
-    for (std::size_t i = 0; i < state.size(); ++i) out[i] = (shifted[i] - base[i]) / eps;
+    for (std::size_t i = 0; i < state.size(); ++i)
+      out[i] = (shifted[i] - base[i]) / eps;
   }
 
   ResidualDomain domain_;

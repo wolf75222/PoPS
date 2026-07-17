@@ -31,13 +31,13 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
-#include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
-#include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
-#include <pops/physics/bricks/hyperbolic.hpp>               // ExBVelocity
-#include <pops/physics/bricks/source.hpp>                   // NoSource
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>            // add_compiled_model(AmrSystem&, ...)
-#include <pops/runtime/amr_system.hpp>               // facade AmrSystem
+#include <pops/coupling/source/coupled_source_program.hpp>   // CsOp (opcodes du bytecode P5)
+#include <pops/physics/bricks/bricks.hpp>                    // CompositeModel
+#include <pops/physics/bricks/elliptic.hpp>                  // ChargeDensity
+#include <pops/physics/bricks/hyperbolic.hpp>                // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                    // NoSource
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
+#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/config/model_spec.hpp>  // ModelSpec (bloc natif, melange compile + natif)
 
 #include <cmath>
@@ -289,8 +289,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     EXPECT_TRUE(dmax_field(d1_after, d1_before) > 1e-6) << "A_block1_evolved";
 
     EXPECT_TRUE(std::fabs(sim.mass("ions") - m0_before) < 1e-10) << "A_block0_mass_conserved";
-    EXPECT_TRUE(std::fabs(sim.mass("electrons") - m1_before) < 1e-10)
-        << "A_block1_mass_conserved";
+    EXPECT_TRUE(std::fabs(sim.mass("electrons") - m1_before) < 1e-10) << "A_block1_mass_conserved";
 
     const std::vector<double> phi = sim.potential();
     double pmax = 0;
@@ -365,8 +364,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     const std::vector<double> d1_before = sim.density("electrons");
     sim.advance(0.01, 5);
     EXPECT_TRUE(dmax_field(sim.density("ions"), d0_before) > 1e-6) << "C_compiled_block_evolved";
-    EXPECT_TRUE(dmax_field(sim.density("electrons"), d1_before) > 1e-6)
-        << "C_native_block_evolved";
+    EXPECT_TRUE(dmax_field(sim.density("electrons"), d1_before) > 1e-6) << "C_native_block_evolved";
     EXPECT_TRUE(std::fabs(sim.mass("ions") - 0.0) >= 0.0) << "C_mass_queryable";  // n'a pas crash
   }
 

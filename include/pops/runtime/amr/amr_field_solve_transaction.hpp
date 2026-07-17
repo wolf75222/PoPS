@@ -74,25 +74,23 @@ inline std::vector<int> AmrRuntime::named_aux_components(const std::string* sele
   return {components.begin(), components.end()};
 }
 
-inline std::vector<int> AmrRuntime::field_solve_aux_components(
-    const FieldSolveScope& scope) const {
+inline std::vector<int> AmrRuntime::field_solve_aux_components(const FieldSolveScope& scope) const {
   std::set<int> components;
   if (scope.default_field) {
     const std::vector<int> defaults = default_aux_components();
     components.insert(defaults.begin(), defaults.end());
   }
   if (scope.named_fields != NamedFieldSnapshotScope::kNone) {
-    const std::string* selected =
-        scope.named_fields == NamedFieldSnapshotScope::kSelected ? scope.selected_named_field
-                                                                 : nullptr;
+    const std::string* selected = scope.named_fields == NamedFieldSnapshotScope::kSelected
+                                      ? scope.selected_named_field
+                                      : nullptr;
     const std::vector<int> named = named_aux_components(selected);
     components.insert(named.begin(), named.end());
   }
   return {components.begin(), components.end()};
 }
 
-inline std::vector<MultiFab> AmrRuntime::pack_aux_components(
-    const std::vector<int>& components) {
+inline std::vector<MultiFab> AmrRuntime::pack_aux_components(const std::vector<int>& components) {
   std::vector<MultiFab> packed;
   if (components.empty())
     return packed;
@@ -108,9 +106,8 @@ inline std::vector<MultiFab> AmrRuntime::pack_aux_components(
       const Box2D grown = source.fab(li).grown_box();
       for (std::size_t packed_component = 0; packed_component < components.size();
            ++packed_component)
-        for_each_cell(grown, detail::CopyAuxComponentKernel{
-                                 src, dst, components[packed_component],
-                                 static_cast<int>(packed_component)});
+        for_each_cell(grown, detail::CopyAuxComponentKernel{src, dst, components[packed_component],
+                                                            static_cast<int>(packed_component)});
     }
   }
   device_fence();
@@ -136,20 +133,18 @@ inline void AmrRuntime::unpack_aux_components(const std::vector<MultiFab>& packe
       const Box2D grown = destination.fab(li).grown_box();
       for (std::size_t packed_component = 0; packed_component < components.size();
            ++packed_component)
-        for_each_cell(grown, detail::CopyAuxComponentKernel{
-                                 src, dst, static_cast<int>(packed_component),
-                                 components[packed_component]});
+        for_each_cell(grown,
+                      detail::CopyAuxComponentKernel{src, dst, static_cast<int>(packed_component),
+                                                     components[packed_component]});
     }
   }
   device_fence();
 }
 
-inline void AmrRuntime::apply_named_aux_bc(MultiFab& packed,
-                                           const std::vector<int>& components) {
+inline void AmrRuntime::apply_named_aux_bc(MultiFab& packed, const std::vector<int>& components) {
   if (named_aux_bc_.empty())
     return;
-  for (std::size_t packed_component = 0; packed_component < components.size();
-       ++packed_component) {
+  for (std::size_t packed_component = 0; packed_component < components.size(); ++packed_component) {
     const auto policy = named_aux_bc_.find(components[packed_component]);
     if (policy == named_aux_bc_.end())
       continue;
@@ -176,8 +171,7 @@ inline void AmrRuntime::publish_aux_components(const std::vector<int>& component
 /// grown box; doing that here would destroy independently solved fine valid cells. FillPatch instead
 /// materializes parent values only in coarse/fine ghosts, then lets the same-level/physical halo
 /// fill override the regions for which a fine-level authority exists.
-inline void AmrRuntime::publish_refined_aux_components(
-    const std::vector<int>& components) {
+inline void AmrRuntime::publish_refined_aux_components(const std::vector<int>& components) {
   if (components.empty())
     return;
   std::vector<MultiFab> packed = pack_aux_components(components);
@@ -194,9 +188,8 @@ inline void AmrRuntime::publish_refined_aux_components(
     MultiFab& fine = packed[static_cast<std::size_t>(level)];
     // The local-parent path is correct for both distributed and replicated parents, including a
     // replicated multi-box coarse layout whose fine grown box crosses a coarse tile boundary.
-    mf_fill_fine_ghosts_spatial_mb(
-        fine, packed[static_cast<std::size_t>(level - 1)],
-        /*replicated_parent=*/false);
+    mf_fill_fine_ghosts_spatial_mb(fine, packed[static_cast<std::size_t>(level - 1)],
+                                   /*replicated_parent=*/false);
     fill_ghosts_profiled(fine, level_domain, level_bc);
   }
   unpack_aux_components(packed, components);

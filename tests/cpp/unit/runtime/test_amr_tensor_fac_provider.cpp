@@ -14,8 +14,8 @@ using pops::runtime::program::AmrProgramContext;
 using pops::runtime::program::AmrTensorElliptic;
 
 using ConfigureSolver = void (AmrProgramContext::*)(int, int, int, Real, Real, int, int) const;
-static_assert(std::is_same_v<
-              decltype(&AmrProgramContext::configure_composite_tensor_fac), ConfigureSolver>);
+static_assert(
+    std::is_same_v<decltype(&AmrProgramContext::configure_composite_tensor_fac), ConfigureSolver>);
 
 TEST(AmrProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
   AmrProgramContext context(nullptr, nullptr);
@@ -43,8 +43,7 @@ TEST(AmrTensorFacSolver, OmittedFacControlsResolveFromNativeOptionsOnly) {
 TEST(AmrTensorFacSolver, ExplicitFacControlsJoinDirectSolverControls) {
   AmrTensorElliptic driver(nullptr, 0, 1);
   driver.configure_composite_tensor_fac(7, Real(2.0e-7), Real(4.0e-14), 9, 1);
-  pops::CompositeFacOptions options =
-      driver.composite_fac_options(Real(4.0e-8), Real(3.0e-13), 17);
+  pops::CompositeFacOptions options = driver.composite_fac_options(Real(4.0e-8), Real(3.0e-13), 17);
 
   EXPECT_EQ(options.max_iters, 17);
   EXPECT_EQ(options.rel_tol, Real(4.0e-8));
@@ -75,10 +74,9 @@ TEST(AmrTensorFacSolver, WireAndDirectSolverControlsAreStrictlyValidated) {
                std::invalid_argument);
   EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(1), Real(0), 0, -1),
                std::invalid_argument);
-  EXPECT_THROW(
-      driver.configure_composite_tensor_fac(
-          0, std::numeric_limits<Real>::quiet_NaN(), Real(0), 0, -1),
-      std::invalid_argument);
+  EXPECT_THROW(driver.configure_composite_tensor_fac(0, std::numeric_limits<Real>::quiet_NaN(),
+                                                     Real(0), 0, -1),
+               std::invalid_argument);
   EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(0), -1, -1),
                std::invalid_argument);
   EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, -2),
@@ -90,17 +88,13 @@ TEST(AmrTensorFacSolver, WireAndDirectSolverControlsAreStrictlyValidated) {
                std::invalid_argument);
   driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, -1);
   EXPECT_THROW(driver.composite_fac_options(Real(0), Real(0), 1), std::invalid_argument);
-  EXPECT_THROW(
-      driver.composite_fac_options(std::numeric_limits<Real>::quiet_NaN(), Real(0), 1),
-      std::invalid_argument);
-  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(-1), 1),
+  EXPECT_THROW(driver.composite_fac_options(std::numeric_limits<Real>::quiet_NaN(), Real(0), 1),
                std::invalid_argument);
+  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(-1), 1), std::invalid_argument);
   EXPECT_THROW(
-      driver.composite_fac_options(Real(1.0e-8),
-                                   std::numeric_limits<Real>::quiet_NaN(), 1),
+      driver.composite_fac_options(Real(1.0e-8), std::numeric_limits<Real>::quiet_NaN(), 1),
       std::invalid_argument);
-  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(0), 0),
-               std::invalid_argument);
+  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(0), 0), std::invalid_argument);
 }
 
 TEST(AmrTensorFacSolver, NonScalarOperatorIsRejectedAtTheNativeBoundary) {

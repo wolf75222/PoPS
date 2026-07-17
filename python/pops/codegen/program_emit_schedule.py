@@ -167,6 +167,15 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
     del lines[start:]
     due = _schedule_due_expression(v, lowering, var)
     policy = lowering.off
+    cache_backed = (
+        ScheduleAction.STORE in policy.after_due
+        and ScheduleAction.RESTORE in policy.off_cadence
+    )
+    # One decision seam surrounds every non-trivial due primitive (period, start, predicate,
+    # logical clock, stage, AMR level). The profiler counts all due/skipped nodes, but only labels a
+    # real STORE+RESTORE policy as a cache hit/miss; Skip/Zero/Error never fabricate cache traffic.
+    due = "ctx.schedule_decision(%d, %s, %s)" % (
+        v.id, due, "true" if cache_backed else "false")
     is_aux = v.op in _AUX_OUTPUT_OPS
     # The scratch node's output token (the MultiFab the policy holds / zeroes). A field solve writes
     # the System aux and sets no var[v.id], so out is read only on the scratch path.

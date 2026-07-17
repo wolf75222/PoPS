@@ -101,7 +101,8 @@ TEST(ExternalBrickJson, ToJsonEmitsV3SchemaAndFields) {
   EXPECT_TRUE(out.find("\"category\":\"riemann\"") != std::string::npos) << "category";
   EXPECT_TRUE(out.find("\"requirements\":\"pressure,wave_speeds\"") != std::string::npos)
       << "requirements";
-  EXPECT_TRUE(out.find("\"capabilities\":\"physical_flux\"") != std::string::npos) << "capabilities";
+  EXPECT_TRUE(out.find("\"capabilities\":\"physical_flux\"") != std::string::npos)
+      << "capabilities";
 }
 
 // A minimal schema-v3 row still supplies its native identity explicitly; documentary CSV fields may
@@ -113,15 +114,18 @@ TEST(ExternalBrickJson, ToJsonEmitsExplicitIdentityForMinimalBrick) {
   const std::string out = reg.to_json();
   EXPECT_TRUE(out.find("\"native_id\":\"minimal\"") != std::string::npos)
       << "explicit native_id emitted";
-  EXPECT_TRUE(out.find("\"supported_layouts\":\"\"") != std::string::npos) << "empty layouts emitted";
-  EXPECT_TRUE(out.find("\"exported_symbols\":\"\"") != std::string::npos) << "empty symbols emitted";
+  EXPECT_TRUE(out.find("\"supported_layouts\":\"\"") != std::string::npos)
+      << "empty layouts emitted";
+  EXPECT_TRUE(out.find("\"exported_symbols\":\"\"") != std::string::npos)
+      << "empty symbols emitted";
 }
 
 TEST(ExternalBrickJson, DuplicateIdIsIdempotentOnlyForIdenticalRows) {
   BrickRegistry& reg = BrickRegistry::instance();
   reg.clear();
-  const BrickManifestEntry row{"same", "riemann", "pressure", "physical_flux", "same_native",
-                               "uniform", "cpu", "", "", "pops_same"};
+  const BrickManifestEntry row{
+      "same", "riemann", "pressure", "physical_flux", "same_native", "uniform",
+      "cpu",  "",        "",         "pops_same"};
   EXPECT_NO_THROW(reg.register_brick(row));
   EXPECT_NO_THROW(reg.register_brick(row));
   EXPECT_TRUE(reg.size() == 1);

@@ -315,8 +315,7 @@ TEST(test_polar_tensor_elliptic_mms, reports_explicit_status_and_action) {
   EXPECT_EQ(bad_iters.status, SolveStatus::kInvalidInput);
   EXPECT_EQ(bad_iters.action, SolveAction::kRejectAttempt);
   EXPECT_DOUBLE_EQ(invalid.phi().fab(0).const_array()(dom.lo[0], dom.lo[1], 0), Real(7));
-  const SolveReport bad_tol =
-      invalid.solve(std::numeric_limits<Real>::quiet_NaN(), 4);
+  const SolveReport bad_tol = invalid.solve(std::numeric_limits<Real>::quiet_NaN(), 4);
   EXPECT_EQ(bad_tol.status, SolveStatus::kInvalidInput);
   EXPECT_EQ(bad_tol.action, SolveAction::kRejectAttempt);
 
@@ -387,8 +386,7 @@ TEST(test_polar_tensor_elliptic_mms, affine_boundary_forcing_uses_effective_rhs_
   }
 }
 
-TEST(test_polar_tensor_elliptic_mms,
-     zero_forcing_requires_exact_zero_without_absolute_tolerance) {
+TEST(test_polar_tensor_elliptic_mms, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
   constexpr int n = 8;
   const Box2D domain = Box2D::from_extents(n, n);
   const PolarGeometry geometry{domain, kRmin, kRmax};
@@ -405,14 +403,13 @@ TEST(test_polar_tensor_elliptic_mms,
   ASSERT_LT(initial_residual, Real(1));
 
   // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
-  const SolveReport exact_only =
-      solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
+  const SolveReport exact_only = solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
   EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
 
   solver.phi().set_val(Real(1e-6));
   const Real reset_residual = solver.residual();
-  const SolveReport absolute = solver.solve(
-      Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
+  const SolveReport absolute =
+      solver.solve(Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
   EXPECT_TRUE(absolute.solved());
   EXPECT_EQ(absolute.iters, 0);
   EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));
@@ -441,7 +438,8 @@ TEST(test_polar_tensor_elliptic_mms, nonsymmetric_tensor_order2_and_converges) {
     SolveReport kr = solve_tensor(kNrs[k], kNrs[k], kM, kArr, kArt, kAtr, kAtt, eB[k]);
     std::printf("  n=%-4d : L2=%.4e  Linf=%.4e  [BiCGStab iters=%d rel=%.2e conv=%d]\n", kNrs[k],
                 eB[k].l2, eB[k].linf, kr.iters, kr.rel_residual, (int)kr.solved());
-    EXPECT_TRUE(kr.solved()) << "B_bicgstab_converge (n=" << kNrs[k] << ")";  // (C) pas de stagnation
+    EXPECT_TRUE(kr.solved()) << "B_bicgstab_converge (n=" << kNrs[k]
+                             << ")";  // (C) pas de stagnation
   }
   const double pB1 = std::log2(eB[0].l2 / eB[1].l2);
   const double pB2 = std::log2(eB[1].l2 / eB[2].l2);
@@ -522,8 +520,7 @@ TEST(test_polar_tensor_elliptic_mms, radialline_preconditioner_beats_jacobi) {
   for (int n : {32, 96}) {
     ErrL2 ej, el;
     SolveReport krj = solve_tensor(n, n, kM, kArr, kArt, kAtr, kAtt, ej, PolarPrecond::Jacobi);
-    SolveReport krl =
-        solve_tensor(n, n, kM, kArr, kArt, kAtr, kAtt, el, PolarPrecond::RadialLine);
+    SolveReport krl = solve_tensor(n, n, kM, kArr, kArt, kAtr, kAtt, el, PolarPrecond::RadialLine);
     std::printf("  n=%-4d : Jacobi iters=%-5d (conv=%d) | RadialLine iters=%-4d (conv=%d)\n", n,
                 krj.iters, (int)krj.solved(), krl.iters, (int)krl.solved());
     if (n == 96) {

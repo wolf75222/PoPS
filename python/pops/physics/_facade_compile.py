@@ -40,6 +40,14 @@ class _FacadeCompileMixin(_FacadeModel):
             facade=self,
         )
 
+    def __pops_native_loader_source__(
+        self, *, name: Any = None, target: str = "system",
+        hoist_reciprocals: bool = False,
+    ) -> str:
+        """Emit a native package without exposing the private formula carrier."""
+        return self._m.emit_cpp_native_loader(
+            name=name, target=target, hoist_reciprocals=hoist_reciprocals)
+
     def _model_hash(self) -> Any:
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)

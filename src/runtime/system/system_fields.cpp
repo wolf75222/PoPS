@@ -4,6 +4,7 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/runtime/output_piece_collective.hpp>
 
 namespace pops {
 
@@ -567,11 +568,41 @@ std::vector<double> System::field_potential_global(const std::string& provider_s
   return gather_global(field, 1, nx(), ny());
 }
 
-// --- LOCAL per-fab accessors (NON collective): parallel HDF5 write by hyperslabs (PR-IO-3) --
-// Local counterpart of the _global accessors: they aggregate nothing (no MPI comm), they expose per rank
-// the LOCAL boxes (in GLOBAL indices, as carried by the fab box) and the state of each fab.
-// The facade sim.write(format='hdf5', parallel=True) creates the global datasets then each rank writes
-// ITS boxes in hyperslabs. A rank without a box -> local_size()==0 -> empty list (never a hard-coded fab(0)).
+std::vector<OutputPiece> System::output_state_local_pieces(const std::string& name,
+                                                          int level) const {
+  if (level != 0)
+    throw std::out_of_range("System::output_state_local_pieces: uniform layout has only level zero");
+  const Impl::Species& species = p_->find(name);
+  return output_local_pieces(species.U, 0, false);
+}
+
+std::vector<OutputPiece> System::output_field_local_pieces(const std::string& provider_slot,
+                                                          int level) {
+  if (level != 0)
+    throw std::out_of_range("System::output_field_local_pieces: uniform layout has only level zero");
+  MultiFab& field = p_->fields_.provider_potential(provider_slot);
+  return output_local_pieces(field, 0, false);
+}
+
+std::vector<OutputPiece> System::output_state_root_pieces(
+    const WorldCommunicator& world, const std::string& name, int level) const {
+  return output_pieces_to_root(
+      world, detail::output_collective_identity("System", "state", name, level),
+      [&] { return output_state_local_pieces(name, level); });
+}
+
+std::vector<OutputPiece> System::output_field_root_pieces(
+    const WorldCommunicator& world, const std::string& provider_slot, int level) {
+  return output_pieces_to_root(
+      world, detail::output_collective_identity("System", "field", provider_slot, level),
+      [&] { return output_field_local_pieces(provider_slot, level); });
+}
+
+// --- LOCAL per-fab accessors (NON collective): exact native ownership inspection ----------------
+// Local counterpart of the _global accessors: they aggregate nothing (no MPI comm), they expose per
+// rank the LOCAL boxes (in GLOBAL indices, as carried by the fab box) and the state of each fab. The
+// typed scientific-output bridge consumes OutputPiece instead; these lower-level views remain useful
+// for native ownership verification. A rank without a box returns an empty list.
 std::vector<std::array<int, 4>> System::local_boxes(const std::string& name) const {
   device_fence();
   const Impl::Species& s = p_->find(name);

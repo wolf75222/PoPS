@@ -133,7 +133,7 @@ TEST(test_cfl_dt, nan_wave_speed_is_swallowed_by_cfl_guard) {
   NanBlk nblk{"nan", NanSpeed{}, Un, bc};
   CoupledSystem nsys{nblk};
   SystemCoupler nsim(nsys, geom, ba, bc, ZeroSystemRhs{});
-  const Real dtn = nsim.cfl_dt(cfl);                     // calcule le pas SANS avancer l'etat
+  const Real dtn = nsim.cfl_dt(cfl);                         // calcule le pas SANS avancer l'etat
   EXPECT_TRUE(std::isfinite(dtn)) << "nan_speed_dt_finite";  // max(0, NaN) = 0 -> w_max = 0 -> fini
   EXPECT_GT(dtn, Real(0)) << "nan_speed_dt_positive";
 }

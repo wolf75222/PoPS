@@ -153,7 +153,8 @@ TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
   const long long ndiff = count_diff_bits(Uoff, Uon, dom);
   const long long evolved = count_diff_bits(Uoff, U0, dom);
   EXPECT_TRUE(evolved > 0) << "l'etat a reellement evolue (test non creux)";
-  EXPECT_TRUE(ndiff == 0) << "bit-exact NoSlope+HLL : cache ON == OFF (0 ulp), ndiff_bits=" << ndiff;
+  EXPECT_TRUE(ndiff == 0) << "bit-exact NoSlope+HLL : cache ON == OFF (0 ulp), ndiff_bits="
+                          << ndiff;
   // PREUVE D'ENGAGEMENT : le cache pre-calcule wave_speeds par cellule, le chemin par face le rappelle
   // pour chaque face -> strictement moins d'appels. calls_on == calls_off signalerait un cache no-op.
   EXPECT_TRUE(calls_on < calls_off)

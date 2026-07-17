@@ -102,7 +102,8 @@ class TransactionalFluxLedger {
       throw std::invalid_argument("AMR flux ledger key is not fully qualified");
     if (!(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure) ||
         !(measure.substep_duration > 0.0) || !std::isfinite(measure.substep_duration))
-      throw std::invalid_argument("AMR flux ledger measure must have finite positive geometry/time");
+      throw std::invalid_argument(
+          "AMR flux ledger measure must have finite positive geometry/time");
     entries_.push_back({std::move(key), measure, std::move(payload)});
   }
 

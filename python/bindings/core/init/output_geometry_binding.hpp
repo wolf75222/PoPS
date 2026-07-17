@@ -47,7 +47,7 @@ inline py::dict native_output_geometry_snapshot(int level, std::uint64_t topolog
   };
 
   std::vector<std::array<std::int64_t, 4>> boxes;
-  if (!adaptive || level == 0) {
+  if (!adaptive) {
     boxes.push_back({0, 0, ny, nx});
   } else {
     for (const PatchBox& box : patch_boxes)
@@ -57,7 +57,8 @@ inline py::dict native_output_geometry_snapshot(int level, std::uint64_t topolog
     if (boxes.empty())
       throw std::invalid_argument("native output geometry level has no materialized patch");
   }
-  std::sort(boxes.begin(), boxes.end());
+  // Preserve the per-level BoxArray order: OutputPiece.global_box_index indexes this exact order.
+  // Sorting geometry independently would silently point each piece at a different patch.
 
   const std::array<py::ssize_t, 2> shape{static_cast<py::ssize_t>(ny),
                                          static_cast<py::ssize_t>(nx)};

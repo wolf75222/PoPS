@@ -51,14 +51,47 @@ Real get_cell(const MultiFab& field, int i, int j, int component) {
 }
 
 PopsExecutionContextV1 serial_interface_execution() {
-  return {sizeof(PopsExecutionContextV1), 1u, "test::execution-context",
+  return {sizeof(PopsExecutionContextV1),
+          1u,
+          "test::execution-context",
           POPS_MEMORY_SPACE_HOST_V1,
-          "pops.runtime-backend-manifest.v1:sha256:test", "host",
-          POPS_SCALAR_FLOAT64_V1, POPS_PRECISION_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1, POPS_PRECISION_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1, 0, "host::synchronous", 0, 0,
-          "serial", "none"};
+          "pops.runtime-backend-manifest.v1:sha256:test",
+          "host",
+          POPS_SCALAR_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          0,
+          "host::synchronous",
+          0,
+          0,
+          "serial",
+          "none"};
 }
+
+#if defined(POPS_HAS_MPI)
+PopsExecutionContextV1 mpi_world_interface_execution() {
+  comm_init();
+  return {sizeof(PopsExecutionContextV1),
+          1u,
+          "test::mpi-execution-context",
+          POPS_MEMORY_SPACE_HOST_V1,
+          "pops.runtime-backend-manifest.v1:sha256:test-mpi",
+          "host",
+          POPS_SCALAR_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          0,
+          "host::synchronous",
+          static_cast<std::int64_t>(MPI_Comm_c2f(MPI_COMM_WORLD)),
+          static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)),
+          "MPI_COMM_WORLD",
+          "MPI_DOUBLE"};
+}
+#endif
 
 AxisAlignedInterface heterogeneous_route() {
   AxisAlignedInterface route;
@@ -93,12 +126,11 @@ ModelSpec scalar_model() {
 TEST(test_multiblock_interface_scheduler,
      UniformExecutorRunsOneSharedFluxOnTwoHeterogeneousLayoutsWithoutDoubleCounting) {
   ensure_runtime();
-  const Box2D left_box{{0, 0}, {3, 2}};    // 4 x 3
+  const Box2D left_box{{0, 0}, {3, 2}};     // 4 x 3
   const Box2D right_box{{10, 7}, {15, 9}};  // 6 x 3: distinct layout/index origin
   const Geometry left_geometry{left_box, Real(0), Real(2), Real(0), Real(3)};
   const Geometry right_geometry{right_box, Real(2), Real(5), Real(0), Real(3)};
-  const BoundaryEvaluationPoint point{
-      "clock.macro", 12, 0, 1, 3, amr::Rational(1, 2), 0.05, 0.625};
+  const BoundaryEvaluationPoint point{"clock.macro", 12, 0, 1, 3, amr::Rational(1, 2), 0.05, 0.625};
 
   SystemBlockStore store;
   int full_boundary_rhs_calls = 0;
@@ -113,13 +145,13 @@ TEST(test_multiblock_interface_scheduler,
       ++full_boundary_rhs_calls;
       rhs.set_val(Real(91));  // manufactured physical-BC flux: must never be retained/added
     };
-    state.rhs_without_prepared_interfaces =
-        [&interface_omitting_rhs_calls, &residual_point](
-            const BoundaryEvaluationPoint& evaluation, MultiFab&, MultiFab& rhs) {
-          ++interface_omitting_rhs_calls;
-          residual_point = evaluation;
-          rhs.set_val(Real(0));
-        };
+    state.rhs_without_prepared_interfaces = [&interface_omitting_rhs_calls, &residual_point](
+                                                const BoundaryEvaluationPoint& evaluation,
+                                                MultiFab&, MultiFab& rhs) {
+      ++interface_omitting_rhs_calls;
+      residual_point = evaluation;
+      rhs.set_val(Real(0));
+    };
     state.rhs_flux_only_without_prepared_interfaces = state.rhs_without_prepared_interfaces;
     store.blocks.push_back(std::move(state));
   }
@@ -165,7 +197,8 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(full_boundary_rhs_calls, 0) << "the physical-BC residual would double-count the face";
   EXPECT_EQ(interface_omitting_rhs_calls, 2);
   ASSERT_TRUE(residual_point.has_value());
-  EXPECT_EQ(*residual_point, point) << "the boundary-aware residual sees the exact point before fill";
+  EXPECT_EQ(*residual_point, point)
+      << "the boundary-aware residual sees the exact point before fill";
 
   const ConstArray4 left_result = left_rhs.fab(0).const_array();
   const ConstArray4 right_result = right_rhs.fab(0).const_array();
@@ -177,8 +210,7 @@ TEST(test_multiblock_interface_scheduler,
       const Real rhs_value =
           right_result(right_box.lo[0], right_box.lo[1] + mapped, right_component);
       EXPECT_NE(lhs, Real(0));
-      EXPECT_EQ(lhs + rhs_value, Real(0))
-          << "the mapped pair must conserve the component exactly";
+      EXPECT_EQ(lhs + rhs_value, Real(0)) << "the mapped pair must conserve the component exactly";
       EXPECT_NE(lhs, Real(91)) << "the old boundary residual was not replaced";
     }
   }
@@ -187,14 +219,22 @@ TEST(test_multiblock_interface_scheduler,
 TEST(test_multiblock_interface_scheduler,
      SerialSchedulerEnumeratesEveryBoundaryPatchAcrossDifferentBoxDecompositions) {
   ensure_runtime();
-  MultiFab left_state = make_field({
-      Box2D{{0, 0}, {1, 1}}, Box2D{{2, 0}, {3, 1}},
-      Box2D{{0, 2}, {1, 5}}, Box2D{{2, 2}, {3, 5}},
-  }, 1);
-  MultiFab right_state = make_field({
-      Box2D{{10, 7}, {12, 9}}, Box2D{{13, 7}, {15, 9}},
-      Box2D{{10, 10}, {12, 12}}, Box2D{{13, 10}, {15, 12}},
-  }, 1);
+  MultiFab left_state = make_field(
+      {
+          Box2D{{0, 0}, {1, 1}},
+          Box2D{{2, 0}, {3, 1}},
+          Box2D{{0, 2}, {1, 5}},
+          Box2D{{2, 2}, {3, 5}},
+      },
+      1);
+  MultiFab right_state = make_field(
+      {
+          Box2D{{10, 7}, {12, 9}},
+          Box2D{{13, 7}, {15, 9}},
+          Box2D{{10, 10}, {12, 12}},
+          Box2D{{13, 10}, {15, 12}},
+      },
+      1);
   left_state.set_val(Real(0));
   right_state.set_val(Real(0));
   for (int face = 0; face < 6; ++face) {
@@ -212,26 +252,24 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
-  const Geometry left_geometry{
-      left_state.box_array().bounding_box(), Real(0), Real(2), Real(0), Real(6)};
-  const Geometry right_geometry{
-      right_state.box_array().bounding_box(), Real(2), Real(5), Real(0), Real(6)};
+  const Geometry left_geometry{left_state.box_array().bounding_box(), Real(0), Real(2), Real(0),
+                               Real(6)};
+  const Geometry right_geometry{right_state.box_array().bounding_box(), Real(2), Real(5), Real(0),
+                                Real(6)};
   InterfaceFluxScheduler scheduler;
   int calls = 0;
-  scheduler.install(
-      route, left_state, left_geometry, right_state, right_geometry,
-      serial_interface_execution(),
-      [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
-        ++calls;
-        ASSERT_EQ(batch.face_count, 6);
-        for (int face = 0; face < batch.face_count; ++face) {
-          EXPECT_EQ(batch.left_state[face], Real(face + 1));
-          EXPECT_EQ(batch.right_state[face], Real(11 + face));
-          batch.shared_flux[face] = Real(face + 2);
-        }
-      });
-  const BoundaryEvaluationPoint point{
-      "clock.multibox", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  scheduler.install(route, left_state, left_geometry, right_state, right_geometry,
+                    serial_interface_execution(),
+                    [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      ++calls;
+                      ASSERT_EQ(batch.face_count, 6);
+                      for (int face = 0; face < batch.face_count; ++face) {
+                        EXPECT_EQ(batch.left_state[face], Real(face + 1));
+                        EXPECT_EQ(batch.right_state[face], Real(11 + face));
+                        batch.shared_flux[face] = Real(face + 2);
+                      }
+                    });
+  const BoundaryEvaluationPoint point{"clock.multibox", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
   std::vector<MultiFab*> states{&left_state, &right_state};
   std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
   scheduler.apply(point, states, rhs);
@@ -239,6 +277,63 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(calls, 1);
   for (int face = 0; face < 6; ++face)
     EXPECT_EQ(get_cell(left_rhs, 3, face, 0) + get_cell(right_rhs, 10, 7 + face, 0), Real(0));
+}
+
+TEST(test_multiblock_interface_scheduler,
+     MpiWorldSingleRankKeepsItsNativeIdentityAndExecutesTheCompleteLocalPair) {
+#if !defined(POPS_HAS_MPI)
+  GTEST_SKIP() << "requires a PoPS build with the native MPI transport enabled";
+#else
+  ensure_runtime();
+  const PopsExecutionContextV1 execution = mpi_world_interface_execution();
+  ASSERT_TRUE(comm_active());
+  if (n_ranks() != 1)
+    GTEST_SKIP() << "the distributed trace-exchange refusal is exercised by an MPI launch";
+
+  const Box2D left_box{{0, 0}, {1, 2}};
+  const Box2D right_box{{2, 0}, {3, 2}};
+  MultiFab left_state = make_field(left_box, 1);
+  MultiFab right_state = make_field(right_box, 1);
+  MultiFab left_rhs(left_state.box_array(), left_state.dmap(), 1, 0);
+  MultiFab right_rhs(right_state.box_array(), right_state.dmap(), 1, 0);
+  left_state.set_val(Real(2));
+  right_state.set_val(Real(6));
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
+
+  AxisAlignedInterface route;
+  route.identity = "mpi-world-one-rank.shared-flux";
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = InterfaceAxis::X;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(3)};
+  const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(3)};
+
+  InterfaceFluxScheduler scheduler;
+  int calls = 0;
+  scheduler.install(route, left_state, left_geometry, right_state, right_geometry, execution,
+                    [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      ++calls;
+                      ASSERT_EQ(batch.face_count, 3);
+                      for (int face = 0; face < batch.face_count; ++face)
+                        batch.shared_flux[face] =
+                            Real(0.5) * (batch.left_state[face] + batch.right_state[face]);
+                    });
+  const BoundaryEvaluationPoint point{"clock.mpi-one-rank", 1,   0,  0, 0,
+                                      amr::Rational(0, 1),  0.1, 0.0};
+  std::vector<MultiFab*> states{&left_state, &right_state};
+  std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
+  scheduler.apply(point, states, rhs);
+
+  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1u);
+  for (int j = left_box.lo[1]; j <= left_box.hi[1]; ++j)
+    EXPECT_EQ(get_cell(left_rhs, left_box.hi[0], j, 0) + get_cell(right_rhs, right_box.lo[0], j, 0),
+              Real(0));
+#endif
 }
 
 TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFailAtInstall) {
@@ -255,13 +350,13 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
     state.U = make_field(block == 0 ? left_box : right_box, 2);
     state.ncomp = 2;
     state.rhs_into = [](MultiFab&, MultiFab& rhs) { rhs.set_val(Real(0)); };
-    state.rhs_without_prepared_interfaces =
-        [](const BoundaryEvaluationPoint&, MultiFab&, MultiFab& rhs) { rhs.set_val(Real(0)); };
+    state.rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                               MultiFab& rhs) { rhs.set_val(Real(0)); };
     state.rhs_flux_only_without_prepared_interfaces = state.rhs_without_prepared_interfaces;
     store.blocks.push_back(std::move(state));
   }
-  const InterfaceFluxEvaluator evaluator =
-      [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch&) {};
+  const InterfaceFluxEvaluator evaluator = [](const BoundaryEvaluationPoint&,
+                                              const InterfaceFluxBatch&) {};
   int prepare_calls = 0;
   const InterfaceFluxEvaluatorFactory evaluator_factory = [&] {
     ++prepare_calls;
@@ -274,24 +369,21 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
   route.right_tangential_scale = Real(1);
   route.right_tangential_offset = Real(0);
   route.tangential_orientation = TangentialOrientation::Aligned;
-  EXPECT_THROW(store.install_interface_flux(
-                   route, left_geometry, detached_right, serial_interface_execution(),
-                   evaluator_factory),
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, detached_right,
+                                            serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
 
   route.identity = "cross-axis";
   route.right_axis = InterfaceAxis::Y;
-  EXPECT_THROW(store.install_interface_flux(
-                   route, left_geometry, coincident_right, serial_interface_execution(),
-                   evaluator_factory),
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
 
   route = heterogeneous_route();
   route.identity = "non-bijection";
   route.right_component_for_left = {0, 0};
-  EXPECT_THROW(store.install_interface_flux(
-                   route, left_geometry, coincident_right, serial_interface_execution(),
-                   evaluator_factory),
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
   EXPECT_EQ(prepare_calls, 0)
       << "invalid topology/geometry must be rejected before component prepare";
@@ -299,13 +391,12 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
 
   route = heterogeneous_route();
   route.identity = "first-owner";
-  store.install_interface_flux(
-      route, left_geometry, coincident_right, serial_interface_execution(), evaluator_factory);
+  store.install_interface_flux(route, left_geometry, coincident_right, serial_interface_execution(),
+                               evaluator_factory);
   EXPECT_EQ(prepare_calls, 1);
   route.identity = "competing-owner";
-  EXPECT_THROW(store.install_interface_flux(
-                   route, left_geometry, coincident_right, serial_interface_execution(),
-                   evaluator_factory),
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
   EXPECT_EQ(prepare_calls, 1)
       << "a face ownership conflict must fail before preparing a second component";
@@ -324,15 +415,14 @@ TEST(test_multiblock_interface_scheduler,
   std::vector<AmrRuntimeBlock> blocks;
   int full_rhs_calls = 0;
   int interface_omitting_rhs_calls = 0;
-  const BoundaryEvaluationPoint point{
-      "clock.fine", 9, 0, 2, 1, amr::Rational(2, 3), 0.125, 0.375};
+  const BoundaryEvaluationPoint point{"clock.fine", 9, 0, 2, 1, amr::Rational(2, 3), 0.125, 0.375};
   std::optional<BoundaryEvaluationPoint> residual_point;
   for (const char* name : {"left", "right"}) {
     detail::dispatch_model(scalar_model(), [&](auto model) {
       blocks.push_back(detail::dispatch_amr_block(
           model, "none", "rusanov", layout, name,
-          std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1,
-          false, false, 1));
+          std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
+          false, 1));
     });
     blocks.back().level_rhs = [&full_rhs_calls](MultiFab&, const MultiFab&, const Geometry&,
                                                 MultiFab& rhs) {
@@ -340,9 +430,9 @@ TEST(test_multiblock_interface_scheduler,
       rhs.set_val(Real(73));
     };
     blocks.back().level_rhs_without_prepared_interfaces =
-        [&interface_omitting_rhs_calls, &residual_point](
-            const BoundaryEvaluationPoint& evaluation, MultiFab&, const MultiFab&,
-            const Geometry&, MultiFab& rhs) {
+        [&interface_omitting_rhs_calls, &residual_point](const BoundaryEvaluationPoint& evaluation,
+                                                         MultiFab&, const MultiFab&,
+                                                         const Geometry&, MultiFab& rhs) {
           ++interface_omitting_rhs_calls;
           residual_point = evaluation;
           rhs.set_val(Real(0));
@@ -350,8 +440,8 @@ TEST(test_multiblock_interface_scheduler,
     blocks.back().level_neg_div_flux_without_prepared_interfaces =
         blocks.back().level_rhs_without_prepared_interfaces;
   }
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
 
   AxisAlignedInterface route;
   route.identity = "amr.level0.shared_flux";
@@ -396,8 +486,7 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(left_result(box.hi[0], j, 0) + right_result(box.lo[0], j, 0), Real(0));
 }
 
-TEST(test_multiblock_interface_scheduler,
-     AmrBoundaryRegistryUsesOtherBlocksProvisionalStageState) {
+TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProvisionalStageState) {
   ensure_runtime();
   AmrBuildParams params;
   params.mesh.n = 3;
@@ -408,9 +497,9 @@ TEST(test_multiblock_interface_scheduler,
   std::vector<AmrRuntimeBlock> blocks;
   for (const char* name : {"a", "b"}) {
     detail::dispatch_model(scalar_model(), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(
-          model, "none", "rusanov", layout, name,
-          std::vector<double>(9, 1.0), true, 1.4, 1, false, false, 1));
+      blocks.push_back(detail::dispatch_amr_block(model, "none", "rusanov", layout, name,
+                                                  std::vector<double>(9, 1.0), true, 1.4, 1, false,
+                                                  false, 1));
     });
   }
   const std::string a_state = "case::amr::a::state::U";
@@ -418,22 +507,19 @@ TEST(test_multiblock_interface_scheduler,
   blocks[0].state_identity = a_state;
   blocks[1].state_identity = b_state;
   blocks[0].boundary_plan = std::make_shared<PreparedBoundaryPlan>(
-      "case::amr::a::boundary", 1, std::vector<BCRec>{BCRec{}},
-      std::vector<int>{}, a_state);
-  blocks[0].boundary_field_registry =
-      std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
+      "case::amr::a::boundary", 1, std::vector<BCRec>{BCRec{}}, std::vector<int>{}, a_state);
+  blocks[0].boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
   const auto registry = blocks[0].boundary_field_registry;
-  blocks[0].level_rhs_at_point = [registry, b_state](
-      const BoundaryEvaluationPoint& point, MultiFab& U, const MultiFab&,
-      const Geometry&, MultiFab& R) {
+  blocks[0].level_rhs_at_point = [registry, b_state](const BoundaryEvaluationPoint& point,
+                                                     MultiFab& U, const MultiFab&, const Geometry&,
+                                                     MultiFab& R) {
     const auto fields = (*registry)(point, U, nullptr, nullptr);
     R.set_val(fields.state(b_state).fab(0).const_array()(0, 0, 0));
   };
-  blocks[1].level_rhs_at_point = [](
-      const BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
-      const Geometry&, MultiFab& R) { R.set_val(Real(0)); };
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  blocks[1].level_rhs_at_point = [](const BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
+                                    const Geometry&, MultiFab& R) { R.set_val(Real(0)); };
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
   runtime.install_boundary_storage_routes({});
   runtime.level_state(0, 0).set_val(Real(1));
   runtime.level_state(1, 0).set_val(Real(2));
@@ -443,8 +529,7 @@ TEST(test_multiblock_interface_scheduler,
   stage_b.set_val(Real(11));
   MultiFab rhs_a(stage_a.box_array(), stage_a.dmap(), 1, 0);
   MultiFab rhs_b(stage_b.box_array(), stage_b.dmap(), 1, 0);
-  const BoundaryEvaluationPoint point{
-      "clock.amr-stage", 4, 0, 0, 1, amr::Rational(1, 3), 0.2, 0.4};
+  const BoundaryEvaluationPoint point{"clock.amr-stage", 4, 0, 0, 1, amr::Rational(1, 3), 0.2, 0.4};
   std::vector<MultiFab*> states{&stage_a, &stage_b};
   std::vector<MultiFab*> rhs{&rhs_a, &rhs_b};
   runtime.level_rhs_with_interfaces(0, point, states, rhs);

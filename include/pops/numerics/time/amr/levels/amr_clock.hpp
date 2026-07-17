@@ -34,9 +34,7 @@ struct Rational {
     denominator = static_cast<std::int64_t>(denominator_magnitude);
   }
 
-  double value() const {
-    return static_cast<double>(numerator) / static_cast<double>(denominator);
-  }
+  double value() const { return static_cast<double>(numerator) / static_cast<double>(denominator); }
   bool integral() const { return denominator == 1; }
 
   friend bool operator==(const Rational&, const Rational&) = default;
@@ -46,24 +44,20 @@ struct Rational {
     if (a.numerator >= 0 && b.numerator < 0)
       return false;
     if (a.numerator < 0)
-      return positive_less_(magnitude_(b.numerator), b.denominator,
-                            magnitude_(a.numerator), a.denominator);
-    return positive_less_(magnitude_(a.numerator), a.denominator,
-                          magnitude_(b.numerator), b.denominator);
+      return positive_less_(magnitude_(b.numerator), b.denominator, magnitude_(a.numerator),
+                            a.denominator);
+    return positive_less_(magnitude_(a.numerator), a.denominator, magnitude_(b.numerator),
+                          b.denominator);
   }
-  friend Rational operator+(Rational a, Rational b) {
-    return add_(a, b, false);
-  }
-  friend Rational operator-(Rational a, Rational b) {
-    return add_(a, b, true);
-  }
+  friend Rational operator+(Rational a, Rational b) { return add_(a, b, false); }
+  friend Rational operator-(Rational a, Rational b) { return add_(a, b, true); }
   friend Rational operator*(Rational a, Rational b) {
     // Cross-cancel before either product.  This both keeps the canonical result in int64 whenever
     // possible and makes every remaining multiplication explicitly checked.
-    const std::uint64_t ga = std::gcd(magnitude_(a.numerator),
-                                     static_cast<std::uint64_t>(b.denominator));
-    const std::uint64_t gb = std::gcd(magnitude_(b.numerator),
-                                     static_cast<std::uint64_t>(a.denominator));
+    const std::uint64_t ga =
+        std::gcd(magnitude_(a.numerator), static_cast<std::uint64_t>(b.denominator));
+    const std::uint64_t gb =
+        std::gcd(magnitude_(b.numerator), static_cast<std::uint64_t>(a.denominator));
     return {checked_mul_(divide_exact_(a.numerator, ga), divide_exact_(b.numerator, gb)),
             checked_mul_(a.denominator / gb, b.denominator / ga)};
   }
@@ -74,11 +68,9 @@ struct Rational {
     // with a positive int64 denominator, while INT64_MIN/INT64_MIN is exactly representable.
     const std::uint64_t gn = std::gcd(magnitude_(a.numerator), magnitude_(b.numerator));
     const std::uint64_t gd = std::gcd(static_cast<std::uint64_t>(a.denominator),
-                                     static_cast<std::uint64_t>(b.denominator));
-    return {checked_mul_(divide_exact_(a.numerator, gn),
-                         divide_exact_(b.denominator, gd)),
-            checked_mul_(divide_exact_(a.denominator, gd),
-                         divide_exact_(b.numerator, gn))};
+                                      static_cast<std::uint64_t>(b.denominator));
+    return {checked_mul_(divide_exact_(a.numerator, gn), divide_exact_(b.denominator, gd)),
+            checked_mul_(divide_exact_(a.denominator, gd), divide_exact_(b.numerator, gn))};
   }
 
  private:
@@ -90,9 +82,9 @@ struct Rational {
 
   static std::int64_t signed_magnitude_(std::uint64_t magnitude, bool negative) {
     const std::uint64_t negative_limit = std::uint64_t{1} << 63u;
-    const std::uint64_t limit = negative
-        ? negative_limit
-        : static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    const std::uint64_t limit =
+        negative ? negative_limit
+                 : static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     if (magnitude > limit)
       throw std::overflow_error("AMR clock rational arithmetic overflow");
     if (negative && magnitude == negative_limit)
@@ -106,13 +98,14 @@ struct Rational {
   }
 
   static std::int64_t checked_mul_(std::int64_t a, std::int64_t b) {
-    if (a == 0 || b == 0) return 0;
+    if (a == 0 || b == 0)
+      return 0;
     const bool negative = (a < 0) != (b < 0);
     const std::uint64_t left = magnitude_(a);
     const std::uint64_t right = magnitude_(b);
-    const std::uint64_t limit = negative
-        ? (std::uint64_t{1} << 63u)
-        : static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    const std::uint64_t limit =
+        negative ? (std::uint64_t{1} << 63u)
+                 : static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     if (left > limit / right)
       throw std::overflow_error("AMR clock rational arithmetic overflow");
     return signed_magnitude_(left * right, negative);
@@ -138,10 +131,8 @@ struct Rational {
     const std::uint64_t p01 = a0 * b1;
     const std::uint64_t p10 = a1 * b0;
     const std::uint64_t p11 = a1 * b1;
-    const std::uint64_t middle =
-        (p00 >> 32u) + (p01 & mask) + (p10 & mask);
-    return {p11 + (p01 >> 32u) + (p10 >> 32u) + (middle >> 32u),
-            (middle << 32u) | (p00 & mask)};
+    const std::uint64_t middle = (p00 >> 32u) + (p01 & mask) + (p10 & mask);
+    return {p11 + (p01 >> 32u) + (p10 >> 32u) + (middle >> 32u), (middle << 32u) | (p00 & mask)};
   }
 
   static bool less_(UInt128 a, UInt128 b) {
@@ -158,9 +149,8 @@ struct Rational {
     return {a.high - b.high - (a.low < b.low ? 1u : 0u), low};
   }
 
-  static Signed128 add_products_(std::int64_t a, std::uint64_t a_factor,
-                                 std::int64_t b, std::uint64_t b_factor,
-                                 bool subtract_b) {
+  static Signed128 add_products_(std::int64_t a, std::uint64_t a_factor, std::int64_t b,
+                                 std::uint64_t b_factor, bool subtract_b) {
     const UInt128 left = multiply_wide_(magnitude_(a), a_factor);
     const UInt128 right = multiply_wide_(magnitude_(b), b_factor);
     const bool left_negative = a < 0;
@@ -174,8 +164,7 @@ struct Rational {
   }
 
   static bool bit_(UInt128 value, int index) {
-    return index < 64 ? ((value.low >> index) & 1u) != 0
-                      : ((value.high >> (index - 64)) & 1u) != 0;
+    return index < 64 ? ((value.low >> index) & 1u) != 0 : ((value.high >> (index - 64)) & 1u) != 0;
   }
 
   static void set_bit_(UInt128& value, int index) {
@@ -189,7 +178,8 @@ struct Rational {
     std::uint64_t remainder = 0;
     for (int index = 127; index >= 0; --index) {
       remainder = remainder * 2u + (bit_(value, index) ? 1u : 0u);
-      if (remainder >= divisor) remainder -= divisor;
+      if (remainder >= divisor)
+        remainder -= divisor;
     }
     return remainder;
   }
@@ -199,7 +189,8 @@ struct Rational {
     std::uint64_t remainder = 0;
     for (int index = 127; index >= 0; --index) {
       remainder = remainder * 2u + (bit_(value, index) ? 1u : 0u);
-      if (remainder < divisor) continue;
+      if (remainder < divisor)
+        continue;
       remainder -= divisor;
       set_bit_(quotient, index);
     }
@@ -207,12 +198,11 @@ struct Rational {
   }
 
   static Rational add_(Rational a, Rational b, bool subtract) {
-    const std::uint64_t common = std::gcd(
-        static_cast<std::uint64_t>(a.denominator),
-        static_cast<std::uint64_t>(b.denominator));
-    const Signed128 numerator = add_products_(
-        a.numerator, static_cast<std::uint64_t>(b.denominator) / common,
-        b.numerator, static_cast<std::uint64_t>(a.denominator) / common, subtract);
+    const std::uint64_t common = std::gcd(static_cast<std::uint64_t>(a.denominator),
+                                          static_cast<std::uint64_t>(b.denominator));
+    const Signed128 numerator =
+        add_products_(a.numerator, static_cast<std::uint64_t>(b.denominator) / common, b.numerator,
+                      static_cast<std::uint64_t>(a.denominator) / common, subtract);
     // Any factor common to the numerator and the shared denominator can be removed before forming
     // the least-common denominator, avoiding a spurious denominator overflow.
     const std::uint64_t reduction = std::gcd(remainder_(numerator.magnitude, common), common);
@@ -225,8 +215,8 @@ struct Rational {
 
   // Exact overflow-free comparison of two non-negative rationals.  Continued-fraction quotients
   // replace the unsafe cross products; taking a reciprocal reverses the ordering at each iteration.
-  static bool positive_less_(std::uint64_t an, std::uint64_t ad,
-                             std::uint64_t bn, std::uint64_t bd) {
+  static bool positive_less_(std::uint64_t an, std::uint64_t ad, std::uint64_t bn,
+                             std::uint64_t bd) {
     bool reversed = false;
     for (;;) {
       const std::uint64_t aq = an / ad;
@@ -295,8 +285,7 @@ class ParentChildClockRelation {
         child_level_(child_level),
         ratio_(temporal_ratio),
         remainder_policy_(remainder_policy) {
-    if (parent_level < 0 || child_level != parent_level + 1 ||
-        temporal_ratio < Rational(1, 1))
+    if (parent_level < 0 || child_level != parent_level + 1 || temporal_ratio < Rational(1, 1))
       throw std::invalid_argument("invalid AMR parent/child clock relation");
   }
 
@@ -358,10 +347,10 @@ struct HistoryIdentity {
   ClockStamp clock;
 
   friend bool operator<(const HistoryIdentity& a, const HistoryIdentity& b) {
-    return std::tie(a.owner, a.state, a.space, a.level, a.clock.macro_step,
-                    a.clock.phase.numerator, a.clock.phase.denominator) <
-           std::tie(b.owner, b.state, b.space, b.level, b.clock.macro_step,
-                    b.clock.phase.numerator, b.clock.phase.denominator);
+    return std::tie(a.owner, a.state, a.space, a.level, a.clock.macro_step, a.clock.phase.numerator,
+                    a.clock.phase.denominator) <
+           std::tie(b.owner, b.state, b.space, b.level, b.clock.macro_step, b.clock.phase.numerator,
+                    b.clock.phase.denominator);
   }
 };
 

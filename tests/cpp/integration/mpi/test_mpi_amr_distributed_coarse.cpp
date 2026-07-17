@@ -29,11 +29,13 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>         // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>          // Euler
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
+#include <pops/physics/fluids/euler.hpp>   // Euler
+#include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/world_communicator.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -46,6 +48,41 @@
 
 using namespace pops;
 using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
+
+static bool bootstrap_volume_average_replicates_parent() {
+  const Box2D coarse_domain = Box2D::from_extents(4, 4);
+  const Box2D fine_domain = coarse_domain.refine(2);
+  const BoxArray coarse_boxes({coarse_domain});
+  const BoxArray fine_boxes({fine_domain});
+
+  // The bootstrap level-zero contract is one parent copy per rank.  Its rank-local mapping is
+  // intentionally different on every rank, whereas the child mapping is globally identical.
+  MultiFab coarse(coarse_boxes, DistributionMapping({my_rank()}), 1, 0);
+  MultiFab fine(fine_boxes, DistributionMapping(fine_boxes.size(), n_ranks()), 1, 0);
+  coarse.set_val(Real(-1));
+  fine.set_val(Real(7));
+
+  const auto restriction = runtime::amr::prepare_volume_average();
+  restriction.spatial(fine, coarse,
+                      runtime::amr::SpatialTransferContext{
+                          0, 1, 1,
+                          runtime::amr::IndexTransform{{coarse_domain.lo[0], coarse_domain.lo[1]},
+                                                       {fine_domain.lo[0], fine_domain.lo[1]},
+                                                       {2, 2}},
+                          true});
+
+  double local_error = 0.0;
+  if (coarse.local_size() != 1) {
+    local_error = std::numeric_limits<double>::infinity();
+  } else {
+    const auto values = coarse.fab(0).const_array();
+    for (int j = coarse_domain.lo[1]; j <= coarse_domain.hi[1]; ++j)
+      for (int i = coarse_domain.lo[0]; i <= coarse_domain.hi[0]; ++i)
+        local_error =
+            std::fmax(local_error, std::fabs(static_cast<double>(values(i, j, 0) - Real(7))));
+  }
+  return all_reduce_max(local_error) == 0.0;
+}
 
 static std::vector<double> four_bubbles(int n) {
   std::vector<double> rho(static_cast<std::size_t>(n) * n);
@@ -69,11 +106,60 @@ static std::vector<double> four_bubbles(int n) {
 struct Result {
   std::vector<double> dens;
   std::vector<double> state;
+  std::vector<OutputPiece> output_local_pieces;
+  std::vector<OutputPiece> output_root_pieces;
   std::vector<double> phi;
   std::vector<double> phi_global;
   double mass, m0;
   int npf;
 };
+
+struct OutputPieceCheck {
+  long failures = 0;
+  long cells = 0;
+  double value_error = 0.0;
+};
+
+static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece>& pieces,
+                                            const std::vector<double>& global, int n,
+                                            bool replicated, bool require_local_owner = true) {
+  OutputPieceCheck check;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  if (cells == 0 || global.size() % cells != 0) {
+    check.failures = 1;
+    return check;
+  }
+  const int ncomp = static_cast<int>(global.size() / cells);
+  for (const OutputPiece& piece : pieces) {
+    const int nx = piece.box.ihi - piece.box.ilo + 1;
+    const int ny = piece.box.jhi - piece.box.jlo + 1;
+    check.failures += piece.box.level != 0;
+    check.failures += piece.box.ilo < 0 || piece.box.jlo < 0 || piece.box.ihi >= n ||
+                      piece.box.jhi >= n || nx < 1 || ny < 1;
+    check.failures += piece.global_box_index < 0;
+    check.failures += require_local_owner ? piece.owner_rank != my_rank()
+                                          : (piece.owner_rank < 0 || piece.owner_rank >= n_ranks());
+    check.failures += piece.replicated != replicated;
+    check.failures += piece.ncomp != ncomp;
+    const std::size_t expected_size = static_cast<std::size_t>(ncomp) * ny * nx;
+    check.failures += piece.values.size() != expected_size;
+    if (piece.values.size() != expected_size)
+      continue;
+    check.cells += static_cast<long>(nx) * ny;
+    for (int component = 0; component < ncomp; ++component)
+      for (int j = piece.box.jlo; j <= piece.box.jhi; ++j)
+        for (int i = piece.box.ilo; i <= piece.box.ihi; ++i) {
+          const std::size_t local = static_cast<std::size_t>(component) * ny * nx +
+                                    static_cast<std::size_t>(j - piece.box.jlo) * nx +
+                                    static_cast<std::size_t>(i - piece.box.ilo);
+          const std::size_t full =
+              static_cast<std::size_t>(component) * cells + static_cast<std::size_t>(j) * n + i;
+          check.value_error =
+              std::fmax(check.value_error, std::fabs(piece.values[local] - global[full]));
+        }
+  }
+  return check;
+}
 
 static double max_abs_difference(const std::vector<double>& a, const std::vector<double>& b) {
   if (a.size() != b.size())
@@ -123,6 +209,8 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   // checkpoint accessors below. They are the oracle for the replicated-vs-distributed ownership
   // contract of level_{state,potential}_global(0).
   R.state = sys.level_state_global(0);
+  R.output_local_pieces = sys.output_state_local_pieces("gas", 0);
+  R.output_root_pieces = sys.output_state_root_pieces(WorldCommunicator::world(), "gas", 0);
   R.phi = sys.potential();
   R.phi_global = sys.level_potential_global(0);
   R.mass = sys.mass();
@@ -143,6 +231,7 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   const int nsteps = 16;
   const double dt = 1e-3;
 
+  const bool bootstrap_restriction_ok = bootstrap_volume_average_replicates_parent();
   const Result rep = run(n, nsteps, dt, /*distribute=*/false);  // oracle : grossier replique
   const Result dis = run(n, nsteps, dt, /*distribute=*/true);   // mode scalable : grossier reparti
 
@@ -174,9 +263,37 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   // exposes the same physical global field rather than a rank-local fragment.
   const double state_mode_dmax = max_abs_difference(rep.state, dis.state);
   const double phi_mode_dmax = max_abs_difference(rep.phi_global, dis.phi_global);
+  const OutputPieceCheck rep_output =
+      check_output_pieces(rep.output_local_pieces, rep.state, n, true);
+  const OutputPieceCheck dis_output =
+      check_output_pieces(dis.output_local_pieces, dis.state, n, false);
+  const OutputPieceCheck rep_root_output =
+      check_output_pieces(rep.output_root_pieces, rep.state, n, true, false);
+  const OutputPieceCheck dis_root_output =
+      check_output_pieces(dis.output_root_pieces, dis.state, n, false, false);
+  const double output_piece_error =
+      all_reduce_max(std::fmax(rep_output.value_error, dis_output.value_error));
+  const long output_piece_failures = static_cast<long>(
+      std::llround(all_reduce_sum(static_cast<double>(rep_output.failures + dis_output.failures))));
+  const long distributed_output_cells =
+      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(dis_output.cells))));
+  const double replicated_cells_max = all_reduce_max(static_cast<double>(rep_output.cells));
+  const double replicated_cells_min = -all_reduce_max(-static_cast<double>(rep_output.cells));
+  const double root_output_piece_error =
+      all_reduce_max(std::fmax(rep_root_output.value_error, dis_root_output.value_error));
+  const long root_output_piece_failures = static_cast<long>(std::llround(
+      all_reduce_sum(static_cast<double>(rep_root_output.failures + dis_root_output.failures))));
+  const long replicated_root_cells =
+      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(rep_root_output.cells))));
+  const long distributed_root_cells =
+      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(dis_root_output.cells))));
 
   int fails = 0;
   if (me == 0) {
+    if (!bootstrap_restriction_ok) {
+      std::printf("FAIL volume-average bootstrap absent d'une copie grossiere repliquee\n");
+      ++fails;
+    }
     std::printf(
         "AMRDIST np=%d distribute_npf=%d replicated_npf=%d | cmax=%.17e | "
         "dist_vs_repl_dmax=%.3e | cmax_crossrank_spread=%.3e | "
@@ -197,9 +314,8 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
       ++fails;
     }
     if (!(rep_state_dmax == 0.0 && rep_phi_dmax == 0.0)) {
-      std::printf(
-          "FAIL les vues globales repliquees ont ete reduites (state=%.3e phi=%.3e)\n",
-          rep_state_dmax, rep_phi_dmax);
+      std::printf("FAIL les vues globales repliquees ont ete reduites (state=%.3e phi=%.3e)\n",
+                  rep_state_dmax, rep_phi_dmax);
       ++fails;
     }
     if (!(dis_state_dmax == 0.0 && dis_phi_dmax == 0.0)) {
@@ -207,6 +323,27 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
           "FAIL les vues globales distribuees ne reconstituent pas la reference (state=%.3e "
           "phi=%.3e)\n",
           dis_state_dmax, dis_phi_dmax);
+      ++fails;
+    }
+    if (output_piece_failures != 0 || output_piece_error != 0.0 ||
+        distributed_output_cells != static_cast<long>(n) * n ||
+        replicated_cells_min != static_cast<double>(n * n) ||
+        replicated_cells_max != static_cast<double>(n * n)) {
+      std::printf(
+          "FAIL pieces output AMR invalides (metadata=%ld value=%.3e distributed_cells=%ld "
+          "replicated_cells=[%.0f,%.0f])\n",
+          output_piece_failures, output_piece_error, distributed_output_cells, replicated_cells_min,
+          replicated_cells_max);
+      ++fails;
+    }
+    if (root_output_piece_failures != 0 || root_output_piece_error != 0.0 ||
+        replicated_root_cells != static_cast<long>(n) * n ||
+        distributed_root_cells != static_cast<long>(n) * n) {
+      std::printf(
+          "FAIL gather ROOT natif des pieces AMR (metadata=%ld value=%.3e "
+          "replicated_cells=%ld distributed_cells=%ld)\n",
+          root_output_piece_failures, root_output_piece_error, replicated_root_cells,
+          distributed_root_cells);
       ++fails;
     }
     if (!(cmax > 1e-6)) {
@@ -251,5 +388,7 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
 }
 
 TEST(test_mpi_amr_distributed_coarse, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_distributed_coarse, "test_mpi_amr_distributed_coarse"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_distributed_coarse,
+                                    "test_mpi_amr_distributed_coarse"),
+            0);
 }

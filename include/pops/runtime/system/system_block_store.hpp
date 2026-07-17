@@ -216,10 +216,10 @@ class SystemBlockStore {
   /// Install one prepared shared-interface flux between two Uniform runtime blocks.  The blocks may
   /// own distinct layouts/geometries; the scheduler proves the supported equal face discretisation
   /// before retaining the route.
-  void install_interface_flux(runtime::multiblock::AxisAlignedInterface route,
-                              const Geometry& left_geometry, const Geometry& right_geometry,
-                              const PopsExecutionContextV1& execution,
-                              runtime::multiblock::InterfaceFluxEvaluatorFactory evaluator_factory) {
+  void install_interface_flux(
+      runtime::multiblock::AxisAlignedInterface route, const Geometry& left_geometry,
+      const Geometry& right_geometry, const PopsExecutionContextV1& execution,
+      runtime::multiblock::InterfaceFluxEvaluatorFactory evaluator_factory) {
     if (route.left_block >= blocks.size() || route.right_block >= blocks.size())
       throw std::out_of_range("SystemBlockStore interface block index is out of range");
     const std::size_t left = route.left_block;
@@ -230,9 +230,8 @@ class SystemBlockStore {
         !blocks[right].rhs_flux_only_without_prepared_interfaces)
       throw std::invalid_argument(
           "SystemBlockStore interface blocks lack full/flux-only interface-omitting residuals");
-    interface_scheduler_.install(
-        std::move(route), blocks[left].U, left_geometry, blocks[right].U, right_geometry,
-        execution, std::move(evaluator_factory));
+    interface_scheduler_.install(std::move(route), blocks[left].U, left_geometry, blocks[right].U,
+                                 right_geometry, execution, std::move(evaluator_factory));
   }
 
   void install_interface_flux(runtime::multiblock::AxisAlignedInterface route,
@@ -248,10 +247,10 @@ class SystemBlockStore {
   /// Real Uniform multi-block residual executor: assemble every block RHS first, then invoke every
   /// shared interface exactly once and scatter its conservative pair contribution before any caller
   /// consumes either residual.
-  void evaluate_rhs_with_interfaces(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::vector<MultiFab*>& states, const std::vector<MultiFab*>& rhs,
-      const std::vector<int>& flux_only = {}) {
+  void evaluate_rhs_with_interfaces(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::vector<MultiFab*>& states,
+                                    const std::vector<MultiFab*>& rhs,
+                                    const std::vector<int>& flux_only = {}) {
     if (states.size() != blocks.size() || rhs.size() != blocks.size() ||
         (!flux_only.empty() && flux_only.size() != blocks.size()))
       throw std::invalid_argument("SystemBlockStore multi-block RHS vector size mismatch");
@@ -266,12 +265,10 @@ class SystemBlockStore {
         auto& closure = flux ? blocks[block].rhs_flux_only_without_prepared_interfaces
                              : blocks[block].rhs_without_prepared_interfaces;
         if (!closure)
-          throw std::runtime_error(
-              "SystemBlockStore lost its interface-omitting residual closure");
+          throw std::runtime_error("SystemBlockStore lost its interface-omitting residual closure");
         closure(point, *states[block], *rhs[block]);
       } else {
-        auto& closure = flux ? blocks[block].rhs_flux_only_at_point
-                             : blocks[block].rhs_at_point;
+        auto& closure = flux ? blocks[block].rhs_flux_only_at_point : blocks[block].rhs_at_point;
         if (!closure)
           throw std::runtime_error(
               "SystemBlockStore block lacks a point-qualified residual closure");
@@ -283,10 +280,10 @@ class SystemBlockStore {
 
   /// Core-only twin for implicit linearization: ghost/volume/source/shared-interface terms are
   /// assembled exactly as above, while additive FieldBoundary residuals stay in their own closure.
-  void evaluate_rhs_core_with_interfaces(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::vector<MultiFab*>& states, const std::vector<MultiFab*>& rhs,
-      const std::vector<int>& flux_only = {}) {
+  void evaluate_rhs_core_with_interfaces(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                         const std::vector<MultiFab*>& states,
+                                         const std::vector<MultiFab*>& rhs,
+                                         const std::vector<int>& flux_only = {}) {
     if (states.size() != blocks.size() || rhs.size() != blocks.size() ||
         (!flux_only.empty() && flux_only.size() != blocks.size()))
       throw std::invalid_argument("SystemBlockStore core RHS vector size mismatch");
@@ -294,10 +291,11 @@ class SystemBlockStore {
       if ((states[block] == nullptr) != (rhs[block] == nullptr))
         throw std::invalid_argument(
             "SystemBlockStore sparse core RHS has only one state/output pointer");
-      if (states[block] == nullptr) continue;
+      if (states[block] == nullptr)
+        continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
-      auto& closure = flux ? blocks[block].rhs_flux_only_core_at_point
-                           : blocks[block].rhs_core_at_point;
+      auto& closure =
+          flux ? blocks[block].rhs_flux_only_core_at_point : blocks[block].rhs_core_at_point;
       if (!closure)
         throw std::runtime_error(
             "SystemBlockStore block lacks a point-qualified core residual closure");

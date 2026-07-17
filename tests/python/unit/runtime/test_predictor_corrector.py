@@ -44,12 +44,12 @@ from pops.time import FailRun, FixedDt, Program
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
-    skip_process_test,
+    require_native_or_skip,
 )
 
 
 def _skip(msg):
-    skip_process_test("test_predictor_corrector: %s" % msg)
+    require_native_or_skip("test_predictor_corrector: %s" % msg)
 
 
 try:

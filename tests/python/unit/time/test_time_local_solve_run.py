@@ -21,6 +21,8 @@ ProgramContext + for_each_cell + the existing
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
+
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
@@ -34,8 +36,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
-    print("skip test_time_local_solve_run (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip("test_time_local_solve_run (%s)" % msg)
 
 
 try:
@@ -86,9 +87,7 @@ def lorentz_model(name="lorentz_local"):
     cs = sqrt(cs2)
     m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
     bz = m.aux("B_z")
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
+    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     return m
 
 
@@ -99,12 +98,12 @@ def lorentz_program(name="lorentz_step", model=None):
     authority = model if model is not None else lorentz_model("%s_model" % name)
     U = typed_state(P, "plasma", model=authority)
     endpoint = typed_state(P, "plasma", state_name="U", model=authority).next
-    Q = P.value(
-        "Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
+    Q = P.value("Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
     linear = authority.module.operator_handle("lorentz")
     W = P.solve(
         adctime.LocalLinear(operator=P.I - dt * P.linear_source(linear), rhs=Q),
-        solver=DenseLU(), name="W",
+        solver=DenseLU(),
+        name="W",
     ).consume(action=adctime.FailRun())
     P.commit(endpoint, W)
     return P
@@ -114,15 +113,25 @@ def lorentz_program(name="lorentz_step", model=None):
 print("== (A) typed local-linear solve codegen ==")
 m = lorentz_model()
 src = emit_cpp_program(lorentz_program(model=m), model=m)
-for frag in ("pops::for_each_cell(", "pops::detail::mat_inverse<3>(", "pops::Real M_[3][3];",
-             "pops::Real Minv_[3][3];", "auxA(i, j, 3)", "ctx.aux()"):
+for frag in (
+    "pops::for_each_cell(",
+    "pops::detail::mat_inverse<3>(",
+    "pops::Real M_[3][3];",
+    "pops::Real Minv_[3][3];",
+    "auxA(i, j, 3)",
+    "ctx.aux()",
+):
     chk(frag in src, "generated local-linear solve kernel has %r" % frag)
-chk("a_ * (B_z)" in src and "a_ * ((-B_z))" in src,
-    "the Lorentz operator M = I - dt*L reads +/- B_z off the aux")
+chk(
+    "a_ * (B_z)" in src and "a_ * ((-B_z))" in src,
+    "the Lorentz operator M = I - dt*L reads +/- B_z off the aux",
+)
 
 # Phase-4b ops are refused without the physical model (cannot read the coefficients).
-chk(raises(NotImplementedError, lambda: emit_cpp_program(lorentz_program())),
-    "local-linear solve refused without a model")
+chk(
+    raises(NotImplementedError, lambda: emit_cpp_program(lorentz_program())),
+    "local-linear solve refused without a model",
+)
 
 # The dense kernel is specialized from the manifest, with no eight-component dispatch cap.
 big = Model("too_big")
@@ -136,18 +145,26 @@ endpoint_big = typed_state(Pbig, "blk", state_name="U", model=big).next
 Qb = Pbig.value("Qb", 1.0 * Ub, at=endpoint_big.point)
 linear_big = big.module.operator_handle("L")
 Wb = Pbig.solve(
-    adctime.LocalLinear(
-        operator=Pbig.I - Pbig.dt * Pbig.linear_source(linear_big), rhs=Qb),
-    solver=DenseLU(), name="Wb",
+    adctime.LocalLinear(operator=Pbig.I - Pbig.dt * Pbig.linear_source(linear_big), rhs=Qb),
+    solver=DenseLU(),
+    name="Wb",
 ).consume(action=adctime.FailRun())
 Pbig.commit(endpoint_big, Wb)
 big_src = emit_cpp_program(Pbig, model=big)
-chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
-    "n_cons=9 emits exact manifest-sized dense storage")
+chk(
+    "pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
+    "n_cons=9 emits exact manifest-sized dense storage",
+)
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
 if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-    print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+    if fails:
+        raise AssertionError(
+            "%d pure-Python acceptance(s) failed before the native capability skip" % fails
+        )
+    require_native_or_skip(
+        "-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --"
+    )
     print("%s test_time_local_solve_run (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
 
@@ -162,9 +179,12 @@ def make_sim():
         compiled_model = lorentz_model("lorentz_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    sim.add_equation(
+        "plasma",
+        compiled_model,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
+    )
     bz = 3.0
     sim.set_magnetic_field(bz * np.ones(n * n))  # constant B_z over the grid
     x = (np.arange(n) + 0.5) / n
@@ -181,7 +201,8 @@ dt = 0.05
 try:
     program_model = lorentz_model("lorentz_prog")
     compiled = compile_drivers.compile_problem(
-        model=program_model, time=lorentz_program(model=program_model))
+        model=program_model, time=lorentz_program(model=program_model)
+    )
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

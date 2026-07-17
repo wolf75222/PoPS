@@ -113,7 +113,8 @@ TEST(GeometricMgTest, dirichlet_converges_mesh_independent_second_order) {
   EXPECT_TRUE(c64 <= 25) << "dir_converged_fast: c64=" << c64;
   EXPECT_TRUE(std::abs(c64 - c32) <= 5) << "dir_mesh_independent: c32=" << c32 << " c64=" << c64;
   EXPECT_TRUE(e64 < 5e-3) << "dir_accurate: e64=" << e64;
-  EXPECT_TRUE(e64 < e32) << "dir_second_order: e32=" << e32 << " e64=" << e64;  // erreur baisse en raffinant
+  EXPECT_TRUE(e64 < e32) << "dir_second_order: e32=" << e32
+                         << " e64=" << e64;  // erreur baisse en raffinant
 }
 
 // --- periodique : phi = sin(2 pi x) sin(2 pi y), lap phi = -8 pi^2 phi ---
@@ -250,8 +251,8 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
   const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
   const BoxArray boxes = BoxArray::from_domain(domain, n);
 
-  for (const Real invalid : {std::numeric_limits<Real>::quiet_NaN(),
-                             std::numeric_limits<Real>::infinity()}) {
+  for (const Real invalid :
+       {std::numeric_limits<Real>::quiet_NaN(), std::numeric_limits<Real>::infinity()}) {
     GeometricMG mg(geometry, boxes, BCRec{});
     mg.rhs().set_val(invalid);
     EXPECT_TRUE(std::isinf(static_cast<double>(norm_inf(mg.rhs()))));
@@ -268,20 +269,18 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
   invalid_iterate.phi().set_val(std::numeric_limits<Real>::infinity());
   EXPECT_TRUE(std::isinf(static_cast<double>(invalid_iterate.current_residual())));
   EXPECT_EQ(invalid_iterate.solve(Real(1e-8), /*max_cycles=*/4), 0);
-  EXPECT_EQ(invalid_iterate.last_solve_report().status,
-            SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(invalid_iterate.last_solve_report().status, SolveStatus::kInvalidEvaluation);
 
   GeometricMG invalid_robust(geometry, boxes, BCRec{});
   invalid_robust.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
   EXPECT_EQ(invalid_robust.solve_robust(Real(1e-8), /*max_cycles=*/4), 0);
-  EXPECT_EQ(invalid_robust.last_solve_report().status,
-            SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(invalid_robust.last_solve_report().status, SolveStatus::kInvalidEvaluation);
 }
 
 TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
   const Box2D domain = Box2D::from_extents(4, 4);
-  GeometricMG mg(Geometry{domain, 0.0, 1.0, 0.0, 1.0},
-                 BoxArray(std::vector<Box2D>{domain}), BCRec{});
+  GeometricMG mg(Geometry{domain, 0.0, 1.0, 0.0, 1.0}, BoxArray(std::vector<Box2D>{domain}),
+                 BCRec{});
   const Real nan = std::numeric_limits<Real>::quiet_NaN();
   EXPECT_THROW((void)mg.solve(nan, 4), std::invalid_argument);
   EXPECT_THROW((void)mg.solve(Real(1e-8), 0), std::invalid_argument);
@@ -296,15 +295,13 @@ TEST(GeometricMgTest, nullspace_compatibility_rejects_nonfinite_moment) {
   const DistributionMapping mapping(1, 1);
   MultiFab rhs(boxes, mapping, 1, 0);
   rhs.set_val(std::numeric_limits<Real>::quiet_NaN());
-  const FieldNullspacePlan plan =
-      constant_mean_zero_nullspace("nonfinite-test", "unit-test");
+  const FieldNullspacePlan plan = constant_mean_zero_nullspace("nonfinite-test", "unit-test");
 
   try {
     (void)require_field_nullspace_compatible(rhs, plan);
     FAIL() << "a non-finite nullspace compatibility moment must be rejected";
   } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string(error.what()).find("non-finite compatibility moment"),
-              std::string::npos)
+    EXPECT_NE(std::string(error.what()).find("non-finite compatibility moment"), std::string::npos)
         << error.what();
   }
 }

@@ -8,6 +8,7 @@
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
@@ -74,16 +75,7 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
   registry.add({
       "pops.lib.amr.transfer::volume_average",
       exact("cell", "cell", "conservative", "restriction", 1, {0}),
-      [](const TransferRouteDescriptor&) {
-        PreparedTransferKernel kernel;
-        kernel.spatial = [](const MultiFab& fine, MultiFab& coarse,
-                            const SpatialTransferContext& context) {
-          if (context.index.refinement_ratio != std::vector<int>{2, 2})
-            throw std::runtime_error("volume-average restriction ratio mismatch");
-          average_down(fine, coarse, context.index.refinement_ratio[0]);
-        };
-        return kernel;
-      }});
+      [](const TransferRouteDescriptor&) { return prepare_volume_average(); }});
   registry.add({
       "pops.lib.amr.transfer::conservative_coarse_fine",
       exact("cell", "cell", "conservative", "coarse_fine_fill", 1, {1}),
@@ -462,6 +454,10 @@ struct AmrSystem::Impl {
   // these under MPI np>1 so a mono-block checkpoint gathers the distributed fabs onto rank 0.
   std::function<std::vector<double>(int)> level_state_global_fn;
   std::function<std::vector<double>(int)> level_potential_global_fn;
+  std::function<std::vector<OutputPiece>(int)> output_state_local_pieces_fn;
+  std::function<std::vector<PatchBox>()> output_geometry_boxes_fn;
+  std::function<double(const std::string&, int, const std::vector<int>&)>
+      composite_reduce_fn;
   // --- multi-block path (AmrRuntime, shared hierarchy + summed Poisson) ---
   std::shared_ptr<pops::AmrRuntime> runtime;
   double t = 0;
@@ -747,6 +743,10 @@ struct AmrSystem::Impl {
     coarse_total_boxes_fn = std::move(h.mpi_gather.coarse_total_boxes);
     level_state_global_fn = std::move(h.mpi_gather.level_state_global);
     level_potential_global_fn = std::move(h.mpi_gather.level_potential_global);
+    // OUTPUT tier: compact native rank-local valid-cell pieces.
+    output_geometry_boxes_fn = std::move(h.output.geometry_boxes);
+    output_state_local_pieces_fn = std::move(h.output.state_local_pieces);
+    composite_reduce_fn = std::move(h.diagnostics.composite_reduce);
     built = true;
   }
 
@@ -1773,6 +1773,10 @@ void AmrSystem::set_field_potential_level(const std::string& provider_slot, int 
   if (phi.size() != expected)
     throw std::runtime_error("AmrSystem::set_field_potential_level layout size mismatch");
   MultiFab& target = p_->runtime->provider_potential_level(provider_slot, level);
+  // This is a host-side restore into a field that may have been touched by a Kokkos solve.
+  // Synchronize the host residence before exposing Array4 write handles; the next native solve
+  // will make the device residence current through its normal execution-space transition.
+  target.sync_host();
   for (int li = 0; li < target.local_size(); ++li) {
     Array4 out = target.fab(li).array();
     const Box2D valid = target.box(li);
@@ -1797,6 +1801,11 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
     throw std::out_of_range("AmrSystem::field_potential_level_global level out of range");
   const int width = p_->cfg.n << level;
   MultiFab& source = p_->runtime->provider_potential_level(provider_slot, level);
+  // The provider potential may have been produced by a Kokkos kernel.  This accessor is a
+  // host-side global snapshot (it copies into a std::vector before the MPI reduction), so make
+  // the host residence authoritative before reading any Array4 values.  The compact output-piece
+  // route performs the same synchronization in output_local_pieces().
+  source.sync_host();
   std::vector<double> result(static_cast<std::size_t>(width) * width, 0.0);
   for (int li = 0; li < source.local_size(); ++li) {
     const ConstArray4 values = source.fab(li).const_array();
@@ -1811,6 +1820,22 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
   if (level > 0 || p_->cfg.distribute_coarse)
     all_reduce_sum_inplace(result.data(), static_cast<int>(result.size()));
   return result;
+}
+
+std::vector<OutputPiece> AmrSystem::output_field_local_pieces(
+    const std::string& provider_slot, int level) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::output_field_local_pieces requires the qualified field runtime");
+  return p_->runtime->output_field_local_pieces(provider_slot, level);
+}
+
+std::vector<OutputPiece> AmrSystem::output_field_root_pieces(
+    const WorldCommunicator& world, const std::string& provider_slot, int level) {
+  return output_pieces_to_root(
+      world, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
+      [&] { return output_field_local_pieces(provider_slot, level); });
 }
 
 namespace {
@@ -3358,6 +3383,64 @@ void AmrSystem::restore_program_accepted_state(const std::vector<std::uint8_t>& 
   p_->program_accepted_state_ = state;
   ++p_->program_accepted_state_revision_;
 }
+void AmrSystem::materialize_program_restart_histories(
+    const std::vector<std::uint8_t>& bytes, const std::vector<std::string>& names,
+    const std::vector<int>& depths, const std::vector<int>& ncomps) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AMR Program restart histories require the multi-block runtime engine");
+  if (names.size() != depths.size() || names.size() != ncomps.size())
+    throw std::invalid_argument(
+        "AMR Program restart history names/depths/component counts must have equal length");
+  const auto state = runtime::program::deserialize_amr_program_accepted_state(bytes);
+  if (state.history_owners.size() != names.size())
+    throw std::runtime_error(
+        "AMR Program restart history registry differs from its accepted-state image");
+  const auto exact_registry = [&names](const auto& values) {
+    if (values.size() != names.size()) return false;
+    for (const std::string& name : names)
+      if (values.find(name) == values.end()) return false;
+    return true;
+  };
+  if (!exact_registry(state.history_owners) || !exact_registry(state.history_states) ||
+      !exact_registry(state.history_spaces) || !exact_registry(state.history_clocks) ||
+      !exact_registry(state.history_interpolations) || !exact_registry(state.ring_clocks) ||
+      !exact_registry(state.ring_identities) || !exact_registry(state.ring_flux) ||
+      !exact_registry(state.ring_flux_contributions) ||
+      !exact_registry(state.ring_flux_initialized))
+    throw std::runtime_error(
+        "AMR Program restart accepted state has an incomplete qualified history registry");
+  const std::vector<int>& block_map = p_->program_.block_map_;
+  if (block_map.empty())
+    throw std::runtime_error(
+        "AMR Program restart requires the explicit program-to-runtime block map");
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const std::string& name = names[index];
+    if (name.empty() || std::find(names.begin(), names.begin() + static_cast<std::ptrdiff_t>(index),
+                                  name) != names.begin() + static_cast<std::ptrdiff_t>(index))
+      throw std::invalid_argument("AMR Program restart history names must be unique non-empty text");
+    const int depth = depths[index];
+    const int ncomp = ncomps[index];
+    if (depth < 2 || ncomp < 1)
+      throw std::invalid_argument(
+          "AMR Program restart history depth must be >= 2 and component count >= 1");
+    const int program_owner = state.history_owners.at(name);
+    if (program_owner < 0 || program_owner >= static_cast<int>(block_map.size()))
+      throw std::runtime_error("AMR Program restart history has an invalid program block owner");
+    const int runtime_owner = block_map[static_cast<std::size_t>(program_owner)];
+    if (runtime_owner < 0 || runtime_owner >= static_cast<int>(p_->runtime->n_blocks()))
+      throw std::runtime_error("AMR Program restart history maps to an invalid runtime block");
+    if (state.ring_clocks.at(name).size() != static_cast<std::size_t>(depth) ||
+        state.ring_identities.at(name).size() != static_cast<std::size_t>(depth) ||
+        state.ring_flux.at(name).size() != static_cast<std::size_t>(depth) ||
+        state.ring_flux_contributions.at(name).size() != static_cast<std::size_t>(depth))
+      throw std::runtime_error(
+          "AMR Program restart history depth differs from its accepted-state image");
+    detail::AmrHistoryOps::register_history(
+        *p_->runtime, static_cast<std::size_t>(runtime_owner), name, depth - 1, ncomp);
+  }
+}
 std::uint64_t AmrSystem::program_accepted_state_revision() const {
   return p_->program_accepted_state_revision_;
 }
@@ -3535,82 +3618,20 @@ std::map<std::string, double> AmrSystem::program_diagnostics() const {
   return p_->program_.diagnostics_;
 }
 
-// Level-composite collective reduction over a named block (ADC-542). Multi-block / forced-runtime
-// routes to AmrRuntime::composite_reduce (native masked level sums + unmasked extrema). Single-block
-// (AmrCouplerMP coupler, no runtime) composes the SAME reduction from the coupler's native per-level
-// state accessors: it gathers each level's valid cells (the existing AMR checkpoint route) and folds
-// them with the covered-cell / extrema discipline on the host -- correct, and single-block AMR carries
-// at most a shallow hierarchy. COLLECTIVE: called on every rank.
+// Exact selected-level collective reduction over a named block (ADC-542). Both runtime-engine and
+// mono-block coupler routes fold their live MultiFabs through Kokkos; checkpoint/global-array gathers
+// are never a diagnostics compute path. COLLECTIVE: called in the same order on every rank.
 double AmrSystem::composite_reduce(const std::string& block, const std::string& kind,
-                                   int comp) const {
+                                   int comp, const std::vector<int>& levels) const {
   p_->ensure_built();
   if (p_->runtime)
-    return p_->runtime->composite_reduce(block, kind, comp);
-  // Single-block coupler path: compose from the per-level state gathers (level_state_global under
-  // np>1, else level_state). n_vars / n_levels come from the coupler closures.
-  const int nlev = p_->n_levels_fn ? p_->n_levels_fn() : 1;
-  const int nc = p_->n_vars_fn ? p_->n_vars_fn() : 1;
-  const bool gather = n_ranks() != 1;
-  const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
-  const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
-  const int c0 = full ? 0 : comp;
-  const int c1 = full ? nc : comp + 1;
-  const int n = p_->cfg.n;  // coarse cells per direction
-  const double L = p_->cfg.L;
-  const bool is_sum = (base == "sum" || base == "abs_sum" || base == "sum_sq");
-  double acc =
-      is_sum ? 0.0
-             : (base == "min" ? std::numeric_limits<double>::infinity()
-                              : (base == "max" ? -std::numeric_limits<double>::infinity() : 0.0));
-  for (int k = 0; k < nlev; ++k) {
-    const std::size_t nf = static_cast<std::size_t>(n) << k;
-    std::vector<double> st =
-        (gather && p_->level_state_global_fn)
-            ? p_->level_state_global_fn(k)
-            : (p_->level_state_fn ? p_->level_state_fn(k) : std::vector<double>());
-    if (st.empty())
-      continue;
-    // Covered cells of level k: the level-(k+1) patches coarsened by 2 (from patch_boxes()).
-    std::vector<PatchBox> covered;
-    if (k + 1 < nlev && p_->patch_boxes_fn) {
-      for (const PatchBox& fb : p_->patch_boxes_fn())
-        if (fb.level == k + 1)
-          covered.push_back(PatchBox{k, fb.ilo >> 1, fb.jlo >> 1, fb.ihi >> 1, fb.jhi >> 1});
-    }
-    const double dx = (L / static_cast<double>(n)) / static_cast<double>(1 << k);
-    const double cell = dx * dx;
-    for (std::size_t j = 0; j < nf; ++j)
-      for (std::size_t i = 0; i < nf; ++i) {
-        bool cov = false;
-        for (const PatchBox& c : covered)
-          if (static_cast<int>(i) >= c.ilo && static_cast<int>(i) <= c.ihi &&
-              static_cast<int>(j) >= c.jlo && static_cast<int>(j) <= c.jhi) {
-            cov = true;
-            break;
-          }
-        for (int c = c0; c < c1; ++c) {
-          const double v = st[static_cast<std::size_t>(c) * nf * nf + j * nf + i];
-          if (base == "min")
-            acc = std::min(acc, v);
-          else if (base == "max")
-            acc = std::max(acc, v);
-          else if (base == "abs_max")
-            acc = std::max(acc, v < 0 ? -v : v);
-          else if (!cov) {  // volume-weighted sums exclude covered coarse cells
-            if (base == "sum")
-              acc += cell * v;
-            else if (base == "abs_sum")
-              acc += cell * (v < 0 ? -v : v);
-            else if (base == "sum_sq")
-              acc += cell * v * v;
-          }
-        }
-      }
-  }
-  if (!is_sum && base != "min" && base != "max" && base != "abs_max")
-    throw std::runtime_error("AmrSystem::composite_reduce : unknown reduction kind '" + kind +
-                             "' for block '" + block + "'");
-  return acc;
+    return p_->runtime->composite_reduce(block, kind, comp, levels);
+  if (p_->blocks.size() != 1 || p_->blocks.front().name != block)
+    throw std::runtime_error("AmrSystem::composite_reduce : no block named '" + block + "'");
+  if (!p_->composite_reduce_fn)
+    throw std::runtime_error(
+        "AmrSystem::composite_reduce : native coupler did not install its reduction provider");
+  return p_->composite_reduce_fn(kind, comp, levels);
 }
 
 // Load a generated problem.so and install its compiled time Program on the AMR hierarchy. Mirrors
@@ -4219,6 +4240,35 @@ std::vector<double> AmrSystem::block_level_state_global(const std::string& name,
     throw std::runtime_error(kAmrCkptMultiOnly);
   return p_->runtime->block_level_state_global(p_->block_index_or_throw(name), k);
 }
+
+std::vector<OutputPiece> AmrSystem::output_state_local_pieces(const std::string& name, int k) {
+  p_->ensure_built();
+  const std::size_t block = p_->block_index_or_throw(name);
+  if (p_->runtime)
+    return p_->runtime->output_block_state_local_pieces(block, k);
+  if (block != 0 || !p_->output_state_local_pieces_fn)
+    throw std::runtime_error(
+        "AmrSystem::output_state_local_pieces has no installed mono-block output provider");
+  return p_->output_state_local_pieces_fn(k);
+}
+
+std::vector<PatchBox> AmrSystem::output_geometry_boxes() {
+  p_->ensure_built();
+  if (p_->runtime)
+    return p_->runtime->output_geometry_boxes();
+  if (!p_->output_geometry_boxes_fn)
+    throw std::runtime_error(
+        "AmrSystem::output_geometry_boxes has no installed mono-block output provider");
+  return p_->output_geometry_boxes_fn();
+}
+
+std::vector<OutputPiece> AmrSystem::output_state_root_pieces(
+    const WorldCommunicator& world, const std::string& name, int k) {
+  return output_pieces_to_root(
+      world, detail::output_collective_identity("AmrSystem", "state", name, k),
+      [&] { return output_state_local_pieces(name, k); });
+}
+
 void AmrSystem::set_block_level_state(const std::string& name, int k,
                                       const std::vector<double>& s) {
   p_->ensure_built();

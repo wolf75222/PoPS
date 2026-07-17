@@ -340,6 +340,54 @@ def test_cpp_ctest_selection_uses_target_labels_not_gtest_suite_names():
     assert not re.search(regex, "BrickCatalog.EntryRoundTripsAllElevenRows")
 
 
+def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
+    """Ordinary suites stay source-registered; runtime discovery is explicit and rare."""
+    cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert re.search(
+        r"gtest_add_tests\(\s*TARGET \$\{ARG_NAME\}\s+"
+        r"SOURCES \$\{ARG_SOURCES\}\s+TEST_LIST _pops_discovered_tests\)",
+        cmake,
+    )
+    assert "DISCOVERY_MODE PRE_TEST" not in cmake
+
+    # No current registration opts into the one-include-per-executable escape
+    # hatch.  A future parameterized/generated suite must make that cost and
+    # contract explicit instead of silently restoring the CTest file fanout.
+    registrations = cmake.split("function(pops_add_test name)", maxsplit=1)[1]
+    assert "RUNTIME_DISCOVERY" not in registrations
+
+    runtime_only = re.compile(
+        r"\b(?:TEST_P|TYPED_TEST|TYPED_TEST_P|INSTANTIATE_TEST_SUITE_P)\s*\("
+    )
+    test_declaration = re.compile(r"\b(?:TEST|TEST_F)\s*\(")
+    conditional_start = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
+    conditional_end = re.compile(r"^\s*#\s*endif\b")
+    offenders = []
+    conditional_offenders = []
+    for source in (REPO_ROOT / "tests/cpp").rglob("*.cpp"):
+        text = source.read_text(encoding="utf-8")
+        if runtime_only.search(text):
+            offenders.append(source.relative_to(REPO_ROOT).as_posix())
+        conditional_depth = 0
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if conditional_start.match(line):
+                conditional_depth += 1
+            elif conditional_end.match(line):
+                conditional_depth -= 1
+            elif conditional_depth and test_declaration.search(line):
+                conditional_offenders.append(
+                    f"{source.relative_to(REPO_ROOT).as_posix()}:{line_number}"
+                )
+    assert not offenders, (
+        "parameterized GoogleTests require an explicit RUNTIME_DISCOVERY suite: "
+        + ", ".join(offenders)
+    )
+    assert not conditional_offenders, (
+        "conditionally compiled GoogleTests require explicit RUNTIME_DISCOVERY: "
+        + ", ".join(conditional_offenders)
+    )
+
+
 def test_full_cpp_plan_six_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)

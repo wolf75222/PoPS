@@ -35,7 +35,7 @@ namespace pops {
 struct Euler {
   using State = StateVec<4>;        ///< conservative variables (rho, rho u, rho v, E)
   using Prim = StateVec<4>;         ///< primitive variables (rho, u, v, p)
-  using Aux = pops::Aux;             ///< auxiliary fields (unused in pure Euler)
+  using Aux = pops::Aux;            ///< auxiliary fields (unused in pure Euler)
   static constexpr int n_vars = 4;  ///< number of conserved variables
 
   Real gamma = kPhysicalDefaultGamma;  ///< adiabatic index of the ideal gas

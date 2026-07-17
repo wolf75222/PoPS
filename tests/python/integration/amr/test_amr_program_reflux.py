@@ -24,6 +24,8 @@ a built _pops / a compiler. Pytest + __main__ guard (CI runs python3 <file>).
 import sys
 from fractions import Fraction
 
+from tests.python.support.requirements import require_native_or_skip
+
 # ADC-627: this file AOT-compiles Program/.so artifacts; give the process-isolated runner headroom.
 POPS_PROCESS_TIMEOUT = 1200
 
@@ -44,8 +46,7 @@ try:
         scalar_advection_field_model,
     )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
-    print("skip test_amr_program_reflux (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip("test_amr_program_reflux imports unavailable: %s" % exc)
 
 N = 16
 NSTEPS = 6
@@ -119,7 +120,9 @@ def _run(program_fn, tag, refine_thr=1.2, regrid_every=2, u0=None, nsteps=NSTEPS
         u0 = _blob(amp=0.5)
     amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
     if not hasattr(amr, "install_program"):
-        return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)", None
+        require_native_or_skip(
+            "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
+        )
     try:
         model = _euler_model("rfx_blk_%s" % tag)
         plan = program_fn(model, "rfx_prog_%s" % tag)
@@ -132,7 +135,7 @@ def _run(program_fn, tag, refine_thr=1.2, regrid_every=2, u0=None, nsteps=NSTEPS
         )
         block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
-        return None, "compile: %s" % str(exc)[:180], None
+        require_native_or_skip("compile: %s" % str(exc)[:180])
     try:
         amr.add_equation("blk", block_cm,
                          spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
@@ -141,7 +144,7 @@ def _run(program_fn, tag, refine_thr=1.2, regrid_every=2, u0=None, nsteps=NSTEPS
         amr.set_density("blk", u0)
         amr.install_program(compiled.so_path)
     except RuntimeError as exc:
-        return None, "install: %s" % str(exc)[:240], None
+        require_native_or_skip("install: %s" % str(exc)[:240])
     m0 = float(amr.mass("blk"))
     for _ in range(nsteps):
         amr.step(DT)
@@ -153,9 +156,7 @@ def test_multilevel_ssprk2_conserves_to_roundoff():
     real regrid -- the conservative reflux at the C/F interface, matching the native path."""
     print("== multilevel SSPRK2 Program: mass conserved to 1e-8 across a real regrid ==")
     m0, mf, rho = _run(_ssprk2_program, "ss")
-    if m0 is None:
-        print("skip (%s)" % mf)
-        return
+    assert m0 is not None, mf
     chk(np.all(np.isfinite(rho)) and float(rho.min()) > 0.0,
         "the 2-level state stays finite and strictly positive (min = %.4f)" % float(rho.min()))
     chk(abs(mf - m0) < 1e-8,
@@ -167,18 +168,14 @@ def test_multilevel_midpoint_conserves_and_differs():
     Program's actual stage weights, not a hard-coded RK), and its trajectory DIFFERS from SSPRK2."""
     print("== multilevel midpoint Program: Feff=F1 conserved to 1e-8, differs from SSPRK2 ==")
     m0, mf, mid_rho = _run(_midpoint_program, "mid")
-    if m0 is None:
-        print("skip (%s)" % mf)
-        return
+    assert m0 is not None, mf
     chk(np.all(np.isfinite(mid_rho)),
         "the midpoint 2-level state stays finite")
     chk(abs(mf - m0) < 1e-8,
         "the midpoint effective flux (Feff = F1) conserves the mass to round-off (|m-m0| = %.3e)"
         % abs(mf - m0))
     ss0, ssf, ss_rho = _run(_ssprk2_program, "mid_ss")
-    if ss0 is None:
-        print("skip ssprk2 leg (%s)" % ssf)
-        return
+    assert ss0 is not None, ssf
     diff = float(np.abs(mid_rho - ss_rho).max())
     chk(diff > 1e-12,
         "the midpoint scheme DIFFERS from SSPRK2 through the same reflux seam (max|diff| = %.3e)" % diff)

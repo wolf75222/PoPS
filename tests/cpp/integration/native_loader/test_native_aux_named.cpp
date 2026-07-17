@@ -28,41 +28,49 @@ std::string package_source() {
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 
-struct NamedAuxModel {
-  using State = pops::StateVec<1>;
-  using Prim = pops::StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-  static constexpr int n_aux = pops::kAuxNamedBase + 1;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(0); }
-  POPS_HD State source(const State& u, const Aux& aux) const {
-    return State{aux.extra_field(0) * u[0]};
-  }
-  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-  POPS_HD Prim to_primitive(const State& u) const { return u; }
-  POPS_HD State to_conservative(const Prim& p) const { return p; }
-  static pops::VariableSet conservative_vars() {
-    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
-  }
-  static pops::VariableSet primitive_vars() {
-    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Custom}};
-  }
-};
+    struct NamedAuxModel {
+      using State = pops::StateVec<1>;
+      using Prim = pops::StateVec<1>;
+      using Aux = pops::Aux;
+      static constexpr int n_vars = 1;
+      static constexpr int n_aux = pops::kAuxNamedBase + 1;
+      POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
+      POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(0); }
+      POPS_HD State source(const State& u, const Aux& aux) const {
+        return State{aux.extra_field(0) * u[0]};
+      }
+      POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+      POPS_HD Prim to_primitive(const State& u) const { return u; }
+      POPS_HD State to_conservative(const Prim& p) const { return p; }
+      static pops::VariableSet conservative_vars() {
+        return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
+      }
+      static pops::VariableSet primitive_vars() {
+        return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Custom}};
+      }
+    };
 
-extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
-extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
-extern "C" int pops_compiled_nparams() { return 0; }
-extern "C" const char* pops_compiled_param_names() { return ""; }
-extern "C" void pops_install_native(void* raw, const char* name, const char* limiter,
-                                    const char* riemann, const char* recon, const char* time,
-                                    double gamma, int substeps, int evolve, int stride,
-                                    const double*, int, double pos_floor) {
-  auto* system = reinterpret_cast<pops::System*>(raw);
-  pops::add_compiled_model(*system, name, NamedAuxModel{}, limiter, riemann, recon, time,
-                           gamma, substeps, evolve != 0, stride, pos_floor);
-}
-)CPP";
+    extern "C" const char* pops_native_abi_key() {
+      return POPS_ABI_KEY_LITERAL;
+    }
+    extern "C" const char* pops_compiled_route_manifest() {
+      return pops::kRouteRegistrySignature;
+    }
+    extern "C" int pops_compiled_nparams() {
+      return 0;
+    }
+    extern "C" const char* pops_compiled_param_names() {
+      return "";
+    }
+    extern "C" void pops_install_native(void* raw, const char* name, const char* limiter,
+                                        const char* riemann, const char* recon, const char* time,
+                                        double gamma, int substeps, int evolve, int stride,
+                                        const double*, int, double pos_floor) {
+      auto* system = reinterpret_cast<pops::System*>(raw);
+      pops::add_compiled_model(*system, name, NamedAuxModel{}, limiter, riemann, recon, time, gamma,
+                               substeps, evolve != 0, stride, pos_floor);
+    }
+  )CPP";
 }
 
 bool compile_package(const std::string& source, const std::string& library) {
@@ -71,8 +79,8 @@ bool compile_package(const std::string& source, const std::string& library) {
 #else
   const std::string compiler = POPS_TEST_CXX;
 #endif
-  std::string command = compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD +
-                        " -O2 -I " + POPS_TEST_INCLUDE + " " + source + " -o " + library;
+  std::string command = compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                        POPS_TEST_INCLUDE + " " + source + " -o " + library;
 #if defined(__APPLE__)
   command += " -undefined dynamic_lookup";
 #endif

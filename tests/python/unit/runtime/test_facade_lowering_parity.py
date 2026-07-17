@@ -14,15 +14,14 @@ IR a bare declarator does not), so the hash is not expected equal; the structura
 
 Pure Python (no numerics beyond IR construction); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
     from pops._ir.expr import Const
     from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_facade_lowering_parity (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_facade_lowering_parity (pops unavailable: %s)' % exc)
 
 
 def _facade_model():

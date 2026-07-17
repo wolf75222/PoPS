@@ -128,14 +128,23 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
 
   int fails = 0;
   // REQUIRED symbols: install_program hard-fails without these.
-  const char* required[] = {
-      "pops_program_abi_key", "pops_program_route_manifest", "pops_install_program",
-      "pops_program_block_count", "pops_program_block_name", "pops_module_operator_count",
-      "pops_module_state_space_count", "pops_module_field_space_count",
-      "pops_module_operator_owner", "pops_module_operator_name", "pops_module_operator_kind",
-      "pops_module_operator_signature", "pops_module_operator_requirements",
-      "pops_module_state_space_name", "pops_module_state_space_owner",
-      "pops_module_field_space_name", "pops_module_field_space_owner"};
+  const char* required[] = {"pops_program_abi_key",
+                            "pops_program_route_manifest",
+                            "pops_install_program",
+                            "pops_program_block_count",
+                            "pops_program_block_name",
+                            "pops_module_operator_count",
+                            "pops_module_state_space_count",
+                            "pops_module_field_space_count",
+                            "pops_module_operator_owner",
+                            "pops_module_operator_name",
+                            "pops_module_operator_kind",
+                            "pops_module_operator_signature",
+                            "pops_module_operator_requirements",
+                            "pops_module_state_space_name",
+                            "pops_module_state_space_owner",
+                            "pops_module_field_space_name",
+                            "pops_module_field_space_owner"};
   for (const char* name : required) {
     if (!pops::dynlib::sym(h, name)) {
       std::printf("FAIL required ABI symbol '%s' absent from the stub .so\n", name);

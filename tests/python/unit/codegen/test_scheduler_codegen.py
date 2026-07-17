@@ -6,7 +6,7 @@ Every schedule kind/policy now LOWERS to C++ (`Program._emit_schedule_wrap`), ge
 per policy/kind on both a field-solve node (output = the System aux) and a scratch node (output = a
 named MultiFab):
 
-  - `every(N)`   -> `if (ctx.schedule_is_due(id, N, exact_domain)) { ... }`
+  - `every(N)`   -> one authenticated `schedule_decision(id, schedule_is_due(...), cache_backed)`
   - `on_start()` -> `if (ctx.schedule_at_start(exact_domain)) { ... }`
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
   - `ClockTick` / `AMRLevel` -> qualified logical-clock / hierarchy-level runtime domains
@@ -117,6 +117,8 @@ def test_unscheduled_has_no_guard():
 def test_every_due_test_carries_period():
     cpp = _emit_field(lambda clock: _every(clock, 7, adctime.Hold()))
     assert "ctx.schedule_is_due(17, 7," in cpp
+    assert "ctx.schedule_decision(17, ctx.schedule_is_due(17, 7," in cpp
+    assert ", true))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
@@ -124,6 +126,8 @@ def test_every_due_test_carries_period():
 def test_on_start_lowers_to_domain_start():
     cpp = _emit_field(lambda clock: _at_start(clock, adctime.Hold()))
     assert "ctx.schedule_at_start(" in cpp
+    assert "ctx.schedule_decision(17, ctx.schedule_at_start(" in cpp
+    assert ", true))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
@@ -206,7 +210,7 @@ def test_amr_level_domain_requires_amr_target_and_lowers_there():
         raise AssertionError("AMRLevel must refuse the uniform System target")
     cpp = emit_cpp_program(program, model=None, target="amr_system")
     assert "ScheduleDomainKind::kAmrLevel" in cpp
-    assert ", 1))" in cpp
+    assert ", 1), false))" in cpp
 
 
 def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
@@ -257,12 +261,14 @@ def test_amr_flux_weight_is_proved_before_artifact_creation():
 # --- policies on a FIELD-SOLVE node (output = aux) --------------------------
 def test_field_hold_stores_and_restores_aux():
     cpp = _emit_field(lambda clock: _every(clock, 10, adctime.Hold()))
+    assert "ctx.schedule_decision(17," in cpp and ", true))" in cpp
     assert "ctx.cache_store_aux(" in cpp
     assert "ctx.cache_restore_aux(" in cpp
 
 
 def test_field_zero_emits_aux_set_val_else():
     cpp = _emit_field(lambda clock: _every(clock, 4, adctime.Zero()))
+    assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
     assert "} else {" in cpp
     assert "ctx.aux().set_val(static_cast<pops::Real>(0));" in cpp
 
@@ -276,6 +282,7 @@ def test_field_accumulate_dt_reads_effective_dt():
 
 def test_field_skip_runs_only_when_due():
     cpp = _emit_field(lambda clock: _every(clock, 5, adctime.Skip()))
+    assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
     assert "skip: stale aux off-cadence" in cpp
     assert "ctx.cache_restore_aux" not in cpp   # skip does not cache (stale, no restore)
     assert "} else {" not in cpp.split("skip: stale aux off-cadence")[1].split("\n", 1)[0]
@@ -289,7 +296,8 @@ def test_field_error_emits_scheduler_error_else():
 
 def test_field_recompute_runs_only_when_due():
     cpp = _emit_field(lambda clock: _every(clock, 2))
-    assert "if (ctx.schedule_is_due(" in cpp
+    assert "if (ctx.schedule_decision(17, ctx.schedule_is_due(" in cpp
+    assert ", false))" in cpp
     assert "cache_store_aux" not in cpp  # recompute does not cache
     assert "cache_restore_aux" not in cpp
 
@@ -303,7 +311,7 @@ def test_scratch_hold_caches_named_scratch():
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
     decl_idx = cpp.index("pops::MultiFab r")
-    guard_idx = cpp.index("if (ctx.schedule_is_due(")
+    guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 
 
@@ -325,7 +333,7 @@ def test_scratch_decl_hoisted_for_skip():
     # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
     cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
     decl_idx = cpp.index("pops::MultiFab r")
-    guard_idx = cpp.index("if (ctx.schedule_is_due(")
+    guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 
 

@@ -50,6 +50,10 @@ class _CheckEmitter:
     def check(self) -> None:
         return None
 
+    def __pops_native_loader_source__(
+            self, *, name=None, target="system", hoist_reciprocals=False):
+        return "// test native loader\n"
+
 
 def test_third_party_provider_enters_resolution_and_lowering_through_public_protocol():
     provider = _ThirdPartyProvider(_facade_model())
@@ -114,12 +118,27 @@ class _WrongSourceModule:
         return CompilerLowering(emit_model=_CheckEmitter(), source_module=object(), facade=self)
 
 
+class _MissingNativeSource:
+    def check(self):
+        return None
+
+
+class _WrongNativeSourceProvider:
+    def __pops_compiler_lowering__(self) -> CompilerLowering:
+        return CompilerLowering(
+            emit_model=_MissingNativeSource(),
+            source_module=Module("missing-native-source"),
+            facade=self,
+        )
+
+
 @pytest.mark.parametrize(
     ("provider", "message"),
     [
         (_MissingProtocol(), "does not implement the CompilerLowerable protocol"),
         (_WrongReturn(), "must return an exact CompilerLowering"),
         (_WrongEmitter(), "emit_model must implement check"),
+        (_WrongNativeSourceProvider(), "must implement __pops_native_loader_source__"),
         (_WrongSourceModule(), "source_module must be a pops.model.Module"),
     ],
 )

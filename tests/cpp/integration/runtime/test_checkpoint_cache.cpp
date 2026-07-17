@@ -50,7 +50,8 @@ struct SerializedSlot {
   int last_update_step = -1;
   double accumulated_dt = 0.0;
   int ncomp = 0;
-  int ngrow = 1;  // the cached value's ghost width (1 = aux; 2 = a held scratch); restore rebuilds with it
+  int ngrow =
+      1;  // the cached value's ghost width (1 = aux; 2 = a held scratch); restore rebuilds with it
   MultiFab value = make_mf(0.0);  // stands in for the gathered global buffer
 };
 
@@ -65,7 +66,8 @@ std::vector<SerializedSlot> serialize(const CacheManager& c) {
     s.accumulated_dt = static_cast<double>(c.accumulated_dt_of(id));
     s.ncomp = c.ncomp_of(id);
     s.ngrow = c.ngrow_of(id);  // serialized so restore rebuilds with the same ghost width
-    s.value = c.value_of(id);  // a real checkpoint gathers this to a global buffer; here a deep copy
+    s.value =
+        c.value_of(id);  // a real checkpoint gathers this to a global buffer; here a deep copy
     out.push_back(std::move(s));
   }
   return out;
@@ -75,8 +77,8 @@ std::vector<SerializedSlot> serialize(const CacheManager& c) {
 // -> CacheManager::restore_slot).
 void deserialize(CacheManager& c, const std::vector<SerializedSlot>& slots) {
   for (const SerializedSlot& s : slots) {
-    c.restore_slot(s.node_id, s.value, s.last_update_step,
-                   static_cast<Real>(s.accumulated_dt), s.name);
+    c.restore_slot(s.node_id, s.value, s.last_update_step, static_cast<Real>(s.accumulated_dt),
+                   s.name);
   }
 }
 

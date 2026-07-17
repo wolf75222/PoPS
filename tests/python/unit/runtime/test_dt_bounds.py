@@ -32,14 +32,13 @@ import pops.runtime._engine_descriptors as engine
 from pops.physics._facade import Model
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
-
-fails = 0
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 INCLUDE = repo_include()
+fails = 0
 
 
 def chk(cond, label):
@@ -149,7 +148,7 @@ if missing:
     if fails:
         print(f"FAIL test_dt_bounds : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(B) test_dt_bounds : {missing}")
+    require_native_or_skip(f"(B) test_dt_bounds : {missing}")
 
 
 def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):
@@ -220,8 +219,11 @@ try:
     try:
         bad = Model("freq_sans_source")
         (r2,) = bad.conservative_vars("rho", roles=["Density"])
-        bad.flux(x=[1.0 * r2], y=[0.0 * r2]); bad.eigenvalues(x=[1.0 + 0.0 * r2], y=[0.0 * r2])
-        bad.primitive_vars(r2); bad.conservative_from([r2]); bad.elliptic_rhs(0.0 * r2)
+        bad.flux(x=[1.0 * r2], y=[0.0 * r2])
+        bad.eigenvalues(x=[1.0 + 0.0 * r2], y=[0.0 * r2])
+        bad.primitive_vars(r2)
+        bad.conservative_from([r2])
+        bad.elliptic_rhs(0.0 * r2)
         bad.source_frequency(10.0 + 0.0 * r2)
         bad.check()
         chk(False, "source_frequency sans source aurait du lever")

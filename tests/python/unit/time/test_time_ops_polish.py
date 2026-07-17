@@ -22,6 +22,7 @@ validation errors #18/#19.
     failures propagate.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from pathlib import Path
 
@@ -38,11 +39,9 @@ from typed_program_support import typed_state
 from pops.numerics.terms import DefaultSource, Flux
 from pops.math import ddt, div, sqrt
 from pops.time import FixedDt
-import sys
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
-    skip_process_test,
 )
 
 
@@ -53,8 +52,7 @@ def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_ops_polish (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_ops_polish (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -404,11 +402,11 @@ def _run_section_b(t):
     try:
         import numpy as np
     except ImportError as exc:
-        skip_process_test("test_time_ops_polish native section: numpy unavailable: %s" % exc)
+        require_native_or_skip("test_time_ops_polish native section: numpy unavailable: %s" % exc)
 
     missing_native = missing_native_compile_requirement(ROOT / "include", default_cxx())
     if missing_native:
-        skip_process_test("test_time_ops_polish native section: %s" % missing_native)
+        require_native_or_skip("test_time_ops_polish native section: %s" % missing_native)
 
     n = 8
     dt = 0.01
@@ -560,7 +558,7 @@ def test_restart_missing_history_fails_loud(t):
         import numpy as np
 
     except Exception as exc:  # noqa: BLE001
-        print("-- (C.1) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (C.1) skipped: pops/numpy unavailable: %s --' % exc)
         return
     import os
     import tempfile
@@ -598,7 +596,7 @@ def _run_section_c2(t):
     try:
         pass
     except Exception as exc:  # noqa: BLE001
-        print("-- (C.2) skipped: pops unavailable: %s --" % exc)
+        require_native_or_skip('-- (C.2) skipped: pops unavailable: %s --' % exc)
         return None
 
     from pops.runtime._system import System  # validation-only bad-ABI install seam
@@ -606,7 +604,7 @@ def _run_section_c2(t):
     n = 4
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (C.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (C.2) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
     import os
     import tempfile
@@ -628,7 +626,7 @@ def _run_section_c2(t):
         rc = os.system("%s -shared -fPIC -std=c++17 -undefined dynamic_lookup -o %s %s 2>/dev/null"
                        % (cxx, so, cpp))
         if rc != 0 or not os.path.exists(so):
-            print("-- (C.2) skipped: could not compile the bad-ABI .so (no toolchain) --")
+            require_native_or_skip('-- (C.2) skipped: could not compile the bad-ABI .so (no toolchain) --')
             return None
         try:
             sim.install_program(so)

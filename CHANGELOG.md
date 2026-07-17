@@ -1949,7 +1949,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `AmrSystem(distribute_coarse=True)` replicated the whole coarse transport on all ranks (no MPI
   strong-scaling). `dsl.py` now re-bakes `-DPOPS_HAS_MPI` plus the module's MPI include dir (exposed as
   `_pops.__has_mpi__` / `__mpi_include__`), leaving the MPI symbols undefined to resolve at load against
-  the libmpi already loaded by `_pops`/mpi4py (no second libmpi linked, like the Kokkos runtime). The
+  the libmpi already loaded by `_pops` (no second libmpi linked, like the Kokkos runtime). The
   MPI seam enters the loader cache key (`mpi=on|off`). Measured on ROMEO (hyqmom15 diocotron, N=256,
   cmg=64, 16 boxes): per-rank coarse box count drops from 16 to 4 at np=4 (the base now distributes),
   and ms/step falls from a flat 2554 to 1962. Serial builds are unaffected (no flag, bit-identical).

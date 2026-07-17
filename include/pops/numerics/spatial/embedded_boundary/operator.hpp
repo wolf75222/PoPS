@@ -362,14 +362,12 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
     Array4 fx = Fx.fab(li).array();
     Array4 fy = Fy.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(xface_box(v),
-                  detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
-                      face_open_eps});
-    for_each_cell(yface_box(v),
-                  detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
-                      face_open_eps});
+    for_each_cell(xface_box(v), detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
+                                    model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim,
+                                    pos_floor, pos_comp, face_open_eps});
+    for_each_cell(yface_box(v), detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
+                                    model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim,
+                                    pos_floor, pos_comp, face_open_eps});
   }
   // PASS 2: EB divergence / kappa_eff + source; inactive cell -> residual 0.
   for (int li = 0; li < U.local_size(); ++li) {

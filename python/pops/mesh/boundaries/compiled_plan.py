@@ -76,17 +76,12 @@ class CompiledBoundaryPlan:
             raise TypeError("compiled boundary binding requires resolved BindSchema values")
         values_by_qid = {}
         handles_by_qid = {}
-        local_counts: dict[str, int] = {}
         for handle, value in params.items():
             if not isinstance(handle, ParamHandle) or not handle.is_resolved:
                 raise TypeError("compiled boundary parameters require canonical ParamHandle keys")
             values_by_qid[handle.qualified_id] = value
             handles_by_qid[handle.qualified_id] = handle
-            local_counts[handle.local_id] = local_counts.get(handle.local_id, 0) + 1
         environment = dict(values_by_qid)
-        for handle, value in params.items():
-            if local_counts[handle.local_id] == 1:
-                environment[handle.local_id] = value
 
         data = _thaw(self.compile_data)
         ncomp = data.get("ncomp")
@@ -161,6 +156,10 @@ class CompiledBoundaryPlan:
             "residual_contributions": data.get("residual_contributions", []),
             "linearization_contributions": data.get("linearization_contributions", []),
             "interfaces": data.get("interfaces", []),
+            # The endpoint rows were proved from owner-qualified BoundaryHandles by the
+            # resolved GhostProducerPlan.  They are executable topology evidence, not
+            # authoring metadata, and must survive the detached compile -> bind boundary.
+            "interface_endpoints": data.get("interface_endpoints", []),
             "interface_component_bindings": data.get("interface_component_bindings", []),
             "omitted_interface_faces": list(data.get("omitted_interface_faces", [])),
             "ghost_plan_identity": self.canonical_id,

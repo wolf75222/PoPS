@@ -50,7 +50,7 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     with np.load(output / "manual_restart.npz", allow_pickle=False) as stored:
         assert [str(name) for name in stored["blocks"]] == ["plasma"]
         assert int(stored["macro_step"]) == 1
-        assert [str(name) for name in stored["history_names"]] == ["plasma.plasma"]
+        assert [str(name) for name in stored["history_names"]] == ["plasma.U"]
         assert "runtime_consumer_graph" in stored
         assert "field_provider_slots" in stored
     rejected_root = output / "rejected_nonrealizable"

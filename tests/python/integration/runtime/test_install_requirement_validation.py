@@ -5,12 +5,20 @@ descriptor). System.install_program reads that descriptor and rejects, BEFORE in
 a simulation that did not provide a required field -- here B_z, normally supplied by
 set_magnetic_field -- with a spec-style message ("operator 'lorentz' requires aux field 'B_z', but
 simulation did not provide it") instead of a cryptic failure mid-step. The negative and positive
-cases both need a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) to build the .so; the test prints a
-skip notice and exits 0 otherwise (run it on ROMEO). cf. docs/sphinx/reference/operator-modules.md.
+cases both need a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) to build the .so. The exact native
+preflight is an explicit optional local skip and a fail-closed requirement in native CI. Any later
+compile failure propagates as a real regression. cf. docs/sphinx/reference/operator-modules.md.
 """
+import sys
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import sys
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
 try:
     import numpy as np
@@ -26,8 +34,9 @@ try:
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
     from tests.python.integration._final_field_program import compile_block_model
 except Exception as exc:  # noqa: BLE001
-    print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip(
+        "test_install_requirement_validation imports unavailable: %s" % exc
+    )
 
 N = 16
 
@@ -93,16 +102,15 @@ def make_sim(block_model, with_bz):
 
 
 def main():
+    missing = missing_native_compile_requirement(repo_include(), default_cxx())
+    if missing:
+        require_native_or_skip("test_install_requirement_validation: %s" % missing)
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_requirement_validation (_pops lacks install_program; rebuild _pops)")
-        return 0
+        require_native_or_skip(
+            "test_install_requirement_validation requires System.install_program"
+        )
     m = lorentz_model()
-    try:
-        compiled = compile_problem(model=m, time=lie_program(m))
-    except RuntimeError as exc:
-        print("skip test_install_requirement_validation (no Kokkos to build the .so: %s)"
-              % str(exc)[:120])
-        return 0
+    compiled = compile_problem(model=m, time=lie_program(m))
 
     # (1) Negative: a simulation WITHOUT set_magnetic_field must be rejected at install with the
     # spec-style message naming the operator and the missing aux field.

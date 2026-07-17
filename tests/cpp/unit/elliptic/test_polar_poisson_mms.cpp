@@ -222,8 +222,8 @@ TEST(test_polar_poisson_mms, dirichlet_radial_order2_and_residual) {
   double resA[3];
   for (int k = 0; k < 3; ++k) {
     solve_case(kNrs[k], kNthFix, m, bcd, phi_dir, f_dir, /*subtract_mean=*/false, eA[k], resA[k]);
-    std::printf("  nr=%-4d nth=%-4d : L2=%.4e  Linf=%.4e  residu=%.3e\n", kNrs[k], kNthFix, eA[k].l2,
-                eA[k].linf, resA[k]);
+    std::printf("  nr=%-4d nth=%-4d : L2=%.4e  Linf=%.4e  residu=%.3e\n", kNrs[k], kNthFix,
+                eA[k].l2, eA[k].linf, resA[k]);
   }
   const double pA1 = std::log2(eA[0].l2 / eA[1].l2);
   const double pA2 = std::log2(eA[1].l2 / eA[2].l2);

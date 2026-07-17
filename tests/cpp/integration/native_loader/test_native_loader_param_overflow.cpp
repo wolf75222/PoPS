@@ -31,16 +31,16 @@ std::string parameter_names(int count) {
 
 std::string stub_source() {
   const int count = kMaxRuntimeParams + 1;
-  return
-      "extern \"C\" const char* pops_native_abi_key() { return \"" + System::abi_key() +
-      "\"; }\n"
-      "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
-      route_registry_signature() +
-      "\"; }\n"
-      "extern \"C\" int pops_compiled_nparams() { return " + std::to_string(count) +
-      "; }\n"
-      "extern \"C\" const char* pops_compiled_param_names() { return \"" +
-      parameter_names(count) + "\"; }\n";
+  return "extern \"C\" const char* pops_native_abi_key() { return \"" + System::abi_key() +
+         "\"; }\n"
+         "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
+         route_registry_signature() +
+         "\"; }\n"
+         "extern \"C\" int pops_compiled_nparams() { return " +
+         std::to_string(count) +
+         "; }\n"
+         "extern \"C\" const char* pops_compiled_param_names() { return \"" +
+         parameter_names(count) + "\"; }\n";
 }
 
 bool compile_stub(const std::string& source, const std::string& library) {
@@ -49,8 +49,8 @@ bool compile_stub(const std::string& source, const std::string& library) {
 #else
   const std::string compiler = POPS_TEST_CXX;
 #endif
-  std::string command = compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD +
-                        " -O2 " + source + " -o " + library;
+  std::string command =
+      compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 " + source + " -o " + library;
 #if defined(__APPLE__)
   command += " -undefined dynamic_lookup";
 #endif
@@ -91,8 +91,8 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   bool threw = false;
   std::string message;
   try {
-    system.add_native_block("gas", library, "none", "rusanov", "conservative", "explicit",
-                            1.4, 1, true, 1, params, 0.0);
+    system.add_native_block("gas", library, "none", "rusanov", "conservative", "explicit", 1.4, 1,
+                            true, 1, params, 0.0);
   } catch (const std::exception& error) {
     threw = true;
     message = error.what();

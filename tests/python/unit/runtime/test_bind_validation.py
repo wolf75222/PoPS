@@ -118,24 +118,14 @@ def test_haloed_initial_state_shape_passes():
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))}) == []
 
 
-def test_amr_density_initial_state_passes():
-    # The compatibility block mapping still accepts a 2D/flat coarse density seed.
+def test_amr_initial_state_table_is_refused_for_every_shape():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64, 64))}) == []
-    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64 * 64,))}) == []
-
-
-def test_amr_full_conservative_state_passes():
-    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    assert bv.validate_initial_state(
-        manifest, args, layout, {"ne": _Array((4, 64, 64))}) == []
-
-
-def test_amr_full_state_component_mismatch_is_refused():
-    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((3, 64, 64))})
-    assert len(lines) == 1
-    assert "complete conservative state (4, 64, 64)" in lines[0]
+    for shape in ((64, 64), (64 * 64,), (4, 64, 64), (3, 64, 64)):
+        lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array(shape)})
+        assert len(lines) == 1
+        assert "initial_state for AMR block 'ne' is not a supported authority" in lines[0]
+        assert "InitialConditionPlan" in lines[0]
+        assert "initial_values" in lines[0]
 
 
 def test_typed_amr_initial_value_requires_complete_state():

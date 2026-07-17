@@ -21,6 +21,7 @@ single-rank Mac ; here we only assert they are 0 (the honest serial value), neve
 Pre-rebuild (an ``_pops`` that predates ``AmrSystem.enable_profiling`` or the engine scopes) the test
 SKIPS cleanly: the binding / scope is simply absent and the typed view stays unavailable.
 """
+from tests.python.support.requirements import require_native_or_skip
 import sys
 
 import numpy as np
@@ -144,7 +145,7 @@ def main():
     """__main__ guard: run the assertions directly (CI auto-discovers + runs tests/python/**/*.py)."""
     fails = 0
     if not _has_amr_profiling():
-        print("skip  test_spec5_amr_mpi_counters : _pops predates AmrSystem profiling (rebuild)")
+        require_native_or_skip('skip  test_spec5_amr_mpi_counters : _pops predates AmrSystem profiling (rebuild)')
         return 0
     for fn in (test_amr_phase_scopes_emitted, test_by_amr_mpi_now_available,
                test_serial_no_amr_run_stays_unavailable):

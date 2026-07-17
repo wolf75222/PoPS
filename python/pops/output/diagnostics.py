@@ -8,6 +8,7 @@ from typing import Any
 from pops.identity import make_identity
 
 from .data import OutputRequest, OutputSnapshot
+from ._writers.common import field_values_on_mask
 
 
 def _finite(value: Any, where: str) -> float:
@@ -32,9 +33,10 @@ def composite_integrals(snapshot: OutputSnapshot, request: OutputRequest) -> Any
             raise ValueError(
                 "composite_integrals requires scalar selections; select a component explicitly")
         geometry = snapshot.geometry(field.key)
-        values = field.materialize()
         active = np.logical_and(geometry.valid_cells, np.logical_not(geometry.coverage))
-        value = float(np.sum(values[active] * geometry.cell_volumes[active], dtype=np.float64))
+        values = field_values_on_mask(field, active, require_piece_subset=False)
+        value = float(np.sum(
+            values * geometry.cell_volumes[active], dtype=np.float64))
         family = make_identity("output-field-family", {
             "reference": field.key.reference.canonical_identity(),
             "component_manifest_identity": field.key.component_manifest_identity.token,

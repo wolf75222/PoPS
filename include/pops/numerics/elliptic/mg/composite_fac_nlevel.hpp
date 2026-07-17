@@ -42,8 +42,8 @@ struct FacFillCoarseFineGhostKernel {
   int ratio;
 
   POPS_HD void operator()(int i, int j) const {
-    const bool inside = i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] &&
-                        j <= valid.hi[1];
+    const bool inside =
+        i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1];
     if (!inside)
       fine(i, j, 0) = fac_bilerp_coarse(coarse, i, j, ratio);
   }
@@ -72,9 +72,8 @@ struct FacRedBlackFivePointSorKernel {
     const Real eym = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j - 1, 0)) : Real(1);
     const Real eyp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j + 1, 0)) : Real(1);
     const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
-    const Real nb =
-        (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
-        (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
+    const Real nb = (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
+                    (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
     const Real cross = Real(0);
     const Real pgs = (nb + cross - rhs(i, j, 0)) / diag;
     phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * pgs;
@@ -147,8 +146,7 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
     geom_lv_.push_back(gk);
     ba_lv_.push_back(bak);
     dm_lv_.push_back(dmk);
-    MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0),
-        lapk(bak, dmk, 1, 0);
+    MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0), lapk(bak, dmk, 1, 0);
     MultiFab epk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1), ayk(bak, dmk, 1, 1);
     phik.set_val(Real(0));
     fk.set_val(Real(0));
@@ -336,8 +334,7 @@ inline void CompositeFacPoisson::fill_cf_field_(int /*k*/, MultiFab& fine, const
     const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, fine.n_grow());
     if (C.p == nullptr)
       continue;  // no local parent (should not happen under co-location); skip
-    for_each_cell(fine.fab(li).grown_box(),
-                  detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
+    for_each_cell(fine.fab(li).grown_box(), detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
   }
 }
 
@@ -355,10 +352,10 @@ inline void CompositeFacPoisson::fill_cf_phi_(int k) {
     const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, phik.n_grow());
     if (C.p == nullptr)
       continue;
-    for_each_cell(phik.fab(li).grown_box(),
-                  detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
+    for_each_cell(phik.fab(li).grown_box(), detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
   }
-  fill_boundary(phik, geom_level(k).domain);  // step 3: fine-fine sibling exchange (adjacency + MPI)
+  fill_boundary(phik,
+                geom_level(k).domain);  // step 3: fine-fine sibling exchange (adjacency + MPI)
 }
 
 // fine_sor_level_ : red-black SOR on level m with FROZEN ghosts, over cells NOT covered by level m+1
@@ -385,10 +382,9 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
     if (finest_unmasked && !hc) {
       for (int s = 0; s < sweeps; ++s)
         for (int color = 0; color < 2; ++color)
-          for_each_cell(vb, detail::FacRedBlackFivePointSorKernel{P, F, E, idx2, idy2,
-                                                                  omega,
-                                                                  has_reaction_ ? reaction_ : Real(0),
-                                                                  color, he});
+          for_each_cell(
+              vb, detail::FacRedBlackFivePointSorKernel{
+                      P, F, E, idx2, idy2, omega, has_reaction_ ? reaction_ : Real(0), color, he});
       continue;
     }
     // CoverageMask is host storage. The intermediate-level mask and the nine-point same-color
@@ -406,8 +402,8 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
             const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
             const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
             const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
-            const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 +
-                              (has_reaction_ ? reaction_ : Real(0));
+            const Real diag =
+                (exm + exp) * idx2 + (eym + eyp) * idy2 + (has_reaction_ ? reaction_ : Real(0));
             const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
                             (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
             const Real cross =
@@ -505,7 +501,8 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
         Real fine_sum = Real(0);
         for (int t = 0; t < r; ++t) {
           const int iff = r * I + t;
-          const Real eff = he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
+          const Real eff =
+              he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
           fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
         }
         reg.add(I, J, 3, coarse_c - fine_sum * idy2);  // +y face of (I,J)
@@ -533,8 +530,7 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
         if (!cov.covered(i, j))
-          D(i, j, 0) +=
-              reg.at(i, j, 0) + reg.at(i, j, 1) + reg.at(i, j, 2) + reg.at(i, j, 3);
+          D(i, j, 0) += reg.at(i, j, 0) + reg.at(i, j, 1) + reg.at(i, j, 2) + reg.at(i, j, 3);
   }
 }
 
@@ -552,10 +548,9 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   // ghosts for the operator: level 0 uses the physical BC (it is the whole domain); a patch level uses
   // the C/F bilerp + fine-fine order (its edges are INTERIOR to the refined domain, not physical).
   if (m == 0) {
-    prepare_field_residual_view(
-        phim, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, gm, bc_,
-        has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
-        has_boundary_kernel_ ? &boundary_context_ : nullptr);
+    prepare_field_residual_view(phim, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, gm, bc_,
+                                has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
+                                has_boundary_kernel_ ? &boundary_context_ : nullptr);
   } else {
     if (m - 1 == 0)
       fill_ghosts(phi_c_, geom_c_.domain, bc_);
@@ -563,8 +558,7 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   }
   MultiFab& lap = lap_level_(m);
   MultiFab& operator_view = (m == 0 && has_boundary_kernel_) ? boundary_view_c_ : phim;
-  apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr,
-                  has_eps_ ? &eps_level(m) : nullptr,
+  apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr, has_eps_ ? &eps_level(m) : nullptr,
                   /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &a_xy_level(m) : nullptr,
                   has_cross_ ? &a_yx_level(m) : nullptr);
   if (has_reaction_)
@@ -577,8 +571,8 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
       const ConstArray4 FM = rhs_level(m).fab(li).const_array();
       const Box2D b = resm.box(li);
       for_each_cell(b, detail::FacFinestResidualKernel{R, FM, LAP});
-      nrm = std::max(nrm,
-                     reduce_max_cell(b, detail::FacFinestNormInfKernel{resm.fab(li).const_array()}));
+      nrm = std::max(
+          nrm, reduce_max_cell(b, detail::FacFinestNormInfKernel{resm.fab(li).const_array()}));
     }
     return Real(all_reduce_max(static_cast<double>(nrm)));
   }
@@ -628,7 +622,8 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
 inline void CompositeFacPoisson::relax_level_(int m, int sweeps) {
   device_fence();
   if (m - 1 == 0)
-    fill_ghosts(phi_c_, geom_c_.domain, bc_);  // parent physical ghosts (bilerp reads to the border)
+    fill_ghosts(phi_c_, geom_c_.domain,
+                bc_);  // parent physical ghosts (bilerp reads to the border)
   const MultiFab& phim = phi_level(m);
   const bool multibox = phim.box_array().size() > 1;  // adjacency: fine-fine sibling ghosts matter
   if (!multibox) {
@@ -688,8 +683,7 @@ inline void CompositeFacPoisson::average_down_level_(int m) {
       if (P.p == nullptr)
         throw std::runtime_error(
             "CompositeFacPoisson: co-located parent missing during average-down");
-      for_each_cell(footprint,
-                    detail::AverageDownKernel{F, P, inv, ratio_, /*component=*/0});
+      for_each_cell(footprint, detail::AverageDownKernel{F, P, inv, ratio_, /*component=*/0});
     }
     return;
   }

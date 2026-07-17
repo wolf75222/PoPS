@@ -171,7 +171,8 @@ CPP_HEADER_SUFFIXES = (".hpp", ".h", ".hh", ".hxx", ".inc", ".ipp", ".tpp")
 
 # ADC-646 per-file C++ impact classification.
 # A ``src/runtime/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
-# (``pops_runtime_system`` / ``pops_runtime_amr``) that most test targets link. The precise
+# (``pops_runtime_system`` / ``pops_runtime_amr`` / ``pops_runtime_output``) that test targets link.
+# The precise
 # per-target linkage is recovered from the central source manifest and test consumers. The
 # ``.cpp``/``.hpp`` suffixes below are compiled units; any other runtime artifact (CMake fragment
 # or ``.cpp.in`` seam template) is a build input and fails open to ALL.
@@ -344,13 +345,29 @@ def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
     return targets
 
 
+def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
+    """Return every manifest-owned MPI CTest name and its exact process count.
+
+    MPI-only suites and serial suites with ``mpi_variants`` both register CTest
+    names as ``<target>_np<n>``.  Keeping the complete projection here lets CI
+    authenticate the configured inventory by identity, label and ``PROCESSORS``
+    instead of accepting any unrelated set with the same aggregate count.
+    """
+    plan: dict[str, int] = {}
+    for suite in manifest_cpp_suites(manifest, include_mpi=True):
+        for nproc in (*suite["mpi_nproc"], *suite["mpi_variants"]):
+            name = f"{suite['name']}_np{nproc}"
+            if name in plan:
+                raise SystemExit(f"duplicate manifest-owned MPI CTest name: {name}")
+            plan[name] = nproc
+    if not plan:
+        raise SystemExit("test manifest declares no MPI CTest launches")
+    return dict(sorted(plan.items()))
+
+
 def cpp_mpi_ctest_count(manifest: dict) -> int:
-    """Return the exact number of manifest-owned ``ctest -L mpi`` launches."""
-    suites = manifest_cpp_suites(manifest, include_mpi=True)
-    return sum(
-        len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
-        for suite in suites
-    )
+    """Return the number of exact manifest-owned MPI CTest launches."""
+    return len(cpp_mpi_ctest_plan(manifest))
 
 
 def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
@@ -481,7 +498,11 @@ RUNTIME_CMAKE = ROOT / "src" / "CMakeLists.txt"
 # The heavy runtime TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
 # and spliced into every consuming test target. A change to a TU in one of them impacts exactly
 # that lib's consumers, so we read the central source list and the test consumer list together.
-_RUNTIME_OBJECT_LIBS = ("pops_runtime_system", "pops_runtime_amr")
+_RUNTIME_OBJECT_LIBS = (
+    "pops_runtime_system",
+    "pops_runtime_amr",
+    "pops_runtime_output",
+)
 
 
 def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
@@ -490,6 +511,7 @@ def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
     source_var = {
         "pops_runtime_system": "POPS_RUNTIME_SYSTEM_SOURCES",
         "pops_runtime_amr": "POPS_RUNTIME_AMR_SOURCES",
+        "pops_runtime_output": "POPS_RUNTIME_OUTPUT_SOURCES",
     }[libname]
     match = re.search(r"set\(\s*" + source_var + r"\b(.*?)\)", text, re.DOTALL)
     if match:
@@ -703,6 +725,73 @@ def cpp_target_label_regex(names: Iterable[str]) -> str:
     return "^(" + "|".join(escaped) + ")$" if escaped else "$^"
 
 
+def _read_ctest_inventory(path: str) -> list[dict]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read CTest JSON inventory {path}: {exc}") from exc
+    tests = payload.get("tests")
+    if not isinstance(tests, list):
+        raise SystemExit("CTest JSON inventory has no tests array")
+    return [test for test in tests if isinstance(test, dict)]
+
+
+def _ctest_labels(test: dict) -> set[str]:
+    test_name = test.get("name")
+    labels: set[str] = set()
+    properties = test.get("properties", [])
+    if not isinstance(properties, list):
+        return labels
+    for prop in properties:
+        if not isinstance(prop, dict) or prop.get("name") != "LABELS":
+            continue
+        value = prop.get("value", [])
+        if isinstance(value, str):
+            encoded_labels = (value,)
+        elif isinstance(value, list):
+            encoded_labels = tuple(item for item in value if isinstance(item, str))
+        else:
+            encoded_labels = ()
+        # CTest's JSON inventory is the selection authority: each LABELS entry
+        # is atomic.  A semicolon proves CMake overescaped the property.
+        malformed = [label for label in encoded_labels if ";" in label]
+        if malformed:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} has non-atomic LABELS entries: "
+                + ", ".join(repr(label) for label in malformed)
+            )
+        labels.update(label for label in encoded_labels if label)
+    return labels
+
+
+def _ctest_processors(test: dict) -> int:
+    values = [
+        prop.get("value")
+        for prop in test.get("properties", [])
+        if isinstance(prop, dict) and prop.get("name") == "PROCESSORS"
+    ] if isinstance(test.get("properties", []), list) else []
+    name = test.get("name")
+    # CTest omits properties equal to their default from JSON; absent
+    # PROCESSORS therefore has the exact scheduler meaning one.
+    if not values:
+        return 1
+    if len(values) != 1:
+        raise SystemExit(
+            f"CTest MPI contract failed; test {name!r} must expose one PROCESSORS property"
+        )
+    value = values[0]
+    if type(value) is int and value > 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value > 0:
+        return int(value)
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return int(value)
+    raise SystemExit(
+        f"CTest MPI contract failed; test {name!r} has invalid PROCESSORS={value!r}"
+    )
+
+
 def verify_cpp_target_labels(args: argparse.Namespace) -> int:
     """Fail unless every selected build target owns discovered CTest cases.
 
@@ -716,14 +805,7 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
     if not targets:
         raise SystemExit("C++ target-label verification requires at least one target")
 
-    try:
-        payload = json.loads(Path(args.ctest_json).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot read CTest JSON inventory {args.ctest_json}: {exc}") from exc
-
-    tests = payload.get("tests")
-    if not isinstance(tests, list):
-        raise SystemExit("CTest JSON inventory has no tests array")
+    tests = _read_ctest_inventory(args.ctest_json)
 
     expected = {f"cpp-target:{target}": target for target in targets}
     hits: dict[str, list[str]] = {target: [] for target in targets}
@@ -733,35 +815,7 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
         test_name = test.get("name")
         if not isinstance(test_name, str):
             continue
-        labels: set[str] = set()
-        properties = test.get("properties", [])
-        if isinstance(properties, list):
-            for prop in properties:
-                if not isinstance(prop, dict) or prop.get("name") != "LABELS":
-                    continue
-                value = prop.get("value", [])
-                if isinstance(value, str):
-                    encoded_labels = (value,)
-                elif isinstance(value, list):
-                    encoded_labels = tuple(
-                        item for item in value if isinstance(item, str)
-                    )
-                else:
-                    encoded_labels = ()
-                # CTest's JSON inventory is the selection authority: each
-                # LABELS entry is one atomic label.  A semicolon here is not a
-                # second serialization layer; it proves CMake overescaped the
-                # LABELS property and CTest will treat the complete string as
-                # one label.  Fail closed instead of inventing labels which an
-                # exact ``ctest -L`` expression cannot select.
-                malformed = [label for label in encoded_labels if ";" in label]
-                if malformed:
-                    raise SystemExit(
-                        "CTest target-label contract failed; test "
-                        f"{test_name!r} has non-atomic LABELS entries: "
-                        + ", ".join(repr(label) for label in malformed)
-                    )
-                labels.update(label for label in encoded_labels if label)
+        labels = _ctest_labels(test)
         for label in labels & expected.keys():
             hits[expected[label]].append(test_name)
 
@@ -779,6 +833,50 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
         f"verified {len(targets)} C++ target labels across "
         f"{sum(len(names) for names in hits.values())} discovered cases"
     )
+    return 0
+
+
+def verify_cpp_mpi_ctests(args: argparse.Namespace) -> int:
+    """Authenticate the exact configured MPI CTest names, labels and ranks."""
+    expected = cpp_mpi_ctest_plan(load_manifest())
+    actual: dict[str, int] = {}
+    for test in _read_ctest_inventory(args.ctest_json):
+        name = test.get("name")
+        if not isinstance(name, str):
+            continue
+        labels = _ctest_labels(test)
+        # Packaging/configuration smokes legitimately carry an ``mpi`` label but
+        # are not rank-launched backend tests and have no PROCESSORS contract.
+        # The dedicated execution fence selects the exact backend+mpi intersection.
+        if not {"backend", "mpi"} <= labels or "python" in labels:
+            continue
+        if name in actual:
+            raise SystemExit(f"CTest MPI contract failed; duplicate test name {name!r}")
+        actual[name] = _ctest_processors(test)
+
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected))
+    rank_mismatches = sorted(
+        (name, expected[name], actual[name])
+        for name in set(expected) & set(actual)
+        if expected[name] != actual[name]
+    )
+    if missing or unexpected or rank_mismatches:
+        details: list[str] = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if unexpected:
+            details.append("unexpected=" + ",".join(unexpected))
+        if rank_mismatches:
+            details.append(
+                "PROCESSORS=" + ",".join(
+                    f"{name}:manifest={wanted}:ctest={configured}"
+                    for name, wanted, configured in rank_mismatches
+                )
+            )
+        raise SystemExit("CTest MPI contract differs from tests/test_manifest.toml; " + "; ".join(details))
+
+    print(f"verified {len(expected)} exact manifest-owned MPI CTest launches")
     return 0
 
 
@@ -1084,7 +1182,8 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
     """Project one exact C++ manifest label into build targets for a dedicated CI job."""
     manifest = load_manifest()
     targets = cpp_targets_with_label(manifest, args.label)
-    mpi_ctest_count = cpp_mpi_ctest_count(manifest) if args.label == "mpi" else 0
+    mpi_ctest_plan = cpp_mpi_ctest_plan(manifest) if args.label == "mpi" else {}
+    mpi_ctest_count = len(mpi_ctest_plan)
     summary = f"label {args.label}: {len(targets)} C++ targets"
     if args.label == "mpi":
         summary += f", {mpi_ctest_count} CTest launches"
@@ -1108,6 +1207,7 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "label": args.label,
             "selected_count": len(targets),
             "ctest_count": mpi_ctest_count,
+            "ctest_names": list(mpi_ctest_plan),
             "selected": targets,
         },
     )
@@ -1403,6 +1503,10 @@ def main() -> int:
     cpp_target_labels.add_argument("--ctest-json", required=True)
     cpp_target_labels.add_argument("--targets", nargs="+", required=True)
     cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
+
+    cpp_mpi_ctests = sub.add_parser("verify-cpp-mpi-ctests")
+    cpp_mpi_ctests.add_argument("--ctest-json", required=True)
+    cpp_mpi_ctests.set_defaults(func=verify_cpp_mpi_ctests)
 
     py_mpi = sub.add_parser("python-mpi")
     py_mpi.add_argument("--plan-file", required=True)

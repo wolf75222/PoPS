@@ -94,9 +94,9 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
                            initial_state: Any) -> Any:
     """Refuse state whose name, shape, dtype, components or ghosts mismatch metadata.
 
-    Uniform consumes full conservative states.  The compatibility AMR block mapping accepts either
-    a coarse density seed or the complete conservative state; typed AMR InitialCondition values use
-    :func:`validate_bound_initial_values`. Missing manifest halo metadata is ABI-incomplete and is
+    Uniform consumes full conservative states. AMR accepts only the resolved typed
+    ``InitialConditionPlan`` through :func:`validate_bound_initial_values`; a block-name table is
+    not a second initialization authority. Missing manifest halo metadata is ABI-incomplete and is
     refused rather than guessed.
     """
     lines = []
@@ -121,6 +121,14 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
     for name in sorted(set(initial_state) & declared):
         array = initial_state[name]
         spec = instances[name]
+        block_layout = _layout_for_block(layout, name)
+        if _layout_kind(block_layout) == "amr":
+            lines.append(
+                "initial_state for AMR block %r is not a supported authority; resolve an "
+                "InitialConditionPlan and bind its Handle-keyed values through initial_values"
+                % name
+            )
+            continue
         ghost = ghost_depth_by_block.get(name)
         if ghost is None and not authoritative_per_block:
             # The scalar remains a valid single-layout manifest projection.  Multi-layout
@@ -134,42 +142,26 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
                 "records the exact ghost_depth_by_block authority)" % name
             )
             continue
-        block_layout = _layout_for_block(layout, name)
         mesh = _layout_mesh(block_layout)
-        # The decision is the open layout capability, never a concrete class or historical
-        # ``.base`` attribute. AMR dispatches density/full state by the authenticated array shape
-        # at install.
-        amr = _layout_kind(block_layout) == "amr"
-        _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes, amr)
+        _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes)
     return lines
 
 
 def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh: Any, ghost: Any,
-                             accepted_dtypes: Any, amr: Any = False) -> Any:
+                             accepted_dtypes: Any) -> Any:
     """Append the shape / dtype / component refusals for ONE block's supplied @p array."""
     components = int(spec.get("components", 0) or 0)
     shape = _shape_of(array)
     if shape is None:
         lines.append("initial state for block %r is not an array (no .shape); pass a numpy array of "
-                     "shape (%s, n, n)" % (name, "n, n" if amr else (components or "n_components")))
+                     "shape (%s, n, n)" % (name, components or "n_components"))
         return
     if mesh is not None and ghost is not None:
-        if amr:
-            expected = {(mesh, mesh), (mesh * mesh,)}
-            if components > 0:
-                expected.add((components, mesh, mesh))
-            if shape not in expected:
-                lines.append(
-                    "initial state for block %r has shape %s; AMR expects coarse density (%d, %d) "
-                    "or (%d,), or the complete conservative state (%d, %d, %d)"
-                    % (name, shape, mesh, mesh, mesh * mesh, components, mesh, mesh)
-                )
-        else:
-            expected = _expected_shapes(components, mesh, ghost)
-            if shape not in expected:
-                lines.append("initial state for block %r has shape %s; expected one of %s (n=%d "
-                             "cells per axis, %d component(s), ghost depth %d)"
-                             % (name, shape, sorted(expected), mesh, components, ghost))
+        expected = _expected_shapes(components, mesh, ghost)
+        if shape not in expected:
+            lines.append("initial state for block %r has shape %s; expected one of %s (n=%d "
+                         "cells per axis, %d component(s), ghost depth %d)"
+                         % (name, shape, sorted(expected), mesh, components, ghost))
     dtype = _dtype_name(array)
     if dtype is not None and dtype not in accepted_dtypes:
         lines.append("initial state for block %r has dtype %r; the artifact's declared precision "

@@ -13,7 +13,9 @@ namespace pops::runtime::program {
 class StepAttemptRejected final : public std::runtime_error {
  public:
   StepAttemptRejected(SolveStatus status, std::string phase, std::string detail = {})
-      : std::runtime_error(message(status, phase, detail)), status_(status), phase_(std::move(phase)),
+      : std::runtime_error(message(status, phase, detail)),
+        status_(status),
+        phase_(std::move(phase)),
         detail_(std::move(detail)) {}
 
   SolveStatus status() const noexcept { return status_; }
@@ -23,8 +25,8 @@ class StepAttemptRejected final : public std::runtime_error {
  private:
   static std::string message(SolveStatus status, const std::string& phase,
                              const std::string& detail) {
-    std::string out = "step attempt rejected during " + phase + ": solve status=" +
-                      std::string(solve_status_name(status));
+    std::string out = "step attempt rejected during " + phase +
+                      ": solve status=" + std::string(solve_status_name(status));
     if (!detail.empty())
       out += " (" + detail + ")";
     return out;

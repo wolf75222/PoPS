@@ -1,14 +1,18 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>            // Real
-#include <pops/mesh/index/box2d.hpp>                 // Box2D
-#include <pops/mesh/layout/box_array.hpp>            // BoxArray
-#include <pops/mesh/storage/multifab.hpp>            // MultiFab, ConstArray4
-#include <pops/numerics/spatial_operator.hpp>        // xface_box / yface_box (Fx/Fy sizing)
-#include <pops/runtime/amr/amr_runtime.hpp>          // the class this file defines members of
+#include <pops/core/foundation/types.hpp>      // Real
+#include <pops/mesh/index/box2d.hpp>           // Box2D
+#include <pops/mesh/layout/box_array.hpp>      // BoxArray
+#include <pops/mesh/storage/multifab.hpp>      // MultiFab, ConstArray4
+#include <pops/numerics/spatial_operator.hpp>  // xface_box / yface_box (Fx/Fy sizing)
+#include <pops/runtime/amr/amr_runtime.hpp>    // the class this file defines members of
 
 /// @file
 /// @brief ADC-639 conservative reflux for a whole-system compiled Program on AMR: the flux-materialising
@@ -69,6 +73,82 @@ struct EdgeFlux {
 
 namespace detail {
 
+inline void require_program_reflux(bool condition, const std::string& detail) {
+  if (!condition)
+    throw std::runtime_error("Program reflux: " + detail);
+}
+
+/// Validates that @p Fx / @p Fy are the face-centred views of @p state with the same global box
+/// identity and ownership.  The state MultiFab is the sole layout authority: a face field that merely
+/// has the same local_size is not accepted because local indices are rank-relative and can alias a
+/// different global patch after redistribution.
+inline void validate_program_reflux_faces(const MultiFab& state, const MultiFab& Fx,
+                                          const MultiFab& Fy, int nc, const char* role) {
+  const std::string prefix = std::string(role) + " face layout ";
+  require_program_reflux(nc > 0, prefix + "requires nc > 0");
+  require_program_reflux(state.ncomp() == nc, prefix + "state component count differs from nc");
+  require_program_reflux(Fx.ncomp() == nc && Fy.ncomp() == nc,
+                         prefix + "flux component count differs from nc");
+  require_program_reflux(Fx.box_array().size() == state.box_array().size() &&
+                             Fy.box_array().size() == state.box_array().size(),
+                         prefix + "global box count differs from the state authority");
+  require_program_reflux(
+      Fx.dmap().ranks() == state.dmap().ranks() && Fy.dmap().ranks() == state.dmap().ranks(),
+      prefix + "ownership differs from the state authority");
+  for (int g = 0; g < state.box_array().size(); ++g) {
+    require_program_reflux(Fx.box_array()[g] == xface_box(state.box_array()[g]),
+                           prefix + "x-face global order differs at box " + std::to_string(g));
+    require_program_reflux(Fy.box_array()[g] == yface_box(state.box_array()[g]),
+                           prefix + "y-face global order differs at box " + std::to_string(g));
+  }
+  require_program_reflux(
+      Fx.local_size() == state.local_size() && Fy.local_size() == state.local_size(),
+      prefix + "local box count differs from the state authority");
+  for (int li = 0; li < state.local_size(); ++li) {
+    const int g = state.global_index(li);
+    require_program_reflux(
+        Fx.global_index(li) == g && Fy.global_index(li) == g,
+        prefix + "local/global patch identity differs at local box " + std::to_string(li));
+  }
+}
+
+/// Persistent redistribution storage for one (Program block, parent level).  The destination
+/// MultiFabs own CopyScheduleCache instances, so retaining them across RHS evaluations also retains
+/// the MPI pack/unpack schedule.  An AMR topology epoch change, component-width change, or exact child
+/// layout/ownership change rebuilds both fields; no schedule can survive a regrid under a stale layout.
+struct CoarseRoleScratch {
+  std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  int ncomp = 0;
+  std::vector<Box2D> child_boxes;
+  std::vector<int> child_ranks;
+  MultiFab Fx;
+  MultiFab Fy;
+
+  bool matches(const MultiFab& child, std::uint64_t epoch, int nc) const {
+    return topology_epoch == epoch && ncomp == nc && child_boxes == child.box_array().boxes() &&
+           child_ranks == child.dmap().ranks();
+  }
+
+  void prepare(const MultiFab& child, std::uint64_t epoch, int nc) {
+    if (matches(child, epoch, nc))
+      return;
+    const BoxArray coarse_child = coarsen(child.box_array(), kAmrRefRatio);
+    std::vector<Box2D> xfaces, yfaces;
+    xfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
+    yfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
+    for (int g = 0; g < coarse_child.size(); ++g) {
+      xfaces.push_back(xface_box(coarse_child[g]));
+      yfaces.push_back(yface_box(coarse_child[g]));
+    }
+    Fx = MultiFab(BoxArray(std::move(xfaces)), child.dmap(), nc, 0);
+    Fy = MultiFab(BoxArray(std::move(yfaces)), child.dmap(), nc, 0);
+    topology_epoch = epoch;
+    ncomp = nc;
+    child_boxes = child.box_array().boxes();
+    child_ranks = child.dmap().ranks();
+  }
+};
+
 /// Add a * src into dst component-wise (both strips share the SAME patch footprint within a frozen macro-
 /// step layout, so the flat arrays align by index). Missing src (empty) contributes 0. Used by the ledger
 /// axpy mirror.
@@ -112,22 +192,69 @@ inline void edge_flux_axpy(EdgeFlux& dst, Real a, const EdgeFlux& src) {
 
 /// Sample the COARSE-ROLE strip of a level-k flux field (Fx/Fy on the level-k grid, PARENT of level k+1):
 /// for each child (level-(k+1)) patch, read the level-k coarse flux at the 4 C/F faces of the patch's
-/// coarse footprint. Replicated coarse (level 0) / a local child: read directly. This is the native
-/// coarse-flux sampling of amr_subcycling.hpp:99-108 (mono-box) / :677-688 (multi-box), lifted verbatim.
-/// @p Fx / @p Fy: the level-k face fluxes (from the capture closure). @p child_ba: the GLOBAL level-(k+1)
-/// box array. Fills @p out.coarse (one EdgeStrip per child patch). nc = the state component count.
-inline void sample_coarse_role_strip(const MultiFab& Fx, const MultiFab& Fy, const BoxArray& child_ba,
-                                     int nc, EdgeFlux& out) {
+/// coarse footprint.  The child layout is the ownership authority: exactly its owner samples each
+/// strip.  A replicated parent is read locally; a distributed parent is first redistributed onto
+/// child-owned coarse face grids.  This is the native algorithm in amr_subcycling.hpp, shared here
+/// without assuming a mono-box parent.  @p parent identifies the face-Fab corresponding to each
+/// parent cell box. @p child is the GLOBAL level-(k+1) layout and its rank ownership.
+inline void sample_coarse_role_strip(const MultiFab& parent, const MultiFab& Fx, const MultiFab& Fy,
+                                     const MultiFab& child, bool replicated_parent,
+                                     std::uint64_t topology_epoch, int nc,
+                                     CoarseRoleScratch& scratch, EdgeFlux& out) {
   device_fence();
+  validate_program_reflux_faces(parent, Fx, Fy, nc, "coarse-role");
+  require_program_reflux(child.ncomp() == nc, "coarse-role child component count differs from nc");
+  const BoxArray& child_ba = child.box_array();
   out.coarse.assign(static_cast<std::size_t>(child_ba.size()), EdgeStrip{});
-  // The level-k face fluxes are a single replicated box on the parent (the coarse level is replicated;
-  // levels >= 1 parents in the >2-level distributed case are handled by the caller via parallel_copy).
-  const ConstArray4 FX = Fx.fab(0).const_array();
-  const ConstArray4 FY = Fy.fab(0).const_array();
-  for (int g = 0; g < child_ba.size(); ++g) {
-    const PatchRange pr(child_ba[g]);
+
+  if (!replicated_parent) {
+    scratch.prepare(child, topology_epoch, nc);
+    parallel_copy(scratch.Fx, Fx);
+    parallel_copy(scratch.Fy, Fy);
+    device_fence();
+  } else {
+    require_program_reflux(parent.local_size() == parent.box_array().size(),
+                           "replicated parent is not fully resident on this rank");
+  }
+
+  for (int lc = 0; lc < child.local_size(); ++lc) {
+    const int g = child.global_index(lc);
+    const PatchRange pr(child.box(lc));
     EdgeStrip& s = out.coarse[static_cast<std::size_t>(g)];
     s.alloc(pr.box(), nc);
+
+    if (replicated_parent) {
+      for (int J = s.J0; J <= s.J1; ++J) {
+        const int left = mf_find_box(parent, s.I0, J);
+        const int right = mf_find_box(parent, s.I1, J);
+        if (left < 0 || right < 0)
+          throw std::runtime_error(
+              "Program reflux: replicated parent does not cover a child x interface");
+        const ConstArray4 FXL = Fx.fab(left).const_array();
+        const ConstArray4 FXR = Fx.fab(right).const_array();
+        for (int k = 0; k < nc; ++k) {
+          s.cL[static_cast<std::size_t>((J - s.J0) * nc + k)] = FXL(s.I0, J, k);
+          s.cR[static_cast<std::size_t>((J - s.J0) * nc + k)] = FXR(s.I1 + 1, J, k);
+        }
+      }
+      for (int I = s.I0; I <= s.I1; ++I) {
+        const int bottom = mf_find_box(parent, I, s.J0);
+        const int top = mf_find_box(parent, I, s.J1);
+        if (bottom < 0 || top < 0)
+          throw std::runtime_error(
+              "Program reflux: replicated parent does not cover a child y interface");
+        const ConstArray4 FYB = Fy.fab(bottom).const_array();
+        const ConstArray4 FYT = Fy.fab(top).const_array();
+        for (int k = 0; k < nc; ++k) {
+          s.cB[static_cast<std::size_t>((I - s.I0) * nc + k)] = FYB(I, s.J0, k);
+          s.cT[static_cast<std::size_t>((I - s.I0) * nc + k)] = FYT(I, s.J1 + 1, k);
+        }
+      }
+      continue;
+    }
+
+    const ConstArray4 FX = scratch.Fx.fab(lc).const_array();
+    const ConstArray4 FY = scratch.Fy.fab(lc).const_array();
     for (int J = s.J0; J <= s.J1; ++J)
       for (int k = 0; k < nc; ++k) {
         s.cL[static_cast<std::size_t>((J - s.J0) * nc + k)] = FX(s.I0, J, k);
@@ -146,22 +273,19 @@ inline void sample_coarse_role_strip(const MultiFab& Fx, const MultiFab& Fy, con
 /// This is the native fine-flux accumulation of amr_subcycling.hpp:135-148 (mono) / :567-580 (multi),
 /// lifted verbatim (WITHOUT the *dtf: the ledger carries dt through the Program combine, so the strip is a
 /// pure flux and the commit's dt-weighting lands it as dt*Feff). @p Fx / @p Fy: the level-k face fluxes,
-/// one face-box per LOCAL level-k box, co-distributed with the level state. @p patch_ba: the GLOBAL
-/// level-k box array (the fine patches at this level, seen from level k-1). Fills @p out.fine.
-inline void sample_fine_role_strip(const MultiFab& Fx, const MultiFab& Fy, const BoxArray& patch_ba,
+/// one face-box per LOCAL level-k box, co-distributed with the level state. @p state is the authoritative
+/// level-k cell layout (the fine patches at this level, seen from level k-1). Fills @p out.fine.
+inline void sample_fine_role_strip(const MultiFab& state, const MultiFab& Fx, const MultiFab& Fy,
                                    int nc, EdgeFlux& out) {
   device_fence();
+  validate_program_reflux_faces(state, Fx, Fy, nc, "fine-role");
+  const BoxArray& patch_ba = state.box_array();
   out.fine.assign(static_cast<std::size_t>(patch_ba.size()), EdgeStrip{});
-  // Fx.fab(li) corresponds to patch_ba[global index]; in serial local == global. For each LOCAL box we
-  // fill the strip of its GLOBAL patch slot (the reflux router indexes by the global patch order).
-  for (int li = 0; li < Fx.local_size(); ++li) {
-    // Recover the global patch index of this local box by matching its valid (face) footprint origin to
-    // the parent-coarsen of patch_ba. The face box lo == the cell box lo, so PatchRange of the coarsened
-    // cell box gives the parent footprint; we match by the local box index in serial (li == global).
-    const int g = li;  // serial / replicated-fine ordering; MPI multi-box handled by the caller
-    if (g >= patch_ba.size())
-      continue;
-    const PatchRange pr(patch_ba[g]);
+  // The validated state authority supplies both local iteration and stable global patch identity.
+  // Only the owning rank fills that global slot (the reflux router later reduces disjoint slots).
+  for (int li = 0; li < state.local_size(); ++li) {
+    const int g = state.global_index(li);
+    const PatchRange pr(state.box(li));
     EdgeStrip& s = out.fine[static_cast<std::size_t>(g)];
     s.alloc(pr.box(), nc);
     const ConstArray4 FX = Fx.fab(li).const_array();
@@ -189,7 +313,8 @@ inline void sample_fine_role_strip(const MultiFab& Fx, const MultiFab& Fy, const
 /// by the SAME level-k patch footprint. A missing role (empty strip) contributes 0.
 inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fine, int nc) {
   // Take the footprint from whichever strip is populated (they coincide when both exist).
-  const EdgeStrip& shape = (!fine.cL.empty() || !fine.fL.empty() || fine.I1 >= fine.I0) ? fine : coarse;
+  const EdgeStrip& shape =
+      (!fine.cL.empty() || !fine.fL.empty() || fine.I1 >= fine.I0) ? fine : coarse;
   EdgeStrip g;
   g.I0 = shape.I0;
   g.I1 = shape.I1;
@@ -197,8 +322,9 @@ inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fi
   g.J1 = shape.J1;
   const int nJ = (g.J1 - g.J0 + 1) * nc, nI = (g.I1 - g.I0 + 1) * nc;
   auto take = [](const std::vector<Real>& v, int n) {
-    return v.size() == static_cast<std::size_t>(n) ? v : std::vector<Real>(static_cast<std::size_t>(n),
-                                                                           Real(0));
+    return v.size() == static_cast<std::size_t>(n)
+               ? v
+               : std::vector<Real>(static_cast<std::size_t>(n), Real(0));
   };
   g.cL = take(coarse.cL, nJ);
   g.cR = take(coarse.cR, nJ);
@@ -247,7 +373,8 @@ inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const Ed
   }
   ref.gather();  // all_reduce (identity in serial); single-writer per slot -> associativity-free
   device_fence();
-  for (int pb = 0; pb < Uc.local_size(); ++pb) {  // apply to the local coarse boxes under coverage guard
+  for (int pb = 0; pb < Uc.local_size();
+       ++pb) {  // apply to the local coarse boxes under coverage guard
     Array4 c = Uc.fab(pb).array();
     const Box2D pbx = Uc.box(pb);
     for (int J = pbx.lo[1]; J <= pbx.hi[1]; ++J)
@@ -255,7 +382,8 @@ inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const Ed
         if (!ref.in(I, J))
           continue;
         for (int kk = 0; kk < nc; ++kk)
-          c(I, J, kk) += ref.at(I, J, kk);  // reflux (0 if no face); covered cells were average_down'd
+          c(I, J, kk) +=
+              ref.at(I, J, kk);  // reflux (0 if no face); covered cells were average_down'd
       }
   }
 }
@@ -275,10 +403,11 @@ inline void AmrRuntime::level_rhs_capture_into(std::size_t b, int k, MultiFab& U
   blocks_[b].level_flux_capture(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 
-inline void AmrRuntime::level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R,
-                                                        MultiFab& Fx, MultiFab& Fy) {
+inline void AmrRuntime::level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U,
+                                                        MultiFab& R, MultiFab& Fx, MultiFab& Fy) {
   if (!blocks_[b].level_flux_capture_neg_div)
-    throw std::runtime_error("AmrRuntime::level_neg_div_flux_capture_into: block '" + blocks_[b].name +
+    throw std::runtime_error("AmrRuntime::level_neg_div_flux_capture_into: block '" +
+                             blocks_[b].name +
                              "' has no flux-only flux-materialising per-level residual closure");
   fill_level_state_cf_ghosts(b, k, U);
   blocks_[b].level_flux_capture_neg_div(U, aux_[k], level_geom(k), Fx, Fy, R);

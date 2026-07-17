@@ -10,9 +10,10 @@ from pops.codegen.loader import CompiledProblem
 class ExternalMetadataProvider:
     def __pops_artifact_model_metadata__(self):
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "state_spaces": ("electrons",),
             "cons_names": ("density", "momentum"),
+            "cons_roles": ("Density", "MomentumX"),
             "n_vars": 2,
             "params": {},
             "aux_names": ("electric_field",),
@@ -40,6 +41,7 @@ def test_external_metadata_provider_is_consumed_without_concrete_class_dispatch(
     assert row.block_name == "plasma"
     assert row.state_space == "electrons"
     assert row.cons_names == ("density", "momentum")
+    assert row.cons_roles == ("Density", "MomentumX")
     assert row.capabilities == {"cpu": True, "amr": False}
     assert row.wave_speed_provider == "jacobian"
 

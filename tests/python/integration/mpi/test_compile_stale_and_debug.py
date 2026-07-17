@@ -15,12 +15,12 @@ the sibling ``test_compile_problem.py``):
 Runs in CI (gate rebuilds _pops with the compile toolchain); skips locally when no compiler / Kokkos
 is visible or the .so compile fails -- never faking the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
 import sys
 
 
 def _skip(msg):
-    print("skip test_compile_stale_and_debug (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_compile_stale_and_debug (%s)' % msg)
 
 
 try:

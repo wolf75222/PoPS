@@ -7,6 +7,7 @@ ne lit que phi/grad_x/grad_y reste a la largeur de base (pas de n_aux emis -> bi
 verifie : (1) le helper aux_n_aux ; (2) l'emission conditionnelle de n_aux ; (3) la retro-compat ;
 (4) la validation des noms ; (5) si un compilateur est present, que la brique B_z compile et lit B_z.
 """
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -57,7 +58,7 @@ def main():
     # (5) compile-check : la brique B_z compile et lit bien B_z (sur les vrais en-tetes pops).
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> compile-check sautee (%s)" % INCLUDE)
+        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> compile-check sautee (%s)' % INCLUDE)
         print("test_dsl_aux_naux : OK (forme seulement)")
         return
 

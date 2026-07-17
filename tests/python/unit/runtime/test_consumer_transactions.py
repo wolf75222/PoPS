@@ -94,7 +94,8 @@ def _manifest_for(
         schedule=Schedule(Every(AcceptedStep(clock), n)),
         target_uri="file:///adc-685/%s" % name,
         output_format=(
-            HDF5(parallel=True) if parallel_mode is ParallelMode.COLLECTIVE else NPZ()),
+            HDF5(mode=ParallelMode.COLLECTIVE)
+            if parallel_mode is ParallelMode.COLLECTIVE else NPZ()),
         parallel_mode=parallel_mode,
         dependencies=dependencies,
         failure_action=action,
@@ -194,22 +195,37 @@ def test_graph_and_plan_are_semantic_and_insertion_order_independent():
     assert len(plan.lowering_coverage.rows) == 2
 
 
-def test_collective_mode_requires_a_nonserial_context_before_planning():
+@pytest.mark.parametrize(
+    "parallel_mode",
+    (ParallelMode.ROOT, ParallelMode.COLLECTIVE, ParallelMode.PER_RANK),
+)
+def test_distributed_modes_require_a_nonserial_context_before_planning(parallel_mode):
     _, serial_runtime = _runtime()
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-collective"))
-    manifest = _manifest_for(
-        serial_runtime, "collective", clock, parallel_mode=ParallelMode.COLLECTIVE)
+    output_format = (
+        HDF5(mode=parallel_mode)
+        if parallel_mode is not ParallelMode.PER_RANK
+        else NPZ(mode=ParallelMode.PER_RANK)
+    )
+    manifest = replace(
+        _manifest_for(serial_runtime, "distributed", clock),
+        output_format=output_format,
+        parallel_mode=parallel_mode,
+    )
     with pytest.raises(RuntimePlanningError) as error:
         plan_accepted_side_effects(serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
-    assert error.value.code == "collective_consumer_requires_distributed_context"
+    assert error.value.code == "distributed_consumer_requires_distributed_context"
 
     _, collective_runtime = _runtime(collective=True)
-    manifest = _manifest_for(
-        collective_runtime, "collective", clock, parallel_mode=ParallelMode.COLLECTIVE)
+    manifest = replace(
+        _manifest_for(collective_runtime, "distributed", clock),
+        output_format=output_format,
+        parallel_mode=parallel_mode,
+    )
     with pytest.raises(RuntimePlanningError) as error:
         plan_accepted_side_effects(
             collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
-    assert error.value.code == "collective_consumer_requires_distributed_context"
+    assert error.value.code == "distributed_consumer_requires_distributed_context"
     assert error.value.evidence == {"communicator": "serial"}
 
 

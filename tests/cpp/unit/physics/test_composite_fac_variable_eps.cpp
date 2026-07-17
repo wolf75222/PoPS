@@ -156,5 +156,7 @@ static int pops_run_test_composite_fac_variable_eps(int argc, char** argv) {
 }
 
 TEST(test_composite_fac_variable_eps, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_variable_eps, "test_composite_fac_variable_eps"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_variable_eps,
+                                    "test_composite_fac_variable_eps"),
+            0);
 }

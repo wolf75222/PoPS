@@ -5,8 +5,8 @@ list_state_spaces / list_field_spaces return the typed registry metadata. The Co
 methods read the carried model's metadata -- no need to load or run the .so -- so they are
 exercised here on a CompiledProblem built directly (not via the Kokkos-only compile). Pure Python.
 """
+from tests.python.support.requirements import require_native_or_skip
 import gc
-import sys
 import weakref
 
 try:
@@ -17,8 +17,7 @@ try:
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
     from typed_program_support import fresh_field_refs
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_introspection (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_introspection (pops unavailable: %s)' % exc)
 
 
 def _op(m, name):

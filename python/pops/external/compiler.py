@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from pops._manifest_protocol import exact_mapping, strict_json_loads
@@ -50,14 +51,16 @@ def compile_component(
     """Instantiate, compile, link and audit one source component for the proved CPU target."""
     if type(component) is not ExternalComponent:
         raise TypeError("compile_component requires an exact ExternalComponent")
+    from pops.codegen._compile_platform import require_shared_library_compile_platform
+    require_shared_library_compile_platform("compile_component", windows_supported=False)
 
     # Toolchain ownership stays in the private codegen implementation. Importing the public
     # external-component package remains pure until the explicit compilation operation is called.
     from pops.codegen.toolchain import (
         _probe_cxx_std,
         _run_compile,
+        _check_headers_match_module,
         loader_cxx_std,
-        pops_header_signature,
         pops_include,
         pops_loader_build_flags,
     )
@@ -66,14 +69,27 @@ def compile_component(
     target = interface.resolve_native_target(component)
     package = component.component_type.package
     include = include or pops_include()
-    signature = pops_header_signature(include)
+    signature = _check_headers_match_module(include)
     compiler, cflags, lflags = pops_loader_build_flags(cxx)
+    cflags = [*cflags, '-DPOPS_HEADER_SIG="%s"' % signature]
     standard = _probe_cxx_std(compiler, loader_cxx_std())
-    abi = "%s|%s|%s" % (signature, compiler, standard)
-    from pops.runtime._platform_manifest import proven_serial_manifest
+    from pops import _pops
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops._platform_contracts import artifact_platform_manifest
 
-    platform_manifest = proven_serial_manifest(
-        backend="aot-component", target="component", abi=abi)
+    # The component is compiled with the same shared loader flags as generated Programs.  Its
+    # manifest must therefore describe that selected host communicator as well; claiming ``serial``
+    # for a binary built with POPS_HAS_MPI defeats the exact launch gate later at installation.
+    communicator = native_mpi_communicator(_pops)
+    host_abi = getattr(_pops, "abi_key", None)
+    if not callable(host_abi) or not isinstance((abi := host_abi()), str) or not abi:
+        raise RuntimeError("loaded pops._pops exposes no exact native abi_key()")
+    platform_manifest = artifact_platform_manifest(
+        backend="aot-component",
+        target="component",
+        component=SimpleNamespace(abi_key=abi),
+        communicator=communicator,
+    )
     component.component_manifest.require_target(target)
     symbols = {
         name: component.component_manifest.entry_points[name]

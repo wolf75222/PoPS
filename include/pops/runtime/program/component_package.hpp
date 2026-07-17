@@ -45,8 +45,7 @@ struct RegisteredComponent final {
 // Compile-time marker only.  Package discovery and registration are manifest-driven and happen
 // before compilation; this macro deliberately creates no static initializer or process-global map.
 #define POPS_COMPONENT_PACKAGE_CONCAT_IMPL(left, right) left##right
-#define POPS_COMPONENT_PACKAGE_CONCAT(left, right) \
-  POPS_COMPONENT_PACKAGE_CONCAT_IMPL(left, right)
-#define POPS_REGISTER_COMPONENT(Component)                                                \
-  using POPS_COMPONENT_PACKAGE_CONCAT(pops_registered_component_, __COUNTER__) =          \
+#define POPS_COMPONENT_PACKAGE_CONCAT(left, right) POPS_COMPONENT_PACKAGE_CONCAT_IMPL(left, right)
+#define POPS_REGISTER_COMPONENT(Component)                                       \
+  using POPS_COMPONENT_PACKAGE_CONCAT(pops_registered_component_, __COUNTER__) = \
       ::pops::component_package::RegisteredComponent<Component>

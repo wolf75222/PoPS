@@ -121,14 +121,14 @@ struct EbThresholds {
 /// GeometricMG tolerance/cycles, and the verbose diagnostics flag. The outer solve stops at
 /// max(rel_tol * ||R(0)||inf, abs_tol), where R(0) is the exact composite affine forcing.
 struct CompositeFacOptions {
-  int max_iters = kFACDefaultMaxIters;               ///< FAC two-way iterations.
-  int fine_sweeps = kFACDefaultFineSweeps;           ///< SOR sweeps per fine-patch solve.
-  Real rel_tol = kFACDefaultRelTol;                  ///< relative composite-residual tolerance.
-  Real abs_tol = kFACDefaultAbsTol;                  ///< absolute composite-residual floor.
-  Real coarse_rel_tol = kFACInitialCoarseRelTol;     ///< internal coarse GeometricMG rel_tol.
-  Real coarse_abs_tol = kFACInitialCoarseAbsTol;     ///< internal coarse GeometricMG abs_tol.
-  int coarse_cycles = kFACInitialCoarseMaxCycles;    ///< internal coarse GeometricMG max_cycles.
-  bool verbose = false;                              ///< record the per-iteration residual trace.
+  int max_iters = kFACDefaultMaxIters;             ///< FAC two-way iterations.
+  int fine_sweeps = kFACDefaultFineSweeps;         ///< SOR sweeps per fine-patch solve.
+  Real rel_tol = kFACDefaultRelTol;                ///< relative composite-residual tolerance.
+  Real abs_tol = kFACDefaultAbsTol;                ///< absolute composite-residual floor.
+  Real coarse_rel_tol = kFACInitialCoarseRelTol;   ///< internal coarse GeometricMG rel_tol.
+  Real coarse_abs_tol = kFACInitialCoarseAbsTol;   ///< internal coarse GeometricMG abs_tol.
+  int coarse_cycles = kFACInitialCoarseMaxCycles;  ///< internal coarse GeometricMG max_cycles.
+  bool verbose = false;                            ///< record the per-iteration residual trace.
 };
 
 struct EffectiveNewtonOptions {
@@ -196,7 +196,8 @@ struct EffectivePoissonOptions {
   int pre_smooth = kMGDefaultPreSmooth;
   int post_smooth = kMGDefaultPostSmooth;
   int bottom_sweeps = kMGDefaultBottomSweeps;
-  int coarse_threshold = kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
+  int coarse_threshold =
+      kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
   std::string smoother = "red_black_gauss_seidel";
   std::string coarse = "direct_small_grid";
   bool has_epsilon_field = false;

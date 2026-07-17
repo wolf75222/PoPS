@@ -66,6 +66,13 @@ def resolve(
             message="heterogeneous AMR layouts have no proved common regrid/transfer runtime",
         )
     target = "amr_system" if adaptive else "system"
+    if target == "system" and len(problem.initials):
+        raise ValueError(
+            "Uniform resolution does not consume Case initial conditions; "
+            "supply the complete block state through pops.bind(initial_state=...). "
+            "Case initials and initial_values are the single typed initialization authority "
+            "for AMR artifacts only."
+        )
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -287,6 +294,8 @@ def resolve(
         else problem._consumers.resolve(
             problem.resolve, layout_plan, owner=problem.owner_path.canonical())
     )
+    from pops.output._restart_provider import RestartAuthority
+    restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
@@ -296,6 +305,7 @@ def resolve(
         },
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, consumer_graph=consumer_graph,
+        restart_authority=restart_authority,
         libraries=(),
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),
@@ -413,6 +423,12 @@ def bind(artifact: Any, inputs: Any) -> Any:
     artifact.verify()
     inputs.verify()
     plan = artifact.plan
+    adaptive = any(row.adaptive for row in plan.layout_plan.layouts)
+    if adaptive and plan.initial_condition_plan is None:
+        raise ValueError(
+            "AMR bind requires a resolved InitialConditionPlan; add typed initial data to the "
+            "Case and supply only its BindArray values through initial_values"
+        )
     if plan.initial_condition_plan is None:
         if inputs.initial_values:
             raise ValueError("BindInputs.initial_values requires a resolved InitialConditionPlan")

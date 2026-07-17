@@ -26,15 +26,16 @@ namespace pops {
 /// never registry indices or a reserved default-field sentinel. @c layout is NON-OWNING: it points
 /// at the installed FieldSolvePlan's manifest, whose lifetime outlives the context.
 struct FieldContext {
-  std::string provider_identity;       ///< complete authenticated FieldOperator/provider-pack id
-  std::string owner_identity;          ///< qualified block/partition owner id
-  int stage_id = -1;                   ///< -1 = live; >= 0 = a specific stage
-  const AuxLayout* layout = nullptr;   ///< non-owning manifest for this solve plan's outputs
+  std::string provider_identity;      ///< complete authenticated FieldOperator/provider-pack id
+  std::string owner_identity;         ///< qualified block/partition owner id
+  int stage_id = -1;                  ///< -1 = live; >= 0 = a specific stage
+  const AuxLayout* layout = nullptr;  ///< non-owning manifest for this solve plan's outputs
 
   /// True when this context was produced by exactly the requested qualified provider, owner and
   /// stage. There is deliberately no wildcard/default-provider match.
   bool matches(std::string_view req_provider, std::string_view req_owner, int req_stage) const {
-    return provider_identity == req_provider && owner_identity == req_owner && stage_id == req_stage;
+    return provider_identity == req_provider && owner_identity == req_owner &&
+           stage_id == req_stage;
   }
 
   /// Resolve an output handle to its real aux component, deferring to the manifest. Throws a

@@ -28,8 +28,7 @@ inline int parse_route_index(const RouteInfo (&table)[N], RouteFamily family,
 }
 
 template <std::size_t N, class Id>
-inline const RouteInfo& checked_route_info(const RouteInfo (&table)[N], Id id,
-                                           RouteFamily family) {
+inline const RouteInfo& checked_route_info(const RouteInfo (&table)[N], Id id, RouteFamily family) {
   const int index = static_cast<int>(id);
   if (index < 0 || index >= static_cast<int>(N) || table[index].index != index)
     throw std::runtime_error(std::string("routes: unknown ") + route_family_name(family) +
@@ -47,14 +46,16 @@ constexpr bool route_indices_sequential(const RouteInfo (&table)[N]) {
 
 }  // namespace detail
 
-#define POPS_DEFINE_ROUTE_ACCESSORS(Name, Id, Table, Family)                                  \
-  inline Id parse_##Name##_route(const std::string& token, const char* context = "routes") {  \
+#define POPS_DEFINE_ROUTE_ACCESSORS(Name, Id, Table, Family)                                       \
+  inline Id parse_##Name##_route(const std::string& token, const char* context = "routes") {       \
     return static_cast<Id>(detail::parse_route_index(Table, RouteFamily::Family, token, context)); \
-  }                                                                                            \
-  inline const RouteInfo& route_info(Id id) {                                                  \
-    return detail::checked_route_info(Table, id, RouteFamily::Family);                         \
-  }                                                                                            \
-  inline const char* route_token(Id id) { return route_info(id).token; }                       \
+  }                                                                                                \
+  inline const RouteInfo& route_info(Id id) {                                                      \
+    return detail::checked_route_info(Table, id, RouteFamily::Family);                             \
+  }                                                                                                \
+  inline const char* route_token(Id id) {                                                          \
+    return route_info(id).token;                                                                   \
+  }                                                                                                \
   static_assert(detail::route_indices_sequential(Table), #Name " route index drift")
 
 #include <pops/runtime/config/generated_route_accessors.inc>
@@ -63,12 +64,15 @@ constexpr bool route_indices_sequential(const RouteInfo (&table)[N]) {
 
 inline constexpr int kReservedRouteWireId255 = 255;
 
-inline std::string route_registry_signature() { return kRouteRegistrySignature; }
+inline std::string route_registry_signature() {
+  return kRouteRegistrySignature;
+}
 
 inline void verify_route_manifest(const std::string& embedded, const char* context) {
   if (embedded.empty())
-    throw std::runtime_error(std::string(context) +
-                             ": compiled artifact is missing the required route registry signature");
+    throw std::runtime_error(
+        std::string(context) +
+        ": compiled artifact is missing the required route registry signature");
   const std::string current = route_registry_signature();
   if (embedded == current)
     return;

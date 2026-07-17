@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 import pops
+import numpy as np
 from pops import interfaces
 from pops.codegen.toolchain import (
     _probe_cxx_std,
@@ -25,7 +26,9 @@ from pops.external import (
     load,
 )
 from pops.model import ComponentManifest
-from pops.output import CoarseOnly, ConsumerGraph, ExternalWriter, ScientificOutput
+from pops.output import (
+    CoarseOnly, ConsumerGraph, ExternalWriter, ParallelMode, ScientificOutput,
+)
 from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 from pops.time import every, on_start
 
@@ -98,6 +101,7 @@ const PopsComponentInterfaceEntryV1 interface_entry = {{
 }};
 const PopsComponentApiV1 component_api = {{
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   {json.dumps(manifest.component_id)},
   {json.dumps(manifest.semantic_digest.token)},
@@ -259,6 +263,7 @@ const PopsComponentInterfaceEntryV1 interface_entry = {{
 }};
 const PopsComponentApiV1 component_api = {{
   sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
   POPS_COMPONENT_CATALOG_SHA256_V1,
   {json.dumps(manifest.component_id)},
   {json.dumps(manifest.semantic_digest.token)},
@@ -281,9 +286,9 @@ _CONSUMER = r'''#include <pops/runtime/dynamic/component_consumers.hpp>
 #include <string>
 
 int main(int argc, char** argv) {
-  if (argc != 6) return 90;
+  if (argc != 7) return 90;
   pops::component::ExpectedNativeComponent expected{
-    argv[2], argv[3], argv[4], argv[5],
+    argv[2], argv[3], argv[4], argv[5], argv[6],
     {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)}}
   };
   auto loaded = pops::component::LoadedComponent::load(argv[1], expected);
@@ -357,6 +362,9 @@ def test_source_component_executes_through_generic_native_loader_and_flux_consum
     package = load(package_path)
     component = package.require("average", interface=interfaces.NumericalFlux)()
     artifact = compile_component(component)
+    from pops import _pops
+    assert artifact.platform_manifest.communicator.require("component communicator") == (
+        "MPI_COMM_WORLD" if _pops.__has_mpi__ else "serial")
     install_root = tmp_path / "installed"
     installed = artifact.install(install_root)
     assert installed.path == install_root / (
@@ -381,8 +389,11 @@ def test_source_component_executes_through_generic_native_loader_and_flux_consum
         str(consumer), str(installed.path), manifest.component_id,
         manifest.semantic_digest.token, manifest.manifest_digest.token,
         interfaces.NumericalFlux.to_data()["catalog_sha256"],
+        _pops.abi_key(),
     ], capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr
+    loaded = installed.load()
+    assert loaded.native_handle.report()["abi_key"] == _pops.abi_key()
     assert installed.to_data()["provenance"]["origin"] == "source"
     assert installed.runtime_contract.native_interface["name"] == "numerical_flux"
     installed.path.write_bytes(b"tampered")
@@ -420,17 +431,35 @@ def _writer_case(example, artifacts, *, adaptive: bool):
     core = example.build_authoring(output_root="unused")
     core.numerics.boundaries.add(example.build_transport_boundaries(core))
     core.case.numerics(core.numerics, block=core.tracer)
-    core.case.initials.add(example.build_initial_condition(core))
+    if adaptive:
+        core.case.initials.add(example.build_initial_condition(core))
     core.case.program(core.program)
+    communicators = {
+        artifact.platform_manifest.communicator.require(
+            "external Writer artifact communicator"
+        )
+        for artifact in artifacts
+    }
+    if communicators == {"serial"}:
+        output_mode = ParallelMode.SERIAL
+    elif communicators == {"MPI_COMM_WORLD"}:
+        output_mode = ParallelMode.ROOT
+    else:
+        raise RuntimeError(
+            "external Writers do not share one supported communicator: %r"
+            % sorted(communicators)
+        )
     outputs = []
     if not adaptive:
         outputs.append(ScientificOutput(
-            format=ExternalWriter(artifacts[0], extension=".popsbin"),
+            format=ExternalWriter(
+                artifacts[0], extension=".popsbin", mode=output_mode),
             schedule=on_start(clock=core.program.clock),
             fields=(core.tracer_state,), levels=CoarseOnly(), target="reject-stage",
         ))
     outputs.append(ScientificOutput(
-        format=ExternalWriter(artifacts[-1], extension=".popsbin"),
+        format=ExternalWriter(
+            artifacts[-1], extension=".popsbin", mode=output_mode),
         schedule=every(1, clock=core.program.clock),
         fields=(core.tracer_state,),
         levels=SelectedLevels(0, 1) if adaptive else CoarseOnly(),
@@ -438,16 +467,36 @@ def _writer_case(example, artifacts, *, adaptive: bool):
     ))
     core.case.consumers(ConsumerGraph.from_consumers(tuple(outputs)))
     layout = example.build_amr_layout(core) if adaptive else Uniform(core.grid)
-    return core, layout
+    if adaptive:
+        initial_state = None
+    else:
+        nx, ny = core.grid.cells
+        initial_state = np.full((1, ny, nx), 0.05, dtype=np.float64)
+    return core, layout, initial_state
 
 
-def _bind_writer_case(example, core, layout, artifacts):
+def _bind_writer_case(example, core, layout, artifacts, initial_state=None):
     validated = pops.validate(core.case)
     resolved = pops.resolve(validated, layout=layout, components=tuple(artifacts))
     compiled = pops.compile(resolved)
+    communicator = compiled.platform_manifest.communicator.require(
+        "external Writer simulation communicator"
+    )
+    resources = (
+        {}
+        if communicator == "serial"
+        else {"execution_context": pops.ExecutionContext.mpi_world(compiled)}
+    )
+    bind_inputs = (
+        {}
+        if initial_state is None
+        else {"initial_state": {"tracer": initial_state}}
+    )
     simulation = pops.bind(
         compiled,
         params=example.build_bind_params(core),
+        resources=resources,
+        **bind_inputs,
     )
     return simulation
 
@@ -457,23 +506,24 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
     first = _compile_writer(tmp_path / "source-one", "writer_one")
     second = _compile_writer(tmp_path / "source-two", "writer_two")
 
-    uniform_core, uniform_layout = _writer_case(
+    uniform_core, uniform_layout, uniform_initial = _writer_case(
         example, (first, second), adaptive=False)
     uniform = _bind_writer_case(
-        example, uniform_core, uniform_layout, (first, second))
+        example, uniform_core, uniform_layout, (first, second), uniform_initial)
     runtime = uniform
 
     # Rejection owns and discards the verified native temporary without publishing it.
     runtime._output_root = tmp_path / "uniform-output"
     transactions = runtime._stage_consumers(at_start=True)
     assert len(transactions) == 1
-    staged = tuple(runtime._output_root.glob(".*.writer-stage"))
+    stage_dir = runtime._output_root / "reject-stage"
+    staged = tuple(stage_dir.glob(".*.writer-stage"))
     assert len(staged) == 1 and staged[0].is_file()
     rejected = transactions[0].reject()
     runtime._output_root = None
     assert rejected.status == "rejected"
     assert not staged[0].exists()
-    assert not tuple((tmp_path / "uniform-output").glob("*.popsbin"))
+    assert not tuple(stage_dir.glob("*.popsbin"))
 
     # Every output carries one qualified component authority; one remaining installed Writer
     # can never stand in for a missing named Writer.
@@ -484,6 +534,9 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
         RuntimeConsumerPublisher(SimpleNamespace(
             _consumer_graph=runtime.consumer_graph,
             _installed_components={ids[-1]: runtime._installed_components[ids[-1]]},
+            _component_manifests=runtime._component_manifests,
+            _execution_context=runtime._execution_context,
+            _layout_plan=runtime._layout_plan,
         ))
 
     # Two separately qualified Writers cannot claim the same canonical target.
@@ -495,29 +548,36 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
         RuntimeConsumerPublisher(SimpleNamespace(
             _consumer_graph=collision_graph,
             _installed_components=runtime._installed_components,
+            _component_manifests=runtime._component_manifests,
+            _execution_context=runtime._execution_context,
+            _layout_plan=runtime._layout_plan,
         ))
 
     run_report = pops.run(
         uniform, t_end=1.0e-4, max_steps=1,
         output_dir=tmp_path / "uniform-run")
     assert run_report.accepted_steps == 1
-    uniform_files = tuple((tmp_path / "uniform-run").glob("*.popsbin"))
-    assert uniform_files
+    uniform_files = tuple((tmp_path / "uniform-run" / "uniform-writer").glob("*.popsbin"))
+    assert len(uniform_files) == 1
+    assert not tuple((tmp_path / "uniform-run").rglob(".*.writer-stage*"))
     assert any("fields=1" in path.read_text(encoding="utf-8")
                for path in uniform_files)
     report = uniform.inspect()
     assert report.runtime == "uniform"
     assert len(report.instance["installed_components"]) == 2
 
-    amr_core, amr_layout = _writer_case(example, (first,), adaptive=True)
+    amr_core, amr_layout, amr_initial = _writer_case(
+        example, (first,), adaptive=True)
+    assert amr_initial is None
     amr = _bind_writer_case(
         example, amr_core, amr_layout, (first,))
     run_report = pops.run(
         amr, t_end=1.0e-4, max_steps=1,
         output_dir=tmp_path / "amr-run")
     assert run_report.accepted_steps == 1
-    amr_files = tuple((tmp_path / "amr-run").glob("*.popsbin"))
-    assert amr_files
+    amr_files = tuple((tmp_path / "amr-run" / "amr-writer").glob("*.popsbin"))
+    assert len(amr_files) == 1
+    assert not tuple((tmp_path / "amr-run").rglob(".*.writer-stage*"))
     body = amr_files[0].read_text(encoding="utf-8")
     assert "geometries=2 fields=2" in body
     assert " level=0 " in body and " level=1 " in body

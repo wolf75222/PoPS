@@ -87,8 +87,8 @@ inline const CanonicalValue::Array& require_array(const CanonicalValue& value,
 inline const std::string& require_text(const CanonicalValue& value, const std::string& path,
                                        bool allow_empty = false) {
   if (value.kind() != CanonicalValue::Kind::kText || (!allow_empty && value.text_value().empty()))
-    refuse("expected_text", path, path + " must be " +
-           std::string(allow_empty ? "text" : "non-empty text"));
+    refuse("expected_text", path,
+           path + " must be " + std::string(allow_empty ? "text" : "non-empty text"));
   return value.text_value();
 }
 
@@ -96,9 +96,8 @@ inline const std::string& require_canonical_text(const CanonicalValue& value,
                                                  const std::string& path,
                                                  bool allow_empty = false) {
   const std::string& text = require_text(value, path, allow_empty);
-  if (!text.empty() &&
-      (std::isspace(static_cast<unsigned char>(text.front())) != 0 ||
-       std::isspace(static_cast<unsigned char>(text.back())) != 0))
+  if (!text.empty() && (std::isspace(static_cast<unsigned char>(text.front())) != 0 ||
+                        std::isspace(static_cast<unsigned char>(text.back())) != 0))
     refuse("invalid_string", path, path + " must not have surrounding whitespace");
   return text;
 }
@@ -107,8 +106,8 @@ inline bool identifier_spelling(const std::string& text) {
   if (text.empty() || text.front() < 'a' || text.front() > 'z')
     return false;
   return std::all_of(text.begin() + 1, text.end(), [](unsigned char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' ||
-           ch == '.' || ch == '-';
+    return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' ||
+           ch == '-';
   });
 }
 
@@ -117,8 +116,8 @@ inline bool member_identifier_spelling(const std::string& text) {
                         (text.front() >= 'a' && text.front() <= 'z') || text.front() == '_'))
     return false;
   return std::all_of(text.begin() + 1, text.end(), [](unsigned char ch) {
-    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-           (ch >= '0' && ch <= '9') || ch == '_';
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+           ch == '_';
   });
 }
 
@@ -132,8 +131,8 @@ inline bool absolute_namespaced_uri(const std::string& uri) {
     return false;
   for (std::size_t index = 1; index < colon; ++index) {
     const unsigned char ch = static_cast<unsigned char>(uri[index]);
-    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) &&
-        ch != '+' && ch != '-' && ch != '.')
+    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) && ch != '+' && ch != '-' &&
+        ch != '.')
       return false;
   }
   const std::string remainder = uri.substr(colon + 1);
@@ -146,8 +145,7 @@ inline bool absolute_namespaced_uri(const std::string& uri) {
 inline std::int64_t require_integer(const CanonicalValue& value, const std::string& path,
                                     std::int64_t minimum) {
   if (value.kind() != CanonicalValue::Kind::kInt || value.integer() < minimum)
-    refuse("invalid_integer", path, path + " must be an integer >= " +
-           std::to_string(minimum));
+    refuse("invalid_integer", path, path + " must be an integer >= " + std::to_string(minimum));
   return value.integer();
 }
 
@@ -186,8 +184,7 @@ inline CanonicalValue normalize_version(const CanonicalValue& value) {
 
 inline CanonicalValue normalize_target(const CanonicalValue& value) {
   const auto& mapping = exact_map(value, kComponentTargetFields, "target");
-  static constexpr const char* variant_fields[] = {
-      "dimension", "scalar", "device", "features"};
+  static constexpr const char* variant_fields[] = {"dimension", "scalar", "device", "features"};
   const auto& variants = require_array(field(mapping, "variants", "target"), "target.variants");
   CanonicalValue::Array normalized;
   normalized.reserve(variants.size());
@@ -201,13 +198,13 @@ inline CanonicalValue normalize_target(const CanonicalValue& value) {
         {"dimension", field(variant, "dimension", path)},
         {"scalar", field(variant, "scalar", path)},
         {"device", field(variant, "device", path)},
-        {"features", normalize_set_array(field(variant, "features", path),
-                                          path + ".features", true)},
+        {"features",
+         normalize_set_array(field(variant, "features", path), path + ".features", true)},
     }));
   }
   return CanonicalValue::map({
-      {"variants", normalize_set_array(CanonicalValue::array(std::move(normalized)),
-                                       "target.variants")},
+      {"variants",
+       normalize_set_array(CanonicalValue::array(std::move(normalized)), "target.variants")},
   });
 }
 
@@ -223,22 +220,22 @@ inline CanonicalValue normalize_determinism(const CanonicalValue& value) {
            "determinism.classification has an unsupported value");
   return CanonicalValue::map({
       {"classification", field(mapping, "classification", "determinism")},
-      {"scope", normalize_set_array(field(mapping, "scope", "determinism"),
-                                    "determinism.scope", true)},
+      {"scope",
+       normalize_set_array(field(mapping, "scope", "determinism"), "determinism.scope", true)},
   });
 }
 
 inline CanonicalValue normalize_restart(const CanonicalValue& value) {
   static constexpr const char* fields[] = {"mode", "schema_uri", "schema_version"};
   const auto& mapping = exact_map(value, fields, "restart");
-  const std::string& mode = require_canonical_text(field(mapping, "mode", "restart"),
-                                                   "restart.mode");
+  const std::string& mode =
+      require_canonical_text(field(mapping, "mode", "restart"), "restart.mode");
   if (mode != "stateless" && mode != "stateful" && mode != "unsupported")
     refuse("invalid_restart_mode", "restart.mode", "restart.mode has an unsupported value");
-  const std::string& schema_uri = require_canonical_text(
-      field(mapping, "schema_uri", "restart"), "restart.schema_uri", true);
-  const std::int64_t schema_version = require_integer(
-      field(mapping, "schema_version", "restart"), "restart.schema_version", 0);
+  const std::string& schema_uri =
+      require_canonical_text(field(mapping, "schema_uri", "restart"), "restart.schema_uri", true);
+  const std::int64_t schema_version =
+      require_integer(field(mapping, "schema_version", "restart"), "restart.schema_version", 0);
   if (mode == "stateful") {
     if (!absolute_namespaced_uri(schema_uri) || schema_version < 1)
       refuse("invalid_restart_schema", "restart",
@@ -256,11 +253,11 @@ inline CanonicalValue normalize_precision(const CanonicalValue& value) {
   (void)require_canonical_text(field(mapping, "accumulation", "precision"),
                                "precision.accumulation");
   return CanonicalValue::map({
-      {"inputs", normalize_set_array(field(mapping, "inputs", "precision"),
-                                     "precision.inputs", true)},
+      {"inputs",
+       normalize_set_array(field(mapping, "inputs", "precision"), "precision.inputs", true)},
       {"accumulation", field(mapping, "accumulation", "precision")},
-      {"outputs", normalize_set_array(field(mapping, "outputs", "precision"),
-                                      "precision.outputs", true)},
+      {"outputs",
+       normalize_set_array(field(mapping, "outputs", "precision"), "precision.outputs", true)},
   });
 }
 
@@ -275,9 +272,8 @@ inline CanonicalValue normalize_entry_points(const CanonicalValue& value) {
 }
 
 inline bool has_field(const CanonicalValue::Map& mapping, const std::string& name) {
-  return std::any_of(mapping.begin(), mapping.end(), [&](const auto& row) {
-    return row.first == name;
-  });
+  return std::any_of(mapping.begin(), mapping.end(),
+                     [&](const auto& row) { return row.first == name; });
 }
 
 inline CanonicalValue normalize_interfaces(const CanonicalValue& value,
@@ -308,8 +304,7 @@ inline CanonicalValue normalize_interfaces(const CanonicalValue& value,
     const std::string& binding =
         require_canonical_text(field(row, "binding", path), path + ".binding");
     if (!member_identifier_spelling(binding))
-      refuse("invalid_string", path + ".binding",
-             path + ".binding has a non-canonical spelling");
+      refuse("invalid_string", path + ".binding", path + ".binding has a non-canonical spelling");
     if (mode == "entry_point" && !has_field(entries, binding))
       refuse("missing_interface_entry_point", path + ".binding",
              "interface '" + name + "' binds undeclared entry point '" + binding + "'");
@@ -345,12 +340,12 @@ inline CanonicalValue normalize_extensions(const CanonicalValue& value) {
       static constexpr const char* documentary_fields[] = {"kind", "data"};
       (void)exact_map(extension, documentary_fields, "extensions." + name);
     } else if (kind == "semantic") {
-      static constexpr const char* semantic_fields[] = {
-          "kind", "schema_uri", "schema_version", "data"};
+      static constexpr const char* semantic_fields[] = {"kind", "schema_uri", "schema_version",
+                                                        "data"};
       const auto& semantic = exact_map(extension, semantic_fields, "extensions." + name);
       const auto& schema_uri = field(semantic, "schema_uri", "extensions." + name);
-      const std::string& uri = require_canonical_text(
-          schema_uri, "extensions." + name + ".schema_uri");
+      const std::string& uri =
+          require_canonical_text(schema_uri, "extensions." + name + ".schema_uri");
       if (!absolute_namespaced_uri(uri))
         refuse("invalid_extension_schema_uri", "extensions." + name + ".schema_uri",
                "semantic extension schema_uri must be absolute");
@@ -369,12 +364,12 @@ inline std::string identity_token(const char* domain, const CanonicalValue& payl
   CanonicalValue envelope = CanonicalValue::map({
       {"protocol", CanonicalValue::text("pops.identity")},
       {"domain", CanonicalValue::text(domain)},
-      {"schema_version", CanonicalValue(static_cast<std::int64_t>(kComponentManifestSchemaVersion))},
+      {"schema_version",
+       CanonicalValue(static_cast<std::int64_t>(kComponentManifestSchemaVersion))},
       {"payload", payload},
   });
-  return std::string("pops.") + domain + ".v" +
-         std::to_string(kComponentManifestSchemaVersion) + ":sha256:" +
-         identity::sha256_hex(identity::canonical_bytes(envelope));
+  return std::string("pops.") + domain + ".v" + std::to_string(kComponentManifestSchemaVersion) +
+         ":sha256:" + identity::sha256_hex(identity::canonical_bytes(envelope));
 }
 
 struct Normalized {
@@ -389,22 +384,20 @@ inline Normalized normalize(const CanonicalValue& value) {
       kComponentManifestSchemaVersion)
     refuse("unsupported_schema_version", "schema_version",
            "unsupported ComponentManifest schema_version");
-  const std::string& uri = require_canonical_text(
-      field(input, "uri", "ComponentManifest"), "uri");
+  const std::string& uri = require_canonical_text(field(input, "uri", "ComponentManifest"), "uri");
   if (!absolute_namespaced_uri(uri))
     refuse("invalid_component_uri", "uri", "uri must be an absolute namespaced URI");
-  const std::string& component_type = require_canonical_text(
-      field(input, "component_type", "ComponentManifest"), "component_type");
+  const std::string& component_type =
+      require_canonical_text(field(input, "component_type", "ComponentManifest"), "component_type");
   if (!identifier_spelling(component_type))
     refuse("invalid_component_type", "component_type", "component_type is not canonical");
 
-  const CanonicalValue normalized_facets = normalize_set_array(
-      field(input, "facets", "ComponentManifest"), "facets", true);
-  const CanonicalValue normalized_entry_points = normalize_entry_points(
-      field(input, "entry_points", "ComponentManifest"));
+  const CanonicalValue normalized_facets =
+      normalize_set_array(field(input, "facets", "ComponentManifest"), "facets", true);
+  const CanonicalValue normalized_entry_points =
+      normalize_entry_points(field(input, "entry_points", "ComponentManifest"));
   const CanonicalValue normalized_interfaces = normalize_interfaces(
-      field(input, "interfaces", "ComponentManifest"), normalized_facets,
-      normalized_entry_points);
+      field(input, "interfaces", "ComponentManifest"), normalized_facets, normalized_entry_points);
 
   CanonicalValue::Map full;
   CanonicalValue::Map manifest_payload;

@@ -26,7 +26,8 @@ TEST(test_numerical_defaults, model_spec_defaults_are_centralized) {
   ModelSpec spec;
   EXPECT_EQ(spec.gamma, static_cast<double>(kPhysicalDefaultGamma)) << "ModelSpec gamma default";
   EXPECT_EQ(spec.B0, static_cast<double>(kPhysicalDefaultB0)) << "ModelSpec B0 default";
-  EXPECT_EQ(spec.cs2, static_cast<double>(kPhysicalDefaultFluidStateCs2)) << "ModelSpec cs2 default";
+  EXPECT_EQ(spec.cs2, static_cast<double>(kPhysicalDefaultFluidStateCs2))
+      << "ModelSpec cs2 default";
   EXPECT_EQ(spec.q, static_cast<double>(kPhysicalDefaultChargeQ)) << "ModelSpec charge default";
 }
 

@@ -37,8 +37,8 @@ namespace pops {
 /// INVARIANT: POINTWISE function, does NOT loop over the grid. POPS_HD.
 template <class Model, class Limiter>
 POPS_HD inline typename Model::State reconstruct(const Model& model, const ConstArray4& u, int i,
-                                                int j, int dir, Real sgn, const Limiter& lim,
-                                                bool prim) {
+                                                 int j, int dir, Real sgn, const Limiter& lim,
+                                                 bool prim) {
   if constexpr (HasPrimitiveVars<Model> && Limiter::n_ghost >= 2) {
     if (prim) {  // convert the stencil U->P, limit on P, convert back P->U
       using Prim = typename Model::Prim;
@@ -100,8 +100,8 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
 /// brought back. pos_floor <= 0 -> strictly identical to reconstruct (short-circuit). POPS_HD.
 template <class Model, class Limiter>
 POPS_HD inline typename Model::State reconstruct_pp(const Model& model, const ConstArray4& u, int i,
-                                                   int j, int dir, Real sgn, const Limiter& lim,
-                                                   bool prim, Real pos_floor, int pos_comp) {
+                                                    int j, int dir, Real sgn, const Limiter& lim,
+                                                    bool prim, Real pos_floor, int pos_comp) {
   typename Model::State s = reconstruct<Model>(model, u, i, j, dir, sgn, lim, prim);
   zhang_shu_scale<Model>(s, u, i, j, pos_floor, pos_comp);
   return s;

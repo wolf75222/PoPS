@@ -11,8 +11,14 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 test environments
+    import tomli as tomllib
+
 from tests.python.support.requirements import (
     native_tests_required,
+    require_mpi_or_skip,
     require_native_or_skip,
 )
 
@@ -37,6 +43,7 @@ class PythonProcessFile(pytest.File):
 
 class PythonProcessItem(pytest.Item):
     def runtest(self) -> None:
+        path = Path(str(self.path))
         env = os.environ.copy()
         env["POPS_PYTEST_PROCESS"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
@@ -50,30 +57,27 @@ class PythonProcessItem(pytest.Item):
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=_process_timeout(Path(str(self.path))),
+            timeout=_process_timeout(path),
         )
         skip_reason = _process_skip_reason(result.stdout)
         if skip_reason:
-            require_native_or_skip(skip_reason, optional_skip=pytest.skip)
+            _require_process_or_skip(skip_reason, path)
         if result.returncode == 0:
             legacy_missing = _missing_process_requirement(result.stdout)
             if legacy_missing:
-                require_native_or_skip(legacy_missing, optional_skip=pytest.skip)
+                _require_process_or_skip(legacy_missing, path)
         if result.returncode != 0:
             missing = _missing_process_requirement_for_environment(result.stdout, env)
             if missing:
-                require_native_or_skip(missing, optional_skip=pytest.skip)
-            raise PythonProcessFailure(Path(str(self.path)), result.returncode, result.stdout)
+                _require_process_or_skip(missing, path)
+            raise PythonProcessFailure(path, result.returncode, result.stdout)
 
     def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException]) -> str:
         if isinstance(excinfo.value, PythonProcessFailure):
             output = excinfo.value.output.rstrip()
             if len(output) > 16000:
                 output = output[-16000:]
-            return (
-                f"{excinfo.value.path} exited with status {excinfo.value.returncode}\n"
-                f"{output}"
-            )
+            return f"{excinfo.value.path} exited with status {excinfo.value.returncode}\n{output}"
         return super().repr_failure(excinfo)
 
     def reportinfo(self) -> tuple[Path, int, str]:
@@ -241,11 +245,7 @@ def pytest_runtest_makereport(
     """
     outcome = yield
     report = outcome.get_result()
-    if (
-        report.skipped
-        and native_tests_required()
-        and _is_native_requirement_skip(report.longrepr)
-    ):
+    if report.skipped and native_tests_required() and _is_native_requirement_skip(report.longrepr):
         report.outcome = "failed"
         report.longrepr = (
             "POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: "
@@ -324,7 +324,8 @@ def _process_pythonpath(existing: str | None) -> str:
     entries: list[str] = []
     if existing:
         entries.extend(
-            part for part in existing.split(os.pathsep)
+            part
+            for part in existing.split(os.pathsep)
             if part and (source_usable or Path(part).resolve() != SOURCE_PYTHON.resolve())
         )
     entries.append(str(REPO_ROOT))
@@ -345,8 +346,7 @@ def _source_python_has_native_extension() -> bool:
     package = SOURCE_PYTHON / "pops"
     suffixes = (".so", ".dylib", ".pyd")
     return any(
-        path.name.startswith("_pops.") and path.suffix in suffixes
-        for path in package.iterdir()
+        path.name.startswith("_pops.") and path.suffix in suffixes for path in package.iterdir()
     )
 
 
@@ -387,8 +387,41 @@ def _process_skip_reason(output: str) -> str | None:
     for line in output.splitlines():
         stripped = line.strip()
         if stripped.startswith(PROCESS_SKIP_MARKER):
-            return stripped[len(PROCESS_SKIP_MARKER):].strip() or "requirement not met"
+            return stripped[len(PROCESS_SKIP_MARKER) :].strip() or "requirement not met"
     return None
+
+
+@cache
+def _manifest_mpi_entrypoints() -> frozenset[Path]:
+    """Return the exact Python MPI scripts owned by the test manifest."""
+    manifest = tomllib.loads((REPO_ROOT / "tests" / "test_manifest.toml").read_text())
+    return frozenset(
+        (REPO_ROOT / entry["path"]).resolve()
+        for suite in manifest.get("python", {}).get("suite", ())
+        for entry in suite.get("mpi_entrypoints", ())
+    )
+
+
+@cache
+def _guarded_process_test_paths() -> tuple[Path, ...]:
+    """Derive every script whose process exit is release-significant."""
+    discovered = {
+        path.resolve()
+        for path in (REPO_ROOT / "tests" / "python").rglob("test_*.py")
+        if _requires_process_collection(path)
+    }
+    return tuple(sorted(discovered | set(_manifest_mpi_entrypoints())))
+
+
+def _require_process_or_skip(
+    reason: str,
+    path: Path,
+) -> None:
+    """Apply the release policy matching the subprocess's manifest authority."""
+    if path.resolve() in _manifest_mpi_entrypoints():
+        require_mpi_or_skip(reason, optional_skip=pytest.skip)
+        return
+    require_native_or_skip(reason, optional_skip=pytest.skip)
 
 
 def _missing_process_requirement(output: str) -> str | None:
@@ -404,7 +437,8 @@ def _missing_process_requirement(output: str) -> str | None:
 
 
 def _missing_process_requirement_for_environment(
-    output: str, environment: dict[str, str],
+    output: str,
+    environment: dict[str, str],
 ) -> str | None:
     """Keep legacy local skips out of a native-required release lane.
 
@@ -426,22 +460,55 @@ def _requires_process_collection(path: Path) -> bool:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return False
-    if _has_test_defs(tree) and _has_pytest_main_entrypoint(tree) and "pytest = _SkipModule()" not in text:
+    if (
+        _has_test_defs(tree)
+        and _has_pytest_main_entrypoint(tree)
+        and "pytest = _SkipModule()" not in text
+    ):
         return False
     return (
         "pytest = _SkipModule()" in text
         or _has_import_time_sys_exit(tree)
+        or _has_import_time_requirement_helper(tree)
         or _has_custom_main_entrypoint(tree)
     )
 
 
 def _has_import_time_sys_exit(tree: ast.Module) -> bool:
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)
+        ):
             continue
         if isinstance(node, ast.If) and _is_main_guard(node.test):
             continue
         if _contains_sys_exit(node):
+            return True
+    return False
+
+
+def _has_import_time_requirement_helper(tree: ast.Module) -> bool:
+    """Detect a canonical skip/fail policy executed while importing a script.
+
+    Replacing a legacy ``sys.exit(0)`` with ``require_*_or_skip`` must not silently move a file
+    back into ordinary in-process pytest collection.  Such a helper can still terminate an optional
+    developer run, so the subprocess boundary remains part of the test's execution contract.
+    """
+    helper_names = {"require_native_or_skip", "require_mpi_or_skip"}
+    for node in tree.body:
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom),
+        ):
+            continue
+        if isinstance(node, ast.If) and _is_main_guard(node.test):
+            continue
+        if any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id in helper_names
+            for child in ast.walk(node)
+        ):
             return True
     return False
 
@@ -476,7 +543,13 @@ def _has_test_defs(tree: ast.Module) -> bool:
 def _is_runner_call(call: ast.Call) -> bool:
     func = call.func
     if isinstance(func, ast.Name):
-        return func.id in {"main", "run", "run_all", "_run", "_run_all"}
+        return func.id.startswith("test_") or func.id in {
+            "main",
+            "run",
+            "run_all",
+            "_run",
+            "_run_all",
+        }
     if isinstance(func, ast.Attribute):
         return func.attr in {"main", "run", "run_all", "_run", "_run_all"}
     return False

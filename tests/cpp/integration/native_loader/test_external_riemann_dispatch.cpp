@@ -20,7 +20,7 @@
 #include "gtest_compat.hpp"
 #include <pops/runtime/program/external_riemann_brick.hpp>
 
-#include <pops/physics/bricks/bricks.hpp>                         // CompositeModel / Euler / ...
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel / Euler / ...
 
 #include "test_harness.hpp"  // pops::test::Checker
 
@@ -99,8 +99,8 @@ bool compile_brick(const std::string& src, const std::string& so) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src + " -o " + so;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src + " -o " + so;
 #if defined(POPS_HAS_KOKKOS)
   // Match the module's Kokkos ABI: its interface includes (Kokkos + libomp), defines and options.
   cmd += include_flags(POPS_TEST_KOKKOS_INC);
@@ -231,5 +231,7 @@ static int pops_run_test_external_riemann_dispatch() {
 }
 
 TEST(test_external_riemann_dispatch, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_riemann_dispatch, "test_external_riemann_dispatch"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_riemann_dispatch,
+                                    "test_external_riemann_dispatch"),
+            0);
 }

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <pops/runtime/amr/amr_runtime.hpp>  // the class this file defines members of
+#include <pops/runtime/amr/composite_reduction.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -32,130 +33,11 @@ inline std::size_t AmrRuntime::block_index_by_name_(const std::string& name) con
   throw std::runtime_error("AmrRuntime::composite_reduce : no block named '" + name + "'");
 }
 
-// COLLECTIVE per-level extremum of U (min / max / abs_max), one component or ALL when full. Delegates
-// to the proven pops:: collectives. UNMASKED: a covered coarse cell is the average of its children,
-// within their [min, max], so including it never changes the global extrema.
-inline double AmrRuntime::composite_extremum_(const MultiFab& U, const std::string& kind, int comp,
-                                              bool full) {
-  const int nc = U.ncomp();
-  if (kind == "min") {
-    double m = std::numeric_limits<double>::infinity();
-    if (full)
-      for (int c = 0; c < nc; ++c)
-        m = std::min(m, static_cast<double>(reduce_min(U, c)));
-    else
-      m = static_cast<double>(reduce_min(U, comp));
-    return m;
-  }
-  if (kind == "max") {
-    double m = -std::numeric_limits<double>::infinity();
-    if (full)
-      for (int c = 0; c < nc; ++c)
-        m = std::max(m, static_cast<double>(reduce_max(U, c)));
-    else
-      m = static_cast<double>(reduce_max(U, comp));
-    return m;
-  }
-  // abs_max: collective max |U(.,.,c)| = all_reduce_max(norm_inf) (norm_inf is LOCAL by contract).
-  double m = 0.0;
-  if (full)
-    for (int c = 0; c < nc; ++c)
-      m = std::max(m, all_reduce_max(static_cast<double>(norm_inf(U, c))));
-  else
-    m = all_reduce_max(static_cast<double>(norm_inf(U, comp)));
-  return m;
-}
-
-inline bool AmrRuntime::cell_covered_(int i, int j, const std::vector<Box2D>& covered) {
-  for (const Box2D& c : covered)
-    if (i >= c.lo[0] && i <= c.hi[0] && j >= c.lo[1] && j <= c.hi[1])
-      return true;
-  return false;
-}
-
-// COLLECTIVE per-level masked sum (sum / abs_sum / sum_sq) of block b at level k, one component or
-// ALL when full, EXCLUDING coarse cells covered by the next finer level's patches. Raw cell sum (the
-// dx*dy volume weight is applied by the caller). Ownership-distributed levels require one sum
-// reduction; replicated level 0 is already globally complete on every rank.
-inline double AmrRuntime::composite_level_sum_(std::size_t b, int k, const std::string& kind,
-                                               int comp, bool full) const {
-  const std::vector<AmrLevelMP>& L = *blocks_[b].levels;
-  const MultiFab& U = L[k].U;
-  const int nc = U.ncomp();
-  // Covered region: level-(k+1) patch boxes coarsened by the resolved transition ratio.
-  // finer boxes come from the runtime-owned hierarchy authority.
-  std::vector<Box2D> covered;
-  if (k + 1 < static_cast<int>(L.size())) {
-    const int ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(k)];
-    for (const Box2D& fb : hierarchy_.ba[static_cast<std::size_t>(k + 1)].boxes())
-      covered.push_back(Box2D{{coarsen_index(fb.lo[0], ratio),
-                               coarsen_index(fb.lo[1], ratio)},
-                              {coarsen_index(fb.hi[0], ratio),
-                               coarsen_index(fb.hi[1], ratio)}});
-  }
-  device_fence();
-  double s = 0.0;
-  for (int li = 0; li < U.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    const Box2D v = U.box(li);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        if (cell_covered_(i, j, covered))
-          continue;
-        const int c0 = full ? 0 : comp;
-        const int c1 = full ? nc : comp + 1;
-        for (int c = c0; c < c1; ++c) {
-          const double val = u(i, j, c);
-          if (kind == "sum")
-            s += val;
-          else if (kind == "abs_sum")
-            s += val < 0 ? -val : val;
-          else  // sum_sq
-            s += val * val;
-        }
-      }
-  }
-  return (k == 0 && replicated_coarse_) ? s : all_reduce_sum(s);
-}
-
 inline double AmrRuntime::composite_reduce(const std::string& block, const std::string& kind,
-                                           int comp) const {
+                                           int comp, const std::vector<int>& levels) const {
   const std::size_t b = block_index_by_name_(block);
-  const std::vector<AmrLevelMP>& L = *blocks_[b].levels;
-  const int nlev = static_cast<int>(L.size());
-  const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
-  const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
-
-  if (base == "min") {
-    double m = std::numeric_limits<double>::infinity();
-    for (int k = 0; k < nlev; ++k)
-      m = std::min(m, composite_extremum_(L[k].U, "min", comp, full));
-    return m;
-  }
-  if (base == "max") {
-    double m = -std::numeric_limits<double>::infinity();
-    for (int k = 0; k < nlev; ++k)
-      m = std::max(m, composite_extremum_(L[k].U, "max", comp, full));
-    return m;
-  }
-  if (base == "abs_max") {
-    double m = 0.0;
-    for (int k = 0; k < nlev; ++k)
-      m = std::max(m, composite_extremum_(L[k].U, "abs_max", comp, full));
-    return m;
-  }
-  if (base == "sum" || base == "abs_sum" || base == "sum_sq") {
-    double acc = 0.0;
-    for (int k = 0; k < nlev; ++k) {
-      const Geometry g = level_geom(k);
-      const double cell = static_cast<double>(g.dx()) * static_cast<double>(g.dy());
-      acc += cell * composite_level_sum_(b, k, base, comp, full);
-    }
-    return acc;
-  }
-  throw std::runtime_error(
-      "AmrRuntime::composite_reduce : unknown reduction kind '" + kind + "' for block '" + block +
-      "' (expected sum / min / max / abs_sum / sum_sq / abs_max and their _all forms)");
+  return runtime::amr::composite_reduce_levels(*blocks_[b].levels, replicated_coarse_, kind, comp,
+                                               levels);
 }
 
 inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
@@ -315,8 +197,7 @@ inline void AmrRuntime::set_clustering(double min_efficiency, int min_box_size, 
   cluster_.min_box_size = min_box_size;
   cluster_.max_box_size = max_box_size;
   if (!external_clustering_)
-    clustering_provider_ =
-        std::make_shared<const amr::BergerRigoutsosProvider>(cluster_);
+    clustering_provider_ = std::make_shared<const amr::BergerRigoutsosProvider>(cluster_);
 }
 
 }  // namespace pops

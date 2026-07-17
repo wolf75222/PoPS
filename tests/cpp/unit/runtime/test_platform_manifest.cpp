@@ -14,13 +14,11 @@ using pops::platform::PlatformManifest;
 using pops::platform::RuntimeBackendManifest;
 
 PlatformManifest platform() {
-  return pops::platform::proven_serial_platform(
-      "production", "system", "headers|clang|c++23");
+  return pops::platform::proven_serial_platform("production", "system", "headers|clang|c++23");
 }
 
 RuntimeBackendManifest backend() {
-  return pops::platform::proven_serial_backend(
-      "production", "system", "headers|clang|c++23");
+  return pops::platform::proven_serial_backend("production", "system", "headers|clang|c++23");
 }
 
 ExecutionContext context() {
@@ -28,7 +26,7 @@ ExecutionContext context() {
 }
 
 FieldViewDescriptor field() {
-  return {"state", 2, {16, 12}, {12, 1}, "cell", {{0, 0}, {0, 0}},
+  return {"state",   2,      {16, 12},  {12, 1}, "cell",    {{0, 0}, {0, 0}},
           "float64", "host", "patch-0", "right", "borrowed"};
 }
 
@@ -87,22 +85,21 @@ TEST(PlatformManifest, FieldAndCommunicatorMismatchesRefuseBeforeKernel) {
       actual.memory_space = "device";
     else
       execution.communicator.identity = "comm:wrong";
-    EXPECT_THROW(pops::platform::launch_checked(
-                     platform(), execution, {actual}, kernel, {required}),
-                 pops::platform::ContractError);
+    EXPECT_THROW(
+        pops::platform::launch_checked(platform(), execution, {actual}, kernel, {required}),
+        pops::platform::ContractError);
     EXPECT_EQ(launches, 0);
   }
 }
 
 TEST(PlatformManifest, GenericTwoDimensionalDoubleRouteLaunches) {
   int launches = 0;
-  EXPECT_EQ(pops::platform::launch_checked(
-                platform(), context(), {field()},
-                [&](const auto&, const auto& fields) {
-                  ++launches;
-                  return fields.front().extents[0];
-                },
-                {field()}),
+  EXPECT_EQ(pops::platform::launch_checked(platform(), context(), {field()},
+                                           [&](const auto&, const auto& fields) {
+                                             ++launches;
+                                             return fields.front().extents[0];
+                                           },
+                                           {field()}),
             16U);
   EXPECT_EQ(launches, 1);
 }

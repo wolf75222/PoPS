@@ -22,8 +22,8 @@
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>     // facade AmrSystem
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
@@ -104,8 +104,8 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
@@ -156,8 +156,8 @@ struct TemporalContractModel {
   }
 };
 
-static AmrRuntime make_temporal_contract_runtime(
-    int mode, const amr::ParentChildClockRelation& relation) {
+static AmrRuntime make_temporal_contract_runtime(int mode,
+                                                 const amr::ParentChildClockRelation& relation) {
   constexpr int n = 8;
   AmrBuildParams bp;
   bp.mesh.n = n;
@@ -218,7 +218,8 @@ TEST(test_amr_multiblock_substeps, Runs) {
       rt1.step(dt);
     const std::vector<double> dA1 = rt1.density(0);
     EXPECT_TRUE(all_finite(dA1)) << "subA1_state_finite";
-    EXPECT_TRUE(dmax_field(dA4, dA1) > 1e-9) << "subA4_differs_from_subA1";  // substepping NON no-op
+    EXPECT_TRUE(dmax_field(dA4, dA1) > 1e-9)
+        << "subA4_differs_from_subA1";  // substepping NON no-op
     // bloc B (substeps=1 dans les deux runs) : meme trajectoire au bit pres (A ne le perturbe pas, les
     // blocs avancent independamment ; phi differe car A differe, mais le couplage est once-per-step et A
     // substeps n'altere PAS l'etat de B a substeps=1 sur le MEME phi de tete).
@@ -358,14 +359,14 @@ TEST(test_amr_multiblock_substeps, Runs) {
     AmrRuntime rational = make_temporal_contract_runtime(/*mode=*/0, ratio_five_halves);
     rational.step(Real(0.2));
     const auto rational_fine = rational.block_level_state_global(0, 1);
-    const Real rational_max = static_cast<Real>(
-        *std::max_element(rational_fine.begin(), rational_fine.end()));
+    const Real rational_max =
+        static_cast<Real>(*std::max_element(rational_fine.begin(), rational_fine.end()));
     const Real expected_rational = Real(1.08) * Real(1.08) * Real(1.04);
     EXPECT_NEAR(rational_max, expected_rational, 2e-14)
         << "native 5/2 partition must execute two nominal intervals and the declared remainder";
 
-    const amr::ParentChildClockRelation ratio_two(
-        0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
+    const amr::ParentChildClockRelation ratio_two(0, 1, amr::Rational(2, 1),
+                                                  amr::RemainderPolicy::IntegralOnly);
     AmrRuntime integral = make_temporal_contract_runtime(/*mode=*/0, ratio_two);
     integral.step(Real(0.2));
     const auto integral_fine = integral.block_level_state_global(0, 1);
@@ -378,10 +379,9 @@ TEST(test_amr_multiblock_substeps, Runs) {
     // Strong preparation guarantee: the rejected candidate neither replaces the accepted chain nor
     // changes any level state.
     const auto before_rejected_set = rational.block_level_state_global(0, 1);
-    EXPECT_THROW(
-        rational.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
-            0, 1, amr::Rational(5, 2), amr::RemainderPolicy::IntegralOnly)}),
-        std::runtime_error);
+    EXPECT_THROW(rational.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
+                     0, 1, amr::Rational(5, 2), amr::RemainderPolicy::IntegralOnly)}),
+                 std::runtime_error);
     EXPECT_EQ(rational.block_level_state_global(0, 1), before_rejected_set);
     ASSERT_EQ(rational.checkpoint_temporal_relations().size(), 1u);
     EXPECT_EQ(rational.checkpoint_temporal_relations()[0].temporal_ratio(), amr::Rational(5, 2));

@@ -7,7 +7,7 @@ hash, and that the pops.model type system (StateSpace, FieldSpace, Rate, LocalLi
 Operator, Signature, OperatorRegistry) behaves as specified. No compilation, no _pops
 numerics; skips cleanly if the pops package is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
@@ -15,8 +15,7 @@ try:
     from pops._ir.ops import abs_
     from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_registry (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_registry (pops unavailable: %s)' % exc)
 
 
 def build_model():

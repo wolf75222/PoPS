@@ -47,8 +47,7 @@ TEST(test_structured_solver_diagnostics, Runs) {
 
     const RuntimeDiagnosticsReport& report = mg.diagnostics_report();
     ASSERT_TRUE(report.source == "pops.numerics.elliptic.geometric_mg") << "MG report source";
-    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0)
-        << "MG trace events recorded structurally";
+    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0) << "MG trace events recorded structurally";
     ASSERT_TRUE(report.events.front().severity == "trace") << "MG trace severity";
   }
 
@@ -75,8 +74,7 @@ TEST(test_structured_solver_diagnostics, Runs) {
         << "FAC report source";
     ASSERT_TRUE(report.count("elliptic.fac.residual") > 0)
         << "FAC residual events recorded structurally";
-    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson")
-        << "FAC event component";
+    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson") << "FAC event component";
   }
 
   std::printf("OK test_structured_solver_diagnostics\n");

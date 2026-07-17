@@ -31,12 +31,19 @@ def _expression(value: Any, *, where: str) -> Expr:
         raise TypeError("%s must be a PoPS Expr or an exact scalar" % where) from exc
 
 
-def _expression_data(value: Expr) -> Any:
+def _expression_data(value: Expr, *, qualified: bool = False) -> Any:
     """Return the same stable structural protocol used by derived parameter expressions."""
+    if qualified:
+        from pops.model._bind_expression import qualified_expression_key
+
+        key = qualified_expression_key(
+            value, where="resolved transport boundary expression")
+    else:
+        key = _key(value)
     return {
         "protocol": "pops.expr.key.v1",
         "value": json.loads(json.dumps(
-            _key(value), sort_keys=True, separators=(",", ":"), allow_nan=False)),
+            key, sort_keys=True, separators=(",", ":"), allow_nan=False)),
     }
 
 
@@ -222,7 +229,7 @@ class ResolvedTransportCondition:
             "condition_type": self.condition_type,
             "geometry": self.geometry.canonical_identity(),
             "state": self.state.canonical_identity(),
-            "values": [_expression_data(value) for value in self.values],
+            "values": [_expression_data(value, qualified=True) for value in self.values],
             "stencil": self.requirement.canonical_identity(),
             "provider": self.provider.canonical_identity(),
         }
@@ -508,7 +515,8 @@ class ResolvedTransportBoundarySet:
                         "native inflow must prescribe exactly %d state components" % ncomp
                     )
                 for expression in condition.values:
-                    if _expression_data(expression).get("protocol") != "pops.expr.key.v1":
+                    if _expression_data(
+                            expression, qualified=True).get("protocol") != "pops.expr.key.v1":
                         raise NotImplementedError("unsupported boundary expression protocol")
         if any(row is None for row in face_rows):
             raise ValueError("native transport boundary has incomplete physical-face coverage")
@@ -539,7 +547,7 @@ class ResolvedTransportBoundarySet:
                              else "dirichlet"),
                     "values": (
                         [] if row.condition_type == "outflow" else
-                        [_expression_data(expression)["value"]
+                        [_expression_data(expression, qualified=True)["value"]
                          for expression in row.values]
                     ),
                 }
@@ -560,15 +568,10 @@ class ResolvedTransportBoundarySet:
         if not isinstance(params, Mapping):
             raise TypeError("runtime boundary lowering requires resolved BindSchema values")
         env: dict[str, Any] = {}
-        local_counts: dict[str, int] = {}
         for handle, value in params.items():
             if not isinstance(handle, ParamHandle) or not handle.is_resolved:
                 raise TypeError("runtime boundary parameters must use canonical ParamHandle keys")
             env[handle.qualified_id] = value
-            local_counts[handle.local_id] = local_counts.get(handle.local_id, 0) + 1
-        for handle, value in params.items():
-            if local_counts[handle.local_id] == 1:
-                env[handle.local_id] = value
 
         state, ncomp, conditions, depth = self._native_contract()
         face_rows: list[dict[str, Any] | None] = [None, None, None, None]
@@ -581,7 +584,7 @@ class ResolvedTransportBoundarySet:
             else:
                 values = []
                 for index, expression in enumerate(condition.values):
-                    data = _expression_data(expression)
+                    data = _expression_data(expression, qualified=True)
                     value = eval_expression_key(
                         data["value"], env,
                         where="transport boundary %s component %d" % (geometry.name, index),

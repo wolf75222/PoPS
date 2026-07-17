@@ -15,10 +15,12 @@
 #include <pops/runtime/program/step_transaction.hpp>
 
 PYBIND11_MODULE(_pops, m) {
-  py::exception<pops::runtime::program::StepAttemptRejected>(m, "StepAttemptRejected", PyExc_RuntimeError);
+  py::exception<pops::runtime::program::StepAttemptRejected>(m, "StepAttemptRejected",
+                                                             PyExc_RuntimeError);
   init_core(m);
   init_identity(m);
   init_component_loader(m);
+  init_parallel_hdf5(m);
   init_system(m);
   init_amr(m);
 }

@@ -24,8 +24,8 @@ struct LocalGrid {
   MultiFab aux;
 };
 
-inline LocalGrid make_grid(int n, double dx, double dy, bool periodic,
-                           const double* aux_input, int naux) {
+inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const double* aux_input,
+                           int naux) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, dx * n, 0.0, dy * n};
   BoxArray boxes = BoxArray::from_domain(dom, n);
@@ -41,9 +41,8 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic,
     for (int component = 0; component < naux; ++component)
       for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i)
-          values(i, j, component) =
-              aux_input[static_cast<std::size_t>(component) * cells +
-                        static_cast<std::size_t>(j) * n + i];
+          values(i, j, component) = aux_input[static_cast<std::size_t>(component) * cells +
+                                              static_cast<std::size_t>(j) * n + i];
     if (periodic)
       fill_boundary(aux, dom, Periodicity{true, true});
     else
@@ -52,13 +51,11 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic,
     for (int component = 0; component < naux; ++component) {
       const std::size_t offset = tail + static_cast<std::size_t>(2) * component;
       const int type = static_cast<int>(aux_input[offset]);
-      if (type == static_cast<int>(BCType::Foextrap) ||
-          type == static_cast<int>(BCType::Dirichlet))
+      if (type == static_cast<int>(BCType::Foextrap) || type == static_cast<int>(BCType::Dirichlet))
         fill_physical_bc(
             aux, dom,
-            aux_halo_override(
-                bc, AuxHaloPolicy{static_cast<BCType>(type),
-                                  static_cast<Real>(aux_input[offset + 1])}),
+            aux_halo_override(bc, AuxHaloPolicy{static_cast<BCType>(type),
+                                                static_cast<Real>(aux_input[offset + 1])}),
             component);
     }
   }
@@ -71,9 +68,8 @@ inline void fill_interior(MultiFab& field, const double* input, int n, int ncomp
   for (int component = 0; component < ncomp; ++component)
     for (int j = 0; j < n; ++j)
       for (int i = 0; i < n; ++i)
-        values(i, j, component) =
-            input[static_cast<std::size_t>(component) * cells +
-                  static_cast<std::size_t>(j) * n + i];
+        values(i, j, component) = input[static_cast<std::size_t>(component) * cells +
+                                        static_cast<std::size_t>(j) * n + i];
 }
 
 inline void extract(const MultiFab& field, double* output, int n, int ncomp) {
@@ -83,8 +79,8 @@ inline void extract(const MultiFab& field, double* output, int n, int ncomp) {
   for (int component = 0; component < ncomp; ++component)
     for (int j = 0; j < n; ++j)
       for (int i = 0; i < n; ++i)
-        output[static_cast<std::size_t>(component) * cells +
-               static_cast<std::size_t>(j) * n + i] = values(i, j, component);
+        output[static_cast<std::size_t>(component) * cells + static_cast<std::size_t>(j) * n + i] =
+            values(i, j, component);
 }
 
 }  // namespace pops::flat_grid

@@ -85,5 +85,6 @@ static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
 }
 
 TEST(test_mpi_coupler_inject, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_coupler_inject, "test_mpi_coupler_inject"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_coupler_inject, "test_mpi_coupler_inject"),
+            0);
 }

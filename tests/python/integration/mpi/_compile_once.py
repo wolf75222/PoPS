@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, TypeVar
 
+from pops._native_collectives import allgather_value, broadcast_value, require_world
+
 
 class _PlanIdentity(Protocol):
     """Minimal resolved-plan identity contract required by this helper."""
@@ -26,27 +28,18 @@ class ResolvedPlan(Protocol):
     def plan_identity(self) -> _PlanIdentity: ...
 
 
-class MpiComm(Protocol):
-    """Collectives used before constructing the runtime MPI context."""
-
-    def Get_rank(self) -> int: ...
-
-    def allgather(self, value: str) -> list[str]: ...
-
-    def bcast(self, value: tuple[bool, str] | None, root: int) -> tuple[bool, str]: ...
-
-
 ArtifactT = TypeVar("ArtifactT")
 PlanT = TypeVar("PlanT", bound=ResolvedPlan)
 
 
-def _phase(comm: MpiComm, label: str) -> None:
+def _phase(comm: object, label: str) -> None:
     """Keep potentially blocking compiler/cache phases visible in CI logs."""
-    print("[rank %d] %s" % (comm.Get_rank(), label), flush=True)
+    native = require_world(comm)
+    print("[rank %d] %s" % (native.rank, label), flush=True)
 
 
 def compile_resolved_plan_once(
-    comm: MpiComm,
+    comm: object,
     resolved: PlanT,
     *,
     route: str,
@@ -58,11 +51,12 @@ def compile_resolved_plan_once(
     communicate rank-local failures before any rank reaches runtime construction,
     avoiding the deadlock pattern where a peer waits in a later MPI collective.
     """
-    identities = comm.allgather(resolved.plan_identity.hexdigest)
+    native = require_world(comm)
+    identities = allgather_value(native, resolved.plan_identity.hexdigest)
     if len(set(identities)) != 1:
         raise RuntimeError("resolved AMR plan identity differs across MPI ranks")
 
-    rank = comm.Get_rank()
+    rank = int(native.rank)
     artifact: ArtifactT | None = None
     publication: tuple[bool, str] | None = None
     if rank == 0:
@@ -77,7 +71,7 @@ def compile_resolved_plan_once(
             publication = (True, "")
             _phase(comm, route + ": compile and publish done")
 
-    publication = comm.bcast(publication, root=0)
+    publication = broadcast_value(native, publication, root=0)
     if not publication[0]:
         raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
 
@@ -93,7 +87,7 @@ def compile_resolved_plan_once(
         else:
             _phase(comm, route + ": authenticated cache load done")
 
-    load_errors = comm.allgather(load_error)
+    load_errors = allgather_value(native, load_error)
     if any(load_errors):
         details = "; ".join(
             "rank %d: %s" % (peer_rank, error)

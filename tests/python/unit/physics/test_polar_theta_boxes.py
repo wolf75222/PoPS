@@ -23,8 +23,8 @@ theta_boxes=1 (defaut) = mono-box, STRICTEMENT bit-identique a l'historique. the
 
 Mono-rang (le Poisson polaire direct refuse MPI ; le transport multi-box teste ici est single-rank).
 """
+from tests.python.support.requirements import require_native_or_skip
 import math
-import sys
 
 import numpy as np
 
@@ -34,8 +34,7 @@ try:
     from pops.runtime._engine_descriptors import Dirichlet
     from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
-    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
 
 # Geometrie : anneau NON carre (nr != ntheta) pour exercer le layout (nr, ntheta) sur chaque chemin.
@@ -84,7 +83,9 @@ def _iso_state():
     exciter le flux radial ET azimutal). Layout composante-majeur (c, theta=j, r=i) : ordre de set_state."""
     dr = (RMAX - RMIN) / NR
     dth = 2.0 * math.pi / NTH
-    rho = np.empty((NTH, NR)); mr = np.empty((NTH, NR)); mth = np.empty((NTH, NR))
+    rho = np.empty((NTH, NR))
+    mr = np.empty((NTH, NR))
+    mth = np.empty((NTH, NR))
     for j in range(NTH):
         th = (j + 0.5) * dth
         for i in range(NR):

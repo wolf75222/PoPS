@@ -156,7 +156,7 @@ def test_history_configuration_snapshots_and_freezes_the_supplied_policy():
     state = typed_state(program, "fluid", state_name="U")
     supplied = Interval(3)
 
-    program.keep_history(state, depth=4, checkpoint_policy=supplied)
+    program.keep_history(state, depth=3, checkpoint_policy=supplied)
     configured = program._time_history_configs[state][2]
     assert isinstance(configured, Interval)
     assert configured is not supplied and configured.k == 3
@@ -176,12 +176,13 @@ def test_history_configuration_is_not_published_when_ring_provenance_is_invalid(
         "fluid.U", space=conflicting, block=state.block,
         state_ref=state.state)
     values_before = tuple(program._values)
+    persistence_before = program._history_persistence["fluid.U"]
 
     with pytest.raises(ValueError, match=r"incompatible structures"):
         program.keep_history(state, depth=2)
     assert state not in program._time_history_configs
     assert state not in program._time_history_stores
-    assert "fluid.U" not in program._history_persistence
+    assert program._history_persistence["fluid.U"] == persistence_before
     assert len(program._values) == len(values_before)
     assert all(
         current is before

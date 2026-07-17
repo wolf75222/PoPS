@@ -15,7 +15,7 @@
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
-#include <pops/runtime/config/runtime_params.hpp>  // kMaxRuntimeParams (ADC-618 hard_limit)
+#include <pops/runtime/config/runtime_params.hpp>          // kMaxRuntimeParams (ADC-618 hard_limit)
 #include <pops/numerics/elliptic/poisson/poisson_fft.hpp>  // DFT-fallback counter (ADC-618 diagnostic)
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/profiler.hpp>
@@ -25,11 +25,11 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>  // std::tuple: argument of AmrSystem.set_hierarchy (patch_boxes boxes) (ADC-65)
+#include <utility>
 #include <vector>
 
 namespace py = pybind11;
 using namespace pops;
-
 
 // field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
 // with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
@@ -56,6 +56,27 @@ inline py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int ro
                              "); inconsistent 3D reshape");
   std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
   return a;
+}
+inline py::tuple output_pieces_to_python(const std::vector<OutputPiece>& pieces) {
+  py::tuple result(pieces.size());
+  for (std::size_t index = 0; index < pieces.size(); ++index) {
+    const OutputPiece& piece = pieces[index];
+    const int nx = piece.box.ihi - piece.box.ilo + 1;
+    const int ny = piece.box.jhi - piece.box.jlo + 1;
+    if (piece.ncomp < 1 || nx < 1 || ny < 1 ||
+        piece.values.size() != static_cast<std::size_t>(piece.ncomp) *
+                                   static_cast<std::size_t>(ny) * static_cast<std::size_t>(nx))
+      throw std::runtime_error("native output piece has an inconsistent compact shape");
+    py::dict row;
+    row["lower"] = py::make_tuple(piece.box.jlo, piece.box.ilo);
+    row["upper"] = py::make_tuple(piece.box.jhi + 1, piece.box.ihi + 1);
+    row["values"] = to_3d(piece.values, piece.ncomp, ny, nx);
+    row["global_box_index"] = piece.global_box_index;
+    row["owner_rank"] = piece.owner_rank;
+    row["replicated"] = piece.replicated;
+    result[index] = std::move(row);
+  }
+  return result;
 }
 inline std::vector<double> flat(
     py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -163,8 +184,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   py::dict amr;
   amr["max_levels"] = kAmrDefaultMaxLevels;
   amr["refinement_ratio"] = kAmrRefRatio;
-  amr["refinement_disabled_threshold"] =
-      static_cast<double>(kAmrRefinementDisabledThreshold);
+  amr["refinement_disabled_threshold"] = static_cast<double>(kAmrRefinementDisabledThreshold);
   amr["phi_refinement_disabled_threshold"] =
       static_cast<double>(kAmrPhiRefinementDisabledThreshold);
 
@@ -442,5 +462,6 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
 void init_core(py::module_& m);
 void init_identity(py::module_& m);
 void init_component_loader(py::module_& m);
+void init_parallel_hdf5(py::module_& m);
 void init_system(py::module_& m);
 void init_amr(py::module_& m);

@@ -47,7 +47,7 @@ double advect_error(int n, const std::string& limiter, const std::string& method
   aux.set_val(0.0);
 
   pops::validation::AdvectionDiffusion model{/*ax=*/1.0, /*ay=*/0.0,
-                                            /*nu=*/0.0};  // advection pure selon x
+                                             /*nu=*/0.0};  // advection pure selon x
   const int ng = block_n_ghost(limiter);
   MultiFab U(ba, dm, 1, ng);
   auto init = [&](MultiFab& mf) {
@@ -94,7 +94,7 @@ TEST(test_weno5_ssprk3, weno5_rhs_matches_direct_assemble_rhs) {
   aux.set_val(0.0);
 
   pops::validation::AdvectionDiffusion model{/*ax=*/1.0, /*ay=*/0.3,
-                                            /*nu=*/0.0};  // advection 2D oblique, pure
+                                             /*nu=*/0.0};  // advection 2D oblique, pure
   const GridContext ctx{dom, bc, geom, &aux};
 
   auto init = [&](MultiFab& mf) {
@@ -233,9 +233,9 @@ TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
   MultiFab Ua(ba, dm, 1, 2), Ub(ba, dm, 1, 2);
   init(Ua);
   init(Ub);
-  BlockClosures cdef = make_block(model, "minmod", "rusanov", ctx, false, false);  // method par defaut
-  BlockClosures cs2 =
-      make_block(model, "minmod", "rusanov", ctx, false, false, "explicit");
+  BlockClosures cdef =
+      make_block(model, "minmod", "rusanov", ctx, false, false);  // method par defaut
+  BlockClosures cs2 = make_block(model, "minmod", "rusanov", ctx, false, false, "explicit");
   // residu identique
   MultiFab Ra(ba, dm, 1, 0), Rb(ba, dm, 1, 0);
   cdef.rhs_into(Ua, Ra);

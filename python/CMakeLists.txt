@@ -18,6 +18,7 @@
 set(POPS_MODULE_BINDING_SOURCES
     bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_identity.cpp
     bindings/core/init/init_component_loader.cpp
+    bindings/core/init/init_parallel_hdf5.cpp
     bindings/core/init/init_system.cpp
     bindings/core/init/init_amr.cpp)
 
@@ -34,7 +35,7 @@ else()
   pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_BINDING_SOURCES})
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
-target_link_libraries(_pops PRIVATE pops_runtime_system pops_runtime_amr pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
+target_link_libraries(_pops PRIVATE pops_runtime_system pops_runtime_amr pops_runtime_output pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 
 # RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du runtime (system.cpp / amr_system.cpp =
@@ -71,15 +72,29 @@ target_compile_definitions(_pops PRIVATE POPS_VERSION="${PROJECT_VERSION}")
 # __VERSION__ different -> rejet ABI. dsl.py prefere ce chemin s'il existe encore sur la machine.
 target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
-# ADC-319 : dossier(s) d'include MPI du build, bake dans le module (expose en pops._pops.__mpi_include__).
+# Contrat MPI::MPI_CXX exact du build, bake dans le module : includes, options/definitions de
+# compilation, options/libraries de lien, chemins et hashes de mpi.h/libraries, plus l'empreinte ABI
+# globale. Les composants natifs hors CMake rejouent puis reauthentifient ce manifeste integral.
 # Le module herite deja -DPOPS_HAS_MPI via l'INTERFACE pops (cible MPI::MPI_CXX, racine), mais le DSL
-# Le backend production compile ses loaders HORS CMake et n'en herite rien : sans -DPOPS_HAS_MPI +
+# backend production compile ses loaders HORS CMake et n'en herite rien : sans -DPOPS_HAS_MPI +
 # l'include MPI, comm.hpp y retombe sur ses stubs serie (n_ranks()=1, my_rank()=0) et toute disposition
 # distribuee construite DANS le loader (p.ex. AmrSystem(distribute_coarse=True)) se replique sur chaque
-# rang (pas de strong-scaling). dsl.py (_native_mpi_flags) lit cet attribut pour recompiler le loader
-# avec le MEME MPI que le module. Sans MPI (build serie) : attribut absent -> loader serie inchange.
+# rang (pas de strong-scaling). Le helper codegen _native_mpi lit ces attributs et refuse un contrat
+# MPI incomplet au lieu de produire un artefact faussement serie. Sans MPI : attributs vides.
 if(POPS_NATIVE_MPI_INCLUDE)
-  target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}")
+  target_compile_definitions(_pops PRIVATE
+    POPS_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}"
+    POPS_MPI_ABI="${POPS_NATIVE_MPI_ABI}"
+    POPS_MPI_COMPILER="${POPS_NATIVE_MPI_COMPILER}"
+    POPS_MPI_STANDARD="${POPS_NATIVE_MPI_STANDARD}"
+    POPS_MPI_COMPILE_OPTIONS="${POPS_NATIVE_MPI_COMPILE_OPTIONS}"
+    POPS_MPI_COMPILE_DEFINITIONS="${POPS_NATIVE_MPI_COMPILE_DEFINITIONS}"
+    POPS_MPI_LINK_OPTIONS="${POPS_NATIVE_MPI_LINK_OPTIONS}"
+    POPS_MPI_LINK_LIBRARIES="${POPS_NATIVE_MPI_LINK_LIBRARIES}"
+    POPS_MPI_HEADER_PATHS="${POPS_NATIVE_MPI_HEADER_PATHS}"
+    POPS_MPI_HEADER_HASHES="${POPS_NATIVE_MPI_HEADER_HASHES}"
+    POPS_MPI_LIBRARY_PATHS="${POPS_NATIVE_MPI_LIBRARY_PATHS}"
+    POPS_MPI_LIBRARY_HASHES="${POPS_NATIVE_MPI_LIBRARY_HASHES}")
 endif()
 
 # Signature du contrat exact des en-tetes installes, BAKEE dans la cle d'ABI du module (pops/runtime/abi_key.hpp
@@ -117,19 +132,32 @@ if(SKBUILD)
   # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
   pops_install_headers("pops/include")
 endif()
-# Copy the pure-Python package (pops/ and every sub-package) into the build tree next to _pops.
+# Stage the pure-Python package (pops/ and every sub-package) in the build tree next to _pops.
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat
 # explicit list silently dropped a new module from the build tree -- "partially initialized module"
 # import errors that the source tree did not show). Type stubs and the PEP 561 marker are package
 # sources too: cold builds and CI's cached-module fast path must expose the same tree.
-# configure_file creates the destination sub-dirs.
+# Build-tree imports need the complete pure-Python package beside ``_pops``.  Do not copy every file
+# through ``configure_file(COPYONLY)``: that command reads both source and destination to compare
+# contents on every configure, which can block for minutes when the checkout is backed by a macOS File
+# Provider.  Per-file symbolic links preserve live source edits without content I/O.  Windows hosts
+# that cannot create symlinks use CMake's explicit COPY_ON_ERROR fallback.
 file(GLOB_RECURSE _pops_py_sources CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
      pops/*.py pops/*.pyi)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pops/py.typed")
   list(APPEND _pops_py_sources pops/py.typed)
 endif()
 foreach(pyf ${_pops_py_sources})
-  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
+  get_filename_component(_pops_py_parent "${pyf}" DIRECTORY)
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_pops_py_parent}")
+  file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/${pyf}")
+  file(CREATE_LINK
+       "${CMAKE_CURRENT_SOURCE_DIR}/${pyf}"
+       "${CMAKE_CURRENT_BINARY_DIR}/${pyf}"
+       SYMBOLIC COPY_ON_ERROR RESULT _pops_py_link_result)
+  if(NOT _pops_py_link_result STREQUAL "0")
+    message(FATAL_ERROR "cannot stage Python package file ${pyf}: ${_pops_py_link_result}")
+  endif()
 endforeach()
 
 

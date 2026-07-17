@@ -149,9 +149,8 @@ TEST(test_amr_layout_guard, Runs) {
   {
     const BoxArray cba_one(std::vector<Box2D>{dom});
     const DistributionMapping cdm_one(cba_one.size(), n_ranks());
-    EXPECT_THROW(
-        build_two_block(cba_one, cdm_one, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
-        std::runtime_error)
+    EXPECT_THROW(build_two_block(cba_one, cdm_one, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+                 std::runtime_error)
         << "guard_throws_on_box_set_mismatch";
   }
 
@@ -170,9 +169,8 @@ TEST(test_amr_layout_guard, Runs) {
   // surtout sous MPI ; en serie tous les rangs valent 0 -> on FORCE une dmap explicite differente.
   {
     const DistributionMapping cdm_alt(std::vector<int>{0, 7});  // rang 7 inexistant en serie
-    EXPECT_THROW(
-        build_two_block(ba_coarse, cdm_alt, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
-        std::runtime_error)
+    EXPECT_THROW(build_two_block(ba_coarse, cdm_alt, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+                 std::runtime_error)
         << "guard_throws_on_dmap_mismatch";
   }
 
@@ -194,8 +192,7 @@ TEST(test_amr_layout_guard, Runs) {
 
   // --- Partie B : le garde-fou PASSE sur un layout strictement identique ---
   {
-    EXPECT_NO_THROW(
-        build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2))
+    EXPECT_NO_THROW(build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2))
         << "guard_passes_on_matching_layout";
   }
 

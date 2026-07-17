@@ -55,8 +55,7 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                        int substeps = 1,
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0) {
   // TYPED time route (ADC-584): an unknown time token is REFUSED here (parse_time_route cites
   // the family, the requested token and the valid set) instead of silently running SSPRK2 -- the
@@ -72,8 +71,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                     "path (") +
         route_info(time_route).limitations + ")");
   const bool imex = (time_route == TimeRouteId::kImex);
-  const bool recon_prim = (parse_recon_route(recon, "add_compiled_model") ==
-                           ReconRouteId::kPrimitive);
+  const bool recon_prim =
+      (parse_recon_route(recon, "add_compiled_model") == ReconRouteId::kPrimitive);
   // EXPLICIT RK scheme marshaled by the production path (add_native_block -> pops_install_native ->
   // this template): the ONE canonical spelling of the typed route (ADC-641), replacing the enum ->
   // string round-trip. route_token(kSsprk3)=="ssprk3", route_token(kForwardEuler)=="euler",

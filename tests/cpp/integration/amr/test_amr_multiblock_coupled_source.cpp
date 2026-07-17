@@ -26,7 +26,7 @@
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -116,8 +116,8 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(kIonFieldCharge, B0), [&](auto m) {
@@ -269,8 +269,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     const Real tot0 = rt.mass(0) + rt.mass(1);
     for (int s = 0; s < K; ++s)
       rt.step(dt);
-    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1)))
-        << "multirate_state_finite";
+    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1))) << "multirate_state_finite";
     EXPECT_TRUE(std::fabs((rt.mass(0) + rt.mass(1)) - tot0) < 1e-9)
         << "multirate_composite_mass_conserved";
   }

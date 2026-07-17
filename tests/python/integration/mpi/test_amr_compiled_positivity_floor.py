@@ -31,6 +31,7 @@ uniform and refined-AMR coverage in the dedicated C++ positivity tests.
 Needs a C++ compiler + the pops headers + POPS_KOKKOS_ROOT (the production loader is Kokkos-only):
 auto-skips (exit 0) without a compiler, like test_dsl_production_amr. Validated under CI (ci-kokkos*).
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction import WENO5
 import os
@@ -125,7 +126,7 @@ def compiled_single(cm, pf, state):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  no C++ compiler or pops headers")
+        require_native_or_skip('skip  no C++ compiler or pops headers')
         print("test_amr_compiled_positivity_floor : OK (nothing to compile)")
         return
 

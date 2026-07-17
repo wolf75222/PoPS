@@ -22,9 +22,9 @@
 #include <pops/validation/physics/advection_diffusion.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
-#include <pops/numerics/fv/numerical_flux.hpp>      // RusanovFlux
-#include <pops/numerics/fv/reconstruction.hpp>      // Weno5, Minmod
-#include <pops/numerics/spatial_operator.hpp>    // reconstruct_pp, positivity_comp
+#include <pops/numerics/fv/numerical_flux.hpp>              // RusanovFlux
+#include <pops/numerics/fv/reconstruction.hpp>              // Weno5, Minmod
+#include <pops/numerics/spatial_operator.hpp>               // reconstruct_pp, positivity_comp
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // advance_amr, AmrLevelMP, mf_fill_fine_ghosts_mb
 
 #include <pops/mesh/index/box2d.hpp>
@@ -190,8 +190,9 @@ TEST(test_amr_positivity_floor, Runs) {
           "mom = %.3f\n",
           n_raw, n_pp, static_cast<double>(ghost_rho), static_cast<double>(ghost_mom));
     if (n_ranks() == 1) {
-      EXPECT_TRUE(n_raw > 0) << "1_unclamped_ghost_subfloor";  // the problem exists at the C/F interface
-      EXPECT_EQ(n_pp, 0) << "1_clamped_ghost_floor";           // the clamp fixes every C/F ghost
+      EXPECT_TRUE(n_raw > 0)
+          << "1_unclamped_ghost_subfloor";            // the problem exists at the C/F interface
+      EXPECT_EQ(n_pp, 0) << "1_clamped_ghost_floor";  // the clamp fixes every C/F ghost
       EXPECT_TRUE(ghost_rho >= floor) << "1_clamped_ghost_density_floored";
       EXPECT_TRUE(std::abs(ghost_mom - Real(0.5)) < Real(1e-12))
           << "1_clamped_ghost_momentum_interpolated";

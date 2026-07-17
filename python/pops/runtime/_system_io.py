@@ -1,14 +1,13 @@
-"""System IO mixin (Spec-4 PR-F): outputs, checkpoint, restart.
+"""Strict accepted-state checkpoint/restart mixin for the Uniform System engine.
 
-VISUALIZATION OUTPUT (vtk/npz/hdf5, serial + parallel-hyperslab), strict restartable checkpoint and
-restart of :class:`pops.runtime._system.System`. Pure Python (zero change to the C++ hot path),
-single-rank / rank-0 gather. ATOMIC write (.tmp + os.replace). Mixed into ``System`` via
-inheritance; operates on ``self._s``. ``abi_key`` is the module ABI key, baked into the .so
-metadata imported by private engine adapters through ``pops.runtime._engine_descriptors``.
+Scientific output belongs exclusively to ConsumerGraph providers.  This private engine adapter only
+owns the restart payload codec and its native transaction; it has no format or MPI policy surface.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pops.runtime._engine_descriptors import abi_key
@@ -19,8 +18,26 @@ else:
     _System = object
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedUniformRestart:
+    payload: Any
+    restart_identity: Any
+    temporal_state: Any
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedUniformCapture:
+    target: Path
+    payload: dict[str, Any]
+    blocks: tuple[str, ...]
+    field_slots: tuple[str, ...]
+    history_plan: Any
+    cache_nodes: tuple[int, ...]
+    capture_identity: str
+
+
 class _SystemIO(_System):
-    """Output / checkpoint / restart methods of System."""
+    """Private accepted-state codec and transactional restore adapter for ``System``."""
 
     def set_history_persistence(self, mapping):
         """Attach the per-history persistence policies (ADC-626): @p mapping is ``name -> policy`` (a
@@ -33,462 +50,327 @@ class _SystemIO(_System):
     def last_restart_report(self):
         """The typed :class:`~pops.time._history.report.HistoryReplayReport` of the last
         restart (stored-vs-recomputed ring slots + replay steps), or ``None`` if no restart has run.
-        Metadata-only (ADC-591); populated by :meth:`restart`."""
+        Metadata-only (ADC-591); populated by the accepted-state restore transaction."""
         return getattr(self, "_last_restart_report", None)
 
-    # ------------------------------------------------------------------
-    # OUTPUTS / STRICT CHECKPOINT / RESTART.
-    # Pure Python (zero change to the C++ hot path), single-rank; HDF5 aggregated/parallel and AMR =
-    # PR-IO-3. ATOMIC write (.tmp file then os.replace: a crash mid-write never
-    # corrupts a previous checkpoint).
-    # ------------------------------------------------------------------
-    def write(self, path: Any, format: str = "vtk", step: Any = None, fields: Any = None,
-              parallel: bool = False) -> Any:
-        """VISUALIZATION OUTPUT: writes the current state to an opened file (ParaView/numpy).
-
-        - ``format="vtk"``: ImageData .vti ASCII (Cartesian; opened by ParaView / VisIt) -- one
-          CellData per conservative variable of each block + the potential phi.
-        - ``format="npz"``: compressed np.savez (any backend / any geometry) -- per-block states,
-          names/roles, phi, t, macro_step, grid.
-        - @p step: numbered suffix (path_000123.vti); None = raw path + extension.
-        - @p fields: subset of blocks to write (None = all).
-        - @p parallel: PARALLEL HDF5 write by hyperslabs (opt-in, format='hdf5' ONLY). Default
-          False = rank-0 gather path below, STRICTLY unchanged. True = each rank writes ITS
-          boxes into a single file via h5py(mpio) -- requires h5py built with MPI + mpi4py (otherwise a
-          CLEAR error with a remedy, never a silent degraded write). Cf. _write_hdf5_parallel.
-        - @return the written path.
-
-        MULTI-RANK (MPI np>1): the fields are gathered via the GLOBAL collective accessors
-        (state_global / potential_global -- every rank MUST therefore call write), then ONLY rank 0
-        writes the file (a single file, identical to single-rank). The System being mono-box (one
-        box covering the whole domain, on rank 0), the gather is exact. The other ranks return the
-        path without I/O. PARALLEL HDF5 (per-rank hyperslabs): parallel=True (cf. _write_hdf5_parallel;
-        real parallelism only in MULTI-BOX, the Cartesian System being mono-box)."""
-        import os
+    def _prepare_checkpoint_capture(self, path: Any) -> _PreparedUniformCapture:
+        """Freeze and identify all local metadata before the first native collective."""
         import numpy as np
-        from pops import _pops
-        if parallel and format != "hdf5":
-            raise ValueError(
-                "write: parallel=True is only supported for format='hdf5' (write by "
-                "hyperslabs); format=%r goes through the rank-0 gather path (parallel=False)."
-                % (format,))
-        rank0 = (_pops.my_rank() == 0)
-        blocks = [b for b in self._s.block_names() if fields is None or b in fields]
-        suffix = ("_%06d" % int(step)) if step is not None else ""
-        nxv, nyv = self._s.nx(), self._s.ny()
-        if format == "npz":
-            # COLLECTIVE gather (all ranks) BEFORE the rank-0 guard: state_global / potential_global
-            # do an internal all_reduce and must be called by each rank.
-            out = {"t": self._s.time(), "macro_step": self._s.macro_step(),
-                   "nx": nxv, "ny": nyv, "blocks": np.array(blocks)}
-            for b in blocks:
-                nv = self._s.n_vars(b)
-                out["state_" + b] = np.asarray(self._s.state_global(b), dtype=np.float64).reshape(
-                    nv, nyv, nxv)
-                out["names_" + b] = np.array(list(self._s.variable_names(b, "conservative")))
-                out["roles_" + b] = np.array(list(self._s.variable_roles(b, "conservative")))
-            out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv)
-            target = path + suffix + ".npz"
-            if not rank0:
-                return target  # only rank 0 writes the file (gather already done collectively)
-            tmp = target + ".tmp"
-            with open(tmp, "wb") as f:
-                np.savez_compressed(f, **out)
-            os.replace(tmp, target)
-            return target
-        if format == "vtk":
-            target = path + suffix + ".vti"
-            arrays, names = [], []
-            for b in blocks:
-                nv = self._s.n_vars(b)
-                st = np.asarray(self._s.state_global(b), dtype=np.float64).reshape(nv, nyv, nxv)
-                for c, nm in enumerate(self._s.variable_names(b, "conservative")):
-                    arrays.append(st[c])
-                    names.append("%s_%s" % (b, nm))
-            arrays.append(np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv))
-            names.append("phi")
-            if not rank0:
-                return target  # collective gather done above; only rank 0 writes
-            lines = ['<?xml version="1.0"?>',
-                     '<VTKFile type="ImageData" version="0.1" byte_order="LittleEndian">',
-                     '  <ImageData WholeExtent="0 %d 0 %d 0 0" Origin="0 0 0" '
-                     'Spacing="%.17g %.17g 1">' % (nxv, nyv, 1.0 / nxv, 1.0 / nyv),
-                     '    <Piece Extent="0 %d 0 %d 0 0">' % (nxv, nyv),
-                     '      <CellData>']
-            for nm, arr in zip(names, arrays, strict=True):
-                lines.append('        <DataArray type="Float64" Name="%s" format="ascii">' % nm)
-                lines.append("          " + " ".join("%.17g" % v for v in arr.ravel()))
-                lines.append('        </DataArray>')
-            lines += ['      </CellData>', '    </Piece>', '  </ImageData>', '</VTKFile>', '']
-            tmp = target + ".tmp"
-            with open(tmp, "w") as f:
-                f.write("\n".join(lines))
-            os.replace(tmp, target)
-            return target
-        if format == "hdf5":
-            if parallel:
-                # PARALLEL HDF5 by hyperslabs (PR-IO-3, opt-in): each rank writes ITS boxes into
-                # a single file (h5py mpio), no global gather. SEPARATE path -- the serial path
-                # below stays STRICTLY unchanged.
-                return self._write_hdf5_parallel(path + suffix + ".h5", blocks, nxv, nyv)
-            # AGGREGATED HDF5 v1 (wave 3, plan PR-IO-2): a single file, one group per block,
-            # attributes for the clock/grid. Multi-rank: collective gather (state_global /
-            # potential_global) then rank-0 write (a single file). PARALLEL HDF5 (per-rank
-            # hyperslabs) = parallel=True (branch above). h5py optional: absent -> clear error.
-            # COLLECTIVE gather (all ranks) BEFORE the rank-0 guard.
-            states = {b: np.asarray(self._s.state_global(b), dtype=np.float64).reshape(
-                self._s.n_vars(b), nyv, nxv) for b in blocks}
-            phi_g = np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv)
-            target = path + suffix + ".h5"
-            if not rank0:
-                return target  # only rank 0 writes the file
-            try:
-                import h5py  # type: ignore[import]
-            except ImportError:
-                raise RuntimeError(
-                    "write(format='hdf5'): h5py missing (pip/conda install h5py); "
-                    "use format='npz' (equivalent, no dependency) in the meantime.") from None
-            tmp = target + ".tmp"
-            with h5py.File(tmp, "w") as f:
-                f.attrs["t"] = self._s.time()
-                f.attrs["macro_step"] = self._s.macro_step()
-                f.attrs["nx"] = nxv
-                f.attrs["ny"] = nyv
-                f.attrs["abi_key"] = abi_key()
-                for b in blocks:
-                    g = f.create_group(b)
-                    g.create_dataset("state", data=states[b], compression="gzip")
-                    g.attrs["names"] = [s.encode() for s in
-                                        self._s.variable_names(b, "conservative")]
-                    g.attrs["roles"] = [s.encode() for s in
-                                        self._s.variable_roles(b, "conservative")]
-                f.create_dataset("phi", data=phi_g, compression="gzip")
-            os.replace(tmp, target)
-            return target
-        raise ValueError("write: format 'vtk' | 'npz' | 'hdf5' (received %r)" % (format,))
+        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+        from pops.identity import make_identity
+        from pops.output._checkpoint_collective import canonical_checkpoint_path
+        from pops.runtime._system_io_history import prepare_history_capture
 
-    def _write_hdf5_parallel(self, target: Any, blocks: Any, nxv: Any, nyv: Any) -> Any:
-        """PARALLEL HDF5 WRITE by hyperslabs (write(format='hdf5', parallel=True)) -- PR-IO-3.
-
-        OPT-IN PATH, separate from the serial path (rank-0 gather) which stays untouched. Instead of
-        gathering the whole field on rank 0, each rank WRITES ITS BOXES into a SINGLE file opened
-        collectively (h5py driver='mpio'). The global datasets (ncomp, ny, nx) per block + phi (ny, nx)
-        are created COLLECTIVELY, the metadata (t, macro_step, nx, ny, abi_key, names/roles) written
-        collectively, then each rank writes its hyperslabs dset[:, jlo:jhi+1, ilo:ihi+1] in INDEPENDENT
-        I/O (disjoint boxes ; a rank with no box writes nothing).
-
-        TRUE PARALLELISM = MULTI-BOX only. The cartesian System is MONO-BOX (one box covering the
-        domain, on rank 0) : under np>1 rank 0 writes the single box and the other ranks carry no
-        box -- the hyperslab gain appears on a multi-box geometry (cf. AMR, ADC-65). The mechanics
-        stay CORRECT in the general case (iteration over all local fabs). phi is solved/gathered
-        COLLECTIVELY (potential_global, all_reduce) then written by rank 0 alone (full scalar field,
-        contiguous dataset).
-
-        CONTIGUOUS DATASETS (no gzip) : parallel HDF5 does not allow independent writes to
-        chunk-filtered datasets. The serial path keeps gzip ; the re-read VALUES are identical field by
-        field (parallel=True under np=1 == parallel=False, verified by test_hdf5_parallel).
-
-        NEVER SILENT : h5py absent, h5py without MPI, or mpi4py absent -> RuntimeError with remedy
-        (install h5py built with MPI + mpi4py, or parallel=False)."""
-        import os
-        import numpy as np
-        from pops import _pops
-        # h5py FIRST, THEN the MPI support test : an h5py present but WITHOUT MPI must give
-        # the targeted error (remedy), independently of whether mpi4py is present.
-        try:
-            import h5py  # type: ignore[import]
-        except ImportError:
-            raise RuntimeError(
-                "write(format='hdf5', parallel=True) : h5py absent. Remedy : install h5py built with "
-                "MPI (parallel HDF5), or parallel=False (global gather + rank-0 write).") from None
-        if not h5py.get_config().mpi:
-            raise RuntimeError(
-                "write(format='hdf5', parallel=True) : h5py present but WITHOUT MPI support "
-                "(h5py.get_config().mpi == False). Remedy : install h5py built with MPI (parallel "
-                "HDF5), or parallel=False (global gather + rank-0 write).")
-        try:
-            from mpi4py import MPI  # type: ignore[import]
-        except ImportError:
-            raise RuntimeError(
-                "write(format='hdf5', parallel=True) : mpi4py absent (required to open in mpio). "
-                "Remedy : install mpi4py, or parallel=False (global gather + rank-0 write).") from None
-        # Guard : _pops module built BEFORE the local accessors (build prior to ADC-66).
-        if not hasattr(self._s, "local_boxes"):
-            raise RuntimeError(
-                "write(format='hdf5', parallel=True) : the loaded _pops module does not expose "
-                "local_boxes/local_state (build prior to hyperslab writes). Remedy : "
-                "rebuild PoPS, or parallel=False.")
-        comm = MPI.COMM_WORLD
-        rank0 = (_pops.my_rank() == 0)
-        # phi : solved + gathered COLLECTIVELY (all ranks ; potential_global does the all_reduce),
-        # then written by rank 0 alone (global scalar field, contiguous dataset).
-        phi_g = np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv)
-        # Descriptors identical on all ranks (shared composition) : pre-computed for coherent
-        # collective operations (create_dataset / attrs).
-        ncomp = {b: self._s.n_vars(b) for b in blocks}
-        names = {b: [s.encode() for s in self._s.variable_names(b, "conservative")] for b in blocks}
-        roles = {b: [s.encode() for s in self._s.variable_roles(b, "conservative")] for b in blocks}
-        tmp = target + ".tmp"
-        # COLLECTIVE open (all ranks open the same file via mpio).
-        f = h5py.File(tmp, "w", driver="mpio", comm=comm)
-        try:
-            # Collective metadata -- identical to the serial path.
-            f.attrs["t"] = self._s.time()
-            f.attrs["macro_step"] = self._s.macro_step()
-            f.attrs["nx"] = nxv
-            f.attrs["ny"] = nyv
-            f.attrs["abi_key"] = abi_key()
-            for b in blocks:
-                g = f.create_group(b)  # collective
-                # GLOBAL dataset (ncomp, ny, nx) CONTIGUOUS (no gzip : independent writes forbidden
-                # on a chunk-filtered dataset in parallel).
-                dset = g.create_dataset("state", shape=(ncomp[b], nyv, nxv), dtype="f8")  # collective
-                g.attrs["names"] = names[b]
-                g.attrs["roles"] = roles[b]
-                # Each rank writes ITS local boxes as hyperslabs (independent I/O : disjoint
-                # boxes, a rank with no box -> empty loop). local_state already returns (ncomp, bny, bnx).
-                for li, (ilo, jlo, ihi, jhi) in enumerate(self._s.local_boxes(b)):
-                    dset[:, jlo:jhi + 1, ilo:ihi + 1] = np.asarray(
-                        self._s.local_state(b, li), dtype=np.float64)
-            phi_d = f.create_dataset("phi", shape=(nyv, nxv), dtype="f8")  # collective
-            if rank0:
-                phi_d[...] = phi_g  # global field already gathered : written by rank 0 alone
-        finally:
-            f.close()  # collective
-        comm.Barrier()  # all ranks have closed BEFORE the atomic rename
-        if rank0:
-            os.replace(tmp, target)
-        comm.Barrier()  # the rename is visible (shared FS) before any return
-        return target
-
-    def checkpoint(self, path: Any, parallel: bool = False) -> Any:
-        """RESTARTABLE CHECKPOINT (npz): complete block state + clock (t, macro_step --
-        MANDATORY for the stride cadence) + grid + provenance (abi_key). CONTRACT (cf.
-        docs/IO_CHECKPOINT_PLAN.md) : restart does NOT rebuild the composition -- the user
-        script replays its add_block/set_poisson/couplings then calls sim.restart(path), which
-        VERIFIES the consistency (blocks, sizes) and raises an explicit error otherwise. @return the path.
-
-        MULTI-RANK (MPI np>1) : the states are gathered by the collective GLOBAL accessors
-        (state_global / potential_global -- all ranks MUST call checkpoint), then ONLY
-        rank 0 writes the SINGLE file (identical to mono-rank). The checkpoint/restart pair stays
-        bit-identical under np>1 (mono-box System : all the state lives on rank 0, exact gather).
-
-        @p parallel: the checkpoint is rank-0 gather (npz format, not HDF5). The hyperslab
-        write (parallel=True) only applies to the visualization OUTPUT
-        write(format='hdf5') : an npz checkpoint has neither HDF5 datasets nor box partitioning. Passing
-        parallel=True therefore raises an EXPLICIT error (never a silently degraded write) : for a
-        parallel output, use write(format='hdf5', parallel=True) ; a restartable parallel HDF5
-        checkpoint is later work (PR-IO-3, cf. docs/IO_CHECKPOINT_PLAN.md)."""
-        import os
-        import numpy as np
-        from pops import _pops
-        if parallel:
-            raise NotImplementedError(
-                "checkpoint(parallel=True): the checkpoint is a rank-0 gather npz (non "
-                "HDF5 format, no box partitioning). The hyperslab write only concerns "
-                "write(format='hdf5', parallel=True) (visualization output). A restartable parallel "
-                "HDF5 checkpoint remains to be done (PR-IO-3, docs/IO_CHECKPOINT_PLAN.md) ; for "
-                "now : checkpoint(parallel=False).")
+        target = canonical_checkpoint_path(path)
         temporal = getattr(self, "_temporal_restart_state", None)
         if temporal is None:
             raise RuntimeError("checkpoint requires the Uniform temporal restart state")
-        temporal_json = temporal.checkpoint_json(
-            time=self._s.time(), macro_step=self._s.macro_step())
-        blocks = list(self._s.block_names())
-        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
-
+        time = float(self._s.time())
+        macro_step = int(self._s.macro_step())
+        temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
+        blocks = tuple(str(block) for block in self._s.block_names())
+        if not blocks or len(blocks) != len(set(blocks)):
+            raise ValueError("checkpoint requires a non-empty unique Uniform block order")
+        required_collectives = ["state_global", "potential_global"]
         out = {"pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
-               "t": self._s.time(), "macro_step": self._s.macro_step(),
-               "nx": self._s.nx(), "ny": self._s.ny(),
+               "t": time, "macro_step": macro_step,
+               "nx": int(self._s.nx()), "ny": int(self._s.ny()),
                "abi_key": abi_key(), "blocks": np.array(blocks),
                "temporal_restart_state": np.array(temporal_json)}
-        # COLLECTIVE gather (all ranks) BEFORE the rank-0 guard.
+        block_evidence = []
         for b in blocks:
-            nv = self._s.n_vars(b)
+            nv = int(self._s.n_vars(b))
+            names = tuple(str(name) for name in self._s.variable_names(b, "conservative"))
+            if nv <= 0 or len(names) != nv or len(names) != len(set(names)):
+                raise ValueError("checkpoint block %r has an invalid conservative schema" % b)
             out["ncomp_" + b] = nv
-            out["state_" + b] = np.asarray(self._s.state_global(b), dtype=np.float64)
-            out["names_" + b] = np.array(list(self._s.variable_names(b, "conservative")))
-        # phi: multigrid warm start required for a bit-identical restart.
-        out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
-        field_slots = list(self._s.field_provider_slots())
+            out["names_" + b] = np.array(names)
+            block_evidence.append({"name": b, "ncomp": nv, "variables": list(names)})
+        field_slots = tuple(str(slot) for slot in self._s.field_provider_slots())
+        if len(field_slots) != len(set(field_slots)):
+            raise ValueError("checkpoint field-provider slots must be unique")
         out["field_provider_slots"] = np.array(field_slots)
-        for index, slot in enumerate(field_slots):
-            out["field_potential_%d" % index] = np.asarray(
-                self._s.field_potential_global(slot), dtype=np.float64)
-        # COMPILED-PROGRAM HISTORIES (ADC-406b): a compiled time Program with multistep histories (e.g.
-        # Adams-Bashforth 2) carries the System-owned ring buffers across macro-steps. To make a
-        # (run, checkpoint, restart, continue) run bit-identical to a continuous run, the rings (the
-        # previous RHS R_{n-1}, ...) MUST survive the checkpoint -- else AB2 cold-starts again and
-        # diverges. The program HASH is recorded too: a restart against a DIFFERENT compiled Program is
-        # rejected (the buffers / cadence would be meaningless). Both groups of keys are OPTIONAL: a
-        # The program identity is mandatory; histories are represented by an explicit index.
-        prog_hash = ""
-        if hasattr(self._s, "installed_program_hash"):
-            prog_hash = self._s.installed_program_hash()
+        if field_slots:
+            required_collectives.append("field_potential_global")
+        prog_hash = str(self._s.installed_program_hash()) \
+            if hasattr(self._s, "installed_program_hash") else ""
         if not prog_hash:
             raise RuntimeError("checkpoint requires the installed compiled Program hash")
         out["program_hash"] = prog_hash
-        # An explicit empty history_names array distinguishes "no rings" from a truncated payload.
-        from pops.runtime._system_io_history import serialize_histories
-        serialize_histories(self._s, getattr(self, "_history_persistence", None) or {}, out)
-        # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): a compiled Program with a held schedule
-        # (every(N).hold / accumulate_dt) caches the System aux / a scratch per node so the field solve
-        # runs only when DUE. The cache lives in the System (program_cache, NOT the .so step closure),
-        # so checkpointing it makes a (run, checkpoint, restart, continue) run bit-for-bit identical to
-        # a continuous run -- else the first post-restart step would cold-start the held node off its
-        # cadence. Keys are OPTIONAL (a program with no held schedule caches nothing): cache_nodes is
-        # the list of cached IR node ids, and per node the cached value + bookkeeping. All ranks gather
-        # (program_cache_global mirrors history_global), only rank 0 writes (below).
-        cache_nodes = (list(self._s.program_cache_nodes())
-                       if hasattr(self._s, "program_cache_nodes") else [])
-        out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
-        out["cache_names"] = np.array([str(self._s.program_cache_name(nid))
-                                       for nid in cache_nodes])
+        history_plan = prepare_history_capture(
+            self._s,
+            getattr(self, "_history_persistence", None) or {},
+            macro_step=macro_step,
+        )
+        if any(ring.stored_slots for ring in history_plan.rings):
+            required_collectives.append("history_global")
+        cache_nodes = tuple(int(node) for node in self._s.program_cache_nodes()) \
+            if hasattr(self._s, "program_cache_nodes") else ()
+        if len(cache_nodes) != len(set(cache_nodes)):
+            raise ValueError("checkpoint scheduled-cache node ids must be unique")
         if cache_nodes:
-            for nid in cache_nodes:
-                out["cache_ncomp_%d" % nid] = int(self._s.program_cache_ncomp(nid))
-                out["cache_ngrow_%d" % nid] = int(self._s.program_cache_ngrow(nid))
-                out["cache_last_update_%d" % nid] = int(
-                    self._s.program_cache_last_update_step(nid))
-                out["cache_accum_dt_%d" % nid] = float(
-                    self._s.program_cache_accumulated_dt(nid))
-                # COLLECTIVE gather of the cached value (all ranks call), like history_global above.
-                out["cache_value_%d" % nid] = np.asarray(
-                    self._s.program_cache_global(nid), dtype=np.float64)
-        from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
-        seal_checkpoint_payload(self, out, runtime_kind="uniform")
-        target = path if path.endswith(".npz") else path + ".npz"
-        if _pops.my_rank() != 0:
-            return target  # only rank 0 writes the checkpoint (gather already done)
-        tmp = target + ".tmp"
-        with open(tmp, "wb") as f:
-            np.savez_compressed(f, **out)
-        os.replace(tmp, target)
-        return target
+            required_collectives.append("program_cache_global")
+        missing_collectives = sorted({
+            name for name in required_collectives
+            if not callable(getattr(self._s, name, None))
+        })
+        if missing_collectives:
+            raise TypeError(
+                "checkpoint Uniform engine lacks collective accessors %r"
+                % missing_collectives)
+        out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
+        cache_evidence = []
+        cache_names = []
+        for nid in cache_nodes:
+            name = str(self._s.program_cache_name(nid))
+            ncomp = int(self._s.program_cache_ncomp(nid))
+            ngrow = int(self._s.program_cache_ngrow(nid))
+            last_update = int(self._s.program_cache_last_update_step(nid))
+            accum_dt = float(self._s.program_cache_accumulated_dt(nid))
+            if not name or ncomp <= 0 or ngrow < 0:
+                raise ValueError("checkpoint scheduled-cache metadata is invalid for node %d" % nid)
+            cache_names.append(name)
+            out["cache_ncomp_%d" % nid] = ncomp
+            out["cache_ngrow_%d" % nid] = ngrow
+            out["cache_last_update_%d" % nid] = last_update
+            out["cache_accum_dt_%d" % nid] = accum_dt
+            cache_evidence.append({
+                "node": nid, "name": name, "ncomp": ncomp, "ngrow": ngrow,
+                "last_update": last_update, "accumulated_dt": accum_dt.hex(),
+            })
+        out["cache_names"] = np.array(cache_names)
+        runtime_identities = [value.to_data() for value in self._checkpoint_identities()]
+        run_identity = self.last_run_identity.to_data()
+        capture_identity = make_identity("checkpoint-capture-plan", {
+            "runtime_kind": "uniform",
+            "target": str(target),
+            "clock": {"time": time.hex(), "macro_step": macro_step},
+            "grid": {"nx": int(out["nx"]), "ny": int(out["ny"])},
+            "abi_key": str(out["abi_key"]),
+            "blocks": block_evidence,
+            "field_slots": list(field_slots),
+            "program_hash": prog_hash,
+            "histories": history_plan.to_data(),
+            "cache": cache_evidence,
+            "runtime_identities": runtime_identities,
+            "run_identity": run_identity,
+        }).token
+        return _PreparedUniformCapture(
+            target, out, blocks, field_slots, history_plan, cache_nodes, capture_identity)
 
-    def restart(self, path: Any) -> Any:
-        """Resume the current strict checkpoint after authenticating its complete manifest.
-        error otherwise, never a silently wrong resume), restores the state of each block
-        then the clock (t, macro_step : the stride cadence resumes exactly). The COMPOSITION
-        (add_block / set_poisson / set_magnetic_field / couplings) must have been replayed by the
-        The composition must already have been bound before the call.
-
-        MULTI-RANK (MPI np>1) : all ranks read the file (shared file system) and
-        call set_state / set_potential / set_clock. set_state / set_potential are MPI-safe (the
-        owner rank -- rank 0, mono-box -- writes, the others are no-ops) ; set_clock sets
-        the clock on each rank. The resume is therefore bit-identical under np>1."""
+    def _capture_checkpoint(self, prepared: _PreparedUniformCapture) -> tuple[dict[str, Any], str]:
+        """Run the agreed native gather sequence and seal the in-memory payload."""
+        if not isinstance(prepared, _PreparedUniformCapture):
+            raise TypeError("Uniform checkpoint capture requires its exact prepared plan")
         import numpy as np
-        target = path if path.endswith(".npz") else path + ".npz"
-        d = np.load(target, allow_pickle=False)
-        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
-        self._last_restart_identity = authenticate_checkpoint_payload(
-            self, d, runtime_kind="uniform")
-        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+        from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
+        from pops.runtime._system_io_history import capture_histories
 
-        ckpt_version = int(d["pops_checkpoint_version"])
-        if ckpt_version != UNIFORM_CHECKPOINT_PAYLOAD_VERSION:
-            raise ValueError("restart : checkpoint version %r not supported (expected exactly %d; "
-                             "historical checkpoints require offline migration)"
-                             % (d["pops_checkpoint_version"],
-                                UNIFORM_CHECKPOINT_PAYLOAD_VERSION))
-        from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
-        preflight_uniform_restart(d)
-        if "temporal_restart_state" not in d:
-            raise ValueError("restart : checkpoint lacks its strict Uniform temporal state")
+        out = dict(prepared.payload)
+        for block in prepared.blocks:
+            out["state_" + block] = np.asarray(
+                self._s.state_global(block), dtype=np.float64)
+        out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
+        for index, slot in enumerate(prepared.field_slots):
+            out["field_potential_%d" % index] = np.asarray(
+                self._s.field_potential_global(slot), dtype=np.float64)
+        capture_histories(self._s, prepared.history_plan, out)
+        for node in prepared.cache_nodes:
+            out["cache_value_%d" % node] = np.asarray(
+                self._s.program_cache_global(node), dtype=np.float64)
+        identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
+        return out, identity.token
+
+    def checkpoint(self, path: Any) -> Any:
+        """Capture the exact accepted state through the collective checkpoint protocol."""
+        import os
+        import numpy as np
+        from pops.output._checkpoint_collective import collective_checkpoint_capture
+
+        prepared_holder = {}
+
+        def prepare():
+            prepared = self._prepare_checkpoint_capture(path)
+            prepared_holder["plan"] = prepared
+            return prepared, prepared.capture_identity
+
+        def publish(payload):
+            prepared = prepared_holder["plan"]
+            temporary = prepared.target.with_name(prepared.target.name + ".tmp")
+            try:
+                with open(temporary, "wb") as stream:
+                    np.savez_compressed(stream, **payload)
+                os.replace(temporary, prepared.target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return str(prepared.target)
+
+        return collective_checkpoint_capture(
+            self, "Uniform accepted-state capture", prepare, self._capture_checkpoint, publish)
+
+    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedUniformRestart:
+        """Authenticate and validate every byte before the first native state write."""
+        import numpy as np
+        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
         from pops.runtime._temporal_restart import TemporalRestartState
+        from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
+        from pops.time._history.persistence import HistoryPersistence
+
+        d = decode_checkpoint_bytes(payload)
+        identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
+        version = int(d["pops_checkpoint_version"])
+        if version != UNIFORM_CHECKPOINT_PAYLOAD_VERSION:
+            raise ValueError(
+                "restart : checkpoint version %r not supported (expected exactly %d; "
+                "historical checkpoints require offline migration)"
+                % (version, UNIFORM_CHECKPOINT_PAYLOAD_VERSION)
+            )
+        preflight_uniform_restart(d)
         installed_schedule = getattr(
             getattr(self, "_temporal_restart_state", None), "program_schedule", None)
-        restored_temporal = TemporalRestartState.from_json(
+        temporal = TemporalRestartState.from_json(
             d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"],
             program_schedule=installed_schedule)
-        if int(d["nx"]) != self._s.nx() or int(d["ny"]) != self._s.ny():
-            raise ValueError("restart : checkpoint grid (%d x %d) != system (%d x %d)"
-                             % (int(d["nx"]), int(d["ny"]), self._s.nx(), self._s.ny()))
-        chk_blocks = [str(b) for b in d["blocks"]]
-        cur_blocks = list(self._s.block_names())
-        if chk_blocks != cur_blocks:
-            raise ValueError("restart : checkpoint blocks %r != current composition %r "
-                             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks))
-        for b in chk_blocks:
-            if int(d["ncomp_" + b]) != self._s.n_vars(b):
-                raise ValueError("restart : block '%s' has %d components in the checkpoint, %d here"
-                                 % (b, int(d["ncomp_" + b]), self._s.n_vars(b)))
-            self._s.set_state(b, np.asarray(d["state_" + b], dtype=np.float64))
-        # phi BEFORE the clock: warm start of the restored solver (bit-identical restart).
-        self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
-        checkpoint_slots = [str(slot) for slot in d["field_provider_slots"]]
+        nx, ny = int(self._s.nx()), int(self._s.ny())
+        if int(d["nx"]) != nx or int(d["ny"]) != ny:
+            raise ValueError(
+                "restart : checkpoint grid (%d x %d) != system (%d x %d)"
+                % (int(d["nx"]), int(d["ny"]), nx, ny))
+        blocks = [str(block) for block in d["blocks"]]
+        current_blocks = list(self._s.block_names())
+        if blocks != current_blocks:
+            raise ValueError(
+                "restart : checkpoint blocks %r != current composition %r "
+                "(replay the SAME composition before restart)" % (blocks, current_blocks))
+        for block in blocks:
+            ncomp = int(d["ncomp_" + block])
+            if ncomp != int(self._s.n_vars(block)):
+                raise ValueError(
+                    "restart : block '%s' has %d components in the checkpoint, %d here"
+                    % (block, ncomp, self._s.n_vars(block)))
+            if np.asarray(d["state_" + block]).size != ncomp * nx * ny:
+                raise ValueError("restart : block '%s' state payload has the wrong size" % block)
+        if np.asarray(d["phi"]).size != nx * ny:
+            raise ValueError("restart : potential payload has the wrong size")
+        slots = [str(slot) for slot in d["field_provider_slots"]]
         current_slots = list(self._s.field_provider_slots())
-        if checkpoint_slots != current_slots:
+        if slots != current_slots:
             raise RuntimeError(
                 "checkpoint qualified field providers %r != installed providers %r"
-                % (checkpoint_slots, current_slots))
-        for index, slot in enumerate(checkpoint_slots):
+                % (slots, current_slots))
+        for index, slot in enumerate(slots):
             key = "field_potential_%d" % index
-            if key not in d:
+            if key not in d or np.asarray(d[key]).size != nx * ny:
                 raise RuntimeError(
-                    "checkpoint missing potential for qualified field provider %s" % slot)
-            self._s.set_field_potential(
-                slot, np.asarray(d[key], dtype=np.float64).ravel())
-        # COMPILED-PROGRAM HASH GUARD (ADC-406b): if the checkpoint recorded an installed program hash,
-        # the user must have installed the SAME compiled Program before restart (the replay
-        # contract). A different Program (different IR hash) makes the restored histories / cadence
-        # meaningless -> fail loud rather than silently continue with the wrong scheme.
-        if "program_hash" in d:
-            chk_hash = str(d["program_hash"])
-            cur_hash = (self._s.installed_program_hash()
+                    "checkpoint potential for qualified field provider %s is missing or malformed"
+                    % slot)
+        checkpoint_hash = str(d["program_hash"])
+        current_hash = (self._s.installed_program_hash()
                         if hasattr(self._s, "installed_program_hash") else "")
-            if cur_hash != chk_hash:
-                raise RuntimeError("checkpoint was created with a different compiled Program hash")
-        # COMPILED-PROGRAM HISTORIES (ADC-406b): restore each ring (the previous RHS, ...) so a
-        # multistep scheme (AB2) resumes EXACTLY where it stopped -- continuous == (run, ckpt, restart,
-        # continue) bit-for-bit. The program re-registers the rings on its first post-restart step;
-        # restoring them here (before that step) seeds the slots and the initialized flag so the first
-        # post-restart read sees the true R_{n-1} (no phantom cold-start re-fill).
-        available = set(str(h) for h in d["history_names"])
-        # MISSING-HISTORY GUARD (ADC-414, spec error 18): a history the CURRENT program already
-        # registered (it stepped at least once before this restart, or was re-installed and run) but the
-        # checkpoint never recorded cannot be restored -> the multistep scheme would silently cold-start.
-        # Fail loud, distinct from the hash-mismatch message above. A fresh program that has not yet
-        # registered any ring (the common install-then-restart flow) has no required history -> no false
-        # positive; the rings it re-registers on its first post-restart step are restored below.
-        if hasattr(self._s, "history_names"):
-            for hname in self._s.history_names():
-                if hname not in available:
-                    raise RuntimeError(
-                        "checkpoint does not contain required Program history '%s'" % hname)
-        if available:
-            from pops.runtime._system_io_history import restore_histories
-            self._last_restart_report = restore_histories(self._s, d)
-        # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): restore each held node's cached value +
-        # bookkeeping so a held schedule resumes EXACTLY on its cadence -- continuous == (run, ckpt,
-        # restart, continue) bit-for-bit. The cache is keyed by IR node id (re-keyed by the re-installed
-        # Program, which uses the SAME ids -- guaranteed by the program-hash guard above). A checkpoint
-        # that lists a cache node but lost its value array is a CORRUPT/TRUNCATED checkpoint: fail loud
-        # with the verbatim spec message naming the node, distinct from the hash-mismatch above (the
-        # held node would otherwise silently cold-start off its cadence). Back-compatible: a checkpoint
-        # with no cache_nodes restores as before.
-        if not hasattr(self._s, "restore_program_cache") and len(d["cache_nodes"]):
+        if current_hash != checkpoint_hash:
+            raise RuntimeError("checkpoint was created with a different compiled Program hash")
+
+        history_names = [str(name) for name in d["history_names"]]
+        current_histories = list(self._s.history_names()) if hasattr(self._s, "history_names") else []
+        missing = [name for name in current_histories if name not in history_names]
+        if missing:
+            raise RuntimeError(
+                "checkpoint does not contain required Program history '%s'" % missing[0])
+        for name in history_names:
+            depth = int(d["history_depth_" + name])
+            ncomp = int(d["history_ncomp_" + name])
+            if name in current_histories and (
+                depth != int(self._s.history_depth(name))
+                or ncomp != int(self._s.history_ncomp(name))
+            ):
+                raise ValueError("restart : history '%s' shape differs from the installed ring" % name)
+            policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
+            stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
+            if stored != list(policy.stored_slots(depth)):
+                raise ValueError("restart : history '%s' stored slots differ from its policy" % name)
+            if len(stored) < depth and not hasattr(self._s, "rebuild_history_slots"):
+                raise RuntimeError("runtime cannot rebuild selectively persisted history '%s'" % name)
+            for slot in stored:
+                if np.asarray(d["history_%s_%d" % (name, slot)]).size != ncomp * nx * ny:
+                    raise ValueError(
+                        "restart : history '%s' slot %d payload has the wrong size" % (name, slot))
+
+        cache_nodes = [int(node) for node in d["cache_nodes"]]
+        if cache_nodes and not hasattr(self._s, "restore_program_cache"):
             raise RuntimeError("runtime cannot restore the checkpoint's scheduled value cache")
-        if hasattr(self._s, "restore_program_cache"):
-            cache_names = [str(nm) for nm in d["cache_names"]]
-            for idx, nid in enumerate(int(n) for n in d["cache_nodes"]):
-                if idx >= len(cache_names):
-                    raise RuntimeError("checkpoint cache-name index is truncated")
-                name = cache_names[idx]
-                value_key = "cache_value_%d" % nid
-                if value_key not in d:
-                    raise RuntimeError(
-                        "checkpoint missing cached value for scheduled node '%s'" % name)
-                ngrow_key = "cache_ngrow_%d" % nid
-                if ngrow_key not in d:
-                    raise RuntimeError(
-                        "checkpoint missing cache ghost depth for scheduled node '%s'" % name)
-                ngrow = int(d[ngrow_key])
-                self._s.restore_program_cache(
-                    nid, int(d["cache_ncomp_%d" % nid]), ngrow,
-                    int(d["cache_last_update_%d" % nid]),
-                    float(d["cache_accum_dt_%d" % nid]), name,
-                    np.asarray(d[value_key], dtype=np.float64))
+        for node in cache_nodes:
+            ncomp = int(d["cache_ncomp_%d" % node])
+            ngrow = int(d["cache_ngrow_%d" % node])
+            if ncomp <= 0 or ngrow < 0:
+                raise ValueError("restart : scheduled cache node %d has invalid metadata" % node)
+            if np.asarray(d["cache_value_%d" % node]).size != ncomp * nx * ny:
+                raise ValueError("restart : scheduled cache node %d has the wrong value size" % node)
+        return _PreparedUniformRestart(d, identity, temporal)
+
+    def _begin_checkpoint_restart(self) -> None:
+        if "_checkpoint_restart_python_snapshot" in self.__dict__:
+            raise RuntimeError("Uniform checkpoint restart transaction is already active")
+        self._checkpoint_restart_python_snapshot = (
+            getattr(self, "_last_restart_identity", None),
+            getattr(self, "_last_restart_report", None),
+            getattr(self, "_temporal_restart_state", None),
+            getattr(self, "_step_controller", None),
+        )
+        try:
+            self._s._begin_step_transaction()
+        except BaseException:
+            del self._checkpoint_restart_python_snapshot
+            raise
+
+    def _apply_checkpoint_restart(self, prepared: _PreparedUniformRestart) -> Any:
+        if type(prepared) is not _PreparedUniformRestart:
+            raise TypeError("Uniform restart requires its exact prepared payload")
+        import numpy as np
+        from pops.runtime._system_io_history import restore_histories
+
+        d = prepared.payload
+        for block in (str(value) for value in d["blocks"]):
+            self._s.set_state(block, np.asarray(d["state_" + block], dtype=np.float64))
+        self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
+        for index, slot in enumerate(str(value) for value in d["field_provider_slots"]):
+            self._s.set_field_potential(
+                slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel())
+        histories = [str(name) for name in d["history_names"]]
+        self._last_restart_report = restore_histories(self._s, d) if histories else None
+        cache_names = [str(name) for name in d["cache_names"]]
+        for index, node in enumerate(int(value) for value in d["cache_nodes"]):
+            self._s.restore_program_cache(
+                node, int(d["cache_ncomp_%d" % node]), int(d["cache_ngrow_%d" % node]),
+                int(d["cache_last_update_%d" % node]),
+                float(d["cache_accum_dt_%d" % node]), cache_names[index],
+                np.asarray(d["cache_value_%d" % node], dtype=np.float64))
         self._s.set_clock(float(d["t"]), int(d["macro_step"]))
-        self._temporal_restart_state = restored_temporal
+        self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
+        self._last_restart_identity = prepared.restart_identity
+        return prepared.restart_identity
+
+    def _commit_checkpoint_restart(self) -> None:
+        self._s._commit_step_transaction()
+
+    def _finalize_checkpoint_restart(self) -> None:
+        self._s._finalize_step_transaction()
+        del self._checkpoint_restart_python_snapshot
+
+    def _rollback_checkpoint_restart(self) -> None:
+        snapshot = self._checkpoint_restart_python_snapshot
+        try:
+            self._s._rollback_step_transaction()
+        finally:
+            (self._last_restart_identity, self._last_restart_report,
+             self._temporal_restart_state, self._step_controller) = snapshot
+            del self._checkpoint_restart_python_snapshot
+
+    def restart(self, path: Any) -> Any:
+        """Restore the direct engine through the native collective transaction protocol."""
+        from pops.output._checkpoint_collective import restore_checkpoint_path
+
+        return restore_checkpoint_path(
+            self, self, path, phase_prefix="Uniform direct-engine restart")

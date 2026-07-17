@@ -28,8 +28,8 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>         // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>          // Euler (transport compressible)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
+#include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
@@ -213,5 +213,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 }
 
 TEST(test_mpi_amr_compiled_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_compiled_parity, "test_mpi_amr_compiled_parity"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_compiled_parity,
+                                    "test_mpi_amr_compiled_parity"),
+            0);
 }

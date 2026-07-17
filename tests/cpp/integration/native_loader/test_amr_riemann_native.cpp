@@ -152,8 +152,8 @@ bool compile_loader(const std::string& src_path, const std::string& so_path) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src_path + " -o " + so_path;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
 #if defined(__APPLE__)
   cmd += " -undefined dynamic_lookup";
 #endif
@@ -300,5 +300,6 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
 }
 
 TEST(test_amr_riemann_native, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_riemann_native, "test_amr_riemann_native"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_riemann_native, "test_amr_riemann_native"),
+            0);
 }

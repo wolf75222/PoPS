@@ -6,8 +6,8 @@ backend, not a second codegen), and ``compile_problem(model=module, time=P)`` ac
 validates the translation + the emitted .so source (codegen-text); the full Kokkos/AOT compile+run
 is on ROMEO. Pure Python; skips if pops is not importable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
-import sys
 
 try:
     from pops import model
@@ -15,8 +15,7 @@ try:
     from pops.math import sqrt
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_module_compile (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_module_compile (pops unavailable: %s)' % exc)
 
 
 def _op(mod, name):

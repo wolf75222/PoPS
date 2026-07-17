@@ -26,6 +26,7 @@ Without the compiled ``_pops`` extension the whole module skips (``System`` cann
 
 Pytest + __main__ guard (CI runs ``python3 <file>``).
 """
+from tests.python.support.requirements import require_native_or_skip
 import sys
 
 try:
@@ -35,8 +36,7 @@ try:
     from tests.python.support.typed_program import program_states, synthetic_module
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- _pops not built in this interpreter
-    print("skip test_print_readability_runtime (_pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_print_readability_runtime (_pops unavailable: %s)' % exc)
 
 _MAX_PRINT_LEN = 800
 

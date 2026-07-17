@@ -162,8 +162,7 @@ class BoundSnapshot:
         ):
             object.__setattr__(self, name, _freeze(_data(value, where=name), where=name))
         object.__setattr__(self, "bind_schema_identity", schema_id)
-        payload = self._identity_payload()
-        object.__setattr__(self, "bind_identity", make_identity("bind", payload))
+        object.__setattr__(self, "bind_identity", make_identity("bind", self._identity_payload()))
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
@@ -217,10 +216,26 @@ class MultiLayoutBoundSnapshot:
     )
 
     def __init__(self, install_plan: Any, child_snapshots: Any) -> None:
+        from pops.codegen._plans import require_install_plan
+
+        install_plan = require_install_plan(install_plan)
         snapshots = tuple(child_snapshots)
         if not snapshots:
             raise ValueError("MultiLayoutBoundSnapshot requires native child snapshots")
+        if any(type(snapshot) is not BoundSnapshot for snapshot in snapshots):
+            raise TypeError(
+                "MultiLayoutBoundSnapshot children must be exact low-level BoundSnapshot values")
         artifact = install_plan.artifact
+        if any(snapshot.semantic_identity != artifact.semantic_identity
+               or snapshot.artifact_identity != artifact.artifact_identity
+               for snapshot in snapshots):
+            raise ValueError("multi-layout child snapshot changed the compiled artifact identity")
+        child_names = tuple(
+            name for snapshot in snapshots for name in snapshot.block_names())
+        expected_names = tuple(install_plan.instances)
+        if len(child_names) != len(set(child_names)) or set(child_names) != set(expected_names):
+            raise ValueError(
+                "multi-layout child snapshots must cover every InstallPlan instance exactly once")
         object.__setattr__(self, "schema_version", SCHEMA_VERSION)
         object.__setattr__(self, "semantic_identity", artifact.semantic_identity)
         object.__setattr__(self, "artifact_identity", artifact.artifact_identity)
@@ -327,11 +342,55 @@ def _transaction_data(compiled: Any) -> Any:
     return None if plan is None else plan.to_data()
 
 
+def _require_exact_install_inputs(engine: Any, compiled: Any, instances: Any,
+                                  field_plans: Any, aux: Any, params: Any,
+                                  install_plan: Any) -> Any:
+    """Authenticate the exact final-plan values consumed by one native installation.
+
+    Canonically equivalent copies are deliberately rejected.  The final ``bind`` identity belongs
+    to one exact :class:`InstallPlan`; accepting aliases here would let the native runtime consume a
+    different object graph while the snapshot claimed the plan's authenticated identity.
+    """
+    from pops.codegen._plans import require_install_plan
+
+    plan = require_install_plan(install_plan)
+    expected = (
+        ("compiled artifact", compiled, plan.artifact),
+        ("instances", instances, plan.instances),
+        ("params", params, plan.params),
+        ("aux", aux, plan.aux),
+        ("field plans", field_plans, plan.artifact.plan.field_plans),
+        ("execution context", getattr(engine, "_execution_context", None),
+         plan.execution_context),
+    )
+    for label, actual, authoritative in expected:
+        if actual is not authoritative:
+            raise ValueError(
+                "bound snapshot %s must be the exact value from the InstallPlan" % label)
+    return plan
+
+
 def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
-                    aux: Any, params: Any, *, layout: str) -> BoundSnapshot:
+                    aux: Any, params: Any, *, layout: str,
+                    install_plan: Any = None) -> BoundSnapshot:
+    plan = None
+    if install_plan is not None:
+        plan = _require_exact_install_inputs(
+            engine, compiled, instances, field_plans, aux, params, install_plan)
+        expected_layout = "uniform" if plan.target == "system" else "amr"
+        if layout != expected_layout:
+            raise ValueError("bound snapshot layout changed the InstallPlan target")
+        # Derive the recorded values from the authenticated plan after proving that these are the
+        # exact objects consumed by the native install.  No caller-supplied alias enters the final
+        # snapshot authority.
+        compiled = plan.artifact
+        instances = plan.instances
+        field_plans = plan.artifact.plan.field_plans
+        aux = plan.aux
+        params = plan.params
     semantic, artifact = _require_compiled_identities(compiled)
     rows = params.rows()
-    return BoundSnapshot(
+    snapshot = BoundSnapshot(
         semantic_identity=semantic,
         artifact_identity=artifact,
         layout={"kind": layout},
@@ -345,23 +404,48 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any
             {name: spec["initial"] for name, spec in (instances or {}).items()
              if "initial" in spec}, where="initial_state"),
         bind_schema_identity=_schema_identity(params),
-        execution_context=getattr(engine, "_execution_context", None),
+        execution_context=(
+            plan.execution_context if plan is not None
+            else getattr(engine, "_execution_context", None)
+        ),
     )
+    if plan is not None:
+        # ``plan`` has just passed require_install_plan() and the exact-input proof above.  This is
+        # the only route that may replace the autonomous low-level snapshot hash with a final bind
+        # authority; BoundSnapshot itself accepts no bare/spoofable Identity.
+        object.__setattr__(snapshot, "bind_identity", plan.bind_identity)
+    return snapshot
 
 
 def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,
-                           field_plans: Any, aux: Any, params: Any) -> BoundSnapshot:
+                           field_plans: Any, aux: Any, params: Any,
+                           install_plan: Any = None) -> BoundSnapshot:
+    if install_plan is not None:
+        plan = _require_exact_install_inputs(
+            engine, compiled, instances, field_plans, aux, params, install_plan)
+        if tuple(resolved_models) != tuple(plan.instances) or any(
+            resolved_models[name] is not plan.instances[name]["model"]
+            for name in plan.instances
+        ):
+            raise ValueError(
+                "bound snapshot resolved models must be the exact InstallPlan instance models")
+        return _build_snapshot(
+            engine, compiled, instances, field_plans, aux, params, layout="uniform",
+            install_plan=plan)
     effective = {
         name: dict(spec, model=resolved_models.get(name, spec["model"]))
         for name, spec in (instances or {}).items()
     }
     return _build_snapshot(
-        engine, compiled, effective, field_plans, aux, params, layout="uniform")
+        engine, compiled, effective, field_plans, aux, params, layout="uniform",
+        install_plan=install_plan)
 
 
 def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
-                       aux: Any, params: Any) -> BoundSnapshot:
-    return _build_snapshot(engine, compiled, instances, field_plans, aux, params, layout="amr")
+                       aux: Any, params: Any, install_plan: Any = None) -> BoundSnapshot:
+    return _build_snapshot(
+        engine, compiled, instances, field_plans, aux, params, layout="amr",
+        install_plan=install_plan)
 
 
 __all__ = [

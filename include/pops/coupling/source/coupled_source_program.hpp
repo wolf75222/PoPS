@@ -175,17 +175,16 @@ inline void validate_cs_program_stack(const CsProgram& pg, const std::string& wh
   int sp = 0;
   for (int k = 0; k < pg.len; ++k) {
     if (pg.op[k] < 0 || pg.op[k] > static_cast<int>(CsOp::Sqrt))
-      throw_validation_error(where, "known CsOp opcode in [0.." +
-                                        std::to_string(static_cast<int>(CsOp::Sqrt)) + "]",
-                             "opcode=" + std::to_string(pg.op[k]) +
-                                 " at instruction " + std::to_string(k));
+      throw_validation_error(
+          where, "known CsOp opcode in [0.." + std::to_string(static_cast<int>(CsOp::Sqrt)) + "]",
+          "opcode=" + std::to_string(pg.op[k]) + " at instruction " + std::to_string(k));
     const CsOp op = static_cast<CsOp>(pg.op[k]);
     const int need = cs_required_stack(op);
     if (sp < need)
       throw_validation_error(where, "well-formed postfix stack program",
-                             "stack underflow at instruction " + std::to_string(k) +
-                                 " (" + cs_opcode_name(op) + "), stack_depth=" +
-                                 std::to_string(sp) + ", required=" + std::to_string(need));
+                             "stack underflow at instruction " + std::to_string(k) + " (" +
+                                 cs_opcode_name(op) + "), stack_depth=" + std::to_string(sp) +
+                                 ", required=" + std::to_string(need));
     if (op == CsOp::PushReg) {
       if (sp >= kCsMaxStack)
         throw_validation_error(where, "postfix stack depth <= " + std::to_string(kCsMaxStack),

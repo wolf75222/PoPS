@@ -16,6 +16,7 @@ This pure-Python test (no .so compile, no engine) checks the two halves the code
 Runs as a plain script (``python3 test_name_binding_codegen.py``, the CI invocation) and under pytest.
 Skips cleanly (never fakes the engine) if pops.time cannot import (it needs _pops for the typed registry).
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
@@ -24,8 +25,7 @@ from tests.python.support.typed_program import program_states, synthetic_module
 
 
 def _skip(msg):
-    print("skip test_name_binding_codegen (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_name_binding_codegen (%s)' % msg)
 
 
 def _pops_time():

@@ -60,7 +60,8 @@ generated C++ path, never Python callbacks or runtime lookup authority.
 - **[Kokkos](https://kokkos.org) 4.4.01**: the exact promised release, with Serial and OpenMP
   execution spaces. It is the only on-node backend and is required. No need to
   pre-install it; if it is not found, CMake fetches and builds it (FetchContent).
-- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*.
+- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*, with
+  `MPI_THREAD_MULTIPLE` support for the native runtime.
 - **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`: DataWriter)*.
 - **Python 3.12 + numpy** *(optional, the `pops` bindings; conda env via `scripts/setup_env.sh`)*.
 
@@ -77,6 +78,8 @@ bash scripts/build_python.sh   # build + install, then pops.doctor()
 `scripts/setup_env.sh` creates the conda environment and pins the platform toolchain.
 `scripts/build_python.sh` builds and installs `pops`, exports the discovery variables, and
 finishes with `pops.doctor()`.
+Use `bash scripts/build_python.sh --mpi` for the final distributed artifact; that strict route
+enables both MPI and its native parallel-HDF5 writer and fails if either backend is unavailable.
 
 ### C++ core only
 
@@ -96,7 +99,7 @@ Parallel presets are available when the required backend dependencies are visibl
 
 ```bash
 cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel  # threaded, Kokkos OpenMP
-cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI
+cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI + parallel HDF5
 ```
 
 Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). For an OpenMP build,

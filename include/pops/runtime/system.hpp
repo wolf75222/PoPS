@@ -9,11 +9,12 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
-#include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
+#include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (native package seam)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/numerical_defaults.hpp>
+#include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
@@ -41,9 +42,11 @@
 
 namespace pops {
 
+class WorldCommunicator;
+
 namespace runtime::program {
-class Profiler;       // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
-class CacheManager;   // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
+class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 }  // namespace runtime::program
 
 namespace runtime::multiblock {
@@ -67,10 +70,10 @@ struct SystemConfig {
   // --- internal geometry: "cartesian" (default, bit-identical) | "polar" (global ring) ---
   std::string geometry = "cartesian";  ///< internal choice lowered from CartesianGrid or advanced
                                        ///< pops.mesh.PolarMesh authoring
-  int nr = 0;          ///< radial cells (polar; 0 => takes n)
-  int ntheta = 0;      ///< azimuthal cells (polar; 0 => takes n)
-  double r_min = 0.0;  ///< inner radius of the ring (polar)
-  double r_max = 1.0;  ///< outer radius of the ring (polar)
+  int nr = 0;                          ///< radial cells (polar; 0 => takes n)
+  int ntheta = 0;                      ///< azimuthal cells (polar; 0 => takes n)
+  double r_min = 0.0;                  ///< inner radius of the ring (polar)
+  double r_max = 1.0;                  ///< outer radius of the ring (polar)
   // --- multi-box split of the polar TRANSPORT (split into theta BANDS, ADC-67) -----------------
   // Number of boxes of the ring, split in theta (each box covers the whole radius [0, nr-1] and one
   // azimuthal band). 1 (default) = mono-box STRICTLY bit-identical to history. theta_boxes > 1:
@@ -210,10 +213,8 @@ class System {
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                        int substeps = 1,
-                        bool evolve = true, int stride = 1,
-                        const std::vector<double>& params = {},
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+                        bool evolve = true, int stride = 1, const std::vector<double>& params = {},
                         double positivity_floor = 0.0);
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
@@ -276,16 +277,16 @@ class System {
       std::shared_ptr<component::LoadedComponent> component);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
-  POPS_EXPORT std::size_t interface_evaluation_count(
-      const std::string& identity, int level = 0) const;
+  POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
+                                                     int level = 0) const;
   /// Installs a block from already-built closures (cf. add_compiled_model). The
   /// cons/prim descriptors carry the names AND the roles (M::conservative_vars()), used
   /// by inter-species couplings.
   POPS_EXPORT void install_block(const std::string& name, int ncomp, const VariableSet& cons_vars,
-                                const VariableSet& prim_vars, double gamma, BlockClosures closures,
-                                std::function<Real(const MultiFab&)> max_speed,
-                                std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
-                                int substeps, bool evolve, int stride = 1);
+                                 const VariableSet& prim_vars, double gamma, BlockClosures closures,
+                                 std::function<Real(const MultiFab&)> max_speed,
+                                 std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
+                                 int substeps, bool evolve, int stride = 1);
   /// Guarantees that the state U of block @p name carries at least @p n_ghost ghosts (width of the
   /// spatial stencil). WENO5 reads 3 ghosts, > the 2 allocated by install_block; called by add_compiled_model
   /// (header) with block_n_ghost(limiter) AFTER install_block, so the native compiled path
@@ -330,63 +331,57 @@ class System {
   /// provider identity. ``plan_identity`` independently commits the complete resolved semantics.
   /// Before any named backend is materialized, the canonical ordered (slot, plan_identity) registry
   /// must agree exactly on every MPI rank. Duplicate slots are refused, including exact repeats.
-  void set_field_solver_plan(const std::string& provider_slot,
-                             const std::string& plan_identity,
+  void set_field_solver_plan(const std::string& provider_slot, const std::string& plan_identity,
                              const std::string& provider_identity,
                              const std::string& output_owner_identity,
-                             const std::string& output_block,
-                             const std::string& output_key,
+                             const std::string& output_block, const std::string& output_key,
                              const std::vector<std::string>& provider_identities,
                              const std::vector<std::string>& provider_blocks,
                              const std::vector<std::string>& provider_keys,
                              const std::vector<double>& provider_coefficients,
-                             const std::string& solver, double abs_tol,
-                             double rel_tol, int max_cycles, int min_coarse,
-                             int pre_smooth, int post_smooth, int bottom_sweeps,
-                             int coarse_threshold);
+                             const std::string& solver, double abs_tol, double rel_tol,
+                             int max_cycles, int min_coarse, int pre_smooth, int post_smooth,
+                             int bottom_sweeps, int coarse_threshold);
   /// Install the resolved scalar reaction coefficient of one named screened field.
   void set_field_reaction(const std::string& provider_slot, double reaction);
   /// Couple the exact generated FieldTopology and FieldSolver component tables to an already
   /// authenticated field plan.  Both components stay owned until the System is destroyed.
   POPS_EXPORT void install_field_solver_components(
-      const std::string& provider_slot,
-      runtime::field::PreparedFieldSolverSpec spec,
+      const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
       std::shared_ptr<component::LoadedComponent> topology,
       std::shared_ptr<component::LoadedComponent> solver);
-  POPS_EXPORT void set_field_topology_authority(
-      const std::string& provider_slot, const std::string& provider_kind,
-      const std::string& provenance, const std::string& topology_digest);
-  POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow>
-  field_topology_report(const std::string& provider_slot) const;
+  POPS_EXPORT void set_field_topology_authority(const std::string& provider_slot,
+                                                const std::string& provider_kind,
+                                                const std::string& provenance,
+                                                const std::string& topology_digest);
+  POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
+      const std::string& provider_slot) const;
 
   /// Install the exact xlo/xhi/ylo/yhi field boundary residuals. ``kind`` is
   /// periodic/dirichlet/neumann/mixed; mixed represents alpha*u + beta*du/dn = value.
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,
-                               const std::vector<double>& alpha,
-                               const std::vector<double>& beta,
+                               const std::vector<double>& alpha, const std::vector<double>& beta,
                                const std::vector<double>& value);
-  void set_field_boundary_dependencies(
-      const std::string& provider_slot,
-      const std::vector<std::string>& state_blocks,
-      const std::vector<int>& state_components,
-      const std::vector<std::string>& field_blocks,
-      const std::vector<std::string>& field_keys,
-      const std::vector<int>& field_components);
+  void set_field_boundary_dependencies(const std::string& provider_slot,
+                                       const std::vector<std::string>& state_blocks,
+                                       const std::vector<int>& state_components,
+                                       const std::vector<std::string>& field_blocks,
+                                       const std::vector<std::string>& field_keys,
+                                       const std::vector<int>& field_components);
 
   /// Install generated boundary residual/JVP launchers owned by the compiled Program artifact.
   /// The shared library remains loaded for the System lifetime, so the direct function pointers are
   /// stable and no registry lookup occurs in a face-cell loop.
-  POPS_EXPORT void set_field_boundary_kernel(
-      const std::string& provider_slot, const CompiledFieldBoundaryKernel& kernel);
-  POPS_EXPORT void set_field_logical_timepoint(
-      const std::string& provider_slot, const FieldLogicalTimePoint& point);
-  POPS_EXPORT void set_field_boundary_parameters(
-      const std::string& provider_slot, const std::vector<double>& parameters);
-  void set_field_newton_plan(const std::string& provider_slot, double tolerance,
-                             int max_iterations, double linear_tolerance,
-                             int linear_max_iterations, int restart, double armijo,
-                             double minimum_step);
+  POPS_EXPORT void set_field_boundary_kernel(const std::string& provider_slot,
+                                             const CompiledFieldBoundaryKernel& kernel);
+  POPS_EXPORT void set_field_logical_timepoint(const std::string& provider_slot,
+                                               const FieldLogicalTimePoint& point);
+  POPS_EXPORT void set_field_boundary_parameters(const std::string& provider_slot,
+                                                 const std::vector<double>& parameters);
+  void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
+                             double linear_tolerance, int linear_max_iterations, int restart,
+                             double armijo, double minimum_step);
 
   /// Declare the constant kernel and its explicit mean-zero gauge.
   void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
@@ -528,7 +523,7 @@ class System {
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                       CellConvert cons_to_prim);
+                                        CellConvert cons_to_prim);
 
   /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
   /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the
@@ -538,8 +533,8 @@ class System {
   /// compiled closures of block_builder (make_source_frequency / make_stability_dt).
   /// POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_dt_bounds(const std::string& name,
-                                      std::function<Real(const MultiFab&)> source_frequency,
-                                      std::function<Real(const MultiFab&)> stability_dt);
+                                       std::function<Real(const MultiFab&)> source_frequency,
+                                       std::function<Real(const MultiFab&)> stability_dt);
 
   /// Adds a GLOBAL time-step bound, evaluated ONCE per step (host) by step_cfl /
   /// step_adaptive: dt <= fn() when fn() > 0 and finite (otherwise the bound does not constrain this step).
@@ -607,9 +602,10 @@ class System {
   /// "unchecked" entry (empty contract). Empty until the first coupling is added.
   const std::vector<CouplingOperatorView>& coupled_operators() const;
 
-  POPS_EXPORT SolveReport solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
-                                   ///< so a compiled program .so resolves it via ProgramContext
-                                   ///< (the other seam accessors below are likewise POPS_EXPORT)
+  POPS_EXPORT SolveReport
+  solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
+                   ///< so a compiled program .so resolves it via ProgramContext
+                   ///< (the other seam accessors below are likewise POPS_EXPORT)
   /// Per-stage field solve (ADC-409): SAME elliptic solve + aux derivation as solve_fields(), but
   /// block @p block_idx assembles its Poisson RHS from @p U_stage instead of its live state (the
   /// other blocks keep theirs). This re-fills the SHARED aux with phi(U_stage) so a field-coupled
@@ -622,8 +618,8 @@ class System {
   /// Point-qualified stage solve used by generated implicit operators.  System has one mesh level,
   /// but the exact point remains part of the cross-target contract and is never reconstructed.
   POPS_EXPORT SolveReport solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int block_idx, const MultiFab& U_stage);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block_idx, const MultiFab& U_stage);
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
   /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
   /// states of MULTIPLE blocks at once -- every coupled block reads its OWN stage state, not a single-
@@ -648,17 +644,17 @@ class System {
   /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
   /// is invalid, or the geometry is polar (cartesian only for now).
   POPS_EXPORT SolveReport solve_fields_from_state(const std::string& field, int block_idx,
-                                                 const MultiFab& U_stage);
+                                                  const MultiFab& U_stage);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
-  POPS_EXPORT void register_elliptic_field(const std::string& block,
-                                          const std::string& field, int phi_comp,
-                                          int gx_comp, int gy_comp, int gradient_sign);
+  POPS_EXPORT void register_elliptic_field(const std::string& block, const std::string& field,
+                                           int phi_comp, int gx_comp, int gy_comp,
+                                           int gradient_sign);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
   /// the native loader (make_poisson_rhs of the per-field brick). @throws if the block is unknown.
   POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
-                                           std::function<void(const MultiFab&, MultiFab&)> rhs);
+                                            std::function<void(const MultiFab&, MultiFab&)> rhs);
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
@@ -778,9 +774,8 @@ class System {
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
   POPS_EXPORT void block_rhs_into(int b, MultiFab& U, MultiFab& R);
   /// Point-qualified twin used by compiled Programs and native boundary components.
-  POPS_EXPORT void block_rhs_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& U, MultiFab& R);
+  POPS_EXPORT void block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                     int b, MultiFab& U, MultiFab& R);
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
@@ -795,24 +790,22 @@ class System {
   /// dlopen boundary, like block_rhs_into.
   POPS_EXPORT void block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R);
   POPS_EXPORT void block_neg_div_flux_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& U, MultiFab& R);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& R);
   /// Evaluate one simultaneous set of block rates at one exact StagePoint.  Sparse groups are
   /// allowed, but an installed shared interface must have either both sides present or neither.
-  POPS_EXPORT void block_rhs_group(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::vector<int>& blocks, const std::vector<MultiFab*>& states,
-      const std::vector<MultiFab*>& rhs, const std::vector<int>& flux_only);
+  POPS_EXPORT void block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                   const std::vector<int>& blocks,
+                                   const std::vector<MultiFab*>& states,
+                                   const std::vector<MultiFab*>& rhs,
+                                   const std::vector<int>& flux_only);
   POPS_EXPORT bool block_has_boundary_linearization(int b) const;
-  POPS_EXPORT void block_rhs_core_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& U, MultiFab& R, bool flux_only);
+  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          int b, MultiFab& U, MultiFab& R, bool flux_only);
   POPS_EXPORT void block_boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& U, MultiFab& C);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C);
   POPS_EXPORT void block_boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      int b, MultiFab& U, const MultiFab& V, MultiFab& J);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
+      const MultiFab& V, MultiFab& J);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The
@@ -876,11 +869,11 @@ class System {
   /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
   /// the current slot [0] -- the read target for lag = 1 after one rotate. @throws if @p lag < 1,
   /// @p ncomp == 0, or no block exists yet.
-  POPS_EXPORT MultiFab& register_history(
-      const std::string& name, int lag, int ncomp = -1, int owner = -1,
-      const std::string& state_identity = "", const std::string& space_identity = "",
-      const std::string& clock_identity = "",
-      const std::string& interpolation_identity = "");
+  POPS_EXPORT MultiFab& register_history(const std::string& name, int lag, int ncomp = -1,
+                                         int owner = -1, const std::string& state_identity = "",
+                                         const std::string& space_identity = "",
+                                         const std::string& clock_identity = "",
+                                         const std::string& interpolation_identity = "");
   /// The history slot @p lag macro-steps back (lag 0 = the current slot, lag 1 = the previous step's
   /// stored value, ...). @throws if @p name is unknown, @p lag exceeds the registered depth, or the
   /// history has not been stored yet ("history '<name>' with lag=<lag> was requested but not
@@ -927,7 +920,7 @@ class System {
   /// ranks call it). Registers the ring (depth = max(slot)+1) if @p name is unknown yet, so the restart
   /// rebuilds the rings the program will re-register on its first step. @throws on a size mismatch.
   POPS_EXPORT void restore_history(const std::string& name, int slot,
-                                  const std::vector<double>& values);
+                                   const std::vector<double>& values);
   /// Mark history @p name initialized (or not) after a restart: a restored, already-stored ring must
   /// read at lag without a phantom cold-start re-fill on its first post-restart store. @throws if
   /// @p name is unknown (restore its slots first).
@@ -1032,8 +1025,8 @@ class System {
   /// call it), and re-key the slot with its bookkeeping (@p name may be empty). @throws if no block
   /// exists yet (the cache value is co-distributed with block 0's storage).
   POPS_EXPORT void restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
-                                        double accumulated_dt, const std::string& name,
-                                        const std::vector<double>& values);
+                                         double accumulated_dt, const std::string& name,
+                                         const std::vector<double>& values);
   /// @}
   /// @}
   /// Apply block @p b's post-step positivity projection to @p u in place (ADC-177): U <- project(U,
@@ -1092,7 +1085,7 @@ class System {
   int nx() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / step_cfl / step_adaptive). Necessary
   /// for checkpoint/restart: the stride cadence (hold-then-catch-up) depends on macro_step % stride,
-  /// not only on the time t (audit 2026-06, IO v1). POPS_EXPORT: a scheduled (every(N)/hold) program
+  /// not only on the time t (accepted-state v3). POPS_EXPORT: a scheduled (every(N)/hold) program
   /// `.so` calls it for the cadence decision, so it must be in the loader's flat ABI like the other
   /// seam accessors (grid_context / solve_fields_from_state); without it the held-schedule `.so`
   /// fails to dlopen ("symbol not found in flat namespace"), caught by the Spec 3 runtime e2e test.
@@ -1119,15 +1112,14 @@ class System {
   double mass(const std::string& name) const;
   std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
   std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
-  /// RESTORES the potential phi (IO v1, reserved for restart): without it the multigrid would restart
+  /// RESTORES the potential phi (accepted-state v3, reserved for restart): without it the multigrid would restart
   /// from a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx
   /// row-major (same layout as potential()).
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
-  void set_field_potential(const std::string& provider_slot,
-                           const std::vector<double>& phi);
+  void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
 
-  /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank checkpoint (IO v1)
+  /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank accepted-state checkpoint
   /// The System builds ONE box covering the whole domain (cf. ctor: mono-box ba, round-robin dm ->
   /// box 0 on rank 0). The accessors above (density / get_state / potential) read fab(0):
   /// VALID on the owner rank (mono-rank OR rank 0 under MPI), but fab(0) is OUT OF BOUNDS on
@@ -1136,19 +1128,30 @@ class System {
   /// rank holds the complete field (AMR reflux pattern, comm.hpp). They are COLLECTIVE: all the
   /// ranks MUST call them. On mono-rank they return EXACTLY the same array as the non-global
   /// accessors (all_reduce = identity, box = complete domain) -> bit-identical output.
-  /// The IO facade (sim.write / sim.checkpoint) uses them then writes the file only on rank 0.
+  /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes
+  /// the single artifact only on rank 0.
   /// @{
   std::vector<double> density_global(const std::string& name) const;  ///< comp0, ny*nx global
   std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*ny*nx global
   std::vector<double> potential_global();                             ///< phi, ny*nx global
   std::vector<double> field_potential_global(const std::string& provider_slot);
+  /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
+  /// Local pieces preserve native DistributionMapping ownership and never gather.
+  std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int level) const;
+  std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
+  /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
+  /// zero receives complete pieces and every non-root rank receives an empty vector.
+  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
+                                                    const std::string& name, int level) const;
+  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
+                                                    const std::string& provider_slot, int level);
   /// @}
 
-  /// @name LOCAL per-fab accessors -- PARALLEL HDF5 write by hyperslabs (IO PR-IO-3, opt-in)
-  /// Local counterpart of the _global accessors: instead of gathering the whole field by all_reduce_sum,
-  /// they expose per rank the list of LOCAL boxes and the state of EACH fab. The parallel HDF5
-  /// facade (sim.write(format='hdf5', parallel=True)) creates the GLOBAL datasets then each rank
-  /// writes ITS boxes as hyperslabs -- no global gather. They are NON COLLECTIVE (purely
+  /// @name LOCAL per-fab accessors -- exact native ownership inspection
+  /// Local counterpart of the _global accessors: instead of gathering the whole field by
+  /// all_reduce_sum, they expose per rank the list of LOCAL boxes and the state of EACH fab. The
+  /// typed scientific-output providers consume the unified OutputPiece API above; these lower-level
+  /// views remain useful for native ownership verification. They are NON COLLECTIVE (purely
   /// local: no MPI comm; a rank without a box returns an empty list). The cartesian System is
   /// MONO-BOX (one box covering the domain, on rank 0): local_boxes thus returns ONE box on
   /// rank 0 and nothing elsewhere -- true hyperslab parallelism appears only on a MULTI-BOX

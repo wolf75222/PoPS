@@ -51,8 +51,7 @@ inline void validate_assembly_write_role(int role, const char* where) {
 inline void validate_assembly_read_role(int role, const char* where) {
   if (role == kPhi)
     return;
-  throw std::runtime_error(std::string(where) +
-                           ": unknown or non-read AssemblyFieldRole wire id " +
+  throw std::runtime_error(std::string(where) + ": unknown or non-read AssemblyFieldRole wire id " +
                            std::to_string(role));
 }
 

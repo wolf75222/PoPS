@@ -117,6 +117,17 @@ class Profiler {
     }
   }
 
+  // Record one authenticated scheduler decision and return it unchanged so generated code can
+  // wrap every due primitive exactly once. All scheduled nodes contribute due/skipped counts;
+  // cache hits/misses move only for policies that really own a STORE+RESTORE cache path.
+  bool schedule_decision(bool due, bool cache_backed) {
+    count(due ? "nodes_due" : "nodes_skipped");
+    if (cache_backed) {
+      count(due ? "cache_misses" : "cache_hits");
+    }
+    return due;
+  }
+
   const Entry* entry(const std::string& name) const {
     auto it = entries_.find(name);
     return it == entries_.end() ? nullptr : &it->second;
@@ -147,13 +158,12 @@ class Profiler {
     out.scopes.reserve(order_.size());
     for (const auto& name : order_) {
       const Entry& e = entries_.at(name);
-      out.scopes.push_back(
-          ScopeSnapshot{.name = name,
-                        .count = e.count,
-                        .total_s = e.total_s,
-                        .mean_s = e.mean_s(),
-                        .min_s = e.min_s,
-                        .max_s = e.max_s});
+      out.scopes.push_back(ScopeSnapshot{.name = name,
+                                         .count = e.count,
+                                         .total_s = e.total_s,
+                                         .mean_s = e.mean_s(),
+                                         .min_s = e.min_s,
+                                         .max_s = e.max_s});
     }
     out.counters.reserve(counter_order_.size());
     for (const auto& name : counter_order_) {

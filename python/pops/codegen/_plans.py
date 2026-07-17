@@ -28,6 +28,12 @@ _SEMANTIC_OVERRIDE_KEYS = frozenset({
 _ATOMIC = (type(None), bool, int, str, bytes)
 
 
+def _builtin_restart_authority():
+    from pops.output._restart_provider import RestartAuthority
+
+    return RestartAuthority.from_consumer_graph(None)
+
+
 def _deep_freeze(value: Any) -> Any:
     """Freeze container structure without copying runtime payloads such as arrays/resources."""
     if isinstance(value, Mapping):
@@ -215,6 +221,7 @@ class ResolvedSimulationPlan:
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
     consumer_graph: Any = None
+    restart_authority: Any = field(default_factory=_builtin_restart_authority)
     component_inputs: tuple[Any, ...] = ()
     compile_options: Mapping[str, Any] = field(default_factory=dict)
     resolved_hierarchy: Any = None
@@ -330,6 +337,14 @@ class ResolvedSimulationPlan:
             if not self.consumer_graph.is_resolved:
                 raise TypeError(
                     "ResolvedSimulationPlan.consumer_graph must be layout-resolved")
+        from pops.output._restart_provider import RestartAuthority
+        if type(self.restart_authority) is not RestartAuthority:
+            raise TypeError(
+                "ResolvedSimulationPlan.restart_authority must be an exact RestartAuthority")
+        expected_restart = RestartAuthority.from_consumer_graph(self.consumer_graph)
+        if self.restart_authority.identity != expected_restart.identity:
+            raise ValueError(
+                "ResolvedSimulationPlan.restart_authority differs from its ConsumerGraph")
         object.__setattr__(self, "requirements", _string_mapping(
             self.requirements, where="ResolvedSimulationPlan.requirements"))
         object.__setattr__(self, "capabilities", _string_mapping(
@@ -371,6 +386,7 @@ class ResolvedSimulationPlan:
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),
+            "restart_authority": self.restart_authority.to_data(),
             "libraries": _evidence(self.libraries, where="plan.libraries"),
             "component_inputs": _evidence(
                 self.component_inputs, where="plan.component_inputs"),

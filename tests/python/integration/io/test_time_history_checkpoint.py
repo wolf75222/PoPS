@@ -22,16 +22,27 @@ under a different composition is rejected before any state mutation.
     (Forward Euler, different IR hash) from that checkpoint -> RuntimeError containing
     "checkpoint was created with a different compiled Program hash".
 
-Sections (B)/(C) self-skip (never fake the engine) without numpy / _pops / install_program / a compiler /
-a visible Kokkos, exactly like test_time_history.py.
+Sections (B)/(C) explicitly skip only when numpy, the native extension, or the native toolchain is
+absent. Once those prerequisites are present, compile and install failures are test failures.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import json
 import os
-import sys
 import tempfile
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+try:
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
+except Exception as exc:  # noqa: BLE001 -- optional outside a native-capable checkout
+    require_native_or_skip(
+        "test_time_history_checkpoint cannot import its runtime: %s" % exc)
 
 
 def _pops_time():
@@ -40,9 +51,16 @@ def _pops_time():
         import pops.time as t
         import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_history_checkpoint (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip(
+            "test_time_history_checkpoint pops.time unavailable: %s" % exc)
     return t
+
+
+def _require_native_toolchain(section):
+    missing = missing_native_compile_requirement(repo_include(), default_cxx())
+    if missing:
+        require_native_or_skip(
+            "test_time_history_checkpoint %s: %s" % (section, missing))
 
 
 _C = 0.75  # source coefficient: S(rho) = _C*rho (a linear ODE rho' = c rho; R changes every step)
@@ -50,13 +68,61 @@ _DT = 0.01
 _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
 
 
+def test_collective_failure_preserves_one_scientific_error_family():
+    """MPI transport retains typed causes instead of flattening them to RuntimeError."""
+    from pops.output._checkpoint_collective import (
+        _error_record,
+        _raise_collective_failure,
+    )
+
+    failures = (
+        (0, _error_record(ValueError("manifest digest mismatch"))),
+        (1, _error_record(ValueError("history depth is invalid"))),
+    )
+    try:
+        _raise_collective_failure("restart-validation", failures)
+    except ValueError as error:
+        message = str(error)
+        assert "rank 0: builtins.ValueError: manifest digest mismatch" in message
+        assert "rank 1: builtins.ValueError: history depth is invalid" in message
+    else:
+        raise AssertionError("homogeneous collective ValueError was not reconstructed")
+
+    mixed = (
+        (0, _error_record(ValueError("invalid manifest"))),
+        (1, _error_record(TypeError("invalid schema"))),
+    )
+    try:
+        _raise_collective_failure("restart-validation", mixed)
+    except RuntimeError as error:
+        message = str(error)
+        assert "rank 0: builtins.ValueError: invalid manifest" in message
+        assert "rank 1: builtins.TypeError: invalid schema" in message
+    else:
+        raise AssertionError("mixed collective error families did not fail closed")
+
+    class BrokenMessage(ValueError):
+        def __str__(self):
+            raise RuntimeError("formatting must not escape before the collective")
+
+    record = _error_record(BrokenMessage())
+    assert record["family"] == "ValueError"
+    assert record["message"] == "<exception message unavailable>"
+
+
 def _authorize_identity_runtime(sim, compiled):
     """Attach the exact identity boundary to this deliberately low-level integration engine."""
     from pops.identity import make_identity
+    from pops.model.bind_schema import BindSchema
     from pops.runtime._bound_snapshot import BoundSnapshot
+    from tests.python.support.native_execution_context import (
+        compiled_problem_execution_context,
+    )
 
     component = compiled.program
     authored = getattr(component, "program", component)
+    context = compiled_problem_execution_context(compiled, target="system")
+    sim._execution_context = context
     sim._step_strategy = authored._step_strategy
     sim._step_transaction_plan = authored.transaction_plan()
     snapshot = BoundSnapshot(
@@ -65,18 +131,19 @@ def _authorize_identity_runtime(sim, compiled):
         layout={"kind": "uniform"}, blocks=[{"name": "blk"}], field_plans={},
         step_transaction=sim._step_transaction_plan.to_data(),
         params=[], aux_evidence={}, initial_evidence={},
-        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+        bind_schema_identity=make_identity("bind-schema", BindSchema().to_dict()),
+        execution_context=context.to_data(),
     )
     sim._finalize_bind(snapshot)
     return snapshot
 
 
 # ---- (A) Current strict NPZ envelope: pure numpy, always runs when numpy is present ----
-def test_current_checkpoint_envelope_roundtrips(_t):
+def test_current_checkpoint_envelope_roundtrips():
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
-        print("-- (A) skipped: numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (A) skipped: numpy unavailable: %s --' % exc)
         return
     from types import SimpleNamespace
     from pops.identity import make_identity
@@ -133,19 +200,25 @@ def test_current_checkpoint_envelope_roundtrips(_t):
 
 
 # ---- (A2) Selective-persistence key scheme + strict reader dispatch (pure numpy) ----
-def test_history_persistence_key_scheme(_t):
-    """The current checkpoint stores only policy-selected slots + policy manifest + per-slot dt;
-    the restore_histories reader dispatches on the manifest, restores the stored slots, and the
-    policy-compat guard refuses a stored-slots / policy mismatch verbatim. Pure numpy (no engine): a
-    fake System captures restore_history / restore_history_slot_dt / rebuild_history_slots calls."""
+def test_history_persistence_key_scheme():
+    """The checkpoint records requested and effective slots plus the resolved storage mode.
+
+    Without an in-window regrid they coincide with the policy selection.  The reader dispatches on
+    the manifest and refuses any resolved-plan mismatch. Pure numpy (no engine): a fake System
+    captures restore_history / restore_history_slot_dt / rebuild_history_slots calls.
+    """
     try:
         import json
 
         import numpy as np
     except Exception as exc:  # noqa: BLE001
-        print("-- (A2) skipped: numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (A2) skipped: numpy unavailable: %s --' % exc)
         return
-    from pops.runtime._system_io_history import restore_histories, serialize_histories
+    from pops.runtime._system_io_history import (
+        prepare_history_capture,
+        restore_histories,
+        serialize_histories,
+    )
     from pops.time._history.persistence import Revolve
 
     hname = "blk.state"
@@ -201,6 +274,8 @@ def test_history_persistence_key_scheme(_t):
     serialize_histories(writer, {hname: Revolve(3)}, out)
     stored = sorted(int(s) for s in out["history_stored_slots_" + hname])
     assert stored == [0, 2, 4], stored
+    assert list(out["history_requested_stored_slots_" + hname]) == stored
+    assert str(out["history_storage_mode_" + hname]) == "policy"
     for k in stored:
         assert ("history_%s_%d" % (hname, k)) in out
     for k in (1, 3):
@@ -208,6 +283,14 @@ def test_history_persistence_key_scheme(_t):
     policy_wire = json.loads(str(out["history_policy_" + hname]))
     assert policy_wire["payload"]["policy"] == "revolve"
     assert len(out["history_slot_dt_" + hname]) == depth
+
+    promoted = prepare_history_capture(
+        writer, {hname: Revolve(3)}, macro_step=6, regrid_every=4)
+    promoted_ring = promoted.rings[0]
+    assert promoted_ring.requested_stored_slots == (0, 2, 4)
+    assert promoted_ring.stored_slots == tuple(range(depth))
+    assert promoted_ring.storage_mode == "dense_regrid_safety"
+    assert promoted_ring.regrid_steps == (4,)
 
     # READER: round-trip through numpy so the dtypes match, then restore + replay.
     with tempfile.TemporaryDirectory() as tmp:
@@ -239,8 +322,8 @@ def test_history_persistence_key_scheme(_t):
         try:
             restore_histories(FakeSystem(stored), d)
         except RuntimeError as exc:
-            raised = "stored slots" in str(exc) and "policy" in str(exc)
-        assert raised, "a stored-slots / policy mismatch must be refused verbatim"
+            raised = "resolved storage plan" in str(exc)
+        assert raised, "an effective stored-slots / resolved-plan mismatch must be refused"
 
     # STRICT FORMAT: a checkpoint without the persistence manifest is refused; conversion belongs
     # outside the runtime core.
@@ -302,12 +385,9 @@ def _build_system(pops, np, n):
 
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
-        return None, None
-    try:
-        compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
-        return None, None
+        require_native_or_skip(
+            "test_time_history_checkpoint requires install_program/history_names bindings")
+    compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
     sim.add_equation("blk", compiled_model,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="euler"))
@@ -333,34 +413,26 @@ def _compile_program(pops, t, builder, builder_options, prog_name, model_name):
     declaration = model.module.state_handle(spaces[0])
     P = builder(block[declaration], rate=rate, **builder_options)
     P.step_strategy(t.FixedDt(_DT))
-    try:
-        from pops.codegen._compile_drivers import compile_problem
-        return compile_problem(model=model, time=P)
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
-        return None
+    from pops.codegen._compile_drivers import compile_problem
+    return compile_problem(model=model, time=P)
 
 
 # ---- (B) spec 45 + 39: continuous == (run, checkpoint, restart, continue), bit-for-bit ----
 def _run_section_b(t):
+    _require_native_toolchain("section B")
     try:
         import numpy as np
 
         import pops
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip(
+            "test_time_history_checkpoint section B imports unavailable: %s" % exc)
 
     n = 16
     sim_cont, has_engine = _build_system(pops, np, n)
-    if sim_cont is None:
-        print("-- (B) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
-        return None
 
     compiled = _compile_program(
         pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_ckpt", "ab2_prog_b")
-    if compiled is None:
-        return None
 
     rho0 = _rho0(np, n)
     half = _NSTEPS // 2
@@ -432,25 +504,21 @@ def _offline_ab2_cold_restart(rho0, dt, nsteps, resume):
 
 # ---- (C) spec 46: restart a DIFFERENT compiled Program -> hash-mismatch RuntimeError ----
 def _run_section_c(t):
+    _require_native_toolchain("section C")
     try:
         import numpy as np
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip(
+            "test_time_history_checkpoint section C imports unavailable: %s" % exc)
 
     n = 8
     sim, has_engine = _build_system(pops, np, n)
-    if sim is None:
-        print("-- (C) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
-        return None
 
     ab2 = _compile_program(
         pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_c", "ab2_prog_c")
     fe = _compile_program(pops, t, lt.ForwardEuler, {}, "fe_c", "fe_prog_c")
-    if ab2 is None or fe is None:
-        return None
     assert ab2.program_hash != fe.program_hash, \
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
 
@@ -478,15 +546,22 @@ def _run_section_c(t):
     raise AssertionError("restarting a different compiled Program must raise (spec test 46)")
 
 
+def test_uniform_ab2_history_checkpoint_restart_is_bit_identical():
+    """Collect the Uniform AB2 checkpoint/restart acceptance as an ordinary test."""
+    _run_section_b(_pops_time())
+
+
+def test_uniform_restart_refuses_a_different_compiled_program():
+    """Collect the authenticated Uniform Program-identity guard as an ordinary test."""
+    _run_section_c(_pops_time())
+
+
 def _run():
-    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn(t)
+        fn()
         print("ok", fn.__name__)
-    print("PASS test_time_history_checkpoint (A: %d checks)" % len(fns))
-    _run_section_b(t)
-    _run_section_c(t)
+    print("PASS test_time_history_checkpoint (%d checks)" % len(fns))
 
 
 if __name__ == "__main__":

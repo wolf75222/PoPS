@@ -28,8 +28,8 @@
 #include <pops/runtime/builders/compiled/flat_grid.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>  // build_block<Limiter, Flux>, block_n_ghost
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
-#include <pops/runtime/config/dispatch_tags.hpp>          // validate_limiter
-#include <pops/numerics/fv/reconstruction.hpp>            // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/runtime/config/dispatch_tags.hpp>  // validate_limiter
+#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
 
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW (ADC-99)
 
@@ -65,8 +65,7 @@ template <class Model, class Flux>
 void external_residual(const double* U, double* R, const double* aux_in, int n, double dx,
                        double dy, bool periodic, const std::string& lim, bool recon_prim,
                        double pos_floor) {
-  flat_grid::LocalGrid lg =
-      flat_grid::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
+  flat_grid::LocalGrid lg = flat_grid::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
   MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)),
       Rmf(lg.ba, lg.dm, Model::n_vars, 0);
   flat_grid::fill_interior(Umf, U, n, Model::n_vars);
@@ -244,14 +243,14 @@ class ExternalBrickHandle {
 #define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, reqs_csv)                       \
   POPS_REGISTER_BRICK(id, "riemann", reqs_csv);                                             \
   extern "C" int pops_brick_nvars() {                                                       \
-    return Model::n_vars;                                                                  \
-  }                                                                                        \
+    return Model::n_vars;                                                                   \
+  }                                                                                         \
   extern "C" int pops_brick_naux() {                                                        \
     return pops::aux_comps<Model>();                                                        \
-  }                                                                                        \
+  }                                                                                         \
   extern "C" void pops_brick_residual(const double* U, double* R, const double* aux, int n, \
-                                     double dx, double dy, int periodic, const char* lim,  \
-                                     int recon_prim, double pos_floor) {                   \
+                                      double dx, double dy, int periodic, const char* lim,  \
+                                      int recon_prim, double pos_floor) {                   \
     ::pops::runtime::program::detail::external_residual<Model, Flux>(                       \
-        U, R, aux, n, dx, dy, periodic != 0, lim, recon_prim != 0, pos_floor);             \
+        U, R, aux, n, dx, dy, periodic != 0, lim, recon_prim != 0, pos_floor);              \
   }

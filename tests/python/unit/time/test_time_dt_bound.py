@@ -16,6 +16,7 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import pops
 from pops.codegen import Production
@@ -93,8 +94,7 @@ def _final_case_program(name, *, factor=None):
 
 
 def _skip(msg):
-    print("skip test_time_dt_bound (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_time_dt_bound (%s)' % msg)
 
 
 try:

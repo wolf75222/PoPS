@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (IMEX per-block report)
-#include <pops/runtime/numerical_defaults.hpp>  // EffectiveBlockOptions
+#include <pops/runtime/numerical_defaults.hpp>                  // EffectiveBlockOptions
 
 #include <map>
 #include <memory>

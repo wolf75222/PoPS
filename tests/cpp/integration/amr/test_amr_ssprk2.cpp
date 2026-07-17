@@ -125,8 +125,8 @@ TEST(test_amr_ssprk2, matches_shu_osher_identity_and_records_heun_effective_flux
       for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
         const Real x = geometry.x_cell(i);
         const Real y = geometry.y_cell(j);
-        state(i, j, 0) = Real(1) + Real(0.2) * std::sin(Real(2) * kPi * x) *
-                                       std::cos(Real(2) * kPi * y);
+        state(i, j, 0) =
+            Real(1) + Real(0.2) * std::sin(Real(2) * kPi * x) * std::cos(Real(2) * kPi * y);
       }
   }
 
@@ -218,14 +218,14 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
   };
   auto prepared_stage0 = [&] {
     MultiFab state = initial;
-    pops::detail::ssprk_refill_level_ghosts(
-        state, /*lev=*/1, coarse_domain, periodic, &parent_old, &parent_new, parent_begin,
-        /*coarse_replicated=*/true);
+    pops::detail::ssprk_refill_level_ghosts(state, /*lev=*/1, coarse_domain, periodic, &parent_old,
+                                            &parent_new, parent_begin,
+                                            /*coarse_replicated=*/true);
     MultiFab flux_x = make_x_flux();
     MultiFab flux_y = make_y_flux();
     pops::compute_face_fluxes<NoSlope, RusanovFlux>(model, state, aux, flux_x, flux_y, dx, dx);
     return std::tuple<MultiFab, MultiFab, MultiFab>{std::move(state), std::move(flux_x),
-                                                   std::move(flux_y)};
+                                                    std::move(flux_y)};
   };
 
   auto manual_ssprk2 = [&](Real stage1_fraction) {
@@ -234,9 +234,9 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
     MultiFab residual(fine_layout, fine_ownership, 1, 0);
     pops::mf_eval_rhs(model, state, aux, flux_x, flux_y, dx, dx, residual);
     pops::saxpy(state, dt, residual);
-    pops::detail::ssprk_refill_level_ghosts(
-        state, /*lev=*/1, coarse_domain, periodic, &parent_old, &parent_new, stage1_fraction,
-        /*coarse_replicated=*/true);
+    pops::detail::ssprk_refill_level_ghosts(state, /*lev=*/1, coarse_domain, periodic, &parent_old,
+                                            &parent_new, stage1_fraction,
+                                            /*coarse_replicated=*/true);
     MultiFab stage_flux_x = make_x_flux();
     MultiFab stage_flux_y = make_y_flux();
     pops::compute_face_fluxes<NoSlope, RusanovFlux>(model, state, aux, stage_flux_x, stage_flux_y,
@@ -253,9 +253,9 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
     MultiFab residual(fine_layout, fine_ownership, 1, 0);
     pops::mf_eval_rhs(model, state, aux, flux_x, flux_y, dx, dx, residual);
     pops::saxpy(state, dt, residual);
-    pops::detail::ssprk_refill_level_ghosts(
-        state, /*lev=*/1, coarse_domain, periodic, &parent_old, &parent_new, stage1_fraction,
-        /*coarse_replicated=*/true);
+    pops::detail::ssprk_refill_level_ghosts(state, /*lev=*/1, coarse_domain, periodic, &parent_old,
+                                            &parent_new, stage1_fraction,
+                                            /*coarse_replicated=*/true);
     MultiFab stage_flux_x = make_x_flux();
     MultiFab stage_flux_y = make_y_flux();
     pops::compute_face_fluxes<NoSlope, RusanovFlux>(model, state, aux, stage_flux_x, stage_flux_y,
@@ -263,9 +263,9 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
     pops::mf_eval_rhs(model, state, aux, stage_flux_x, stage_flux_y, dx, dx, residual);
     pops::saxpy(state, dt, residual);
     pops::lincomb(state, Real(3) / 4, start, Real(1) / 4, state);
-    pops::detail::ssprk_refill_level_ghosts(
-        state, /*lev=*/1, coarse_domain, periodic, &parent_old, &parent_new, stage2_fraction,
-        /*coarse_replicated=*/true);
+    pops::detail::ssprk_refill_level_ghosts(state, /*lev=*/1, coarse_domain, periodic, &parent_old,
+                                            &parent_new, stage2_fraction,
+                                            /*coarse_replicated=*/true);
     pops::compute_face_fluxes<NoSlope, RusanovFlux>(model, state, aux, stage_flux_x, stage_flux_y,
                                                     dx, dx);
     pops::mf_eval_rhs(model, state, aux, stage_flux_x, stage_flux_y, dx, dx, residual);
@@ -281,8 +281,8 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
   auto [state2, flux2_x, flux2_y] = prepared_stage0();
   AmrLevelMP level2{std::move(state2), &aux, dx, dx};
   pops::detail::ssprk2_advance_level<NoSlope, RusanovFlux>(
-      model, level2, dt, flux2_x, flux2_y, /*recon_prim=*/false, /*lev=*/1, coarse_domain,
-      periodic, &parent_old, &parent_new, parent_begin, parent_span,
+      model, level2, dt, flux2_x, flux2_y, /*recon_prim=*/false, /*lev=*/1, coarse_domain, periodic,
+      &parent_old, &parent_new, parent_begin, parent_span,
       /*coarse_replicated=*/true);
   EXPECT_LT(max_valid_difference(level2.U, expected2), Real(2e-14));
   EXPECT_GT(max_valid_difference(level2.U, frozen2), Real(1e-5));
@@ -292,8 +292,8 @@ TEST(test_amr_ssprk2, coarse_fine_ghosts_follow_ssp_tableau_abscissae) {
   auto [state3, flux3_x, flux3_y] = prepared_stage0();
   AmrLevelMP level3{std::move(state3), &aux, dx, dx};
   pops::detail::ssprk3_advance_level<NoSlope, RusanovFlux>(
-      model, level3, dt, flux3_x, flux3_y, /*recon_prim=*/false, /*lev=*/1, coarse_domain,
-      periodic, &parent_old, &parent_new, parent_begin, parent_span,
+      model, level3, dt, flux3_x, flux3_y, /*recon_prim=*/false, /*lev=*/1, coarse_domain, periodic,
+      &parent_old, &parent_new, parent_begin, parent_span,
       /*coarse_replicated=*/true);
   EXPECT_LT(max_valid_difference(level3.U, expected3), Real(2e-14));
   EXPECT_GT(max_valid_difference(level3.U, frozen3), Real(1e-5));
@@ -310,10 +310,9 @@ TEST(test_amr_ssprk2, rejects_imex_instead_of_ignoring_the_ssp_method) {
   levels.push_back(AmrLevelMP{std::move(state), &aux, Real(1) / 8, Real(1) / 8});
   const pops::validation::AdvectionDiffusion model{/*ax=*/Real(1), /*ay=*/Real(0),
                                                    /*nu=*/Real(0)};
-  EXPECT_THROW(
-      (pops::advance_amr<NoSlope, RusanovFlux>(
-          model, levels, domain, Real(1e-3), Periodicity{true, true},
-          /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/true,
-          pops::NewtonOptions{}, AmrTimeMethod::kSsprk2)),
-      std::runtime_error);
+  EXPECT_THROW((pops::advance_amr<NoSlope, RusanovFlux>(
+                   model, levels, domain, Real(1e-3), Periodicity{true, true},
+                   /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/true,
+                   pops::NewtonOptions{}, AmrTimeMethod::kSsprk2)),
+               std::runtime_error);
 }

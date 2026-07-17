@@ -65,7 +65,6 @@ def test_platform_compatibility_facts_change_artifact_identity():
         replace(baseline, precision=replace(baseline.precision, compute=_proof("float32"))),
         replace(baseline, device=_proof("cuda:0")),
         replace(baseline, memory_spaces=_proof(("device",))),
-        replace(baseline, communicator=_proof("comm:7")),
     ]
     identities = {
         make_identity("artifact", {"platform": item.to_data()}).token
@@ -93,10 +92,7 @@ def test_platform_manifest_strict_data_round_trip():
 
 def test_execution_context_changes_bind_and_run_identity():
     serial = _context()
-    other_backend = replace(serial.backend, communicator=_proof("comm:7"))
-    other = _context(
-        backend=other_backend,
-        communicator=ExecutionResource("communicator", "comm:7", handle=object()))
+    other = _context(datatype=ExecutionResource("datatype", "float32"))
     bind_a = make_identity("bind", {"execution_context": serial.to_data()})
     bind_b = make_identity("bind", {"execution_context": other.to_data()})
     assert bind_a != bind_b
@@ -139,17 +135,6 @@ def test_field_mismatch_refuses_before_kernel(changed):
     assert launched == []
 
 
-def test_communicator_mismatch_refuses_before_kernel():
-    backend = replace(_context().backend, communicator=_proof("comm:7"))
-    context = _context(
-        backend=backend,
-        communicator=ExecutionResource("communicator", "comm:7", handle=object()))
-    launched = []
-    with pytest.raises(PlatformContractError, match="communicator mismatch"):
-        launch_checked(_platform(), context, [_field()], lambda *_: launched.append(True))
-    assert launched == []
-
-
 def test_generic_2d_double_descriptor_launches_once():
     launched = []
     assert launch_checked(
@@ -178,6 +163,21 @@ def test_aot_component_build_route_is_checked_against_simulation_execution_facts
         validate_component_launch(_platform(), context, ())
 
 
+def test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard():
+    openmpi = (
+        "compiler=clang;std=202002;headers=same;kokkos=1;stdlib=libc++;"
+        "mpi=1;mpi_abi=" + "a" * 64
+    )
+    mpich = openmpi[:-64] + "b" * 64
+    component = proven_serial_manifest(
+        backend="aot-component", target="component", abi=openmpi)
+    runtime = proven_serial_manifest(
+        backend="production", target="system", abi=mpich, runtime=True)
+    context = _context(backend=runtime)
+    with pytest.raises(PlatformContractError, match="exact native ABI mismatch"):
+        validate_component_launch(component, context, ())
+
+
 def test_final_generic_contract_has_no_implicit_device_capture():
     from pathlib import Path
     root = Path(__file__).resolve().parents[4]
@@ -187,8 +187,7 @@ def test_final_generic_contract_has_no_implicit_device_capture():
         root / "python/pops/runtime/_platform_validation.py",
     ]
     text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-    for forbidden in ("DefaultExecutionSpace", "current_device"):
+    for forbidden in ("DefaultExecutionSpace", "current_device", "mpi" + "4py"):
         assert forbidden not in text
-    assert "def mpi_world" in text
-    assert "ExecutionContext.mpi_world accepts only mpi4py.MPI.COMM_WORLD" in text
-    assert 'ExecutionResource("datatype", "float64", handle=MPI.DOUBLE)' in text
+    assert "def mpi_world(cls, artifact: Any)" in text
+    assert "handle=communicator.datatype_float64" in text

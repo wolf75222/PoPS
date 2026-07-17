@@ -112,7 +112,8 @@ TEST(CutCellAnisotropicMultiboxTest, converges_at_order_two_in_l2_on_multibox) {
   const double o = order(m128, m512, 128, 512);
   std::printf("cut-cell+aniso (ex=%.1f ey=%.1f) MULTI-BOX L2 : %.3e %.3e %.3e  ordre=%.2f\n", kEx,
               kEy, m128, m256, m512, o);
-  EXPECT_TRUE(o > 1.7) << "cutcell_aniso_multibox_ordre2_L2: order=" << o;  // Shortley-Weller : ~2 en L2
+  EXPECT_TRUE(o > 1.7) << "cutcell_aniso_multibox_ordre2_L2: order="
+                       << o;  // Shortley-Weller : ~2 en L2
   EXPECT_TRUE(std::isfinite(m512) && m512 > 0) << "cutcell_aniso_multibox_fini: m512=" << m512;
 }
 
@@ -121,7 +122,7 @@ TEST(CutCellAnisotropicMultiboxTest, converges_at_order_two_in_l2_on_multibox) {
 // sur le disque doit etre BIT-IDENTIQUE (le solveur ne depend pas du decoupage en boites).
 TEST(CutCellAnisotropicMultiboxTest, l2_error_is_invariant_to_box_decomposition) {
   const int nc = 256;
-  const double l2_mono = solve_l2(nc, nc);              // max_grid_size = nc -> 1 boite
+  const double l2_mono = solve_l2(nc, nc);             // max_grid_size = nc -> 1 boite
   const double l2_multi = solve_l2(nc, kMaxGridSize);  // plusieurs boites
   const double gap = std::fabs(l2_mono - l2_multi);
   std::printf("invariance decoupage n=%d : mono=%.12e multi=%.12e  ecart=%.3e\n", nc, l2_mono,

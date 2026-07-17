@@ -4,10 +4,10 @@
 #include <pops/parallel/comm.hpp>     // n_ranks (round-robin distribution mapping)
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/geometry/geometry.hpp>   // Geometry, PolarGeometry
-#include <pops/mesh/storage/multifab.hpp>    // MultiFab
-#include <pops/mesh/boundary/physical_bc.hpp>  // BCRec, BCType, Periodicity
-#include <pops/mesh/index/box2d.hpp>         // Box2D
+#include <pops/mesh/geometry/geometry.hpp>        // Geometry, PolarGeometry
+#include <pops/mesh/storage/multifab.hpp>         // MultiFab
+#include <pops/mesh/boundary/physical_bc.hpp>     // BCRec, BCType, Periodicity
+#include <pops/mesh/index/box2d.hpp>              // Box2D
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode, detail::DiscDomain
 #include <pops/runtime/system.hpp>  // SystemConfig (the geometry/layout source; system.hpp does NOT include this header, so no cycle)
 
@@ -59,7 +59,8 @@ struct SystemDomain {
   PolarGeometry pgeom_;
   BoxArray ba;
   DistributionMapping dm;
-  BCRec bc_;  // transport BC (periodic or Foextrap per cfg.periodic; polar: physical r, periodic theta)
+  BCRec
+      bc_;  // transport BC (periodic or Foextrap per cfg.periodic; polar: physical r, periodic theta)
   Box2D dom;
   Periodicity per_;
   bool periodic_;
@@ -72,7 +73,8 @@ struct SystemDomain {
   // STABLE-address members: the block closures read them by pointer at each step.
   detail::DiscDomain eb_domain_;
   bool eb_set_ = false;
-  MultiFab domain_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty while !eb_set_
+  MultiFab
+      domain_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty while !eb_set_
   // At least one block requested wave_speed_cache (ADC-199, opt-in HLL cache): locks the switch to an
   // embedded-boundary transport mode (explicit rejection rather than a silently ignored cache).
   bool ws_cache_block_ = false;
@@ -149,8 +151,8 @@ struct SystemDomain {
     bool eb_active;
   };
   LayoutReport layout_report() const {
-    return LayoutReport{polar_, dom.nx(), dom.ny(), static_cast<int>(ba.size()), aux_ncomp_,
-                        periodic_, eb_set_};
+    return LayoutReport{polar_,     dom.nx(),  dom.ny(), static_cast<int>(ba.size()),
+                        aux_ncomp_, periodic_, eb_set_};
   }
 };
 

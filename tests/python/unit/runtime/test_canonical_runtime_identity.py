@@ -5,8 +5,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
-from pops.runtime._bound_snapshot import BoundSnapshot
+from pops.runtime._bound_snapshot import (
+    BoundSnapshot,
+    _require_exact_install_inputs,
+    build_uniform_snapshot,
+)
 from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY,
     MANIFEST_KEY,
@@ -38,6 +44,32 @@ def _bound_snapshot():
     )
 
 
+def _exact_install_plan():
+    fixture = artifact_fixture()
+    for block in fixture.blocks:
+        block.model.definition_identity = {
+            "protocol": "pops.test.compiled-model-definition.v1",
+            "block": block.name,
+        }
+    artifact = type(fixture)(
+        plan=fixture.plan,
+        program=fixture.program,
+        blocks=fixture.blocks,
+    )
+    bind_inputs = BindInputs()
+    return InstallPlan(
+        artifact=artifact,
+        bind_inputs=bind_inputs,
+        instances={
+            block.name: {"model": block.model, "spatial": block.spatial}
+            for block in artifact.blocks
+        },
+        params=artifact.bind_schema.resolve_bind(
+            {}, compile_values=artifact.plan.compile_values),
+        aux={},
+    )
+
+
 def test_bound_snapshot_has_domain_separated_bind_identity_and_json_view():
     snapshot = _bound_snapshot()
     assert snapshot.bind_identity.domain == "bind"
@@ -64,6 +96,97 @@ def test_bound_snapshot_projects_execution_context_identity_digest_without_loss(
     assert snapshot.to_dict()["execution_context"]["backend_identity"]["digest"] == {
         "bytes_hex": identity.hexdigest,
     }
+
+
+def test_bound_snapshot_refuses_a_bare_bind_identity():
+    with pytest.raises(TypeError, match="bind_identity"):
+        BoundSnapshot(
+            semantic_identity=make_identity("semantic", {}),
+            artifact_identity=make_identity("artifact", {}),
+            layout={"kind": "uniform"}, blocks=[], field_plans={}, step_transaction={}, params=[],
+            aux_evidence={}, initial_evidence={},
+            bind_schema_identity=make_identity("bind-schema", {}),
+            bind_identity=make_identity("bind", {"spoofed": True}),
+        )
+
+
+def test_final_bound_snapshot_uses_only_the_verified_install_plan_authority():
+    plan = _exact_install_plan()
+    engine = SimpleNamespace(
+        _execution_context=plan.execution_context,
+        _lower_spatial=lambda value: value,
+    )
+    resolved_models = {
+        name: spec["model"] for name, spec in plan.instances.items()
+    }
+
+    snapshot = build_uniform_snapshot(
+        engine,
+        plan.artifact,
+        resolved_models,
+        plan.instances,
+        plan.artifact.plan.field_plans,
+        plan.aux,
+        plan.params,
+        install_plan=plan,
+    )
+
+    assert snapshot.bind_identity == plan.bind_identity
+
+
+def test_final_bound_snapshot_refuses_a_structural_install_plan_lookalike():
+    plan = _exact_install_plan()
+    engine = SimpleNamespace(_execution_context=plan.execution_context)
+    lookalike = SimpleNamespace(
+        artifact=plan.artifact,
+        instances=plan.instances,
+        params=plan.params,
+        aux=plan.aux,
+        bind_identity=plan.bind_identity,
+    )
+
+    with pytest.raises(TypeError, match="exact InstallPlan"):
+        _require_exact_install_inputs(
+            engine,
+            plan.artifact,
+            plan.instances,
+            plan.artifact.plan.field_plans,
+            plan.aux,
+            plan.params,
+            lookalike,
+        )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    ("artifact", "instances", "params", "aux", "field_plans", "execution_context"),
+)
+def test_final_bound_snapshot_refuses_every_install_plan_input_alias(changed):
+    plan = _exact_install_plan()
+    engine = SimpleNamespace(_execution_context=plan.execution_context)
+    values = {
+        "compiled": plan.artifact,
+        "instances": plan.instances,
+        "field_plans": plan.artifact.plan.field_plans,
+        "aux": plan.aux,
+        "params": plan.params,
+    }
+    if changed == "artifact":
+        values["compiled"] = object()
+    elif changed == "instances":
+        values["instances"] = dict(plan.instances)
+    elif changed == "params":
+        values["params"] = plan.artifact.bind_schema.resolve_bind(
+            {}, compile_values=plan.artifact.plan.compile_values)
+    elif changed == "aux":
+        values["aux"] = dict(plan.aux)
+    elif changed == "field_plans":
+        values["field_plans"] = dict(plan.artifact.plan.field_plans)
+    else:
+        engine._execution_context = None
+
+    with pytest.raises(ValueError, match="exact value from the InstallPlan"):
+        _require_exact_install_inputs(engine, install_plan=plan, **values)
 
 
 def test_bound_snapshot_refuses_repr_based_extension():

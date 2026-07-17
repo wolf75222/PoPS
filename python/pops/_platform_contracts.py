@@ -6,7 +6,6 @@ an explicit :class:`CapabilityProof`; ``CapabilityProof.unknown()`` means absenc
 """
 from __future__ import annotations
 
-import importlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -253,13 +252,11 @@ class ExecutionContext:
                 "datatype": self.datatype.to_data(), "device": self.device.to_data()}
 
     @classmethod
-    def mpi_world(cls, artifact: Any, communicator: Any) -> ExecutionContext:
+    def mpi_world(cls, artifact: Any) -> ExecutionContext:
         """Build the exact native ``MPI_COMM_WORLD`` launch context for one artifact.
 
-        The compiled artifact must itself have been authenticated for the world-communicator
-        route.  A duplicated, split or otherwise custom communicator is intentionally rejected:
-        the current native engines consume ``MPI_COMM_WORLD`` and do not expose a communicator
-        injection ABI.
+        MPI initialization, communicator ownership and collectives belong to the compiled PoPS
+        runtime.  Python never accepts or manufactures an MPI handle.
         """
         from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 
@@ -267,18 +264,10 @@ class ExecutionContext:
             raise TypeError(
                 "ExecutionContext.mpi_world requires the exact artifact returned by pops.compile"
             )
-        try:
-            MPI = importlib.import_module("mpi4py.MPI")
-        except ImportError as exc:
-            raise RuntimeError(
-                "ExecutionContext.mpi_world requires mpi4py and an MPI-enabled PoPS module"
-            ) from exc
-        if not isinstance(communicator, MPI.Comm) or MPI.Comm.Compare(
-                communicator, MPI.COMM_WORLD) != MPI.IDENT:
-            raise ValueError(
-                "ExecutionContext.mpi_world accepts only mpi4py.MPI.COMM_WORLD; custom MPI "
-                "communicators are not consumed by the native provider"
-            )
+        from pops import _pops
+        from pops._native_collectives import require_world
+
+        communicator = require_world(_pops.mpi_world())
         from pops.runtime._platform_manifest import native_runtime_backend
 
         backend = native_runtime_backend(artifact.platform_manifest)
@@ -293,7 +282,9 @@ class ExecutionContext:
             communicator=ExecutionResource(
                 "communicator", "MPI_COMM_WORLD", handle=communicator
             ),
-            datatype=ExecutionResource("datatype", "float64", handle=MPI.DOUBLE),
+            datatype=ExecutionResource(
+                "datatype", "float64", handle=communicator.datatype_float64
+            ),
             device=ExecutionResource("device", "host"),
         )
 
@@ -467,6 +458,21 @@ def validate_component_launch(platform: PlatformManifest, context: ExecutionCont
     if type(platform) is not PlatformManifest or type(context) is not ExecutionContext:
         raise TypeError(
             "validate_component_launch requires exact PlatformManifest and ExecutionContext values")
+    validate_component_runtime(platform, context.backend)
+    _validate_launch_facts(platform, context, fields, expected_fields, compare_route=False)
+
+
+def validate_component_runtime(platform: PlatformManifest,
+                               runtime: RuntimeBackendManifest) -> None:
+    """Authenticate an AOT component against the loaded native backend before ``dlopen``.
+
+    Component binaries cross the native table boundary directly, so their ABI is an exact literal
+    contract rather than the weaker header/standard compatibility used by generic artifact metadata.
+    """
+    if type(platform) is not PlatformManifest or type(runtime) is not RuntimeBackendManifest:
+        raise TypeError(
+            "validate_component_runtime requires exact PlatformManifest and "
+            "RuntimeBackendManifest values")
     route = (
         platform.backend.require("component.backend"),
         platform.target.require("component.target"),
@@ -476,7 +482,17 @@ def validate_component_launch(platform: PlatformManifest, context: ExecutionCont
         raise PlatformContractError(
             "component artifact route must be exactly %r" % (expected_route,),
             field="component_route", expected=expected_route, actual=route)
-    _validate_launch_facts(platform, context, fields, expected_fields, compare_route=False)
+    for name in ("device", "memory_spaces", "communicator"):
+        _require_same(name, getattr(platform, name), getattr(runtime, name))
+    expected_abi = platform.abi.require("component.abi")
+    actual_abi = runtime.abi.require("runtime.abi")
+    if expected_abi != actual_abi:
+        raise PlatformContractError(
+            "exact native ABI mismatch between component and runtime backend",
+            field="abi", expected=expected_abi, actual=actual_abi)
+    for name in ("storage", "compute", "accumulation", "reduction"):
+        _require_same("precision.%s" % name, getattr(platform.precision, name),
+                      getattr(runtime.precision, name))
 
 
 def _require_field_capability(view: FieldViewDescriptor, field_name: str,
@@ -590,6 +606,6 @@ __all__ = [
     "PLATFORM_CONTRACT_SCHEMA_VERSION", "CapabilityProof", "PrecisionPolicy",
     "PlatformManifest", "RuntimeBackendManifest", "ExecutionResource", "ExecutionContext",
     "FieldViewDescriptor", "PlatformContractError", "validate_launch",
-    "validate_component_launch", "launch_checked",
+    "validate_component_launch", "validate_component_runtime", "launch_checked",
     "proven_serial_manifest", "artifact_platform_manifest", "serial_execution_context",
 ]

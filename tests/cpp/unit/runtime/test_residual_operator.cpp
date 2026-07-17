@@ -10,7 +10,9 @@ using namespace pops::runtime::program;
 
 namespace {
 
-ResidualDomain coupled_domain() { return {{{2}}, {{"fluid", 0, 1}, {"field", 1, 1}}}; }
+ResidualDomain coupled_domain() {
+  return {{{2}}, {{"fluid", 0, 1}, {"field", 1, 1}}};
+}
 
 void coupled_residual(const std::vector<double>& x, std::vector<double>& r) {
   r[0] = x[0] * x[0] + 3.0 * x[1];
@@ -40,8 +42,8 @@ TEST(ResidualOperator, ExactAndFiniteDifferenceJvpAgreeOnCoupledFixture) {
 }
 
 TEST(ResidualOperator, FidelityAndDomainContractsFailClosed) {
-  ResidualOperator missing(coupled_domain(), {}, DaeIndex::kNotDae,
-                           LinearizationFidelity::kExact, coupled_residual);
+  ResidualOperator missing(coupled_domain(), {}, DaeIndex::kNotDae, LinearizationFidelity::kExact,
+                           coupled_residual);
   EXPECT_EQ(missing.support().refusal, SupportRefusal::kUnsupportedLinearization);
   EXPECT_THROW(missing.apply_jvp({1.0, 2.0}, {1.0, 0.0}), std::logic_error);
 
@@ -61,11 +63,9 @@ TEST(ResidualOperator, EvaluatorOutputsAreValidated) {
   EXPECT_THROW(bad_residual.evaluate({1.0, 2.0}), std::runtime_error);
 
   auto wrong_size_jvp = [](const std::vector<double>&, const std::vector<double>&,
-                           std::vector<double>& out) {
-    out.pop_back();
-  };
-  ResidualOperator bad_jvp(coupled_domain(), {}, DaeIndex::kNotDae,
-                           LinearizationFidelity::kJvp, coupled_residual, {}, wrong_size_jvp);
+                           std::vector<double>& out) { out.pop_back(); };
+  ResidualOperator bad_jvp(coupled_domain(), {}, DaeIndex::kNotDae, LinearizationFidelity::kJvp,
+                           coupled_residual, {}, wrong_size_jvp);
   EXPECT_THROW(bad_jvp.apply_jvp({1.0, 2.0}, {1.0, 0.0}), std::runtime_error);
 }
 

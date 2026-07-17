@@ -6,7 +6,7 @@ operator typed for another, a Rate(U) cannot be combined with a State(V), and an
 drive a solve over State(V). Every state enters through typed block and declaration handles.
 Pure Python; skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
@@ -17,8 +17,7 @@ try:
     from pops import time as adctime
     from typed_program_support import solve_field, typed_field, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_validation (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_validation (pops unavailable: %s)' % exc)
 
 
 def _model():

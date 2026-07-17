@@ -13,6 +13,7 @@ On verifie (compilateur requis pour le bout-en-bout, auto-skip sinon) :
       (non-regression bit-identique du chemin partage) ;
   (4) AMR : le halo est accepte sur AmrSystem (mono + multi bloc) et n'empeche pas le pas.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import os
@@ -92,7 +93,7 @@ def test_system_cartesian_halo():
     """Cartesien non periodique : la BC du champ vx change le residu au bord, pas a l'interieur ;
     'foextrap' explicite == defaut (non-regression du chemin partage)."""
     if not _have_compiler():
-        print("skip  cartesian halo (compilateur absent)")
+        require_native_or_skip('skip  cartesian halo (compilateur absent)')
         return
     tmp = tempfile.mkdtemp()
     try:
@@ -128,7 +129,7 @@ def test_amr_halo():
     densite APRES un pas -- le halo dirichlet change la densite au bord, pas a l'interieur. Le halo est
     applique par AmrRuntime/AmrCouplerMP (apply_named_aux_bc) au niveau grossier."""
     if not _have_compiler():
-        print("skip  AMR halo (compilateur absent)")
+        require_native_or_skip('skip  AMR halo (compilateur absent)')
         return
     tmp = tempfile.mkdtemp()
     try:

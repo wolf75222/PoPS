@@ -2,9 +2,10 @@
 """Final generic explicit Runge--Kutta factory and exact tableau contracts."""
 from decimal import Decimal
 from fractions import Fraction
-import sys
 
 import pytest
+
+from tests.python.support.requirements import require_native_or_skip
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -18,8 +19,7 @@ def _pops_time():
         import pops.time as t
         import pops.lib.time as lt
     except Exception as exc:
-        print("skip test_time_std_rk (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip("test_time_std_rk pops.time unavailable: %s" % exc)
     return t
 
 
@@ -141,10 +141,11 @@ def _run_section_b(t):
         import numpy as np
         import pops.runtime._engine_descriptors as engine
     except Exception as exc:
-        print("-- compiled parity skipped: %s --" % exc)
-        return
+        require_native_or_skip("test_time_std_rk compiled parity unavailable: %s" % exc)
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-        return
+        require_native_or_skip(
+            "test_time_std_rk _pops lacks install_program (rebuild _pops)"
+        )
 
     def compile_factory(factory, name):
         model = _passive_model(name + "_model")
@@ -153,16 +154,20 @@ def _run_section_b(t):
         try:
             from pops.codegen._compile_drivers import compile_problem
             return compile_problem(model=model, time=program)
-        except RuntimeError:
-            return None
+        except RuntimeError as exc:
+            require_native_or_skip(
+                "test_time_std_rk compile_problem could not build a .so: %s"
+                % str(exc)[:160]
+            )
 
     preset = compile_factory(lambda state, rate: lt.RK4(state, rate=rate), "rk4")
     generic = compile_factory(
         lambda state, rate: lt.RungeKutta(state, rate=rate, tableau=lt.RK4_TABLEAU),
         "rk4",
     )
-    if preset is None or generic is None:
-        return
+    assert preset is not None and generic is not None, (
+        "test_time_std_rk compile_problem returned no artifact"
+    )
 
     n = 16
     x = (np.arange(n) + 0.5) / n

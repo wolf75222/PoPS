@@ -32,7 +32,8 @@ TEST(VariableUserRole, NamedUserRolesAndStrictCouplingFallback) {
   vs.roles = {R::MomentumX, R::Custom, R::Density};
   vs.user_roles = {"", "phi", ""};
 
-  EXPECT_EQ(vs.index_of("density"), 2) << "index_of_string:canonical_name_non_canonical_layout";  // (2)
+  EXPECT_EQ(vs.index_of("density"), 2)
+      << "index_of_string:canonical_name_non_canonical_layout";                             // (2)
   EXPECT_EQ(vs.index_of(R::Density), 2) << "index_of_enum:canonical_non_canonical_layout";  // (2)
   EXPECT_EQ(vs.index_of("momentum_x"), 0) << "index_of_string:canonical_name_resolves";
   EXPECT_EQ(vs.index_of("phi"), 1) << "index_of_string:user_label_resolves";                  // (1)

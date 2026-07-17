@@ -51,15 +51,14 @@ struct FieldBoundaryFailure {
     }
 
     const int rank = my_rank();
-    const int owner = static_cast<int>(all_reduce_min(
-        static_cast<double>(local_failed ? rank : n_ranks())));
+    const int owner =
+        static_cast<int>(all_reduce_min(static_cast<double>(local_failed ? rank : n_ranks())));
     const bool publish = local_failed && rank == owner;
     code = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(code) : 0L));
     face = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(face) : 0L));
     i = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(i) : 0L));
     j = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(j) : 0L));
-    value = static_cast<Real>(all_reduce_sum(
-        publish ? static_cast<double>(value) : 0.0));
+    value = static_cast<Real>(all_reduce_sum(publish ? static_cast<double>(value) : 0.0));
     return true;
   }
 };
@@ -85,12 +84,13 @@ struct FieldBoundaryExecutionContext {
 /// Generated residual and JVP launchers.  A call handles one complete physical face and launches its
 /// device-clean named Kokkos functor over all local face cells.  The function pointer is selected once
 /// per solve/face outside the iterative hot loop; the function itself contains no runtime registry.
-using FieldBoundaryPrepareResidualFn = void (*)(
-    int face, const MultiFab& iterate, MultiFab& operator_view, const Geometry& geometry,
-    const FieldBoundaryExecutionContext& context);
-using FieldBoundaryPrepareJvpFn = void (*)(
-    int face, const MultiFab& iterate, const MultiFab& direction, MultiFab& direction_view,
-    const Geometry& geometry, const FieldBoundaryExecutionContext& context);
+using FieldBoundaryPrepareResidualFn = void (*)(int face, const MultiFab& iterate,
+                                                MultiFab& operator_view, const Geometry& geometry,
+                                                const FieldBoundaryExecutionContext& context);
+using FieldBoundaryPrepareJvpFn = void (*)(int face, const MultiFab& iterate,
+                                           const MultiFab& direction, MultiFab& direction_view,
+                                           const Geometry& geometry,
+                                           const FieldBoundaryExecutionContext& context);
 /// Residual launchers use additive semantics: @c residual already contains `f-L(phi)` and the
 /// launcher adds the exact boundary closure/elimination term `C(phi)` on boundary cells.
 ///
@@ -103,9 +103,8 @@ using FieldBoundaryPrepareJvpFn = void (*)(
 using FieldBoundaryResidualFn = void (*)(int face, const MultiFab& iterate, MultiFab& residual,
                                          const Geometry& geometry,
                                          const FieldBoundaryExecutionContext& context);
-using FieldBoundaryJvpFn = void (*)(int face, const MultiFab& iterate,
-                                    const MultiFab& direction, MultiFab& output,
-                                    const Geometry& geometry,
+using FieldBoundaryJvpFn = void (*)(int face, const MultiFab& iterate, const MultiFab& direction,
+                                    MultiFab& output, const Geometry& geometry,
                                     const FieldBoundaryExecutionContext& context);
 
 struct CompiledFieldBoundaryKernel {
@@ -147,15 +146,13 @@ struct CompiledFieldBoundaryKernel {
     prepare_jvp(face, iterate, direction, direction_view, geometry, context);
   }
 
-  void add_residual(int face, const MultiFab& iterate, MultiFab& output,
-                    const Geometry& geometry,
-                      const FieldBoundaryExecutionContext& context) const {
+  void add_residual(int face, const MultiFab& iterate, MultiFab& output, const Geometry& geometry,
+                    const FieldBoundaryExecutionContext& context) const {
     residual(face, iterate, output, geometry, context);
   }
 
   void apply_jvp(int face, const MultiFab& iterate, const MultiFab& direction, MultiFab& output,
-                 const Geometry& geometry,
-                 const FieldBoundaryExecutionContext& context) const {
+                 const Geometry& geometry, const FieldBoundaryExecutionContext& context) const {
     if (jvp == nullptr)
       throw std::runtime_error("field boundary closure has no compiled JVP launcher");
     jvp(face, iterate, direction, output, geometry, context);

@@ -30,11 +30,11 @@ struct RuntimeDiagnosticsReport {
 
   void clear() { events.clear(); }
 
-  void record(std::string code, std::string component, std::string severity,
-              std::string message, int iteration = -1, double value = 0.0) {
+  void record(std::string code, std::string component, std::string severity, std::string message,
+              int iteration = -1, double value = 0.0) {
     events.push_back(RuntimeDiagnosticEvent{std::move(code), std::move(component),
-                                            std::move(severity), std::move(message),
-                                            iteration, value});
+                                            std::move(severity), std::move(message), iteration,
+                                            value});
   }
 
   std::size_t count(const std::string& code) const {

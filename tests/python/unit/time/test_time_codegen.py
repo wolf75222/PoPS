@@ -11,21 +11,20 @@ the codegen still cannot lower -- named sources beyond 'default', a commit of an
 must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from types import SimpleNamespace
 
 from typed_program_support import solve_field, solve_field_blocks, state_refs, typed_state
 from pops.numerics.terms import DefaultSource, Flux
 
-import sys
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable in this environment -> skip, never fake
-        print("skip test_time_codegen (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_codegen (pops.time unavailable: %s)' % exc)
     return t
 
 

@@ -8,10 +8,22 @@ AND byte-identical ring-slot buffers. This proves the per-level AMR ring seam (r
 / rotate on detail::AmrHistoryOps) is a byte-faithful mirror of the Uniform HistoryManager when nlev=1
 (the per-level slot [level 0] IS the Uniform ring), so the whole compiled-Program byte-code drives both.
 
-Self-skips (exit 0) without pops / a built _pops / a compiler / a visible Kokkos, exactly like
+Missing native prerequisites are explicit local skips and required-lane failures, exactly like
 test_amr_program_parity. Pytest + __main__ guard (CI runs ``python3 <file>``).
 """
 import sys
+
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+
+_native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
+if _native_missing:
+    require_native_or_skip("test_amr_history_parity: %s" % _native_missing)
 
 try:
     import numpy as np
@@ -28,8 +40,8 @@ try:
         resolve_periodic_field_program,
     )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
-    print("skip test_amr_history_parity (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip(
+        "test_amr_history_parity cannot import pops/numpy: %s" % exc)
 
 N = 16
 NSTEPS = 5
@@ -85,19 +97,17 @@ def _ring_slots(sim, depth):
 def _system_run(u0):
     sim = System(n=N, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
-        return None, "the built _pops lacks install_program/history_names (rebuild _pops)"
-    try:
-        model = _passive_source_model("blkS")
-        plan = _ab2_plan(model, target="system")
-        block_cm = compile_block_model(model, target="system")
-        compiled = compile_problem(
-            model=model,
-            time=plan.time,
-            field_plans=plan.field_plans,
-            problem_snapshot=plan.snapshot,
-        )
-    except RuntimeError as exc:
-        return None, "compile (System): %s" % str(exc)[:160]
+        require_native_or_skip(
+            "test_amr_history_parity requires System install_program/history_names bindings")
+    model = _passive_source_model("blkS")
+    plan = _ab2_plan(model, target="system")
+    block_cm = compile_block_model(model, target="system")
+    compiled = compile_problem(
+        model=model,
+        time=plan.time,
+        field_plans=plan.field_plans,
+        problem_snapshot=plan.snapshot,
+    )
     sim.add_equation("blk", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
@@ -111,28 +121,23 @@ def _system_run(u0):
 def _amr_run(u0):
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)  # FLAT: no refinement -> nlev=1 (coarse-only)
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
-        return None, "the built _pops lacks AmrSystem.install_program/history_names (rebuild _pops)"
-    try:
-        model = _passive_source_model("blkA")
-        plan = _ab2_plan(model, target="amr_system")
-        compiled = compile_problem(
-            model=model,
-            time=plan.time,
-            target="amr_system",
-            field_plans=plan.field_plans,
-            problem_snapshot=plan.snapshot,
-        )
-        block_cm = compile_block_model(model, target="amr_system")
-    except RuntimeError as exc:
-        return None, "compile (AMR): %s" % str(exc)[:160]
-    try:
-        amr.add_equation("blk", block_cm,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit(method="ssprk2"))
-        amr.set_density("blk", u0)
-        amr.install_program(compiled.so_path)
-    except RuntimeError as exc:
-        return None, "install (AMR): %s" % str(exc)[:240]
+        require_native_or_skip(
+            "test_amr_history_parity requires AmrSystem install_program/history_names bindings")
+    model = _passive_source_model("blkA")
+    plan = _ab2_plan(model, target="amr_system")
+    compiled = compile_problem(
+        model=model,
+        time=plan.time,
+        target="amr_system",
+        field_plans=plan.field_plans,
+        problem_snapshot=plan.snapshot,
+    )
+    block_cm = compile_block_model(model, target="amr_system")
+    amr.add_equation("blk", block_cm,
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="ssprk2"))
+    amr.set_density("blk", u0)
+    amr.install_program(compiled.so_path)
     for _ in range(NSTEPS):
         amr.step(DT)
     return (np.array(amr.density("blk")), _ring_slots(amr, 2), int(amr.n_levels())), None
@@ -142,13 +147,9 @@ def test_flat_amr_history_equals_uniform():
     print("== flat-AMR AB2 history == Uniform (bit-for-bit density + ring slots) ==")
     u0 = _rho0()
     sys_out, sys_err = _system_run(u0)
-    if sys_out is None:
-        print("skip (%s)" % sys_err)
-        return
+    assert sys_out is not None, sys_err
     amr_out, amr_err = _amr_run(u0)
-    if amr_out is None:
-        print("skip (%s)" % amr_err)
-        return
+    assert amr_out is not None, amr_err
     sys_rho, sys_rings = sys_out
     amr_rho, amr_rings, nlev = amr_out
 
@@ -170,7 +171,11 @@ def test_flat_amr_history_equals_uniform():
     chk(all_slots_equal, "every ring slot buffer is BIT-IDENTICAL System vs AMR (the seam is faithful)")
 
 
-if __name__ == "__main__":
+def main():
     test_flat_amr_history_equals_uniform()
     print("FAILURES:", _fails)
     sys.exit(1 if _fails else 0)
+
+
+if __name__ == "__main__":
+    main()

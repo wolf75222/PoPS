@@ -72,11 +72,17 @@ struct CompositeReductions {
 // Independent composite reference for component zero. This deliberately does not use density(): it
 // walks the public per-level checkpoint views and applies the AMR covered-cell rule itself. Thus
 // abs_sum and sum_sq remain valid when a fine state differs from its coarse average.
-static CompositeReductions composite_oracle(AmrSystem& system, const char* block, int base_n) {
+static CompositeReductions composite_oracle(AmrSystem& system, const char* block, int base_n,
+                                            std::vector<int> selected = {}) {
   CompositeReductions result;
   const int n_levels = system.n_levels();
+  if (selected.empty())
+    for (int level = 0; level < n_levels; ++level)
+      selected.push_back(level);
   const std::vector<PatchBox> boxes = system.patch_boxes();
-  for (int level = 0; level < n_levels; ++level) {
+  for (std::size_t selected_index = 0; selected_index < selected.size(); ++selected_index) {
+    const int level = selected[selected_index];
+    const int next = selected_index + 1 < selected.size() ? selected[selected_index + 1] : -1;
     const std::size_t width = static_cast<std::size_t>(base_n) << level;
     const std::vector<double> state = system.block_level_state_global(block, level);
     if (state.size() < width * width)
@@ -87,12 +93,13 @@ static CompositeReductions composite_oracle(AmrSystem& system, const char* block
       for (std::size_t i = 0; i < width; ++i) {
         bool covered = false;
         for (const PatchBox& fine : boxes) {
-          if (fine.level != level + 1)
+          if (fine.level != next)
             continue;
-          if (static_cast<int>(i) >= (fine.ilo >> 1) &&
-              static_cast<int>(i) <= (fine.ihi >> 1) &&
-              static_cast<int>(j) >= (fine.jlo >> 1) &&
-              static_cast<int>(j) <= (fine.jhi >> 1)) {
+          const int shift = next - level;
+          if (static_cast<int>(i) >= (fine.ilo >> shift) &&
+              static_cast<int>(i) <= (fine.ihi >> shift) &&
+              static_cast<int>(j) >= (fine.jlo >> shift) &&
+              static_cast<int>(j) <= (fine.jhi >> shift)) {
             covered = true;
             break;
           }
@@ -108,10 +115,11 @@ static CompositeReductions composite_oracle(AmrSystem& system, const char* block
   return result;
 }
 
-static CompositeReductions composite_reductions(const AmrSystem& system, const char* block) {
-  return {system.composite_reduce(block, "sum", 0),
-          system.composite_reduce(block, "abs_sum", 0),
-          system.composite_reduce(block, "sum_sq", 0)};
+static CompositeReductions composite_reductions(const AmrSystem& system, const char* block,
+                                                const std::vector<int>& levels = {}) {
+  return {system.composite_reduce(block, "sum", 0, levels),
+          system.composite_reduce(block, "abs_sum", 0, levels),
+          system.composite_reduce(block, "sum_sq", 0, levels)};
 }
 
 static double composite_reduction_error(const CompositeReductions& actual,
@@ -129,6 +137,10 @@ struct RunResult {
   CompositeReductions electrons_reduce;
   CompositeReductions ions_oracle;
   CompositeReductions electrons_oracle;
+  CompositeReductions coarse_reduce;
+  CompositeReductions coarse_oracle;
+  CompositeReductions fine_reduce;
+  CompositeReductions fine_oracle;
   double initial_ions_mass = 0.0;
   double initial_electrons_mass = 0.0;
   double ions_mass = 0.0;
@@ -162,8 +174,8 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
     AmrSystem sys(cfg);
     sys.set_temporal_relations({2}, {1}, {"integral_only"});
     sys.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sys.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative",
-                  "explicit", 1);  // SCHEMA DIFFERENT
+    sys.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
+                  1);  // SCHEMA DIFFERENT
     sys.set_poisson("charge_density", "geometric_mg", "periodic");
     sys.set_density("ions", rho0);
     sys.set_density("electrons", rho1);
@@ -186,6 +198,12 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
     result.electrons_reduce = composite_reductions(sys, "electrons");
     result.ions_oracle = composite_oracle(sys, "ions", n);
     result.electrons_oracle = composite_oracle(sys, "electrons", n);
+    result.coarse_reduce = composite_reductions(sys, "ions", {0});
+    result.coarse_oracle = composite_oracle(sys, "ions", n, {0});
+    if (sys.n_levels() > 1) {
+      result.fine_reduce = composite_reductions(sys, "ions", {1});
+      result.fine_oracle = composite_oracle(sys, "ions", n, {1});
+    }
     return result;
   };
 
@@ -200,10 +218,18 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
       composite_reduction_error(replicated.ions_reduce, replicated.ions_oracle);
   const double replicated_electrons_reduce_error =
       composite_reduction_error(replicated.electrons_reduce, replicated.electrons_oracle);
-  const double distributed_ions_reduce_error = composite_reduction_error(
-      distributed.ions_reduce, distributed.ions_oracle);
-  const double distributed_electrons_reduce_error = composite_reduction_error(
-      distributed.electrons_reduce, distributed.electrons_oracle);
+  const double distributed_ions_reduce_error =
+      composite_reduction_error(distributed.ions_reduce, distributed.ions_oracle);
+  const double distributed_electrons_reduce_error =
+      composite_reduction_error(distributed.electrons_reduce, distributed.electrons_oracle);
+  const double replicated_coarse_error =
+      composite_reduction_error(replicated.coarse_reduce, replicated.coarse_oracle);
+  const double distributed_coarse_error =
+      composite_reduction_error(distributed.coarse_reduce, distributed.coarse_oracle);
+  const double replicated_fine_error =
+      composite_reduction_error(replicated.fine_reduce, replicated.fine_oracle);
+  const double distributed_fine_error =
+      composite_reduction_error(distributed.fine_reduce, distributed.fine_oracle);
 
   auto checksum = [](const std::vector<double>& v) {
     double s = 0;
@@ -266,6 +292,13 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
       std::printf("FAIL composite_reduce distribue ne reconstruit pas le grossier\n");
       ++fails;
     }
+    if (!(replicated_coarse_error < kReductionTolerance &&
+          distributed_coarse_error < kReductionTolerance &&
+          replicated_fine_error < kReductionTolerance &&
+          distributed_fine_error < kReductionTolerance)) {
+      std::printf("FAIL composite_reduce ne respecte pas la selection exacte des niveaux\n");
+      ++fails;
+    }
     if (fails == 0)
       std::printf(
           "OK test_mpi_amr_twoblock_parity np=%d (multi-blocs AMR : Poisson somme "
@@ -279,5 +312,7 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
 }
 
 TEST(test_mpi_amr_twoblock_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_twoblock_parity, "test_mpi_amr_twoblock_parity"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_twoblock_parity,
+                                    "test_mpi_amr_twoblock_parity"),
+            0);
 }

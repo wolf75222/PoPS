@@ -33,6 +33,41 @@ OUTPUT_ROOT = Path("outputs/scalar_advection")
 ProgramBuilder = Callable[[Any, Any], pops.Program]
 
 
+def _native_output_mode() -> Any:
+    """Select the portable publication topology proved by the loaded native backend."""
+
+    from pops.output import ParallelMode
+    from pops.runtime_environment import runtime_environment_report
+
+    communicator = runtime_environment_report().get("communicator")
+    if communicator == "serial":
+        return ParallelMode.SERIAL
+    if communicator == "MPI_COMM_WORLD":
+        # ROOT keeps the example independent of parallel-HDF5 availability while retaining one
+        # shared, complete scientific artifact under an explicit native MPI context.
+        return ParallelMode.ROOT
+    raise RuntimeError(
+        "the final scalar example requires a proved serial or MPI_COMM_WORLD backend"
+    )
+
+
+def _bind_artifact(artifact: Any, **inputs: Any) -> Any:
+    """Bind with the exact context required by the artifact's communicator contract."""
+
+    communicator = artifact.platform_manifest.communicator.require(
+        "scalar artifact communicator"
+    )
+    if communicator == "serial":
+        return pops.bind(artifact, **inputs)
+    if communicator == "MPI_COMM_WORLD":
+        return pops.bind(
+            artifact,
+            resources={"execution_context": pops.ExecutionContext.mpi_world(artifact)},
+            **inputs,
+        )
+    raise RuntimeError("unsupported scalar artifact communicator %r" % communicator)
+
+
 @dataclass(frozen=True, slots=True)
 class ScalarAdvectionAuthoring:
     """The inert declarations shared by validation, resolution, bind and run."""
@@ -77,7 +112,7 @@ class ScalarRuntimeSnapshot:
 
     time: float
     macro_step: int
-    state: np.ndarray
+    states: tuple[np.ndarray, ...]
     patch_boxes: tuple[tuple[int, ...], ...]
     program_hash: str
     consumer_graph_identity: str
@@ -385,34 +420,50 @@ def build_initial_condition(core: ScalarAdvectionAuthoring) -> Any:
     )
 
 
-def build_consumer_graph(core: ScalarAdvectionAuthoring) -> Any:
+def build_consumer_graph(
+    core: ScalarAdvectionAuthoring, *, output_mode: Any = None,
+) -> Any:
     """Build the sole accepted-side-effect graph for diagnostics, output and checkpointing."""
 
-    from pops.diagnostics import Integral
-    from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
-    from pops.time import every
+    from pops.diagnostics import Integral, MinMax, Norm
+    from pops.linalg.norms import L1, L2, LInf
+    from pops.output import (
+        Checkpoint, ConsumerGraph, HDF5, ParallelMode, ParaView, ScientificOutput,
+    )
+    from pops.time import every, on_end
 
-    tracer_mass = Integral(block=core.tracer, cadence=every(10, clock=core.program.clock))
+    if output_mode is None:
+        output_mode = ParallelMode.SERIAL
+
+    diagnostic_schedule = every(10, clock=core.program.clock)
+    diagnostics = (
+        Integral(block=core.tracer, cadence=diagnostic_schedule),
+        Norm(L1(), block=core.tracer, cadence=diagnostic_schedule),
+        Norm(L2(), block=core.tracer, cadence=diagnostic_schedule),
+        Norm(LInf(), block=core.tracer, cadence=diagnostic_schedule),
+        MinMax(block=core.tracer, cadence=diagnostic_schedule),
+    )
     consumers = (
         ScientificOutput(
-            format=ParaView(),
-            schedule=every(10, clock=core.program.clock),
+            format=ParaView(mode=output_mode),
+            schedule=diagnostic_schedule,
             fields=(core.tracer_state,),
-            diagnostics=(tracer_mass,),
+            diagnostics=diagnostics,
             target="solution/tracer",
         ),
         ScientificOutput(
-            # The normative default run binds the proved serial ExecutionContext.  Collective
-            # HDF5 is exercised by the dedicated MPI conformance matrix, where a communicator is
-            # an explicit runtime resource; selecting it here would make the default example
-            # invalid before its first publication.
-            format=HDF5(parallel=False),
+            # ROOT is the portable shared-file route for an MPI artifact; the dedicated MPI
+            # conformance matrix separately exercises true collective HDF5.
+            format=HDF5(mode=output_mode),
             schedule=every(50, clock=core.program.clock),
             fields=(core.tracer_state,),
             target="state/tracer",
         ),
         Checkpoint(
-            schedule=every(100, clock=core.program.clock),
+            # A fixed target is a single immutable publication, so publish it exactly once at the
+            # accepted end of each run.  A repeating cadence would correctly fail on its second
+            # attempt rather than silently overwrite the first restart state.
+            schedule=on_end(clock=core.program.clock),
             bit_identical=True,
             target="checkpoints/restart",
         ),
@@ -424,6 +475,7 @@ def build_final_case(
     *,
     program_builder: ProgramBuilder = explicit_ssprk2,
     output_root: Any = OUTPUT_ROOT,
+    output_mode: Any = None,
 ) -> FinalScalarAdvectionCase:
     """Assemble every public authority exactly once."""
 
@@ -432,7 +484,7 @@ def build_final_case(
     core.case.numerics(core.numerics, block=core.tracer)
     core.case.initials.add(build_initial_condition(core))
     core.case.program(core.program)
-    core.case.consumers(build_consumer_graph(core))
+    core.case.consumers(build_consumer_graph(core, output_mode=output_mode))
 
     layout = build_amr_layout(core)
     return FinalScalarAdvectionCase(core, layout)
@@ -459,7 +511,11 @@ def compile_final_case(
 ) -> tuple[FinalScalarAdvectionCase, Any]:
     """Resolve and compile one exact manual or factory-authored target."""
 
-    target = build_final_case(program_builder=program_builder, output_root=output_root)
+    target = build_final_case(
+        program_builder=program_builder,
+        output_root=output_root,
+        output_mode=_native_output_mode(),
+    )
     validated = pops.validate(target.authoring.case)
     resolved = pops.resolve(validated, layout=target.layout)
     return target, pops.compile(resolved)
@@ -471,10 +527,19 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
     blocks = tuple(simulation.block_names())
     if blocks != ("tracer",):
         raise RuntimeError("scalar acceptance expected exactly the qualified tracer block")
+    level_count = int(simulation.n_levels())
+    if level_count <= 0:
+        raise RuntimeError("scalar acceptance installed no AMR hierarchy levels")
     return ScalarRuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
-        state=np.asarray(simulation.state_global("tracer"), dtype=np.float64).copy(),
+        states=tuple(
+            np.asarray(
+                simulation.block_level_state_global("tracer", level),
+                dtype=np.float64,
+            ).copy()
+            for level in range(level_count)
+        ),
         patch_boxes=tuple(
             tuple(int(value) for value in row)
             for row in simulation.patch_boxes()
@@ -507,18 +572,25 @@ def _require_same_snapshot(
     for name, (expected, actual) in exact.items():
         if expected != actual:
             raise RuntimeError("%s changed %s" % (where, name))
-    if not np.array_equal(left.state, right.state):
-        raise RuntimeError("%s changed the conservative tracer state" % where)
+    if len(left.states) != len(right.states) or any(
+        not np.array_equal(expected, actual)
+        for expected, actual in zip(left.states, right.states, strict=True)
+    ):
+        raise RuntimeError("%s changed the conservative tracer AMR hierarchy" % where)
 
 
 def _require_refined_hierarchy(snapshot: ScalarRuntimeSnapshot, *, where: str) -> None:
     """Require the AMR acceptance target to execute at least one genuinely refined level."""
 
-    levels = tuple(row[0] for row in snapshot.patch_boxes)
-    if not levels or min(levels) != 0 or not any(level > 0 for level in levels):
+    # ``patch_boxes`` reports adaptive patches only; the level-zero base box is represented by the
+    # first public level state.  Require every installed refined state level to have real patch
+    # geometry instead of incorrectly expecting a synthetic level-zero patch row.
+    expected_levels = tuple(range(1, len(snapshot.states)))
+    actual_levels = tuple(sorted({row[0] for row in snapshot.patch_boxes}))
+    if not expected_levels or actual_levels != expected_levels:
         raise RuntimeError(
-            "%s did not execute the requested refined AMR hierarchy: levels=%r"
-            % (where, levels)
+            "%s did not execute the requested refined AMR hierarchy: expected=%r, actual=%r"
+            % (where, expected_levels, actual_levels)
         )
 
 
@@ -552,7 +624,7 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
         output_root=accepted_root,
     )
     params = build_bind_params(target.authoring)
-    simulation = pops.bind(artifact, params=params)
+    simulation = _bind_artifact(artifact, params=params)
     controls = dict(target.authoring.run_controls)
     run_report = pops.run(simulation, **controls)
     if run_report.accepted_steps <= 0:
@@ -564,7 +636,7 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     accepted = _snapshot(simulation)
     _require_refined_hierarchy(accepted, where="accepted scalar run")
 
-    resumed = pops.bind(artifact, params=params)
+    resumed = _bind_artifact(artifact, params=params)
     resumed.restart(checkpoint_path)
     restored = _snapshot(resumed)
     _require_same_snapshot(accepted, restored, where="independent strict restart")
@@ -622,13 +694,29 @@ def run_preset_parity(output_dir: Any, expected: ScalarRuntimeSnapshot) -> Scala
     if semantic_identity_of(program=manual_program) != semantic_identity_of(program=preset_program):
         raise RuntimeError("pops.lib.time.SSPRK2 changed the semantic Program identity")
 
-    simulation = pops.bind(artifact, params=build_bind_params(preset.authoring))
-    pops.run(
+    simulation = _bind_artifact(
+        artifact, params=build_bind_params(preset.authoring)
+    )
+    # Mirror the explicit proof's two run boundaries.  ``on_end`` checkpoint cursors are part of
+    # restart-sensitive state, so manual/factory parity includes the same two accepted end events
+    # while each immutable publication receives its own output root.
+    split_time = float(preset.authoring.run_controls["t_end"])
+    if not 0.0 < split_time < expected.time:
+        raise RuntimeError("preset parity requires an intermediate accepted run boundary")
+    first_report = pops.run(
+        simulation,
+        t_end=split_time,
+        max_steps=int(preset.authoring.run_controls["max_steps"]),
+        output_dir=Path(output_dir) / "accepted",
+    )
+    second_report = pops.run(
         simulation,
         t_end=expected.time,
         max_steps=int(preset.authoring.run_controls["max_steps"]),
-        output_dir=output_dir,
+        output_dir=Path(output_dir) / "continued",
     )
+    if first_report.accepted_steps <= 0 or second_report.accepted_steps <= 0:
+        raise RuntimeError("preset SSPRK2 parity did not execute both accepted run segments")
     actual = _snapshot(simulation)
     _require_same_snapshot(expected, actual, where="manual/pops.lib.time.SSPRK2 parity")
     return actual

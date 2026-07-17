@@ -191,8 +191,8 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
     ctx.rotate_histories();
     ctx.cache_store_scratch(17, state);
     ctx.record_scalar("provisional", Real(42));
-    throw runtime::program::StepAttemptRejected(
-        SolveStatus::kIterationLimit, "solve", "fault injection after provisional publications");
+    throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "solve",
+                                                "fault injection after provisional publications");
   });
 
   EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);

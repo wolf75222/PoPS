@@ -6,8 +6,7 @@
 
 namespace pops {
 
-inline const BrickCatalogEntry* catalog_entry(const std::string& category,
-                                              const std::string& id) {
+inline const BrickCatalogEntry* catalog_entry(const std::string& category, const std::string& id) {
   for (const BrickCatalogEntry& entry : kBrickCatalog)
     if (category == entry.category && id == entry.id)
       return &entry;
@@ -31,13 +30,27 @@ inline void append_catalog_json_string(std::string& out, const char* value) {
   out += '"';
   for (const unsigned char ch : std::string(value)) {
     switch (ch) {
-      case '"': out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\b': out += "\\b"; break;
-      case '\f': out += "\\f"; break;
-      case '\n': out += "\\n"; break;
-      case '\r': out += "\\r"; break;
-      case '\t': out += "\\t"; break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
       default:
         if (ch < 0x20) {
           out += "\\u00";

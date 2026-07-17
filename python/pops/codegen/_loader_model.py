@@ -134,9 +134,10 @@ class CompiledModel:
     def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
         """Exact report data; consumers never probe optional model attributes."""
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "state_spaces": tuple(self.state_spaces),
             "cons_names": tuple(self.cons_names),
+            "cons_roles": tuple(self.cons_roles),
             "n_vars": self.n_vars,
             "params": dict(self.params),
             "aux_names": tuple(self.aux_extra_names),

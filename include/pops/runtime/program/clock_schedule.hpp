@@ -43,7 +43,8 @@ class ClockScheduleState {
     SubcycleScope(const SubcycleScope&) = delete;
     SubcycleScope& operator=(const SubcycleScope&) = delete;
     SubcycleScope(SubcycleScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)), depth_(other.depth_),
+        : owner_(std::exchange(other.owner_, nullptr)),
+          depth_(other.depth_),
           finished_(other.finished_) {}
     ~SubcycleScope() {
       if (owner_ != nullptr && !finished_)
@@ -94,9 +95,10 @@ class ClockScheduleState {
     (void)ticks_per_macro_(child, {});  // validates reachability and cycles immediately.
   }
 
-  std::optional<ScheduleCoordinate> coordinate(
-      ScheduleDomainKind kind, const std::string& clock, const std::string& stage_identity,
-      int required_level, int current_level, std::int64_t macro_step) const {
+  std::optional<ScheduleCoordinate> coordinate(ScheduleDomainKind kind, const std::string& clock,
+                                               const std::string& stage_identity,
+                                               int required_level, int current_level,
+                                               std::int64_t macro_step) const {
     const std::optional<std::int64_t> tick = active_tick_(clock, macro_step);
     if (!tick)
       return std::nullopt;

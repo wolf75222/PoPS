@@ -57,8 +57,8 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc, Real dyc,
                                 MultiFab& Uf, const MultiFab& auxc, const MultiFab& auxf, Real dt) {
-  const SubcyclingSchedule sched(
-      0, 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
+  const SubcyclingSchedule sched(0, 1, amr::Rational(kAmrRefRatio, 1),
+                                 amr::RemainderPolicy::IntegralOnly);
   const int nc = Uc.ncomp();
   const Real dxf = dxc / kAmrRefRatio, dyf = dyc / kAmrRefRatio, dtf = sched.dt_sub(dt);
   const int NX = dom.nx(), NY = dom.ny();
@@ -196,7 +196,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
         if (!ref.in(I, J))
           continue;  // outside interface: neither average nor reflux (was 0)
         for (int k = 0; k < nc; ++k) {
-          c(I, J, k) += ref.at(I, J, k);   // sync phase 1: reflux (0 if no face)
+          c(I, J, k) += ref.at(I, J, k);  // sync phase 1: reflux (0 if no face)
           if (covered(I, J))
             c(I, J, k) = avg.at(I, J, k);  // sync phase 2: average-down
         }
@@ -360,8 +360,7 @@ struct CoarseFineSpatialGhostKernel {
   int components;
 
   POPS_HD void operator()(int i, int j) const {
-    if (i >= valid.lo[0] && i <= valid.hi[0] &&
-        j >= valid.lo[1] && j <= valid.hi[1])
+    if (i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1])
       return;
     const int ci = coarsen_index(i, kAmrRefRatio);
     const int cj = coarsen_index(j, kAmrRefRatio);
@@ -384,7 +383,7 @@ inline void mf_fill_fine_ghosts_spatial_mb(MultiFab& Uf, const MultiFab& parent,
       if (box < 0)
         continue;
       for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
-                                Uf.fab(li).array(), parent.fab(box).const_array(), valid, nc});
+                               Uf.fab(li).array(), parent.fab(box).const_array(), valid, nc});
     }
     return;
   }
@@ -394,7 +393,7 @@ inline void mf_fill_fine_ghosts_spatial_mb(MultiFab& Uf, const MultiFab& parent,
   for (int li = 0; li < Uf.local_size(); ++li) {
     const Box2D valid = Uf.box(li), grown = Uf.fab(li).grown_box();
     for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
-                              Uf.fab(li).array(), local_parent.fab(li).const_array(), valid, nc});
+                             Uf.fab(li).array(), local_parent.fab(li).const_array(), valid, nc});
   }
 }
 
@@ -479,9 +478,8 @@ struct ExplicitTemporalSubstep {
 /// partition here preserves the same validation and exact Rational authority as the Program path.
 inline std::vector<ExplicitTemporalSubstep> explicit_temporal_partition(
     const amr::ParentChildClockRelation& relation) {
-  const amr::ClockWindow unit_parent{
-      {relation.parent_level(), 0, amr::Rational(0, 1), 0.0},
-      {relation.parent_level(), 0, amr::Rational(1, 1), 1.0}};
+  const amr::ClockWindow unit_parent{{relation.parent_level(), 0, amr::Rational(0, 1), 0.0},
+                                     {relation.parent_level(), 0, amr::Rational(1, 1), 1.0}};
   const auto authored = relation.partition(unit_parent);
   std::vector<ExplicitTemporalSubstep> result;
   result.reserve(authored.size());
@@ -595,13 +593,13 @@ void ssprk2_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   const Real stage1_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1));
   ssprk_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, stage1_fraction,
                             coarse_replicated, pos_floor, pos_comp);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy,
-                                              recon_prim, pos_floor);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
+                                              pos_floor);
   device_fence();
   mf_eval_rhs(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);
-  saxpy(lv.U, dt, R);                                  // U1 + dt L(U1)
+  saxpy(lv.U, dt, R);                                 // U1 + dt L(U1)
   lincomb(lv.U, Real(1) / 2, U0, Real(1) / 2, lv.U);  // Shu-Osher U_new
-  saxpy(fx, Real(1) / 2, Fxs);                         // Feff += 1/2 F(U1)
+  saxpy(fx, Real(1) / 2, Fxs);                        // Feff += 1/2 F(U1)
   saxpy(fy, Real(1) / 2, Fys);
   device_fence();
 }
@@ -652,8 +650,7 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   saxpy(fy, Real(1) / 6, Fys);
 
   // --- stage 2: F(U2) ---
-  const Real stage2_fraction =
-      ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1) / 2);
+  const Real stage2_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1) / 2);
   ssprk_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, stage2_fraction,
                             coarse_replicated, pos_floor, pos_comp);
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
@@ -671,9 +668,8 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
                        const MultiFab* pNew, Real frac, Real parent_span,
-                       std::vector<RegMP>* parentRegs,
-                       bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
-                       const NewtonOptions& nopts = {},
+                       std::vector<RegMP>* parentRegs, bool coarse_replicated = true,
+                       bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
                        AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
                        const PreparedAmrTemporalPlan* temporal_plan = nullptr) {
   // An unknown enum value must never fall through to the Euler branch.  This also protects direct
@@ -770,7 +766,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     }
   }
 
-  if (is_leaf) {  // leaf
+  if (is_leaf) {   // leaf
     if (!ssprk) {  // forward Euler (legacy path); SSPRK already advanced lv.U above
       mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
       mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
@@ -898,8 +894,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     // Clearly separated low-level compatibility route.  Callers that have not authored temporal
     // relations retain the historical ratio-two cadence; an installed explicit relation never
     // reaches this branch.
-    const SubcyclingSchedule legacy_schedule(
-        lev, lev + 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
+    const SubcyclingSchedule legacy_schedule(lev, lev + 1, amr::Rational(kAmrRefRatio, 1),
+                                             amr::RemainderPolicy::IntegralOnly);
     for (int s = 0; s < legacy_schedule.count(); ++s)
       subcycle_level_mp<Limiter, NumericalFlux>(
           m, L, lev + 1, legacy_schedule.dt_sub(dt), base_dom, base_per, &U_old, &lv.U,

@@ -19,8 +19,9 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
-#include <pops/parallel/comm.hpp>    // all_reduce_sum / all_reduce_max (distributed mass/drift)
+#include <pops/parallel/comm.hpp>  // all_reduce_sum / all_reduce_max (distributed mass/drift)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams: NATIVE per-block runtime params (ADC-514)
+#include <pops/runtime/output_piece.hpp>
 
 #include <algorithm>   // std::max
 #include <cmath>       // std::hypot
@@ -29,7 +30,7 @@
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied by compute_aux
 #include <stdexcept>  // std::runtime_error (density size guard)
 #include <type_traits>  // std::void_t / if constexpr detection of a brick's runtime-param member (ADC-514)
-#include <utility>    // std::pair, std::move
+#include <utility>  // std::pair, std::move
 #include <vector>
 
 /// @file
@@ -256,25 +257,21 @@ struct ConservativeLinearProlongKernel {
   int component;
 
   POPS_HD void operator()(int i, int j) const {
-    const int ci = coarse_domain.lo[0] +
-                   floor_div(i - fine_domain.lo[0], kAmrRefRatio);
-    const int cj = coarse_domain.lo[1] +
-                   floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+    const int ci = coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+    const int cj = coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
     const Real center = coarse(ci, cj, component);
     Real sx = Real(0), sy = Real(0);
     if (ci > coarse_domain.lo[0] && ci < coarse_domain.hi[0]) {
       const Real left = center - coarse(ci - 1, cj, component);
       const Real right = coarse(ci + 1, cj, component) - center;
       if (left * right > Real(0))
-        sx = ((left < Real(0) ? -left : left) <
-              (right < Real(0) ? -right : right)) ? left : right;
+        sx = ((left < Real(0) ? -left : left) < (right < Real(0) ? -right : right)) ? left : right;
     }
     if (cj > coarse_domain.lo[1] && cj < coarse_domain.hi[1]) {
       const Real down = center - coarse(ci, cj - 1, component);
       const Real up = coarse(ci, cj + 1, component) - center;
       if (down * up > Real(0))
-        sy = ((down < Real(0) ? -down : down) <
-              (up < Real(0) ? -up : up)) ? down : up;
+        sy = ((down < Real(0) ? -down : down) < (up < Real(0) ? -up : up)) ? down : up;
     }
     const Real ox = ((i - fine_domain.lo[0]) & 1) ? Real(0.25) : Real(-0.25);
     const Real oy = ((j - fine_domain.lo[1]) & 1) ? Real(0.25) : Real(-0.25);
@@ -285,16 +282,17 @@ struct ConservativeLinearProlongKernel {
 /// Ratio-2 conservative piecewise-linear prolongation. The four fine children average exactly to
 /// the parent value; minmod-limited slopes make the operator monotone. Parent regions are first
 /// migrated onto the child DistributionMapping, so the per-patch kernel is MPI/GPU-safe.
-inline void coupler_conservative_linear_to_fine_mb(
-    const MultiFab& coarse, MultiFab& fine, const std::vector<int>& coarse_origin,
-    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio) {
+inline void coupler_conservative_linear_to_fine_mb(const MultiFab& coarse, MultiFab& fine,
+                                                   const std::vector<int>& coarse_origin,
+                                                   const std::vector<int>& fine_origin,
+                                                   const std::vector<int>& refinement_ratio) {
   if (fine.ncomp() != coarse.ncomp())
     throw std::runtime_error("conservative-linear prolongation component mismatch");
   if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
       refinement_ratio != std::vector<int>{2, 2})
-    throw std::runtime_error("conservative-linear prolongation received an invalid index transform");
-  const BoxArray local_parent_boxes =
-      coarsen_grown(fine.box_array(), 2, refinement_ratio[0]);
+    throw std::runtime_error(
+        "conservative-linear prolongation received an invalid index transform");
+  const BoxArray local_parent_boxes = coarsen_grown(fine.box_array(), 2, refinement_ratio[0]);
   MultiFab local_parent(local_parent_boxes, fine.dmap(), coarse.ncomp(), 0);
   parallel_copy(local_parent, coarse);
   const Box2D coarse_domain = coarse.box_array().bounding_box();
@@ -307,10 +305,8 @@ inline void coupler_conservative_linear_to_fine_mb(
     const ConstArray4 source = local_parent.fab(li).const_array();
     const Box2D valid = fine.box(li);
     for (int component = 0; component < fine.ncomp(); ++component)
-      for_each_cell(
-          valid,
-          ConservativeLinearProlongKernel{
-              destination, source, coarse_domain, fine_domain, component});
+      for_each_cell(valid, ConservativeLinearProlongKernel{destination, source, coarse_domain,
+                                                           fine_domain, component});
   }
 }
 
@@ -397,11 +393,10 @@ class AmrCouplerMP {
   int nlev() const { return stack_.nlev(); }
 
   // ----------------------------------------------------------------------------------------------
-  // SINGLE-RANK AMR CHECKPOINT / RESTART (ADC-65). The mono-block coupler carries the FULL
-  // CONSERVATIVE STATE per level (all components) + the phi (multigrid warm-start), and can IMPOSE
-  // a SAVED fine hierarchy (instead of Berger-Rigoutsos clustering on tags). SINGLE-RANK: the
-  // accessors loop over local_size() + device_fence(), WITHOUT MPI gather (the facade rejects np>1
-  // AND multi-block upstream; multi-rank/multi-block restart is a documented follow-up).
+  // AMR ACCEPTED-STATE CHECKPOINT / RESTART. The mono-block coupler carries the FULL conservative
+  // state per level (all components) plus phi (multigrid warm-start), and can impose a saved fine
+  // hierarchy instead of reclustering tags. Local accessors preserve native patch ownership; their
+  // explicit global counterparts perform the MPI gather used by the strict v3 checkpoint provider.
   // ----------------------------------------------------------------------------------------------
 
   // Reads the FULL conservative state (all components) of level @p k into a flat
@@ -506,6 +501,28 @@ class AmrCouplerMP {
       all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
+
+  /// Exact valid-cell pieces allocated on this rank, including the complete replicated coarse fab
+  /// when that ownership policy is active.  No level-sized staging buffer and no MPI collective.
+  std::vector<PatchBox> output_geometry_boxes() const {
+    std::vector<PatchBox> result;
+    const std::vector<AmrLevelMP>& levels = stack_.levels();
+    for (int level = 0; level < static_cast<int>(levels.size()); ++level) {
+      const auto& boxes = levels[static_cast<std::size_t>(level)].U.box_array().boxes();
+      for (const Box2D& box : boxes)
+        result.push_back(PatchBox{level, box.lo[0], box.lo[1], box.hi[0], box.hi[1]});
+    }
+    return result;
+  }
+
+  std::vector<OutputPiece> output_state_local_pieces(int k) {
+    std::vector<AmrLevelMP>& levels = stack_.L();
+    if (k < 0 || k >= static_cast<int>(levels.size()))
+      throw std::runtime_error("AmrCouplerMP::output_state_local_pieces: level out of bounds");
+    return output_local_pieces(levels[static_cast<std::size_t>(k)].U, k,
+                               k == 0 && replicated_coarse_);
+  }
+
   std::vector<double> level_potential_global(int k) {
     std::vector<double> out = level_potential(k);
     if (k > 0 || !replicated_coarse_)

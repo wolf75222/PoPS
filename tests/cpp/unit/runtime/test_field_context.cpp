@@ -56,7 +56,8 @@ TEST(AuxLayout, RejectsDuplicateAndOutOfRangeChannels) {
   pops::AuxLayout layout = pops::default_poisson_layout();
   EXPECT_THROW(layout.add_channel("phi", 6, pops::FieldChannelRole::kNamed), std::invalid_argument)
       << "duplicate handle";
-  EXPECT_THROW(layout.add_channel("alias", 0, pops::FieldChannelRole::kNamed), std::invalid_argument)
+  EXPECT_THROW(layout.add_channel("alias", 0, pops::FieldChannelRole::kNamed),
+               std::invalid_argument)
       << "component 0 already bound to phi";
   EXPECT_THROW(layout.add_channel("oob", pops::kAuxMaxComps, pops::FieldChannelRole::kNamed),
                std::out_of_range)

@@ -63,8 +63,7 @@ struct GridContext {
   /// AMR, field registries and storage classes.  Empty selects the ordinary one-state/one-aux
   /// convenience adapter and never fabricates aliases for an N-ary request.
   using BoundaryFieldRegistryFactory = std::function<detail::BoundaryFieldRegistry(
-      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
-      const MultiFab*, MultiFab*)>;
+      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab*, MultiFab*)>;
   BoundaryFieldRegistryFactory boundary_field_registry{};
 };
 
@@ -79,47 +78,43 @@ inline void fill_grid_ghosts(MultiFab& state, const GridContext& context) {
   fill_ghosts(state, context.dom, context.bc);
 }
 
-inline void fill_grid_ghosts(
-    MultiFab& state, const GridContext& context,
-    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
+                             const runtime::multiblock::BoundaryEvaluationPoint& point) {
   if (context.boundary_plan) {
     if (context.boundary_field_registry) {
       auto fields = context.boundary_field_registry(point, state, nullptr, nullptr);
-      context.boundary_plan->fill_same_level_and_physical(
-          state, fields, context.geom, point);
+      context.boundary_plan->fill_same_level_and_physical(state, fields, context.geom, point);
     } else {
-      context.boundary_plan->fill_same_level_and_physical(
-          state, context.aux, context.geom, point);
+      context.boundary_plan->fill_same_level_and_physical(state, context.aux, context.geom, point);
     }
     return;
   }
   fill_ghosts(state, context.dom, context.bc);
 }
 
-inline void add_grid_boundary_residual(
-    MultiFab& state, MultiFab& residual, const GridContext& context,
-    const runtime::multiblock::BoundaryEvaluationPoint& point) {
-  if (!context.boundary_plan) return;
+inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
+                                       const GridContext& context,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (!context.boundary_plan)
+    return;
   if (context.boundary_field_registry) {
     auto fields = context.boundary_field_registry(point, state, nullptr, &residual);
     context.boundary_plan->add_residual(point, fields, context.geom);
   } else {
-    context.boundary_plan->add_residual(
-        point, state, context.aux, context.geom, residual);
+    context.boundary_plan->add_residual(point, state, context.aux, context.geom, residual);
   }
 }
 
-inline void apply_grid_boundary_jvp(
-    MultiFab& state, const MultiFab& direction, MultiFab& output,
-    const GridContext& context,
-    const runtime::multiblock::BoundaryEvaluationPoint& point) {
-  if (!context.boundary_plan) return;
+inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
+                                    const GridContext& context,
+                                    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (!context.boundary_plan)
+    return;
   if (context.boundary_field_registry) {
     auto fields = context.boundary_field_registry(point, state, &direction, &output);
     context.boundary_plan->apply_jvp(point, fields, context.geom);
   } else {
-    context.boundary_plan->apply_jvp(
-        point, state, direction, context.aux, context.geom, output);
+    context.boundary_plan->apply_jvp(point, state, direction, context.aux, context.geom, output);
   }
 }
 

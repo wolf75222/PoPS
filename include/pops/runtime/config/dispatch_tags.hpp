@@ -97,8 +97,8 @@ inline void validate_riemann(const std::string& riem, bool polar = false,
       if (riem == t.name && t.polar_ok)
         return;
     throw std::runtime_error(std::string(ctx) + ": Riemann flux '" + riem +
-                             "' unsupported for polar geometry (valid: " +
-                             riemann_tags_csv(true) + "); no fallback");
+                             "' unsupported for polar geometry (valid: " + riemann_tags_csv(true) +
+                             "); no fallback");
   }
   for (const RiemannTag& t : kRiemanns)
     if (riem == t.name)

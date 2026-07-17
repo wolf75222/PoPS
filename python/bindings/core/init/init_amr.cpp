@@ -1,4 +1,5 @@
 #include "../bindings_detail.hpp"
+#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -24,16 +25,15 @@ pops::CompositeFacOptions amr_fac_options_from_python(const py::object& value) {
   if (!py::isinstance<py::dict>(value))
     throw std::invalid_argument("AMR field FAC options must be a mapping or None");
   const py::dict row = py::cast<py::dict>(value);
-  const char* keys[] = {"schema_version", "kind", "max_iters", "fine_sweeps", "rel_tol",
-                        "abs_tol", "coarse_rel_tol", "coarse_abs_tol", "coarse_cycles",
-                        "verbose"};
+  const char* keys[] = {"schema_version", "kind",    "max_iters",      "fine_sweeps",
+                        "rel_tol",        "abs_tol", "coarse_rel_tol", "coarse_abs_tol",
+                        "coarse_cycles",  "verbose"};
   if (row.size() != 10)
     throw std::invalid_argument("AMR field FAC options have an invalid schema");
   for (const char* key : keys)
     if (!row.contains(key))
       throw std::invalid_argument("AMR field FAC options have an invalid schema");
-  if (PyBool_Check(row["schema_version"].ptr()) ||
-      py::cast<int>(row["schema_version"]) != 1 ||
+  if (PyBool_Check(row["schema_version"].ptr()) || py::cast<int>(row["schema_version"]) != 1 ||
       py::cast<std::string>(row["kind"]) != "composite_fac")
     throw std::invalid_argument("AMR field FAC options require schema-v1 composite_fac");
 
@@ -68,35 +68,27 @@ pops::CompositeFacOptions amr_fac_options_from_python(const py::object& value) {
   return options;
 }
 
-pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(
-    const py::dict& row, const py::dict& execution) {
+pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dict& row,
+                                                                   const py::dict& execution) {
   pops::runtime::amr::PreparedTaggerSpec spec;
   spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
   spec.component_id = py::cast<std::string>(row["component_id"]);
-  spec.manifest_identity =
-      py::cast<std::string>(row["component_manifest_identity"]);
+  spec.manifest_identity = py::cast<std::string>(row["component_manifest_identity"]);
   spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
   spec.clock_identity = py::cast<std::string>(row["clock_identity"]);
   const py::dict capability = py::cast<py::dict>(row["tagging_capability"]);
-  spec.leaf_opcodes =
-      py::cast<std::vector<std::int32_t>>(capability["leaf_opcode_ids"]);
-  spec.logical_opcodes =
-      py::cast<std::vector<std::int32_t>>(capability["logical_opcode_ids"]);
+  spec.leaf_opcodes = py::cast<std::vector<std::int32_t>>(capability["leaf_opcode_ids"]);
+  spec.logical_opcodes = py::cast<std::vector<std::int32_t>>(capability["logical_opcode_ids"]);
   spec.indicator_stencil_routes =
       py::cast<std::vector<std::string>>(capability["indicator_stencil_routes"]);
-  spec.maximum_stencil_terms =
-      py::cast<std::size_t>(capability["maximum_stencil_terms"]);
-  spec.maximum_instruction_count =
-      py::cast<std::size_t>(capability["maximum_instruction_count"]);
-  const std::string non_finite_policy =
-      py::cast<std::string>(capability["non_finite_policy"]);
+  spec.maximum_stencil_terms = py::cast<std::size_t>(capability["maximum_stencil_terms"]);
+  spec.maximum_instruction_count = py::cast<std::size_t>(capability["maximum_instruction_count"]);
+  const std::string non_finite_policy = py::cast<std::string>(capability["non_finite_policy"]);
   if (non_finite_policy != "reject")
-    throw std::invalid_argument(
-        "AMR Tagger native adapter requires non_finite_policy='reject'");
+    throw std::invalid_argument("AMR Tagger native adapter requires non_finite_policy='reject'");
   spec.non_finite_policy = POPS_TAGGING_NON_FINITE_REJECT_V1;
   spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
-  spec.execution =
-      pops::python::detail::make_component_execution_context(execution);
+  spec.execution = pops::python::detail::make_component_execution_context(execution);
   return spec;
 }
 
@@ -127,13 +119,10 @@ pops::runtime::amr::PreparedTaggingProgram::Stencil amr_tagging_stencil_from_pyt
       coefficients.push_back(parsed);
     }
     result.axes.push_back(Program::AxisStencil{
-        py::cast<std::int32_t>(axis["axis"]),
-        py::cast<std::int32_t>(axis["derivative_order"]),
-        py::cast<std::int32_t>(axis["formal_order"]),
-        py::cast<std::size_t>(axis["ghost_lower"]),
+        py::cast<std::int32_t>(axis["axis"]), py::cast<std::int32_t>(axis["derivative_order"]),
+        py::cast<std::int32_t>(axis["formal_order"]), py::cast<std::size_t>(axis["ghost_lower"]),
         py::cast<std::size_t>(axis["ghost_upper"]),
-        py::cast<std::vector<std::int32_t>>(axis["offsets"]),
-        std::move(coefficients)});
+        py::cast<std::vector<std::int32_t>>(axis["offsets"]), std::move(coefficients)});
   }
   return result;
 }
@@ -143,12 +132,10 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
   pops::runtime::amr::PreparedClusteringSpec spec;
   spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
   spec.component_id = py::cast<std::string>(row["component_id"]);
-  spec.manifest_identity =
-      py::cast<std::string>(row["component_manifest_identity"]);
+  spec.manifest_identity = py::cast<std::string>(row["component_manifest_identity"]);
   spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
   spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
-  spec.execution =
-      pops::python::detail::make_component_execution_context(execution);
+  spec.execution = pops::python::detail::make_component_execution_context(execution);
   return spec;
 }
 
@@ -194,8 +181,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none",
-          py::arg("newton_diagnostics") = false,
+          py::arg("newton_fail_policy") = "none", py::arg("newton_diagnostics") = false,
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
@@ -206,8 +192,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("omitted_interface_faces") = std::vector<int>{},
            py::arg("state_identity") = std::string{},
            "Install one resolved per-block ghost-production plan before lazy AMR construction.")
-      .def("_install_block_state_route", &AmrSystem::install_block_state_route,
-           py::arg("name"), py::arg("state_identity"),
+      .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
+           py::arg("state_identity"),
            "Bind one exact state Handle identity to native AMR block storage.")
       .def("_install_boundary_field_route", &AmrSystem::install_boundary_field_route,
            py::arg("field_identity"), py::arg("provider_slot"),
@@ -216,90 +202,83 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
           "_install_amr_tagger_component",
-          [](AmrSystem& system,
-             std::shared_ptr<pops::component::LoadedComponent> component,
+          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
              const py::dict& binding, const py::dict& execution) {
-            system.install_amr_tagger_component(
-                amr_tagger_spec_from_python(binding, execution),
-                std::move(component));
+            system.install_amr_tagger_component(amr_tagger_spec_from_python(binding, execution),
+                                                std::move(component));
           },
-          py::arg("component"), py::arg("binding"),
-          py::arg("execution_context"))
+          py::arg("component"), py::arg("binding"), py::arg("execution_context"))
       .def(
           "_install_amr_clustering_component",
-          [](AmrSystem& system,
-             std::shared_ptr<pops::component::LoadedComponent> component,
+          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
              const py::dict& binding, const py::dict& execution) {
             system.install_amr_clustering_component(
-                amr_clustering_spec_from_python(binding, execution),
-                std::move(component));
+                amr_clustering_spec_from_python(binding, execution), std::move(component));
           },
-          py::arg("component"), py::arg("binding"),
-          py::arg("execution_context"))
-      .def("_discard_amr_provider_components",
-           &AmrSystem::discard_amr_provider_components,
+          py::arg("component"), py::arg("binding"), py::arg("execution_context"))
+      .def("_discard_amr_provider_components", &AmrSystem::discard_amr_provider_components,
            "Roll back one failed external AMR provider transaction.")
       .def(
           "_install_ghost_boundary_component",
           [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_ghost_boundary_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_field_boundary_residual_component",
           [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_field_boundary_residual_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_field_boundary_jvp_component",
           [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& row, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
             system.install_field_boundary_jvp_component(
-                name, pops::python::detail::boundary_component_spec_from_python(
-                          row, parameters_json, target_json, execution),
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
                 std::move(component));
           },
-          py::arg("name"), py::arg("component"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_interface_flux_component",
           [](AmrSystem& system, std::size_t left_block, std::size_t right_block, int level,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& interface, const py::dict& binding,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            auto route = pops::python::detail::interface_route_from_python(
-                interface, left_block, right_block, level);
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& interface,
+             const py::dict& binding, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            auto route = pops::python::detail::interface_route_from_python(interface, left_block,
+                                                                           right_block, level);
             auto spec = pops::python::detail::interface_flux_spec_from_python(
                 interface, binding, parameters_json, target_json, execution);
-            system.install_interface_flux_component(
-                std::move(route), std::move(spec), std::move(component));
+            system.install_interface_flux_component(std::move(route), std::move(spec),
+                                                    std::move(component));
           },
-          py::arg("left_block"), py::arg("right_block"), py::arg("level"),
-          py::arg("component"), py::arg("interface"), py::arg("binding"),
-          py::arg("parameters_json"), py::arg("target_json"),
-          py::arg("execution_context"))
+          py::arg("left_block"), py::arg("right_block"), py::arg("level"), py::arg("component"),
+          py::arg("interface"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def("_interface_evaluation_count", &AmrSystem::interface_evaluation_count,
            py::arg("identity"), py::arg("level") = 0)
-      .def("_discard_interface_flux_components",
-           &AmrSystem::discard_interface_flux_components,
+      .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
       // Newton report (IMEX diagnostics OPT-IN, native MULTI-BLOCK): dict {enabled, converged,
       // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
@@ -337,11 +316,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           },
           py::arg("name"))
       // Private production-package seam. Parameters are fixed before AMR closures are built.
-      .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"), py::arg("so_path"),
-           py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
+      .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"),
+           py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
-           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma),
-           py::arg("substeps") = 1,
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("params") = std::vector<double>{},
            // Zhang-Shu positivity floor (ADC-322): marshaled down the regenerated .so loader
            // (pops_install_native_amr). 0 (default) = inactive, bit-identical.
@@ -359,43 +337,34 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "name and role at once, or a name/role absent from a block, raises. Non-default "
            "selector is "
            "multi-block only.")
-      .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement,
-           py::arg("block"), py::arg("variable"), py::arg("threshold"),
-           py::arg("provider_identity"))
-      .def("_set_bootstrap_tagging",
-           [](AmrSystem& system,
-              const std::vector<std::string>& leaf_blocks,
-              const std::vector<std::string>& leaf_variables,
-              const std::vector<int>& leaf_ops,
-              const std::vector<double>& leaf_thresholds,
-              const std::vector<int>& leaf_stencil_indices,
-              const py::list& stencil_rows,
-              const std::vector<std::int32_t>& refine_ops,
-              const std::vector<std::int32_t>& refine_args,
-              const std::vector<std::int32_t>& coarsen_ops,
-              const std::vector<std::int32_t>& coarsen_args,
-              int min_cycles, const std::string& equality_policy,
-              const std::string& conflict_policy,
-              const std::string& clock_identity,
-              const std::string& provider_identity) {
-             std::vector<pops::runtime::amr::PreparedTaggingProgram::Stencil> stencils;
-             stencils.reserve(stencil_rows.size());
-             for (const py::handle row : stencil_rows)
-               stencils.push_back(
-                   amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
-             system.set_bootstrap_tagging(
-                 leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
-                 leaf_stencil_indices, stencils, refine_ops, refine_args,
-                 coarsen_ops, coarsen_args, min_cycles, equality_policy,
-                 conflict_policy, clock_identity, provider_identity);
-           },
-           py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
-           py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"),
-           py::arg("stencils"), py::arg("refine_ops"), py::arg("refine_args"),
-           py::arg("coarsen_ops"), py::arg("coarsen_args"), py::arg("min_cycles"),
-           py::arg("equality_policy"), py::arg("conflict_policy"),
-           py::arg("clock_identity"),
-           py::arg("provider_identity"))
+      .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement, py::arg("block"),
+           py::arg("variable"), py::arg("threshold"), py::arg("provider_identity"))
+      .def(
+          "_set_bootstrap_tagging",
+          [](AmrSystem& system, const std::vector<std::string>& leaf_blocks,
+             const std::vector<std::string>& leaf_variables, const std::vector<int>& leaf_ops,
+             const std::vector<double>& leaf_thresholds,
+             const std::vector<int>& leaf_stencil_indices, const py::list& stencil_rows,
+             const std::vector<std::int32_t>& refine_ops,
+             const std::vector<std::int32_t>& refine_args,
+             const std::vector<std::int32_t>& coarsen_ops,
+             const std::vector<std::int32_t>& coarsen_args, int min_cycles,
+             const std::string& equality_policy, const std::string& conflict_policy,
+             const std::string& clock_identity, const std::string& provider_identity) {
+            std::vector<pops::runtime::amr::PreparedTaggingProgram::Stencil> stencils;
+            stencils.reserve(stencil_rows.size());
+            for (const py::handle row : stencil_rows)
+              stencils.push_back(amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
+            system.set_bootstrap_tagging(leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
+                                         leaf_stencil_indices, stencils, refine_ops, refine_args,
+                                         coarsen_ops, coarsen_args, min_cycles, equality_policy,
+                                         conflict_policy, clock_identity, provider_identity);
+          },
+          py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
+          py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"), py::arg("stencils"),
+          py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
+          py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
+          py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
       // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
       // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
       // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
@@ -416,42 +385,35 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
           py::arg("composite") = false, py::arg("fac_max_iters") = 0,
           py::arg("fac_fine_sweeps") = 0, py::arg("fac_rel_tol") = 0.0,
-          py::arg("fac_abs_tol") = 0.0,
-          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_abs_tol") = 0.0,
-          py::arg("fac_coarse_cycles") = 0,
+          py::arg("fac_abs_tol") = 0.0, py::arg("fac_coarse_rel_tol") = 0.0,
+          py::arg("fac_coarse_abs_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
           py::arg("fac_verbose") = false)
-      .def("set_field_solver_plan",
-           [](AmrSystem& system, const std::string& provider_slot,
-              const std::string& plan_identity,
-              const std::string& provider_identity,
-              const std::string& output_owner_identity,
-              const std::string& output_block, const std::string& output_key,
-              const std::vector<std::string>& provider_identities,
-              const std::vector<std::string>& provider_blocks,
-              const std::vector<std::string>& provider_keys,
-              const std::vector<double>& provider_coefficients,
-              const std::string& solver, const std::string& hierarchy,
-              double abs_tol, double rel_tol, int max_cycles, int min_coarse,
-              int pre_smooth, int post_smooth, int bottom_sweeps,
-              int coarse_threshold, const py::object& fac_options) {
-             system.set_field_solver_plan(
-                 provider_slot, plan_identity, provider_identity, output_owner_identity,
-                 output_block, output_key, provider_identities, provider_blocks,
-                 provider_keys, provider_coefficients, solver, hierarchy, abs_tol,
-                 rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth,
-                 bottom_sweeps, coarse_threshold,
-                 amr_fac_options_from_python(fac_options));
-           },
-           py::arg("provider_slot"), py::arg("plan_identity"),
-           py::arg("provider_identity"),
-           py::arg("output_owner_identity"),
-           py::arg("output_block"), py::arg("output_key"),
-           py::arg("provider_identities"), py::arg("provider_blocks"),
-           py::arg("provider_keys"), py::arg("provider_coefficients"),
-           py::arg("solver"), py::arg("hierarchy"), py::arg("abs_tol"),
-           py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
-           py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
-           py::arg("coarse_threshold"), py::arg("fac_options"))
+      .def(
+          "set_field_solver_plan",
+          [](AmrSystem& system, const std::string& provider_slot, const std::string& plan_identity,
+             const std::string& provider_identity, const std::string& output_owner_identity,
+             const std::string& output_block, const std::string& output_key,
+             const std::vector<std::string>& provider_identities,
+             const std::vector<std::string>& provider_blocks,
+             const std::vector<std::string>& provider_keys,
+             const std::vector<double>& provider_coefficients, const std::string& solver,
+             const std::string& hierarchy, double abs_tol, double rel_tol, int max_cycles,
+             int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
+             int coarse_threshold, const py::object& fac_options) {
+            system.set_field_solver_plan(
+                provider_slot, plan_identity, provider_identity, output_owner_identity,
+                output_block, output_key, provider_identities, provider_blocks, provider_keys,
+                provider_coefficients, solver, hierarchy, abs_tol, rel_tol, max_cycles, min_coarse,
+                pre_smooth, post_smooth, bottom_sweeps, coarse_threshold,
+                amr_fac_options_from_python(fac_options));
+          },
+          py::arg("provider_slot"), py::arg("plan_identity"), py::arg("provider_identity"),
+          py::arg("output_owner_identity"), py::arg("output_block"), py::arg("output_key"),
+          py::arg("provider_identities"), py::arg("provider_blocks"), py::arg("provider_keys"),
+          py::arg("provider_coefficients"), py::arg("solver"), py::arg("hierarchy"),
+          py::arg("abs_tol"), py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
+          py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
+          py::arg("coarse_threshold"), py::arg("fac_options"))
       .def(
           "field_solver_configuration",
           [](const AmrSystem& system, const std::string& provider_slot) {
@@ -488,12 +450,11 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             return result;
           },
           py::arg("provider_slot"))
-      .def("set_field_reaction", &AmrSystem::set_field_reaction,
-           py::arg("provider_slot"), py::arg("reaction"))
-      .def("_set_field_topology_authority",
-           &AmrSystem::set_field_topology_authority,
-           py::arg("provider_slot"), py::arg("provider_kind"),
-           py::arg("provenance"), py::arg("topology_digest"))
+      .def("set_field_reaction", &AmrSystem::set_field_reaction, py::arg("provider_slot"),
+           py::arg("reaction"))
+      .def("_set_field_topology_authority", &AmrSystem::set_field_topology_authority,
+           py::arg("provider_slot"), py::arg("provider_kind"), py::arg("provenance"),
+           py::arg("topology_digest"))
       .def(
           "_field_topology_report",
           [](const AmrSystem& system, const std::string& provider_slot) {
@@ -510,25 +471,22 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             return report;
           },
           py::arg("provider_slot"))
-      .def("register_elliptic_field", &AmrSystem::register_elliptic_field,
-           py::arg("block"), py::arg("field"), py::arg("phi_comp"),
-           py::arg("gx_comp"), py::arg("gy_comp"), py::arg("gradient_sign"))
-      .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan,
-           py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
-           py::arg("value"))
+      .def("register_elliptic_field", &AmrSystem::register_elliptic_field, py::arg("block"),
+           py::arg("field"), py::arg("phi_comp"), py::arg("gx_comp"), py::arg("gy_comp"),
+           py::arg("gradient_sign"))
+      .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan, py::arg("provider_slot"),
+           py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &AmrSystem::set_field_boundary_dependencies,
-           py::arg("provider_slot"), py::arg("state_blocks"),
-           py::arg("state_components"), py::arg("field_blocks"),
-           py::arg("field_keys"), py::arg("field_components"))
+           py::arg("provider_slot"), py::arg("state_blocks"), py::arg("state_components"),
+           py::arg("field_blocks"), py::arg("field_keys"), py::arg("field_components"))
       .def("set_field_boundary_parameters", &AmrSystem::set_field_boundary_parameters,
            py::arg("provider_slot"), py::arg("parameters"))
-      .def("set_field_newton_plan", &AmrSystem::set_field_newton_plan,
-           py::arg("provider_slot"), py::arg("tolerance"), py::arg("max_iterations"),
-           py::arg("linear_tolerance"), py::arg("linear_max_iterations"),
-           py::arg("restart"), py::arg("armijo"), py::arg("minimum_step"))
-      .def("set_field_nullspace", &AmrSystem::set_field_nullspace,
-           py::arg("provider_slot"), py::arg("constant_kernel"),
-           py::arg("mean_zero_gauge"));
+      .def("set_field_newton_plan", &AmrSystem::set_field_newton_plan, py::arg("provider_slot"),
+           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
+           py::arg("minimum_step"))
+      .def("set_field_nullspace", &AmrSystem::set_field_nullspace, py::arg("provider_slot"),
+           py::arg("constant_kernel"), py::arg("mean_zero_gauge"));
 }
 
 // Physics wiring: dt bounds, fields, and coupled source stages.
@@ -591,13 +549,11 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_bootstrap_next_level", &AmrSystem::bootstrap_next_level)
       .def("_commit_bootstrap_level", &AmrSystem::commit_bootstrap_level)
       .def("_rollback_bootstrap_level", &AmrSystem::rollback_bootstrap_level)
-      .def("_register_bootstrap_transfer_route",
-           &AmrSystem::register_bootstrap_transfer_route,
-           py::arg("identity"), py::arg("subjects"), py::arg("provider_identity"),
-           py::arg("space"), py::arg("centering"), py::arg("representation"),
-           py::arg("storage"), py::arg("operation"), py::arg("kernel"),
-           py::arg("order"), py::arg("ghost_depth"), py::arg("dimension"),
-           py::arg("refinement_ratio"))
+      .def("_register_bootstrap_transfer_route", &AmrSystem::register_bootstrap_transfer_route,
+           py::arg("identity"), py::arg("subjects"), py::arg("provider_identity"), py::arg("space"),
+           py::arg("centering"), py::arg("representation"), py::arg("storage"),
+           py::arg("operation"), py::arg("kernel"), py::arg("order"), py::arg("ghost_depth"),
+           py::arg("dimension"), py::arg("refinement_ratio"))
       .def("_register_bootstrap_face_vector", &AmrSystem::register_bootstrap_face_vector,
            py::arg("subjects"))
       .def(
@@ -615,38 +571,35 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_bind_bootstrap_block_subject", &AmrSystem::bind_bootstrap_block_subject,
            py::arg("subject"), py::arg("block"))
       .def("_register_analytic_constant", &AmrSystem::register_analytic_constant,
-           py::arg("subject"), py::arg("block"), py::arg("space"),
-           py::arg("centering"), py::arg("components"))
+           py::arg("subject"), py::arg("block"), py::arg("space"), py::arg("centering"),
+           py::arg("components"))
       .def("_register_analytic_gaussian", &AmrSystem::register_analytic_gaussian,
-           py::arg("subject"), py::arg("block"), py::arg("center_x"),
-           py::arg("center_y"), py::arg("background"), py::arg("amplitude"),
-           py::arg("inverse_width"))
+           py::arg("subject"), py::arg("block"), py::arg("center_x"), py::arg("center_y"),
+           py::arg("background"), py::arg("amplitude"), py::arg("inverse_width"))
       .def("_bootstrap_analytic_reproject", &AmrSystem::bootstrap_analytic_reproject,
            py::arg("subject"), py::arg("level"))
       .def("_apply_bootstrap_component_floor", &AmrSystem::apply_bootstrap_component_floor,
            py::arg("subject"), py::arg("level"), py::arg("component"), py::arg("floor"))
-      .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field,
-           py::arg("subject"), py::arg("field_name"))
-      .def("_bootstrap_prolong_array", &AmrSystem::bootstrap_prolong_array,
-           py::arg("subject"), py::arg("level"))
+      .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field, py::arg("subject"),
+           py::arg("field_name"))
+      .def("_bootstrap_prolong_array", &AmrSystem::bootstrap_prolong_array, py::arg("subject"),
+           py::arg("level"))
       .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
            py::arg("subject"), py::arg("fine_level"))
-      .def("_bootstrap_array_level", &AmrSystem::bootstrap_array_level,
-           py::arg("subject"), py::arg("level"))
+      .def("_bootstrap_array_level", &AmrSystem::bootstrap_array_level, py::arg("subject"),
+           py::arg("level"))
       .def("_invalidate_bootstrap_cache", &AmrSystem::invalidate_bootstrap_cache,
            py::arg("subject"), py::arg("level"))
       .def(
           "_rebuild_bootstrap_topology_cache",
           [](AmrSystem& s, const std::string& subject, int level) {
             py::list out;
-            for (const pops::PatchBox& b :
-                 s.rebuild_bootstrap_topology_cache(subject, level))
+            for (const pops::PatchBox& b : s.rebuild_bootstrap_topology_cache(subject, level))
               out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
             return out;
           },
           py::arg("subject"), py::arg("level"))
-      .def("_bootstrap_cache_epoch", &AmrSystem::bootstrap_cache_epoch,
-           py::arg("subject"))
+      .def("_bootstrap_cache_epoch", &AmrSystem::bootstrap_cache_epoch, py::arg("subject"))
       // Inter-species COUPLED source (compiled pops.dsl.CoupledSource, P5 bytecode), MULTI-BLOCK on the
       // SHARED AMR hierarchy: applied after the transport at each macro-step, by explicit
       // splitting, level by level + fine -> coarse cascade (consistent covered cells). SAME
@@ -738,8 +691,7 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
            "multi-block runtime engine (default = the historical kCflSpeedFloor, bit-identical); "
            "refused non-default on the single-block coupler (no historical floor site there).",
            py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
-           py::arg("max_dt") = std::numeric_limits<double>::infinity(),
-           py::arg("min_dt") = 0.0)
+           py::arg("max_dt") = std::numeric_limits<double>::infinity(), py::arg("min_dt") = 0.0)
       // AMR / MPI profiling (Spec 5 criterion 43, ADC-479): the multi-block engine times its
       // non-numeric phases (regrid / fill_boundary / average_down) + MPI counters into the
       // facade-owned Profiler. PerformanceSummary.by_amr_mpi() surfaces them. Off by default.
@@ -754,9 +706,10 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
            "Per-phase wall-clock report of the AMR runtime (count / total / mean / min / max per "
            "scope, plus counters regrid / fill_boundary / mpi_reductions / mpi_messages). "
            "Per-rank.")
-      .def("profile_snapshot",
-           [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
-           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.");
+      .def(
+          "profile_snapshot",
+          [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
+          "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.");
 }
 
 // Clock + compiled-Program install/introspection + runtime freeze lifecycle.
@@ -769,10 +722,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("field_provider_slots", &AmrSystem::field_provider_slots)
-      .def("field_provider_levels", &AmrSystem::field_provider_levels,
-           py::arg("provider_slot"))
-      .def("set_field_potential", &AmrSystem::set_field_potential,
-           py::arg("provider_slot"), py::arg("phi"))
+      .def("field_provider_levels", &AmrSystem::field_provider_levels, py::arg("provider_slot"))
+      .def("set_field_potential", &AmrSystem::set_field_potential, py::arg("provider_slot"),
+           py::arg("phi"))
       .def("set_field_potential_level", &AmrSystem::set_field_potential_level,
            py::arg("provider_slot"), py::arg("level"), py::arg("phi"))
       // Compiled time Program on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6): dlopen a generated
@@ -799,15 +751,27 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
-      .def("program_accepted_state", [](const AmrSystem& s) {
-        const auto bytes = s.program_accepted_state();
-        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-      })
-      .def("restore_program_accepted_state", [](AmrSystem& s, py::bytes payload) {
-        std::string bytes = payload;
-        s.restore_program_accepted_state(
-            std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
-      }, py::arg("payload"))
+      .def("program_accepted_state",
+           [](const AmrSystem& s) {
+             const auto bytes = s.program_accepted_state();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def(
+          "restore_program_accepted_state",
+          [](AmrSystem& s, py::bytes payload) {
+            std::string bytes = payload;
+            s.restore_program_accepted_state(std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def(
+          "materialize_program_restart_histories",
+          [](AmrSystem& s, py::bytes payload, const std::vector<std::string>& names,
+             const std::vector<int>& depths, const std::vector<int>& ncomps) {
+            std::string bytes = payload;
+            s.materialize_program_restart_histories(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()), names, depths, ncomps);
+          },
+          py::arg("payload"), py::arg("names"), py::arg("depths"), py::arg("ncomps"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
@@ -824,10 +788,10 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
            py::arg("value"))
       // ADC-542: the level-composite collective reduction over a named block the AMR diagnostics
-      // path drives -- volume-weighted sums with covered-cell exclusion, extrema folded over all
-      // levels (a covered coarse cell is the average of its children, provably inside their extrema).
+      // path drives -- exact selected levels, with every coarser selected footprint masked by the
+      // next selected finer footprint.
       .def("composite_reduce", &AmrSystem::composite_reduce, py::arg("block"), py::arg("kind"),
-           py::arg("comp") = 0)
+           py::arg("comp") = 0, py::arg("levels") = std::vector<int>{})
       // ADC-592: runtime freeze lifecycle (parity with System). mark_bound() (called LAST by the
       // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
       // running (running derived from macro_step()).
@@ -839,11 +803,12 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
 void bind_amr_data(py::class_<AmrSystem>& cls) {
   cls.def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
-      .def("effective_options_report",
-           [](const AmrSystem& s) {
-             return effective_options_report_to_dict(s.effective_options_report());
-           },
-           "Structured effective numerical/solver/physical options for this AmrSystem.")
+      .def(
+          "effective_options_report",
+          [](const AmrSystem& s) {
+            return effective_options_report_to_dict(s.effective_options_report());
+          },
+          "Structured effective numerical/solver/physical options for this AmrSystem.")
       .def("n_patches", &AmrSystem::n_patches)
       // Index-space footprints of the fine patches: list of tuples (level, ilo, jlo, ihi, jhi), INCLUSIVE
       // corners, in the index space of the level (n << level cells/direction, ratio 2). SAME
@@ -924,7 +889,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             bx.reserve(boxes.size());
             for (const auto& b : boxes)
               bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
-                                         std::get<3>(b), std::get<4>(b)});
+                                          std::get<3>(b), std::get<4>(b)});
             s.set_hierarchy(bx);
           },
           py::arg("boxes"))
@@ -937,10 +902,29 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "level_potential_global", [](AmrSystem& s, int k) { return s.level_potential_global(k); },
           py::arg("k"))
-      .def("field_potential_global", &AmrSystem::field_potential_global,
-           py::arg("provider_slot"))
+      .def("field_potential_global", &AmrSystem::field_potential_global, py::arg("provider_slot"))
       .def("field_potential_level_global", &AmrSystem::field_potential_level_global,
            py::arg("provider_slot"), py::arg("level"))
+      .def(
+          "output_field_local_pieces",
+          [](AmrSystem& s, const std::string& provider_slot, int level) {
+            return output_pieces_to_python(s.output_field_local_pieces(provider_slot, level));
+          },
+          py::arg("provider_slot"), py::arg("level"),
+          "Exact compact valid-cell pieces of one qualified field owned by this rank.")
+      .def(
+          "output_field_root_pieces",
+          [](AmrSystem& s, const WorldCommunicator& world, const std::string& provider_slot,
+             int level) {
+            std::vector<OutputPiece> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_field_root_pieces(world, provider_slot, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
           [](AmrSystem& s, int level, const std::array<double, 2>& origin,
@@ -950,7 +934,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
               throw std::out_of_range("AmrSystem output geometry level is out of range");
             return pops::python::detail::native_output_geometry_snapshot(
                 level, s.checkpoint_topology_epoch(), origin, spacing, cell_shape, cell_measure,
-                s.patch_boxes(), next_refinement_ratio, true);
+                s.output_geometry_boxes(), next_refinement_ratio, true);
           },
           py::arg("level"), py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"),
           py::arg("next_refinement_ratio"), py::arg("cell_measure"),
@@ -960,7 +944,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // (level_potential). block_level_state returns a FLAT field (c*nf*nf + j*nf + i); the _global
       // variant gathers under np>1; set_block_level_state flattens any C-contiguous array.
       .def(
-          "block_n_vars", [](AmrSystem& s, const std::string& name) { return s.block_n_vars(name); },
+          "block_n_vars",
+          [](AmrSystem& s, const std::string& name) { return s.block_n_vars(name); },
           py::arg("name"))
       .def(
           "block_level_state",
@@ -972,6 +957,25 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             return s.block_level_state_global(name, k);
           },
           py::arg("name"), py::arg("k"))
+      .def(
+          "output_state_local_pieces",
+          [](AmrSystem& s, const std::string& name, int level) {
+            return output_pieces_to_python(s.output_state_local_pieces(name, level));
+          },
+          py::arg("block"), py::arg("level"),
+          "Exact compact valid-cell pieces of one qualified state owned by this rank.")
+      .def(
+          "output_state_root_pieces",
+          [](AmrSystem& s, const WorldCommunicator& world, const std::string& name, int level) {
+            std::vector<OutputPiece> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_state_root_pieces(world, name, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("world"), py::arg("block"), py::arg("level"),
+          "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "set_block_level_state",
           [](AmrSystem& s, const std::string& name, int k,
@@ -1010,7 +1014,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             bx.reserve(boxes.size());
             for (const auto& b : boxes)
               bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
-                                         std::get<3>(b), std::get<4>(b)});
+                                          std::get<3>(b), std::get<4>(b)});
             s.rebuild_hierarchy(bx, owner_ranks);
           },
           py::arg("boxes"), py::arg("owner_ranks"))
@@ -1022,8 +1026,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
-      .def("set_temporal_relations", &AmrSystem::set_temporal_relations,
-           py::arg("numerators"), py::arg("denominators"), py::arg("remainder_policies"))
+      .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
+           py::arg("denominators"), py::arg("remainder_policies"))
       .def("checkpoint_transfer_routes", &AmrSystem::checkpoint_transfer_routes)
       // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
       // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.

@@ -126,5 +126,6 @@ static int pops_run_test_mpi_cutcell_multibox(int argc, char** argv) {
 }
 
 TEST(test_mpi_cutcell_multibox, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_cutcell_multibox, "test_mpi_cutcell_multibox"), 0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&pops_run_test_mpi_cutcell_multibox, "test_mpi_cutcell_multibox"), 0);
 }

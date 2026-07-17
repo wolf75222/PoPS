@@ -50,8 +50,7 @@ inline int runtime_param_count(const Model& model = Model{}) {
   const int expected = hyp != 0 ? hyp : (src != 0 ? src : ell);
   if ((hyp != 0 && hyp != expected) || (src != 0 && src != expected) ||
       (ell != 0 && ell != expected))
-    throw std::runtime_error(
-        "compiled model bricks disagree on the runtime parameter layout");
+    throw std::runtime_error("compiled model bricks disagree on the runtime parameter layout");
   if (expected < 0 || expected > kMaxRuntimeParams)
     throw std::runtime_error("compiled model runtime parameter count exceeds exact capacity");
   return expected;
@@ -69,9 +68,8 @@ template <class Model>
 inline Model bind_runtime_params(Model model, const double* values, int count) {
   const int expected = runtime_param_count(model);
   if (count != expected)
-    throw std::runtime_error(
-        "native block parameter vector has " + std::to_string(count) +
-        " values but the compiled model requires " + std::to_string(expected));
+    throw std::runtime_error("native block parameter vector has " + std::to_string(count) +
+                             " values but the compiled model requires " + std::to_string(expected));
   if (count > 0 && values == nullptr)
     throw std::runtime_error("native block parameter vector is null");
   RuntimeParams params{};

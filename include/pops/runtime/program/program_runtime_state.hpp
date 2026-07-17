@@ -224,8 +224,8 @@ struct ProgramRuntimeState {
     if (count > kMaxRuntimeParams)
       throw std::runtime_error(
           "install_program: program block " + std::to_string(prog_block) + " declares " +
-          std::to_string(count) + " runtime parameters > kMaxRuntimeParams=" +
-          std::to_string(kMaxRuntimeParams) +
+          std::to_string(count) +
+          " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
           " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
           "RuntimeParams cannot hold them. Regenerate the problem.so with the current headers.");
     RuntimeParams rp;

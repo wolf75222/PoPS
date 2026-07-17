@@ -15,6 +15,7 @@ Ce test verifie :
     QUELLE QUE SOIT sa position -- c'est exactement ce dont depend la resolution par role des couplages.
 Lance avec python3.
 """
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -124,7 +125,7 @@ def main():
     # (2) RESOLUTION par role a travers le C++ (si compilateur dispo) --------------------------
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> resolution sautee (%s)" % INCLUDE)
+        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> resolution sautee (%s)' % INCLUDE)
         print("test_dsl_roles : OK (forme des roles seulement)")
         return
 

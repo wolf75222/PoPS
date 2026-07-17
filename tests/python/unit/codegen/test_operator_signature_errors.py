@@ -13,7 +13,7 @@ operator, the argument and the expected vs received space -- one case per typed 
 
 Pure Python (pops.model + pops.time, no numerics / no _pops); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
@@ -23,8 +23,7 @@ try:
     from pops.solvers import DenseLU
     from typed_program_support import solve_field, typed_field, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_signature_errors (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_signature_errors (pops unavailable: %s)' % exc)
 
 
 _OTHER = model.StateSpace("V", ("a", "b", "c"))

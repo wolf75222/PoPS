@@ -2,8 +2,8 @@
 
 ``System`` composes blocks, shares a Poisson and advances the whole. Its ~1300 lines of methods
 are split into cohesive mixins (``_system_install`` / ``_system_unified_install`` /
-``_system_aux_state`` / ``_system_diagnostics`` / ``_system_io``) to satisfy the per-file
-<=500-line cap ; this module composes them and keeps the constructor + the delegation glue.
+``_system_aux_state`` / ``_system_diagnostics`` / ``_system_io``); this module composes them and
+keeps the constructor plus delegation glue.
 ``AmrSystem`` lives in :mod:`pops.runtime._amr_system` and is re-exported only through this private
 engine module so compiler/runtime internals share one import seam. Neither engine is a public
 authoring API; users obtain the installed runtime exclusively through ``pops.bind``.

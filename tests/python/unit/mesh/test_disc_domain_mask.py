@@ -21,13 +21,13 @@ cartesien plein. La conservation FV du sous-domaine actif est validee cote C++
 Lance comme un simple script python3 (pas pytest : la CI lance ces tests directement). Se saute
 proprement si le module _pops n'est pas importable (build absent).
 """
+from tests.python.support.requirements import require_native_or_skip
 
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 from pops.mesh.geometry import DiscDomain
 from pops.mesh.polar import PolarMesh
-import sys
 
 import numpy as np
 
@@ -37,8 +37,7 @@ try:
     )
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # pragma: no cover - environnement sans build
-    print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ? build ?) : %s' % e)
 
 
 fails = 0

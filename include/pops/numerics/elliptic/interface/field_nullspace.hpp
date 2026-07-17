@@ -161,17 +161,16 @@ inline void validate_basis_layout(const MultiFab& value, const MultiFab* mask,
         "field nullspace basis requires identity, provenance and deterministic recipe identity");
   if (basis.field_component < 0 || basis.field_component >= value.ncomp())
     throw std::runtime_error("field nullspace basis component is outside the solved field");
-  if (mask != nullptr && (mask->ncomp() != 1 ||
-                          mask->box_array().boxes() != value.box_array().boxes() ||
-                          mask->dmap().ranks() != value.dmap().ranks()))
+  if (mask != nullptr &&
+      (mask->ncomp() != 1 || mask->box_array().boxes() != value.box_array().boxes() ||
+       mask->dmap().ranks() != value.dmap().ranks()))
     throw std::runtime_error("field nullspace mask is not co-distributed with the solved field");
 }
 
-inline void validate_mask_layout(const MultiFab& value, const MultiFab* mask,
-                                 const char* kind) {
-  if (mask != nullptr && (mask->ncomp() != 1 ||
-                          mask->box_array().boxes() != value.box_array().boxes() ||
-                          mask->dmap().ranks() != value.dmap().ranks()))
+inline void validate_mask_layout(const MultiFab& value, const MultiFab* mask, const char* kind) {
+  if (mask != nullptr &&
+      (mask->ncomp() != 1 || mask->box_array().boxes() != value.box_array().boxes() ||
+       mask->dmap().ranks() != value.dmap().ranks()))
     throw std::runtime_error(std::string("field nullspace ") + kind +
                              " mask is not co-distributed with the solved field");
 }
@@ -190,8 +189,7 @@ inline int gauge_index(const FieldNullspacePlan& plan, const std::string& identi
 /// while same-component modes must be disjoint/orthogonal to roundoff.  This prevents the gauge
 /// application below from acquiring a hidden order dependence.
 inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& level_layouts,
-                                           const FieldNullspacePlan& plan,
-                                           int first_level = 0) {
+                                           const FieldNullspacePlan& plan, int first_level = 0) {
   if (plan.empty())
     return;
   if (level_layouts.empty())
@@ -216,16 +214,17 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
         detail::validate_basis_layout(layout, right, plan.bases[b]);
         detail::validate_mask_layout(layout, coverage, "coverage");
         for (int li = 0; li < layout.local_size(); ++li) {
-          const ConstArray4 left_array = left == nullptr ? ConstArray4{} :
-              left->fab(li).const_array();
-          const ConstArray4 right_array = right == nullptr ? ConstArray4{} :
-              right->fab(li).const_array();
-          const ConstArray4 coverage_array = coverage == nullptr ? ConstArray4{} :
-              coverage->fab(li).const_array();
+          const ConstArray4 left_array =
+              left == nullptr ? ConstArray4{} : left->fab(li).const_array();
+          const ConstArray4 right_array =
+              right == nullptr ? ConstArray4{} : right->fab(li).const_array();
+          const ConstArray4 coverage_array =
+              coverage == nullptr ? ConstArray4{} : coverage->fab(li).const_array();
           gram[a * count + b] += static_cast<double>(reduce_sum_cell(
-              layout.box(li), detail::FieldBasisGramKernel{
-                  left_array, right_array, coverage_array, left != nullptr, right != nullptr,
-                  coverage != nullptr, plan.bases[a].measure(resolved_level)}));
+              layout.box(li),
+              detail::FieldBasisGramKernel{left_array, right_array, coverage_array, left != nullptr,
+                                           right != nullptr, coverage != nullptr,
+                                           plan.bases[a].measure(resolved_level)}));
         }
       }
       gram[b * count + a] = gram[a * count + b];
@@ -240,7 +239,7 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
       if (plan.bases[a].field_component != plan.bases[b].field_component)
         continue;
       const double tolerance = 128.0 * std::numeric_limits<Real>::epsilon() *
-          std::sqrt(gram[a * count + a] * gram[b * count + b]);
+                               std::sqrt(gram[a * count + a] * gram[b * count + b]);
       if (std::abs(gram[a * count + b]) > tolerance)
         throw std::runtime_error("field nullspace bases '" + plan.bases[a].identity + "' and '" +
                                  plan.bases[b].identity + "' are not orthogonal/disjoint");
@@ -250,7 +249,8 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
   for (const auto& gauge : plan.gauges) {
     if (detail::gauge_index(plan, gauge.basis_identity) < 0)
       throw std::runtime_error("field gauge references an unknown nullspace basis");
-    if (std::find(constrained.begin(), constrained.end(), gauge.basis_identity) != constrained.end())
+    if (std::find(constrained.begin(), constrained.end(), gauge.basis_identity) !=
+        constrained.end())
       throw std::runtime_error("field gauge constrains one nullspace basis more than once");
     constrained.push_back(gauge.basis_identity);
   }
@@ -284,19 +284,19 @@ inline std::vector<double> require_field_nullspace_compatible(
       detail::validate_mask_layout(rhs, coverage, "coverage");
       for (int li = 0; li < rhs.local_size(); ++li) {
         const ConstArray4 value = rhs.fab(li).const_array();
-        const ConstArray4 mask_array = mask == nullptr ? ConstArray4{} :
-            mask->fab(li).const_array();
-        const ConstArray4 coverage_array = coverage == nullptr ? ConstArray4{} :
-            coverage->fab(li).const_array();
+        const ConstArray4 mask_array =
+            mask == nullptr ? ConstArray4{} : mask->fab(li).const_array();
+        const ConstArray4 coverage_array =
+            coverage == nullptr ? ConstArray4{} : coverage->fab(li).const_array();
         const Box2D valid = rhs.box(li);
         moments[2 * b] += static_cast<double>(reduce_sum_cell(
-            valid, detail::FieldBasisMomentKernel{
-                       value, mask_array, coverage_array, basis.field_component,
-                       mask != nullptr, coverage != nullptr, measure}));
+            valid,
+            detail::FieldBasisMomentKernel{value, mask_array, coverage_array, basis.field_component,
+                                           mask != nullptr, coverage != nullptr, measure}));
         moments[2 * b + 1] += static_cast<double>(reduce_sum_cell(
-            valid, detail::FieldBasisAbsMomentKernel{
-                       value, mask_array, coverage_array, basis.field_component,
-                       mask != nullptr, coverage != nullptr, measure}));
+            valid, detail::FieldBasisAbsMomentKernel{value, mask_array, coverage_array,
+                                                     basis.field_component, mask != nullptr,
+                                                     coverage != nullptr, measure}));
       }
     }
   }
@@ -314,17 +314,17 @@ inline std::vector<double> require_field_nullspace_compatible(
       witness << std::setprecision(17) << moments[2 * b];
       std::ostringstream allowed;
       allowed << std::setprecision(17) << tolerance;
-      throw std::runtime_error(
-          "field RHS is incompatible with nullspace basis '" + plan.bases[b].identity +
-          "' (" + plan.bases[b].provenance + "): moment=" + witness.str() +
-          " tolerance=" + allowed.str() + "; silent projection is forbidden");
+      throw std::runtime_error("field RHS is incompatible with nullspace basis '" +
+                               plan.bases[b].identity + "' (" + plan.bases[b].provenance +
+                               "): moment=" + witness.str() + " tolerance=" + allowed.str() +
+                               "; silent projection is forbidden");
     }
   }
   return moments;
 }
 
-inline std::vector<double> require_field_nullspace_compatible(
-    const MultiFab& rhs, const FieldNullspacePlan& plan) {
+inline std::vector<double> require_field_nullspace_compatible(const MultiFab& rhs,
+                                                              const FieldNullspacePlan& plan) {
   return require_field_nullspace_compatible(std::vector<const MultiFab*>{&rhs}, plan, 0);
 }
 
@@ -340,7 +340,8 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
   if (plan.scope == FieldNullspaceScope::LevelLocal && phi_levels.size() != 1)
     throw std::runtime_error("level-local field gauges must be applied independently per level");
   if (plan.gauges.size() != plan.bases.size())
-    throw std::runtime_error("field gauge must constrain every declared nullspace basis exactly once");
+    throw std::runtime_error(
+        "field gauge must constrain every declared nullspace basis exactly once");
   std::vector<double> moments(plan.bases.size() * 2, 0.0);
   for (std::size_t b = 0; b < plan.bases.size(); ++b) {
     const auto& basis = plan.bases[b];
@@ -357,18 +358,18 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
       detail::validate_mask_layout(phi, coverage, "coverage");
       for (int li = 0; li < phi.local_size(); ++li) {
         const ConstArray4 value = phi.fab(li).const_array();
-        const ConstArray4 mask_array = mask == nullptr ? ConstArray4{} :
-            mask->fab(li).const_array();
-        const ConstArray4 coverage_array = coverage == nullptr ? ConstArray4{} :
-            coverage->fab(li).const_array();
+        const ConstArray4 mask_array =
+            mask == nullptr ? ConstArray4{} : mask->fab(li).const_array();
+        const ConstArray4 coverage_array =
+            coverage == nullptr ? ConstArray4{} : coverage->fab(li).const_array();
         const Box2D valid = phi.box(li);
         moments[2 * b] += static_cast<double>(reduce_sum_cell(
-            valid, detail::FieldBasisMomentKernel{
-                       value, mask_array, coverage_array, basis.field_component,
-                       mask != nullptr, coverage != nullptr, measure}));
+            valid,
+            detail::FieldBasisMomentKernel{value, mask_array, coverage_array, basis.field_component,
+                                           mask != nullptr, coverage != nullptr, measure}));
         moments[2 * b + 1] += static_cast<double>(reduce_sum_cell(
-            valid, detail::FieldBasisNormKernel{
-                       mask_array, coverage_array, mask != nullptr, coverage != nullptr, measure}));
+            valid, detail::FieldBasisNormKernel{mask_array, coverage_array, mask != nullptr,
+                                                coverage != nullptr, measure}));
       }
     }
   }
@@ -379,17 +380,18 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
     const Real norm = static_cast<Real>(moments[2 * b + 1]);
     if (!(norm > Real(0)))
       throw std::runtime_error("field nullspace basis has zero norm");
-    const Real coefficient = static_cast<Real>(moments[2 * b]) / norm -
-                             plan.gauges[static_cast<std::size_t>(g)].value;
+    const Real coefficient =
+        static_cast<Real>(moments[2 * b]) / norm - plan.gauges[static_cast<std::size_t>(g)].value;
     for (int level = 0; level < static_cast<int>(phi_levels.size()); ++level) {
       MultiFab& phi = *phi_levels[static_cast<std::size_t>(level)];
       const MultiFab* mask = basis.mask(first_level + level);
       for (int li = 0; li < phi.local_size(); ++li) {
         Array4 value = phi.fab(li).array();
-        const ConstArray4 mask_array = mask == nullptr ? ConstArray4{} :
-            mask->fab(li).const_array();
-        for_each_cell(phi.box(li), detail::ShiftFieldBasisKernel{
-            value, mask_array, basis.field_component, mask != nullptr, coefficient});
+        const ConstArray4 mask_array =
+            mask == nullptr ? ConstArray4{} : mask->fab(li).const_array();
+        for_each_cell(phi.box(li),
+                      detail::ShiftFieldBasisKernel{value, mask_array, basis.field_component,
+                                                    mask != nullptr, coefficient});
       }
     }
   }
@@ -400,16 +402,19 @@ inline void apply_field_gauge(MultiFab& phi, const FieldNullspacePlan& plan) {
   apply_field_gauge(levels, plan);
 }
 
-inline FieldNullspacePlan constant_mean_zero_nullspace(std::string identity,
-                                                       std::string provenance,
+inline FieldNullspacePlan constant_mean_zero_nullspace(std::string identity, std::string provenance,
                                                        Real cell_measure = Real(1)) {
   FieldNullspacePlan result;
   result.identity = std::move(identity);
   result.layout_identity = result.identity + ":layout";
   result.scope = FieldNullspaceScope::Uniform;
-  result.bases.push_back(FieldNullspaceBasis{
-      result.identity + ":constant", std::move(provenance), result.identity + ":recipe",
-      0, {}, {}, {cell_measure}});
+  result.bases.push_back(FieldNullspaceBasis{result.identity + ":constant",
+                                             std::move(provenance),
+                                             result.identity + ":recipe",
+                                             0,
+                                             {},
+                                             {},
+                                             {cell_measure}});
   result.gauges.push_back(FieldGaugeConstraint{result.bases[0].identity, Real(0)});
   return result;
 }
@@ -426,8 +431,8 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
     std::string identity, std::string layout_identity, FieldNullspaceScope scope,
     const std::vector<std::shared_ptr<const MultiFab>>& labels,
     std::vector<FieldConnectedComponent> components,
-    std::vector<std::shared_ptr<const MultiFab>> coverage,
-    std::vector<Real> cell_measure, int field_component = 0) {
+    std::vector<std::shared_ptr<const MultiFab>> coverage, std::vector<Real> cell_measure,
+    int field_component = 0) {
   if (identity.empty() || layout_identity.empty())
     throw std::invalid_argument(
         "labelled field nullspace requires non-empty plan and layout identities");
@@ -478,8 +483,8 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
             "composite field nullspace coverage must be co-distributed with component labels");
     }
     for (auto& per_component : masks)
-      per_component.push_back(std::make_shared<MultiFab>(
-          labels[level]->box_array(), labels[level]->dmap(), 1, 0));
+      per_component.push_back(
+          std::make_shared<MultiFab>(labels[level]->box_array(), labels[level]->dmap(), 1, 0));
 
     for (int li = 0; li < labels[level]->local_size(); ++li) {
       const ConstArray4 source = labels[level]->fab(li).const_array();
@@ -498,11 +503,9 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
             counts.back() += 1.0;
           } else if (integral > Real(0)) {
             const int label = static_cast<int>(integral);
-            const auto found = std::lower_bound(
-                components.begin(), components.end(), label,
-                [](const FieldConnectedComponent& component, int value) {
-                  return component.label < value;
-                });
+            const auto found = std::lower_bound(components.begin(), components.end(), label,
+                                                [](const FieldConnectedComponent& component,
+                                                   int value) { return component.label < value; });
             if (found == components.end() || found->label != label) {
               counts.back() += 1.0;
             } else {
@@ -534,8 +537,8 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
     FieldNullspaceBasis basis;
     basis.identity = components[component].identity;
     basis.provenance = components[component].provenance;
-    basis.recipe_identity = result.identity + ":component-label:" +
-                            std::to_string(components[component].label);
+    basis.recipe_identity =
+        result.identity + ":component-label:" + std::to_string(components[component].label);
     basis.field_component = field_component;
     basis.masks.reserve(masks[component].size());
     for (auto& mask : masks[component])

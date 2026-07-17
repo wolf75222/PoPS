@@ -25,37 +25,39 @@ std::size_t periodic(std::ptrdiff_t index, std::size_t size) {
 }
 
 double minmod(double left, double right) {
-  if (left * right <= 0.0) return 0.0;
+  if (left * right <= 0.0)
+    return 0.0;
   return std::copysign(std::min(std::abs(left), std::abs(right)), left);
 }
 
 PopsComponentTableHeaderV1 flux_header() {
-  return {sizeof(PopsNumericalFluxApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-          POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, nullptr, nullptr};
+  return {sizeof(PopsNumericalFluxApiV1),
+          POPS_COMPONENT_PROTOCOL_ABI_V1,
+          POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1,
+          1,
+          nullptr,
+          nullptr};
 }
 
 PopsNumericalFluxApiV1 flux_api() {
-  return {
-      flux_header(),
-      +[](void*, const PopsNumericalFluxRequestV1* request,
-          PopsNumericalFluxResultV1* result) {
-        const auto* left_values = static_cast<const double*>(request->left.data);
-        const auto* right_values = static_cast<const double*>(request->right.data);
-        auto* output_values = static_cast<double*>(result->normal_flux.data);
-        for (std::size_t point = 0;
-             point < pops::component::field_point_count(request->left); ++point) {
-          const double left = left_values[point];
-          const double right = right_values[point];
-          output_values[point] =
-              0.5 * kVelocity * (left + right) -
-              0.5 * std::abs(kVelocity) * (right - left);
-          result->stability_bounds[point] = std::abs(kVelocity);
-          result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
-        }
-        result->status = {sizeof(PopsComponentStatusV1), 0,
-                          POPS_COMPONENT_CONTINUE_V1, nullptr};
-        return 0;
-      }};
+  return {flux_header(),
+          +[](void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
+            const auto* left_values = static_cast<const double*>(request->left.data);
+            const auto* right_values = static_cast<const double*>(request->right.data);
+            auto* output_values = static_cast<double*>(result->normal_flux.data);
+            for (std::size_t point = 0; point < pops::component::field_point_count(request->left);
+                 ++point) {
+              const double left = left_values[point];
+              const double right = right_values[point];
+              output_values[point] =
+                  0.5 * kVelocity * (left + right) - 0.5 * std::abs(kVelocity) * (right - left);
+              result->stability_bounds[point] = std::abs(kVelocity);
+              result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+            }
+            result->status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1,
+                              nullptr};
+            return 0;
+          }};
 }
 
 std::vector<double> evaluate_flux(const std::vector<double>& left,
@@ -65,17 +67,20 @@ std::vector<double> evaluate_flux(const std::vector<double>& left,
   std::vector<double> stability(faces);
   std::vector<PopsComponentActionV1> actions(faces);
   std::vector<double> normals(faces * 2, 0.0);
-  for (std::size_t point = 0; point < faces; ++point) normals[2 * point] = 1.0;
-  const PopsNumericalFluxRequestV1 request{
-      sizeof(PopsNumericalFluxRequestV1),
-      abi::const_field_view(left.data(), 1, faces),
-      abi::const_field_view(right.data(), 1, faces),
-      abi::const_field_view(normals.data(), 1, faces, 2),
-      nullptr, abi::logical_time(), abi::host_execution_context()};
-  PopsNumericalFluxResultV1 result{
-      sizeof(PopsNumericalFluxResultV1),
-      abi::field_view(output.data(), 1, faces),
-      stability.data(), actions.data(), {}};
+  for (std::size_t point = 0; point < faces; ++point)
+    normals[2 * point] = 1.0;
+  const PopsNumericalFluxRequestV1 request{sizeof(PopsNumericalFluxRequestV1),
+                                           abi::const_field_view(left.data(), 1, faces),
+                                           abi::const_field_view(right.data(), 1, faces),
+                                           abi::const_field_view(normals.data(), 1, faces, 2),
+                                           nullptr,
+                                           abi::logical_time(),
+                                           abi::host_execution_context()};
+  PopsNumericalFluxResultV1 result{sizeof(PopsNumericalFluxResultV1),
+                                   abi::field_view(output.data(), 1, faces),
+                                   stability.data(),
+                                   actions.data(),
+                                   {}};
   const auto api = flux_api();
   EXPECT_EQ(pops::component::evaluate_faces(api, nullptr, request, result), 0);
   return output;
@@ -94,18 +99,15 @@ TEST(test_amr_weno5_native, CoreWenoStatesFeedExactExternalFluxTableWithoutMarsh
   std::vector<double> minmod_left(cells), minmod_right(cells);
   const auto value = [&](std::ptrdiff_t cell) { return state[periodic(cell, cells)]; };
   for (std::ptrdiff_t cell = 0; cell < static_cast<std::ptrdiff_t>(cells); ++cell) {
-    weno_left[static_cast<std::size_t>(cell)] =
-        pops::weno5z(value(cell - 2), value(cell - 1), value(cell),
-                     value(cell + 1), value(cell + 2));
-    weno_right[static_cast<std::size_t>(cell)] =
-        pops::weno5z(value(cell + 3), value(cell + 2), value(cell + 1),
-                     value(cell), value(cell - 1));
+    weno_left[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell - 2), value(cell - 1), value(cell), value(cell + 1), value(cell + 2));
+    weno_right[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell + 3), value(cell + 2), value(cell + 1), value(cell), value(cell - 1));
     minmod_left[static_cast<std::size_t>(cell)] =
-        value(cell) + 0.5 * minmod(value(cell) - value(cell - 1),
-                                   value(cell + 1) - value(cell));
+        value(cell) + 0.5 * minmod(value(cell) - value(cell - 1), value(cell + 1) - value(cell));
     minmod_right[static_cast<std::size_t>(cell)] =
-        value(cell + 1) - 0.5 * minmod(value(cell + 1) - value(cell),
-                                       value(cell + 2) - value(cell + 1));
+        value(cell + 1) -
+        0.5 * minmod(value(cell + 1) - value(cell), value(cell + 2) - value(cell + 1));
   }
 
   const auto weno_flux = evaluate_flux(weno_left, weno_right);
@@ -125,12 +127,10 @@ TEST(test_amr_weno5_native, ConstantStateRemainsExactlyConstantAcrossWenoAndFina
   std::vector<double> left(cells), right(cells);
   const auto value = [&](std::ptrdiff_t cell) { return state[periodic(cell, cells)]; };
   for (std::ptrdiff_t cell = 0; cell < static_cast<std::ptrdiff_t>(cells); ++cell) {
-    left[static_cast<std::size_t>(cell)] =
-        pops::weno5z(value(cell - 2), value(cell - 1), value(cell),
-                     value(cell + 1), value(cell + 2));
-    right[static_cast<std::size_t>(cell)] =
-        pops::weno5z(value(cell + 3), value(cell + 2), value(cell + 1),
-                     value(cell), value(cell - 1));
+    left[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell - 2), value(cell - 1), value(cell), value(cell + 1), value(cell + 2));
+    right[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell + 3), value(cell + 2), value(cell + 1), value(cell), value(cell - 1));
   }
   for (const double value_at_face : evaluate_flux(left, right))
     EXPECT_DOUBLE_EQ(value_at_face, kVelocity * 2.5);

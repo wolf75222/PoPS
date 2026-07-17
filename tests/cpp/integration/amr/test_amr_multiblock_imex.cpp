@@ -35,8 +35,8 @@
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>     // facade AmrSystem
+#include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -158,8 +158,8 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   // bloc A : raide, traitement imex_stiff (true = IMEX, false = explicite : disable-and-fail).
@@ -265,7 +265,8 @@ TEST(test_amr_multiblock_imex, Runs) {
   {
     AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho);
     const Real m0 = rt.mass(0);  // masse du bloc raide AVANT (sur le grossier, cascade incluse)
-    EXPECT_EQ(rt.nlev(), 2) << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
+    EXPECT_EQ(rt.nlev(), 2)
+        << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
     for (int s = 0; s < K; ++s)
       rt.step(static_cast<Real>(dt));
     const std::vector<double> dStiff = rt.density(0);
@@ -406,10 +407,10 @@ TEST(test_amr_multiblock_imex, Runs) {
     // (5b) masque IMEX partiel REFUSE en explicite (pas d'ignore silencieux).
     {
       AmrSystem s2(cfg);
-      EXPECT_THROW(s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative",
-                                "explicit", 1, 1,
-                                /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"}),
-                  std::runtime_error)
+      EXPECT_THROW(
+          s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "explicit", 1, 1,
+                       /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"}),
+          std::runtime_error)
           << "facade_mask_rejected_in_explicit";
     }
 

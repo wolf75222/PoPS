@@ -159,16 +159,15 @@ struct RegistrationRecord {
   Provenance provenance;
 
   [[nodiscard]] const InterfaceBinding* find(std::string_view name) const noexcept {
-    const auto found = std::find_if(interfaces.begin(), interfaces.end(), [&](const auto& row) {
-      return row.name == name;
-    });
+    const auto found = std::find_if(interfaces.begin(), interfaces.end(),
+                                    [&](const auto& row) { return row.name == name; });
     return found == interfaces.end() ? nullptr : &*found;
   }
 };
 
-inline const identity::CanonicalValue::Map& map_field(
-    const identity::CanonicalValue::Map& source, const std::string& name,
-    const std::string& path) {
+inline const identity::CanonicalValue::Map& map_field(const identity::CanonicalValue::Map& source,
+                                                      const std::string& name,
+                                                      const std::string& path) {
   return component_manifest::require_map(component_manifest::field(source, name, path),
                                          path + "." + name);
 }
@@ -176,16 +175,16 @@ inline const identity::CanonicalValue::Map& map_field(
 inline std::string version_string(const identity::CanonicalValue::Map& manifest) {
   const auto& version = map_field(manifest, "version", "ComponentManifest");
   const auto value = [&](const char* name) {
-    return component_manifest::require_integer(
-        component_manifest::field(version, name, "version"), "version." + std::string(name), 0);
+    return component_manifest::require_integer(component_manifest::field(version, name, "version"),
+                                               "version." + std::string(name), 0);
   };
   return std::to_string(value("major")) + "." + std::to_string(value("minor")) + "." +
          std::to_string(value("patch"));
 }
 
 inline RegistrationRecord registration_from_manifest(const identity::CanonicalValue& input,
-                                                       std::string origin,
-                                                       std::string source_uri = {}) {
+                                                     std::string origin,
+                                                     std::string source_uri = {}) {
   using component_manifest::field;
   using component_manifest::require_array;
   using component_manifest::require_map;
@@ -205,13 +204,14 @@ inline RegistrationRecord registration_from_manifest(const identity::CanonicalVa
   record.component_id = uri + "@" + version_string(manifest);
   record.component_type = component_type;
   record.provenance = {
-      std::move(origin), source_uri.empty() ? uri : std::move(source_uri),
+      std::move(origin),
+      source_uri.empty() ? uri : std::move(source_uri),
       require_text(field(digests, "semantic", "digests"), "digests.semantic"),
       require_text(field(digests, "manifest", "digests"), "digests.manifest"),
   };
 
-  const auto& rows = require_array(field(manifest, "interfaces", "ComponentManifest"),
-                                   "interfaces");
+  const auto& rows =
+      require_array(field(manifest, "interfaces", "ComponentManifest"), "interfaces");
   record.interfaces.reserve(rows.size());
   for (std::size_t index = 0; index < rows.size(); ++index) {
     const std::string path = "interfaces[" + std::to_string(index) + "]";
@@ -225,8 +225,8 @@ inline RegistrationRecord registration_from_manifest(const identity::CanonicalVa
     const InterfaceBindingMode mode = parse_binding_mode(mode_text);
     std::string symbol;
     if (mode == InterfaceBindingMode::kEntryPoint)
-      symbol = require_text(field(entry_points, binding, "entry_points"),
-                            "entry_points." + binding);
+      symbol =
+          require_text(field(entry_points, binding, "entry_points"), "entry_points." + binding);
     record.interfaces.push_back({interface->id, mode, name, binding, std::move(symbol)});
   }
   return record;
@@ -245,8 +245,7 @@ class Registry {
       const RegistrationRecord& existing = records_[previous->second];
       if (existing.provenance.semantic_identity == record.provenance.semantic_identity)
         return existing;
-      throw std::invalid_argument("component identity collision for '" + record.component_id +
-                                  "'");
+      throw std::invalid_argument("component identity collision for '" + record.component_id + "'");
     }
     const std::size_t index = records_.size();
     records_.push_back(std::move(record));
@@ -256,10 +255,9 @@ class Registry {
   }
 
   const RegistrationRecord& register_manifest(const identity::CanonicalValue& manifest,
-                                               std::string origin,
-                                               std::string source_uri = {}) {
-    return register_component(registration_from_manifest(
-        manifest, std::move(origin), std::move(source_uri)));
+                                              std::string origin, std::string source_uri = {}) {
+    return register_component(
+        registration_from_manifest(manifest, std::move(origin), std::move(source_uri)));
   }
 
   [[nodiscard]] const RegistrationRecord* find(std::string_view component_id) const noexcept {
@@ -273,9 +271,7 @@ class Registry {
   }
   [[nodiscard]] bool frozen() const noexcept { return frozen_; }
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
-  [[nodiscard]] const std::vector<RegistrationRecord>& records() const noexcept {
-    return records_;
-  }
+  [[nodiscard]] const std::vector<RegistrationRecord>& records() const noexcept { return records_; }
 
  private:
   std::vector<RegistrationRecord> records_;

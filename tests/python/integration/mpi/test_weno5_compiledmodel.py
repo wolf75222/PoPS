@@ -5,6 +5,7 @@ remaining low-level ``System.add_equation`` seam.  Rusanov with first-order, Min
 bit-identical to the equivalent native ModelSpec, including a multi-step WENO5 advance.  This
 proves that the production package derives its halo from the selected reconstruction.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
 from pops.numerics.riemann import Rusanov
 import os
@@ -47,7 +48,7 @@ def _initial_state(n):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
+        require_native_or_skip('skip  compilateur ou en-tetes pops absents')
         print("test_weno5_compiledmodel : OK (rien a compiler)")
         return
 

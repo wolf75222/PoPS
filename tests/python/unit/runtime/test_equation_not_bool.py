@@ -8,14 +8,13 @@ sourced symbolic-truth diagnostic. ``==`` itself still builds an Equation.
 
 Pure Python (pops._ir only, no numerics / no _pops); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import math as bm
     from pops.math import Equation
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_equation_not_bool (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_equation_not_bool (pops unavailable: %s)' % exc)
 
 
 def test_equal_on_board_node_builds_an_equation():

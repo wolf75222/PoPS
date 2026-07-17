@@ -175,8 +175,8 @@ inline std::vector<int> require_int_set(const CapabilityProof& proof, const std:
 }
 
 inline CanonicalValue proof_data(const CapabilityProof& proof) {
-  return CanonicalValue::map({
-      {"value", proof.value}, {"evidence", CanonicalValue::text(proof.evidence)}});
+  return CanonicalValue::map(
+      {{"value", proof.value}, {"evidence", CanonicalValue::text(proof.evidence)}});
 }
 
 inline CanonicalValue precision_data(const PrecisionPolicy& precision) {
@@ -214,8 +214,8 @@ inline std::string identity_token(const char* domain, const Manifest& manifest) 
       {"schema_version", CanonicalValue(std::int64_t{kPlatformContractSchemaVersion})},
       {"payload", manifest_data(manifest)},
   });
-  return std::string("pops.") + domain + ".v1:sha256:" +
-         identity::sha256_hex(identity::canonical_bytes(envelope));
+  return std::string("pops.") + domain +
+         ".v1:sha256:" + identity::sha256_hex(identity::canonical_bytes(envelope));
 }
 
 inline void require_same(const std::string& field, const CapabilityProof& expected,
@@ -281,12 +281,12 @@ inline void validate_launch(const PlatformManifest& platform, const ExecutionCon
       !context.device.has_handle)
     throw ContractError("device", "non-host execution requires an explicit handle");
 
-  const auto dimensions = require_int_set(capability(backend, "dimensions"),
-                                          "runtime.capabilities.dimensions");
-  const auto centerings = require_text_set(capability(backend, "centerings"),
-                                           "runtime.capabilities.centerings");
-  const auto scalars = require_text_set(capability(backend, "scalars"),
-                                        "runtime.capabilities.scalars");
+  const auto dimensions =
+      require_int_set(capability(backend, "dimensions"), "runtime.capabilities.dimensions");
+  const auto centerings =
+      require_text_set(capability(backend, "centerings"), "runtime.capabilities.centerings");
+  const auto scalars =
+      require_text_set(capability(backend, "scalars"), "runtime.capabilities.scalars");
   const auto memories = require_text_set(backend.memory_spaces, "runtime.memory_spaces");
   for (const auto& view : fields) {
     validate_descriptor(view);
@@ -296,9 +296,8 @@ inline void validate_launch(const PlatformManifest& platform, const ExecutionCon
     require_member("memory_space", view.memory_space, memories);
     if (view.scalar != context.datatype.identity)
       throw ContractError("datatype", "field scalar and ExecutionContext datatype differ");
-    const auto wanted = std::find_if(expected.begin(), expected.end(), [&](const auto& item) {
-      return item.name == view.name;
-    });
+    const auto wanted = std::find_if(expected.begin(), expected.end(),
+                                     [&](const auto& item) { return item.name == view.name; });
     if (wanted != expected.end() &&
         (view.dimension != wanted->dimension || view.extents != wanted->extents ||
          view.centering != wanted->centering || view.scalar != wanted->scalar ||
@@ -306,9 +305,8 @@ inline void validate_launch(const PlatformManifest& platform, const ExecutionCon
       throw ContractError("field." + view.name, "field descriptor does not match launch contract");
   }
   for (const auto& wanted : expected)
-    if (std::none_of(fields.begin(), fields.end(), [&](const auto& view) {
-          return view.name == wanted.name;
-        }))
+    if (std::none_of(fields.begin(), fields.end(),
+                     [&](const auto& view) { return view.name == wanted.name; }))
       throw ContractError("field." + wanted.name, "required field descriptor is missing");
 }
 
@@ -320,47 +318,44 @@ decltype(auto) launch_checked(const PlatformManifest& platform, const ExecutionC
   return std::forward<Kernel>(kernel)(context, fields);
 }
 
-inline PlatformManifest proven_host_platform(const std::string& backend,
-                                             const std::string& target,
+inline PlatformManifest proven_host_platform(const std::string& backend, const std::string& target,
                                              const std::string& abi,
                                              const std::string& communicator,
                                              const std::string& evidence) {
   const auto scalar = prove_text("float64", evidence);
-  return {
-      prove_text(backend, evidence), prove_text(target, evidence), prove_text(abi, evidence),
-      {scalar, scalar, scalar, scalar}, prove_text("host", evidence),
-      prove_text_set({"host"}, evidence), prove_text(communicator, evidence),
-      {{"dimensions", prove_int_set({2}, evidence)},
-       {"centerings", prove_text_set({"cell"}, evidence)},
-       {"scalars", prove_text_set({"float64"}, evidence)},
-       {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
-       {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
-       {"generic_field_view", prove_bool(true, evidence)}}};
+  return {prove_text(backend, evidence),
+          prove_text(target, evidence),
+          prove_text(abi, evidence),
+          {scalar, scalar, scalar, scalar},
+          prove_text("host", evidence),
+          prove_text_set({"host"}, evidence),
+          prove_text(communicator, evidence),
+          {{"dimensions", prove_int_set({2}, evidence)},
+           {"centerings", prove_text_set({"cell"}, evidence)},
+           {"scalars", prove_text_set({"float64"}, evidence)},
+           {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
+           {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
+           {"generic_field_view", prove_bool(true, evidence)}}};
 }
 
 inline PlatformManifest proven_serial_platform(const std::string& backend,
-                                               const std::string& target,
-                                               const std::string& abi) {
-  return proven_host_platform(backend, target, abi, "serial",
-                              "pops.native.2d-float64-host.v1");
+                                               const std::string& target, const std::string& abi) {
+  return proven_host_platform(backend, target, abi, "serial", "pops.native.2d-float64-host.v1");
 }
 
 inline RuntimeBackendManifest proven_host_backend(const std::string& backend,
-                                                  const std::string& target,
-                                                  const std::string& abi,
+                                                  const std::string& target, const std::string& abi,
                                                   const std::string& communicator,
                                                   const std::string& evidence) {
-  const auto platform = proven_host_platform(
-      backend, target, abi, communicator, evidence);
-  return {platform.backend, platform.target, platform.abi, platform.precision, platform.device,
-          platform.memory_spaces, platform.communicator, platform.capabilities};
+  const auto platform = proven_host_platform(backend, target, abi, communicator, evidence);
+  return {platform.backend, platform.target,        platform.abi,          platform.precision,
+          platform.device,  platform.memory_spaces, platform.communicator, platform.capabilities};
 }
 
 inline RuntimeBackendManifest proven_serial_backend(const std::string& backend,
                                                     const std::string& target,
                                                     const std::string& abi) {
-  return proven_host_backend(backend, target, abi, "serial",
-                             "pops.native.2d-float64-host.v1");
+  return proven_host_backend(backend, target, abi, "serial", "pops.native.2d-float64-host.v1");
 }
 
 }  // namespace pops::platform
