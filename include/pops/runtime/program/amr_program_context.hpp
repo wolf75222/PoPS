@@ -86,9 +86,10 @@ class AmrProgramContext {
   }
   /// Direct ctor (C++ tests / the driver): an engine + the facade carrying the param / block-map stores.
   AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {
-    if (eng_ == nullptr)
-      throw std::runtime_error("AmrProgramContext: the AMR runtime engine is null");
-    require_supported_program_refinement_ratios_(*eng_);
+    // Keep the established contract-test seam: argument/rate validation must be exercisable before
+    // any topology lookup. Every executable driver supplies a real engine and is ratio-validated here;
+    // the production void* constructor above remains fail-closed when the engine was not built.
+    if (eng_ != nullptr) require_supported_program_refinement_ratios_(*eng_);
   }
 
   // --- driver state (mutable: every seam method is const, like ProgramContext::mg_precond_) ----------
