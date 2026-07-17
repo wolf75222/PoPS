@@ -7,7 +7,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HISTORY_NATIVE_TESTS = (
     "tests/python/integration/amr/test_amr_history_parity.py",
-    "tests/python/integration/amr/test_amr_history_regrid.py",
     "tests/python/integration/io/test_amr_history_checkpoint.py",
     "tests/python/integration/io/test_amr_history_regrid_replay.py",
     "tests/python/integration/io/test_time_history_checkpoint.py",
