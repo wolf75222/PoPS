@@ -769,7 +769,10 @@ jobs:
   gate-python:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
+    # tests can legitimately run a little over 30 minutes on a cold public runner; keep a bounded
+    # ten-minute margin so GitHub does not cancel an otherwise progressing shard near completion.
+    timeout-minutes: 40
     needs: [changes, set-mode, gate-python-build]
     if: needs.set-mode.outputs.python_required == 'true'
     strategy:

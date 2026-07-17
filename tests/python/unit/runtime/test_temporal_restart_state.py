@@ -69,7 +69,7 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
     from pops.numerics.spatial import FiniteVolume
-    from pops.numerics.terms import DefaultSource, Flux
+    from pops.numerics.terms import Flux, SourceTerm
     from pops.physics import Model
     from pops.time import GuardRole, Program, RejectAttempt
 
@@ -90,6 +90,7 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     )
     source_rate = 0.5
     source = model.source("forcing", on=state, value=(source_rate + 0.0 * rho,))
+    source_operator = model.module.operator_handle("forcing")
     rate = model.rate(
         "transport-rate", equation=ddt(state) == -div(flux) + source)
     case = pops.Case("temporal-rejection-case")
@@ -107,7 +108,7 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     case.numerics(numerics, block=block)
     program = Program("temporal_native_%s" % attempt_policy)
     temporal = program.state(block[state])
-    rhs = program.rhs(state=temporal.n, terms=[Flux(), DefaultSource()])
+    rhs = program.rhs(state=temporal.n, terms=[Flux(), SourceTerm(source_operator)])
     candidate = program.value(
         "candidate", temporal.n + program.dt * rhs, at=temporal.next.point)
     if attempt_policy == "forced_reject":
