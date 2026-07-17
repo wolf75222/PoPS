@@ -14,6 +14,8 @@ from decimal import Decimal
 from fractions import Fraction
 
 pops = pytest.importorskip("pops")
+from pops._ir.literals import PREPARED_GMRES_MAX_RESTART
+
 solvers = pytest.importorskip("pops.solvers")
 elliptic = pytest.importorskip("pops.solvers.elliptic")
 krylov = pytest.importorskip("pops.solvers.krylov")
@@ -81,6 +83,21 @@ def test_krylov_nonpositive_or_nonint_max_iter_is_refused(factory, bad):
     # Zero / negative / bool / non-int budgets are all refused (dynamic loops require a real budget).
     with pytest.raises(ValueError, match="max_iter"):
         factory(max_iter=bad)
+
+
+def test_krylov_integer_controls_match_the_native_signed_int_capacity():
+    cpp_int_max = (1 << 31) - 1
+
+    for factory in (krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson):
+        assert factory(max_iter=cpp_int_max).options["max_iter"] == cpp_int_max
+        with pytest.raises(ValueError, match="max_iter"):
+            factory(max_iter=cpp_int_max + 1)
+
+    assert krylov.GMRES(
+        max_iter=1, restart=PREPARED_GMRES_MAX_RESTART
+    ).options["restart"] == PREPARED_GMRES_MAX_RESTART
+    with pytest.raises(ValueError, match="restart"):
+        krylov.GMRES(max_iter=1, restart=PREPARED_GMRES_MAX_RESTART + 1)
 
 
 def test_krylov_descriptors_compute_nothing():
@@ -392,6 +409,17 @@ def test_precond_geometric_mg_refuses_out_of_domain(kw):
         preconditioners.GeometricMG(**kw)
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"],
+)
+def test_precond_geometric_mg_integer_knobs_match_native_int_capacity(name):
+    cpp_int_max = (1 << 31) - 1
+    assert preconditioners.GeometricMG(**{name: cpp_int_max}).options[name] == cpp_int_max
+    with pytest.raises(ValueError, match=name):
+        preconditioners.GeometricMG(**{name: cpp_int_max + 1})
+
+
 # --- ADC-644: DirectSmallGrid threshold is None by default (wired, not dropped) -----------------
 def test_direct_small_grid_default_is_disabled():
     # The default threshold is None ("governed by min_coarse"), lowering to the disabled sentinel 0
@@ -440,6 +468,16 @@ def test_composite_fac_defaults_and_domain():
                 {"verbose": 1}):
         with pytest.raises(TypeError):
             CompositeFAC(**bad)
+
+
+@pytest.mark.parametrize("name", ["max_iters", "fine_sweeps", "coarse_cycles"])
+def test_composite_fac_integer_knobs_match_native_int_capacity(name):
+    from pops.solvers.options import CompositeFAC
+
+    cpp_int_max = (1 << 31) - 1
+    assert getattr(CompositeFAC(**{name: cpp_int_max}), name) == cpp_int_max
+    with pytest.raises(ValueError, match=name):
+        CompositeFAC(**{name: cpp_int_max + 1})
 
 
 def test_solver_tolerances_retain_exact_domains_until_native_lowering():

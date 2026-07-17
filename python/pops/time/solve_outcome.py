@@ -10,7 +10,7 @@ from pops.time.residual_common import CanonicalDescriptor, residual_names
 
 SOLVE_STATUSES = (
     "singular", "breakdown", "iteration_limit",
-    "invalid_evaluation", "capability_failure", "invalid_input",
+    "invalid_evaluation", "capability_failure", "invalid_input", "incompatible_rhs",
 )
 _STATUS_SET = frozenset(SOLVE_STATUSES)
 

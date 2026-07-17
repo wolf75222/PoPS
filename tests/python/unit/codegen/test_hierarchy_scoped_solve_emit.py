@@ -3,9 +3,12 @@
 from __future__ import annotations
 from pops.codegen.program_codegen import emit_cpp_program
 
+from dataclasses import replace
 from pathlib import Path
 
-from pops._ir.literals import scalar_cpp
+import pytest
+
+from pops._ir.literals import scalar_cpp, scalar_data
 from pops.linalg import LinearProblem
 from pops.params import ConstParam
 from pops.solvers import CompositeTensorFAC, Hierarchy
@@ -103,7 +106,8 @@ def _build(solver):
 
     program.set_apply(operator, apply)
     phi = program.solve(
-        LinearProblem(operator, rhs, initial_guess=phi_previous, scope=Hierarchy()),
+        LinearProblem(
+            operator, rhs, initial_guess=phi_previous, scope=Hierarchy(), nullspace=None),
         solver=solver,
         name="phi",
     ).consume(action=FailRun())
@@ -178,12 +182,25 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     assert solve.attrs["method"] == "bicgstab"
     assert solve.attrs["preconditioner"] == "identity"
     assert solve.attrs["restart"] is None
+    assert scalar_data(solve.attrs["abs_tol"]) == scalar_data(4.0e-13)
     frozen_identity = solve.attrs["hierarchy_solver_identity"]
     expected_identity = solver.canonical_identity()
     assert frozen_identity["solver_id"] == expected_identity["solver_id"]
     assert tuple(frozen_identity["capabilities"]) == tuple(expected_identity["capabilities"])
     assert dict(frozen_identity["options"]) == expected_identity["options"]
     assert "hierarchy_provider" not in solve.attrs
+
+
+def test_program_reauthenticates_composite_fac_native_iteration_capacity():
+    prepared = replace(
+        CompositeTensorFAC().prepare_program_solve(), max_iterations=1 << 31)
+
+    class ForgedDescriptor:
+        def prepare_program_solve(self):
+            return prepared
+
+    with pytest.raises(ValueError, match="CompositeTensorFAC max_iter"):
+        _build(ForgedDescriptor())
 
 
 def test_omitted_fac_controls_emit_native_default_sentinels_only():

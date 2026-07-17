@@ -51,9 +51,8 @@ def optional_positive_int(value: Any, *, where: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("%s must be a Python int or None (got %r)" % (where, value))
-    if value < 1:
-        raise ValueError("%s must be >= 1 (got %r)" % (where, value))
-    return value
+    from pops._ir.literals import exact_cpp_int
+    return exact_cpp_int(value, where=where, minimum=1)
 
 
 def strict_bool(value: Any, *, where: str) -> bool:

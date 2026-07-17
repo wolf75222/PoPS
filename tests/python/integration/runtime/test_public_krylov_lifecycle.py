@@ -70,6 +70,7 @@ def _public_identity_krylov_case():
             operator,
             temporal.n,
             properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None,
         ),
         solver=GMRES(max_iter=4, restart=2, rel_tol=1.0e-13),
         name="identity_solution",

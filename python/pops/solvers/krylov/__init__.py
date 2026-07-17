@@ -11,11 +11,13 @@ consume the descriptor. This is the ONE public home of the catalog formerly park
 * :func:`GMRES` -- generalised minimal residual (nonsymmetric);
 * :func:`Richardson` -- Richardson iteration with explicit relaxation.
 
-Every factory takes a MANDATORY ``max_iter`` (a positive Python int): a dynamic Krylov loop
-with no iteration budget is a configuration error. Refusing a missing / non-positive budget
+Every factory takes a MANDATORY ``max_iter`` (a positive Python int representable by the native
+signed C++ ``int``): a dynamic Krylov loop with no iteration budget is a configuration error.
+Refusing a missing, non-positive, or unrepresentable budget
 HERE, at descriptor construction, surfaces the same error before the prepared native route is
 ever touched (Spec 5 sec.6: a route is refused explainably, pre-compile).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,6 +39,7 @@ _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True
 def _exact_control(value: Any, where: str) -> Any:
     # Lazy to keep the catalog-layer import graph (solvers -> no symbolic implementation module).
     from pops._ir.literals import exact_numeric_scalar
+
     return exact_numeric_scalar(value, where=where)
 
 
@@ -52,12 +55,17 @@ def _check_max_iter(name: str, max_iter: Any) -> int:
     if max_iter is None:
         raise ValueError(
             "%s: max_iter is required (dynamic solver loops require max_iter); pass a positive "
-            "int, e.g. %s(max_iter=200)" % (name, name))
-    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+            "int, e.g. %s(max_iter=200)" % (name, name)
+        )
+    from pops._ir.literals import exact_cpp_int
+
+    try:
+        return exact_cpp_int(max_iter, where="%s: max_iter" % name, minimum=1)
+    except ValueError as exc:
         raise ValueError(
-            "%s: max_iter must be a positive int (dynamic solver loops require max_iter); got %r"
-            % (name, max_iter))
-    return int(max_iter)
+            "%s: max_iter must be a positive signed C++ int (dynamic solver loops require "
+            "max_iter); got %r" % (name, max_iter)
+        ) from exc
 
 
 def _check_rel_tol(name: str, rel_tol: Any) -> Any:
@@ -73,8 +81,9 @@ def _check_rel_tol(name: str, rel_tol: Any) -> Any:
     except (OverflowError, TypeError, ValueError):
         valid = False
     if not valid:
-        raise ValueError("%s: rel_tol must be a finite number in [0, 1) or None; got %r"
-                         % (name, rel_tol))
+        raise ValueError(
+            "%s: rel_tol must be a finite number in [0, 1) or None; got %r" % (name, rel_tol)
+        )
     return value
 
 
@@ -105,8 +114,7 @@ class _PreparedKrylov:
     omega: Any
     identity: Identity
 
-    def build_program_solve(self, *, program: Any, problem: Any,
-                            name: Any = None) -> Any:
+    def build_program_solve(self, *, program: Any, problem: Any, name: Any = None) -> Any:
         build = getattr(problem, "build_matrix_free_linear", None)
         if not callable(build):
             raise TypeError("Krylov solvers require a pops.linalg.LinearProblem")
@@ -120,11 +128,12 @@ class _KrylovDescriptor(BrickDescriptor):
         from pops.time._program.solve import _lower_preconditioner
 
         preconditioner, preconditioner_options = _lower_preconditioner(
-            self.options.get("preconditioner"))
+            self.options.get("preconditioner")
+        )
         if preconditioner != "identity" and self.scheme not in ("gmres", "bicgstab"):
             raise ValueError(
-                "%s does not expose a native preconditioner slot; use GMRES or BiCGStab"
-                % self.name)
+                "%s does not expose a native preconditioner slot; use GMRES or BiCGStab" % self.name
+            )
         tolerance = self.options.get("rel_tol", 1.0e-8)
         restart = self.options.get("restart")
         omega = self.options.get("omega")
@@ -151,9 +160,18 @@ class _KrylovDescriptor(BrickDescriptor):
         )
 
 
-def _solver(name: str, native_id: str, factory: str, max_iter: Any, rel_tol: Any = None,
-            *, restart: Any = None, preconditioner: Any = None,
-            omega: Any = None, abs_tol: Any = None) -> Any:
+def _solver(
+    name: str,
+    native_id: str,
+    factory: str,
+    max_iter: Any,
+    rel_tol: Any = None,
+    *,
+    restart: Any = None,
+    preconditioner: Any = None,
+    omega: Any = None,
+    abs_tol: Any = None,
+) -> Any:
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name).
 
     ``max_iter`` is validated (positive int, mandatory) and folded into the descriptor options so
@@ -168,16 +186,22 @@ def _solver(name: str, native_id: str, factory: str, max_iter: Any, rel_tol: Any
     if rel == 0 and absolute == 0:
         raise ValueError(
             "%s: rel_tol and abs_tol cannot both be zero; at least one stopping threshold "
-            "must be positive" % factory)
+            "must be positive" % factory
+        )
     if rel is not None:
         options["rel_tol"] = rel
     options["abs_tol"] = absolute
     if name == "gmres":
         if restart is None:
             restart = 30
-        if isinstance(restart, bool) or not isinstance(restart, int) or restart <= 0:
-            raise ValueError("GMRES: restart must be a positive integer")
-        options["restart"] = int(restart)
+        from pops._ir.literals import PREPARED_GMRES_MAX_RESTART, exact_cpp_int
+
+        options["restart"] = exact_cpp_int(
+            restart,
+            where="GMRES: restart (MPI Arnoldi reduction count requires restart + 1)",
+            minimum=1,
+            maximum=PREPARED_GMRES_MAX_RESTART,
+        )
     elif restart is not None:
         raise ValueError("%s: restart is a GMRES-only control" % factory)
     if preconditioner is not None:
@@ -185,48 +209,90 @@ def _solver(name: str, native_id: str, factory: str, max_iter: Any, rel_tol: Any
     if omega is not None:
         options["omega"] = omega
     return _KrylovDescriptor(
-        name, "native", category="solver", native_id=native_id, scheme=name,
-        capabilities=_KRYLOV_CAPABILITIES, options=options)
+        name,
+        "native",
+        category="solver",
+        native_id=native_id,
+        scheme=name,
+        capabilities=_KRYLOV_CAPABILITIES,
+        options=options,
+    )
 
 
-def CG(max_iter: Any = None, rel_tol: Any = None, *, preconditioner: Any = None,
-       abs_tol: Any = None) -> Any:
+def CG(
+    max_iter: Any = None, rel_tol: Any = None, *, preconditioner: Any = None, abs_tol: Any = None
+) -> Any:
     """Conjugate gradient over the prepared affine route (scheme ``"cg"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int (the iteration budget); a missing / non-positive
     budget is refused at construction (see the module docstring). ``rel_tol`` (ADC-645, optional)
     supplies the ``P.solve_linear`` tolerance when the call-site ``tol`` is left default.
     """
-    return _solver("cg", "pops::solve_prepared_affine", "CG", max_iter, rel_tol,
-                   preconditioner=preconditioner, abs_tol=abs_tol)
+    return _solver(
+        "cg",
+        "pops::solve_prepared_affine",
+        "CG",
+        max_iter,
+        rel_tol,
+        preconditioner=preconditioner,
+        abs_tol=abs_tol,
+    )
 
 
-def BiCGStab(max_iter: Any = None, rel_tol: Any = None, *, preconditioner: Any = None,
-             abs_tol: Any = None) -> Any:
+def BiCGStab(
+    max_iter: Any = None, rel_tol: Any = None, *, preconditioner: Any = None, abs_tol: Any = None
+) -> Any:
     """Stabilised bi-CG over the prepared affine route (scheme ``"bicgstab"``).
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
     ``rel_tol`` (ADC-645, optional) supplies the ``P.solve_linear`` tolerance when the call-site
     ``tol`` is left default.
     """
-    return _solver("bicgstab", "pops::solve_prepared_affine", "BiCGStab", max_iter, rel_tol,
-                   preconditioner=preconditioner, abs_tol=abs_tol)
+    return _solver(
+        "bicgstab",
+        "pops::solve_prepared_affine",
+        "BiCGStab",
+        max_iter,
+        rel_tol,
+        preconditioner=preconditioner,
+        abs_tol=abs_tol,
+    )
 
 
-def GMRES(max_iter: Any = None, rel_tol: Any = None, *, restart: Any = 30,
-          preconditioner: Any = None, abs_tol: Any = None) -> Any:
+def GMRES(
+    max_iter: Any = None,
+    rel_tol: Any = None,
+    *,
+    restart: Any = 30,
+    preconditioner: Any = None,
+    abs_tol: Any = None,
+) -> Any:
     """Restarted GMRES over the prepared affine route (scheme ``"gmres"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
     ``rel_tol`` (ADC-645, optional) supplies the ``P.solve_linear`` tolerance when the call-site
     ``tol`` is left default.
     """
-    return _solver("gmres", "pops::solve_prepared_affine", "GMRES", max_iter, rel_tol,
-                   restart=restart, preconditioner=preconditioner, abs_tol=abs_tol)
+    return _solver(
+        "gmres",
+        "pops::solve_prepared_affine",
+        "GMRES",
+        max_iter,
+        rel_tol,
+        restart=restart,
+        preconditioner=preconditioner,
+        abs_tol=abs_tol,
+    )
 
 
-def Richardson(max_iter: Any = None, rel_tol: Any = None, omega: Any = None, *,
-               preconditioner: Any = None, abs_tol: Any = None) -> Any:
+def Richardson(
+    max_iter: Any = None,
+    rel_tol: Any = None,
+    omega: Any = None,
+    *,
+    preconditioner: Any = None,
+    abs_tol: Any = None,
+) -> Any:
     """Richardson iteration over the prepared affine route (scheme ``"richardson"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
@@ -242,11 +308,19 @@ def Richardson(max_iter: Any = None, rel_tol: Any = None, omega: Any = None, *,
         except (TypeError, ValueError):
             valid = False
         if not valid:
-            raise ValueError("Richardson: omega must be a positive number or None; got %r"
-                             % (omega,))
-    return _solver("richardson", "pops::solve_prepared_affine", "Richardson", max_iter, rel_tol,
-                   preconditioner=preconditioner,
-                   omega=omega_value if omega is not None else None, abs_tol=abs_tol)
+            raise ValueError(
+                "Richardson: omega must be a positive number or None; got %r" % (omega,)
+            )
+    return _solver(
+        "richardson",
+        "pops::solve_prepared_affine",
+        "Richardson",
+        max_iter,
+        rel_tol,
+        preconditioner=preconditioner,
+        omega=omega_value if omega is not None else None,
+        abs_tol=abs_tol,
+    )
 
 
 __all__ = ["CG", "BiCGStab", "GMRES", "Richardson"]

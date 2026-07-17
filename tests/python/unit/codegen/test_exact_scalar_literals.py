@@ -226,7 +226,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     program.set_apply(operator, lambda P, out, in_: in_)
     rhs = program.value("rhs", state, at=time_state.next.point)
     result = program.solve(
-        LinearProblem(operator, rhs),
+        LinearProblem(operator, rhs, nullspace=None),
         solver=Richardson(
             max_iter=4, rel_tol=Decimal("1e-12"), omega=Fraction(2, 3)),
     ).consume(action=FailRun())
@@ -251,7 +251,8 @@ def test_solver_iteration_budget_rejects_bool():
     program.set_apply(operator, lambda P, out, in_: in_)
 
     with pytest.raises(ValueError, match="max_iter"):
-        program.solve(LinearProblem(operator, state), solver=CG(max_iter=True))
+        program.solve(
+            LinearProblem(operator, state, nullspace=None), solver=CG(max_iter=True))
 
 
 def test_board_operator_scales_never_erase_annotations_or_mix_number_domains():

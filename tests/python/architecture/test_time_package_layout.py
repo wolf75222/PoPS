@@ -57,7 +57,7 @@ OLD_MODULES = (
 )
 
 PUBLIC = (
-    "Program", "ProgramValue", "StageStateSet", "ResidualSolution",
+    "Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
     "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
     "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
     "SOLVE_STATUSES", "Schedule",

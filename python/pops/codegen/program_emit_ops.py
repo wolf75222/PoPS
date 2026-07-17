@@ -43,6 +43,7 @@ from pops.codegen.program_emit_control import (
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
+    _SOLVE_STATUS_CPP,
     _consumed_solve_action,
     _emit_matrix_free_operator,
     _emit_solve_linear,
@@ -73,18 +74,22 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
 def _append_solve_report_guard(
         program: Any, solve: Any, report: str, lines: list[str], *, label: str) -> None:
     """Consume a native SolveReport with the exact action authored for ``solve``."""
-    action = _consumed_solve_action(program, solve)
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
     lines.append("if (!%s.solved_value_available()) {" % report)
-    if action == "reject_attempt":
+    if action_kind == "reject_attempt":
+        selected = " || ".join(
+            "%s.status == %s" % (report, _SOLVE_STATUS_CPP[status])
+            for status in action_statuses)
+        lines.append("  if (%s) {" % selected)
         lines.append(
-            "  throw pops::runtime::program::StepAttemptRejected("
+            "    throw pops::runtime::program::StepAttemptRejected("
             "%s.status, %s, std::string(%s) + %s.status_name());"
             % (report, json.dumps(label), json.dumps(label + " failed: "), report))
-    else:
-        lines.append(
-            "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
-            "\" action=fail_run\");"
-            % (json.dumps(label + " failed: "), report))
+        lines.append("  }")
+    lines.append(
+        "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
+        "\" action=fail_run\");"
+        % (json.dumps(label + " failed: "), report))
     lines.append("}")
 
 
@@ -565,16 +570,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = var[value.id]
     elif v.op == "while":
         _emit_while(
-            program, v, base, var, model, lines, block_idx, field_plans, target=target)
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
     elif v.op == "range":
         _emit_range(
-            program, v, base, var, model, lines, block_idx, field_plans, target=target)
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
     elif v.op == "subcycle":
         _emit_subcycle(
-            program, v, base, var, model, lines, block_idx, field_plans, target=target)
+            program, v, base, var, model, lines, prelude, block_idx, field_plans, target=target)
     elif v.op == "branch":
         _emit_branch(
-            program, v, base, var, model, lines, block_idx, field_plans, target=target)
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
     elif v.op == "linear_combine":
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:

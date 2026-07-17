@@ -73,7 +73,7 @@ def _divgrad_program(t, *, name="divgrad", solver=None, tol=1e-10, max_iter=200,
     P.set_apply(A, apply)
     endpoint = typed_state(P, "blk", state_name="U").next
     phi = P.solve(
-        LinearProblem(A, U, at=endpoint.point), solver=solver,
+        LinearProblem(A, U, at=endpoint.point, nullspace=None), solver=solver,
     ).consume(action=FailRun())
     final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -98,7 +98,7 @@ def test_divergence_records_and_validates(t):
     U = typed_state(P, "blk")
     endpoint = typed_state(P, "blk", state_name="U").next
     phi = P.solve(
-        LinearProblem(A, U, at=endpoint.point),
+        LinearProblem(A, U, at=endpoint.point, nullspace=None),
         solver=BiCGStab(max_iter=50, rel_tol=1e-8),
     ).consume(action=FailRun())
     final = P.value("phi_next", phi, at=endpoint.point)

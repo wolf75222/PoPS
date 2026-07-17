@@ -46,9 +46,8 @@ class CompositeTensorFAC:
 
     ``CompositeTensorFAC`` owns the complete solve contract. On a flat hierarchy it runs the
     authenticated tensor apply through BiCGStab; on a refined hierarchy it runs the equivalent
-    native composite FAC operator. ``max_iter`` and ``rel_tol`` govern both branches; ``abs_tol`` is
-    the refined FAC absolute floor. The FAC-only controls shape the refined iteration and are never
-    presented as Krylov options.
+    native composite FAC operator. ``max_iter``, ``rel_tol`` and ``abs_tol`` govern both branches.
+    The FAC-only controls shape the refined iteration and are never presented as Krylov options.
     """
 
     max_iter: int = _DEFAULT_MAX_ITER

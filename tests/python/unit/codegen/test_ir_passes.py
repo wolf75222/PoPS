@@ -193,7 +193,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from pops.time import FailRun
     P.set_apply(A, apply)
     P.solve(
-        LinearProblem(A, buf), solver=GMRES(max_iter=10, restart=3),
+        LinearProblem(A, buf, nullspace=None), solver=GMRES(max_iter=10, restart=3),
     ).consume(action=FailRun())  # reads buf by BUFFER IDENTITY
     P.commit(typed_state(P, "plasma", state_name="U").next,
              P.value("U1", 1.0 * U,

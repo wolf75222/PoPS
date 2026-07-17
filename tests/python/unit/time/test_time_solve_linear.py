@@ -96,7 +96,8 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
         LinearProblem(
             A, rhs, at=endpoint.point,
             properties=(LinearOperatorProperties.symmetric_positive_definite()
-                        if method == "cg" else LinearOperatorProperties.general())),
+                        if method == "cg" else LinearOperatorProperties.general()),
+            nullspace=None),
         solver=solver,
     ).consume(action=action or FailRun())
     P.commit(endpoint, phi)
@@ -113,10 +114,14 @@ def test_apply_lambda_and_cg_codegen(t):
 
 
 def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
-    src = emit_cpp_program(_solve_program(t, method="cg", action=RejectAttempt()))
+    src = emit_cpp_program(_solve_program(
+        t, method="cg", action=RejectAttempt(statuses=("iteration_limit",))))
     assert "#include <pops/runtime/program/step_transaction.hpp>" in src, src
     assert "pops::runtime::program::StepAttemptRejected" in src, src
     assert "solve_linear failed" in src, src
+    assert ".status == pops::SolveStatus::kIterationLimit" in src, src
+    assert ".status == pops::SolveStatus::kBreakdown" not in src, src
+    assert "action=fail_run" in src, src
 
 
 def test_bicgstab_codegen(t):
@@ -197,7 +202,7 @@ def test_string_precond_rejected(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
         P.solve(
-            LinearProblem(A, U),
+            LinearProblem(A, U, nullspace=None),
             solver=_krylov(
                 "gmres", max_iter=10, preconditioner="geometric_mg"),
         )
@@ -239,7 +244,7 @@ def test_max_iter_required(t):
     for bad in (None, 0, -5):
         try:
             P.solve(
-                LinearProblem(A, U), solver=_krylov("cg", max_iter=bad))
+                LinearProblem(A, U, nullspace=None), solver=_krylov("cg", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -254,7 +259,7 @@ def test_tol_positive(t):
     for bad in (0.0, -1e-8):
         try:
             P.solve(
-                LinearProblem(A, U),
+                LinearProblem(A, U, nullspace=None),
                 solver=_krylov("cg", max_iter=10, rel_tol=bad),
             )
         except ValueError as exc:
@@ -271,7 +276,7 @@ def test_string_method_rejected(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in ("cg", "minres"):
         try:
-            P.solve(LinearProblem(A, U), solver=bad)
+            P.solve(LinearProblem(A, U, nullspace=None), solver=bad)
         except TypeError as exc:
             assert "solver" in str(exc) and "typed descriptor" in str(exc), str(exc)
         else:
@@ -283,7 +288,7 @@ def test_operator_must_be_matrix_free(t):
     U = typed_state(P, "blk")
     try:
         P.solve(
-            LinearProblem(U, U), solver=_krylov("cg", max_iter=10))
+            LinearProblem(U, U, nullspace=None), solver=_krylov("cg", max_iter=10))
     except ValueError as exc:
         assert "operator" in str(exc), str(exc)
     else:

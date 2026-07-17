@@ -13,6 +13,7 @@ from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
+import pytest
 
 from typed_program_support import typed_state
 
@@ -37,7 +38,7 @@ def _solve_program(preconditioner=None):
     solver = GMRES(
         max_iter=200, rel_tol=1e-10, restart=8, preconditioner=preconditioner)
     phi = P.solve(
-        LinearProblem(A, rhs), solver=solver,
+        LinearProblem(A, rhs, nullspace=None), solver=solver,
     ).consume(action=t.FailRun())
     P.commit(endpoint, phi)
     return P
@@ -79,6 +80,21 @@ def test_configured_precond_emits_explicit_ctor():
     src = emit_cpp_program(override)
     # nu1, nu2, nbottom, min_coarse, n_vcycles in fixed positional order.
     assert "GeometricMgPreconditioner>(1, 1, 80, 4, 3)" in src
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"],
+)
+def test_codegen_rejects_forged_preconditioner_integer_overflow(name):
+    program = _solve_program(_mg())
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    attrs["precond_options"] = {name: 1 << 31}
+    object.__setattr__(solve, "attrs", attrs)
+
+    with pytest.raises(ValueError, match=name):
+        emit_cpp_program(program)
 
 
 def _mg(**kw):

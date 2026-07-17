@@ -1,4 +1,5 @@
 """Exact scalar literals used by symbolic expressions and time coefficients."""
+
 from __future__ import annotations
 
 import math
@@ -12,6 +13,11 @@ from typing import Any
 
 
 _CPP_SIGNED_INTEGER_MAX = (1 << 63) - 1
+CPP_INT_MAX = (1 << 31) - 1
+# The native GMRES exceptional path flattens one 67-double exponent-banded payload per Arnoldi
+# projection into a single MPI_Allreduce. Keep the authored restart within that signed-int count.
+PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH = 67
+PREPARED_GMRES_MAX_RESTART = CPP_INT_MAX // PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH - 1
 _BINARY64_EXACT_INTEGER_MAX = 1 << 53
 _CPP_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
 
@@ -22,10 +28,12 @@ def _finite_real_token(value: Any, *, description: str) -> str:
         lowered = float(value)
     except (OverflowError, ValueError) as exc:
         raise OverflowError(
-            "%s cannot be represented by the finite pops::Real target" % description) from exc
+            "%s cannot be represented by the finite pops::Real target" % description
+        ) from exc
     if not math.isfinite(lowered):
         raise OverflowError(
-            "%s cannot be represented by the finite pops::Real target" % description)
+            "%s cannot be represented by the finite pops::Real target" % description
+        )
     return repr(lowered)
 
 
@@ -35,11 +43,10 @@ def _integer_chunks_cpp(value: int, cpp_type: str) -> str:
     digits = str(abs(value))
     first = len(digits) % 9 or 9
     chunks = [int(digits[:first])]
-    chunks.extend(int(digits[index:index + 9]) for index in range(first, len(digits), 9))
+    chunks.extend(int(digits[index : index + 9]) for index in range(first, len(digits), 9))
     expression = "%s(%d)" % (cpp_type, chunks[0])
     for chunk in chunks[1:]:
-        expression = "((%s * %s(1000000000)) + %s(%d))" % (
-            expression, cpp_type, cpp_type, chunk)
+        expression = "((%s * %s(1000000000)) + %s(%d))" % (expression, cpp_type, cpp_type, chunk)
     return "(-%s)" % expression if sign < 0 else expression
 
 
@@ -50,26 +57,31 @@ def _integer_cpp(value: int, cpp_type: str, *, bounded_real: bool) -> str:
     if abs(value) <= _CPP_SIGNED_INTEGER_MAX:
         return "%s(%d)" % (cpp_type, value)
     if bounded_real:
-        return "%s(%s)" % (
-            cpp_type, _finite_real_token(value, description="integer literal"))
+        return "%s(%s)" % (cpp_type, _finite_real_token(value, description="integer literal"))
     return _integer_chunks_cpp(value, cpp_type)
 
 
 def _rational_cpp(
-    numerator: int, denominator: int, cpp_type: str, *, bounded_real: bool,
+    numerator: int,
+    denominator: int,
+    cpp_type: str,
+    *,
+    bounded_real: bool,
 ) -> str:
     if bounded_real:
         # Division is a single correctly-rounded binary64 operation only when both integer operands
         # reach it exactly. Wider operands would be rounded separately first (a possible 1-ulp
         # double-rounding error), so precompute the exact Fraction -> binary64 boundary once.
-        if (abs(numerator) <= _BINARY64_EXACT_INTEGER_MAX
-                and abs(denominator) <= _BINARY64_EXACT_INTEGER_MAX):
+        if (
+            abs(numerator) <= _BINARY64_EXACT_INTEGER_MAX
+            and abs(denominator) <= _BINARY64_EXACT_INTEGER_MAX
+        ):
             return "(%s(%d) / %s(%d))" % (cpp_type, numerator, cpp_type, denominator)
         rounded = _finite_real_token(
-            Fraction(numerator, denominator), description="rational literal")
+            Fraction(numerator, denominator), description="rational literal"
+        )
         return "%s(%s)" % (cpp_type, rounded)
-    if (abs(numerator) <= _CPP_SIGNED_INTEGER_MAX
-            and abs(denominator) <= _CPP_SIGNED_INTEGER_MAX):
+    if abs(numerator) <= _CPP_SIGNED_INTEGER_MAX and abs(denominator) <= _CPP_SIGNED_INTEGER_MAX:
         return "(%s(%d) / %s(%d))" % (cpp_type, numerator, cpp_type, denominator)
     return "(%s / %s)" % (
         _integer_chunks_cpp(numerator, cpp_type),
@@ -92,7 +104,8 @@ def _freeze_payload(value: Any) -> Any:
         return value
     raise TypeError(
         "custom ScalarLiteral payload must be strict JSON data (string-keyed mappings, "
-        "lists, and scalar values)")
+        "lists, and scalar values)"
+    )
 
 
 def _data_payload(value: Any) -> Any:
@@ -131,15 +144,20 @@ class ScalarLiteral:
         if self.target is not None and _CPP_TYPE_RE.fullmatch(self.target) is None:
             raise ValueError(
                 "ScalarLiteral target must be a qualified C++ scalar type name, got %r"
-                % self.target)
+                % self.target
+            )
         object.__setattr__(self, "payload", _freeze_payload(self.payload))
-        if self.kind == "integer" and (isinstance(self.payload, bool)
-                                       or not isinstance(self.payload, int)):
+        if self.kind == "integer" and (
+            isinstance(self.payload, bool) or not isinstance(self.payload, int)
+        ):
             raise TypeError("integer ScalarLiteral payload must be a Python int")
         if self.kind == "rational":
-            if (not isinstance(self.payload, tuple) or len(self.payload) != 2
-                    or any(isinstance(item, bool) or not isinstance(item, int)
-                           for item in self.payload) or self.payload[1] == 0):
+            if (
+                not isinstance(self.payload, tuple)
+                or len(self.payload) != 2
+                or any(isinstance(item, bool) or not isinstance(item, int) for item in self.payload)
+                or self.payload[1] == 0
+            ):
                 raise TypeError("rational ScalarLiteral payload must be (numerator, denominator)")
             rational = Fraction(*self.payload)
             object.__setattr__(self, "payload", (rational.numerator, rational.denominator))
@@ -162,12 +180,15 @@ class ScalarLiteral:
             try:
                 binary = float.fromhex(self.payload)
             except (TypeError, ValueError) as exc:
-                raise TypeError("binary64 ScalarLiteral payload must be a float.hex string") from exc
+                raise TypeError(
+                    "binary64 ScalarLiteral payload must be a float.hex string"
+                ) from exc
             if not math.isfinite(binary):
                 raise ValueError("binary64 ScalarLiteral payload must be finite")
             object.__setattr__(self, "payload", binary.hex())
         if self.kind == "algebraic" and (
-                not isinstance(self.payload, str) or not self.payload or self.cpp is None):
+            not isinstance(self.payload, str) or not self.payload or self.cpp is None
+        ):
             raise ValueError("algebraic ScalarLiteral requires string payload and C++ spelling")
 
     @classmethod
@@ -242,9 +263,10 @@ class ScalarLiteral:
         unit: str | None = None,
         target: Any = None,
     ) -> ScalarLiteral:
-        if not isinstance(expression, str) or not expression \
-                or not isinstance(cpp, str) or not cpp:
-            raise TypeError("an algebraic literal requires non-empty string symbolic and C++ spellings")
+        if not isinstance(expression, str) or not expression or not isinstance(cpp, str) or not cpp:
+            raise TypeError(
+                "an algebraic literal requires non-empty string symbolic and C++ spellings"
+            )
         return cls("algebraic", expression, unit, _target_name(target), cpp)
 
     def to_data(self) -> dict[str, Any]:
@@ -279,8 +301,8 @@ class ScalarLiteral:
         if self.unit is not None:
             raise TypeError(
                 "ScalarLiteral.to_cpp cannot lower unit %r without an explicit unit-system "
-                "conversion; convert the quantity to an unannotated target scalar first"
-                % self.unit)
+                "conversion; convert the quantity to an unannotated target scalar first" % self.unit
+            )
         cpp_type = self.target or "pops::Real"
         bounded_real = cpp_type == "pops::Real"
         if self.kind == "integer":
@@ -300,8 +322,7 @@ class ScalarLiteral:
                 body = "%s(-0.0)" % cpp_type
             else:
                 numerator, denominator = decimal.as_integer_ratio()
-                body = _rational_cpp(
-                    numerator, denominator, cpp_type, bounded_real=False)
+                body = _rational_cpp(numerator, denominator, cpp_type, bounded_real=False)
         elif self.kind == "binary64":
             body = repr(float.fromhex(self.payload))
             if self.target:
@@ -340,13 +361,39 @@ def exact_numeric_scalar(value: Any, *, where: str) -> Any:
     if literal.unit is not None or literal.target is not None:
         raise TypeError(
             "%s cannot erase a scalar unit or target annotation; keep the constant as an Expr "
-            "until explicit target lowering" % where)
+            "until explicit target lowering" % where
+        )
     try:
         return literal.to_python()
     except TypeError as exc:
         raise TypeError(
             "%s requires a statically evaluable numeric scale; keep algebraic/custom constants "
-            "as Expr nodes" % where) from exc
+            "as Expr nodes" % where
+        ) from exc
+
+
+def exact_cpp_int(
+    value: Any,
+    *,
+    where: str,
+    minimum: int,
+    maximum: int = CPP_INT_MAX,
+) -> int:
+    """Validate one exact Python integer before lowering it to a signed C++ ``int``.
+
+    Python integers are arbitrary precision, while every native PoPS control using this helper is
+    stored in a signed C++ ``int``.  Keep that target boundary explicit: booleans and coercible
+    values are not integers here, and an out-of-range value must fail before source generation.
+    """
+    if isinstance(minimum, bool) or not isinstance(minimum, int):
+        raise TypeError("exact_cpp_int minimum must be a Python int")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < minimum:
+        raise TypeError("exact_cpp_int maximum must be a Python int >= minimum")
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > maximum:
+        raise ValueError(
+            "%s must be an exact Python int in [%d, %d]; got %r" % (where, minimum, maximum, value)
+        )
+    return value
 
 
 def numeric_domains_compatible(left: Any, right: Any) -> bool:
@@ -385,8 +432,9 @@ def exact_decimal_add(left: Decimal | int, right: Decimal | int) -> Decimal:
     left_coeff, left_exp = _decimal_parts(left)
     right_coeff, right_exp = _decimal_parts(right)
     exponent = min(left_exp, right_exp)
-    coefficient = (left_coeff * 10 ** (left_exp - exponent)
-                   + right_coeff * 10 ** (right_exp - exponent))
+    coefficient = left_coeff * 10 ** (left_exp - exponent) + right_coeff * 10 ** (
+        right_exp - exponent
+    )
     return _decimal_from_parts(coefficient, exponent)
 
 
@@ -426,8 +474,7 @@ def exact_decimal_divide(left: Decimal | int, right: Decimal | int) -> Decimal |
     if denominator != 1:
         return None
     scale = max(powers_two, powers_five)
-    coefficient = (quotient.numerator * 5 ** (scale - powers_two)
-                   * 2 ** (scale - powers_five))
+    coefficient = quotient.numerator * 5 ** (scale - powers_two) * 2 ** (scale - powers_five)
     return _decimal_from_parts(coefficient, -scale)
 
 
@@ -438,7 +485,8 @@ def multiply_exact_scalars(left: Any, right: Any, *, where: str) -> Any:
     if not numeric_domains_compatible(a, b):
         raise TypeError(
             "%s cannot mix %s and %s without an explicit target conversion"
-            % (where, type(a).__name__, type(b).__name__))
+            % (where, type(a).__name__, type(b).__name__)
+        )
     if isinstance(a, Decimal) or isinstance(b, Decimal):
         return exact_decimal_multiply(a, b)
     return a * b
@@ -463,10 +511,10 @@ def scalar_to_native(value: Any, *, where: str) -> float:
     if literal.unit is not None:
         raise TypeError(
             "%s cannot lower unit %r at the native pops::Real boundary; convert the "
-            "quantity explicitly first" % (where, literal.unit))
+            "quantity explicitly first" % (where, literal.unit)
+        )
     if literal.target not in (None, "pops::Real"):
-        raise TypeError(
-            "%s targets %r, not the native pops::Real ABI" % (where, literal.target))
+        raise TypeError("%s targets %r, not the native pops::Real ABI" % (where, literal.target))
     try:
         result = float(literal.to_python())
     except (TypeError, ValueError, OverflowError) as exc:
@@ -479,8 +527,21 @@ def scalar_to_native(value: Any, *, where: str) -> float:
 
 
 __all__ = [
-    "ScalarLiteral", "exact_decimal_add", "exact_decimal_divide", "exact_decimal_multiply",
-    "exact_decimal_negate", "exact_numeric_scalar", "exact_scale_prefix", "multiply_exact_scalars", "scalar_cpp",
+    "CPP_INT_MAX",
+    "PREPARED_GMRES_MAX_RESTART",
+    "PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH",
+    "ScalarLiteral",
+    "exact_decimal_add",
+    "exact_decimal_divide",
+    "exact_decimal_multiply",
+    "exact_cpp_int",
+    "exact_decimal_negate",
+    "exact_numeric_scalar",
+    "exact_scale_prefix",
+    "multiply_exact_scalars",
+    "scalar_cpp",
     "scalar_to_native",
-    "numeric_domains_compatible", "scalar_data", "scalar_literal",
+    "numeric_domains_compatible",
+    "scalar_data",
+    "scalar_literal",
 ]

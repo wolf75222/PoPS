@@ -10,8 +10,8 @@ compile, NO .so on disk -- and assert that
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
   - the REJECTED reuse names an inspectable REASON (a still-live occupant, an aux/field barrier);
-  - persistent Krylov buffers use the exact typed footprint while multigrid remains explicitly
-    topology-dependent;
+  - persistent Krylov bundles report solution, apply, prepared-problem and workspace fields
+    separately, while multigrid remains explicitly topology-dependent;
   - ``to_dict`` / ``to_json`` / ``str`` / ``repr`` work and round-trip through JSON.
 
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
@@ -87,12 +87,110 @@ def _krylov(name="krylov_demo", *, preconditioner=None):
     from pops.time import FailRun
     P.set_apply(A, _apply)
     P.solve(
-        LinearProblem(A, buf),
+        LinearProblem(A, buf, nullspace=None),
         solver=GMRES(max_iter=10, restart=3, preconditioner=preconditioner),
     ).consume(action=FailRun())
     P.commit(
         temporal.next,
         P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
+    return P
+
+
+def _nested_subcycled_krylov(name="nested_subcycled_krylov"):
+    """One solve two logical-clock body blocks below the Program's top-level value list."""
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    U = temporal.n
+    A = P.matrix_free_operator("op", domain="state", range_="state", ncomp=1)
+
+    def _apply(p, _out, value):
+        lap = p.scalar_field("lap")
+        p.laplacian(lap, value)
+        return value - p.dt * lap
+
+    from pops.linalg import LinearProblem
+    from pops.solvers.krylov import GMRES
+    from pops.time import FailRun, SampleAndHold
+    from pops.time.points import Clock, TimePoint
+    P.set_apply(A, _apply)
+    fast = Clock("fast", owner=P.owner_path)
+    micro = Clock("micro", owner=P.owner_path)
+    fast_state = P.synchronize(
+        U, at=TimePoint(fast), relation=SampleAndHold(), name="to_fast")
+
+    def fast_tick(builder, value):
+        micro_state = builder.synchronize(
+            value, at=TimePoint(micro), relation=SampleAndHold(), name="to_micro")
+
+        def micro_tick(inner, micro_value):
+            return inner.solve(
+                LinearProblem(A, micro_value, nullspace=None),
+                solver=GMRES(max_iter=10, restart=3),
+            ).consume(action=FailRun())
+
+        advanced = builder.subcycle(
+            micro_state, clock=micro, within=fast, count=2,
+            body_fn=micro_tick, name="micro_ticks")
+        return builder.synchronize(
+            advanced, at=TimePoint(fast), relation=SampleAndHold(), name="to_fast_tick")
+
+    advanced = P.subcycle(
+        fast_state, clock=fast, within=P.clock, count=2,
+        body_fn=fast_tick, name="fast_ticks")
+    returned = P.synchronize(
+        advanced, at=temporal.next.point, relation=SampleAndHold(), name="to_macro")
+    P.commit(temporal.next, returned)
+    return P
+
+
+def _structured_region_krylov(kind, name="structured_region_krylov"):
+    """Author prepared solves under while/range/branch regions, never the top-level SSA list."""
+    P, _, _, _, _, temporal = typed_program_state(
+        "%s_%s" % (name, kind), block_name="plasma")
+    U = temporal.n
+    A = P.matrix_free_operator("op", domain="state", range_="state", ncomp=1)
+
+    def _apply(builder, _out, value):
+        lap = builder.scalar_field("lap")
+        builder.laplacian(lap, value)
+        return value - builder.dt * lap
+
+    from pops.linalg import LinearProblem
+    from pops.solvers.krylov import GMRES
+    from pops.time import FailRun
+    P.set_apply(A, _apply)
+
+    def solve(builder, value):
+        return builder.solve(
+            LinearProblem(A, value, nullspace=None),
+            solver=GMRES(max_iter=10, restart=3),
+        ).consume(action=FailRun())
+
+    if kind == "while_cond":
+        advanced = P.while_(
+            U,
+            lambda builder, value: builder.norm2(solve(builder, value)) > 0,
+            lambda _builder, value: value,
+        )
+    elif kind == "while_body":
+        advanced = P.while_(
+            U,
+            lambda builder, value: builder.norm2(value) > 0,
+            solve,
+        )
+    elif kind == "range":
+        advanced = P.range(U, 2, solve)
+    elif kind == "branch":
+        advanced = P.branch(
+            P.norm2(U) > 0,
+            lambda builder: solve(builder, U),
+            lambda builder: solve(builder, U),
+        )
+    else:
+        raise ValueError("unknown structured region %r" % kind)
+    P.commit(
+        temporal.next,
+        P.value("advanced", advanced, at=temporal.next.point),
     )
     return P
 
@@ -242,12 +340,14 @@ def test_persistent_multigrid_buffers():
 
 
 def test_persistent_krylov_buffers():
-    """A solve_linear carries its exact prepared footprint into inspection."""
+    """A solve_linear reports the complete per-level generated bundle transparently."""
     print("== persistent Krylov work vectors for a solve_linear ==")
     P = _krylov()
     plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+    operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
+    chk(len(operators) == 1, "one reusable matrix-free operator -> one persistent entry")
     chk(krylov[0]["workspace_buffers"] == 6,
         "unpreconditioned GMRES(3) owns restart+3 persistent workspace fields")
     chk(krylov[0]["prepared_problem_buffers"] == 2,
@@ -258,8 +358,19 @@ def test_persistent_krylov_buffers():
         "GMRES(3) reports its Hessenberg/rotation/solution scalar storage exactly")
     chk(krylov[0]["collective_values"] == 4,
         "GMRES(3) reports its persistent batched-reduction payload exactly")
-    chk(krylov[0]["buffers"] == 8 and krylov[0]["exact"] is True,
-        "the complete prepared footprint is exact")
+    chk(krylov[0]["solution_buffers"] == 1,
+        "the published persistent solution is counted separately")
+    chk(operators[0]["apply_scratch_buffers"] == 1
+        and operators[0]["apply_accumulator_buffers"] == 1,
+        "the authored Laplacian scratch and generated apply accumulator are counted")
+    chk(krylov[0]["prepared_core_buffers"] == 8,
+        "workspace plus prepared A(0)/zero is an exact native sub-footprint")
+    chk(krylov[0]["buffers"] == krylov[0]["buffers_max"] == 9
+        and operators[0]["buffers"] == operators[0]["buffers_max"] == 2
+        and krylov[0]["buffers"] + operators[0]["buffers"] == 11,
+        "the ordinary GMRES solve and operator owners total eleven exact fields")
+    chk(krylov[0]["per_materialized_level"] is True,
+        "AMR multiplicity is explicit: one complete bundle per materialized level")
     chk(plan.conservative is True,
         "the exact Krylov entry does not hide this Program's separate conservative MG hierarchy")
 
@@ -267,6 +378,8 @@ def test_persistent_krylov_buffers():
     prepared = build_scratch_plan(
         _krylov("preconditioned_krylov", preconditioner=preconditioners.GeometricMG()))
     prepared_krylov = [p for p in prepared.persistent if p["kind"] == "krylov"][0]
+    prepared_operator = [
+        p for p in prepared.persistent if p["kind"] == "matrix_free_operator"][0]
     chk(prepared_krylov["workspace_buffers"] == 7,
         "preconditioned GMRES(3) owns its restart+4 transformed-vector workspace")
     chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
@@ -274,8 +387,52 @@ def test_persistent_krylov_buffers():
     chk(prepared_krylov["workspace_scalar_values"] == 25
         and prepared_krylov["collective_values"] == 4,
         "preconditioning does not duplicate GMRES scalar/collective storage")
-    chk(prepared_krylov["buffers"] == 11,
-        "the complete preconditioned GMRES footprint is exact")
+    chk(prepared_krylov["prepared_core_buffers"] == 11,
+        "the prepared preconditioned native core sub-footprint is exact")
+    chk(prepared_krylov["buffers"] == prepared_krylov["buffers_max"] == 12
+        and prepared_operator["buffers"] == prepared_operator["buffers_max"] == 2
+        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 14,
+        "solve and shared operator owners total fourteen generated fields")
+    chk(prepared_krylov["exact"] is True,
+        "the per-bundle fields are exact; the separate MG hierarchy entry remains conservative")
+
+
+def test_persistent_krylov_buffers_descend_nested_subcycles_once():
+    """A solve nested under recursive subcycle bodies remains one persistent allocation owner."""
+    print("== persistent Krylov owner inside nested subcycles ==")
+    P = _nested_subcycled_krylov()
+    chk(not any(value.op == "solve_linear" for value in P._values),
+        "the regression solve is absent from the top-level Program value list")
+    plan = build_scratch_plan(P)
+    krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+    operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
+    chk(len(krylov) == 1,
+        "recursive subcycle traversal reports the nested solve exactly once")
+    chk(len(operators) == 1,
+        "the top-level matrix-free operator remains one shared allocation owner")
+    chk(krylov[0]["workspace_buffers"] == 6 and krylov[0]["buffers"] == 9,
+        "the nested GMRES(3) keeps its exact solution/problem/workspace footprint")
+    chk(krylov[0]["operator_id"] == operators[0]["operator_id"],
+        "the nested solve references the separately counted shared operator owner")
+
+
+def test_persistent_krylov_buffers_descend_every_structured_region_once():
+    """Prepared owners under cond/body/true/false blocks are all visible before compilation."""
+    print("== persistent Krylov owners inside every structured control-flow region ==")
+    for kind, expected_solves in (
+            ("while_cond", 1), ("while_body", 1), ("range", 1), ("branch", 2)):
+        P = _structured_region_krylov(kind)
+        chk(not any(value.op == "solve_linear" for value in P._values),
+            "%s regression solves remain outside the top-level SSA list" % kind)
+        plan = build_scratch_plan(P)
+        krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+        operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
+        chk(len(krylov) == expected_solves,
+            "%s reports each distinct nested solve exactly once" % kind)
+        chk(len(operators) == 1,
+            "%s keeps the shared top-level operator as one allocation owner" % kind)
+        chk(all(entry["operator_id"] == operators[0]["operator_id"] for entry in krylov),
+            "%s nested solves retain exact shared-operator provenance" % kind)
 
 
 def test_scratch_plan_rejects_tampered_krylov_footprint():

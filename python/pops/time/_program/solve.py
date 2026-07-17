@@ -1,17 +1,23 @@
 """Program solve, history, value, commit, and record operations."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from pops.time.handles import (
-    HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
+    HistoryHandle,
+    StageHandle,
+    StateEndpointHandle,
+    TimeState,
 )
 from pops.time._program.constants import _ProgramConstants
 from pops.time._program.commit_validation import validate_commit_many
 from pops.time._program.diagnostics import _ProgramDiagnostics
 from pops.time.references import block_name
 from pops.time._program.value_validation import (
-    require_compatible_spaces, require_top_level, structural_state_space,
+    require_compatible_spaces,
+    require_top_level,
+    structural_state_space,
 )
 from pops.time.solve_outcome import SolveOutcome
 from pops.time.value_metadata import positive_scalar_literal
@@ -46,16 +52,19 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
         raise TypeError(
             "solve_linear: preconditioner must be a typed pops.solvers.preconditioners "
             "descriptor (e.g. pops.solvers.preconditioners.Identity() / GeometricMG()), not the "
-            "string %r" % (preconditioner,))
+            "string %r" % (preconditioner,)
+        )
     scheme = getattr(preconditioner, "scheme", None)
     if getattr(preconditioner, "category", None) != "preconditioner" or not isinstance(scheme, str):
         raise TypeError(
             "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
-            "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,))
+            "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,)
+        )
     if scheme not in _WIRED_PRECOND_SCHEMES:
         raise NotImplementedError(
             "solve: the %r preconditioner has no executable Program route; use "
-            "preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
+            "preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,)
+        )
     options = getattr(preconditioner, "options", None)
     precond_options = dict(options) if options else None
     return scheme, precond_options
@@ -64,15 +73,27 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
 def _preconditioners() -> Any:
     """The pops.solvers.preconditioners catalog (imported lazily)."""
     from pops.solvers import preconditioners
+
     return preconditioners
 
 
 class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
     """Private Krylov lowering plus histories, commits and records."""
 
-    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
-                      initial_guess: Any = None, name: Any = None,
-                      at: Any = None, scope: Any = None) -> Any:
+    def _solve_linear(
+        self,
+        *,
+        operator: Any,
+        rhs: Any,
+        prepared: Any,
+        properties: Any,
+        nullspace_contract: Any,
+        gauge_contract: Any,
+        initial_guess: Any = None,
+        name: Any = None,
+        at: Any = None,
+        scope: Any = None,
+    ) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a field. A state-domain operator with a State rhs returns a State;
         scratch/vector solves return a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
@@ -102,15 +123,18 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             methods; passing it to a non-gmres solve is rejected."""
         operator = self._canonical_value(operator)
         from pops.solvers.scopes import solve_scope_id
-        solve_scope = (operator.attrs.get("scope", "level") if scope is None
-                       else solve_scope_id(scope))
+
+        solve_scope = (
+            operator.attrs.get("scope", "level") if scope is None else solve_scope_id(scope)
+        )
         if operator.attrs.get("scope") == "hierarchy" and solve_scope != "hierarchy":
             raise ValueError("solve: a hierarchy-scoped operator cannot be downgraded to Level()")
         if solve_scope == "hierarchy":
             raise TypeError(
                 "solve: Hierarchy() is a direct native solve and requires "
                 "CompositeTensorFAC(max_iter=..., rel_tol=...); Krylov descriptors solve Level() "
-                "operators only")
+                "operators only"
+            )
         method = getattr(prepared, "method", None)
         tol = getattr(prepared, "tolerance", None)
         abs_tol = getattr(prepared, "absolute_tolerance", None)
@@ -128,27 +152,34 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:
-            raise ValueError("solve_linear: operator '%s' has no apply; call P.set_apply first"
-                             % operator.name)
+            raise ValueError(
+                "solve_linear: operator '%s' has no apply; call P.set_apply first" % operator.name
+            )
         if not _is_field_value(rhs):
             raise ValueError("solve_linear: rhs must be a scalar_field or State value (rhs=...)")
         if initial_guess is not None and not _is_field_value(initial_guess):
             raise ValueError("solve_linear: initial_guess must be a scalar_field or State value")
         if initial_guess is not None:
             unqualified_initial = (
-                initial_guess.vtype == "scalar_field" and initial_guess.block is None
-                and initial_guess.space is None)
+                initial_guess.vtype == "scalar_field"
+                and initial_guess.block is None
+                and initial_guess.space is None
+            )
             unqualified_rhs = (
-                rhs.vtype == "scalar_field" and rhs.block is None and rhs.space is None)
+                rhs.vtype == "scalar_field" and rhs.block is None and rhs.space is None
+            )
             # A fresh scalar scratch has no independent owner/layout identity: the qualified
             # operand supplies it.  This is the generic condensed-solve case (an owner-qualified
             # persistent warm start against a freshly allocated RHS).  Two explicit owners must
             # still agree; no owner is guessed when both operands are qualified.
             if initial_guess.block != rhs.block and not (unqualified_initial or unqualified_rhs):
-                raise ValueError("solve_linear: rhs and initial_guess must belong to the same block")
+                raise ValueError(
+                    "solve_linear: rhs and initial_guess must belong to the same block"
+                )
             if not (unqualified_initial or unqualified_rhs):
                 require_compatible_spaces(
-                    rhs.space, initial_guess.space, "solve_linear initial_guess", typed_pair=True)
+                    rhs.space, initial_guess.space, "solve_linear initial_guess", typed_pair=True
+                )
         op_ncomp = int(operator.attrs["ncomp"])
         # The rhs and initial guess must inhabit exactly the operator's vector space.  The native
         # prepared problem intentionally has no implicit component slicing; accepting a wider field
@@ -162,7 +193,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 if fld_ncomp != op_ncomp:
                     raise ValueError(
                         "solve_linear: %s StateSpace has %d component(s) but the operator declares "
-                        "ncomp=%d" % (label, fld_ncomp, op_ncomp))
+                        "ncomp=%d" % (label, fld_ncomp, op_ncomp)
+                    )
                 continue
             if fld.vtype != "scalar_field":
                 continue
@@ -170,19 +202,72 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             if fld_ncomp != op_ncomp:
                 raise ValueError(
                     "solve_linear: %s has %d component(s) but the operator declares ncomp=%d; "
-                    "select an explicit component view before solving" %
-                    (label, fld_ncomp, op_ncomp))
+                    "select an explicit component view before solving"
+                    % (label, fld_ncomp, op_ncomp)
+                )
         if method not in self._KRYLOV_METHODS:
-            raise ValueError("solve_linear: method must be one of %s; got %r"
-                             % (sorted(self._KRYLOV_METHODS), method))
-        from pops.linalg import LinearOperatorProperties
-        if not isinstance(properties, LinearOperatorProperties):
-            raise TypeError(
-                "solve_linear: properties must be pops.linalg.LinearOperatorProperties")
-        if method == "cg" and not properties.certifies_spd:
             raise ValueError(
-                "solve_linear: CG requires "
-                "LinearOperatorProperties.symmetric_positive_definite(); no property is inferred")
+                "solve_linear: method must be one of %s; got %r"
+                % (sorted(self._KRYLOV_METHODS), method)
+            )
+        from pops.linalg import LinearOperatorProperties
+
+        if not isinstance(properties, LinearOperatorProperties):
+            raise TypeError("solve_linear: properties must be pops.linalg.LinearOperatorProperties")
+        from pops._ir.literals import ScalarLiteral
+
+        if (
+            type(nullspace_contract) is not dict
+            or set(nullspace_contract) != {"schema_version", "kind"}
+            or type(nullspace_contract.get("schema_version")) is not int
+            or nullspace_contract.get("schema_version") != 1
+        ):
+            raise TypeError("solve_linear: nullspace contract is not canonical")
+        nullspace_kind = nullspace_contract.get("kind")
+        if nullspace_kind == "none":
+            if type(gauge_contract) is not dict or gauge_contract != {
+                "schema_version": 1,
+                "kind": "none",
+            }:
+                raise TypeError(
+                    "solve_linear: a nonsingular problem requires the canonical no-gauge contract"
+                )
+        elif nullspace_kind == "constant":
+            if (
+                type(gauge_contract) is not dict
+                or set(gauge_contract) != {"schema_version", "kind", "value"}
+                or type(gauge_contract.get("schema_version")) is not int
+                or gauge_contract.get("schema_version") != 1
+                or gauge_contract.get("kind") != "mean_value"
+                or type(gauge_contract.get("value")) is not ScalarLiteral
+            ):
+                raise TypeError(
+                    "solve_linear: ConstantNullspace requires an authenticated MeanValueGauge "
+                    "snapshot"
+                )
+            if op_ncomp != 1:
+                raise ValueError(
+                    "solve_linear: ConstantNullspace is scalar-only (ncomp=1); no vector nullspace "
+                    "basis is inferred"
+                )
+        else:
+            raise TypeError(
+                "solve_linear: nullspace must be the explicit canonical none/constant contract"
+            )
+        declared_nullspace = nullspace_kind == "constant"
+        if declared_nullspace and preconditioner != "identity":
+            raise NotImplementedError(
+                "solve_linear: ConstantNullspace currently requires preconditioners.Identity(); "
+                "GeometricMG has no explicit public certificate that its prepared V-cycle "
+                "preserves the mean-zero complement"
+            )
+        if method == "cg" and not properties.certifies_cg(declared_nullspace=declared_nullspace):
+            required = (
+                "LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()"
+                if declared_nullspace
+                else "LinearOperatorProperties.symmetric_positive_definite()"
+            )
+            raise ValueError("solve_linear: CG requires %s; no property is inferred" % required)
         # A non-identity preconditioner needs the runtime ApplyFn slot, which only the Krylov methods
         # that take one (BiCGStab / GMRES) expose. CG / Richardson have no preconditioner slot. This is
         # an honest capability limit of the matrix-free path,
@@ -190,13 +275,16 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if preconditioner != "identity" and method not in ("gmres", "bicgstab"):
             raise ValueError(
                 "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
-                "Krylov path; use GMRES() or BiCGStab()")
+                "Krylov path; use GMRES() or BiCGStab()"
+            )
         if preconditioner == "geometric_mg" and op_ncomp != 1:
             raise ValueError(
                 "solve_linear: preconditioners.GeometricMG() is scalar-only (ncomp=1); "
                 "a component-coupled multigrid operator is not implemented, so a multi-component "
-                "Krylov solve must use Identity() or another genuinely block-aware provider")
-        from pops._ir.literals import scalar_literal
+                "Krylov solve must use Identity() or another genuinely block-aware provider"
+            )
+        from pops._ir.literals import PREPARED_GMRES_MAX_RESTART, exact_cpp_int, scalar_literal
+
         try:
             tol_literal = scalar_literal(tol)
             tol_value = tol_literal.to_python()
@@ -216,43 +304,69 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if tol_value == 0 and abs_tol_value == 0:
             raise ValueError(
                 "solve_linear: rel_tol and abs_tol cannot both be zero; at least one stopping "
-                "threshold must be positive")
-        if (max_iter is None or isinstance(max_iter, bool)
-                or not isinstance(max_iter, int) or max_iter <= 0):
-            raise ValueError("dynamic solver loops require max_iter")
+                "threshold must be positive"
+            )
+        try:
+            max_iter_int = exact_cpp_int(max_iter, where="solve_linear: max_iter", minimum=1)
+        except ValueError as exc:
+            raise ValueError(
+                "dynamic solver loops require max_iter as a positive signed C++ int"
+            ) from exc
         # restart is a gmres-only knob; the GMRES(m) basis size. Other methods have no restart concept,
         # so passing one to them is a config error (fail loud rather than silently ignore it).
         if method == "gmres":
             if restart is None:
                 restart = self._GMRES_RESTART_DEFAULT
-            elif isinstance(restart, bool) or not isinstance(restart, int) or restart <= 0:
-                raise ValueError("solve_linear: restart must be a positive integer for gmres (got %r)"
-                                 % (restart,))
+            try:
+                restart_int = exact_cpp_int(
+                    restart,
+                    where=(
+                        "solve_linear: GMRES restart "
+                        "(MPI Arnoldi reduction count requires restart + 1)"
+                    ),
+                    minimum=1,
+                    maximum=PREPARED_GMRES_MAX_RESTART,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "solve_linear: restart exceeds the native batched robust-dot collective "
+                    "capacity (got %r)" % (restart,)
+                ) from exc
         elif restart is not None:
-            raise ValueError("solve_linear: restart only applies to method='gmres' (got method=%r)"
-                             % (method,))
+            raise ValueError(
+                "solve_linear: restart only applies to method='gmres' (got method=%r)" % (method,)
+            )
+        else:
+            restart_int = None
         inputs = (operator, rhs) if initial_guess is None else (operator, rhs, initial_guess)
-        # restart is a positive int on the gmres path (validated above); the None union member the
-        # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
-        restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
         from pops.time.stencil import StencilAccess
+
         stencil_access = operator.attrs.get("stencil_access")
         if type(stencil_access) is not StencilAccess:
             raise ValueError(
                 "solve_linear: matrix-free operator has no authenticated StencilAccess; "
-                "call set_apply on a current operator declaration")
+                "call set_apply on a current operator declaration"
+            )
         input_ghosts = stencil_access.required_ghost_depth
-        attrs = {"method": method, "preconditioner": preconditioner, "tol": tol_literal,
-                 "abs_tol": abs_tol_literal,
-                 "max_iter": int(max_iter), "has_guess": initial_guess is not None,
-                 "ncomp": op_ncomp, "restart": restart_int,
-                 "operator_properties": properties.canonical_data(),
-                 "krylov_footprint": {
-                     "components": op_ncomp,
-                     "input_ghosts": input_ghosts,
-                     "restart": restart_int or 0,
-                     "preconditioned": preconditioner != "identity",
-                 }}
+        attrs = {
+            "method": method,
+            "preconditioner": preconditioner,
+            "tol": tol_literal,
+            "abs_tol": abs_tol_literal,
+            "max_iter": max_iter_int,
+            "has_guess": initial_guess is not None,
+            "ncomp": op_ncomp,
+            "restart": restart_int,
+            "operator_properties": properties.canonical_data(),
+            "nullspace_contract": dict(nullspace_contract),
+            "gauge_contract": dict(gauge_contract),
+            "krylov_footprint": {
+                "components": op_ncomp,
+                "input_ghosts": input_ghosts,
+                "restart": restart_int or 0,
+                "preconditioned": preconditioner != "identity",
+            },
+        }
         # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
         # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
         # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).
@@ -261,26 +375,40 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         # ADC-645: Richardson relaxation factor, added ONLY when the descriptor set it (a default
         # Richardson() program's IR hash / emitted source stays byte-identical: omega = 1 literal).
         if omega is not None:
-            attrs["omega"] = positive_scalar_literal(
-                omega, where="solve_linear: Richardson omega")
+            attrs["omega"] = positive_scalar_literal(omega, where="solve_linear: Richardson omega")
         attrs["solver_identity"] = solver_identity_token
         attrs["problem_kind"] = "matrix_free_linear"
         # A state-domain solve over a State rhs returns a State, preserving the mathematical unknown's
         # block and StateSpace. Scalar/vector scratch solves remain scalar_field values. This keeps a
         # Newton update ``U + dU`` typed without an implicit scalar-field-to-State conversion.
         result_type = (
-            "state" if operator.attrs["domain"] == "state" and rhs.vtype == "state"
-            else "scalar_field")
+            "state"
+            if operator.attrs["domain"] == "state" and rhs.vtype == "state"
+            else "scalar_field"
+        )
         token = self._new(
-            result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space,
-            point=rhs.point if at is None else at)
+            result_type,
+            "solve_linear",
+            inputs,
+            attrs,
+            name,
+            rhs.block,
+            space=rhs.space,
+            point=rhs.point if at is None else at,
+        )
         outcome_name = name or token.name
 
         def project(outcome: Any) -> Any:
             return self._new(
-                result_type, "solve_outcome_component", (outcome,),
+                result_type,
+                "solve_outcome_component",
+                (outcome,),
                 {"index": 0, "ncomp": op_ncomp},
-                outcome_name, rhs.block, space=rhs.space, point=token.point)
+                outcome_name,
+                rhs.block,
+                space=rhs.space,
+                point=token.point,
+            )
 
         return SolveOutcome(self, token, project, outcome_name)
 
@@ -299,7 +427,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if not isinstance(endpoint, StateEndpointHandle):
             raise TypeError(
                 "commit: target must be U.next (a StateEndpointHandle); block-name strings and "
-                "stage handles are not public commit targets")
+                "stage handles are not public commit targets"
+            )
         endpoint = self._require_endpoint(endpoint, "commit")
         if isinstance(state, ProgramValue) and state.block != endpoint.block:
             raise ValueError(
@@ -311,12 +440,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError(
                 "commit: endpoint clock %r cannot receive value %r on clock %r; "
                 "insert Program.synchronize(..., at=TimePoint(endpoint.clock)) first"
-                % (endpoint.clock.name, state.name, state.clock.name))
+                % (endpoint.clock.name, state.name, state.clock.name)
+            )
         if state.point != endpoint.point:
             raise ValueError(
                 "commit: value %r is at %r, but the endpoint is at %r; construct the final "
-                "value with at=U.next.point"
-                % (state.name, state.point, endpoint.point))
+                "value with at=U.next.point" % (state.name, state.point, endpoint.point)
+            )
         require_compatible_spaces(endpoint.space, state.space, "commit", typed_pair=True)
         return self._commit_state(endpoint.state, state)
 
@@ -324,8 +454,12 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         """Record one validated qualified-state commit."""
         self._guard_mutable("commit a state")
         from pops.model.handles import Handle
-        if not isinstance(state_ref, Handle) or state_ref.kind != "state" \
-                or not state_ref.is_instance:
+
+        if (
+            not isinstance(state_ref, Handle)
+            or state_ref.kind != "state"
+            or not state_ref.is_instance
+        ):
             raise TypeError("_commit_state: target must be a block-qualified state Handle")
         block = state_ref.block_ref
         if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field")):
@@ -336,16 +470,20 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if state.block != block:
             raise ValueError(
                 "_commit_state: block %r cannot receive a value owned by block %r"
-                % (block_name(block), block_name(state.block)))
+                % (block_name(block), block_name(state.block))
+            )
         if state.state_ref is not None and state.state_ref != state_ref:
             raise ValueError(
                 "_commit_state: state %s cannot receive a value derived from %s"
-                % (state_ref.qualified_id, state.state_ref.qualified_id))
+                % (state_ref.qualified_id, state.state_ref.qualified_id)
+            )
         if state_ref not in self._state_spaces:
             raise ValueError(
-                "_commit_state: state %s has no declared StateSpace" % state_ref.qualified_id)
+                "_commit_state: state %s has no declared StateSpace" % state_ref.qualified_id
+            )
         require_compatible_spaces(
-            self._state_spaces[state_ref], state.space, "_commit_state", typed_pair=True)
+            self._state_spaces[state_ref], state.space, "_commit_state", typed_pair=True
+        )
         if state_ref in self._commits:
             raise ValueError("state %s committed more than once" % state_ref.qualified_id)
         self._commits[state_ref] = state
@@ -364,8 +502,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if isinstance(name, StateEndpointHandle):
             self._require_endpoint(name, "T.value")
             raise TypeError(
-                "T.value: U.next is a commit-only StateEndpointHandle; "
-                "use T.commit(U.next, value)")
+                "T.value: U.next is a commit-only StateEndpointHandle; use T.commit(U.next, value)"
+            )
         if isinstance(name, StageHandle):
             if at is not None:
                 raise TypeError("T.value(stage, expr) gets its point from the StageHandle")
@@ -382,19 +520,21 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError("T.value: name must be a non-empty string")
         value = _resolve_handle(expr)
         from pops import math as _bm
+
         if isinstance(value, _bm.Equation):
             if not isinstance(value.lhs, _bm.TimeDerivative):
-                raise ValueError("value(%r): an equation must read 'rate(U) == <rate expression>'"
-                                 % (name,))
+                raise ValueError(
+                    "value(%r): an equation must read 'rate(U) == <rate expression>'" % (name,)
+                )
             value = value.rhs
         if isinstance(value, _Affine):
             return self._linear_combine(name, value, at=at)
         if isinstance(value, ProgramValue):
-            return self._replace_value(
-                value, name=name, point=value.point if at is None else at)
+            return self._replace_value(value, name=name, point=value.point if at is None else at)
         raise TypeError(
             "value(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
-            % (name, value))
+            % (name, value)
+        )
 
     def commit_many(self, mapping: Any) -> None:
         """Commit ``{Ua.next: Ua_next, Ub.next: Ub_next}`` as one atomic group.

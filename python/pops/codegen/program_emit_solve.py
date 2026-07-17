@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops._ir.literals import scalar_cpp
+from pops._ir.literals import exact_cpp_int, scalar_cpp
 from pops.time.points import StagePoint, TimePoint
 
 from pops.codegen.program_emit_kernels import (
@@ -22,7 +22,10 @@ from pops.codegen.program_emit_kernels import (
     _coeff_cpp,
     _emit_field_combine,
 )
-from pops.codegen.krylov_contract import validated_krylov_footprint
+from pops.codegen.krylov_contract import (
+    validated_krylov_footprint,
+    validated_prepared_problem_contract,
+)
 
 
 def _program_nodes(program: Any) -> Any:
@@ -40,15 +43,37 @@ def _program_nodes(program: Any) -> Any:
         yield from walk(value)
 
 
-def _consumed_solve_action(program: Any, solve: Any) -> str:
-    """Return the explicit action kind attached to the unique solve_outcome consumer."""
+_SOLVE_STATUS_CPP = {
+    "singular": "pops::SolveStatus::kSingular",
+    "breakdown": "pops::SolveStatus::kBreakdown",
+    "iteration_limit": "pops::SolveStatus::kIterationLimit",
+    "invalid_evaluation": "pops::SolveStatus::kInvalidEvaluation",
+    "capability_failure": "pops::SolveStatus::kCapabilityFailure",
+    "invalid_input": "pops::SolveStatus::kInvalidInput",
+    "incompatible_rhs": "pops::SolveStatus::kIncompatibleRhs",
+}
+
+
+def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ...]]:
+    """Return the complete canonical action attached to the unique outcome consumer."""
     matches = []
     for node in _program_nodes(program):
         if node.op != "solve_outcome" or len(node.inputs) != 1 or node.inputs[0] is not solve:
             continue
         action = node.attrs.get("action")
-        matches.append(str(getattr(action, "kind", "")))
-    if len(matches) != 1 or matches[0] not in ("fail_run", "reject_attempt"):
+        kind = str(getattr(action, "kind", ""))
+        statuses = getattr(action, "statuses", None)
+        if (
+            kind not in ("fail_run", "reject_attempt")
+            or not isinstance(statuses, tuple)
+            or not statuses
+            or any(type(status) is not str or status not in _SOLVE_STATUS_CPP
+                   for status in statuses)
+            or len(set(statuses)) != len(statuses)
+        ):
+            raise ValueError("solve outcome action is not canonical")
+        matches.append((kind, statuses))
+    if len(matches) != 1:
         raise ValueError(
             "solve %r must have exactly one explicit outcome.consume(action=FailRun(...) or "
             "RejectAttempt(...)); found %d" % (solve.name, len(matches)))
@@ -218,10 +243,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     The lambda captures ``[ctx_owner, <scratch shared_ptrs>]`` and resolves the one context object
     shared with the installed step closure.  This is load-bearing for AMR level selection and exact
     evaluation clocks: copying a context at install time would freeze level 0 / stage 0 forever. @p
-    lines is the mandatory step-body line list: it refreshes the current ``dt`` before every solve
-    and carries the rhs_jacvec scratch refresh when that optional operation is present.  A
+    lines is the mandatory step-body scope used to resolve the live fields captured by an optional
+    rhs_jacvec.  The resulting refresh statements and both live-dt pointees are attached to the
+    operator token and emitted at each solve site, immediately before native preparation.  A
     matrix-free operator cannot be lowered in a control-flow-local scope because its install-time
-    ApplyFn would otherwise have no authenticated step-lifetime source for those values."""
+    ApplyFn would otherwise have no authenticated evaluation-lifetime source for those values."""
     apply_id = v.id
     lam = "apply_A%d" % apply_id
     var[apply_id] = lam
@@ -239,12 +265,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     if lines is None:
         raise NotImplementedError(
             "matrix-free operators require a top-level prepared evaluation scope")
+    prepare_refresh = []
     operator_dt = "operator_dt%d" % apply_id
     prelude.append(
         "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
         % operator_dt)
     captures.append(operator_dt)
-    lines.append("*%s = static_cast<pops::Real>(dt);" % operator_dt)
     for w in scratch:
         sp = "sf%d_%d" % (apply_id, w.id)
         sub[w.id] = sp
@@ -273,7 +299,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % apply_dt)
     captures.append(apply_dt)
-    lines.append("*%s = static_cast<pops::Real>(dt);" % apply_dt)
+    var[("operator_dt_captures", apply_id)] = (operator_dt, apply_dt)
     # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
     # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
@@ -381,19 +407,26 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # removed from the frozen base so the finite difference covers only the core residual; their
         # derivative is supplied separately by boundary_jvp_into_at in the ApplyFn.
         stage = _rhs_stage_fraction(r0_in)
-        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-        lines.append("*%s = ctx.boundary_evaluation_point(%d);" % (point, int(r0_in.id)))
-        lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
-        lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
-        lines.append("if (%s) {" % has_boundary)
-        lines.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
-        lines.append("  pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-        lines.append("  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
-                     % (point, block_idx, uk, boundary_work))
-        lines.append("  pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
-                     % (r0_core, boundary_work))
-        lines.append("}")
-        lines.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+        prepare_refresh.append(
+            "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        prepare_refresh.append(
+            "*%s = ctx.boundary_evaluation_point(%d);" % (point, int(r0_in.id)))
+        prepare_refresh.append(
+            "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
+        prepare_refresh.append(
+            "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
+        prepare_refresh.append("if (%s) {" % has_boundary)
+        prepare_refresh.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
+        prepare_refresh.append("  pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+        prepare_refresh.append(
+            "  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
+            % (point, block_idx, uk, boundary_work))
+        prepare_refresh.append(
+            "  pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+            % (r0_core, boundary_work))
+        prepare_refresh.append("}")
+        prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
     for w in block:
@@ -511,6 +544,9 @@ def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
     rejects every other preconditioner upstream."""
     scheme = v.attrs.get("preconditioner", "identity")
     if scheme == "identity":
+        if "precond_options" in v.attrs:
+            raise ValueError(
+                "identity preconditioner cannot carry GeometricMG integer options")
         return "pops::PreparedLinearPreconditioner::identity()"
     if scheme == "geometric_mg":
         name = "precond_mg%d" % v.id
@@ -527,14 +563,41 @@ def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
         # in the fixed positional order (nu1, nu2, nbottom, min_coarse, n_vcycles), each defaulting to
         # the native kMG* value so an omitted knob keeps its historical default.
         opts = v.attrs.get("precond_options")
-        if not opts:
+        if opts is None:
             ctor_args = ""
         else:
-            nu1 = int(opts.get("pre_sweeps", 2))
-            nu2 = int(opts.get("post_sweeps", 2))
-            nbottom = int(opts.get("bottom_sweeps", 50))
-            min_coarse = int(opts.get("min_coarse", 2))
-            n_vcycles = int(opts.get("n_vcycles", 1))
+            allowed = {
+                "n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"
+            }
+            if not isinstance(opts, Mapping) or not opts or not set(opts) <= allowed:
+                raise ValueError(
+                    "GeometricMG precond_options must be a non-empty exact subset of %s"
+                    % sorted(allowed))
+            nu1 = exact_cpp_int(
+                opts.get("pre_sweeps", 2),
+                where="GeometricMG pre_sweeps",
+                minimum=0,
+            )
+            nu2 = exact_cpp_int(
+                opts.get("post_sweeps", 2),
+                where="GeometricMG post_sweeps",
+                minimum=0,
+            )
+            nbottom = exact_cpp_int(
+                opts.get("bottom_sweeps", 50),
+                where="GeometricMG bottom_sweeps",
+                minimum=0,
+            )
+            min_coarse = exact_cpp_int(
+                opts.get("min_coarse", 2),
+                where="GeometricMG min_coarse",
+                minimum=1,
+            )
+            n_vcycles = exact_cpp_int(
+                opts.get("n_vcycles", 1),
+                where="GeometricMG n_vcycles",
+                minimum=1,
+            )
             ctor_args = "%d, %d, %d, %d, %d" % (nu1, nu2, nbottom, min_coarse, n_vcycles)
         prelude.append(
             "auto %s = std::make_shared<pops::runtime::program::GeometricMgPreconditioner>(%s);"
@@ -584,19 +647,16 @@ def _composite_tensor_fac_options(
         raise TypeError(
             "CompositeTensorFAC options must contain exactly max_iter, rel_tol, abs_tol, fine_sweeps, "
             "coarse_rel_tol, coarse_abs_tol, coarse_cycles and verbose")
-    max_iter = options["max_iter"]
-    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
-        raise ValueError("CompositeTensorFAC max_iter must be a positive int")
+    max_iter = exact_cpp_int(
+        options["max_iter"], where="CompositeTensorFAC max_iter", minimum=1)
     fine_sweeps, coarse_cycles, verbose = (
         options["fine_sweeps"], options["coarse_cycles"], options["verbose"])
-    if fine_sweeps is not None and (
-            isinstance(fine_sweeps, bool) or not isinstance(fine_sweeps, int)
-            or fine_sweeps < 1):
-        raise ValueError("CompositeTensorFAC fine_sweeps must be a positive int or None")
-    if coarse_cycles is not None and (
-            isinstance(coarse_cycles, bool) or not isinstance(coarse_cycles, int)
-            or coarse_cycles < 1):
-        raise ValueError("CompositeTensorFAC coarse_cycles must be a positive int or None")
+    if fine_sweeps is not None:
+        fine_sweeps = exact_cpp_int(
+            fine_sweeps, where="CompositeTensorFAC fine_sweeps", minimum=1)
+    if coarse_cycles is not None:
+        coarse_cycles = exact_cpp_int(
+            coarse_cycles, where="CompositeTensorFAC coarse_cycles", minimum=1)
     if verbose is not None and type(verbose) is not bool:
         raise TypeError("CompositeTensorFAC verbose must be a Python bool or None")
     from pops.model._bind_schema_data import literal_value
@@ -620,9 +680,12 @@ def _composite_tensor_fac_options(
             raise ValueError("CompositeTensorFAC coarse_abs_tol must be >= 0 or None")
     from pops._ir.literals import scalar_data
     emitted_tol_data = scalar_data(v.attrs["tol"])
-    emitted_max_iter = v.attrs.get("max_iter")
-    if (emitted_tol_data != options["rel_tol"] or isinstance(emitted_max_iter, bool)
-            or not isinstance(emitted_max_iter, int) or emitted_max_iter != max_iter):
+    emitted_abs_tol_data = scalar_data(v.attrs["abs_tol"])
+    emitted_max_iter = exact_cpp_int(
+        v.attrs.get("max_iter"), where="CompositeTensorFAC emitted max_iter", minimum=1)
+    if (emitted_tol_data != options["rel_tol"]
+            or emitted_abs_tol_data != options["abs_tol"]
+            or emitted_max_iter != max_iter):
         raise ValueError(
             "CompositeTensorFAC emitted convergence controls disagree with solver identity")
     if v.attrs.get("method") != "bicgstab" or v.attrs.get("preconditioner") != "identity" \
@@ -632,9 +695,11 @@ def _composite_tensor_fac_options(
     if isinstance(emitted_ncomp, bool) or not isinstance(emitted_ncomp, int) \
             or emitted_ncomp != 1:
         raise ValueError("CompositeTensorFAC supports exactly ncomp=1")
-    block_index = v.attrs.get("hierarchy_block_index")
-    if isinstance(block_index, bool) or not isinstance(block_index, int) or block_index < 0:
-        raise ValueError("CompositeTensorFAC requires an authenticated hierarchy block index")
+    exact_cpp_int(
+        v.attrs.get("hierarchy_block_index"),
+        where="CompositeTensorFAC hierarchy block index",
+        minimum=0,
+    )
     return (max_iter, rel_tol, abs_tol, fine_sweeps, coarse_rel_tol, coarse_abs_tol,
             coarse_cycles, verbose)
 
@@ -671,6 +736,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
     footprint = validated_krylov_footprint(v.attrs, operator=op_value)
+    problem_contract = validated_prepared_problem_contract(v.attrs, operator=op_value)
     op_ncomp = footprint["components"]
     input_ghosts = footprint["input_ghosts"]
     prelude.append(
@@ -705,17 +771,21 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     rhs_tok = var[rhs_in.id]
     method = v.attrs["method"]
     kr = "kr%d" % v.id
-    action_kind = _consumed_solve_action(program, v)
+    action_kind, action_statuses = _consumed_solve_action(program, v)
 
     def _append_report_guard() -> None:
         lines.append("if (!%s.solved_value_available()) {" % kr)
         if action_kind == "reject_attempt":
-            lines.append("  throw pops::runtime::program::StepAttemptRejected("
+            selected = " || ".join(
+                "%s.status == %s" % (kr, _SOLVE_STATUS_CPP[status])
+                for status in action_statuses)
+            lines.append("  if (%s) {" % selected)
+            lines.append("    throw pops::runtime::program::StepAttemptRejected("
                          "%s.status, \"solve\", std::string(\"solve_linear failed: \") + "
                          "%s.status_name());" % (kr, kr))
-        else:
-            lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
-                         "%s.status_name() + \" action=fail_run\");" % kr)
+            lines.append("  }")
+        lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
+                     "%s.status_name() + \" action=fail_run\");" % kr)
         lines.append("}")
 
     restart = footprint["restart"]
@@ -730,12 +800,33 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                  else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
     abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["abs_tol"])
 
-    properties = v.attrs.get("operator_properties")
-    if properties == {"symmetric": True, "positive_definite": True}:
+    properties = problem_contract["operator_properties"]
+    if properties == {
+        "symmetric": True,
+        "positive_definite": True,
+        "positive_definite_on_nullspace_complement": False,
+    }:
         properties_expr = "pops::LinearOperatorProperties::symmetric_positive_definite()"
-    elif properties == {"symmetric": True, "positive_definite": False}:
+    elif properties == {
+        "symmetric": True,
+        "positive_definite": False,
+        "positive_definite_on_nullspace_complement": True,
+    }:
+        properties_expr = (
+            "pops::LinearOperatorProperties::"
+            "symmetric_positive_definite_on_nullspace_complement()"
+        )
+    elif properties == {
+        "symmetric": True,
+        "positive_definite": False,
+        "positive_definite_on_nullspace_complement": False,
+    }:
         properties_expr = "pops::LinearOperatorProperties::symmetric()"
-    elif properties == {"symmetric": False, "positive_definite": False}:
+    elif properties == {
+        "symmetric": False,
+        "positive_definite": False,
+        "positive_definite_on_nullspace_complement": False,
+    }:
         properties_expr = "pops::LinearOperatorProperties::general()"
     else:
         raise ValueError("solve_linear operator properties are incoherent or unauthenticated")
@@ -767,6 +858,27 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     snapshot_name = "operator_snapshot%d" % v.id
     prelude.append(
         "auto %s = std::make_shared<pops::OperatorEvaluationSnapshot>();" % snapshot_name)
+    nullspace_contract = problem_contract["nullspace_contract"]
+    gauge_contract = problem_contract["gauge_contract"]
+    if nullspace_contract["kind"] == "none":
+        nullspace_policy_expr = "pops::PreparedNullspacePolicy::nonsingular()"
+    else:
+        nullspace_plan_name = "krylov_nullspace_plan%d" % v.id
+        nullspace_id = "pops://program/krylov/%s/constant-nullspace@1" % authority_digest.hex()
+        prelude.append(
+            "auto %s = pops::constant_mean_zero_nullspace(\"%s\", "
+            "\"authored ConstantNullspace with MeanValueGauge\");"
+            % (nullspace_plan_name, nullspace_id))
+        if target == "amr_system":
+            prelude.append(
+                "%s.scope = pops::FieldNullspaceScope::LevelLocal;" % nullspace_plan_name)
+        prelude.append(
+            "%s.gauges.front().value = static_cast<pops::Real>(%s);"
+            % (nullspace_plan_name, scalar_cpp(gauge_contract["value"])))
+        nullspace_policy_expr = (
+            "pops::PreparedNullspacePolicy::preserving(std::move(%s))"
+            % nullspace_plan_name
+        )
     preconditioner_expr = _prepared_preconditioner(v, prelude, sol_sp)
     problem_name = "prepared_problem%d" % v.id
     freeze_expr = var.get(("operator_freeze", op_value.id))
@@ -774,10 +886,12 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         raise ValueError("matrix-free operator has no prepared resource contract")
     prelude.append(
         "auto %s = std::make_shared<pops::PreparedAffineLinearProblem>("
-        "*%s, %s, %s, %s, %s, [ctx_owner, %s]() { "
+        "*%s, %s, %s, %s, %s, %s, "
+        "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
         "%s, pops::OperatorApplyPurity::kAuthenticatedProgram);"
         % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
+           nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
            freeze_expr))
     workspace_name = "krylov_workspace%d" % v.id
@@ -798,9 +912,17 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
             "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %s, %d);"
             % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, fac_abs_tol, max_iter))
     else:
+        prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))
+        dt_captures = var.get(("operator_dt_captures", op_value.id))
+        if not isinstance(prepare_refresh, tuple) or not isinstance(dt_captures, tuple) \
+                or not dt_captures:
+            raise ValueError("matrix-free operator has no per-solve evaluation refresh contract")
+        lines.extend(prepare_refresh)
         solve_stage = _solve_stage_fraction(v)
         lines.append("ctx.set_stage_time(%d, %d);" %
                      (solve_stage.numerator, solve_stage.denominator))
+        for capture in dt_captures:
+            lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
         lines.append(
             "*%s = ctx.operator_evaluation_snapshot("
             "{%s}, *%s, {%s});"

@@ -30,7 +30,6 @@ tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on e
 """
 from tests.python.support.requirements import require_native_or_skip
 from fractions import Fraction
-import sys
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
@@ -39,7 +38,6 @@ from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.time import FailRun
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -87,7 +85,8 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
         LinearProblem(
             A, U,
             properties=(LinearOperatorProperties.symmetric_positive_definite()
-                        if method == "cg" else LinearOperatorProperties.general())),
+                        if method == "cg" else LinearOperatorProperties.general()),
+            nullspace=None),
         solver=_krylov(
             method, max_iter=max_iter, rel_tol=tol, abs_tol=abs_tol, restart=restart),
     ).consume(action=FailRun())
@@ -125,7 +124,8 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
         method, max_iter=max_iter, rel_tol=tol,
         restart=(restart if method == "gmres" else None),
     )
-    phi = P.solve(LinearProblem(A, U), solver=solver).consume(action=FailRun())
+    phi = P.solve(
+        LinearProblem(A, U, nullspace=None), solver=solver).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -209,7 +209,8 @@ def test_arbitrary_stencil_depth_is_authenticated_and_lowered(t):
     solution = program.solve(
         LinearProblem(
             operator, state,
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=_krylov("cg", max_iter=10, rel_tol=1e-9),
     ).consume(action=FailRun())
     endpoint = typed_state(program, "blk", state_name="U").next
@@ -287,7 +288,8 @@ def test_gmres_max_iter_required(t):
     for bad in (None, 0, -5):
         try:
             P.solve(
-                LinearProblem(A, U), solver=_krylov("gmres", max_iter=bad))
+                LinearProblem(A, U, nullspace=None),
+                solver=_krylov("gmres", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -303,7 +305,7 @@ def test_gmres_restart_validation(t):
         # A positive int is required (True is rejected: bool is not allowed).
         try:
             P.solve(
-                LinearProblem(A, U),
+                LinearProblem(A, U, nullspace=None),
                 solver=_krylov("gmres", max_iter=10, restart=bad),
             )
         except ValueError as exc:
@@ -312,7 +314,8 @@ def test_gmres_restart_validation(t):
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
     # The basis is dynamically sized at preparation time; it has no algorithmic hard cap.
     P.solve(
-        LinearProblem(A, U), solver=_krylov("gmres", max_iter=10, restart=51),
+        LinearProblem(A, U, nullspace=None),
+        solver=_krylov("gmres", max_iter=10, restart=51),
     ).consume(action=FailRun())
     token = next(value for value in P._values if value.op == "solve_linear")
     assert token.attrs["restart"] == 51, "the exact restart is stored on the IR node"
@@ -326,7 +329,7 @@ def test_restart_rejected_for_non_gmres(t):
     for method in ("cg", "bicgstab", "richardson"):
         try:
             P.solve(
-                LinearProblem(A, U),
+                LinearProblem(A, U, nullspace=None),
                 solver=_krylov(method, max_iter=10, restart=20),
             )
         except TypeError as exc:
@@ -417,7 +420,9 @@ def _run_one(t, pops, np, program, name):
         import pops.runtime._engine_descriptors as engine
         from pops.runtime._system import System  # ADC-545 advanced runtime seam
     except Exception as exc:  # noqa: BLE001 -- pure source tests intentionally lack pops._pops
-        print("-- (B) skipped: native runtime unavailable: %s --" % exc)
+        require_native_or_skip(
+            "-- (B) skipped: native runtime unavailable: %s --" % exc
+        )
         return None
 
     n = 16

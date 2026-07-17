@@ -336,7 +336,8 @@ def capabilities() -> Any:
                    "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
-            "system_cartesian": "explicit Program.solve(LinearProblem(...), solver=GMRES/BiCGStab) ; "
+            "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
+                                "solver=GMRES/BiCGStab) ; "
                                 "authored roles/fields ; generic matrix-free operator",
             "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
                             "PolarTensorKrylovSolver provider",

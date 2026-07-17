@@ -118,7 +118,7 @@ def _build_case():
 
     program.set_apply(operator, apply)
     phi = program.solve(
-        LinearProblem(operator, rhs, initial_guess=phi_previous),
+        LinearProblem(operator, rhs, initial_guess=phi_previous, nullspace=None),
         solver=BiCGStab(max_iter=80, rel_tol=1.0e-12),
         name="condensed_potential",
     ).consume(action=FailRun())

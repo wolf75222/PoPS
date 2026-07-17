@@ -46,7 +46,8 @@ def _solve_program(solver):
     phi = P.solve(
         LinearProblem(
             A, U.n, at=U.next.point,
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=solver,
     ).consume(action=t.FailRun())
     P.commit(U.next, phi)

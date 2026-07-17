@@ -63,7 +63,7 @@ def _emit(*, sources, field_coupled=False):
     operator = program.set_apply(operator, apply)
     linear_rhs = program.value("linear_rhs", -1 * iterate, at=point)
     correction = program.solve(
-        LinearProblem(operator, linear_rhs, at=point),
+        LinearProblem(operator, linear_rhs, at=point, nullspace=None),
         solver=krylov.GMRES(max_iter=4, rel_tol=1.0e-8, restart=2),
     ).consume(action=FailRun())
     endpoint = program.value("next", 1 * correction, at=temporal.next.point)
@@ -135,7 +135,7 @@ def test_step_refresh_uses_r0_exact_explicit_stage_and_separates_boundary_residu
         % (names["point"], operator.id, jacvec.id, names["boundary_work"])
     )
     subtract = (
-        "ctx.axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+        "pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
         % (names["r0_core"], names["boundary_work"])
     )
     assert source.index(refresh) < source.index(residual) < source.index(subtract)
@@ -156,8 +156,10 @@ def test_apply_uses_point_qualified_core_and_exact_boundary_jvp(sources, flux_on
         "const_cast<pops::MultiFab&>(in), *%s);"
         % (names["point"], operator.id, jacvec.id, names["boundary_work"])
     ) in apply_source
-    assert "ctx.axpy(out, -*%s, *%s);" % (names["cdt"], names["boundary_work"]) \
-        in apply_source
+    assert (
+        "pops::PureFieldAlgebra::axpy(out, -*%s, *%s);"
+        % (names["cdt"], names["boundary_work"])
+    ) in apply_source
     assert "ctx.rhs_into" not in apply_source
     assert "ctx.neg_div_flux_default_into" not in apply_source
     assert "ctx.boundary_evaluation_point" not in apply_source
@@ -182,21 +184,23 @@ def test_field_coupled_apply_restores_the_frozen_provider_after_the_perturbed_rh
         % names["field_slot"]
     ) in source
     assert names["field_slot"] in apply_source.splitlines()[0]
-    perturbed_solve = (
-        "ctx.solve_fields_from_state_at(*%s, %s, 0, *jac_up%d_%d);"
-        % (names["point"], names["field_slot"], operator.id, jacvec.id)
-    )
-    frozen_solve = (
-        "ctx.solve_fields_from_state_at(*%s, %s, 0, *jac_uk%d_%d);"
-        % (names["point"], names["field_slot"], operator.id, jacvec.id)
+    transactional_evaluation = (
+        "ctx.evaluate_with_field_state_at(*%s, %s, 0, *jac_up%d_%d, "
+        "*jac_uk%d_%d, [&]() {"
+        % (
+            names["point"], names["field_slot"], operator.id, jacvec.id,
+            operator.id, jacvec.id,
+        )
     )
     perturbed_rhs = "ctx.rhs_core_into_at(*%s" % names["point"]
     boundary_jvp = "ctx.boundary_jvp_into_at(*%s" % names["point"]
-    assert apply_source.count("ctx.solve_fields_from_state_at(") == 2
+    assert apply_source.count("ctx.evaluate_with_field_state_at(") == 1
+    assert "ctx.solve_fields_from_state_at(" not in apply_source
+    transaction_end = apply_source.index("});", apply_source.index(transactional_evaluation))
     assert (
-        apply_source.index(perturbed_solve)
+        apply_source.index(transactional_evaluation)
         < apply_source.index(perturbed_rhs)
-        < apply_source.index(frozen_solve)
+        < transaction_end
         < apply_source.index(boundary_jvp)
     )
     assert "ctx.solve_fields_from_state(0, *jac_up" not in apply_source

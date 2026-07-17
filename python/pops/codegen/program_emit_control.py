@@ -443,7 +443,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     return emit_phase("gather"), emit_phase("solve"), emit_phase("publish")
 
 
-def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, prelude: Any,
                 block_idx: Any = None, field_plans: Any = None,
                 *, target: str = "system") -> None:
     """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
@@ -466,20 +466,22 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     sub[loop_in.id] = x
     body_lines = []
     for w in v.attrs["cond_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans, target=target)
+        _emit_op(
+            program, w, base, frozenset(), sub, model, body_lines,
+            prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     cond_expr = sub[v.attrs["cond"].id]
     body_lines.append("if (!(%s)) break;" % cond_expr)
     for w in v.attrs["body_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans, target=target)
+        _emit_op(
+            program, w, base, frozenset(), sub, model, body_lines,
+            prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     # Write the next state into the loop variable in place (x <- body result).
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
-def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, prelude: Any,
                 block_idx: Any = None, field_plans: Any = None,
                 *, target: str = "system") -> None:
     """Lower a range op to a C++ ``for`` over a fixed count. Like a while, the loop variable is one
@@ -498,15 +500,16 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     sub[loop_in.id] = x
     body_lines = []
     for w in v.attrs["body_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans, target=target)
+        _emit_op(
+            program, w, base, frozenset(), sub, model, body_lines,
+            prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
 
-def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, prelude: Any,
                    block_idx: Any = None, field_plans: Any = None,
                    *, target: str = "system") -> None:
     """Lower one exact parent/child clock relation with an exception-safe native cursor scope."""
@@ -527,7 +530,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     x = "x%d" % v.id
     i = "i%d" % v.id
     scope = "subcycle_scope_%d" % v.id
-    parent_dt = "parent_dt_%d" % v.id
+    evaluation_scope = "logical_evaluation_scope_%d" % v.id
     var[v.id] = x
     lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
@@ -536,11 +539,11 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     lines.append("  auto %s = ctx.subcycle_scope(%s, %s, %d);"
                  % (scope, json.dumps(parent.qualified_id),
                     json.dumps(child.qualified_id), count))
-    lines.append("  const pops::Real %s = dt;" % parent_dt)
     lines.append("  for (int %s = 0; %s < %d; ++%s) {" % (i, i, count, i))
     lines.append("    %s.iteration(%s);" % (scope, i))
-    lines.append("    const pops::Real dt = %s / static_cast<pops::Real>(%d);"
-                 % (parent_dt, count))
+    lines.append("    auto %s = ctx.logical_evaluation_scope(%s, %d);"
+                 % (evaluation_scope, i, count))
+    lines.append("    const pops::Real dt = %s.dt();" % evaluation_scope)
 
     # ``keep_history`` owns a state history. Store the loop input at every child tick so lag one in
     # the body means the immediately preceding child-clock value, not the enclosing macro value.
@@ -564,7 +567,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     for w in v.attrs["body_block"]:
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
-            block_idx=block_idx, field_plans=field_plans, target=target)
+            prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     body_lines.append(
         "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
         "static_cast<pops::Real>(1), %s);" % (x, x, sub[v.attrs["body"].id]))
@@ -575,7 +578,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     lines.append("  %s.finish();" % scope)
     lines.append("}")
 
-def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, prelude: Any,
                  block_idx: Any = None, field_plans: Any = None,
                  *, target: str = "system") -> None:
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
@@ -596,16 +599,16 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     lines.append("if (%s) {" % var[cond.id])
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["true_block"], v.attrs["true_result"], x, is_field,
-        base, var, model, block_idx, field_plans, target=target)]
+        base, var, model, prelude, block_idx, field_plans, target=target)]
     lines.append("} else {")
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["false_block"], v.attrs["false_result"], x, is_field,
-        base, var, model, block_idx, field_plans, target=target)]
+        base, var, model, prelude, block_idx, field_plans, target=target)]
     lines.append("}")
 
 
 def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_field: bool,
-                     base: Any, outer_var: Any, model: Any, block_idx: Any,
+                     base: Any, outer_var: Any, model: Any, prelude: Any, block_idx: Any,
                      field_plans: Any = None, *, target: str = "system") -> list[str]:
     from pops.codegen.program_emit_ops import _emit_op
 
@@ -614,7 +617,7 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
     for value in block:
         _emit_op(
             program, value, base, frozenset(), sub, model, arm_lines,
-            block_idx=block_idx, field_plans=field_plans, target=target)
+            prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     token = sub[result.id]
     if is_field:
         arm_lines.append(

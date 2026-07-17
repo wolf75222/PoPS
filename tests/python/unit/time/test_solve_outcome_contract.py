@@ -5,7 +5,7 @@ import pytest
 
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.solvers import CG
-from pops.time import Program, RejectAttempt
+from pops.time import Program, RejectAttempt, SOLVE_STATUSES
 
 
 def _linear_outcome():
@@ -16,7 +16,8 @@ def _linear_outcome():
     return program, program.solve(
         LinearProblem(
             operator, rhs,
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=CG(max_iter=2))
 
 
@@ -42,3 +43,11 @@ def test_solve_outcome_refuses_implicit_invalid_and_double_consumption():
     outcome.consume(action=RejectAttempt())
     with pytest.raises(RuntimeError, match="already been consumed"):
         outcome.consume(action=RejectAttempt())
+
+
+def test_incompatible_rhs_is_a_selectable_public_solve_status():
+    assert "incompatible_rhs" in SOLVE_STATUSES
+    program, outcome = _linear_outcome()
+    outcome.consume(action=RejectAttempt(statuses=("incompatible_rhs",)))
+    node = next(value for value in program._values if value.op == "solve_outcome")
+    assert node.attrs["action"].statuses == ("incompatible_rhs",)

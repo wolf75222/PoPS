@@ -169,8 +169,8 @@ class SourceImplicit:
     - SourceImplicit is LOCAL: the implicit part couples only the components of A SINGLE CELL
       (backward-Euler solved by per-cell Newton), there is NO spatial coupling between
       cells. Suited to purely local stiff terms (relaxation, reactions, friction).
-    - an explicit ``Program.solve(LinearProblem(...), solver=...)`` is GLOBAL: its matrix-free
-      operator may couple the whole domain, and a hierarchy provider can span all AMR levels.
+    - an explicit ``Program.solve(LinearProblem(..., nullspace=None), solver=...)`` is GLOBAL: its
+      matrix-free operator may couple the whole domain, and a hierarchy provider can span all AMR levels.
       This is the appropriate route for non-local stiff Lorentz / electrostatic coupling. A local
       stiff source does not need that global solve.
 

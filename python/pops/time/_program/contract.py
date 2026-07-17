@@ -199,6 +199,7 @@ class _ProgramBase:
 
     # --- solve / commit / board sugar (_ProgramSolve) ---
     def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
+                      nullspace_contract: Any, gauge_contract: Any,
                       initial_guess: Any = None, name: Any = None,
                       at: Any = None, scope: Any = None) -> Any: ...
     def solve(self, problem: Any, *, solver: Any, name: Any = None) -> Any: ...

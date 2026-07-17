@@ -29,14 +29,16 @@ _PRECOND_MG_ITERATIVE = ("tolerance", "max_cycles")
 
 
 def _check_precond_int(value: Any, param: str, minimum: int) -> int:
-    """Validate a GeometricMG preconditioner integer knob: a Python int (not bool) >= @p minimum."""
+    """Validate one GeometricMG knob at its exact signed C++ ``int`` boundary."""
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("preconditioners.GeometricMG(%s=) must be a Python int; got %r"
                         % (param, value))
-    if value < minimum:
-        raise ValueError("preconditioners.GeometricMG(%s=) must be >= %d; got %d"
-                         % (param, minimum, value))
-    return int(value)
+    from pops._ir.literals import exact_cpp_int
+    return exact_cpp_int(
+        value,
+        where="preconditioners.GeometricMG(%s=)" % param,
+        minimum=minimum,
+    )
 
 
 def _geometric_mg_precond(**o: Any) -> Any:

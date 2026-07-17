@@ -195,7 +195,8 @@ def _block_scalar_field(program, block, name):
     return program.solve(
         LinearProblem(
             operator, state.n,
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=CG(max_iter=1), name=name,
     ).consume(action=FailRun())
 

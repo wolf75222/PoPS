@@ -15,11 +15,11 @@ over a lowered ``pops.time.Program`` IR and reports, BEFORE any bind / run / all
   - the REJECTED reuse -- scratch nodes that could NOT collapse onto an existing buffer, each with
     an inspectable REASON (their live ranges overlap a still-live occupant, or -- for an aux-reading
     rhs/source/apply straddling a field solve -- the buffer carries a value the next reader needs);
-  - the PERSISTENT solver buffers -- the Krylov work vectors a ``solve_linear`` needs across its
-    dynamic iteration and the multigrid hierarchy a ``solve_fields`` elliptic solve carries. These
-    live for the whole solve (not a step-body scratch), so they are reported separately. Prepared
-    Krylov counts are exact from the typed footprint; topology-dependent multigrid storage is marked
-    conservative item by item.
+  - the PERSISTENT solver bundles -- solution storage, matrix-free apply scratch/frozen resources,
+    prepared affine problem/preconditioner fields, Krylov work vectors and optional multigrid
+    hierarchy. These live for the whole solve (not a step-body scratch), so they are reported
+    separately. Exact per-bundle sub-counts come from typed IR; conditional boundary-JVP and
+    topology-dependent multigrid storage are bounded and labelled rather than hidden.
 
 Nothing here binds, dlopens, allocates or reads a runtime array: the builder reads the Program IR
 (the same SSA value list ``_ir_hash`` digests) and the carried model's component counts only. It
@@ -72,11 +72,11 @@ class ScratchPlan:
         live ranges do not overlap.
       rejected: a list of ``{"scratch", "op", "reason"}`` -- a scratch that could NOT reuse an
         existing buffer, with the inspectable reason (a still-live occupant, or an aux/field barrier).
-      persistent: Krylov / multigrid storage that lives for a whole solve, reported separately from
-        step-body scratch. Krylov items expose exact field-buffer, scalar-value and collective-payload
-        counts; each item says whether its count is exact.
-      conservative: True iff any reported persistent figure is topology-dependent. Step-body scratch
-        reuse and prepared Krylov footprints are exact; the ``notes`` identify any remaining estimate.
+      persistent: disjoint Krylov-operator, solve and multigrid allocation owners that live for a
+        whole solve. Their exact workspace/problem/apply sub-counts, scalar values and collective
+        payload are reported separately; AMR owns one instance per materialized level.
+      conservative: True iff any reported persistent figure is conditional or topology-dependent.
+        Step-body reuse and each explicitly scoped Krylov sub-count remain exact.
       notes: inspectable assumptions -- exactly which figures are exact vs conservative.
     """
 
@@ -144,8 +144,11 @@ class ScratchPlan:
             qualification = "mixed exact/conservative" if self.conservative else "exact"
             lines.append("  persistent solver buffers (whole-solve, %s):" % qualification)
             for p in self.persistent:
-                lines.append("    %-13s %s x%d  (%s)"
-                             % (p["name"], p["kind"], p["buffers"], p["note"]))
+                maximum = p.get("buffers_max", p["buffers"])
+                count = (str(p["buffers"]) if maximum == p["buffers"]
+                         else "%d..%d" % (p["buffers"], maximum))
+                lines.append("    %-13s %s x%s  (%s)"
+                             % (p["name"], p["kind"], count, p["note"]))
         if self.notes:
             lines.append("  notes:")
             for note in self.notes:
@@ -186,8 +189,8 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     Runs the liveness / buffer-reuse analysis the Program already exposes
     (``Program.scratch_liveness`` / ``Program.buffer_reuse_report``) and turns it into an inspectable
     scratch plan. The reuse it reports is EXACT (two scratches share a buffer only when their SSA
-    live ranges are provably disjoint); the persistent Krylov / multigrid buffers are reported
-    separately with CONSERVATIVE counts (the exact figures are solver-dependent bind inputs). It
+    live ranges are provably disjoint); persistent Krylov bundles are split into exact/bounded typed
+    categories, while topology-dependent multigrid storage remains conservative. It
     reads the IR only -- no bind, no dlopen, no allocation.
 
     @p program a lowered ``pops.time.Program`` (or a ``CompiledProblem`` carrying one).
@@ -240,10 +243,8 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     # not even CSE-equal, let alone buffer-shareable). ---
     rejected = _rejected_reuse(ranges_in_order, assignment, op_of, by_name, program)
 
-    # --- persistent solver buffers: Krylov work vectors + the multigrid hierarchy. These live for a
-    # whole solve, not a step-body scratch, so they are reported separately. Prepared Krylov counts
-    # come exactly from authenticated typed IR; only topology-dependent hierarchy entries are
-    # conservative. ---
+    # --- persistent solver owners: disjoint operator, solve and multigrid resources. These live for
+    # a whole solve, not a step-body scratch, so they are reported separately. ---
     persistent = _persistent_solver_buffers(program)
 
     notes = [
@@ -255,8 +256,9 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     conservative = any(not item.get("exact", False) for item in persistent)
     if persistent:
         notes.append(
-            "prepared Krylov workspace and affine-problem field counts are EXACT from the typed IR "
-            "footprint; only a geometric multigrid hierarchy remains topology-dependent (%s)."
+            "prepared Krylov allocation owners and solution/apply/problem/workspace sub-counts are "
+            "derived from typed IR; conditional boundary-JVP buffers are bounded and only a geometric "
+            "multigrid hierarchy remains topology-dependent (%s)."
             % _MULTIGRID_LEVELS_NOTE)
 
     return ScratchPlan(program_name=getattr(program, "name", None),
@@ -326,16 +328,127 @@ def _field_solve_indices(program: Any) -> list:
     return out
 
 
-def _persistent_solver_buffers(program: Any) -> list:
-    """The exact prepared Krylov fields plus topology-dependent multigrid hierarchies.
+def _operator_bundle_footprint(operator: Any) -> dict[str, int]:
+    """Return the exact/bounded persistent fields owned by one matrix-free operator.
 
-    A ``solve_linear`` node carries an exact typed prepared footprint. A ``solve_fields`` elliptic
-    solve carries a topology-dependent geometric multigrid hierarchy (~4/3 of the fine grid). Both
-    persist for the solve, NOT the step body, so they are reported here (not in the step-body scratch
-    reuse). Only the multigrid hierarchy remains conservative."""
+    Codegen owns one field for every authored scalar scratch, one result accumulator, four frozen
+    coefficient fields per distinct tensor-coefficient bundle, and four fixed fields per
+    ``rhs_jacvec``. A boundary-linearized jacvec conditionally owns two more fields whose presence
+    is known only after native provider installation, hence the explicit min/max range.
+    """
+    attrs = getattr(operator, "attrs", None)
+    attrs_get = getattr(attrs, "get", None)
+    block = attrs_get("apply_block") if callable(attrs_get) else None
+    if block is None:
+        raise ValueError("solve_linear operator has no authenticated apply block")
+    if not isinstance(block, (list, tuple)):
+        raise ValueError("solve_linear operator apply block is not an authenticated value sequence")
+    scalar_scratch = sum(getattr(value, "op", None) == "scalar_field" for value in block)
+    coefficient_bundles = {
+        getattr(value.inputs[2], "id", None)
+        for value in block
+        if getattr(value, "op", None) == "apply_laplacian_coeff"
+    }
+    if None in coefficient_bundles:
+        raise ValueError("coefficiented matrix-free operator has no authenticated bundle identity")
+    jacvec_count = sum(getattr(value, "op", None) == "rhs_jacvec" for value in block)
+    fixed = scalar_scratch + 1 + 4 * len(coefficient_bundles) + 4 * jacvec_count
+    return {
+        "apply_scratch_buffers": scalar_scratch,
+        "apply_accumulator_buffers": 1,
+        "frozen_resource_buffers": 4 * len(coefficient_bundles),
+        "jacvec_fixed_buffers": 4 * jacvec_count,
+        "jacvec_conditional_buffers": 2 * jacvec_count,
+        "operator_buffers_min": fixed,
+        "operator_buffers_max": fixed + 2 * jacvec_count,
+    }
+
+
+def _persistent_program_values(program: Any):
+    """Yield persistent-owner candidates in every structured region exactly once.
+
+    Control-flow values are not members of ``Program._values``.  A solve nested in a while condition
+    or body, range/subcycle body, or either branch arm nevertheless owns install-lifetime
+    solution/problem/workspace storage.  Inspection therefore follows every authenticated structured
+    block just as code emission does. SSA ids are global to one Program; deduplicating them prevents a
+    shared/referenced node from being reported twice while preserving distinct authored solves that
+    reuse one operator.
+    """
+    block_keys = ("cond_block", "body_block", "true_block", "false_block")
+    seen_ids = set()
+
+    def walk(values: Any):
+        for value in values:
+            value_id = getattr(value, "id", None)
+            if not isinstance(value_id, int):
+                raise ValueError("persistent scratch inspection found a value without an SSA id")
+            if value_id in seen_ids:
+                continue
+            seen_ids.add(value_id)
+            yield value
+            attrs = getattr(value, "attrs", None)
+            attrs_get = getattr(attrs, "get", None)
+            if not callable(attrs_get):
+                continue
+            for key in block_keys:
+                block = attrs_get(key)
+                if block is None:
+                    continue
+                if not isinstance(block, (list, tuple)):
+                    raise ValueError(
+                        "%s has no authenticated %s for scratch inspection"
+                        % (getattr(value, "op", "control-flow value"), key))
+                yield from walk(block)
+
+    yield from walk(getattr(program, "_values", ()))
+
+
+def _persistent_solver_buffers(program: Any) -> list:
+    """Allocation-owner records for prepared Krylov and multigrid resources.
+
+    Each generated owner appears exactly once: matrix-free apply resources belong to their operator,
+    live condensed coefficients to the coefficient node, and solution/problem/preconditioner/workspace
+    fields to their solve. This avoids double-counting when two solves intentionally reuse one
+    operator. A ``solve_fields`` elliptic hierarchy remains topology-dependent. All records are per
+    materialized runtime level and rematerialize only after an authenticated topology change.
+    """
     persistent = []
-    for v in getattr(program, "_values", []):
-        if v.op in _KRYLOV_OPS:
+    for v in _persistent_program_values(program):
+        if v.op == "matrix_free_operator":
+            operator_bundle = _operator_bundle_footprint(v)
+            conditional = operator_bundle["jacvec_conditional_buffers"]
+            persistent.append({
+                "kind": "matrix_free_operator",
+                "name": v.name,
+                "operator_id": v.id,
+                "buffers": operator_bundle["operator_buffers_min"],
+                "buffers_max": operator_bundle["operator_buffers_max"],
+                **operator_bundle,
+                "per_materialized_level": True,
+                "exact": (operator_bundle["operator_buffers_min"]
+                          == operator_bundle["operator_buffers_max"]),
+                "note": (
+                    "%d scalar apply scratch + 1 result accumulator + %d frozen coefficient + "
+                    "%d fixed Jv fields%s"
+                    % (operator_bundle["apply_scratch_buffers"],
+                       operator_bundle["frozen_resource_buffers"],
+                       operator_bundle["jacvec_fixed_buffers"],
+                       " + 0..%d boundary-JVP fields" % conditional
+                       if conditional else " (exact)")),
+            })
+        elif v.op == "condensed_coeffs":
+            # The operator owns four frozen copies separately. Keeping this live source bundle as
+            # its own owner stays exact when several operators share one coefficient assembly.
+            persistent.append({
+                "kind": "prepared_coefficient_bundle",
+                "name": v.name,
+                "buffers": 4,
+                "buffers_max": 4,
+                "per_materialized_level": True,
+                "exact": True,
+                "note": "four live condensed tensor-coefficient fields (exact)",
+            })
+        elif v.op in _KRYLOV_OPS:
             method = v.attrs.get("method", "krylov")
             footprint = validated_krylov_footprint(v.attrs, operator=v.inputs[0])
             restart = footprint["restart"]
@@ -355,22 +468,30 @@ def _persistent_solver_buffers(program: Any) -> list:
                 if method == "gmres" else 0
             )
             collective_values = restart + 1 if method == "gmres" else 0
+            prepared_core = workspace + 2 + preconditioner_buffers
+            solve_buffers = 1 + prepared_core
             persistent.append({
                 "kind": "krylov",
                 "name": v.name,
-                "buffers": workspace + 2 + preconditioner_buffers,
+                "buffers": solve_buffers,
+                "buffers_max": solve_buffers,
+                "operator_id": v.inputs[0].id,
+                "solution_buffers": 1,
                 "workspace_buffers": workspace,
                 "prepared_problem_buffers": 2,
                 "prepared_preconditioner_buffers": preconditioner_buffers,
+                "prepared_core_buffers": prepared_core,
                 "workspace_scalar_values": workspace_scalar_values,
                 "collective_values": collective_values,
+                "per_materialized_level": True,
                 "exact": True,
                 "footprint": dict(footprint),
                 "note": (
-                    "%s: %d workspace + 2 A(0)/zero + %d M(0)/zero fields; "
-                    "%d scalar + %d collective values (exact)"
-                    % (method, workspace, preconditioner_buffers,
-                       workspace_scalar_values, collective_values)
+                    "%s solve owner: 1 solution + %d workspace + 2 A(0)/zero + "
+                    "%d M(0)/zero fields; %d scalar + %d collective values (exact); "
+                    "matrix-free resources are owned once by operator id %d"
+                    % (method, workspace, preconditioner_buffers, workspace_scalar_values,
+                       collective_values, v.inputs[0].id)
                 ),
             })
             if v.attrs.get("preconditioner") == "geometric_mg":

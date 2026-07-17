@@ -18,7 +18,7 @@ from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import block_name
 from pops.time.stencil import StencilAccess
 from pops.time.value_metadata import positive_scalar_literal
-from pops._ir.literals import scalar_literal
+from pops._ir.literals import exact_cpp_int, scalar_literal
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _residual_wants_guess,
     _resolve_handle)
@@ -131,6 +131,17 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
         if not isinstance(problem, LinearProblem):
             raise TypeError("CompositeTensorFAC requires a pops.linalg.LinearProblem")
+        nullspace_contract = problem.canonical_nullspace_contract()
+        gauge_contract = problem.canonical_gauge_contract()
+        if nullspace_contract != {
+            "schema_version": 1, "kind": "none"
+        } or gauge_contract != {
+            "schema_version": 1, "kind": "none"
+        }:
+            raise NotImplementedError(
+                "CompositeTensorFAC does not yet transport the prepared constant-nullspace and "
+                "mean-value-gauge policy across the complete AMR hierarchy; use nullspace=None"
+            )
         operator = self._canonical_value(_resolve_handle(problem.operator))
         rhs = self._canonical_value(_resolve_handle(problem.rhs))
         initial_guess = (
@@ -201,10 +212,21 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         tolerance = positive_scalar_literal(
             getattr(prepared, "tolerance", None), where="CompositeTensorFAC rel_tol"
         )
+        # Re-authenticate forged prepared providers at the descriptor -> IR boundary.  Keep the
+        # exact literal domain (Fraction/Decimal/etc.) while rejecting values that the provider
+        # contract cannot represent as a finite, nonnegative native stopping threshold.
+        try:
+            absolute_tolerance = scalar_literal(getattr(prepared, "absolute_tolerance", None))
+            absolute_numeric = absolute_tolerance.to_python()
+            if not absolute_numeric >= 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "CompositeTensorFAC abs_tol must be a finite, nonnegative scalar literal"
+            ) from exc
         max_iterations = getattr(prepared, "max_iterations", None)
-        if (isinstance(max_iterations, bool) or not isinstance(max_iterations, int)
-                or max_iterations <= 0):
-            raise ValueError("CompositeTensorFAC max_iter must be a positive int")
+        max_iterations = exact_cpp_int(
+            max_iterations, where="CompositeTensorFAC max_iter", minimum=1)
 
         inputs = ((operator, rhs) if initial_guess is None
                   else (operator, rhs, initial_guess))
@@ -212,12 +234,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "method": "bicgstab",  # exact flat-topology branch; not a public hierarchy knob
             "preconditioner": "identity",
             "tol": tolerance,
-            "abs_tol": scalar_literal(0),
-            "max_iter": int(max_iterations),
+            "abs_tol": absolute_tolerance,
+            "max_iter": max_iterations,
             "has_guess": initial_guess is not None,
             "ncomp": 1,
             "restart": None,
-            "operator_properties": {"symmetric": False, "positive_definite": False},
+            "operator_properties": problem.properties.canonical_data(),
+            "nullspace_contract": nullspace_contract,
+            "gauge_contract": gauge_contract,
             "krylov_footprint": {
                 "components": 1,
                 "input_ghosts": operator.attrs["stencil_access"].required_ghost_depth,
@@ -549,7 +573,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         When omitted, :meth:`set_apply` derives the minimum from PoPS' typed stencil operations;
         an explicit value may be larger (for an external/custom stencil) but never smaller than
         the derived minimum. Supply the apply via ``P.set_apply(A, body_fn)`` before using it in
-        ``P.solve(LinearProblem(A, rhs), solver=...)``."""
+        ``P.solve(LinearProblem(A, rhs, nullspace=None), solver=...)``."""
         if domain not in self._OPERATOR_KINDS or range_ not in self._OPERATOR_KINDS:
             raise ValueError(
                 "matrix_free_operator: domain / range_ must be one of %s; got domain=%r range_=%r"

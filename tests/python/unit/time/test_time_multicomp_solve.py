@@ -75,7 +75,8 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     P.set_apply(A, apply)
     phi = P.solve(
         LinearProblem(
-            A, U, properties=LinearOperatorProperties.symmetric_positive_definite()),
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=method,
     ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
@@ -102,7 +103,8 @@ def test_state_operator_builds(t):
     U = typed_state(P, "blk", space=space)
     phi = P.solve(
         LinearProblem(
-            A, U, properties=LinearOperatorProperties.symmetric_positive_definite()),
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=CG(max_iter=50, rel_tol=1e-10),
     ).consume(action=FailRun())
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
@@ -160,14 +162,15 @@ def test_solve_rhs_component_count(t):
     rhs_small = P.scalar_field("rhs2", ncomp=2)  # too few components for the ncomp=3 operator
     try:
         P.solve(
-            LinearProblem(A, rhs_small), solver=krylov.CG(max_iter=10))
+            LinearProblem(A, rhs_small, nullspace=None), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
     rhs_wide = P.scalar_field("rhs4", ncomp=4)
     try:
-        P.solve(LinearProblem(A, rhs_wide), solver=krylov.CG(max_iter=10))
+        P.solve(
+            LinearProblem(A, rhs_wide, nullspace=None), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "component" in str(exc), str(exc)
     else:
@@ -176,7 +179,8 @@ def test_solve_rhs_component_count(t):
     outcome = P.solve(
         LinearProblem(
             A, P.scalar_field("rhs3", ncomp=3),
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=krylov.CG(max_iter=10),
     )
     token = next(value for value in P._values if value.op == "solve_linear")
@@ -186,7 +190,8 @@ def test_solve_rhs_component_count(t):
     P.solve(
         LinearProblem(
             A, typed_state(P, "blk", space=state_space),
-            properties=LinearOperatorProperties.symmetric_positive_definite()),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=krylov.CG(max_iter=10),
     ).consume(action=FailRun())
 
@@ -200,7 +205,7 @@ def test_typed_state_component_count_is_checked_at_author_time(t):
     P.set_apply(A, lambda _P, _out, x: x)
     try:
         P.solve(
-            LinearProblem(A, rhs), solver=krylov.CG(max_iter=10))
+            LinearProblem(A, rhs, nullspace=None), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "StateSpace" in str(exc) and "2 component" in str(exc) and "ncomp=3" in str(exc), str(exc)
     else:
