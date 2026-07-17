@@ -135,32 +135,36 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     program, source = _build(solver)
 
-    configure = source.index("ctx.configure_composite_tensor_fac(")
-    branch = source.index("if (!ctx.has_refined_hierarchy())")
-    gather = source.index("Gather every level before the unique hierarchy-scoped solve")
-    direct = source.index("ctx.solve_composite_tensor_fac(", gather)
-    publish = source.index("The composite solution is complete", direct)
-    synchronized = source.index("ctx.advance_synchronized_hierarchy", publish)
-    assert configure < branch < gather < direct < publish < synchronized
+    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    configure = amr.index("ctx.configure_composite_tensor_fac(")
+    flat_phase = amr.index("ctx.solve_prepared_linear(")
+    direct_phase = amr.index("ctx.solve_composite_tensor_fac(")
+    branch = amr.index("if (!ctx.has_refined_hierarchy())")
+    hierarchy_advance = amr.index("auto _advance_hierarchy")
+    refresh = amr.index("_refresh_level_programs();", hierarchy_advance)
+    gather_call = amr.index(".gather(hierarchy_dt)", branch)
+    direct_call = amr.index("_level_programs->front().solve(hierarchy_dt)", gather_call)
+    publish_call = amr.index(".publish(hierarchy_dt)", direct_call)
+    synchronized = amr.index("ctx.advance_synchronized_hierarchy", publish_call)
+    assert configure < flat_phase < direct_phase < branch
+    assert hierarchy_advance < refresh < branch < gather_call < direct_call < publish_call < synchronized
 
-    flat = source[branch:gather]
-    refined = source[gather:synchronized]
-    assert flat.count("ctx.solve_prepared_linear(") == 1
-    assert "ctx.solve_composite_tensor_fac(" not in flat
-    assert refined.count("ctx.solve_composite_tensor_fac(") == 1
-    assert "ctx.solve_prepared_linear(" not in refined
-    assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 1)' in refined[:direct]
-    assert "ctx.stage_linear_initial_guess(" in refined[:direct]
-    assert "ctx.stage_linear_initial_guess();" not in refined[:direct]
-    assert "assembly_source(" in source[publish:synchronized]
+    assert amr.count("ctx.solve_prepared_linear(") == 1
+    assert amr.count("ctx.solve_composite_tensor_fac(") == 1
+    assert "pops::PureFieldAlgebra::copy_allocated(*frozen_A" in source
+    assert "pops::PureFieldAlgebra::copy(*frozen_A" not in source
+    assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 1)' in amr[:direct_phase]
+    assert "ctx.stage_linear_initial_guess(" in amr[:direct_phase]
+    assert "ctx.stage_linear_initial_guess();" not in amr[:direct_phase]
+    assert "assembly_source(" in amr[direct_phase:branch]
 
     expected_configuration = (
         "ctx.configure_composite_tensor_fac(1, 1, 7, static_cast<pops::Real>(%s), "
         "static_cast<pops::Real>(%s), 9, 1);" % (scalar_cpp(2.0e-7), scalar_cpp(5.0e-14))
     )
-    assert expected_configuration in source[:branch]
+    assert expected_configuration in amr[:branch]
     solve_line = next(
-        line for line in source[direct:].splitlines()
+        line for line in amr[direct_phase:].splitlines()
         if "ctx.solve_composite_tensor_fac(" in line
     )
     assert "ctx.solve_composite_tensor_fac(1, 1," in solve_line
@@ -201,12 +205,14 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
 def test_refined_solution_publishes_atomically_before_reflux_then_average_down():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
-    gather = source.index("Gather every level before the unique hierarchy-scoped solve")
-    solve = source.index("ctx.solve_composite_tensor_fac(", gather)
-    publish = source.index("The composite solution is complete", solve)
-    synchronize = source.index("ctx.advance_synchronized_hierarchy", publish)
+    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    branch = amr.index("if (!ctx.has_refined_hierarchy())")
+    gather = amr.index(".gather(hierarchy_dt)", branch)
+    solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    publish = amr.index(".publish(hierarchy_dt)", solve)
+    synchronize = amr.index("ctx.advance_synchronized_hierarchy", publish)
     assert gather < solve < publish < synchronize
-    assert source[gather:publish].count("ctx.solve_composite_tensor_fac(") == 1
+    assert amr.count("ctx.solve_composite_tensor_fac(") == 1
 
     root = Path(__file__).resolve().parents[4]
     provider = (root / "include" / "pops" / "runtime" / "amr"

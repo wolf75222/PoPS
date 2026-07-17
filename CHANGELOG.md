@@ -19,6 +19,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [1.0.0] - 2026-07-16
 
 ### Added
+- ADC-696 replaces the callback-plus-method Krylov route with one prepared affine problem,
+  snapshot-authenticated operator/preconditioner resources, exact `A(0)` and `M_raw(0)`
+  linearization, exact-layout and non-aliasing guards, private method-sized workspaces, mixed
+  true-residual stopping, typed stencil footprints, two-matvec BiCGStab iterations and batched
+  DGKS/CGS2 Arnoldi reductions and allocation-free Kokkos/MPI paths for all four methods; removes
+  the obsolete fixed-workspace `restart <= 50` ceiling from global Newton-Krylov; and adds per-level
+  AMR resource bundles rebuilt only when the checkpointed topology epoch or the
+  process-local hierarchy-materialization generation changes (regrid, rollback, or restart rebuild).
 - ADC-688 versions the public API, semantic IR, normalization, component catalog/registry,
   native ABI, and checkpoint envelopes independently in one generated Python/C++ release contract;
   declares the exact source/wheel matrix; and adds a fail-closed release preflight requiring exact

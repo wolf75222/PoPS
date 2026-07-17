@@ -1206,6 +1206,13 @@ class AmrRuntime {
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
   std::uint64_t topology_epoch() const { return topology_epoch_; }
+  /// Process-local identity of the currently materialized hierarchy storage. Unlike the
+  /// checkpointed epoch, this generation is never restored to an older value: rebuilding a
+  /// checkpoint or rolling back a topology-changing attempt must invalidate address/layout-bound
+  /// Program resources even when the restored epoch and level count numerically match.
+  std::uint64_t topology_materialization_generation() const {
+    return topology_materialization_generation_;
+  }
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch) {
     if (regrid_count < 0)
       throw std::runtime_error("AMR checkpoint regrid count must be non-negative");
@@ -1341,6 +1348,7 @@ class AmrRuntime {
     solve_count_ = saved.solve_count;
     regrid_count_ = saved.regrid_count;
     topology_epoch_ = saved.topology_epoch;
+    advance_topology_materialization_generation_();
     if (saved.has_profiler && profiler_ != nullptr)
       *profiler_ = saved.profiler;
 
@@ -3030,7 +3038,7 @@ class AmrRuntime {
       publish_aux_components(components);
     }
     invalidate_named_field_topology();
-    ++topology_epoch_;
+    record_topology_replacement_();
   }
 
   void commit_bootstrap_level() {
@@ -3210,7 +3218,7 @@ class AmrRuntime {
     // Composite and level-local solvers both own exact hierarchy topology. Rebuild their native
     // backends lazily after regrid; no hidden coarse-on-refined solver survives this invalidation.
     invalidate_named_field_topology();
-    ++topology_epoch_;
+    record_topology_replacement_();
 
     // (R8) RESTORATION OF THE COVERAGE INVARIANT: re-solve so that phi / grad phi are consistent with
     // the new grid AND to trigger the fine -> coarse cascade (mf_average_down_mb, in solve_fields) that
@@ -4352,6 +4360,20 @@ class AmrRuntime {
   // it; accepted-state rollback restores it.  Nullspace recipes include the epoch so no basis or
   // coverage mask can silently survive a regrid/restart hierarchy rebuild.
   std::uint64_t topology_epoch_ = 0;
+  // Runtime-only invalidation key for persistent resources tied to concrete MultiFab layouts and
+  // addresses. It intentionally does not belong to StepSnapshot/checkpoint state.
+  std::uint64_t topology_materialization_generation_ = 1;
+
+  void advance_topology_materialization_generation_() noexcept {
+    ++topology_materialization_generation_;
+    if (topology_materialization_generation_ == 0)
+      ++topology_materialization_generation_;  // reserve zero; tolerate the theoretical wrap
+  }
+
+  void record_topology_replacement_() noexcept {
+    ++topology_epoch_;
+    advance_topology_materialization_generation_();
+  }
   // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): non-owning pointer to the AmrSystem-owned
   // Profiler (lifetime guaranteed by the facade). Null by default -> the engine never profiles
   // (zero overhead). Set via set_profiler after build (parity with System::profiler_).

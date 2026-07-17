@@ -64,6 +64,12 @@ class MultiFab {
   /// Number of ghost layers.
   int n_grow() const { return ngrow_; }
 
+  /// Whether two field objects expose at least one identical owned buffer on this rank. MultiFab
+  /// storage is deep-owned, so exact buffer identity is the native alias contract; the object check
+  /// also remains true on an MPI rank owning no boxes. Prepared solvers use this at their public
+  /// boundary and keep it out of numerical loops.
+  bool shares_storage_with(const MultiFab& other) const { return this == &other; }
+
   /// Number of fabs OWNED by this rank (bound on local indices).
   int local_size() const { return static_cast<int>(fabs_.size()); }
   /// Local fab at index li (0 <= li < local_size()), for writing.

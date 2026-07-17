@@ -300,7 +300,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         prelude.append("pops::PreparedResourceFn %s = [%s]() {" %
                        (freeze_name, ", ".join(freeze_captures)))
         for live, frozen in freeze_pairs:
-            prelude.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (frozen, live))
+            # Tensor face/cross stencils read coefficient neighbours.  The live condensed fields
+            # have already completed their typed ghost production; freezing only valid cells would
+            # silently replace multibox/interface coefficients by stale or zero halo values.
+            prelude.append(
+                "  pops::PureFieldAlgebra::copy_allocated(*%s, *%s);" % (frozen, live))
         prelude.append("};")
         var[("operator_freeze", apply_id)] = freeze_name
     else:
@@ -383,7 +387,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
         lines.append("if (%s) {" % has_boundary)
         lines.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
-        lines.append("  %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
+        lines.append("  pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
         lines.append("  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
                      % (point, block_idx, uk, boundary_work))
         lines.append("  pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
@@ -467,7 +471,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                         % (out_tok, in_arg, rp))
             body.append("  if (%s) {" % has_boundary)
             body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0_core))
-            body.append("    %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
+            body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
             body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s);"
                         % (point, block_idx, uk, in_arg, boundary_work))
             body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
@@ -497,8 +501,10 @@ def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
         path, byte-identical);
       - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing a persistent
         ``pops::runtime::program::GeometricMgPreconditioner`` (the V-cycle cache, coeff_elliptic_ops.hpp)
-        whose ``apply(ctx, out, in)`` runs ONE V-cycle of the already-wired pops::GeometricMG (the
-        field-solve multigrid), no new numerical kernel (ADC-516).
+        whose ``apply(ctx, out, in)`` runs the configured fixed V-cycle composition of the
+        already-wired pops::GeometricMG. The ``PreparedLinearPreconditioner`` owns prototype-shaped
+        zero/constant buffers and subtracts the exact raw zero response, so inhomogeneous physical
+        boundaries cannot make the Krylov preconditioner affine (ADC-516).
 
     A scheme other than these two never reaches here: the Python layer
     (pops.time._program.solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
@@ -511,8 +517,9 @@ def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
         # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (re-homed to the
         # Schur-free coeff_elliptic_ops.hpp, ADC-637; it moved off ProgramContext with the Schur/Lorentz
         # module split). Allocate ONE (alloc-once, like the matrix-free scratch), capture it by shared_ptr
-        # into the ApplyFn lambda: the MG is built once on the first apply and reused across every Krylov
-        # iteration / step. ctx is captured by value too (it forwards the seam ops the apply reuses).
+        # into the ApplyFn lambda: the explicit preparation hook builds the MG before iteration and
+        # compatible solves reuse it across every Krylov apply / step. ctx is captured by value too
+        # (it forwards the seam ops the apply reuses).
         pc = "precond_mg_state%d" % v.id
         # ADC-644: a configured GeometricMG preconditioner carries V-cycle-shape knobs
         # (pre/post/bottom sweeps, min_coarse, n_vcycles). When absent (a default GeometricMG()) emit
@@ -544,7 +551,8 @@ def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
         prelude.append("  auto& ctx = *ctx_owner;")
         prelude.append("  %s->prepare(ctx, *%s);" % (pc, prototype))
         prelude.append("};")
-        return "pops::PreparedLinearPreconditioner(%s, %s)" % (name, prepare)
+        return "pops::PreparedLinearPreconditioner(*%s, %s, %s)" % (
+            prototype, name, prepare)
     raise NotImplementedError(
         "emit_cpp_program: preconditioner scheme '%s' is not lowerable (supported: identity, "
         "geometric_mg)" % scheme)
@@ -662,7 +670,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
-    footprint = validated_krylov_footprint(v.attrs)
+    footprint = validated_krylov_footprint(v.attrs, operator=op_value)
     op_ncomp = footprint["components"]
     input_ghosts = footprint["input_ghosts"]
     prelude.append(
@@ -688,7 +696,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # Initial guess: zero (default) or a copy of the guess field.
     if not direct_refined:
         if guess_in is None:
-            lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
+            lines.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sol_sp)
         else:
             lines.append("pops::PureFieldAlgebra::copy(*%s, %s);"
                          % (sol_sp, var[guess_in.id]))

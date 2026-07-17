@@ -47,11 +47,13 @@
 #include <pops/parallel/comm.hpp>
 
 #include <bit>
-#include <chrono>   // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
+#include <chrono>  // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>  // getenv
 #include <functional>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -110,7 +112,8 @@ class GeometricMG {
               int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
               bool cut_cell = false, std::function<Real(Real, Real)> levelset = {},
               Real cut_theta_min = kEbCutFractionFloor,
-              int coarse_threshold = kMGDefaultCoarseThreshold)
+              int coarse_threshold = kMGDefaultCoarseThreshold,
+              const DistributionMapping* finest_distribution = nullptr)
       : bc_(bc),
         active_(std::move(active)),
         nu1_(nu1),
@@ -126,7 +129,7 @@ class GeometricMG {
     bc_.dy = geom.dy();
     if (cut_cell_ && levelset_ && !active_)
       active_ = [ls = levelset_](Real x, Real y) { return ls(x, y) < Real(0); };
-    add_level(geom, ba);
+    add_level(geom, ba, finest_distribution);
     while (true) {
       const Geometry g = lev_.back().geom;
       // ADC-644: an explicit total-cell coarsening ceiling. STOP coarsening once the current level's
@@ -163,7 +166,8 @@ class GeometricMG {
       if (!coarsenable)
         break;
       Geometry gc{g.domain.coarsen(2), g.xlo, g.xhi, g.ylo, g.yhi};
-      add_level(gc, coarsen(lev_.back().ba, 2));
+      const DistributionMapping coarse_distribution = lev_.back().dm;
+      add_level(gc, coarsen(lev_.back().ba, 2), &coarse_distribution);
     }
     // V-cycle buffers (corr/cfine) allocated ONCE for each NON-bottom level. cfine adopts the
     // exact layout that average_down/interpolate would have allocated internally: coarsen(L.ba, 2) on the
@@ -230,6 +234,18 @@ class GeometricMG {
       }
     }
   }
+
+  /// Build the finest level on an already materialized distribution. This is the prepared
+  /// preconditioner route: a custom but valid box ownership must remain co-distributed with the
+  /// Krylov vectors instead of being silently replaced by a new round-robin mapping.
+  GeometricMG(const Geometry& geom, const BoxArray& ba, const DistributionMapping& distribution,
+              const BCRec& bc, std::function<bool(Real, Real)> active = {},
+              int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
+              int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
+              int coarse_threshold = kMGDefaultCoarseThreshold)
+      : GeometricMG(geom, ba, bc, std::move(active), /*replicated=*/false, min_coarse, nu1, nu2,
+                    nbottom, /*cut_cell=*/false, {}, kEbCutFractionFloor, coarse_threshold,
+                    &distribution) {}
 
   MultiFab& phi() { return lev_[0].phi; }
   MultiFab& rhs() { return lev_[0].rhs; }
@@ -701,182 +717,16 @@ class GeometricMG {
 
   const SolveReport& last_solve_report() const { return last_solve_report_; }
 
+  /// Monotonic identity of the active Newton cache. It changes only after a successful rebuild for
+  /// a different field layout or GMRES restart.
+  std::uint64_t boundary_newton_cache_generation() const;
+
+  /// Number of persistent MultiFab slots owned by the active Newton cache (scratch, prepared
+  /// operator/preconditioner state, and GMRES workspace). Zero before the first cached solve.
+  std::size_t boundary_newton_cache_allocation_count() const;
+
   SolveReport solve_boundary_newton(const FieldNewtonOptions& options) {
-    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
-        boundary_kernel_.jvp == nullptr)
-      return SolveReport::capability_failure();
-    set_field_newton_options(options);
-    auto& L = lev_[0];
-    MultiFab published_snapshot(L.ba, L.dm, 1, L.phi.n_grow());
-    MultiFab accepted(L.ba, L.dm, 1, L.phi.n_grow());
-    MultiFab trial(L.ba, L.dm, 1, L.phi.n_grow());
-    MultiFab residual(L.ba, L.dm, 1, 0);
-    MultiFab trial_residual(L.ba, L.dm, 1, 0);
-    MultiFab delta(L.ba, L.dm, 1, L.phi.n_grow());
-    MultiFab rhs_snapshot(L.ba, L.dm, 1, L.rhs.n_grow());
-    lincomb(published_snapshot, Real(1), L.phi, Real(0), L.phi);
-    lincomb(accepted, Real(1), published_snapshot, Real(0), published_snapshot);
-    lincomb(rhs_snapshot, Real(1), L.rhs, Real(0), L.rhs);
-
-    auto restore_published = [&]() {
-      lincomb(L.phi, Real(1), published_snapshot, Real(0), published_snapshot);
-      lincomb(L.rhs, Real(1), rhs_snapshot, Real(0), rhs_snapshot);
-    };
-
-    auto evaluate = [&](MultiFab& iterate, MultiFab& output) -> Real {
-      boundary_failure_.reset();
-      poisson_residual(iterate, rhs_snapshot, L.geom, bc_, output, mask_ptr(0), coef_ptr(0),
-                       eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0), a_yx_ptr(0),
-                       &boundary_kernel_, &boundary_context_, &L.boundary_view);
-      if (boundary_failure_.synchronize_across_ranks())
-        return std::numeric_limits<Real>::quiet_NaN();
-      return all_reduce_max(norm_inf(output));
-    };
-
-    SolveReport report;
-    Real r0 = evaluate(accepted, residual);
-    if (!std::isfinite(static_cast<double>(r0))) {
-      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-      restore_published();
-      return report;
-    }
-    const Real base = r0 > Real(0) ? r0 : Real(1);
-    if (r0 == Real(0)) {
-      report.rel_residual = r0 / base;
-      report.mark_solved();
-      lincomb(L.phi, Real(1), accepted, Real(0), accepted);
-      return report;
-    }
-
-    ApplyFn jacobian = [&](MultiFab& out, const MultiFab& in) {
-      boundary_failure_.reset();
-      apply_jvp(accepted, in, out);
-      if (boundary_failure_.synchronize_across_ranks())
-        out.set_val(std::numeric_limits<Real>::quiet_NaN());
-    };
-    ApplyFn preconditioner = [&](MultiFab& out, const MultiFab& in) {
-      struct RestorePreconditionerState {
-        bool& boundary_enabled;
-        bool saved_boundary_enabled;
-        MultiFab& phi;
-        MultiFab& rhs;
-        const MultiFab& saved_phi;
-        const MultiFab& saved_rhs;
-        ~RestorePreconditionerState() {
-          lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
-          lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
-          boundary_enabled = saved_boundary_enabled;
-        }
-      } restore{has_boundary_kernel_, has_boundary_kernel_, L.phi, L.rhs, accepted,
-                rhs_snapshot};
-      has_boundary_kernel_ = false;
-      L.phi.set_val(Real(0));
-      lincomb(L.rhs, Real(1), in, Real(0), in);
-      vcycle();
-      lincomb(out, Real(1), L.phi, Real(0), L.phi);
-    };
-    PreparedResourceFn prepare_linear_preconditioner = [&]() {
-      delta.set_val(Real(0));
-      preconditioner(delta, delta);
-      delta.set_val(Real(0));
-    };
-    KrylovFootprint footprint{1, delta.n_grow(), options.restart, true};
-    std::uint64_t linear_revision = 0;
-    OperatorFingerprint linear_topology = detail::layout_fingerprint(delta);
-    detail::fingerprint_geometry(linear_topology, L.geom);
-    detail::fingerprint_boundary(linear_topology, bc_);
-    auto probe_linear_snapshot = [&]() {
-      OperatorFingerprint resources = detail::fingerprint_seed();
-      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(has_boundary_kernel_));
-      detail::fingerprint_mix(
-          resources, static_cast<std::uint64_t>(boundary_context_.point.iteration));
-      detail::fingerprint_mix(resources,
-                              std::bit_cast<std::uint64_t>(boundary_context_.point.time));
-      detail::fingerprint_mix(resources,
-                              std::bit_cast<std::uint64_t>(boundary_context_.point.dt));
-      return OperatorEvaluationSnapshot{
-          {0x504f50534e455754ull, 0x4f4e4a41434f4249ull,
-           0x414e505245504152ull, 0x45444b52594c4f56ull},
-          linear_revision,
-          static_cast<std::int64_t>(boundary_context_.point.step),
-          static_cast<std::int64_t>(boundary_context_.point.stage_slot),
-          1,
-          std::bit_cast<std::uint64_t>(boundary_context_.point.dt),
-          std::bit_cast<std::uint64_t>(boundary_context_.point.time),
-          UINT64_C(1),
-          linear_topology,
-          resources};
-    };
-    PreparedAffineLinearProblem linear_problem(
-        delta, jacobian,
-        PreparedLinearPreconditioner(preconditioner, prepare_linear_preconditioner),
-        LinearOperatorProperties::general(), footprint,
-        probe_linear_snapshot);
-    KrylovWorkspace linear_workspace(delta, KrylovMethod::kGmres, footprint);
-    const KrylovControls linear_controls{KrylovMethod::kGmres,
-                                         options.linear_tolerance,
-                                         Real(0),
-                                         options.linear_max_iterations,
-                                         options.restart,
-                                         Real(1)};
-
-    for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
-      boundary_context_.point.iteration = iteration;
-      delta.set_val(Real(0));
-      linear_revision = static_cast<std::uint64_t>(iteration + 1);
-      const OperatorEvaluationSnapshot linear_snapshot = probe_linear_snapshot();
-      SolveReport linear;
-      try {
-        linear_problem.prepare(linear_snapshot);
-        linear_workspace.bind(linear_problem);
-        linear = solve_prepared_affine(
-            linear_problem, linear_workspace, delta, residual, linear_controls);
-      } catch (...) {
-        restore_published();
-        throw;
-      }
-      if (!linear.solved()) {
-        report = linear;
-        report.action = SolveAction::kRejectAttempt;
-        restore_published();
-        return report;
-      }
-
-      Real step = Real(1);
-      Real trial_norm = std::numeric_limits<Real>::infinity();
-      bool accepted_step = false;
-      while (step >= options.minimum_step) {
-        lincomb(trial, Real(1), accepted, step, delta);
-        trial_norm = evaluate(trial, trial_residual);
-        if (std::isfinite(static_cast<double>(trial_norm)) &&
-            trial_norm <= (Real(1) - options.armijo * step) * r0) {
-          accepted_step = true;
-          break;
-        }
-        step *= Real(0.5);
-      }
-      if (!accepted_step) {
-        report.iters = iteration + 1;
-        report.rel_residual = r0 / base;
-        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-        restore_published();
-        return report;
-      }
-      lincomb(accepted, Real(1), trial, Real(0), trial);
-      lincomb(residual, Real(1), trial_residual, Real(0), trial_residual);
-      r0 = trial_norm;
-      report.iters = iteration + 1;
-      report.rel_residual = r0 / base;
-      if (r0 <= options.tolerance * base) {
-        report.mark_solved();
-        lincomb(L.phi, Real(1), accepted, Real(0), accepted);
-        lincomb(L.rhs, Real(1), rhs_snapshot, Real(0), rhs_snapshot);
-        return report;
-      }
-    }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    restore_published();
-    return report;
+    return solve_boundary_newton_cached(options);
   }
 
   void apply_jvp(const MultiFab& iterate, const MultiFab& direction, MultiFab& output) {
@@ -927,6 +777,323 @@ class GeometricMG {
     MultiFab zero_probe;  // persistent level-0 zero iterate for the exact affine forcing R(0)
   };
 
+  /// Stable-address storage for the nonlinear boundary solve. The prepared callbacks capture this
+  /// cache (and reach the owning GeometricMG through owner_), so the object is deliberately neither
+  /// copied nor moved after construction. A compatible solve reuses every field and callback.
+  struct BoundaryNewtonCache {
+    static MultiFab allocate_like(const MultiFab& prototype, int ghosts) {
+      MultiFab field(prototype.box_array(), prototype.dmap(), prototype.ncomp(), ghosts);
+      if (ghosts == prototype.n_grow())
+        field.share_halo_cache_from(prototype);
+      return field;
+    }
+
+    static OperatorFingerprint make_linear_topology(GeometricMG& owner, const MultiFab& prototype) {
+      OperatorFingerprint topology = detail::layout_fingerprint(prototype);
+      detail::fingerprint_geometry(topology, owner.lev_[0].geom);
+      detail::fingerprint_boundary(topology, owner.bc_);
+      return topology;
+    }
+
+    BoundaryNewtonCache(GeometricMG& owner, int restart)
+        : owner_(&owner),
+          phi_layout_(detail::layout_fingerprint(owner.lev_[0].phi)),
+          rhs_layout_(detail::layout_fingerprint(owner.lev_[0].rhs)),
+          restart_(restart),
+          published_snapshot_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
+          accepted_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
+          trial_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
+          residual_(allocate_like(owner.lev_[0].rhs, /*ghosts=*/0)),
+          trial_residual_(allocate_like(owner.lev_[0].rhs, /*ghosts=*/0)),
+          delta_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
+          rhs_snapshot_(allocate_like(owner.lev_[0].rhs, owner.lev_[0].rhs.n_grow())),
+          footprint_{delta_.ncomp(), delta_.n_grow(), restart, true},
+          linear_topology_(make_linear_topology(owner, delta_)),
+          linear_problem_(
+              delta_, [this](MultiFab& out, const MultiFab& in) { apply_jacobian(out, in); },
+              PreparedLinearPreconditioner(
+                  delta_,
+                  [this](MultiFab& out, const MultiFab& in) { apply_preconditioner(out, in); },
+                  [this]() { prepare_linear_preconditioner(); }),
+              LinearOperatorProperties::general(), footprint_,
+              [this]() { return probe_linear_snapshot(); }),
+          linear_workspace_(delta_, KrylovMethod::kGmres, footprint_) {}
+
+    BoundaryNewtonCache(const BoundaryNewtonCache&) = delete;
+    BoundaryNewtonCache& operator=(const BoundaryNewtonCache&) = delete;
+    BoundaryNewtonCache(BoundaryNewtonCache&&) = delete;
+    BoundaryNewtonCache& operator=(BoundaryNewtonCache&&) = delete;
+
+    bool compatible(const MultiFab& phi, const MultiFab& rhs, int restart) const {
+      return restart_ == restart && phi_layout_ == detail::layout_fingerprint(phi) &&
+             rhs_layout_ == detail::layout_fingerprint(rhs);
+    }
+
+    std::size_t allocation_count() const {
+      // Seven solve scratches plus the two fields owned by each prepared wrapper. The remaining
+      // count is the method/restart-dependent persistent GMRES workspace.
+      constexpr std::size_t fixed_fields = 7u + 2u + 2u;
+      return fixed_fields + linear_workspace_.allocation_count();
+    }
+
+    void begin_solve() {
+      auto& L = owner_->lev_[0];
+      lincomb(published_snapshot_, Real(1), L.phi, Real(0), L.phi);
+      lincomb(accepted_, Real(1), published_snapshot_, Real(0), published_snapshot_);
+      lincomb(rhs_snapshot_, Real(1), L.rhs, Real(0), L.rhs);
+    }
+
+    void advance_linear_revision() {
+      if (linear_revision_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("GeometricMG boundary Newton snapshot revision overflow");
+      ++linear_revision_;
+    }
+
+    void restore_published() {
+      auto& L = owner_->lev_[0];
+      lincomb(L.phi, Real(1), published_snapshot_, Real(0), published_snapshot_);
+      lincomb(L.rhs, Real(1), rhs_snapshot_, Real(0), rhs_snapshot_);
+    }
+
+    Real evaluate(MultiFab& iterate, MultiFab& output) {
+      auto& owner = *owner_;
+      auto& L = owner.lev_[0];
+      owner.boundary_failure_.reset();
+      poisson_residual(iterate, rhs_snapshot_, L.geom, owner.bc_, output, owner.mask_ptr(0),
+                       owner.coef_ptr(0), owner.eps_ptr(0), owner.kappa_ptr(0), owner.eps_y_ptr(0),
+                       owner.a_xy_ptr(0), owner.a_yx_ptr(0), &owner.boundary_kernel_,
+                       &owner.boundary_context_, &L.boundary_view);
+      if (owner.boundary_failure_.synchronize_across_ranks())
+        return std::numeric_limits<Real>::quiet_NaN();
+      return all_reduce_max(norm_inf(output));
+    }
+
+    void apply_jacobian(MultiFab& out, const MultiFab& in) {
+      owner_->boundary_failure_.reset();
+      owner_->apply_jvp(accepted_, in, out);
+      if (owner_->boundary_failure_.synchronize_across_ranks())
+        PureFieldAlgebra::fill_valid(out, std::numeric_limits<Real>::quiet_NaN());
+    }
+
+    void apply_preconditioner(MultiFab& out, const MultiFab& in) {
+      auto& owner = *owner_;
+      auto& L = owner.lev_[0];
+      struct RestorePreconditionerState {
+        bool& boundary_enabled;
+        bool saved_boundary_enabled;
+        MultiFab& phi;
+        MultiFab& rhs;
+        const MultiFab& saved_phi;
+        const MultiFab& saved_rhs;
+        ~RestorePreconditionerState() {
+          lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
+          lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
+          boundary_enabled = saved_boundary_enabled;
+        }
+      } restore{owner.has_boundary_kernel_,
+                owner.has_boundary_kernel_,
+                L.phi,
+                L.rhs,
+                accepted_,
+                rhs_snapshot_};
+      owner.has_boundary_kernel_ = false;
+      PureFieldAlgebra::zero_valid(L.phi);
+      lincomb(L.rhs, Real(1), in, Real(0), in);
+      owner.vcycle();
+      lincomb(out, Real(1), L.phi, Real(0), L.phi);
+    }
+
+    void prepare_linear_preconditioner() {
+      PureFieldAlgebra::zero_valid(delta_);
+      apply_preconditioner(delta_, delta_);
+      PureFieldAlgebra::zero_valid(delta_);
+    }
+
+    OperatorEvaluationSnapshot probe_linear_snapshot() const {
+      const auto& owner = *owner_;
+      OperatorFingerprint resources = detail::fingerprint_seed();
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(owner.has_boundary_kernel_));
+      detail::fingerprint_mix(resources,
+                              static_cast<std::uint64_t>(owner.boundary_context_.point.iteration));
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                             owner.boundary_context_.point.clock_slot)));
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                             owner.boundary_context_.point.partition_slot)));
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                             owner.boundary_context_.point.stage_slot)));
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                             owner.boundary_context_.point.substep)));
+      detail::fingerprint_mix(resources,
+                              std::bit_cast<std::uint64_t>(owner.boundary_context_.point.time));
+      detail::fingerprint_mix(resources,
+                              std::bit_cast<std::uint64_t>(owner.boundary_context_.point.dt));
+      return OperatorEvaluationSnapshot{
+          {0x504f50534e455754ull, 0x4f4e4a41434f4249ull, 0x414e505245504152ull,
+           0x45444b52594c4f56ull},
+          linear_revision_,
+          static_cast<std::int64_t>(owner.boundary_context_.point.step),
+          0,
+          1,
+          std::bit_cast<std::uint64_t>(owner.boundary_context_.point.dt),
+          std::bit_cast<std::uint64_t>(owner.boundary_context_.point.time),
+          UINT64_C(1),
+          linear_topology_,
+          resources};
+    }
+
+    GeometricMG* owner_;
+    OperatorFingerprint phi_layout_{};
+    OperatorFingerprint rhs_layout_{};
+    int restart_ = 0;
+    std::uint64_t linear_revision_ = 0;
+    MultiFab published_snapshot_;
+    MultiFab accepted_;
+    MultiFab trial_;
+    MultiFab residual_;
+    MultiFab trial_residual_;
+    MultiFab delta_;
+    MultiFab rhs_snapshot_;
+    KrylovFootprint footprint_{};
+    OperatorFingerprint linear_topology_{};
+    PreparedAffineLinearProblem linear_problem_;
+    KrylovWorkspace linear_workspace_;
+  };
+
+  /// Prepared callbacks must never retain a previous object's address. Copying or moving this slot
+  /// therefore drops only the derived cache; the destination rebuilds it on first use.
+  struct BoundaryNewtonCacheSlot {
+    BoundaryNewtonCacheSlot() = default;
+    BoundaryNewtonCacheSlot(const BoundaryNewtonCacheSlot&) noexcept {}
+    BoundaryNewtonCacheSlot& operator=(const BoundaryNewtonCacheSlot&) noexcept {
+      value.reset();
+      generation = 0;
+      return *this;
+    }
+    BoundaryNewtonCacheSlot(BoundaryNewtonCacheSlot&& other) noexcept {
+      other.value.reset();
+      other.generation = 0;
+    }
+    BoundaryNewtonCacheSlot& operator=(BoundaryNewtonCacheSlot&& other) noexcept {
+      if (this != &other) {
+        value.reset();
+        generation = 0;
+        other.value.reset();
+        other.generation = 0;
+      }
+      return *this;
+    }
+
+    std::unique_ptr<BoundaryNewtonCache> value;
+    std::uint64_t generation = 0;
+  };
+
+  BoundaryNewtonCache& ensure_boundary_newton_cache(int restart) {
+    auto& slot = boundary_newton_cache_;
+    auto& L = lev_[0];
+    if (!slot.value || !slot.value->compatible(L.phi, L.rhs, restart)) {
+      auto replacement = std::make_unique<BoundaryNewtonCache>(*this, restart);
+      if (slot.generation == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("GeometricMG boundary Newton cache generation overflow");
+      slot.value = std::move(replacement);
+      ++slot.generation;
+    }
+    return *slot.value;
+  }
+
+  SolveReport solve_boundary_newton_cached(const FieldNewtonOptions& options) {
+    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
+        boundary_kernel_.jvp == nullptr)
+      return SolveReport::capability_failure();
+    set_field_newton_options(options);
+    auto& L = lev_[0];
+    BoundaryNewtonCache& cache = ensure_boundary_newton_cache(options.restart);
+    cache.begin_solve();
+
+    SolveReport report;
+    // A direct repeated solve must start from the same well-defined logical Newton point; retaining
+    // the previous solve's last iteration would make the initial residual depend on call history.
+    boundary_context_.point.iteration = 0;
+    Real r0 = cache.evaluate(cache.accepted_, cache.residual_);
+    if (!std::isfinite(static_cast<double>(r0))) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
+      cache.restore_published();
+      return report;
+    }
+    const Real base = r0 > Real(0) ? r0 : Real(1);
+    if (r0 == Real(0)) {
+      report.rel_residual = r0 / base;
+      report.mark_solved();
+      lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
+      return report;
+    }
+
+    // Tolerances and iteration limits remain per-call controls. Only restart changes storage shape
+    // and therefore participates in cache compatibility.
+    const KrylovControls linear_controls{
+        KrylovMethod::kGmres,          options.linear_tolerance, Real(0),
+        options.linear_max_iterations, options.restart,          Real(1)};
+
+    for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
+      boundary_context_.point.iteration = iteration;
+      PureFieldAlgebra::zero_valid(cache.delta_);
+      // The prepared problem outlives one solve. Give every linearisation a cache-lifetime-unique
+      // identity even when two calls use the same external logical time/stage.
+      cache.advance_linear_revision();
+      const OperatorEvaluationSnapshot linear_snapshot = cache.probe_linear_snapshot();
+      SolveReport linear;
+      try {
+        cache.linear_problem_.prepare(linear_snapshot);
+        cache.linear_workspace_.bind(cache.linear_problem_);
+        linear = solve_prepared_affine(cache.linear_problem_, cache.linear_workspace_, cache.delta_,
+                                       cache.residual_, linear_controls);
+      } catch (...) {
+        cache.restore_published();
+        throw;
+      }
+      if (!linear.solved()) {
+        report = linear;
+        report.action = SolveAction::kRejectAttempt;
+        cache.restore_published();
+        return report;
+      }
+
+      Real step = Real(1);
+      Real trial_norm = std::numeric_limits<Real>::infinity();
+      bool accepted_step = false;
+      while (step >= options.minimum_step) {
+        lincomb(cache.trial_, Real(1), cache.accepted_, step, cache.delta_);
+        trial_norm = cache.evaluate(cache.trial_, cache.trial_residual_);
+        if (std::isfinite(static_cast<double>(trial_norm)) &&
+            trial_norm <= (Real(1) - options.armijo * step) * r0) {
+          accepted_step = true;
+          break;
+        }
+        step *= Real(0.5);
+      }
+      if (!accepted_step) {
+        report.iters = iteration + 1;
+        report.rel_residual = r0 / base;
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
+        cache.restore_published();
+        return report;
+      }
+      lincomb(cache.accepted_, Real(1), cache.trial_, Real(0), cache.trial_);
+      lincomb(cache.residual_, Real(1), cache.trial_residual_, Real(0), cache.trial_residual_);
+      r0 = trial_norm;
+      report.iters = iteration + 1;
+      report.rel_residual = r0 / base;
+      if (r0 <= options.tolerance * base) {
+        report.mark_solved();
+        lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
+        lincomb(L.rhs, Real(1), cache.rhs_snapshot_, Real(0), cache.rhs_snapshot_);
+        return report;
+      }
+    }
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
+    cache.restore_published();
+    return report;
+  }
+
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
   const MultiFab* coef_ptr(int l) { return cut_cell_ ? &lev_[l].coef : nullptr; }
   const MultiFab* eps_ptr(int l) { return has_eps_ ? &lev_[l].eps : nullptr; }
@@ -965,10 +1132,14 @@ class GeometricMG {
     return b;
   }
 
-  void add_level(const Geometry& g, const BoxArray& ba) {
-    DistributionMapping dm = replicated_
-                                 ? DistributionMapping(std::vector<int>(ba.size(), my_rank()))
-                                 : DistributionMapping(ba.size(), n_ranks());
+  void add_level(const Geometry& g, const BoxArray& ba,
+                 const DistributionMapping* distribution = nullptr) {
+    if (distribution && distribution->size() != ba.size())
+      throw std::invalid_argument("GeometricMG distribution size disagrees with BoxArray");
+    DistributionMapping dm =
+        distribution ? *distribution
+                     : (replicated_ ? DistributionMapping(std::vector<int>(ba.size(), my_rank()))
+                                    : DistributionMapping(ba.size(), n_ranks()));
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1), MultiFab(ba, dm, 1, 0),
                            MultiFab(ba, dm, 1, 0), MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
                            MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
@@ -1133,6 +1304,15 @@ class GeometricMG {
       make_runtime_diagnostics_report("pops.numerics.elliptic.geometric_mg");
   std::function<Real(Real, Real)> levelset_;
   std::vector<MGLevel> lev_;
+  BoundaryNewtonCacheSlot boundary_newton_cache_;
 };
+
+inline std::uint64_t GeometricMG::boundary_newton_cache_generation() const {
+  return boundary_newton_cache_.generation;
+}
+
+inline std::size_t GeometricMG::boundary_newton_cache_allocation_count() const {
+  return boundary_newton_cache_.value ? boundary_newton_cache_.value->allocation_count() : 0u;
+}
 
 }  // namespace pops

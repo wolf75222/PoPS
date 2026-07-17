@@ -12,6 +12,10 @@
 
 namespace pops {
 
+namespace detail {
+struct KrylovWorkspaceAccess;
+}
+
 struct KrylovControls {
   KrylovMethod method = KrylovMethod::kCg;
   Real rel_tol = Real(1e-8);
@@ -25,8 +29,7 @@ class KrylovWorkspace {
  public:
   KrylovWorkspace(const MultiFab& prototype, KrylovMethod method, KrylovFootprint footprint)
       : method_(method), footprint_(footprint), layout_(detail::layout_fingerprint(prototype)) {
-    if (footprint_.components != prototype.ncomp() ||
-        footprint_.input_ghosts != prototype.n_grow())
+    if (footprint_.components != prototype.ncomp() || footprint_.input_ghosts != prototype.n_grow())
       throw std::invalid_argument("KrylovWorkspace footprint disagrees with prototype");
     if (method_ == KrylovMethod::kGmres) {
       if (footprint_.restart < 1)
@@ -49,6 +52,10 @@ class KrylovWorkspace {
       sine_.assign(gmres_restart_, Real(0));
       rotated_rhs_.assign(gmres_restart_ + 1, Real(0));
       solution_coefficient_.assign(gmres_restart_, Real(0));
+      // One persistent contiguous MPI payload for all Arnoldi projections of a column (plus its
+      // local norm term). The normal pass and the selective DGKS reorthogonalization reuse it; no
+      // temporary vector appears in the loop.
+      gmres_reduction_data_.assign(gmres_restart_ + 1, 0.0);
     }
   }
 
@@ -65,8 +72,9 @@ class KrylovWorkspace {
       case KrylovMethod::kBicgstab:
         return footprint.preconditioned ? 9 : 7;
       case KrylovMethod::kGmres:
-        // b_eff, V[0..restart], w/raw residual, preconditioned residual
-        return static_cast<std::size_t>(footprint.restart) + 4;
+        // b_eff, V[0..restart], w/raw residual, plus one preconditioned Arnoldi vector only when
+        // M is non-identity. The identity route neither allocates nor copies through a fake M slot.
+        return static_cast<std::size_t>(footprint.restart) + (footprint.preconditioned ? 4u : 3u);
     }
     throw std::invalid_argument("unknown Krylov method");
   }
@@ -89,6 +97,22 @@ class KrylovWorkspace {
       throw std::invalid_argument("KrylovWorkspace method/restart mismatch");
   }
 
+  KrylovMethod method() const { return method_; }
+  const KrylovFootprint& footprint() const { return footprint_; }
+  /// Number of persistent MultiFab work vectors (not heap-allocation events).
+  std::size_t allocation_count() const { return allocation_count_; }
+  std::size_t scalar_value_count() const {
+    return h_.size() + cosine_.size() + sine_.size() + rotated_rhs_.size() +
+           solution_coefficient_.size();
+  }
+  std::size_t collective_value_count() const { return gmres_reduction_data_.size(); }
+
+ private:
+  friend struct detail::KrylovWorkspaceAccess;
+
+  // Work storage is deliberately not a public extension seam. Replacing even one iso-layout field
+  // could discard its warmed halo/MPI buffers and reintroduce allocation inside an iteration; all
+  // algorithms reach these stable slots through the private detail access object instead.
   MultiFab& field(std::size_t index) {
     if (index >= fields_.size())
       throw std::out_of_range("KrylovWorkspace field index");
@@ -101,8 +125,7 @@ class KrylovWorkspace {
   }
 
   Real& h(int row, int column) {
-    return h_[static_cast<std::size_t>(row) * gmres_restart_ +
-              static_cast<std::size_t>(column)];
+    return h_[static_cast<std::size_t>(row) * gmres_restart_ + static_cast<std::size_t>(column)];
   }
   Real& cosine(int index) { return cosine_[static_cast<std::size_t>(index)]; }
   Real& sine(int index) { return sine_[static_cast<std::size_t>(index)]; }
@@ -110,12 +133,9 @@ class KrylovWorkspace {
   Real& solution_coefficient(int index) {
     return solution_coefficient_[static_cast<std::size_t>(index)];
   }
+  double* gmres_reduction_data() { return gmres_reduction_data_.data(); }
+  std::size_t gmres_reduction_size() const { return gmres_reduction_data_.size(); }
 
-  KrylovMethod method() const { return method_; }
-  const KrylovFootprint& footprint() const { return footprint_; }
-  std::size_t allocation_count() const { return allocation_count_; }
-
- private:
   KrylovMethod method_;
   KrylovFootprint footprint_;
   OperatorFingerprint layout_{};
@@ -128,6 +148,7 @@ class KrylovWorkspace {
   std::vector<Real> sine_;
   std::vector<Real> rotated_rhs_;
   std::vector<Real> solution_coefficient_;
+  std::vector<double> gmres_reduction_data_;
 };
 
 }  // namespace pops

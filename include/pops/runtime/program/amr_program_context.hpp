@@ -103,6 +103,16 @@ class AmrProgramContext {
   // --- driver state (mutable: every seam method is const, like ProgramContext::mg_precond_) ----------
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
+  /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
+  /// generated Programs then rematerialize every per-level persistent field/problem/workspace once,
+  /// before entering the next hierarchy advance. Compatible steps retain the same bundles.
+  std::uint64_t program_resource_topology_epoch() const { return eng_->topology_epoch(); }
+  /// Runtime-only companion to the checkpointed epoch. This changes whenever hierarchy storage is
+  /// reconstructed, including checkpoint restore and rejected-attempt rollback, so an equal restored
+  /// epoch/nlev pair can never authenticate stale layout-bound Program resources.
+  std::uint64_t program_resource_topology_generation() const {
+    return eng_->topology_materialization_generation();
+  }
   int nlev() const { return eng_->nlev(); }
   bool has_refined_hierarchy() const { return configured_tensor_elliptic().has_fine_patches(); }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also

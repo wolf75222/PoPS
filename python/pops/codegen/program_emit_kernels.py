@@ -113,12 +113,12 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any,
     shared_ptr allocated once at install time -- no per-call/per-iteration allocation), accumulate the
     non-`target` terms onto it, then ``ctx.lincomb(target, c_target, target, 1, *acc)``. A single unit
     term that already is the target is a no-op. @p sub maps IR value ids to C++ tokens (``in``/``out``/
-    scratch shared_ptrs); @p acc is the install-time accumulator shared_ptr name. Zeroing via
-    ``set_val(0)`` reproduces the old ``scratch_state_like`` (a zero-initialized scratch) bit-for-bit
-    over the valid cells the axpy / lincomb touch."""
+    scratch shared_ptrs); @p acc is the install-time accumulator shared_ptr name. Only valid cells
+    participate in the algebra, so the reset is a Kokkos valid-region fill; no host cell sweep or
+    ghost initialization occurs in the Krylov hot path."""
     aff = _to_affine(result)._merge()
     terms = [(v, c.as_dict()) for v, c in aff]
-    lines = ["%s->set_val(static_cast<pops::Real>(0));" % acc]
+    lines = ["pops::PureFieldAlgebra::zero_valid(*%s);" % acc]
     c_target = {0: 0}
     for value, coeff in terms:
         tok = sub[value.id]
@@ -384,6 +384,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
+#include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)

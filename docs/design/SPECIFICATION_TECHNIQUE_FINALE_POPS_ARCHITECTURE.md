@@ -873,6 +873,9 @@ aux méthodes générales. `CG` est refusé sans
 Les solveurs Krylov portent un arrêt mixte exact
 `max(rel_tol * reference_residual_norm, abs_tol)` et leur footprint persistant est dérivé de la
 méthode, du nombre de composantes, de la largeur de halo, du restart et du préconditionneur.
+Le restart GMRES accepte tout entier strictement positif : le workspace est dimensionné dynamiquement,
+son coût exact est visible dans le plan scratch, et la route Newton-Krylov n'impose aucun plafond hérité
+d'un ancien tableau fixe.
 La largeur n'est pas un booléen « stencil présent » : chaque opération porte une capacité immuable
 `StencilAccess(required_ghost_depth=n)` et `set_apply` compose le sous-graphe par le maximum de ces
 capacités, sans table centrale de noms d'opérations. `matrix_free_operator(stencil_depth=n)` reste une
@@ -889,12 +892,41 @@ code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinear
 `KrylovWorkspace`, puis prépare chaque évaluation avec un snapshot exact : identité canonique
 256 bits du Program/opérateur, révision, macro-pas, fraction d'étape, bits IEEE de `dt` et du temps,
 empreintes 256 bits de la topologie native (boxes, distribution, halo, métrique et BC) et des
-ressources figées. Le probe ne relit jamais l'objet snapshot produit par le code généré : il recalcule
-l'identité depuis l'unique `ProgramContext` partagé par le step, l'ApplyFn et le préconditionneur. La
+ressources figées. Le probe réutilise uniquement la topologie complète et la révision immuables
+frappées lors de `prepare`, puis recalcule depuis l'unique `ProgramContext` partagé par le step,
+l'ApplyFn et le préconditionneur les identités dynamiques de l'horloge et de la révision topologique ;
+il ne renvoie jamais simplement la copie du snapshot attendu. La
 préparation copie les coefficients variables, matérialise les plans halo/buffers MPI et prépare le
-préconditionneur avant la première itération, puis calcule exactement `c = A(0)`. Les itérations appliquent
-uniquement `A_lin(v) = A(v) - c` et résolvent `A_lin(u) = b - c`. Toute mutation du snapshot après
-préparation est refusée.
+préconditionneur avant la première itération, puis calcule exactement `c = A(0)`. Un
+préconditionneur brut peut lui aussi être affine sous des frontières inhomogènes : son objet préparé
+possède donc ses propres buffers persistants et calcule `d = M_raw(0)` ; les itérations appliquent
+exclusivement `M_lin(v) = M_raw(v) - d`. Elles appliquent de même
+`A_lin(v) = A(v) - c` et résolvent `A_lin(u) = b - c`. Toute mutation du snapshot après préparation
+est refusée. Les prototypes du problème et du préconditionneur doivent avoir exactement les mêmes
+composantes, boxes, distribution et halo. L'itéré et le second membre ne peuvent pas partager leur
+stockage ; les slots du workspace sont privés, de forme immuable et conservent leurs plans halo/MPI
+préchauffés. Le plan scratch expose séparément le nombre exact de champs persistants, de scalaires
+Hessenberg/rotations et de valeurs du payload collectif.
+
+CG et BiCGStab remplacent leur récurrence complète lorsqu'une convergence récursive candidate échoue
+à la confirmation par le vrai résidu. BiCGStab maintient autrement `r = s - omega*t` et ne recalcule
+le résidu scientifique que pour confirmer une convergence candidate, publier un échec ou produire le
+report final : une itération complète ne paie pas un troisième matvec. GMRES agrège toutes les
+projections Arnoldi d'une colonne dans une réduction
+vectorielle, calcule ensuite la norme projetée directement et déclenche une seconde passe CGS2 batchée
+uniquement sous le critère de perte de norme DGKS. Le chemin normal utilise donc deux collectives par
+colonne au lieu d'une collective par vecteur de base, sans remplacer la norme scientifique finale.
+
+Sur AMR, le préambule compilé n'est jamais partagé entre des layouts de niveaux différents. À
+l'installation, le module matérialise un bundle complet par niveau (scratch, coefficients gelés,
+ApplyFn, problème préparé, préconditionneur et workspace), puis le driver sélectionne ce bundle par le
+curseur de niveau natif. Un changement d'epoch topologique ou de génération de matérialisation
+native (regrid, rollback ou reconstruction de restart, même avec la même valeur d'epoch) invalide et
+rematérialise tous les bundles une fois avant l'advance suivant ; deux solves compatibles ne
+réallouent rien. Cette règle vaut aussi lorsqu'un même Program compose un solve `Level()` et un solve
+`Hierarchy()` : gather/publish utilisent le bundle de leur niveau, tandis que l'unique solve composite
+est déclenché par le bundle du niveau racine. Le gel des coefficients tensoriels copie toute la région
+allouée, halos compris, car les moyennes de face et termes croisés lisent les voisins inter-boxes.
 
 Les récurrences utilisent une algèbre de champs pure qui ne touche ni le ledger reflux AMR ni les
 effets temporels de `ProgramContext`. Aucune allocation de champ, de plan halo, de buffer MPI ou de
@@ -925,8 +957,10 @@ Pour tout solveur linéaire affine et son résidu discret `R(u) = b - A(u)`, le 
 `||R(u)|| / ||R(0)||` dans la norme globale définie par le contrat du solveur, avec une base égale à
 `1` lorsque `||R(0)|| == 0`. `R(0)` est évalué par l'opérateur préparé exact : mêmes coefficients,
 masques, frontières physiques ou générées et topologie que `R(u)`. Il inclut donc le lifting des
-frontières inhomogènes ; pour un opérateur linéaire homogène, il se réduit à `b`. Cette norme (`L2`,
-`Linf`, pondérée, composite, etc.) ne dépend jamais du warm start. Le critère mixte est
+frontières inhomogènes ; pour un opérateur linéaire homogène, il se réduit à `b`. Le provider livré
+est l'unique produit `L2` global sur toutes les composantes et tous les rangs ; aucun `Linf`, poids ou
+masque composite n'est accepté tant qu'un provider de métrique préparé typé ne le transporte pas de
+bout en bout. Cette norme ne dépend jamais du warm start. Le critère mixte est
 `||R(u)|| <= max(rel_tol * ||R(0)||, abs_tol)`. Le zero-probe et ses buffers sont persistants, et les
 normes initiales peuvent être agrégées dans une même collective. Relancer un système inchangé déjà
 sous ce seuil retourne donc un succès à zéro itération, au lieu de demander implicitement une

@@ -23,36 +23,6 @@ else:
     _ProgramBase = object
 
 
-def _lower_krylov_method(method: Any) -> Any:
-    """Lower a typed Krylov descriptor to ``(scheme, options)`` (Spec 5 sec.7).
-
-    ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
-    ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token. A bare
-    algorithm-selector string is REJECTED; ``None`` defaults to the ``cg`` scheme.
-
-    The descriptor's own ``max_iter`` is metadata for LinearProblem lowering; the
-    call-site ``max_iter`` is authoritative for THIS op.
-    """
-    if method is None:
-        return "cg", {}
-    if isinstance(method, str):
-        raise TypeError(
-            "solve_linear: method must be a typed pops.solvers.krylov descriptor "
-            "(e.g. pops.solvers.krylov.GMRES() / CG() / BiCGStab() / Richardson()), not the "
-            "string %r" % (method,))
-    scheme = getattr(method, "scheme", None)
-    if getattr(method, "category", None) != "solver" or not isinstance(scheme, str):
-        raise TypeError(
-            "solve_linear: method must be a pops.solvers.krylov descriptor "
-            "(CG() / GMRES() / BiCGStab() / Richardson()); got %r" % (method,))
-    options = dict(getattr(method, "options", None) or {})
-    if "omega" in options and scheme != "richardson":
-        raise ValueError(
-            "solve_linear: omega only applies to Richardson() (the relaxation factor of "
-            "the prepared Richardson controls); got method %r" % (scheme,))
-    return scheme, options
-
-
 # Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
 #   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
 #   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
@@ -180,9 +150,9 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 require_compatible_spaces(
                     rhs.space, initial_guess.space, "solve_linear initial_guess", typed_pair=True)
         op_ncomp = int(operator.attrs["ncomp"])
-        # The rhs / initial guess must carry at least the operator's component count: the solve runs on
-        # an op_ncomp buffer. A scalar_field exposes its ncomp here; a State's n_cons is only known at
-        # compile (against the model), so a State is accepted now and checked there.
+        # The rhs and initial guess must inhabit exactly the operator's vector space.  The native
+        # prepared problem intentionally has no implicit component slicing; accepting a wider field
+        # here would only fail later when the exact ncomp solution buffer is bound.
         for label, fld in (("rhs", rhs), ("initial_guess", initial_guess)):
             if fld is None:
                 continue
@@ -197,10 +167,11 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             if fld.vtype != "scalar_field":
                 continue
             fld_ncomp = int(fld.attrs.get("ncomp", 1))
-            if fld_ncomp < op_ncomp:
+            if fld_ncomp != op_ncomp:
                 raise ValueError(
-                    "solve_linear: %s has %d component(s) but the operator needs %d (a scalar_field "
-                    "with ncomp >= the operator ncomp, or a State)" % (label, fld_ncomp, op_ncomp))
+                    "solve_linear: %s has %d component(s) but the operator declares ncomp=%d; "
+                    "select an explicit component view before solving" %
+                    (label, fld_ncomp, op_ncomp))
         if method not in self._KRYLOV_METHODS:
             raise ValueError("solve_linear: method must be one of %s; got %r"
                              % (sorted(self._KRYLOV_METHODS), method))

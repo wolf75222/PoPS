@@ -144,7 +144,9 @@ def test_nonlinear_surface_contains_only_executable_descriptors():
         "max_iterations": 12,
         "finite_difference_step": 1e-6,
     }
-    assert nonlinear.Newton().available().ok is True
+    global_newton = nonlinear.Newton(restart=51)
+    assert global_newton.options()["restart"] == 51
+    assert global_newton.available().ok is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------

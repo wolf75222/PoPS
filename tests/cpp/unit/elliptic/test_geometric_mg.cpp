@@ -23,6 +23,24 @@ using namespace pops;
 
 static constexpr double kPi = 3.14159265358979323846;
 
+namespace {
+
+int first_boundary_residual_iteration = -1;
+
+void noop_boundary_prepare_residual(int, const MultiFab&, MultiFab&, const Geometry&,
+                                    const FieldBoundaryExecutionContext& context) {
+  if (first_boundary_residual_iteration < 0)
+    first_boundary_residual_iteration = context.point.iteration;
+}
+void noop_boundary_prepare_jvp(int, const MultiFab&, const MultiFab&, MultiFab&, const Geometry&,
+                               const FieldBoundaryExecutionContext&) {}
+void noop_boundary_residual(int, const MultiFab&, MultiFab&, const Geometry&,
+                            const FieldBoundaryExecutionContext&) {}
+void noop_boundary_jvp(int, const MultiFab&, const MultiFab&, MultiFab&, const Geometry&,
+                       const FieldBoundaryExecutionContext&) {}
+
+}  // namespace
+
 static void expect_zero_probe_forcing_scale(const BCRec& bc) {
   constexpr int n = 16;
   const Box2D domain = Box2D::from_extents(n, n);
@@ -287,6 +305,102 @@ TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
   EXPECT_THROW((void)mg.solve(Real(1e-8), 4, nan), std::invalid_argument);
   EXPECT_THROW((void)mg.solve_robust(nan, 4), std::invalid_argument);
   EXPECT_THROW(mg.set_abs_tol(nan), std::invalid_argument);
+
+  FieldNewtonOptions newton;
+  newton.tolerance = std::numeric_limits<Real>::infinity();
+  EXPECT_THROW(mg.set_field_newton_options(newton), std::invalid_argument);
+  newton = FieldNewtonOptions{};
+  newton.linear_tolerance = std::numeric_limits<Real>::infinity();
+  EXPECT_THROW(mg.set_field_newton_options(newton), std::invalid_argument);
+  newton = FieldNewtonOptions{};
+  newton.restart = 51;
+  EXPECT_NO_THROW(mg.set_field_newton_options(newton));
+}
+
+TEST(GeometricMgTest, nonlinear_boundary_snapshot_reuses_cache_with_opaque_stage_slot) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  GeometricMG mg(geometry, BoxArray(std::vector<Box2D>{domain}), bc);
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(1));
+
+  CompiledFieldBoundaryKernel kernel{"noop-iteration-boundary",
+                                     "noop-iteration-boundary-residual",
+                                     "noop-iteration-boundary-jvp",
+                                     noop_boundary_prepare_residual,
+                                     noop_boundary_prepare_jvp,
+                                     noop_boundary_residual,
+                                     noop_boundary_jvp,
+                                     true};
+  FieldBoundaryExecutionContext context;
+  context.point.clock_slot = 3;
+  context.point.partition_slot = 5;
+  context.point.stage_slot = 17;  // generated wire ids are not Runge--Kutta fractions
+  context.point.step = 2;
+  context.point.substep = 7;
+  context.point.time = Real(0.25);
+  context.point.dt = Real(0.01);
+  mg.set_boundary_kernel(kernel, context);
+
+  FieldNewtonOptions options;
+  options.max_iterations = 3;
+  options.linear_max_iterations = 80;
+  options.restart = 12;
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), 0u);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), 0u);
+
+  SolveReport first_report;
+  first_boundary_residual_iteration = -1;
+  EXPECT_NO_THROW(first_report = mg.solve_boundary_newton(options));
+  EXPECT_EQ(first_boundary_residual_iteration, 0);
+  EXPECT_NE(first_report.status, SolveStatus::kInvalidEvaluation);
+  const auto generation = mg.boundary_newton_cache_generation();
+  const auto allocation_count = mg.boundary_newton_cache_allocation_count();
+  EXPECT_GT(generation, 0u);
+  EXPECT_GT(allocation_count, 0u);
+
+  // A new logical evaluation point and different per-call stopping controls do not change storage.
+  // Only the field layout or GMRES restart may rebuild this cache.
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(1));
+  context.point.stage_slot = 29;
+  context.point.time = Real(0.5);
+  mg.set_boundary_context(context);
+  options.max_iterations = 2;
+  options.linear_tolerance = Real(5e-4);
+  options.linear_max_iterations = 64;
+
+  SolveReport second_report;
+  first_boundary_residual_iteration = -1;
+  EXPECT_NO_THROW(second_report = mg.solve_boundary_newton(options));
+  EXPECT_EQ(first_boundary_residual_iteration, 0);
+  EXPECT_NE(second_report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
+
+  // A repeated direct call without a fresh context must not inherit the previous Newton iteration.
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(1));
+  first_boundary_residual_iteration = -1;
+  SolveReport repeated_report;
+  EXPECT_NO_THROW(repeated_report = mg.solve_boundary_newton(options));
+  EXPECT_EQ(first_boundary_residual_iteration, 0);
+  EXPECT_NE(repeated_report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
+
+  // Restart changes the GMRES basis shape and is therefore the one per-call control that rebuilds
+  // storage. The replacement remains a single persistent cache, not an accumulating cache family.
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(1));
+  options.restart = 8;
+  SolveReport resized_report;
+  EXPECT_NO_THROW(resized_report = mg.solve_boundary_newton(options));
+  EXPECT_NE(resized_report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation + 1);
+  EXPECT_NE(mg.boundary_newton_cache_allocation_count(), allocation_count);
 }
 
 TEST(GeometricMgTest, nullspace_compatibility_rejects_nonfinite_moment) {

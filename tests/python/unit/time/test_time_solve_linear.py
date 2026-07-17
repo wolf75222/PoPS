@@ -147,7 +147,7 @@ def test_gmres_gmg_precond_codegen(t):
     assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
     assert "->prepare(ctx," in src, "MG must be built before the Krylov loop\n%s" % src
     assert "pops::ApplyFn precond_mg" in src, "a named real precond ApplyFn must be emitted\n%s" % src
-    assert "pops::PreparedLinearPreconditioner(precond_mg" in src, src
+    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
 
 
 def test_bicgstab_gmg_precond_codegen(t):
@@ -155,7 +155,7 @@ def test_bicgstab_gmg_precond_codegen(t):
                          preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
     assert "->apply(ctx," in src, src
-    assert "pops::PreparedLinearPreconditioner(precond_mg" in src, src
+    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
 
 
 def test_identity_precond_byte_identical(t):

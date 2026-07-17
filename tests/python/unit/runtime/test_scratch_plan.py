@@ -68,7 +68,7 @@ def _ssprk3(name="ssprk3"):
     return P
 
 
-def _krylov(name="krylov_demo"):
+def _krylov(name="krylov_demo", *, preconditioner=None):
     """A Program with a typed matrix-free linear solve -- exercises the persistent path."""
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     U = temporal.n
@@ -87,7 +87,8 @@ def _krylov(name="krylov_demo"):
     from pops.time import FailRun
     P.set_apply(A, _apply)
     P.solve(
-        LinearProblem(A, buf), solver=GMRES(max_iter=10, restart=3),
+        LinearProblem(A, buf),
+        solver=GMRES(max_iter=10, restart=3, preconditioner=preconditioner),
     ).consume(action=FailRun())
     P.commit(
         temporal.next,
@@ -247,18 +248,38 @@ def test_persistent_krylov_buffers():
     plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
-    chk(krylov[0]["workspace_buffers"] == 7,
-        "GMRES(3) owns restart+4 persistent workspace fields")
+    chk(krylov[0]["workspace_buffers"] == 6,
+        "unpreconditioned GMRES(3) owns restart+3 persistent workspace fields")
     chk(krylov[0]["prepared_problem_buffers"] == 2,
         "the prepared affine problem owns zero and A(0)")
-    chk(krylov[0]["buffers"] == 9 and krylov[0]["exact"] is True,
+    chk(krylov[0]["prepared_preconditioner_buffers"] == 0,
+        "the identity preconditioner owns no affine-linearization fields")
+    chk(krylov[0]["workspace_scalar_values"] == 25,
+        "GMRES(3) reports its Hessenberg/rotation/solution scalar storage exactly")
+    chk(krylov[0]["collective_values"] == 4,
+        "GMRES(3) reports its persistent batched-reduction payload exactly")
+    chk(krylov[0]["buffers"] == 8 and krylov[0]["exact"] is True,
         "the complete prepared footprint is exact")
     chk(plan.conservative is True,
         "the exact Krylov entry does not hide this Program's separate conservative MG hierarchy")
 
+    from pops.solvers import preconditioners
+    prepared = build_scratch_plan(
+        _krylov("preconditioned_krylov", preconditioner=preconditioners.GeometricMG()))
+    prepared_krylov = [p for p in prepared.persistent if p["kind"] == "krylov"][0]
+    chk(prepared_krylov["workspace_buffers"] == 7,
+        "preconditioned GMRES(3) owns its restart+4 transformed-vector workspace")
+    chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
+        "an affine prepared preconditioner owns zero and M_raw(0)")
+    chk(prepared_krylov["workspace_scalar_values"] == 25
+        and prepared_krylov["collective_values"] == 4,
+        "preconditioning does not duplicate GMRES scalar/collective storage")
+    chk(prepared_krylov["buffers"] == 11,
+        "the complete preconditioned GMRES footprint is exact")
+
 
 def test_scratch_plan_rejects_tampered_krylov_footprint():
-    """Inspection shares codegen's exact footprint validator; it never coerces fake booleans."""
+    """Inspection authenticates the duplicate footprint against its typed operator."""
     print("== scratch_plan() rejects a tampered Krylov footprint ==")
     P = _krylov()
     solve = next(value for value in P._values if value.op == "solve_linear")
@@ -275,6 +296,37 @@ def test_scratch_plan_rejects_tampered_krylov_footprint():
             "the shared footprint validator rejects string-to-bool coercion")
     else:
         chk(False, "a tampered Krylov footprint must not produce an exact scratch plan")
+
+    P = _krylov("tampered_ghost_depth")
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    footprint["input_ghosts"] = 0
+    attrs["krylov_footprint"] = footprint
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("input_ghosts" in str(exc) and "operator" in str(exc),
+            "the duplicate ghost depth is bound to the typed operator stencil")
+    else:
+        chk(False, "an undersized Krylov halo must be rejected before code generation")
+
+    P = _krylov("tampered_component_count")
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    attrs["ncomp"] = 2
+    footprint["components"] = 2
+    attrs["krylov_footprint"] = footprint
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("component count" in str(exc) and "operator" in str(exc),
+            "paired solve/footprint tampering cannot override the operator component count")
+    else:
+        chk(False, "a forged Krylov component count must be rejected before code generation")
 
 
 def test_no_persistent_without_solve():

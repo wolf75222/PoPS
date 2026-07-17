@@ -221,6 +221,7 @@ function(pops_add_mpi_rank_test name nproc)
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(${name}_np${nproc} PROPERTIES
     LABELS "backend;mpi;medium"
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${nproc}"
     PROCESSORS ${nproc}
     TIMEOUT 600)
 endfunction()
@@ -776,7 +777,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GenericKrylov.cg_converges_on_spd_operator:GenericKrylov.bicgstab_converges_with_identity_preconditioner:GenericKrylov.gmres_converges_on_spd_operator:GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:GenericKrylov.mpi_variant_distributes_real_work_to_every_rank")
+            "GenericKrylov.footprint_authenticates_layout_and_preconditioner_presence:GenericKrylov.cg_converges_on_spd_operator:GenericKrylov.bicgstab_converges_with_identity_preconditioner:GenericKrylov.gmres_converges_on_spd_operator:GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:GenericKrylov.arbitrary_halo_depth_is_a_first_class_prepared_footprint:GenericKrylov.mpi_variant_distributes_real_work_to_every_rank:GenericKrylov.geometric_preconditioner_preserves_a_custom_distribution")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

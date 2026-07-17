@@ -11,6 +11,7 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -21,8 +22,10 @@
 
 namespace pops {
 
-/// Host-side matrix-free application. Device work remains inside the Kokkos-backed kernels called by
-/// the function; no callback is ever copied or constructed inside an iteration.
+/// Host-side matrix-free application. The callback must overwrite every valid output cell and owns
+/// any typed halo/boundary fill required before it reads input ghosts. Device work remains inside the
+/// Kokkos-backed kernels called by the function; no callback is ever copied or constructed inside an
+/// iteration.
 using ApplyFn = std::function<void(MultiFab& out, const MultiFab& in)>;
 using PreparedResourceFn = std::function<void()>;
 
@@ -59,11 +62,11 @@ struct LinearOperatorProperties {
            has(LinearOperatorProperty::kPositiveDefinite);
   }
   constexpr bool valid() const {
-    constexpr std::uint32_t known = operator_property_bit(LinearOperatorProperty::kSymmetric) |
-                                    operator_property_bit(LinearOperatorProperty::kPositiveDefinite);
-    return (bits & ~known) == 0 &&
-           (!has(LinearOperatorProperty::kPositiveDefinite) ||
-            has(LinearOperatorProperty::kSymmetric));
+    constexpr std::uint32_t known =
+        operator_property_bit(LinearOperatorProperty::kSymmetric) |
+        operator_property_bit(LinearOperatorProperty::kPositiveDefinite);
+    return (bits & ~known) == 0 && (!has(LinearOperatorProperty::kPositiveDefinite) ||
+                                    has(LinearOperatorProperty::kSymmetric));
   }
 };
 
@@ -101,8 +104,12 @@ struct OperatorEvaluationSnapshot {
       return fingerprint[0] != 0 || fingerprint[1] != 0 || fingerprint[2] != 0 ||
              fingerprint[3] != 0;
     };
-    return nonzero_authority && revision != 0 && stage_denominator > 0 &&
-           topology_revision != 0 && any_nonzero(topology) && any_nonzero(resources);
+    const double dt = std::bit_cast<double>(dt_bits);
+    const double time = std::bit_cast<double>(physical_time_bits);
+    return nonzero_authority && revision != 0 && macro_step >= 0 && stage_numerator >= 0 &&
+           stage_denominator > 0 && stage_numerator <= stage_denominator && std::isfinite(dt) &&
+           dt >= 0.0 && std::isfinite(time) && topology_revision != 0 && any_nonzero(topology) &&
+           any_nonzero(resources);
   }
   friend bool operator==(const OperatorEvaluationSnapshot&,
                          const OperatorEvaluationSnapshot&) = default;
@@ -133,14 +140,12 @@ inline std::uint64_t fingerprint_mix_word(std::uint64_t hash, std::uint64_t valu
 }
 
 inline OperatorFingerprint fingerprint_seed() {
-  return {1469598103934665603ull, 1099511628211ull, 7809847782465536322ull,
-          9650029242287828579ull};
+  return {1469598103934665603ull, 1099511628211ull, 7809847782465536322ull, 9650029242287828579ull};
 }
 
 inline void fingerprint_mix(OperatorFingerprint& hash, std::uint64_t value) {
   constexpr std::array<std::uint64_t, 4> domain_separators{
-      0x9e3779b97f4a7c15ull, 0xbf58476d1ce4e5b9ull, 0x94d049bb133111ebull,
-      0xd6e8feb86659fd93ull};
+      0x9e3779b97f4a7c15ull, 0xbf58476d1ce4e5b9ull, 0x94d049bb133111ebull, 0xd6e8feb86659fd93ull};
   for (std::size_t lane = 0; lane < hash.size(); ++lane)
     hash[lane] = fingerprint_mix_word(hash[lane], value ^ domain_separators[lane]);
 }
@@ -161,13 +166,10 @@ inline OperatorFingerprint layout_fingerprint(const MultiFab& value) {
   for (std::size_t index = 0; index < boxes.size(); ++index) {
     const Box2D& box = boxes[index];
     for (int axis = 0; axis < 2; ++axis) {
-      fingerprint_mix(hash, static_cast<std::uint64_t>(
-                                static_cast<std::int64_t>(box.lo[axis])));
-      fingerprint_mix(hash, static_cast<std::uint64_t>(
-                                static_cast<std::int64_t>(box.hi[axis])));
+      fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(box.lo[axis])));
+      fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[axis])));
     }
-    fingerprint_mix(hash, static_cast<std::uint64_t>(
-                              static_cast<std::int64_t>(ranks[index])));
+    fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(ranks[index])));
   }
   return hash;
 }
@@ -175,10 +177,10 @@ inline OperatorFingerprint layout_fingerprint(const MultiFab& value) {
 inline void fingerprint_geometry(OperatorFingerprint& hash, const Geometry& geometry) {
   fingerprint_mix(hash, "cartesian");
   for (int axis = 0; axis < 2; ++axis) {
-    fingerprint_mix(hash, static_cast<std::uint64_t>(
-                              static_cast<std::int64_t>(geometry.domain.lo[axis])));
-    fingerprint_mix(hash, static_cast<std::uint64_t>(
-                              static_cast<std::int64_t>(geometry.domain.hi[axis])));
+    fingerprint_mix(
+        hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(geometry.domain.lo[axis])));
+    fingerprint_mix(
+        hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(geometry.domain.hi[axis])));
   }
   fingerprint_mix(hash, std::bit_cast<std::uint64_t>(geometry.xlo));
   fingerprint_mix(hash, std::bit_cast<std::uint64_t>(geometry.xhi));
@@ -189,10 +191,10 @@ inline void fingerprint_geometry(OperatorFingerprint& hash, const Geometry& geom
 inline void fingerprint_geometry(OperatorFingerprint& hash, const PolarGeometry& geometry) {
   fingerprint_mix(hash, "polar");
   for (int axis = 0; axis < 2; ++axis) {
-    fingerprint_mix(hash, static_cast<std::uint64_t>(
-                              static_cast<std::int64_t>(geometry.domain.lo[axis])));
-    fingerprint_mix(hash, static_cast<std::uint64_t>(
-                              static_cast<std::int64_t>(geometry.domain.hi[axis])));
+    fingerprint_mix(
+        hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(geometry.domain.lo[axis])));
+    fingerprint_mix(
+        hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(geometry.domain.hi[axis])));
   }
   fingerprint_mix(hash, std::bit_cast<std::uint64_t>(geometry.r_min));
   fingerprint_mix(hash, std::bit_cast<std::uint64_t>(geometry.r_max));
@@ -203,36 +205,44 @@ inline void fingerprint_boundary(OperatorFingerprint& hash, const BCRec& boundar
   fingerprint_mix(hash, static_cast<std::uint64_t>(boundary.xhi));
   fingerprint_mix(hash, static_cast<std::uint64_t>(boundary.ylo));
   fingerprint_mix(hash, static_cast<std::uint64_t>(boundary.yhi));
-  const std::array<Real, 14> values{
-      boundary.xlo_val,   boundary.xhi_val,   boundary.ylo_val,   boundary.yhi_val,
-      boundary.xlo_alpha, boundary.xlo_beta,  boundary.xhi_alpha, boundary.xhi_beta,
-      boundary.ylo_alpha, boundary.ylo_beta,  boundary.yhi_alpha, boundary.yhi_beta,
-      boundary.dx,        boundary.dy};
+  const std::array<Real, 14> values{boundary.xlo_val,   boundary.xhi_val,   boundary.ylo_val,
+                                    boundary.yhi_val,   boundary.xlo_alpha, boundary.xlo_beta,
+                                    boundary.xhi_alpha, boundary.xhi_beta,  boundary.ylo_alpha,
+                                    boundary.ylo_beta,  boundary.yhi_alpha, boundary.yhi_beta,
+                                    boundary.dx,        boundary.dy};
   for (const Real value : values)
     fingerprint_mix(hash, std::bit_cast<std::uint64_t>(value));
 }
 
-inline bool same_allocated_layout(const MultiFab& left, const MultiFab& right) {
-  return PureFieldAlgebra::same_vector_space(left, right) && left.n_grow() == right.n_grow();
-}
-
 }  // namespace detail
 
-/// A fixed linear preconditioner prepared separately from the affine operator. The preparation hook
-/// must allocate/build all native state before the first apply; apply() refuses an unbound or changed
-/// snapshot, so no lazy initialization can hide inside a Krylov iteration.
+/// A fixed preconditioner prepared separately from the affine operator. Its raw callback may contain
+/// an affine physical-boundary response; prepare() captures the exact zero response and apply()
+/// subtracts it. The preparation hook must allocate/build all native state before the first apply;
+/// apply() refuses an unbound or changed snapshot, so no lazy initialization can hide inside a
+/// Krylov iteration.
 class PreparedLinearPreconditioner {
  public:
   static PreparedLinearPreconditioner identity() { return PreparedLinearPreconditioner(); }
 
   PreparedLinearPreconditioner() = default;
-  explicit PreparedLinearPreconditioner(ApplyFn apply, PreparedResourceFn prepare = {})
-      : apply_(std::move(apply)), prepare_(std::move(prepare)) {
-    if (!apply_)
+  explicit PreparedLinearPreconditioner(const MultiFab& prototype, ApplyFn raw_apply,
+                                        PreparedResourceFn prepare = {})
+      : raw_apply_(std::move(raw_apply)),
+        prepare_(std::move(prepare)),
+        zero_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow()),
+        constant_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow()),
+        layout_(detail::layout_fingerprint(prototype)) {
+    if (!raw_apply_)
       throw std::invalid_argument("PreparedLinearPreconditioner requires a non-empty apply");
+    zero_.share_halo_cache_from(prototype);
+    constant_.share_halo_cache_from(prototype);
   }
 
-  bool is_identity() const { return !static_cast<bool>(apply_); }
+  bool is_identity() const { return !static_cast<bool>(raw_apply_); }
+  bool compatible_with(const MultiFab& prototype) const {
+    return is_identity() || layout_ == detail::layout_fingerprint(prototype);
+  }
 
   void prepare(const OperatorEvaluationSnapshot& snapshot) {
     snapshot_.reset();
@@ -240,22 +250,37 @@ class PreparedLinearPreconditioner {
       throw std::invalid_argument("PreparedLinearPreconditioner received an invalid snapshot");
     if (prepare_)
       prepare_();
+    if (!is_identity()) {
+      // A physical-BC preconditioner can itself be affine. Evaluate its exact zero response once
+      // after all resources are materialized, then subtract it from every search-direction apply.
+      // This is the preconditioner analogue of A_lin(v) = A(v) - A(0), and it also warms every
+      // callback/halo resource before the iteration begins.
+      detail::PreparedFieldAlgebra::zero(zero_);
+      detail::PreparedFieldAlgebra::zero(constant_);
+      raw_apply_(constant_, zero_);
+    }
     snapshot_ = snapshot;
   }
 
-  void apply(MultiFab& out, const MultiFab& in,
-             const OperatorEvaluationSnapshot& snapshot) const {
+  void apply(MultiFab& out, const MultiFab& in, const OperatorEvaluationSnapshot& snapshot) const {
     if (!snapshot_ || *snapshot_ != snapshot)
       throw std::logic_error("prepared preconditioner snapshot changed without preparation");
+    if (out.shares_storage_with(in))
+      throw std::invalid_argument("prepared preconditioner output must not alias its input");
     if (is_identity())
       detail::PreparedFieldAlgebra::copy(out, in);
-    else
-      apply_(out, in);
+    else {
+      raw_apply_(out, in);
+      detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
+    }
   }
 
  private:
-  ApplyFn apply_{};
+  ApplyFn raw_apply_{};
   PreparedResourceFn prepare_{};
+  MultiFab zero_{};
+  MultiFab constant_{};
+  OperatorFingerprint layout_{};
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
 };
 
@@ -265,13 +290,11 @@ class PreparedLinearPreconditioner {
 /// preconditioners may be warmed before it evaluates A(0). No lazy work may escape into iteration.
 class PreparedAffineLinearProblem {
  public:
-  PreparedAffineLinearProblem(const MultiFab& prototype, ApplyFn raw_apply,
-                              PreparedLinearPreconditioner preconditioner,
-                              LinearOperatorProperties properties, KrylovFootprint footprint,
-                              OperatorSnapshotProbe snapshot_probe,
-                              PreparedResourceFn freeze_resources = {},
-                              OperatorApplyPurity apply_purity =
-                                  OperatorApplyPurity::kVerifyAfterApply)
+  PreparedAffineLinearProblem(
+      const MultiFab& prototype, ApplyFn raw_apply, PreparedLinearPreconditioner preconditioner,
+      LinearOperatorProperties properties, KrylovFootprint footprint,
+      OperatorSnapshotProbe snapshot_probe, PreparedResourceFn freeze_resources = {},
+      OperatorApplyPurity apply_purity = OperatorApplyPurity::kVerifyAfterApply)
       : raw_apply_(std::move(raw_apply)),
         preconditioner_(std::move(preconditioner)),
         properties_(properties),
@@ -296,6 +319,9 @@ class PreparedAffineLinearProblem {
     if (footprint_.preconditioned != !preconditioner_.is_identity())
       throw std::invalid_argument(
           "PreparedAffineLinearProblem footprint disagrees with preconditioner presence");
+    if (!preconditioner_.compatible_with(prototype))
+      throw std::invalid_argument(
+          "PreparedAffineLinearProblem preconditioner layout disagrees with prototype");
     if (!snapshot_probe_)
       throw std::invalid_argument("PreparedAffineLinearProblem requires a snapshot probe");
   }
@@ -333,6 +359,7 @@ class PreparedAffineLinearProblem {
   void effective_rhs(MultiFab& out, const MultiFab& rhs) const {
     require_vector_field(rhs, "PreparedAffineLinearProblem::effective_rhs(rhs)");
     require_operator_field(out, "PreparedAffineLinearProblem::effective_rhs(out)");
+    require_distinct_storage(out, rhs, "PreparedAffineLinearProblem::effective_rhs");
     effective_rhs_prepared_(out, rhs);
   }
 
@@ -340,6 +367,7 @@ class PreparedAffineLinearProblem {
   void apply_linear(MultiFab& out, const MultiFab& direction) const {
     require_operator_field(direction, "PreparedAffineLinearProblem::apply_linear(direction)");
     require_operator_field(out, "PreparedAffineLinearProblem::apply_linear(out)");
+    require_distinct_storage(out, direction, "PreparedAffineLinearProblem::apply_linear");
     apply_linear_prepared_(out, direction);
   }
 
@@ -348,13 +376,31 @@ class PreparedAffineLinearProblem {
     require_vector_field(rhs, "PreparedAffineLinearProblem::true_residual(rhs)");
     require_operator_field(iterate, "PreparedAffineLinearProblem::true_residual(iterate)");
     require_operator_field(out, "PreparedAffineLinearProblem::true_residual(out)");
+    require_distinct_storage(out, rhs, "PreparedAffineLinearProblem::true_residual(out, rhs)");
+    require_distinct_storage(out, iterate,
+                             "PreparedAffineLinearProblem::true_residual(out, iterate)");
     true_residual_prepared_(out, rhs, iterate);
   }
 
   void apply_preconditioner(MultiFab& out, const MultiFab& in) const {
     require_operator_field(in, "PreparedAffineLinearProblem::apply_preconditioner(in)");
     require_operator_field(out, "PreparedAffineLinearProblem::apply_preconditioner(out)");
+    require_distinct_storage(out, in, "PreparedAffineLinearProblem::apply_preconditioner");
     apply_preconditioner_prepared_(out, in);
+  }
+
+  /// The delivered prepared metric is one global L2 product over every component and rank. Keeping
+  /// it on the problem (rather than inside individual algorithms) gives every method and report one
+  /// authority and leaves a narrow metric-provider seam for a future weighted/composite route.
+  Real inner_product(const MultiFab& left, const MultiFab& right) const {
+    require_vector_field(left, "PreparedAffineLinearProblem::inner_product(left)");
+    require_vector_field(right, "PreparedAffineLinearProblem::inner_product(right)");
+    return inner_product_prepared_(left, right);
+  }
+
+  Real residual_norm(const MultiFab& value) const {
+    require_vector_field(value, "PreparedAffineLinearProblem::residual_norm");
+    return residual_norm_prepared_(value);
   }
 
   void require_vector_field(const MultiFab& value, const char* where) const {
@@ -373,6 +419,12 @@ class PreparedAffineLinearProblem {
       throw std::logic_error("PreparedAffineLinearProblem is not prepared");
     if (snapshot_probe_() != *snapshot_)
       throw std::logic_error("operator snapshot mutated after preparation");
+  }
+
+  static void require_distinct_storage(const MultiFab& out, const MultiFab& in,
+                                       const char* where) {
+    if (out.shares_storage_with(in))
+      throw std::invalid_argument(std::string(where) + ": output aliases an input field");
   }
 
  private:
@@ -395,8 +447,7 @@ class PreparedAffineLinearProblem {
     detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
   }
 
-  void true_residual_prepared_(MultiFab& out, const MultiFab& rhs,
-                               const MultiFab& iterate) const {
+  void true_residual_prepared_(MultiFab& out, const MultiFab& rhs, const MultiFab& iterate) const {
     require_current();
     raw_apply_(out, iterate);
     verify_external_apply_();
@@ -407,6 +458,18 @@ class PreparedAffineLinearProblem {
     require_current();
     preconditioner_.apply(out, in, *snapshot_);
     verify_external_apply_();
+  }
+
+  Real inner_product_prepared_(const MultiFab& left, const MultiFab& right) const {
+    return detail::PreparedFieldAlgebra::dot(left, right);
+  }
+
+  Real local_inner_product_prepared_(const MultiFab& left, const MultiFab& right) const {
+    return detail::PreparedFieldAlgebra::local_dot(left, right);
+  }
+
+  Real residual_norm_prepared_(const MultiFab& value) const {
+    return detail::PreparedFieldAlgebra::norm(value);
   }
 
   ApplyFn raw_apply_;
@@ -443,6 +506,17 @@ struct PreparedProblemAccess {
   static void apply_preconditioner(const PreparedAffineLinearProblem& problem, MultiFab& out,
                                    const MultiFab& in) {
     problem.apply_preconditioner_prepared_(out, in);
+  }
+  static Real inner_product(const PreparedAffineLinearProblem& problem, const MultiFab& left,
+                            const MultiFab& right) {
+    return problem.inner_product_prepared_(left, right);
+  }
+  static Real local_inner_product(const PreparedAffineLinearProblem& problem, const MultiFab& left,
+                                  const MultiFab& right) {
+    return problem.local_inner_product_prepared_(left, right);
+  }
+  static Real residual_norm(const PreparedAffineLinearProblem& problem, const MultiFab& value) {
+    return problem.residual_norm_prepared_(value);
   }
 };
 

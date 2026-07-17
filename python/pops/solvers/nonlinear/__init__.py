@@ -159,8 +159,6 @@ class Newton(Descriptor):
         self.linear_max_iterations = _positive_int(
             linear_max_iterations, "linear_max_iterations")
         self.restart = _positive_int(restart, "restart")
-        if self.restart > 50:
-            raise ValueError("Newton restart must be <= 50")
         self.armijo = _positive_float(armijo, "armijo", upper=1.0)
         self.minimum_step = _positive_float(minimum_step, "minimum_step", upper=1.0)
 

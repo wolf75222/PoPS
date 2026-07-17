@@ -1212,7 +1212,29 @@ complete flat/refined solver identity, tolerance and iteration budget. On a flat
 generated C++ freezes the authored apply in a `PreparedAffineLinearProblem`, binds its persistent
 `KrylovWorkspace`, then executes it through `ctx.solve_prepared_linear`. Preparation authenticates the
 exact evaluation snapshot and separates `A(0)` from `A_lin`; the flat branch therefore supports affine
-boundary/source terms without applying them to search directions. On a refined hierarchy,
+boundary/source terms without applying them to search directions. A prepared non-identity
+preconditioner performs the same construction independently (`d = M_raw(0)`,
+`M_lin(v) = M_raw(v) - d`), so a Dirichlet or Robin value cannot be reinjected at every Krylov
+iteration. The problem and preconditioner prototypes must have the exact same components, boxes,
+distribution and halo footprint; inputs may not alias mutable outputs, and workspace slots are a
+private, fixed-shape native resource rather than an extension mutation seam. CG and BiCGStab replace
+their complete recurrence after a recursive convergence candidate fails true-residual confirmation.
+BiCGStab otherwise keeps `r = s - omega*t` and evaluates the true residual only for convergence
+confirmation, failure reporting and final reporting, avoiding a third matvec on every full iteration.
+GMRES batches all Arnoldi projections of a column into one vector collective, evaluates the projected
+norm exactly, and applies a selective batched CGS2 pass under the DGKS norm-loss criterion. Its normal
+column uses two collectives instead of one collective per existing basis vector. Every positive GMRES
+restart is dynamically sized, including the Newton-Krylov route; no fixed-array ceiling remains. The
+inert scratch plan reports the exact persistent field, Hessenberg/rotation scalar and
+batched-collective payload counts.
+
+The AMR install owns one complete persistent Program-resource bundle per level and
+rebuilds those bundles when either the checkpointed topology epoch or the process-local
+materialization generation changes. The latter is deliberately not restored, so restart rebuilds and
+rejected-attempt rollbacks invalidate concrete storage even when epoch and level count are unchanged;
+a level-local Krylov problem is therefore never reused against another layout.
+Frozen tensor coefficients copy valid and ghost regions because face and cross stencils consume
+inter-box neighbour values. On a refined hierarchy,
 every level first assembles and gathers its coefficients, right-hand side and initial guess; exactly
 one `ctx.solve_composite_tensor_fac` then solves the complete hierarchy; only a successful complete
 solution is published to every level. The accepted synchronization subsequently applies reflux and
@@ -1225,7 +1247,8 @@ by maximum depth, without an opcode-name table. `matrix_free_operator(stencil_de
 larger provider halo and is rejected if `n` is smaller than the composed requirement. The wired
 `preconditioners.GeometricMG()` is intentionally scalar-only and is rejected for a multi-component
 operator until a genuinely block-coupled multigrid provider exists; no component-wise fallback is
-performed.
+performed. Its native controls are validated before allocation, and its cache key authenticates the
+layout, geometry, BC and prepared boundary-plan identity before reuse.
 
 **Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
@@ -1523,9 +1546,10 @@ then solves by matrix-free BiCGStab (handles the non-symmetric of the cross term
 $1/r^2$). Singular operator (pure radial Neumann + periodic theta): gauge fixed by projection onto
 the subspace of zero FV mean (`project_mean`, the iterative counterpart of the mode-0 pinning). The
 9-point stencil reads the diagonal corners filled by `fill_ghosts` (without which the cross term would be wrong at the
-box boundary). The same generic `Program.solve(LinearProblem(...), solver=...)` IR carries polar
-divergence and gradient metrics, then `ProgramContext::solve_linear_matfree` selects
-`PolarTensorKrylovSolver`. Multi-rank MPI /
+box boundary). This specialized backend is not selected by the final prepared
+`Program.solve(LinearProblem(...), solver=...)` route; a future typed polar metric/operator provider
+must connect it explicitly rather than reviving the removed callback-based `solve_linear_matfree`
+dispatch. Multi-rank MPI /
 multi-box is supported by azimuthal splitting under `RadialLine` (the Thomas sweep in r must stay local
 to a box, safeguard `check_radial_columns`) and free 2D tiling under `Jacobi`.
 

@@ -165,7 +165,14 @@ def test_solve_rhs_component_count(t):
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
-    # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
+    rhs_wide = P.scalar_field("rhs4", ncomp=4)
+    try:
+        P.solve(LinearProblem(A, rhs_wide), solver=krylov.CG(max_iter=10))
+    except ValueError as exc:
+        assert "component" in str(exc), str(exc)
+    else:
+        raise AssertionError("a wider rhs requires an explicit component view")
+    # An exactly matching scalar_field and structurally matching typed State are accepted.
     outcome = P.solve(
         LinearProblem(
             A, P.scalar_field("rhs3", ncomp=3),

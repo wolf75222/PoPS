@@ -20,7 +20,36 @@ def _exact_int(value: Any, *, label: str, minimum: int) -> int:
     return value
 
 
-def validated_krylov_footprint(attrs: Mapping[str, Any]) -> dict[str, Any]:
+def _authenticated_operator_footprint(operator: Any) -> tuple[int, int]:
+    """Return the independently authored operator shape consumed by Krylov.
+
+    The solve node duplicates these two values so scratch inspection remains self-contained, but
+    that duplicate is not an authority: codegen must bind it back to the typed operator declaration
+    before allocating native fields.  Keep the import lazy so importing :mod:`pops.codegen` does not
+    eagerly import the time DSL.
+    """
+    operator_attrs = getattr(operator, "attrs", None)
+    if (
+        getattr(operator, "op", None) != "matrix_free_operator"
+        or not isinstance(operator_attrs, Mapping)
+    ):
+        raise ValueError("solve_linear requires an authenticated matrix_free_operator input")
+    operator_components = _exact_int(
+        operator_attrs.get("ncomp"), label="operator component count", minimum=1)
+
+    from pops.time.stencil import StencilAccess
+    stencil_access = operator_attrs.get("stencil_access")
+    if type(stencil_access) is not StencilAccess:
+        raise ValueError("solve_linear operator has no authenticated StencilAccess")
+    operator_ghosts = _exact_int(
+        stencil_access.required_ghost_depth,
+        label="operator input_ghosts", minimum=0)
+    return operator_components, operator_ghosts
+
+
+def validated_krylov_footprint(
+    attrs: Mapping[str, Any], *, operator: Any
+) -> dict[str, Any]:
     """Return the exact canonical footprint or reject a malformed/tampered solve node.
 
     Code emission and inert scratch inspection consume this one validator so neither can coerce
@@ -31,7 +60,11 @@ def validated_krylov_footprint(attrs: Mapping[str, Any]) -> dict[str, Any]:
     if method not in _KRYLOV_METHODS:
         raise ValueError("solve_linear has an unauthenticated Krylov method %r" % (method,))
 
+    operator_components, operator_ghosts = _authenticated_operator_footprint(operator)
     components = _exact_int(attrs.get("ncomp"), label="operator component count", minimum=1)
+    if components != operator_components:
+        raise ValueError(
+            "solve_linear component count disagrees with its authenticated operator")
     preconditioner = attrs.get("preconditioner")
     if preconditioner not in _PRECONDITIONERS:
         raise ValueError(
@@ -60,6 +93,9 @@ def validated_krylov_footprint(attrs: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("solve_linear Krylov footprint component count is unauthenticated")
     input_ghosts = _exact_int(
         footprint["input_ghosts"], label="input_ghosts", minimum=0)
+    if input_ghosts != operator_ghosts:
+        raise ValueError(
+            "solve_linear Krylov footprint input_ghosts disagrees with its authenticated operator")
     footprint_restart = _exact_int(
         footprint["restart"], label="restart", minimum=0)
     if footprint_restart != restart:

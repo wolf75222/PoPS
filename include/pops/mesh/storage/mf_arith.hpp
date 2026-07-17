@@ -203,14 +203,21 @@ inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiF
 /// COLLECTIVE, MANDATORY UNDER MPI: must be called on every rank (including empty), otherwise
 /// deadlock. FP NOTE: not bit-identical across backends under Kokkos; the all-reduce returns the same
 /// value to all ranks (no desynchronization of the Krylov stopping criterion).
-inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
+/// Rank-local component dot. This is the non-collective building block for algorithms that batch
+/// several products into one explicit vector all-reduce. Every caller must still participate in
+/// that collective, including ranks owning no box.
+inline Real dot_local(const MultiFab& x, const MultiFab& y, int comp = 0) {
   Real s = 0;
   for (int li = 0; li < x.local_size(); ++li) {
     const ConstArray4 X = x.fab(li).const_array();
     const ConstArray4 Y = y.fab(li).const_array();
     s += reduce_sum_cell(x.box(li), detail::DotKernel{X, Y, comp});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+  return s;
+}
+
+inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(dot_local(x, y, comp))));
 }
 
 /// FULL-component dot Sum_{cells, c} x(.,.,c) * y(.,.,c) over ALL components, reduced over ALL ranks
@@ -222,7 +229,8 @@ inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
 /// COLLECTIVE, MANDATORY UNDER MPI: like dot, all_reduce_sum runs on every rank (an empty rank
 /// contributes 0); the per-component local sums are summed BEFORE the single all-reduce so the
 /// reduction structure matches dot per component (same per-tile Kokkos::Sum, deterministic).
-inline Real dot_all(const MultiFab& x, const MultiFab& y) {
+/// Rank-local full-component dot, paired with an explicit batched collective by prepared solvers.
+inline Real dot_all_local(const MultiFab& x, const MultiFab& y) {
   const int nc = x.ncomp();
   Real s = 0;
   for (int li = 0; li < x.local_size(); ++li) {
@@ -232,7 +240,11 @@ inline Real dot_all(const MultiFab& x, const MultiFab& y) {
     for (int c = 0; c < nc; ++c)
       s += reduce_sum_cell(b, detail::DotKernel{X, Y, c});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+  return s;
+}
+
+inline Real dot_all(const MultiFab& x, const MultiFab& y) {
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(dot_all_local(x, y))));
 }
 
 /// Sum Sum_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_sum) -- the

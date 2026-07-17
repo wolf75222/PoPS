@@ -209,8 +209,11 @@ def test_codegen_emits_amr_install_wrapper():
         "the wrapper delegates to the explicit parent/child clock driver")
     chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
         "exact SSPRK2 stage abscissae are emitted")
-    chk("ctx.set_level(" not in body and "ctx.couple_levels(" not in body,
-        "level traversal and synchronization are not duplicated in generated code")
+    chk("_make_level_program" in body and "ctx.program_resource_topology_epoch()" in body
+        and "ctx.program_resource_topology_generation()" in body,
+        "per-level Program resources refresh after regrid, rollback, and checkpoint rebuild")
+    chk("ctx.set_level(level)" in body and "ctx.couple_levels(" not in body,
+        "generated traversal only materializes level-local resources; native sync remains owned")
     chk("the per-level AMR macro-step driver" not in body
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")

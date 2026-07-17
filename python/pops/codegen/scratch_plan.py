@@ -17,9 +17,9 @@ over a lowered ``pops.time.Program`` IR and reports, BEFORE any bind / run / all
     rhs/source/apply straddling a field solve -- the buffer carries a value the next reader needs);
   - the PERSISTENT solver buffers -- the Krylov work vectors a ``solve_linear`` needs across its
     dynamic iteration and the multigrid hierarchy a ``solve_fields`` elliptic solve carries. These
-    live for the whole solve (not a step-body scratch), so they are reported separately and their
-    counts are CONSERVATIVE (the exact Krylov vector count / V-cycle depth is solver-dependent and a
-    bind input); the plan says so.
+    live for the whole solve (not a step-body scratch), so they are reported separately. Prepared
+    Krylov counts are exact from the typed footprint; topology-dependent multigrid storage is marked
+    conservative item by item.
 
 Nothing here binds, dlopens, allocates or reads a runtime array: the builder reads the Program IR
 (the same SSA value list ``_ir_hash`` digests) and the carried model's component counts only. It
@@ -72,11 +72,11 @@ class ScratchPlan:
         live ranges do not overlap.
       rejected: a list of ``{"scratch", "op", "reason"}`` -- a scratch that could NOT reuse an
         existing buffer, with the inspectable reason (a still-live occupant, or an aux/field barrier).
-      persistent: a list of ``{"kind", "name", "buffers", "note"}`` -- the Krylov / multigrid buffers
-        that live for a whole solve (reported separately from the step-body scratch); CONSERVATIVE.
-      conservative: True iff any reported figure is an over-count (the persistent solver buffers are);
-        the step-body scratch reuse is EXACT (from the liveness analysis), the persistent counts are
-        rules of thumb. The ``notes`` spell out which is which.
+      persistent: Krylov / multigrid storage that lives for a whole solve, reported separately from
+        step-body scratch. Krylov items expose exact field-buffer, scalar-value and collective-payload
+        counts; each item says whether its count is exact.
+      conservative: True iff any reported persistent figure is topology-dependent. Step-body scratch
+        reuse and prepared Krylov footprints are exact; the ``notes`` identify any remaining estimate.
       notes: inspectable assumptions -- exactly which figures are exact vs conservative.
     """
 
@@ -141,7 +141,8 @@ class ScratchPlan:
             for r in self.rejected:
                 lines.append("    %-13s (%s): %s" % (r["scratch"], r["op"], r["reason"]))
         if self.persistent:
-            lines.append("  persistent solver buffers (whole-solve, conservative):")
+            qualification = "mixed exact/conservative" if self.conservative else "exact"
+            lines.append("  persistent solver buffers (whole-solve, %s):" % qualification)
             for p in self.persistent:
                 lines.append("    %-13s %s x%d  (%s)"
                              % (p["name"], p["kind"], p["buffers"], p["note"]))
@@ -240,8 +241,9 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     rejected = _rejected_reuse(ranges_in_order, assignment, op_of, by_name, program)
 
     # --- persistent solver buffers: Krylov work vectors + the multigrid hierarchy. These live for a
-    # whole solve, not a step-body scratch, so they are reported separately. The counts are rules of
-    # thumb (the exact figures are solver-dependent bind inputs) -> CONSERVATIVE. ---
+    # whole solve, not a step-body scratch, so they are reported separately. Prepared Krylov counts
+    # come exactly from authenticated typed IR; only topology-dependent hierarchy entries are
+    # conservative. ---
     persistent = _persistent_solver_buffers(program)
 
     notes = [
@@ -335,25 +337,41 @@ def _persistent_solver_buffers(program: Any) -> list:
     for v in getattr(program, "_values", []):
         if v.op in _KRYLOV_OPS:
             method = v.attrs.get("method", "krylov")
-            footprint = validated_krylov_footprint(v.attrs)
+            footprint = validated_krylov_footprint(v.attrs, operator=v.inputs[0])
             restart = footprint["restart"]
             preconditioned = footprint["preconditioned"]
             workspace = {
                 "richardson": 2,
                 "cg": 4,
                 "bicgstab": 9 if preconditioned else 7,
-                "gmres": restart + 4,
+                # Identity GMRES applies Arnoldi directly to the raw operator result, so it does
+                # not reserve the extra transformed-vector field.  A real preconditioner still
+                # owns that persistent vector across every restart cycle.
+                "gmres": restart + (4 if preconditioned else 3),
             }[method]
+            preconditioner_buffers = 2 if preconditioned else 0
+            workspace_scalar_values = (
+                restart * (restart + 1) + 4 * restart + 1
+                if method == "gmres" else 0
+            )
+            collective_values = restart + 1 if method == "gmres" else 0
             persistent.append({
                 "kind": "krylov",
                 "name": v.name,
-                "buffers": workspace + 2,
+                "buffers": workspace + 2 + preconditioner_buffers,
                 "workspace_buffers": workspace,
                 "prepared_problem_buffers": 2,
+                "prepared_preconditioner_buffers": preconditioner_buffers,
+                "workspace_scalar_values": workspace_scalar_values,
+                "collective_values": collective_values,
                 "exact": True,
                 "footprint": dict(footprint),
-                "note": "%s: %d workspace + A(0)/zero fields (exact)"
-                        % (method, workspace),
+                "note": (
+                    "%s: %d workspace + 2 A(0)/zero + %d M(0)/zero fields; "
+                    "%d scalar + %d collective values (exact)"
+                    % (method, workspace, preconditioner_buffers,
+                       workspace_scalar_values, collective_values)
+                ),
             })
             if v.attrs.get("preconditioner") == "geometric_mg":
                 persistent.append({
