@@ -2,6 +2,8 @@
 # is deliberately executed outside project mode so CMake can inspect the native
 # loader closure without loading either HDF5 or MPI into the configure process.
 
+cmake_minimum_required(VERSION 3.21)
+
 foreach(_pops_required
     POPS_HDF5_RUNTIME_FILES
     POPS_EXPECTED_MPI_RUNTIME_FILES
@@ -85,8 +87,11 @@ set(_pops_unexpected_mpi "")
 foreach(_pops_dependency IN LISTS _pops_resolved)
   file(REAL_PATH "${_pops_dependency}" _pops_dependency_real)
   file(SHA256 "${_pops_dependency_real}" _pops_dependency_sha256)
-  if(NOT "${_pops_dependency_real}::${_pops_dependency_sha256}" IN_LIST
-      _pops_expected_identities)
+  set(_pops_dependency_identity
+    "${_pops_dependency_real}::${_pops_dependency_sha256}")
+  list(FIND _pops_expected_identities "${_pops_dependency_identity}"
+    _pops_expected_index)
+  if(_pops_expected_index EQUAL -1)
     list(APPEND _pops_unexpected_mpi "${_pops_dependency_real}")
   endif()
 endforeach()
@@ -98,13 +103,13 @@ if(_pops_unexpected_mpi)
 endif()
 
 set(_pops_missing_mpi "")
-set(_pops_expected_identities "")
 foreach(_pops_expected IN LISTS _pops_expected_mpi_files)
   file(REAL_PATH "${_pops_expected}" _pops_expected_real)
   file(SHA256 "${_pops_expected_real}" _pops_expected_sha256)
   set(_pops_expected_identity "${_pops_expected_real}::${_pops_expected_sha256}")
-  list(APPEND _pops_expected_identities "${_pops_expected_identity}")
-  if(NOT _pops_expected_identity IN_LIST _pops_resolved_identities)
+  list(FIND _pops_resolved_identities "${_pops_expected_identity}"
+    _pops_resolved_index)
+  if(_pops_resolved_index EQUAL -1)
     list(APPEND _pops_missing_mpi "${_pops_expected_real}")
   endif()
 endforeach()
@@ -114,22 +119,6 @@ if(_pops_missing_mpi)
   message(FATAL_ERROR
     "Parallel HDF5 is not bound to the exact MPI runtime selected by PoPS: "
     "missing ${_pops_missing_mpi_text} from its binary dependency closure")
-endif()
-
-set(_pops_unexpected_mpi "")
-foreach(_pops_dependency IN LISTS _pops_resolved)
-  file(REAL_PATH "${_pops_dependency}" _pops_dependency_real)
-  file(SHA256 "${_pops_dependency_real}" _pops_dependency_sha256)
-  if(NOT "${_pops_dependency_real}::${_pops_dependency_sha256}" IN_LIST
-      _pops_expected_identities)
-    list(APPEND _pops_unexpected_mpi "${_pops_dependency_real}")
-  endif()
-endforeach()
-if(_pops_unexpected_mpi)
-  list(JOIN _pops_unexpected_mpi ", " _pops_unexpected_mpi_text)
-  message(FATAL_ERROR
-    "Parallel HDF5 loads an additional MPI runtime outside the authenticated PoPS contract: "
-    "${_pops_unexpected_mpi_text}")
 endif()
 
 file(WRITE "${POPS_RUNTIME_SCAN_OUTPUT}" "ok\n")
