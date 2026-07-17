@@ -804,7 +804,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "uses: actions/cache/save@v6" in python_build_block
     assert "always() && steps.kokkos.outcome == 'success'" in python_build_block
     assert "github.run_attempt" in python_build_block
-    assert "timeout-minutes: 30" in python_shards_block
+    assert "timeout-minutes: 40" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block
