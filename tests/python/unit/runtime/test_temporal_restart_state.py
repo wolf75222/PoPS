@@ -88,7 +88,8 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
         components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
         waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
     )
-    source = model.source("forcing", on=state, value=(0.5 + 0.0 * rho,))
+    source_rate = 0.5
+    source = model.source("forcing", on=state, value=(source_rate + 0.0 * rho,))
     rate = model.rate(
         "transport-rate", equation=ddt(state) == -div(flux) + source)
     case = pops.Case("temporal-rejection-case")
@@ -128,10 +129,16 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
             shrink=0.5,
             growth=1.25,
         )
+        increment = program.value(
+            "candidate_increment",
+            candidate - temporal.n,
+            at=temporal.next.point,
+        )
         candidate = program.guard(
             "dt_dependent_error_estimate",
             candidate,
-            program.dt <= strategy.dt_init * strategy.shrink,
+            program.norm_inf(increment)
+            <= source_rate * strategy.dt_init * strategy.shrink,
             action=RejectAttempt(),
             role=GuardRole.ERROR_ESTIMATE,
         )

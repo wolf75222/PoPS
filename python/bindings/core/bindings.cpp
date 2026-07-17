@@ -15,8 +15,8 @@
 #include <pops/runtime/program/step_transaction.hpp>
 
 PYBIND11_MODULE(_pops, m) {
-  py::exception<pops::runtime::program::StepAttemptRejected>(m, "StepAttemptRejected",
-                                                             PyExc_RuntimeError);
+  py::register_exception<pops::runtime::program::StepAttemptRejected>(
+      m, "StepAttemptRejected", PyExc_RuntimeError);
   init_core(m);
   init_identity(m);
   init_component_loader(m);
