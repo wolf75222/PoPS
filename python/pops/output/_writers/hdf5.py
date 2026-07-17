@@ -834,9 +834,10 @@ class HDF5Writer:
                     message += "; cleanup: " + cleanup_error
                 raise RuntimeError(message)
             # Every local non-None check was part of ``descriptor_error`` above.
+            native_writer = cast(Any, native)
             native_error = None
             try:
-                native._write_parallel_hdf5(
+                native_writer._write_parallel_hdf5(
                     communicator,
                     str(temporary.path),
                     json_text(output_manifest),

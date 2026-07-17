@@ -466,8 +466,9 @@ class RuntimeInstance:
             provider = getattr(engine, "composite_reduce", None)
             if not callable(provider):
                 raise NotImplementedError(
-                    "adaptive runtime provider does not expose composite_reduce")
-            return float(provider(block, "sum", component, list(selected_levels)))
+                    "adaptive runtime provider does not expose composite_reduce"
+                )
+            return float(cast(float, provider(block, "sum", component, list(selected_levels))))
 
         provider = getattr(engine, "reduce_component", None)
         if not callable(provider):
@@ -488,7 +489,7 @@ class RuntimeInstance:
         measure = 1.0
         for length, cells in zip(geometry.lengths, geometry.cells, strict=True):
             measure *= float(length) / int(cells)
-        return measure * float(provider(block, "sum", component))
+        return measure * float(cast(float, provider(block, "sum", component)))
 
     def get_state(self, block: str) -> Any:
         return self._executor.get_state(block)
@@ -824,7 +825,9 @@ class RuntimeInstance:
     ) -> tuple[Any, ...]:
         """Seal, report, and retain every release owner until its finalizer succeeds."""
         sealed = []
-        pending = list(getattr(self, "_consumer_finalize_pending", ()))
+        pending: list[_PendingConsumerFinalization] = list(
+            getattr(self, "_consumer_finalize_pending", ())
+        )
         report_offset = len(self._consumer_reports)
         for index, transaction in enumerate(transactions):
             report = reports[index]
@@ -839,19 +842,22 @@ class RuntimeInstance:
                 report, base_diagnostics, diagnostics)
             sealed.append(report)
             if diagnostics or bool(getattr(transaction, "finalize_pending", False)):
-                pending.append(_PendingConsumerFinalization(
-                    transaction, report_index, base_diagnostics))
+                pending.append(
+                    _PendingConsumerFinalization(transaction, report_index, base_diagnostics)
+                )
         self._consumer_finalize_pending = tuple(pending)
         return tuple(sealed)
 
     def _retry_consumer_finalizers(self) -> tuple[str, ...]:
         """Retry pending releases and replace, rather than accumulate, operational diagnostics."""
-        pending = tuple(getattr(self, "_consumer_finalize_pending", ()))
+        pending: list[_PendingConsumerFinalization] = list(
+            getattr(self, "_consumer_finalize_pending", ())
+        )
         if not pending:
             return ()
         reports = list(self._consumer_reports)
-        remaining = []
-        current_diagnostics = []
+        remaining: list[_PendingConsumerFinalization] = []
+        current_diagnostics: list[str] = []
         for owner in pending:
             diagnostics = self._consumer_seal_diagnostics(owner.transaction)
             diagnostics += self._retain_consumer_recoveries(
