@@ -30,7 +30,7 @@ ghost_width = 1
 
 [[case]]
 id = "tensor_krylov"
-implementation = "real PoPS TensorKrylovSolver with GeometricMG preconditioning"
+implementation = "real PoPS prepared generic BiCGStab with a persistent GeometricMG preconditioner"
 comparison = "none"
 records = ["bicgstab_geometric_mg"]
 
