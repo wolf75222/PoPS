@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
 from typing import Any
 
 from pops.descriptors import Descriptor
@@ -122,8 +123,6 @@ class ExternalFieldSolver(Descriptor):
     def options(self) -> dict[str, Any]:
         topology, solver = self.component_bindings()
         return {
-            "provider_id": self.provider_id,
-            "provider_kind": "external_component_v1",
             "topology": topology,
             "solver": solver,
             "request": {
@@ -168,36 +167,175 @@ class ExternalFieldSolver(Descriptor):
             "component_pair_declares_gpu": declared["gpu"],
         })
 
-    def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
-        if target != "system":
-            raise ValueError(
-                "ExternalFieldSolver ABI v2 supports Uniform System only; AMR requires a "
-                "hierarchy-aware FieldSolver/FieldTopology interface version"
-            )
-        from pops.layouts import Uniform
-        from pops.mesh import CartesianGrid
-
-        if type(layout) is not Uniform or type(layout.mesh) is not CartesianGrid:
-            raise ValueError(
-                "ExternalFieldSolver ABI v2 requires an exact Uniform(CartesianGrid(...)) "
-                "layout"
-            )
-        if layout.embedded_boundary is not None:
-            raise ValueError(
-                "ExternalFieldSolver ABI v2 currently proves full-material Cartesian topology; "
-                "embedded-boundary/cut-cell material data is not lowered yet"
-            )
-        if layout.refine is not None:
-            raise ValueError(
-                "ExternalFieldSolver ABI v2 requires a non-adaptive Uniform layout; refinement "
-                "criteria require the hierarchy-aware interface"
-            )
-        if not self.capabilities().get("host"):
-            raise ValueError(
-                "ExternalFieldSolver requires both component manifests to declare a compatible "
-                "2D float64 CPU target for the host adapter"
-            )
-        return dict(self.options())
+    def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
+        return _EXTERNAL_FIELD_SOLVER_PROVIDER, self.options()
 
 
-__all__ = ["ExternalFieldSolver"]
+class PreparedFieldSolver(Descriptor):
+    """Generic descriptor backed by one registered field-solver provider.
+
+    Registration alone is not a native implementation: a provider must own a real native installer
+    and its exact component bindings.  This descriptor only records immutable authoring options.
+    """
+
+    category = "field_solver_provider"
+
+    def __init__(self, provider: Any, **options: Any) -> None:
+        from ._prepared_field_solver_registry import (
+            PreparedFieldSolverProvider,
+            prepared_field_solver_provider_by_resolver_id,
+        )
+
+        if type(provider) is not PreparedFieldSolverProvider:
+            raise TypeError("PreparedFieldSolver requires an exact registered Provider")
+        if prepared_field_solver_provider_by_resolver_id(provider.resolver_id) is not provider:
+            raise ValueError("PreparedFieldSolver provider is not the registered authority")
+        self.provider = provider
+        self.provider_options = dict(options)
+
+    @property
+    def name(self) -> str:
+        return self.provider.provider_id
+
+    def options(self) -> dict[str, Any]:
+        return dict(self.provider_options)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "provider": self.provider.authority(),
+            "options": self.options(),
+        }
+
+    def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
+        return self.provider, self.options()
+
+
+def _external_resolver(options, facts, where):
+    from ._prepared_field_solver_registry import PreparedFieldSolverResolution
+
+    if not isinstance(options, Mapping) or set(options) != {"topology", "solver", "request"}:
+        raise TypeError("%s external field solver options have an invalid shape" % where)
+    topology = options["topology"]
+    solver = options["solver"]
+    request = options["request"]
+    if not isinstance(topology, Mapping) or not isinstance(solver, Mapping):
+        raise TypeError("%s external field solver component bindings must be mappings" % where)
+    expected_request = {"relative_tolerance", "absolute_tolerance", "max_iterations"}
+    if not isinstance(request, Mapping) or set(request) != expected_request:
+        raise TypeError("%s external field solver request has an invalid shape" % where)
+    relative = _finite_nonnegative(
+        request["relative_tolerance"], where="%s relative_tolerance" % where)
+    absolute = _finite_nonnegative(
+        request["absolute_tolerance"], where="%s absolute_tolerance" % where)
+    maximum = request["max_iterations"]
+    if type(maximum) is not int or maximum < 1 or maximum > (1 << 31) - 1:
+        raise ValueError("%s max_iterations must be one positive native integer" % where)
+    return PreparedFieldSolverResolution(
+        {
+            "schema_identity": "pops.external.field-solver-request@2",
+            "options": {
+                "relative_tolerance": relative,
+                "absolute_tolerance": absolute,
+                "max_iterations": maximum,
+            },
+        },
+        {
+            "provider_id": "pops.external.field-topology",
+            "version": 1,
+            "topology_identity": facts.layout["topology_identity"],
+            "component": dict(topology),
+        },
+        (dict(topology), dict(solver)),
+    )
+
+
+def _finite_nonnegative(value: Any, *, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("%s must be a finite real" % where)
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError("%s must be finite and nonnegative" % where)
+    return result
+
+
+def _validate_external_use(use, where):
+    facts = use.facts
+    if facts.target != "system":
+        raise ValueError(
+            "%s external FieldSolver@2 requires a hierarchy-aware interface for AMR" % where
+        )
+    if facts.layout.get("kind") != "uniform" or facts.layout.get("levels") != 1:
+        raise ValueError("%s external FieldSolver@2 requires one uniform layout" % where)
+    if facts.layout.get("embedded_boundary") or facts.layout.get("adaptive"):
+        raise ValueError(
+            "%s external FieldSolver@2 requires a full-material non-adaptive topology" % where
+        )
+    if facts.operator.get("screened"):
+        raise ValueError(
+            "%s external FieldSolver@2 has no reaction-coefficient carrier" % where
+        )
+    if facts.boundary.get("dynamic") or facts.boundary.get("dependent"):
+        raise ValueError(
+            "%s external FieldSolver@2 carries only an immutable boundary contract" % where
+        )
+    if facts.nonlinear:
+        raise ValueError(
+            "%s external FieldSolver@2 has no shared nonlinear iterate/JVP protocol" % where
+        )
+    bindings = use.resolution.component_bindings
+    if len(bindings) != 2 or any(
+        not binding.get("declared_execution", {}).get("host") for binding in bindings
+    ):
+        raise ValueError(
+            "%s external field components require compatible 2D float64 CPU targets" % where
+        )
+
+
+def _install_external(context: Any, binding: Any) -> None:
+    context.install_component(binding)
+
+
+from ._prepared_field_solver_registry import (  # noqa: E402
+    PreparedFieldSolverBinding as Binding,
+    PreparedFieldSolverFacts as Facts,
+    PreparedFieldSolverProvider as Provider,
+    PreparedFieldSolverResolution as Resolution,
+    PreparedFieldSolverUse as Use,
+    PreparedFieldSolverUsePolicy as UsePolicy,
+    register_prepared_field_solver_provider as register,
+)
+
+
+_EXTERNAL_FIELD_SOLVER_PROVIDER = register(Provider(
+    provider_id="pops.fields.external-field-solver",
+    version=2,
+    resolver_id="pops.fields.external-field-solver.resolve@2",
+    installer_id="pops.fields.external-field-solver.install@2",
+    use_policy=UsePolicy(
+        "pops.fields.external-field-solver.use",
+        2,
+        {
+            "targets": ("system",),
+            "topology": "uniform-cartesian-full-material",
+            "execution": "host-serial-multi-patch-batch",
+            "components": ("FieldTopology@2", "FieldSolver@2"),
+        },
+        _validate_external_use,
+    ),
+    resolver=_external_resolver,
+    native_installer=_install_external,
+))
+
+
+__all__ = [
+    "Binding",
+    "ExternalFieldSolver",
+    "Facts",
+    "PreparedFieldSolver",
+    "Provider",
+    "Resolution",
+    "Use",
+    "UsePolicy",
+    "register",
+]

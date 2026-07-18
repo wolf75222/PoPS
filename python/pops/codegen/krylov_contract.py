@@ -5,20 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from pops._ir.literals import CPP_INT_MAX, PREPARED_GMRES_MAX_RESTART, exact_cpp_int
-
-
-_KRYLOV_METHODS = frozenset({"cg", "bicgstab", "gmres", "richardson"})
-_PRECONDITIONED_METHODS = frozenset({"bicgstab", "gmres"})
-_PRECONDITIONERS = frozenset({"identity", "geometric_mg"})
-_FOOTPRINT_KEYS = frozenset(
-    {
-        "components",
-        "input_ghosts",
-        "restart",
-        "preconditioned",
-    }
+from pops._ir.literals import CPP_INT_MAX, exact_cpp_int, scalar_literal
+from pops.fields._prepared_nullspace_registry import (
+    prepared_nullspace_contracts_from_attrs,
 )
+from pops.solvers._prepared_preconditioner_registry import prepared_preconditioner_provider_from_attrs
+from pops.solvers.krylov._prepared_method_registry import (
+    PreparedKrylovMethodUse,
+    prepared_krylov_method_provider_from_attrs,
+)
+
+_FOOTPRINT_KEYS = frozenset({"components", "input_ghosts", "preconditioned"})
 _OPERATOR_PROPERTY_KEYS = frozenset(
     {
         "symmetric",
@@ -26,8 +23,6 @@ _OPERATOR_PROPERTY_KEYS = frozenset(
         "positive_definite_on_nullspace_complement",
     }
 )
-
-
 def _exact_int(
     value: Any,
     *,
@@ -71,68 +66,10 @@ def _authenticated_operator_footprint(operator: Any) -> tuple[int, int]:
     return operator_components, operator_ghosts
 
 
-def _validated_nullspace_and_gauge(
-    attrs: Mapping[str, Any],
-    *,
-    components: int,
-) -> tuple[dict[str, Any], dict[str, Any], bool]:
-    """Authenticate the complete author-declared nullspace/gauge pair.
-
-    This validator deliberately does not inspect a stencil name, boundary condition, or mesh.
-    ``LinearProblem`` is the sole mathematical authority; codegen only checks that its canonical
-    snapshot reached the IR intact.
-    """
-    nullspace = attrs.get("nullspace_contract")
-    gauge = attrs.get("gauge_contract")
-    if (
-        not isinstance(nullspace, Mapping)
-        or set(nullspace) != {"schema_version", "kind"}
-        or type(nullspace.get("schema_version")) is not int
-        or nullspace.get("schema_version") != 1
-    ):
-        raise ValueError("solve_linear requires an exact nullspace_contract")
-    nullspace_kind = nullspace.get("kind")
-    if nullspace_kind == "none":
-        if not isinstance(gauge, Mapping) or dict(gauge) != {"schema_version": 1, "kind": "none"}:
-            raise ValueError(
-                "solve_linear nonsingular nullspace contract requires gauge_contract=none"
-            )
-        return (
-            {"schema_version": 1, "kind": "none"},
-            {"schema_version": 1, "kind": "none"},
-            False,
-        )
-    if nullspace_kind != "constant":
-        raise ValueError("solve_linear nullspace_contract kind must be 'none' or 'constant'")
-    if components != 1:
-        raise ValueError(
-            "solve_linear constant nullspace is scalar-only; no component basis is inferred"
-        )
-    from pops._ir.literals import ScalarLiteral
-
-    if (
-        not isinstance(gauge, Mapping)
-        or set(gauge) != {"schema_version", "kind", "value"}
-        or type(gauge.get("schema_version")) is not int
-        or gauge.get("schema_version") != 1
-        or gauge.get("kind") != "mean_value"
-        or type(gauge.get("value")) is not ScalarLiteral
-    ):
-        raise ValueError(
-            "solve_linear constant nullspace requires an exact MeanValueGauge snapshot"
-        )
-    return (
-        {"schema_version": 1, "kind": "constant"},
-        {"schema_version": 1, "kind": "mean_value", "value": gauge["value"]},
-        True,
-    )
-
-
 def _validated_operator_properties(
     attrs: Mapping[str, Any],
     *,
     declared_nullspace: bool,
-    method: str,
 ) -> dict[str, bool]:
     properties = attrs.get("operator_properties")
     if not isinstance(properties, Mapping) or set(properties) != _OPERATOR_PROPERTY_KEYS:
@@ -147,21 +84,13 @@ def _validated_operator_properties(
         raise ValueError(
             "solve_linear operator properties are incoherent or unauthenticated"
         ) from exc
-    if declared_nullspace and not certificate.symmetric:
-        raise ValueError(
-            "solve_linear constant nullspace requires a symmetric operator certificate"
-        )
     if declared_nullspace and certificate.positive_definite:
         raise ValueError(
-            "solve_linear constant-nullspace operator cannot be globally positive definite"
+            "solve_linear singular operator cannot be globally positive definite"
         )
     if not declared_nullspace and certificate.positive_definite_on_nullspace_complement:
         raise ValueError(
             "solve_linear complement-positive certificate requires a declared nullspace"
-        )
-    if method == "cg" and not certificate.certifies_cg(declared_nullspace=declared_nullspace):
-        raise ValueError(
-            "solve_linear CG operator certificate disagrees with its nullspace contract"
         )
     return certificate.canonical_data()
 
@@ -172,9 +101,7 @@ def validated_prepared_problem_contract(
     operator: Any,
 ) -> dict[str, Any]:
     """Return canonical prepared-problem metadata or reject an unauthenticated IR node."""
-    method = attrs.get("method")
-    if method not in _KRYLOV_METHODS:
-        raise ValueError("solve_linear has an unauthenticated Krylov method %r" % (method,))
+    prepared_krylov_method_provider_from_attrs(attrs)
 
     # Serialized/tampered IR bypasses descriptor construction and Program authoring validation.
     # Authenticate native integer controls again before any C++ token or workspace size is emitted.
@@ -183,14 +110,24 @@ def validated_prepared_problem_contract(
     components = _exact_int(attrs.get("ncomp"), label="operator component count", minimum=1)
     if components != operator_components:
         raise ValueError("solve_linear component count disagrees with its authenticated operator")
-    nullspace, gauge, declared_nullspace = _validated_nullspace_and_gauge(
-        attrs, components=components
+    nullspace_provider, nullspace_contracts = prepared_nullspace_contracts_from_attrs(
+        attrs
     )
+    declared_nullspace = nullspace_provider.singular
     properties = _validated_operator_properties(
-        attrs, declared_nullspace=declared_nullspace, method=method
+        attrs, declared_nullspace=declared_nullspace
     )
+    nullspace_provider.validate_use(
+        contracts=nullspace_contracts,
+        components=components,
+        operator_properties=properties,
+        where="solve_linear nullspace provider %r" % nullspace_provider.provider_id,
+    )
+    nullspace, gauge = nullspace_contracts.detached()
     return {
-        "nullspace_contract": nullspace,
+        "nullspace_contract": nullspace_provider.enveloped_contract(
+            nullspace_contracts
+        ),
         "gauge_contract": gauge,
         "operator_properties": properties,
     }
@@ -203,9 +140,7 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
     booleans/strings into plausible counts or silently disagree about method, restart, or actual
     preconditioner presence.
     """
-    method = attrs.get("method")
-    if method not in _KRYLOV_METHODS:
-        raise ValueError("solve_linear has an unauthenticated Krylov method %r" % (method,))
+    method_provider = prepared_krylov_method_provider_from_attrs(attrs)
 
     operator_components, operator_ghosts = _authenticated_operator_footprint(operator)
     components = _exact_int(attrs.get("ncomp"), label="operator component count", minimum=1)
@@ -213,30 +148,15 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
         raise ValueError("solve_linear component count disagrees with its authenticated operator")
     # Authentication of the problem-level mathematical contract is inseparable from allocation:
     # malformed/tampered metadata must fail before code emission or scratch accounting can proceed.
-    validated_prepared_problem_contract(attrs, operator=operator)
-    preconditioner = attrs.get("preconditioner")
-    if preconditioner not in _PRECONDITIONERS:
-        raise ValueError(
-            "solve_linear has an unauthenticated prepared preconditioner %r" % (preconditioner,)
-        )
-    preconditioned = preconditioner != "identity"
-    if preconditioned and method not in _PRECONDITIONED_METHODS:
-        raise ValueError("solve_linear preconditioning is unavailable for %s" % method)
-
-    raw_restart = attrs.get("restart")
-    if method == "gmres":
-        restart = _exact_int(
-            raw_restart,
-            label="GMRES restart (MPI Arnoldi reduction count requires restart + 1)",
-            minimum=1,
-            maximum=PREPARED_GMRES_MAX_RESTART,
-        )
-    else:
-        if raw_restart is not None:
-            raise ValueError(
-                "solve_linear restart belongs only to GMRES; got %r for %s" % (raw_restart, method)
-            )
-        restart = 0
+    problem_contract = validated_prepared_problem_contract(attrs, operator=operator)
+    preconditioner_provider = prepared_preconditioner_provider_from_attrs(attrs)
+    preconditioned = preconditioner_provider.preconditioned
+    preconditioner_provider.validate_use(
+        method_provider=method_provider.authority(),
+        components=components,
+        nullspace_contract=problem_contract["nullspace_contract"],
+        where="solve_linear preconditioner %r" % preconditioner_provider.scheme,
+    )
 
     footprint = attrs.get("krylov_footprint")
     if not isinstance(footprint, Mapping) or set(footprint) != _FOOTPRINT_KEYS:
@@ -249,11 +169,6 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
         raise ValueError(
             "solve_linear Krylov footprint input_ghosts disagrees with its authenticated operator"
         )
-    footprint_restart = _exact_int(
-        footprint["restart"], label="restart", minimum=0, maximum=PREPARED_GMRES_MAX_RESTART
-    )
-    if footprint_restart != restart:
-        raise ValueError("solve_linear Krylov footprint restart disagrees with method controls")
     footprint_preconditioned = footprint["preconditioned"]
     if not isinstance(footprint_preconditioned, bool):
         raise ValueError("solve_linear Krylov footprint preconditioned must be a boolean")
@@ -262,9 +177,26 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
             "solve_linear Krylov footprint disagrees with prepared preconditioner presence"
         )
 
+    try:
+        rel_tol = scalar_literal(attrs.get("tol")).to_python()
+        abs_tol = scalar_literal(attrs.get("abs_tol")).to_python()
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("solve_linear has invalid prepared method scalar controls") from exc
+    use = PreparedKrylovMethodUse(
+        rel_tol=rel_tol,
+        abs_tol=abs_tol,
+        max_iterations=_exact_int(attrs.get("max_iter"), label="max_iter", minimum=1),
+        components=components,
+        input_ghosts=input_ghosts,
+        preconditioned=preconditioned,
+        operator_properties=problem_contract["operator_properties"],
+        declared_nullspace=prepared_nullspace_contracts_from_attrs(attrs)[0].singular,
+        method_options=attrs.get("method_options"),
+    )
+    method_provider.validate_use(use, where="solve_linear prepared method")
+
     return {
         "components": components,
         "input_ghosts": input_ghosts,
-        "restart": restart,
         "preconditioned": preconditioned,
     }

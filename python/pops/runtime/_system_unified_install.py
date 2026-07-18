@@ -27,6 +27,145 @@ if TYPE_CHECKING:
 else:
     _System = object
 
+
+class _PreparedSystemFieldSolverInstall:
+    """Native primitives offered to provider-owned installers on the uniform System."""
+
+    def __init__(self, engine: Any, field_plan: Any, install_plan: Any) -> None:
+        self.engine = engine
+        self.field_plan = field_plan
+        self.install_plan = install_plan
+        self.options = field_plan.native_install_data()
+        self.slot = self.options["provider_slot"]
+
+    def _install_common_plan(self, provider_route: str) -> None:
+        if type(provider_route) is not str or not provider_route:
+            raise TypeError("native field solver provider route must be non-empty")
+        routes = self.options["provider_pack"]
+        output = self.options["output_route"]
+        from pops.identity import canonical_bytes
+
+        self.engine.set_field_solver_plan(
+            self.slot,
+            self.field_plan.identity.token,
+            self.options["provider_identity_text"],
+            canonical_bytes(output["owner_identity"]).hex(),
+            output["owner_block"],
+            output["key"],
+            [canonical_bytes(route["provider_identity"]).hex() for route in routes],
+            [route["owner_block"] for route in routes],
+            [route["key"] for route in routes],
+            [route["coefficient"] for route in routes],
+            provider_route,
+        )
+
+    def _install_topology_authority(self, binding: Any) -> None:
+        topology = binding.resolution.to_data()["topology_contract"]
+        self.engine._set_field_topology_authority(
+            self.slot,
+            topology["provider_id"],
+            binding.identity,
+            topology["topology_identity"],
+        )
+
+    def install_configured(self, binding: Any) -> None:
+        contract = binding.resolution.to_data()["native_contract"]
+        exact = self.engine.register_configured_field_solver_provider(
+            contract["factory_route"],
+            self.slot,
+            contract["schema_identity"],
+            contract["options"],
+        )
+        if type(exact) is not str or not exact:
+            raise RuntimeError("native configured field solver returned no exact identity")
+        # The topology authority is attached to the resolved field-plan slot.  Registering the
+        # backend provider alone does not create that slot, so the common plan must precede it.
+        self._install_common_plan(self.slot)
+        self._install_topology_authority(binding)
+
+    def install_component(self, binding: Any) -> None:
+        if self.install_plan is None:
+            raise ValueError("component field providers require the authenticated InstallPlan")
+        component_bindings = binding.resolution.to_data()["component_bindings"]
+        if len(component_bindings) != 2:
+            raise ValueError("component field provider requires exact topology and solver bindings")
+        installed = []
+        from pops.fields._identity import field_identity, strict_field_data
+        from pops.identity import canonical_bytes
+
+        for authority in component_bindings:
+            component = self.install_plan.components.get(authority["component_id"])
+            if component is None:
+                raise ValueError(
+                    "field %r requires installed component %r"
+                    % (self.field_plan.name, authority["component_id"])
+                )
+            if component.component_manifest.token != authority["component_manifest_identity"]:
+                raise ValueError("field component manifest identity changed before install")
+            if canonical_bytes(strict_field_data(component.interface.to_data())) != canonical_bytes(
+                strict_field_data(authority["native_interface"])
+            ):
+                raise ValueError("field component native interface identity changed before install")
+            if component.native_handle is None:
+                raise ValueError("field components must be loaded before native installation")
+            installed.append(component.native_handle)
+        import json
+        from pops.runtime._component_execution_context import component_execution_data
+
+        nullspace = self.options["nullspace_provider"]
+        boundary = {
+            "identity": field_identity(
+                "field-boundary-contract",
+                {
+                    "field": self.field_plan.identity.token,
+                    "faces": self.options["boundary_faces"],
+                    "nullspace_provider": nullspace,
+                    "topology_identity": binding.facts.layout["topology_identity"],
+                },
+            ).token,
+            "faces": self.options["boundary_faces"],
+            "nullspace_provider": nullspace,
+            "topology_identity": binding.facts.layout["topology_identity"],
+        }
+        request = binding.resolution.native_contract["options"]
+        exact = self.engine.register_field_solver_provider(
+            self.slot,
+            installed[0],
+            installed[1],
+            component_bindings[0],
+            component_bindings[1],
+            json.dumps(component_bindings[0]["parameters"], sort_keys=True,
+                       separators=(",", ":"), allow_nan=False),
+            json.dumps(component_bindings[1]["parameters"], sort_keys=True,
+                       separators=(",", ":"), allow_nan=False),
+            self.install_plan.artifact.layout_plan.qualified_id,
+            binding.facts.layout["topology_identity"],
+            json.dumps(strict_field_data(boundary), sort_keys=True, separators=(",", ":")),
+            request["relative_tolerance"],
+            request["absolute_tolerance"],
+            request["max_iterations"],
+            component_execution_data(self.install_plan.execution_context),
+        )
+        if type(exact) is not str or not exact:
+            raise RuntimeError("native component field solver returned no exact identity")
+        self._install_common_plan(self.slot)
+
+
+class _PreparedSystemFieldNullspaceInstall:
+    def __init__(self, engine: Any, slot: str) -> None:
+        self.engine = engine
+        self.slot = slot
+
+    def install_registered_nullspace(self, binding: Any) -> None:
+        contract = binding.resolution.to_data()["native_contract"]
+        self.engine.set_field_nullspace(
+            self.slot,
+            contract["provider_route"],
+            contract["schema_identity"],
+            contract["options"],
+        )
+
+
 class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
@@ -155,8 +294,7 @@ class _SystemUnifiedInstall(_System):
         # closures. Attach the resolved solve to the exact FieldSpace storage route after block
         # loaders have installed those closures; no legacy m.elliptic_field name is inferred.
         for field_plan in field_plans.values():
-            self._register_field_plan_output(field_plan, resolved_models)
-            self._install_field_reaction(field_plan, params)
+            self._install_field_method_runtime(field_plan, resolved_models, params)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before install_program.
         for field_name, field in aux.items():
@@ -306,46 +444,17 @@ class _SystemUnifiedInstall(_System):
         # Re-run canonical construction verification before touching the native engine.
         field_plan.__post_init__()
         options = field_plan.native_install_data()
-        provider = options["solver_provider"]
-        provider_kind = provider["provider_kind"]
-        if provider_kind == "builtin_v1":
-            token = provider["solver"]["route"]
-        elif provider_kind == "external_component_v1":
-            if install_plan is None:
-                raise ValueError(
-                    "external field providers require the authenticated InstallPlan")
-            token = "external_component_v1"
-        else:
-            raise ValueError("field plan selected an unknown solver provider kind")
-        mg = options["mg_options"]
-        from pops.solvers._numeric import native_float
+        from pops.fields._prepared_field_solver_registry import (
+            prepared_field_solver_binding_from_data,
+            prepared_field_solver_provider_from_identity,
+        )
+
+        binding = prepared_field_solver_binding_from_data(options["solver_provider"])
+        provider = prepared_field_solver_provider_from_identity(binding.provider)
+        provider.install(
+            _PreparedSystemFieldSolverInstall(self._s, field_plan, install_plan), binding
+        )
         slot = options["provider_slot"]
-        routes = options["provider_pack"]
-        output_route = options["output_route"]
-        from pops.identity import canonical_bytes
-        self._s.set_field_solver_plan(
-            slot, field_plan.identity.token, options["provider_identity_text"],
-            canonical_bytes(output_route["owner_identity"]).hex(),
-            output_route["owner_block"],
-            output_route["key"],
-            [canonical_bytes(route["provider_identity"]).hex()
-             for route in routes],
-            [route["owner_block"] for route in routes],
-            [route["key"] for route in routes],
-            [route["coefficient"] for route in routes], token,
-            native_float(mg["abs_tol"],
-                         where="field plan absolute tolerance"),
-            native_float(mg["rel_tol"], where="field plan relative tolerance"),
-            mg["max_cycles"], mg["min_coarse"], mg["pre_smooth"],
-            mg["post_smooth"], mg["bottom_sweeps"], mg["coarse_threshold"])
-        if provider_kind == "builtin_v1":
-            topology = provider["topology"]
-            self._s._set_field_topology_authority(
-                slot, topology["provider_kind"], topology["provenance"],
-                topology["topology_digest"])
-        else:
-            self._install_external_field_provider(
-                slot, field_plan, install_plan)
         faces = options["boundary_faces"]
         if faces is not None:
             self._s.set_field_boundary_plan(
@@ -362,78 +471,23 @@ class _SystemUnifiedInstall(_System):
             [row["owner_block"] for row in dependencies["fields"]],
             [row["output_key"] for row in dependencies["fields"]],
             [row["component"] for row in dependencies["fields"]])
-        self._s.set_field_nullspace(
-            slot, options["nullspace"] == "constant", options["gauge"] == "mean_zero")
+        # Provider-owned nullspace installation follows after the exact boundary topology is set.
+        self._install_field_nullspace(slot, field_plan)
         nonlinear = options.get("nonlinear")
         if nonlinear is not None:
             field_plan.nonlinear_provider.install(self._s, slot)
 
-    def _install_external_field_provider(
-        self, slot: str, field_plan: Any, install_plan: Any
-    ) -> None:
-        """Install one exact topology+solver pair before block construction."""
-        native_options = field_plan.native_install_data()
-        provider = native_options["solver_provider"]
-        bindings = (provider["topology"], provider["solver"])
-        # ``native_install_data`` deliberately detaches the frozen plan into ordinary JSON-like
-        # carriers, so a tuple declared by ComponentInterface becomes a list here.  Compare the
-        # canonical structural form, not Python container implementation details; this keeps the
-        # exact interface contract while accepting its faithful detached representation.
-        from pops.fields._identity import field_identity, strict_field_data
-        from pops.identity import canonical_bytes
-
-        installed = []
-        for binding in bindings:
-            component = install_plan.components.get(binding["component_id"])
-            if component is None:
-                raise ValueError(
-                    "field %r requires installed component %r"
-                    % (field_plan.name, binding["component_id"])
-                )
-            if component.component_manifest.token != binding[
-                    "component_manifest_identity"]:
-                raise ValueError("field component manifest identity changed before install")
-            if (
-                canonical_bytes(strict_field_data(component.interface.to_data()))
-                != canonical_bytes(strict_field_data(binding["native_interface"]))
-            ):
-                raise ValueError("field component native interface identity changed before install")
-            if component.native_handle is None:
-                raise ValueError("field components must be loaded before native installation")
-            installed.append(component.native_handle)
-        import json
-        from pops.runtime._component_execution_context import component_execution_data
-
-        boundary = {
-            "identity": field_identity(
-                "field-boundary-contract",
-                {
-                    "field": field_plan.identity.token,
-                    "faces": native_options["boundary_faces"],
-                    "nullspace": native_options["nullspace"],
-                    "gauge": native_options["gauge"],
-                    "topology_recipe_identity": provider["topology_recipe_identity"],
-                },
-            ).token,
-            "faces": native_options["boundary_faces"],
-            "nullspace": native_options["nullspace"],
-            "gauge": native_options["gauge"],
-            "topology_recipe_identity": provider["topology_recipe_identity"],
-        }
-        self._s._install_field_solver_components(
-            slot, installed[0], installed[1], bindings[0], bindings[1],
-            json.dumps(bindings[0]["parameters"], sort_keys=True,
-                       separators=(",", ":"), allow_nan=False),
-            json.dumps(bindings[1]["parameters"], sort_keys=True,
-                       separators=(",", ":"), allow_nan=False),
-            install_plan.artifact.layout_plan.qualified_id,
-            provider["topology_recipe_identity"],
-            json.dumps(strict_field_data(boundary), sort_keys=True, separators=(",", ":")),
-            provider["request"]["relative_tolerance"],
-            provider["request"]["absolute_tolerance"],
-            provider["request"]["max_iterations"],
-            component_execution_data(install_plan.execution_context),
+    def _install_field_nullspace(self, slot: str, field_plan: Any) -> None:
+        from pops.fields._prepared_field_nullspace_registry import (
+            prepared_field_nullspace_binding_from_data,
+            prepared_field_nullspace_provider_from_identity,
         )
+
+        binding = prepared_field_nullspace_binding_from_data(
+            field_plan.native_install_data()["nullspace_provider"]
+        )
+        provider = prepared_field_nullspace_provider_from_identity(binding.provider)
+        provider.install(_PreparedSystemFieldNullspaceInstall(self._s, slot), binding)
 
     def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
                                            compiled: Any) -> None:
@@ -443,7 +497,7 @@ class _SystemUnifiedInstall(_System):
             raise ValueError(
                 "dynamic field boundaries require a compiled artifact that owns their generated "
                 "device launchers")
-        handles = field_plan.boundary_parameter_handles()
+        handles = field_plan.provider_parameter_handles("boundary-kernel")
         missing = [handle.qualified_id for handle in handles if handle not in params]
         if missing:
             raise ValueError(
@@ -454,39 +508,21 @@ class _SystemUnifiedInstall(_System):
         self._s.set_field_boundary_parameters(
             field_plan.native_options["provider_slot"], values)
 
-    def _install_field_reaction(self, field_plan: Any, params: Any) -> None:
-        """Bind one screened-Poisson scalar into its exact qualified native field slot."""
-        effective = field_plan.native_reaction_value(params)
-        if effective is None:
-            return
-        self._s.set_field_reaction(
-            field_plan.native_options["provider_slot"], effective)
+    def _install_field_method_runtime(
+        self, field_plan: Any, models: Any, params: Any,
+    ) -> None:
+        """Offer opaque target resources to the method provider's authenticated installer."""
+        from pops.fields import PreparedFieldRuntimeInstallContext
 
-    def _register_field_plan_output(self, field_plan: Any, models: Any) -> None:
-        route = field_plan.native_options["output_route"]
-        block = route["owner_block"]
-        model = models.get(block)
-        if model is None:
-            raise ValueError("field output route names unknown block %r" % block)
-        from pops.physics.aux import aux_component_index
-
-        declared = tuple(getattr(model, "aux_extra_names", ()) or ())
-        components = tuple(route["components"])
-        try:
-            indices = [aux_component_index(component, declared) for component in components]
-        except ValueError as error:
-            raise ValueError(
-                "field output route %r is absent from block %r native aux layout: %s"
-                % (field_plan.name, block, ", ".join(components))
-            ) from error
-        indices.extend([-1] * (3 - len(indices)))
-        gradient_sign = route.get("gradient_sign")
-        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
-            raise ValueError("field output route has no valid GradientOutput sign")
-        if indices[1] < 0 and gradient_sign != 1:
-            raise ValueError("field output route carries a sign without gradient components")
-        self._s.register_elliptic_field(
-            block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
+        field_plan.install_runtime(
+            PreparedFieldRuntimeInstallContext(
+                target=field_plan.target,
+                engine=self._s,
+                resources={"models": models},
+                slot=field_plan.native_options["provider_slot"],
+            ),
+            params,
+        )
 
     def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any other name

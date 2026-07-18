@@ -14,10 +14,13 @@ from typing import Any
 
 _CPP_SIGNED_INTEGER_MAX = (1 << 63) - 1
 CPP_INT_MAX = (1 << 31) - 1
-# The native GMRES exceptional path flattens one 67-double exponent-banded payload per Arnoldi
-# projection into a single MPI_Allreduce. Keep the authored restart within that signed-int count.
+# The native GMRES exceptional path can flatten two robust 67-double payloads per Arnoldi
+# projection into one MPI_Allreduce.  This is the exact native
+# ``max_krylov_batched_basis_extent`` bound, not a looser authoring approximation.
 PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH = 67
-PREPARED_GMRES_MAX_RESTART = CPP_INT_MAX // PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH - 1
+PREPARED_GMRES_MAX_RESTART = (
+    (CPP_INT_MAX - 1) // (2 * PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH) - 1
+)
 _BINARY64_EXACT_INTEGER_MAX = 1 << 53
 _CPP_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
 

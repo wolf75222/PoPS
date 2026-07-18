@@ -43,7 +43,7 @@ def program_artifact_spec(
     *, snapshot: Any, model_authority: Any, program: Any, program_graph: Any,
     target: str, abi_key: str,
     compiler: str, standard: str, source: str, cflags: Any, lflags: Any, optflags: Any,
-    libraries: Any,
+    libraries: Any, native_components: Any = (),
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one compiled Program."""
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
@@ -95,8 +95,10 @@ def program_artifact_spec(
         routes={"registry": _registry_cache_key(), "features": _native_feature_key()},
         components={
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
+            "native_dependency_contract": "compiler-observed-v1",
             "program_entry": str(getattr(program, "name", "problem")),
             "program_graph_hash": program_graph.graph_hash,
+            "prepared_native_components": list(native_components),
         },
         flags=[*optflags, *cflags, *lflags],
         libraries=[manifest.content_hash for manifest in libraries],

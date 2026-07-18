@@ -5,7 +5,6 @@ Local solves, matrix-free operators, laplacian/gradient/divergence and the coeff
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from pops.time._program.constants import _ProgramConstants
@@ -18,7 +17,6 @@ from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import block_name
 from pops.time.stencil import StencilAccess
 from pops.time.value_metadata import positive_scalar_literal
-from pops._ir.literals import exact_cpp_int, scalar_literal
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _residual_wants_guess,
     _resolve_handle)
@@ -115,161 +113,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 "solve: prepared solver must implement build_program_solve(); got %r"
                 % type(prepared).__name__)
         return build(program=self, problem=problem, name=name)
-
-    def _solve_composite_tensor_fac(self, *, problem: Any, prepared: Any,
-                                    name: Any = None) -> Any:
-        """Build the one direct scalar tensor-FAC hierarchy contract.
-
-        The exact tensor apply remains executable because a flat AMR topology runs it through
-        BiCGStab. A refined topology may use the native FAC operator only after this method proves
-        that the apply, coefficient assembly and condensed RHS are the same owner-qualified
-        mathematical operator.
-        """
-        from pops.linalg import LinearProblem
-        from pops.solvers.scopes import solve_scope_id
-        from pops.time.solve_outcome import SolveOutcome
-
-        if not isinstance(problem, LinearProblem):
-            raise TypeError("CompositeTensorFAC requires a pops.linalg.LinearProblem")
-        nullspace_contract = problem.canonical_nullspace_contract()
-        gauge_contract = problem.canonical_gauge_contract()
-        if nullspace_contract != {
-            "schema_version": 1, "kind": "none"
-        } or gauge_contract != {
-            "schema_version": 1, "kind": "none"
-        }:
-            raise NotImplementedError(
-                "CompositeTensorFAC does not yet transport the prepared constant-nullspace and "
-                "mean-value-gauge policy across the complete AMR hierarchy; use nullspace=None"
-            )
-        operator = self._canonical_value(_resolve_handle(problem.operator))
-        rhs = self._canonical_value(_resolve_handle(problem.rhs))
-        initial_guess = (
-            None if problem.initial_guess is None
-            else self._canonical_value(_resolve_handle(problem.initial_guess))
-        )
-        if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
-            raise ValueError("CompositeTensorFAC requires a matrix_free_operator")
-        solve_scope = (
-            operator.attrs.get("scope", "level") if problem.scope is None
-            else solve_scope_id(problem.scope)
-        )
-        if solve_scope != "hierarchy" or operator.attrs.get("scope") != "hierarchy":
-            raise ValueError(
-                "CompositeTensorFAC is a direct Hierarchy() solver; its operator and "
-                "LinearProblem must both be hierarchy-scoped"
-            )
-        coefficients = self._hierarchy_tensor_apply_contract(operator.attrs)
-        owner = coefficients.block
-        if not (isinstance(rhs, ProgramValue) and rhs.vtype == "scalar_field"
-                and rhs.op == "condensed_rhs"):
-            raise ValueError(
-                "CompositeTensorFAC rhs must be the owner-qualified result of P.condensed_rhs"
-            )
-        if rhs.block != owner:
-            raise ValueError(
-                "CompositeTensorFAC operator coefficients and rhs must belong to the same block"
-            )
-        rhs_storage = rhs.inputs[0]
-        if int(rhs_storage.attrs.get("ncomp", 1)) != 1:
-            raise ValueError("CompositeTensorFAC supports exactly one scalar component")
-        coefficient_state = coefficients.inputs[0]
-        rhs_state = rhs.inputs[2]
-        if coefficient_state.id != rhs_state.id:
-            raise ValueError(
-                "CompositeTensorFAC coefficients and rhs must be assembled from the same State value"
-            )
-        for key in ("linear_operator", "subset"):
-            if coefficients.attrs.get(key) != rhs.attrs.get(key):
-                raise ValueError(
-                    "CompositeTensorFAC coefficients and rhs disagree on %s" % key
-                )
-        if initial_guess is not None:
-            if not (isinstance(initial_guess, ProgramValue)
-                    and initial_guess.vtype == "scalar_field"):
-                raise ValueError("CompositeTensorFAC initial_guess must be a scalar field")
-            if initial_guess.block != owner:
-                raise ValueError(
-                    "CompositeTensorFAC initial_guess must carry the exact solver block owner"
-                )
-            if int(initial_guess.attrs.get("ncomp", 1)) != 1:
-                raise ValueError("CompositeTensorFAC initial_guess must have ncomp=1")
-        block_indices = self._block_indices()
-        if owner not in block_indices:
-            raise ValueError("CompositeTensorFAC block owner has no installed Program state")
-        block_index = int(block_indices[owner])
-        if int(operator.attrs.get("hierarchy_block_index", -1)) != block_index:
-            raise ValueError("CompositeTensorFAC operator block identity is stale or unauthenticated")
-
-        identity = getattr(prepared, "identity", None)
-        identity_data = getattr(prepared, "identity_data", None)
-        identity_token = getattr(identity, "token", None)
-        if not isinstance(identity_token, str):
-            raise TypeError("CompositeTensorFAC solver identity is not canonical")
-        if not isinstance(identity_data, Mapping) or identity_data.get("solver_id") != (
-                "composite_tensor_fac"):
-            raise TypeError("CompositeTensorFAC solver identity data is unauthenticated")
-        tolerance = positive_scalar_literal(
-            getattr(prepared, "tolerance", None), where="CompositeTensorFAC rel_tol"
-        )
-        # Re-authenticate forged prepared providers at the descriptor -> IR boundary.  Keep the
-        # exact literal domain (Fraction/Decimal/etc.) while rejecting values that the provider
-        # contract cannot represent as a finite, nonnegative native stopping threshold.
-        try:
-            absolute_tolerance = scalar_literal(getattr(prepared, "absolute_tolerance", None))
-            absolute_numeric = absolute_tolerance.to_python()
-            if not absolute_numeric >= 0:
-                raise ValueError
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                "CompositeTensorFAC abs_tol must be a finite, nonnegative scalar literal"
-            ) from exc
-        max_iterations = getattr(prepared, "max_iterations", None)
-        max_iterations = exact_cpp_int(
-            max_iterations, where="CompositeTensorFAC max_iter", minimum=1)
-
-        inputs = ((operator, rhs) if initial_guess is None
-                  else (operator, rhs, initial_guess))
-        attrs = {
-            "method": "bicgstab",  # exact flat-topology branch; not a public hierarchy knob
-            "preconditioner": "identity",
-            "tol": tolerance,
-            "abs_tol": absolute_tolerance,
-            "max_iter": max_iterations,
-            "has_guess": initial_guess is not None,
-            "ncomp": 1,
-            "restart": None,
-            "operator_properties": problem.properties.canonical_data(),
-            "nullspace_contract": nullspace_contract,
-            "gauge_contract": gauge_contract,
-            "krylov_footprint": {
-                "components": 1,
-                "input_ghosts": operator.attrs["stencil_access"].required_ghost_depth,
-                "restart": 0,
-                "preconditioned": False,
-            },
-            "scope": "hierarchy",
-            "hierarchy_solver": "composite_tensor_fac",
-            "hierarchy_solver_identity": deepcopy(identity_data),
-            "hierarchy_block_index": block_index,
-            "hierarchy_tensor_coefficients": coefficients.id,
-            "solver_identity": identity_token,
-            "problem_kind": "scalar_tensor_elliptic_hierarchy",
-        }
-        token = self._new(
-            "scalar_field", "solve_linear", inputs, attrs, name, owner,
-            space=rhs.space, point=rhs.point if problem.at is None else problem.at,
-        )
-        outcome_name = name or token.name
-
-        def project(outcome: Any) -> Any:
-            return self._new(
-                "scalar_field", "solve_outcome_component", (outcome,),
-                {"index": 0, "ncomp": 1}, outcome_name, owner,
-                space=rhs.space, point=token.point,
-            )
-
-        return SolveOutcome(self, token, project, outcome_name)
 
     def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
                                 name: Any = None, at: Any = None, coefficient: Any,
@@ -545,10 +388,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             field_context=field_context)
 
     # --- matrix-free operators / dynamic linear solve (ADC-405 Phase 6b) ----------------------------
-    # A level-scoped ``matrix_free_op`` supplies the exact apply callback to a Krylov solver. A
-    # hierarchy-scoped operator is narrower: it must be the authenticated scalar tensor operator below.
-    # CompositeTensorFAC then owns the whole solve. Flat AMR executes the callback with BiCGStab;
-    # refined AMR executes the mathematically identical native FAC operator.
+    # A ``matrix_free_op`` supplies an exact apply callback. Mathematical shape and hierarchy use
+    # are validated by the selected prepared solver provider, not by this generic authoring core.
 
     def scalar_field(self, name: Any = None, ncomp: Any = 1) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
@@ -601,10 +442,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 "got %r" % (stencil_depth,))
         from pops.solvers.scopes import solve_scope_id
         scope_id = solve_scope_id(scope)
-        if scope_id == "hierarchy" and (domain != "scalar" or int(ncomp) != 1):
-            raise ValueError(
-                "matrix_free_operator: the direct CompositeTensorFAC Hierarchy() route supports "
-                "only a scalar operator with ncomp=1")
         attrs = {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
                  "apply_result": None, "apply_in": None, "apply_out": None,
                  "declared_stencil_access": (
@@ -613,49 +450,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if scope_id != "level":
             attrs["scope"] = scope_id
         return self._new("matrix_free_op", "matrix_free_operator", (), attrs, name, None)
-
-    @staticmethod
-    def _hierarchy_tensor_apply_contract(attrs: Mapping[str, Any]) -> ProgramValue:
-        """Authenticate the sole apply whose flat and refined implementations are equivalent."""
-        if attrs.get("scope") != "hierarchy" or attrs.get("domain") != "scalar" \
-                or attrs.get("range") != "scalar" or int(attrs.get("ncomp", 0)) != 1:
-            raise ValueError(
-                "CompositeTensorFAC requires a scalar Hierarchy() operator with ncomp=1")
-        block = attrs.get("apply_block")
-        if not isinstance(block, (list, tuple)):
-            raise ValueError(
-                "CompositeTensorFAC operator has no apply; call P.set_apply with -div(A grad)")
-        ops = sorted(node.op for node in block)
-        expected = sorted(("apply_out", "apply_in", "scalar_field", "apply_laplacian_coeff"))
-        if ops != expected:
-            raise ValueError(
-                "CompositeTensorFAC accepts exactly one scalar scratch and one "
-                "P.apply_laplacian_coeff operation")
-        tensor = next(node for node in block if node.op == "apply_laplacian_coeff")
-        scratch = next(node for node in block if node.op == "scalar_field")
-        apply_in = attrs.get("apply_in")
-        if (len(tensor.inputs) != 3 or tensor.inputs[0].id != scratch.id
-                or not isinstance(apply_in, ProgramValue)
-                or tensor.inputs[1].id != apply_in.id):
-            raise ValueError(
-                "CompositeTensorFAC apply must compute its tensor stencil directly from apply_in")
-        if int(scratch.attrs.get("ncomp", 1)) != 1:
-            raise ValueError("CompositeTensorFAC tensor apply scratch must have ncomp=1")
-        coefficients = tensor.inputs[2]
-        if not (isinstance(coefficients, ProgramValue)
-                and coefficients.vtype == "condensed_coeffs" and coefficients.block is not None):
-            raise ValueError(
-                "CompositeTensorFAC apply requires owner-qualified P.condensed_coeffs")
-        result = attrs.get("apply_result")
-        if not isinstance(result, _Affine):
-            raise ValueError(
-                "CompositeTensorFAC apply must return exactly -P.apply_laplacian_coeff(...)")
-        terms = result._merge()
-        if (len(terms) != 1 or terms[0][0].id != tensor.id
-                or terms[0][1].as_dict() != {0: -1}):
-            raise ValueError(
-                "CompositeTensorFAC apply must return exactly -P.apply_laplacian_coeff(...)")
-        return coefficients
 
     @atomic_authoring
     def set_apply(self, operator: Any, body_fn: Any) -> Any:
@@ -733,14 +527,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "apply_in": in_sf,
             "apply_out": out_sf,
         })
-        if attrs.get("scope") == "hierarchy":
-            coefficients = self._hierarchy_tensor_apply_contract(attrs)
-            block_indices = self._block_indices()
-            if coefficients.block not in block_indices:
-                raise ValueError(
-                    "CompositeTensorFAC coefficient owner has no installed Program state")
-            attrs["hierarchy_block_index"] = int(block_indices[coefficients.block])
-            attrs["hierarchy_tensor_coefficients"] = coefficients.id
         return self._replace_value(operator, attrs=attrs)
 
     def laplacian(self, out: Any, in_: Any) -> Any:

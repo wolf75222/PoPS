@@ -18,6 +18,10 @@ from fractions import Fraction
 from typing import Any
 
 from pops._ir.literals import scalar_cpp
+from pops.fields._prepared_nullspace_registry import prepared_nullspace_provider_from_attrs
+from pops.solvers._prepared_preconditioner_registry import prepared_preconditioner_provider_from_attrs
+from pops.solvers.krylov._prepared_method_registry import prepared_krylov_method_provider_from_attrs
+from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
 from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
@@ -44,29 +48,61 @@ _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 
 _AUX_OUTPUT_OPS = frozenset({"solve_fields", "solve_fields_from_blocks"})
 
-# The Schur-free tensor-coefficient elliptic infrastructure (ADC-637,
-# include/pops/runtime/program/coeff_elliptic_ops.hpp): the GeometricMgPreconditioner V-cycle cache. A
-# generated .so pulls that header in ONLY when the IR carries a solve_linear that requests the
-# geometric_mg preconditioner -- a Program that uses no elliptic preconditioner must not include it.
-_COEFF_ELLIPTIC_INCLUDE = ("#include <pops/runtime/program/coeff_elliptic_ops.hpp>"
-                           "  // Schur-free tensor-coefficient elliptic ops (ADC-637)\n")
+def _prepared_native_components(program: Any) -> tuple[Any, ...]:
+    """Return used native components in first-use order after authenticating every provider."""
+    def walk(values: Any) -> Any:
+        for value in values:
+            yield value
+            for key in (
+                "cond_block",
+                "body_block",
+                "apply_block",
+                "residual_block",
+                "true_block",
+                "false_block",
+            ):
+                nested = value.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    yield from walk(nested)
+
+    components: list[Any] = []
+    seen: set[str] = set()
+    for value in walk(program._values):
+        if value.op != "solve_linear":
+            continue
+        providers = [
+            prepared_krylov_method_provider_from_attrs(value.attrs),
+            prepared_preconditioner_provider_from_attrs(value.attrs),
+            prepared_nullspace_provider_from_attrs(value.attrs),
+        ]
+        if "hierarchy_solver_provider" in value.attrs:
+            providers.append(prepared_hierarchy_solver_provider_from_attrs(value.attrs))
+        for provider in providers:
+            component = provider.native_component
+            identity = component.manifest_sha256
+            if identity not in seen:
+                seen.add(identity)
+                components.append(component)
+    return tuple(components)
 
 
-def _needs_coeff_elliptic_header(program: Any) -> bool:
-    """True iff @p program's IR lowers to the Schur-free coeff-elliptic module -- a solve_linear that
-    requests the geometric_mg preconditioner (its GeometricMgPreconditioner lives in that header,
-    ADC-637 re-home). The generic condensed_* ops emit their coefficiented apply INLINE (block_inverse
-    + pops::apply_laplacian), so they need no coeff-elliptic include; only the MG preconditioner does."""
-    for v in program._values:
-        if v.op == "solve_linear" and v.attrs.get("preconditioner") == "geometric_mg":
-            return True
-    return False
+def _prepared_native_component_includes(program: Any) -> str:
+    """Return entry headers from the typed native components used by prepared providers.
 
-
-def _coeff_elliptic_include(program: Any) -> str:
-    """The coeff-elliptic #include for @p program's generated .so, or "" when it uses no geometric_mg
-    preconditioner (ADC-637): a Program with no elliptic preconditioner must not include it."""
-    return _COEFF_ELLIPTIC_INCLUDE if _needs_coeff_elliptic_header(program) else ""
+    Provider selection is fully data-driven: no backend name, include root or arbitrary compiler
+    flag is known here.
+    """
+    headers: list[str] = []
+    seen: set[str] = set()
+    for component in _prepared_native_components(program):
+        for header in component.entry_headers:
+            if header not in seen:
+                seen.add(header)
+                headers.append(header)
+    return "".join(
+        "#include <%s>  // prepared native provider\n" % header
+        for header in headers
+    )
 
 
 # Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit
@@ -374,7 +410,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #endif
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
-{coeff_elliptic_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
+{prepared_native_component_includes}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
@@ -392,22 +428,13 @@ _PROGRAM_CPP_TEMPLATE = '''\
 extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
 {route_manifest}extern "C" const char* pops_program_name() {{ return {name}; }}
 extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
+{operator_authorities}
 
 {block_names}
 {module_metadata}
 {program_params}
 {field_boundaries}
-extern "C" void pops_install_program(void* sys) {{
-  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);
-  pops::runtime::program::ProgramContext& ctx = *ctx_owner;
-{prelude}
-  ctx.install([=](double dt) {{
-    pops::runtime::program::ProgramContext& ctx = *ctx_owner;
-    (void)dt;
-    ctx.begin_step(dt);
-{body}
-  }});
-}}
+{system_install}
 {amr_install}
 
 // OPTIONAL dt bound (spec s18 / ADC-417). pops_program_has_dt_bound() is true iff the Program set one;

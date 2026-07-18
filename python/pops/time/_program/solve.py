@@ -20,7 +20,6 @@ from pops.time._program.value_validation import (
     structural_state_space,
 )
 from pops.time.solve_outcome import SolveOutcome
-from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import ProgramValue, _Affine, _is_field_value, _resolve_handle
 
 if TYPE_CHECKING:
@@ -29,45 +28,47 @@ else:
     _ProgramBase = object
 
 
-# Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
-#   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
-#   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
-_WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
-
-
 def _lower_preconditioner(preconditioner: Any) -> Any:
-    """Lower a typed preconditioner descriptor to ``(scheme, precond_options|None)`` (Spec 5 sec.7).
+    """Lower a typed descriptor to ``(provider authority, canonical opaque options)``.
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
-    (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
-    C++ token. A bare string is REJECTED; ``None`` defaults to ``Identity()`` (the unpreconditioned
-    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn.
+    (a builtin or ``preconditioners.Prepared(provider, ...)`` descriptor); its provider owns the
+    exact native provider. A bare string is REJECTED; ``None`` defaults to ``Identity()`` (the
+    unpreconditioned default).
 
-    ADC-644: a ``GeometricMG(...)`` with validated V-cycle-shape knobs returns its option dict; a
-    default one returns ``None`` (the IR omits ``precond_options`` -> emitted V-cycle byte-identical).
+    Preset names are diagnostic authoring metadata only.  The executable IR is authenticated solely
+    through the provider authority and its complete provider-owned option mapping.
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
     if isinstance(preconditioner, str):
         raise TypeError(
             "solve_linear: preconditioner must be a typed pops.solvers.preconditioners "
-            "descriptor (e.g. pops.solvers.preconditioners.Identity() / GeometricMG()), not the "
+            "descriptor (e.g. Identity(), GeometricMG(), or Prepared(provider)), not the "
             "string %r" % (preconditioner,)
         )
-    scheme = getattr(preconditioner, "scheme", None)
-    if getattr(preconditioner, "category", None) != "preconditioner" or not isinstance(scheme, str):
+    if getattr(preconditioner, "category", None) != "preconditioner":
         raise TypeError(
             "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
-            "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,)
+            "(e.g. Identity(), GeometricMG(), or Prepared(provider)); got %r" % (preconditioner,)
         )
-    if scheme not in _WIRED_PRECOND_SCHEMES:
-        raise NotImplementedError(
-            "solve: the %r preconditioner has no executable Program route; use "
-            "preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,)
-        )
+    from pops.solvers.preconditioners import _program_preconditioner_provider
+
+    provider = _program_preconditioner_provider(preconditioner)
     options = getattr(preconditioner, "options", None)
-    precond_options = dict(options) if options else None
-    return scheme, precond_options
+    prepared_options = provider.prepare_options(
+        options, where="solve_linear preconditioner %r" % provider.scheme
+    )
+    return provider.authority(), prepared_options
+
+
+def _prepared_preconditioner_provider(identity: Any) -> Any:
+    """Resolve the authenticated provider capabilities carried by a prepared Krylov descriptor."""
+    from pops.solvers._prepared_preconditioner_registry import (
+        prepared_preconditioner_provider_from_identity,
+    )
+
+    return prepared_preconditioner_provider_from_identity(identity)
 
 
 def _preconditioners() -> Any:
@@ -87,6 +88,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         rhs: Any,
         prepared: Any,
         properties: Any,
+        nullspace_provider: Any,
         nullspace_contract: Any,
         gauge_contract: Any,
         initial_guess: Any = None,
@@ -109,18 +111,15 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             ``BiCGStab()`` (general), ``Richardson()``, or ``GMRES()`` -- restarted GMRES(m), the
             robust choice for a NON-symmetric operator). A bare string is REJECTED (Spec 5
             sec.7); ``None`` defaults to ``CG()``;
-          - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor.
-            ``Identity()`` (the unpreconditioned default) and ``GeometricMG()`` (one V-cycle of the
-            wired geometric multigrid, for ``GMRES()`` / ``BiCGStab()`` only) lower to real C++; the
-            planned ``Jacobi()`` / ``BlockJacobi()`` are rejected (no native kernel yet). A non-identity
-            preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have no
-            preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
+          - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor. Builtins and
+            ``Prepared(provider, ...)`` use the same authenticated provider protocol; each provider
+            declares its supported methods, component limit, nullspace behavior, native component,
+            option schema and C++ emitter. A bare string is REJECTED; ``None`` defaults to
+            ``Identity()``;
           - @p tol: relative L2 residual stop (>= 0); zero selects absolute-only stopping and
             requires a positive ``abs_tol`` on the prepared solver;
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
-            configuration error refused before the prepared native route is entered);
-          - @p restart: GMRES restart length m (a positive int; defaults to 30). Ignored by the other
-            methods; passing it to a non-gmres solve is rejected."""
+            configuration error refused before the prepared native route is entered)."""
         operator = self._canonical_value(operator)
         from pops.solvers.scopes import solve_scope_id
 
@@ -131,20 +130,27 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError("solve: a hierarchy-scoped operator cannot be downgraded to Level()")
         if solve_scope == "hierarchy":
             raise TypeError(
-                "solve: Hierarchy() is a direct native solve and requires "
-                "CompositeTensorFAC(max_iter=..., rel_tol=...); Krylov descriptors solve Level() "
-                "operators only"
+                "solve: Hierarchy() requires a prepared hierarchy-solver provider; "
+                "Krylov descriptors solve Level() operators only"
             )
-        method = getattr(prepared, "method", None)
+        method_provider_identity = getattr(prepared, "method_provider", None)
+        method_options = getattr(prepared, "method_options", None)
         tol = getattr(prepared, "tolerance", None)
         abs_tol = getattr(prepared, "absolute_tolerance", None)
         max_iter = getattr(prepared, "max_iterations", None)
-        restart = getattr(prepared, "restart", None)
         preconditioner_data = getattr(prepared, "preconditioner", None)
         if not (isinstance(preconditioner_data, tuple) and len(preconditioner_data) == 2):
             raise TypeError("solve: Krylov provider has an invalid preconditioner contract")
-        preconditioner, precond_options = preconditioner_data
-        omega = getattr(prepared, "omega", None)
+        preconditioner_provider_identity, preconditioner_options = preconditioner_data
+        preconditioner_provider = _prepared_preconditioner_provider(
+            preconditioner_provider_identity
+        )
+        canonical_preconditioner_options = preconditioner_provider.prepare_options(
+            preconditioner_options,
+            where="solve_linear preconditioner %r" % preconditioner_provider.scheme,
+        )
+        if canonical_preconditioner_options != preconditioner_options:
+            raise ValueError("solve: Krylov preconditioner options are not canonical")
         solver_identity = getattr(prepared, "identity", None)
         solver_identity_token = getattr(solver_identity, "token", None)
         if not isinstance(solver_identity_token, str):
@@ -205,85 +211,54 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                     "select an explicit component view before solving"
                     % (label, fld_ncomp, op_ncomp)
                 )
-        if method not in self._KRYLOV_METHODS:
-            raise ValueError(
-                "solve_linear: method must be one of %s; got %r"
-                % (sorted(self._KRYLOV_METHODS), method)
-            )
+        from pops.solvers.krylov._prepared_method_registry import (
+            prepared_krylov_method_provider_from_identity,
+        )
+
+        method_provider = prepared_krylov_method_provider_from_identity(
+            method_provider_identity
+        )
+        method_options = method_provider.prepare_options(method_options)
         from pops.linalg import LinearOperatorProperties
 
         if not isinstance(properties, LinearOperatorProperties):
             raise TypeError("solve_linear: properties must be pops.linalg.LinearOperatorProperties")
-        from pops._ir.literals import ScalarLiteral
+        from pops.fields._prepared_nullspace_registry import (
+            PreparedNullspaceContracts,
+            prepared_nullspace_provider_from_identity,
+        )
 
+        nullspace_provider_impl = prepared_nullspace_provider_from_identity(
+            nullspace_provider
+        )
         if (
             type(nullspace_contract) is not dict
-            or set(nullspace_contract) != {"schema_version", "kind"}
+            or set(nullspace_contract) != {"schema_version", "provider", "contract"}
             or type(nullspace_contract.get("schema_version")) is not int
             or nullspace_contract.get("schema_version") != 1
+            or nullspace_contract.get("provider") != nullspace_provider_impl.authority()
+            or not isinstance(nullspace_contract.get("contract"), dict)
+            or not isinstance(gauge_contract, dict)
         ):
-            raise TypeError("solve_linear: nullspace contract is not canonical")
-        nullspace_kind = nullspace_contract.get("kind")
-        if nullspace_kind == "none":
-            if type(gauge_contract) is not dict or gauge_contract != {
-                "schema_version": 1,
-                "kind": "none",
-            }:
-                raise TypeError(
-                    "solve_linear: a nonsingular problem requires the canonical no-gauge contract"
-                )
-        elif nullspace_kind == "constant":
-            if (
-                type(gauge_contract) is not dict
-                or set(gauge_contract) != {"schema_version", "kind", "value"}
-                or type(gauge_contract.get("schema_version")) is not int
-                or gauge_contract.get("schema_version") != 1
-                or gauge_contract.get("kind") != "mean_value"
-                or type(gauge_contract.get("value")) is not ScalarLiteral
-            ):
-                raise TypeError(
-                    "solve_linear: ConstantNullspace requires an authenticated MeanValueGauge "
-                    "snapshot"
-                )
-            if op_ncomp != 1:
-                raise ValueError(
-                    "solve_linear: ConstantNullspace is scalar-only (ncomp=1); no vector nullspace "
-                    "basis is inferred"
-                )
-        else:
-            raise TypeError(
-                "solve_linear: nullspace must be the explicit canonical none/constant contract"
-            )
-        declared_nullspace = nullspace_kind == "constant"
-        if declared_nullspace and preconditioner != "identity":
-            raise NotImplementedError(
-                "solve_linear: ConstantNullspace currently requires preconditioners.Identity(); "
-                "GeometricMG has no explicit public certificate that its prepared V-cycle "
-                "preserves the mean-zero complement"
-            )
-        if method == "cg" and not properties.certifies_cg(declared_nullspace=declared_nullspace):
-            required = (
-                "LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()"
-                if declared_nullspace
-                else "LinearOperatorProperties.symmetric_positive_definite()"
-            )
-            raise ValueError("solve_linear: CG requires %s; no property is inferred" % required)
-        # A non-identity preconditioner needs the runtime ApplyFn slot, which only the Krylov methods
-        # that take one (BiCGStab / GMRES) expose. CG / Richardson have no preconditioner slot. This is
-        # an honest capability limit of the matrix-free path,
-        # not a transitional reject.
-        if preconditioner != "identity" and method not in ("gmres", "bicgstab"):
-            raise ValueError(
-                "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
-                "Krylov path; use GMRES() or BiCGStab()"
-            )
-        if preconditioner == "geometric_mg" and op_ncomp != 1:
-            raise ValueError(
-                "solve_linear: preconditioners.GeometricMG() is scalar-only (ncomp=1); "
-                "a component-coupled multigrid operator is not implemented, so a multi-component "
-                "Krylov solve must use Identity() or another genuinely block-aware provider"
-            )
-        from pops._ir.literals import PREPARED_GMRES_MAX_RESTART, exact_cpp_int, scalar_literal
+            raise TypeError("solve_linear: prepared nullspace contract is not canonical")
+        nullspace_contracts = PreparedNullspaceContracts(
+            nullspace_contract["contract"], gauge_contract
+        )
+        nullspace_provider_impl.validate_use(
+            contracts=nullspace_contracts,
+            components=op_ncomp,
+            operator_properties=properties.canonical_data(),
+            where="solve_linear nullspace provider %r"
+            % nullspace_provider_impl.provider_id,
+        )
+        declared_nullspace = nullspace_provider_impl.singular
+        preconditioner_provider.validate_use(
+            method_provider=method_provider.authority(),
+            components=op_ncomp,
+            nullspace_contract=nullspace_contract,
+            where="solve_linear preconditioner %r" % preconditioner_provider.scheme,
+        )
+        from pops._ir.literals import exact_cpp_int, scalar_literal
 
         try:
             tol_literal = scalar_literal(tol)
@@ -312,32 +287,6 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError(
                 "dynamic solver loops require max_iter as a positive signed C++ int"
             ) from exc
-        # restart is a gmres-only knob; the GMRES(m) basis size. Other methods have no restart concept,
-        # so passing one to them is a config error (fail loud rather than silently ignore it).
-        if method == "gmres":
-            if restart is None:
-                restart = self._GMRES_RESTART_DEFAULT
-            try:
-                restart_int = exact_cpp_int(
-                    restart,
-                    where=(
-                        "solve_linear: GMRES restart "
-                        "(MPI Arnoldi reduction count requires restart + 1)"
-                    ),
-                    minimum=1,
-                    maximum=PREPARED_GMRES_MAX_RESTART,
-                )
-            except ValueError as exc:
-                raise ValueError(
-                    "solve_linear: restart exceeds the native batched robust-dot collective "
-                    "capacity (got %r)" % (restart,)
-                ) from exc
-        elif restart is not None:
-            raise ValueError(
-                "solve_linear: restart only applies to method='gmres' (got method=%r)" % (method,)
-            )
-        else:
-            restart_int = None
         inputs = (operator, rhs) if initial_guess is None else (operator, rhs, initial_guess)
         from pops.time.stencil import StencilAccess
 
@@ -348,34 +297,40 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "call set_apply on a current operator declaration"
             )
         input_ghosts = stencil_access.required_ghost_depth
+        from pops.solvers.krylov._prepared_method_registry import PreparedKrylovMethodUse
+
+        method_use = PreparedKrylovMethodUse(
+            rel_tol=tol_value,
+            abs_tol=abs_tol_value,
+            max_iterations=max_iter_int,
+            components=op_ncomp,
+            input_ghosts=input_ghosts,
+            preconditioned=preconditioner_provider.preconditioned,
+            operator_properties=properties.canonical_data(),
+            declared_nullspace=declared_nullspace,
+            method_options=method_options,
+        )
+        method_provider.validate_use(method_use, where="solve_linear method provider")
         attrs = {
-            "method": method,
-            "preconditioner": preconditioner,
+            "method_provider": method_provider.authority(),
+            "method_options": method_options,
+            "preconditioner_provider": preconditioner_provider.authority(),
+            "preconditioner_options": canonical_preconditioner_options,
             "tol": tol_literal,
             "abs_tol": abs_tol_literal,
             "max_iter": max_iter_int,
             "has_guess": initial_guess is not None,
             "ncomp": op_ncomp,
-            "restart": restart_int,
             "operator_properties": properties.canonical_data(),
+            "nullspace_provider": dict(nullspace_provider),
             "nullspace_contract": dict(nullspace_contract),
             "gauge_contract": dict(gauge_contract),
             "krylov_footprint": {
                 "components": op_ncomp,
                 "input_ghosts": input_ghosts,
-                "restart": restart_int or 0,
-                "preconditioned": preconditioner != "identity",
+                "preconditioned": preconditioner_provider.preconditioned,
             },
         }
-        # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
-        # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
-        # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).
-        if precond_options is not None:
-            attrs["precond_options"] = precond_options
-        # ADC-645: Richardson relaxation factor, added ONLY when the descriptor set it (a default
-        # Richardson() program's IR hash / emitted source stays byte-identical: omega = 1 literal).
-        if omega is not None:
-            attrs["omega"] = positive_scalar_literal(omega, where="solve_linear: Richardson omega")
         attrs["solver_identity"] = solver_identity_token
         attrs["problem_kind"] = "matrix_free_linear"
         # A state-domain solve over a State rhs returns a State, preserving the mathematical unknown's

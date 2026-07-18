@@ -234,6 +234,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     from pops.time._program.detach import detach_compiled_program
     time = detach_compiled_program(time)
     program_graph = time.to_graph()
+    from pops.codegen.program_emit_kernels import _prepared_native_components
+    native_components = _prepared_native_components(time)
     from pops.codegen.program_graph_lowering import emit_program_graph
     src = emit_program_graph(
         program_graph, lowering_program=time, model=model,
@@ -241,6 +243,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
 
     include = include or pops_include()
     sig = pops_header_signature(include)
+    for component in native_components:
+        component.verify_builtin_headers(include)
     cc, cflags, lflags = pops_loader_build_flags(cxx)
     lflags = deterministic_program_link_flags(lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
@@ -267,6 +271,10 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
         lflags=lflags,
         optflags=optflags,
         libraries=library_manifests,
+        native_components=[{
+            "manifest": component.manifest(),
+            "manifest_sha256": component.manifest_sha256,
+        } for component in native_components],
     )
     program_hash = semantic.hexdigest
     cache_key = spec_identity.hexdigest
@@ -330,6 +338,34 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 cpp = os.path.join(tmp, "problem.cpp")
+                dependency_file = os.path.join(tmp, "problem.d")
+                component_include_flags = []
+                component_header_owners = {}
+                staged_component_roots = {}
+                staged_component_authorities = []
+                for component in native_components:
+                    for header_file in component.files:
+                        prior = component_header_owners.get(header_file.path)
+                        if prior is not None and prior != header_file.sha256:
+                            raise ValueError(
+                                "prepared native components provide conflicting header %r"
+                                % header_file.path
+                            )
+                        if os.path.isfile(os.path.join(include, header_file.path)):
+                            raise ValueError(
+                                "prepared native component %r shadows PoPS SDK header %r"
+                                % (component.component_id, header_file.path)
+                            )
+                        component_header_owners[header_file.path] = header_file.sha256
+                    staged_root = component.stage_verified(
+                        os.path.join(
+                            tmp, "prepared-native-components", component.manifest_sha256
+                        )
+                    )
+                    if staged_root is not None:
+                        component_include_flags.extend(("-I", staged_root))
+                        staged_component_roots[staged_root] = component.component_id
+                        staged_component_authorities.append((component, staged_root))
                 # The compiler ALWAYS reads the banner-free src. The retained source and failure
                 # diagnostics use the logical final path, never the private staging name.
                 with open(cpp, "w") as f:
@@ -337,9 +373,19 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                 flags = [
                     "-shared", "-fPIC", "-std=" + eff_std, *optflags,
                     "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags,
+                    "-MMD", "-MF", dependency_file, "-MT", compile_path,
                 ]
-                cmd = [cc, *flags, "-I", include, cpp, "-o", compile_path, *lflags]
-                reported_cmd = [so_path if item == compile_path else item for item in cmd]
+                cmd = [
+                    cc, *flags, "-I", include, *component_include_flags,
+                    cpp, "-o", compile_path, *lflags,
+                ]
+                reported_cmd = [
+                    so_path if item == compile_path else
+                    "<compiler-dependencies>" if item == dependency_file else
+                    "<verified-native-component:%s>" % staged_component_roots[item]
+                    if item in staged_component_roots else item
+                    for item in cmd
+                ]
                 compile_command = _redact_compile_command(
                     reported_cmd,
                     tmp_cpp=cpp,
@@ -367,7 +413,26 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                 cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
                 try:
                     _run_compile(cmd, "compile_problem (backend production)")
-                except RuntimeError as exc:
+                    from pops.native_components import (
+                        compiler_include_roots,
+                        verify_prepared_native_dependencies,
+                    )
+                    verify_prepared_native_dependencies(
+                        dependency_file,
+                        generated_source=cpp,
+                        pops_include_root=include,
+                        staged_components=tuple(staged_component_authorities),
+                        toolchain_include_roots=compiler_include_roots(cflags),
+                    )
+                    if pops_header_signature(include) != sig:
+                        raise RuntimeError(
+                            "PoPS SDK headers changed while the native artifact was compiled"
+                        )
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    try:
+                        os.remove(compile_path)
+                    except FileNotFoundError:
+                        pass
                     failed_src = os.path.splitext(so_path)[0] + ".failed.cpp"
                     try:
                         with open(failed_src, "w") as f:

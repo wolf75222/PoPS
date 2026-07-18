@@ -17,6 +17,7 @@ from .bootstrap import *  # noqa: F403
 from .hierarchy import *  # noqa: F403
 from .hierarchy_regrid import *  # noqa: F403
 from .hierarchy_resolution import *  # noqa: F403
+from .hierarchy_native import *  # noqa: F403
 from .transfer import *  # noqa: F403
 from . import tagging_graph as _tagging_graph, tagging_resolution as _tagging_resolution
 from .tagging_graph import *  # noqa: F403

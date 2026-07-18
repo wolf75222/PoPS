@@ -15,6 +15,19 @@ from fractions import Fraction
 from typing import Any
 
 from pops._ir.literals import exact_cpp_int, scalar_cpp
+from pops.fields._prepared_nullspace_registry import (
+    prepared_nullspace_contracts_from_attrs,
+)
+from pops.solvers._prepared_preconditioner_registry import (
+    prepared_preconditioner_provider_from_attrs,
+)
+from pops.solvers.krylov._prepared_method_registry import (
+    prepared_krylov_method_provider_from_attrs,
+)
+from pops.solvers.providers import (
+    PreparedHierarchySolverEmitRequest,
+    prepared_hierarchy_solver_provider_from_attrs,
+)
 from pops.time.points import StagePoint, TimePoint
 
 from pops.codegen.program_emit_kernels import (
@@ -474,8 +487,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             want_default = want_default is None or "default" in want_default
             flux_only = "false" if want_default else "true"
             body.append("{")
-            # FD step norms via krylov_dot (all components when ncomp>1, component 0 otherwise --
-            # the SAME reduction the Krylov loop uses for its residual norm).
+            # FD step norms use PureFieldAlgebra::dot over the complete prepared vector
+            # distribution: the same reduction contract as the Krylov residual norm.
             body.append("  const pops::Real jvn = std::sqrt(pops::PureFieldAlgebra::dot(%s, %s));"
                         % (in_arg, in_arg))
             body.append("  const pops::Real jukn = std::sqrt(pops::PureFieldAlgebra::dot(*%s, *%s));"
@@ -527,181 +540,42 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     prelude.append("};")
 
 
-def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
-    """Emit and return one explicitly prepared native preconditioner expression.
+def _prepared_preconditioner(
+        v: Any, prelude: Any, prototype: str,
+        vector_distribution_expr: str) -> str:
+    """Dispatch through the exact authenticated provider carried by the solve IR.
 
-      - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
-        path, byte-identical);
-      - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing a persistent
-        ``pops::runtime::program::GeometricMgPreconditioner`` (the V-cycle cache, coeff_elliptic_ops.hpp)
-        whose ``apply(ctx, out, in)`` runs the configured fixed V-cycle composition of the
-        already-wired pops::GeometricMG. The ``PreparedLinearPreconditioner`` owns prototype-shaped
-        zero/constant buffers and subtracts the exact raw zero response, so inhomogeneous physical
-        boundaries cannot make the Krylov preconditioner affine (ADC-516).
-
-    A scheme other than these two never reaches here: the Python layer
-    (pops.time._program.solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
-    rejects every other preconditioner upstream."""
-    scheme = v.attrs.get("preconditioner", "identity")
-    if scheme == "identity":
-        if "precond_options" in v.attrs:
-            raise ValueError(
-                "identity preconditioner cannot carry GeometricMG integer options")
-        return "pops::PreparedLinearPreconditioner::identity()"
-    if scheme == "geometric_mg":
-        name = "precond_mg%d" % v.id
-        # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (re-homed to the
-        # Schur-free coeff_elliptic_ops.hpp, ADC-637; it moved off ProgramContext with the Schur/Lorentz
-        # module split). Allocate ONE (alloc-once, like the matrix-free scratch), capture it by shared_ptr
-        # into the ApplyFn lambda: the explicit preparation hook builds the MG before iteration and
-        # compatible solves reuse it across every Krylov apply / step. ctx is captured by value too
-        # (it forwards the seam ops the apply reuses).
-        pc = "precond_mg_state%d" % v.id
-        # ADC-644: a configured GeometricMG preconditioner carries V-cycle-shape knobs
-        # (pre/post/bottom sweeps, min_coarse, n_vcycles). When absent (a default GeometricMG()) emit
-        # the no-arg ctor -- byte-identical to the pre-644 source. When present, emit the explicit ctor
-        # in the fixed positional order (nu1, nu2, nbottom, min_coarse, n_vcycles), each defaulting to
-        # the native kMG* value so an omitted knob keeps its historical default.
-        opts = v.attrs.get("precond_options")
-        if opts is None:
-            ctor_args = ""
-        else:
-            allowed = {
-                "n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"
-            }
-            if not isinstance(opts, Mapping) or not opts or not set(opts) <= allowed:
-                raise ValueError(
-                    "GeometricMG precond_options must be a non-empty exact subset of %s"
-                    % sorted(allowed))
-            nu1 = exact_cpp_int(
-                opts.get("pre_sweeps", 2),
-                where="GeometricMG pre_sweeps",
-                minimum=0,
-            )
-            nu2 = exact_cpp_int(
-                opts.get("post_sweeps", 2),
-                where="GeometricMG post_sweeps",
-                minimum=0,
-            )
-            nbottom = exact_cpp_int(
-                opts.get("bottom_sweeps", 50),
-                where="GeometricMG bottom_sweeps",
-                minimum=0,
-            )
-            min_coarse = exact_cpp_int(
-                opts.get("min_coarse", 2),
-                where="GeometricMG min_coarse",
-                minimum=1,
-            )
-            n_vcycles = exact_cpp_int(
-                opts.get("n_vcycles", 1),
-                where="GeometricMG n_vcycles",
-                minimum=1,
-            )
-            ctor_args = "%d, %d, %d, %d, %d" % (nu1, nu2, nbottom, min_coarse, n_vcycles)
-        prelude.append(
-            "auto %s = std::make_shared<pops::runtime::program::GeometricMgPreconditioner>(%s);"
-            % (pc, ctor_args))
-        prelude.append(
-            "pops::ApplyFn %s = [ctx_owner, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
-            % (name, pc))
-        prelude.append("  auto& ctx = *ctx_owner;")
-        prelude.append("  %s->apply(ctx, out, in);" % pc)
-        prelude.append("};")
-        prepare = "prepare_precond_mg%d" % v.id
-        prelude.append("pops::PreparedResourceFn %s = [ctx_owner, %s, %s]() {" %
-                       (prepare, pc, prototype))
-        prelude.append("  auto& ctx = *ctx_owner;")
-        prelude.append("  %s->prepare(ctx, *%s);" % (pc, prototype))
-        prelude.append("};")
-        return "pops::PreparedLinearPreconditioner(*%s, %s, %s)" % (
-            prototype, name, prepare)
-    raise NotImplementedError(
-        "emit_cpp_program: preconditioner scheme '%s' is not lowerable (supported: identity, "
-        "geometric_mg)" % scheme)
+    The dispatcher knows no provider class or provider name.  A compiler plugin registers one
+    immutable provider carrying both metadata and emitter; unknown or scheme-mismatched identities
+    fail before any C++ is emitted.  The plugin must supply its referenced native headers/C++ too.
+    """
+    provider = prepared_preconditioner_provider_from_attrs(v.attrs)
+    return provider.emit(v, prelude, prototype, vector_distribution_expr)
 
 
-def _composite_tensor_fac_options(
-        v: Any) -> tuple[int, Any, Any, int | None, Any, Any, int | None, bool | None]:
-    """Authenticate the complete direct-solver identity carried by a hierarchy solve node."""
-    identity = v.attrs.get("hierarchy_solver_identity")
-    expected_identity = {"schema_version", "solver_id", "capabilities", "options"}
-    if not isinstance(identity, Mapping) or set(identity) != expected_identity:
-        raise TypeError(
-            "CompositeTensorFAC hierarchy solve requires an exact canonical solver identity")
-    if identity["schema_version"] != 1:
-        raise ValueError("CompositeTensorFAC hierarchy solve uses an unsupported identity schema")
-    if identity["solver_id"] != "composite_tensor_fac" \
-            or v.attrs.get("hierarchy_solver") != identity["solver_id"]:
-        raise ValueError("CompositeTensorFAC hierarchy solve solver identity is unauthenticated")
-    capabilities = identity["capabilities"]
-    if (not isinstance(capabilities, (list, tuple))
-            or tuple(capabilities) != (
-                "amr_hierarchy", "flat_bicgstab", "scalar", "tensor_elliptic")):
-        raise ValueError("CompositeTensorFAC hierarchy solve capabilities are unauthenticated")
-    options = identity["options"]
-    expected_options = {
-        "max_iter", "rel_tol", "abs_tol", "fine_sweeps", "coarse_rel_tol", "coarse_abs_tol",
-        "coarse_cycles", "verbose"}
-    if not isinstance(options, Mapping) or set(options) != expected_options:
-        raise TypeError(
-            "CompositeTensorFAC options must contain exactly max_iter, rel_tol, abs_tol, fine_sweeps, "
-            "coarse_rel_tol, coarse_abs_tol, coarse_cycles and verbose")
-    max_iter = exact_cpp_int(
-        options["max_iter"], where="CompositeTensorFAC max_iter", minimum=1)
-    fine_sweeps, coarse_cycles, verbose = (
-        options["fine_sweeps"], options["coarse_cycles"], options["verbose"])
-    if fine_sweeps is not None:
-        fine_sweeps = exact_cpp_int(
-            fine_sweeps, where="CompositeTensorFAC fine_sweeps", minimum=1)
-    if coarse_cycles is not None:
-        coarse_cycles = exact_cpp_int(
-            coarse_cycles, where="CompositeTensorFAC coarse_cycles", minimum=1)
-    if verbose is not None and type(verbose) is not bool:
-        raise TypeError("CompositeTensorFAC verbose must be a Python bool or None")
-    from pops.model._bind_schema_data import literal_value
-    rel_tol = literal_value(options["rel_tol"], where="CompositeTensorFAC rel_tol")
-    if isinstance(rel_tol, bool) or not 0 < rel_tol < 1:
-        raise ValueError("CompositeTensorFAC rel_tol must be in (0, 1)")
-    abs_tol = literal_value(options["abs_tol"], where="CompositeTensorFAC abs_tol")
-    if isinstance(abs_tol, bool) or abs_tol < 0:
-        raise ValueError("CompositeTensorFAC abs_tol must be >= 0")
-    coarse_rel_tol = options["coarse_rel_tol"]
-    if coarse_rel_tol is not None:
-        coarse_rel_tol = literal_value(
-            coarse_rel_tol, where="CompositeTensorFAC coarse_rel_tol")
-        if isinstance(coarse_rel_tol, bool) or not 0 < coarse_rel_tol < 1:
-            raise ValueError("CompositeTensorFAC coarse_rel_tol must be in (0, 1) or None")
-    coarse_abs_tol = options["coarse_abs_tol"]
-    if coarse_abs_tol is not None:
-        coarse_abs_tol = literal_value(
-            coarse_abs_tol, where="CompositeTensorFAC coarse_abs_tol")
-        if isinstance(coarse_abs_tol, bool) or coarse_abs_tol < 0:
-            raise ValueError("CompositeTensorFAC coarse_abs_tol must be >= 0 or None")
-    from pops._ir.literals import scalar_data
-    emitted_tol_data = scalar_data(v.attrs["tol"])
-    emitted_abs_tol_data = scalar_data(v.attrs["abs_tol"])
-    emitted_max_iter = exact_cpp_int(
-        v.attrs.get("max_iter"), where="CompositeTensorFAC emitted max_iter", minimum=1)
-    if (emitted_tol_data != options["rel_tol"]
-            or emitted_abs_tol_data != options["abs_tol"]
-            or emitted_max_iter != max_iter):
-        raise ValueError(
-            "CompositeTensorFAC emitted convergence controls disagree with solver identity")
-    if v.attrs.get("method") != "bicgstab" or v.attrs.get("preconditioner") != "identity" \
-            or v.attrs.get("restart") is not None:
-        raise ValueError("CompositeTensorFAC flat branch must be exact unpreconditioned BiCGStab")
-    emitted_ncomp = v.attrs.get("ncomp")
-    if isinstance(emitted_ncomp, bool) or not isinstance(emitted_ncomp, int) \
-            or emitted_ncomp != 1:
-        raise ValueError("CompositeTensorFAC supports exactly ncomp=1")
-    exact_cpp_int(
-        v.attrs.get("hierarchy_block_index"),
-        where="CompositeTensorFAC hierarchy block index",
-        minimum=0,
+def _validated_direct_solve_components(v: Any, operator: Any) -> int:
+    """Authenticate the operator shape needed by a provider-owned direct solve.
+
+    A direct hierarchy provider owns its native storage and therefore has no Krylov footprint. The
+    component count still has two independent authorities (operator declaration and solve node), and
+    both must agree before native emission.
+    """
+    operator_attrs = getattr(operator, "attrs", None)
+    if getattr(operator, "op", None) != "matrix_free_operator" or not isinstance(
+        operator_attrs, Mapping
+    ):
+        raise ValueError("direct hierarchy solve requires an authenticated matrix_free_operator")
+    operator_components = exact_cpp_int(
+        operator_attrs.get("ncomp"),
+        where="direct hierarchy operator component count",
+        minimum=1,
     )
-    return (max_iter, rel_tol, abs_tol, fine_sweeps, coarse_rel_tol, coarse_abs_tol,
-            coarse_cycles, verbose)
+    solve_components = exact_cpp_int(
+        v.attrs.get("ncomp"), where="direct hierarchy solve component count", minimum=1
+    )
+    if solve_components != operator_components:
+        raise ValueError("direct hierarchy solve component count disagrees with its operator")
+    return solve_components
 
 
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
@@ -716,51 +590,52 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     inside the loop -- invisible to the IR. The result token is the solution field, dereferenced for the
     final copy back into the block state at commit.
 
-    Uniform and level-scoped AMR solves use the generic context seam. A direct hierarchy solve emits
-    the flat Krylov call in the flat topology body and the authenticated composite-FAC call in the
-    refined solve-once phase."""
+    Uniform and level-scoped AMR solves use the generic context seam. A prepared hierarchy provider
+    owns the refined native emission and declares its exact flat Krylov fallback contract."""
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
     lam = var[op_value.id]  # the apply lambda (already emitted into the prelude)
-    hierarchy_solver = v.attrs.get("hierarchy_solver")
-    direct_refined = bool(var.get(("direct_hierarchy_solve", v.id), False))
-    fac_options = None
-    if hierarchy_solver is not None:
-        if target != "amr_system" or v.attrs.get("scope") != "hierarchy" \
-                or hierarchy_solver != "composite_tensor_fac":
-            raise ValueError(
-                "CompositeTensorFAC lowers only as a direct hierarchy solver for target='amr_system'")
-        fac_options = _composite_tensor_fac_options(v)
+    direct_hierarchy_phase = bool(var.get(("direct_hierarchy_solve", v.id), False))
+    hierarchy_provider = None
+    if v.attrs.get("scope") == "hierarchy" or "hierarchy_solver_provider" in v.attrs:
+        if target != "amr_system" or v.attrs.get("scope") != "hierarchy":
+            raise ValueError("a prepared hierarchy solver requires target='amr_system'")
+        hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(v.attrs)
+        hierarchy_provider.validate_node(v, target=target)
+    if direct_hierarchy_phase and hierarchy_provider is None:
+        raise ValueError("a direct hierarchy phase requires an authenticated provider")
+    direct_provider_execution = hierarchy_provider is not None and (
+        direct_hierarchy_phase
+        or not hierarchy_provider.flat_execution.uses_prepared_krylov_fallback
+    )
+    uses_prepared_krylov = not direct_provider_execution
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
-    footprint = validated_krylov_footprint(v.attrs, operator=op_value)
-    problem_contract = validated_prepared_problem_contract(v.attrs, operator=op_value)
-    op_ncomp = footprint["components"]
-    input_ghosts = footprint["input_ghosts"]
-    prelude.append(
-        "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %d));"
-        % (sol_sp, op_ncomp, input_ghosts))
-    if fac_options is not None:
-        _, _, _, fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose = fac_options
+    if uses_prepared_krylov:
+        footprint = validated_krylov_footprint(v.attrs, operator=op_value)
+        problem_contract = validated_prepared_problem_contract(v.attrs, operator=op_value)
+        op_ncomp = footprint["components"]
+        input_ghosts = footprint["input_ghosts"]
         prelude.append(
-            "ctx.configure_composite_tensor_fac(%d, %d, %d, static_cast<pops::Real>(%s), "
-            "static_cast<pops::Real>(%s), %d, %s);"
-            % (int(v.attrs["hierarchy_block_index"]), op_ncomp,
-               0 if fine_sweeps is None else fine_sweeps,
-               scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
-               scalar_cpp(0 if coarse_abs_tol is None else coarse_abs_tol),
-               0 if coarse_cycles is None else coarse_cycles,
-               -1 if verbose is None else int(verbose)))
+            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %d));"
+            % (sol_sp, op_ncomp, input_ghosts))
+    else:
+        footprint = None
+        problem_contract = None
+        op_ncomp = _validated_direct_solve_components(v, op_value)
     # On a refined AMR hierarchy the mathematical solution is one field per level.  The persistent
     # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
     # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
-    var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
-                 if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
-                 else "(*%s)" % sol_sp)
+    if direct_provider_execution:
+        var[v.id] = "ctx.hierarchy_solution()"
+    else:
+        var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
+                     if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
+                     else "(*%s)" % sol_sp)
     # Initial guess: zero (default) or a copy of the guess field.
-    if not direct_refined:
+    if uses_prepared_krylov:
         if guess_in is None:
             lines.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sol_sp)
         else:
@@ -769,7 +644,6 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
-    method = v.attrs["method"]
     kr = "kr%d" % v.id
     action_kind, action_statuses = _consumed_solve_action(program, v)
 
@@ -788,17 +662,32 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                      "%s.status_name() + \" action=fail_run\");" % kr)
         lines.append("}")
 
-    restart = footprint["restart"]
-    method_expr = {
-        "cg": "pops::KrylovMethod::kCg",
-        "bicgstab": "pops::KrylovMethod::kBicgstab",
-        "gmres": "pops::KrylovMethod::kGmres",
-        "richardson": "pops::KrylovMethod::kRichardson",
-    }[method]
-    omega = v.attrs.get("omega")
-    omega_tok = ("static_cast<pops::Real>(1)" if omega is None
-                 else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
     abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["abs_tol"])
+    hierarchy_emission = None
+    if hierarchy_provider is not None:
+        hierarchy_emission = hierarchy_provider.emit(
+            PreparedHierarchySolverEmitRequest(
+                node=v,
+                target=target,
+                report_name=kr,
+                solution_name=var[v.id] if direct_provider_execution else sol_sp,
+                components=op_ncomp,
+                block_index=int(v.attrs["hierarchy_block_index"]),
+                relative_tolerance_cpp=tol,
+                absolute_tolerance_cpp=abs_tol,
+                max_iterations=max_iter,
+            )
+        )
+        prelude.extend(hierarchy_emission.configure)
+
+    if direct_provider_execution:
+        if hierarchy_emission is None:
+            raise ValueError("a direct hierarchy phase has no native provider emission")
+        lines.extend(hierarchy_emission.solve)
+        _append_report_guard()
+        return
+
+    method_expr = prepared_krylov_method_provider_from_attrs(v.attrs).emit_cpp(v)
 
     properties = problem_contract["operator_properties"]
     if properties == {
@@ -832,8 +721,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         raise ValueError("solve_linear operator properties are incoherent or unauthenticated")
     footprint_name = "krylov_footprint%d" % v.id
     prelude.append(
-        "const pops::KrylovFootprint %s{%d, %d, %d, %s};"
-        % (footprint_name, op_ncomp, input_ghosts, restart,
+        "const pops::KrylovFootprint %s{%d, %d, %s};"
+        % (footprint_name, op_ncomp, input_ghosts,
            "true" if footprint["preconditioned"] else "false"))
 
     authority_material = json.dumps({
@@ -847,6 +736,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         int.from_bytes(authority_digest[offset:offset + 8], "big")
         for offset in range(0, 32, 8)
     ]
+    var.setdefault(("compiled_program_operator_authorities",), []).append(tuple(authority))
     resource_digest = hashlib.sha256(
         b"prepared-resources:" + authority_material).digest()
     resources = [
@@ -858,79 +748,60 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     snapshot_name = "operator_snapshot%d" % v.id
     prelude.append(
         "auto %s = std::make_shared<pops::OperatorEvaluationSnapshot>();" % snapshot_name)
-    nullspace_contract = problem_contract["nullspace_contract"]
-    gauge_contract = problem_contract["gauge_contract"]
-    if nullspace_contract["kind"] == "none":
-        nullspace_policy_expr = "pops::PreparedNullspacePolicy::nonsingular()"
-    else:
-        nullspace_plan_name = "krylov_nullspace_plan%d" % v.id
-        nullspace_id = "pops://program/krylov/%s/constant-nullspace@1" % authority_digest.hex()
-        prelude.append(
-            "auto %s = pops::constant_mean_zero_nullspace(\"%s\", "
-            "\"authored ConstantNullspace with MeanValueGauge\");"
-            % (nullspace_plan_name, nullspace_id))
-        if target == "amr_system":
-            prelude.append(
-                "%s.scope = pops::FieldNullspaceScope::LevelLocal;" % nullspace_plan_name)
-        prelude.append(
-            "%s.gauges.front().value = static_cast<pops::Real>(%s);"
-            % (nullspace_plan_name, scalar_cpp(gauge_contract["value"])))
-        nullspace_policy_expr = (
-            "pops::PreparedNullspacePolicy::preserving(std::move(%s))"
-            % nullspace_plan_name
-        )
-    preconditioner_expr = _prepared_preconditioner(v, prelude, sol_sp)
+    nullspace_provider, nullspace_contracts = prepared_nullspace_contracts_from_attrs(
+        v.attrs
+    )
+    nullspace_policy_expr = nullspace_provider.emit(
+        node=v, prelude=prelude, contracts=nullspace_contracts
+    )
+    vector_distribution_expr = "ctx.program_resource_vector_distribution()"
+    preconditioner_expr = _prepared_preconditioner(
+        v, prelude, sol_sp, vector_distribution_expr)
     problem_name = "prepared_problem%d" % v.id
     freeze_expr = var.get(("operator_freeze", op_value.id))
     if not isinstance(freeze_expr, str):
         raise ValueError("matrix-free operator has no prepared resource contract")
+    vector_distribution_arg = ", " + vector_distribution_expr
     prelude.append(
         "auto %s = std::make_shared<pops::PreparedAffineLinearProblem>("
         "*%s, %s, %s, %s, %s, %s, "
         "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
-        "%s, pops::OperatorApplyPurity::kAuthenticatedProgram);"
+        "%s, ctx.authenticated_program_apply_token({%s})%s);"
         % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
            nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
-           freeze_expr))
+           freeze_expr, authority_cpp, vector_distribution_arg))
     workspace_name = "krylov_workspace%d" % v.id
     prelude.append(
         "auto %s = std::make_shared<pops::KrylovWorkspace>("
-        "*%s, %s, %s);"
-        % (workspace_name, sol_sp, method_expr, footprint_name))
+        "*%s, %s, %s%s);"
+        % (workspace_name, sol_sp, method_expr, footprint_name,
+           vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
-        "const pops::KrylovControls %s{%s, %s, %s, %d, %d, %s};"
-        % (controls_name, method_expr, tol, abs_tol, max_iter, restart, omega_tok))
+        "const pops::KrylovControls %s{%s, %s, %s, %d};"
+        % (controls_name, method_expr, tol, abs_tol, max_iter))
 
-    if direct_refined:
-        if fac_options is None:
-            raise ValueError("a direct hierarchy phase requires CompositeTensorFAC")
-        fac_abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(fac_options[2])
-        lines.append(
-            "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %s, %d);"
-            % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, fac_abs_tol, max_iter))
-    else:
-        prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))
-        dt_captures = var.get(("operator_dt_captures", op_value.id))
-        if not isinstance(prepare_refresh, tuple) or not isinstance(dt_captures, tuple) \
-                or not dt_captures:
-            raise ValueError("matrix-free operator has no per-solve evaluation refresh contract")
-        lines.extend(prepare_refresh)
-        solve_stage = _solve_stage_fraction(v)
-        lines.append("ctx.set_stage_time(%d, %d);" %
-                     (solve_stage.numerator, solve_stage.denominator))
-        for capture in dt_captures:
-            lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
-        lines.append(
-            "*%s = ctx.operator_evaluation_snapshot("
-            "{%s}, *%s, {%s});"
-            % (snapshot_name, authority_cpp, sol_sp, resources_cpp))
-        lines.append("%s->prepare(*%s);" % (problem_name, snapshot_name))
-        lines.append("%s->bind(*%s);" % (workspace_name, problem_name))
-        lines.append(
-            "pops::SolveReport %s = ctx.solve_prepared_linear("
-            "*%s, *%s, *%s, %s, %s);"
-            % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
+    prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))
+    dt_captures = var.get(("operator_dt_captures", op_value.id))
+    if not isinstance(prepare_refresh, tuple) or not isinstance(dt_captures, tuple) \
+            or not dt_captures:
+        raise ValueError("matrix-free operator has no per-solve evaluation refresh contract")
+    lines.extend(prepare_refresh)
+    solve_stage = _solve_stage_fraction(v)
+    lines.append("ctx.set_stage_time(%d, %d);" %
+                 (solve_stage.numerator, solve_stage.denominator))
+    for capture in dt_captures:
+        lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
+    lines.append(
+        "*%s = ctx.operator_evaluation_snapshot("
+        "{%s}, *%s, {%s});"
+        % (snapshot_name, authority_cpp, sol_sp, resources_cpp))
+    lines.append("%s->prepare(*%s);" % (problem_name, snapshot_name))
+    lines.append("%s->bind(*%s);" % (workspace_name, problem_name))
+    lines.append(
+        "pops::SolveReport %s = ctx.solve_prepared_linear("
+        "*%s, *%s, *%s, %s, %s);"
+        % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_report_guard()

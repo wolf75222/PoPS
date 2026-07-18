@@ -183,10 +183,10 @@ def _emit_condensed_coeffs_kernel(uid: Any, model: Any, jblock_op: Any, subset: 
                             "cond%s_ayxW" % uid)
     body = [
         "pops::MultiFab& %s = ctx.aux();" % aux,
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kEpsX);" % (exW, ex),
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kEpsY);" % (eyW, ey),
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kAxy);" % (axyW, axy),
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kAyx);" % (ayxW, ayx),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.diagonal.x");' % (exW, ex),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.diagonal.y");' % (eyW, ey),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.cross.xy");' % (axyW, axy),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.cross.yx");' % (ayxW, ayx),
         "for (int li = 0; li < %s.local_size(); ++li) {" % exW,
         "  const pops::Array4 exA = %s.fab(li).array();" % exW,
         "  const pops::Array4 eyA = %s.fab(li).array();" % eyW,
@@ -269,13 +269,13 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "  });",
         "}",
         "pops::MultiFab %s = ctx.alloc_scalar_field(2, 1);  // F = M^-1 (mx, my), 1 ghost for div" % fx,
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kFlux);" % (fxW, fx),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.flux");' % (fxW, fx),
     ]
     _emit_condensed_flux_kernel(body, uid, impl, jblock, th_dt_cpp, subset, fxW, state_var)
     body.append("ctx.fill_boundary(%s);" % fxW)
     # rhs = -Lap phi^n - g*div(F): centered FV divergence (Fx comp 0, Fy comp 1), fused with -Lap.
     body += [
-        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kRhs);" % (rhsW, rhs),
+        'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.rhs");' % (rhsW, rhs),
         "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"
         % uid,
         "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
@@ -323,7 +323,7 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
     # solution), the current level's PUBLISHED composite potential on a refined hierarchy (the level-0
     # solution cannot hold a fine level's phi). Byte-for-byte unchanged on System / flat.
     body = [
-        "pops::MultiFab& %s = ctx.assembly_source(%s, pops::runtime::program::kPhi);" % (phiR, phi),
+        'pops::MultiFab& %s = ctx.assembly_source(%s, "pops.tensor-elliptic.solution");' % (phiR, phi),
         "ctx.fill_boundary(%s);" % phiR,
         "pops::MultiFab& %s = ctx.aux();" % aux,
         "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"

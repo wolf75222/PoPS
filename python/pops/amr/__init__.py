@@ -18,6 +18,11 @@ from .authoring import (
 )
 from pops.mesh._amr.transfer import AMRTransfer
 from pops.mesh._amr import IgnoreAMRCriteria
+from pops.mesh._amr.hierarchy_native import (
+    PreparedHierarchyNativeLowering,
+    PreparedHierarchyNativeProvider,
+    register_prepared_hierarchy_native_provider,
+)
 from pops.mesh._amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
 from .materialization import (
     CanonicalOptions,
@@ -51,7 +56,10 @@ __all__ = [
     "NativeAMRMaterializationDescriptor",
     "NativeAMRMaterializationKind",
     "PatchLayout",
+    "PreparedHierarchyNativeLowering",
+    "PreparedHierarchyNativeProvider",
     "Tag",
     "TaggerProvider",
     "TransferCapabilities",
+    "register_prepared_hierarchy_native_provider",
 ]

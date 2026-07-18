@@ -13,6 +13,7 @@ from ._identity import field_identity, strict_field_data
 from .bcs import BoundaryCondition
 from .gauges import FieldGauge
 from ._references import collect_references, resolve_value
+from .solve import ResolvedHierarchyPolicy
 
 
 FIELD_DISCRETIZATION_SCHEMA_VERSION = 2
@@ -84,35 +85,68 @@ def field_discretization_data(value: Any, *, where: str) -> dict[str, Any]:
 
 
 class FieldHierarchyPolicy(Descriptor):
-    """Small extension interface for hierarchy coupling semantics."""
+    """Small extension interface producing an opaque resolved hierarchy authority."""
 
     category = "field_hierarchy_policy"
 
     def to_data(self) -> dict[str, Any]:
         return {"type": type(self).__name__, "options": self.options()}
 
-    def resolve(self, capabilities: Any) -> Any:
-        resolver = getattr(capabilities, "resolve_hierarchy", None)
-        if not callable(resolver):
+    def resolved_authority(self) -> ResolvedHierarchyPolicy:
+        raise NotImplementedError(
+            "%s must provide a resolved hierarchy authority" % type(self).__name__
+        )
+
+    def resolve(self, capabilities: Any) -> ResolvedHierarchyPolicy:
+        binder = getattr(capabilities, "bind_hierarchy_policy", None)
+        if not callable(binder):
             raise TypeError("field hierarchy policy requires typed solve capabilities")
-        return resolver(self.options()["policy"])
+        return binder(self.resolved_authority())
 
 
 class InferHierarchyFromLayout(FieldHierarchyPolicy):
     """Resolve uniform/level-local/composite behavior from method and layout capabilities."""
 
     def options(self) -> dict[str, Any]:
-        return {"policy": "infer_from_layout"}
+        return {
+            "policy_id": "pops.field-hierarchy.infer-from-layout",
+            "interface_version": 1,
+        }
+
+    def resolve(self, capabilities: Any) -> ResolvedHierarchyPolicy:
+        resolver = getattr(capabilities, "inferred_hierarchy_policy", None)
+        if not callable(resolver):
+            raise TypeError("inferred field hierarchy requires a typed layout authority")
+        resolved = resolver()
+        if not isinstance(resolved, ResolvedHierarchyPolicy):
+            raise TypeError("inferred hierarchy authority is not resolved")
+        return resolved
 
 
 class LevelByLevelSolve(FieldHierarchyPolicy):
     def options(self) -> dict[str, Any]:
-        return {"policy": "level_local"}
+        return self.resolved_authority().authority()
+
+    def resolved_authority(self) -> ResolvedHierarchyPolicy:
+        return ResolvedHierarchyPolicy(
+            "pops.field-hierarchy.level-local",
+            1,
+            "pops.field-hierarchy.options.empty@1",
+            {},
+        )
 
 
 class CompositeHierarchySolve(FieldHierarchyPolicy):
     def options(self) -> dict[str, Any]:
-        return {"policy": "composite"}
+        return self.resolved_authority().authority()
+
+    def resolved_authority(self) -> ResolvedHierarchyPolicy:
+        return ResolvedHierarchyPolicy(
+            "pops.field-hierarchy.composite",
+            1,
+            "pops.field-hierarchy.options.empty@1",
+            {},
+        )
 
 
 def _typed_descriptor(value: Any, *, field: str, required: bool = True) -> Any:
@@ -216,7 +250,7 @@ class FieldDiscretization(Descriptor):
             "preconditioner": label(self.preconditioner),
             "nullspace": label(self.nullspace),
             "gauge": label(self.gauge),
-            "hierarchy_policy": self.hierarchy_policy.options()["policy"],
+            "hierarchy_policy": self.hierarchy_policy.options(),
         }
 
     def requirements(self) -> RequirementSet:
@@ -234,7 +268,7 @@ class FieldDiscretization(Descriptor):
             {
                 "derives_order": True,
                 "derives_ghost_depth": True,
-                "hierarchy_policy": self.hierarchy_policy.options()["policy"],
+                "hierarchy_policy": self.hierarchy_policy.options(),
             }
         )
 

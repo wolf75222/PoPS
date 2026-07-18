@@ -79,7 +79,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
             '    auto _advance_hierarchy = [&](double hierarchy_dt) {\n'
             '      _refresh_level_programs();\n'
             '      const int _nlev = ctx.nlev();\n'
-            '      if (!ctx.has_refined_hierarchy()) {\n'
+            '      if (ctx.uses_prepared_krylov_fallback()) {\n'
             '        for (int _k = 0; _k < _nlev; ++_k) {\n'
             '          ctx.set_level(_k);\n'
             '          _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n'

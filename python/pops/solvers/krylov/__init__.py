@@ -20,6 +20,7 @@ ever touched (Spec 5 sec.6: a route is refused explainably, pre-compile).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import math
 from typing import Any
@@ -27,6 +28,13 @@ from typing import Any
 from pops.descriptors import BrickDescriptor
 from pops.identity import Identity, make_identity
 from pops.solvers.requirements import capability_map
+from ._prepared_method_registry import (
+    PreparedKrylovMethodProvider,
+    PreparedKrylovMethodUse,
+    prepared_krylov_method_provider_by_id,
+    prepared_krylov_method_provider_from_identity,
+    register_prepared_krylov_method_provider,
+)
 
 # The Krylov solvers are matrix-free free functions over ``pops::MultiFab`` primitives (dot /
 # saxpy / the operator apply): the algebra is layout-agnostic, so it runs on a uniform mesh or
@@ -105,13 +113,12 @@ def _check_abs_tol(name: str, abs_tol: Any) -> Any:
 class _PreparedKrylov:
     """Private authenticated provider consumed by ``Program.solve``."""
 
-    method: str
+    method_provider: Any
+    method_options: Any
     tolerance: Any
     absolute_tolerance: Any
     max_iterations: int
-    restart: int | None
     preconditioner: Any
-    omega: Any
     identity: Identity
 
     def build_program_solve(self, *, program: Any, problem: Any, name: Any = None) -> Any:
@@ -127,49 +134,45 @@ class _KrylovDescriptor(BrickDescriptor):
     def prepare_program_solve(self) -> _PreparedKrylov:
         from pops.time._program.solve import _lower_preconditioner
 
-        preconditioner, preconditioner_options = _lower_preconditioner(
+        preconditioner_provider, preconditioner_options = _lower_preconditioner(
             self.options.get("preconditioner")
         )
-        if preconditioner != "identity" and self.scheme not in ("gmres", "bicgstab"):
-            raise ValueError(
-                "%s does not expose a native preconditioner slot; use GMRES or BiCGStab" % self.name
-            )
         tolerance = self.options.get("rel_tol", 1.0e-8)
-        restart = self.options.get("restart")
-        omega = self.options.get("omega")
+        provider = prepared_krylov_method_provider_from_identity(
+            self.options["method_provider"]
+        )
+        method_options = provider.prepare_options(self.options["method_options"])
         payload = {
-            "schema_version": 2,
-            "method": self.scheme,
+            "schema_version": 4,
+            "method_provider": provider.authority(),
+            "method_options": method_options,
             "tolerance": str(tolerance),
             "absolute_tolerance": str(self.options.get("abs_tol", 0)),
             "max_iterations": self.options["max_iter"],
-            "restart": restart,
-            "preconditioner": preconditioner,
+            "preconditioner_provider": preconditioner_provider,
             "preconditioner_options": preconditioner_options,
-            "omega": None if omega is None else str(omega),
         }
         return _PreparedKrylov(
-            method=self.scheme,
+            method_provider=payload["method_provider"],
+            method_options=method_options,
             tolerance=tolerance,
             absolute_tolerance=self.options.get("abs_tol", 0),
             max_iterations=self.options["max_iter"],
-            restart=restart,
-            preconditioner=(preconditioner, preconditioner_options),
-            omega=omega,
+            preconditioner=(preconditioner_provider, preconditioner_options),
             identity=make_identity("prepared-krylov", payload),
         )
 
 
 def _solver(
     name: str,
+    provider: PreparedKrylovMethodProvider,
     native_id: str,
     factory: str,
     max_iter: Any,
     rel_tol: Any = None,
     *,
-    restart: Any = None,
+    method_options: Mapping[str, Any] | None = None,
     preconditioner: Any = None,
-    omega: Any = None,
     abs_tol: Any = None,
 ) -> Any:
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name).
@@ -191,23 +194,10 @@ def _solver(
     if rel is not None:
         options["rel_tol"] = rel
     options["abs_tol"] = absolute
-    if name == "gmres":
-        if restart is None:
-            restart = 30
-        from pops._ir.literals import PREPARED_GMRES_MAX_RESTART, exact_cpp_int
-
-        options["restart"] = exact_cpp_int(
-            restart,
-            where="GMRES: restart (MPI Arnoldi reduction count requires restart + 1)",
-            minimum=1,
-            maximum=PREPARED_GMRES_MAX_RESTART,
-        )
-    elif restart is not None:
-        raise ValueError("%s: restart is a GMRES-only control" % factory)
+    options["method_provider"] = provider.authority()
+    options["method_options"] = provider.prepare_options(method_options or {})
     if preconditioner is not None:
         options["preconditioner"] = preconditioner
-    if omega is not None:
-        options["omega"] = omega
     return _KrylovDescriptor(
         name,
         "native",
@@ -230,6 +220,7 @@ def CG(
     """
     return _solver(
         "cg",
+        prepared_krylov_method_provider_by_id("pops.krylov.cg"),
         "pops::solve_prepared_affine",
         "CG",
         max_iter,
@@ -250,6 +241,7 @@ def BiCGStab(
     """
     return _solver(
         "bicgstab",
+        prepared_krylov_method_provider_by_id("pops.krylov.bicgstab"),
         "pops::solve_prepared_affine",
         "BiCGStab",
         max_iter,
@@ -275,11 +267,12 @@ def GMRES(
     """
     return _solver(
         "gmres",
+        prepared_krylov_method_provider_by_id("pops.krylov.gmres"),
         "pops::solve_prepared_affine",
         "GMRES",
         max_iter,
         rel_tol,
-        restart=restart,
+        method_options={"restart": restart},
         preconditioner=preconditioner,
         abs_tol=abs_tol,
     )
@@ -301,26 +294,67 @@ def Richardson(
     ``None`` (the default) emits the historical ``omega = 1`` literal byte-identically; a finite
     positive value is baked into the typed prepared controls.
     """
-    if omega is not None:
-        try:
-            omega_value = _exact_control(omega, "Richardson omega")
-            valid = omega_value > 0
-        except (TypeError, ValueError):
-            valid = False
-        if not valid:
-            raise ValueError(
-                "Richardson: omega must be a positive number or None; got %r" % (omega,)
-            )
+    provider = prepared_krylov_method_provider_by_id("pops.krylov.richardson")
+    try:
+        method_options = provider.prepare_options(
+            {"relaxation": 1 if omega is None else omega}
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Richardson: omega must be a positive unannotated scalar; got %r" % (omega,)
+        ) from exc
     return _solver(
         "richardson",
+        provider,
         "pops::solve_prepared_affine",
         "Richardson",
         max_iter,
         rel_tol,
         preconditioner=preconditioner,
-        omega=omega_value if omega is not None else None,
+        method_options=method_options,
         abs_tol=abs_tol,
     )
 
 
-__all__ = ["CG", "BiCGStab", "GMRES", "Richardson"]
+def Prepared(
+    provider: PreparedKrylovMethodProvider,
+    max_iter: Any = None,
+    rel_tol: Any = None,
+    *,
+    method_options: Mapping[str, Any] | None = None,
+    preconditioner: Any = None,
+    abs_tol: Any = None,
+    name: str | None = None,
+) -> Any:
+    """Create an inert descriptor for a registered external prepared method provider."""
+    if type(provider) is not PreparedKrylovMethodProvider:
+        raise TypeError("Prepared requires an exact PreparedKrylovMethodProvider")
+    registered = prepared_krylov_method_provider_by_id(provider.provider_id)
+    if registered.authority() != provider.authority():
+        raise ValueError("Prepared provider authority disagrees with the registry")
+    public_name = provider.provider_id if name is None else name
+    if type(public_name) is not str or not public_name:
+        raise TypeError("Prepared name must be a non-empty string or None")
+    return _solver(
+        public_name,
+        provider,
+        "pops::solve_prepared_affine",
+        "Prepared",
+        max_iter,
+        rel_tol,
+        method_options=method_options,
+        preconditioner=preconditioner,
+        abs_tol=abs_tol,
+    )
+
+
+__all__ = [
+    "CG",
+    "BiCGStab",
+    "GMRES",
+    "Richardson",
+    "Prepared",
+    "PreparedKrylovMethodProvider",
+    "PreparedKrylovMethodUse",
+    "register_prepared_krylov_method_provider",
+]

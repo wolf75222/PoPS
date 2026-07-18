@@ -11,6 +11,13 @@ def _freeze_canonical(value: Any) -> Any:
         return tuple((key, _freeze_canonical(value[key])) for key in sorted(value))
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_canonical(item) for item in value)
+    to_data = getattr(value, "to_data", None)
+    if getattr(value, "__pops_ir_immutable__", False) is True and callable(to_data):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            _freeze_canonical(to_data()),
+        )
     return value
 
 
@@ -107,82 +114,61 @@ class LinearProblem:
     properties: LinearOperatorProperties = LinearOperatorProperties()
     nullspace: Any = field(kw_only=True, compare=False, hash=False)
     gauge: Any = field(default=None, kw_only=True, compare=False, hash=False)
-    _nullspace_kind: str = field(init=False, repr=False)
-    _gauge_value: Any = field(init=False, repr=False, compare=False, hash=False)
+    _prepared_nullspace_provider: Any = field(
+        init=False, repr=False, compare=False, hash=False
+    )
+    _prepared_nullspace_contracts: Any = field(
+        init=False, repr=False, compare=False, hash=False
+    )
+    _nullspace_identity: Any = field(init=False, repr=False)
     _gauge_identity: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # Keep the abstract linalg layer dependency-free at import time. These exact public
-        # descriptor/literal checks are needed only when a concrete problem is authored.
-        from pops._ir.literals import scalar_literal
-        from pops.fields.gauges import MeanValueGauge
-        from pops.fields.nullspace import ConstantNullspace
+        # Keep the abstract linalg layer dependency-free at import time. Provider resolution and
+        # descriptor/gauge validation are needed only when a concrete problem is authored.
+        from pops.fields._prepared_nullspace_registry import (
+            prepared_nullspace_binding_from_descriptor,
+        )
 
         if not isinstance(self.properties, LinearOperatorProperties):
             raise TypeError(
                 "LinearProblem.properties must be pops.linalg.LinearOperatorProperties")
-        if self.nullspace is None:
-            if self.gauge is not None:
-                raise ValueError(
-                    "LinearProblem.gauge must be None when nullspace=None"
-                )
-            if self.properties.positive_definite_on_nullspace_complement:
-                raise ValueError(
-                    "positive_definite_on_nullspace_complement requires "
-                    "nullspace=ConstantNullspace()"
-                )
-            object.__setattr__(self, "_nullspace_kind", "none")
-            object.__setattr__(self, "_gauge_value", None)
-            object.__setattr__(self, "_gauge_identity", None)
-            return
-        if type(self.nullspace) is not ConstantNullspace:
-            raise TypeError(
-                "LinearProblem.nullspace must be explicitly None or exactly "
-                "pops.fields.ConstantNullspace()"
-            )
-        if type(self.gauge) is not MeanValueGauge:
-            raise TypeError(
-                "LinearProblem with ConstantNullspace() requires exactly "
-                "pops.fields.MeanValueGauge(value)"
-            )
-        if not self.properties.symmetric:
-            raise ValueError(
-                "ConstantNullspace requires an explicit symmetric operator certificate; "
-                "a right constant kernel alone does not prove that the mean-zero complement "
-                "is invariant"
-            )
-        if self.properties.positive_definite:
-            raise ValueError(
-                "a constant-nullspace operator cannot carry a global "
-                "positive_definite certificate; certify positive definiteness on the "
-                "nullspace complement instead"
-            )
-        try:
-            gauge_value = scalar_literal(self.gauge.value)
-        except (OverflowError, TypeError, ValueError) as exc:
-            raise TypeError(
-                "LinearProblem MeanValueGauge value must be one finite scalar literal"
-            ) from exc
-        object.__setattr__(self, "_nullspace_kind", "constant")
-        # ScalarLiteral is a frozen, recursively immutable value.  Lowering consumes this snapshot,
-        # never the mutable descriptor object retained for author-facing inspection.
-        object.__setattr__(self, "_gauge_value", gauge_value)
+        provider, options = prepared_nullspace_binding_from_descriptor(self.nullspace)
+        contracts = provider.prepare(
+            options=options,
+            gauge=self.gauge,
+            operator_properties=self.properties.canonical_data(),
+            where="LinearProblem nullspace provider %r" % provider.provider_id,
+        )
+        nullspace_contract = provider.enveloped_contract(contracts)
+        _, gauge_contract = contracts.detached()
+        object.__setattr__(self, "_prepared_nullspace_provider", provider)
+        object.__setattr__(self, "_prepared_nullspace_contracts", contracts)
         object.__setattr__(
-            self, "_gauge_identity", _freeze_canonical(gauge_value.to_data()))
+            self,
+            "_nullspace_identity",
+            _freeze_canonical(nullspace_contract),
+        )
+        object.__setattr__(
+            self,
+            "_gauge_identity",
+            _freeze_canonical(gauge_contract),
+        )
+
+    def canonical_nullspace_provider(self) -> dict[str, Any]:
+        """Return the exact registered compiler authority selected at construction."""
+        return self._prepared_nullspace_provider.authority()
 
     def canonical_nullspace_contract(self) -> dict[str, Any]:
         """Return a detached canonical view of the authored nullspace assertion."""
-        return {"schema_version": 1, "kind": self._nullspace_kind}
+        return self._prepared_nullspace_provider.enveloped_contract(
+            self._prepared_nullspace_contracts
+        )
 
     def canonical_gauge_contract(self) -> dict[str, Any]:
         """Return the construction-time gauge snapshot used by every lowering path."""
-        if self._gauge_value is None:
-            return {"schema_version": 1, "kind": "none"}
-        return {
-            "schema_version": 1,
-            "kind": "mean_value",
-            "value": self._gauge_value,
-        }
+        _, gauge = self._prepared_nullspace_contracts.detached()
+        return gauge
 
     def build_matrix_free_linear(self, *, program: Any, prepared_solver: Any,
                                  name: Any = None) -> Any:
@@ -190,6 +176,7 @@ class LinearProblem:
             operator=self.operator, rhs=self.rhs,
             initial_guess=self.initial_guess, prepared=prepared_solver,
             name=name, at=self.at, scope=self.scope, properties=self.properties,
+            nullspace_provider=self.canonical_nullspace_provider(),
             nullspace_contract=self.canonical_nullspace_contract(),
             gauge_contract=self.canonical_gauge_contract())
 

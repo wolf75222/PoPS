@@ -42,7 +42,7 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _PROFILE_SKIP_OPS,
     _PROGRAM_CPP_TEMPLATE,
     _block_inverse_include,
-    _coeff_elliptic_include,
+    _prepared_native_component_includes,
     ProgramValue,
     _apply_in_arg,
     _aux_comp,
@@ -119,17 +119,16 @@ def emit_cpp_program(
 
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
     preprocessor literal, NOT the interposable inline), ``pops_program_name``, ``pops_program_hash``,
-    ``pops_install_program`` -- and installs the macro step as a closure built from `ProgramContext`
-    primitives only (no MultiFab / flux / solver reimplementation). It is the source the C++ loader
-    (`System::install_program`) compiles, dlopens, and runs.
+    one target-specific install entry -- and installs the macro step as a closure built from the
+    matching native context primitives (no MultiFab / flux / solver reimplementation).
 
     @p target selects the install entry the .so exports. ``"system"`` (default) emits only
     ``pops_install_program`` (the single-level ``System`` macro-step closure). ``"amr_system"``
-    (epic ADC-511 / ADC-508, Spec 6) ALSO emits ``pops_install_program_amr``, the entry
+    (epic ADC-511 / ADC-508, Spec 6) emits only ``pops_install_program_amr``, the entry
     ``AmrSystem::install_program`` resolves: it wraps the ``AmrSystem`` in an ``AmrProgramContext``
-    and installs the per-level Lie/Strang macro-step. The driver (``AmrProgramContext``) lands with
-    the Kokkos-gated AMR runtime seam; until then the AMR install entry FAILS LOUD at install (it is
-    ABI-complete so the whole loader path is wired, but it never produces a silently-wrong run).
+    and installs the real per-level synchronized macro-step. A mismatched runtime therefore rejects
+    the artifact by its missing mandatory entry instead of compiling a dead closure against the
+    wrong context type.
 
     Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
     (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
@@ -198,7 +197,7 @@ def emit_cpp_program(
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
     _check_lowerable(program, authority, field_plans or {}, target=target)
-    prelude, body = _emit_body(
+    prelude, body, operator_authorities = _emit_body(
         program, authority, target=target, field_plans=field_plans or {})
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
@@ -210,19 +209,73 @@ def emit_cpp_program(
         program, authority, field_plans or {}, target)
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
+        operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
-        coeff_elliptic_include=_coeff_elliptic_include(program),
+        system_install=_emit_system_install(target, prelude, body),
+        prepared_native_component_includes=_prepared_native_component_includes(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
             program, target, prelude, body,
             _emit_amr_hierarchy_bodies(
                 program, authority, field_plans or {}) if target == "amr_system" else None,
             dt_bound_body if target == "amr_system" else None))
+
+
+def _emit_system_install(target: str, prelude: str, body: str) -> str:
+    """Emit only the install entry matching the artifact's declared runtime target.
+
+    An AMR artifact owns an ``AmrProgramContext`` and may contain hierarchy-only providers.  Emitting
+    the uniform entry as well would compile the AMR prelude against the wrong context type and, more
+    importantly, advertise a System route the artifact cannot execute.  The native loaders already
+    resolve distinct mandatory symbols, so a mismatched target now fails by a missing entry instead
+    of carrying a dead or partially compilable implementation.
+    """
+    if target != "system":
+        return ""
+    return (
+        'extern "C" void pops_install_program(void* sys) {\n'
+        '  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);\n'
+        '  pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n'
+        + prelude + '\n'
+        '  ctx.install([=](double dt) {\n'
+        '    pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n'
+        '    (void)dt;\n'
+        '    ctx.begin_step(dt);\n'
+        + body + '\n'
+        '  });\n'
+        '}\n'
+    )
+
+
+def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
+    """Exact loader-authenticated authority table for compiled prepared operators."""
+    rows = []
+    for authority in authorities:
+        if len(authority) != 4 or not any(authority):
+            raise ValueError("compiled Program operator authority must contain four non-zero words")
+        rows.append("  {%s}" % ", ".join("UINT64_C(%d)" % word for word in authority))
+    if rows:
+        table = "static constexpr std::uint64_t values[][4] = {\n%s\n  };" % ",\n".join(rows)
+        lookup = "return values[operator_index][word_index];"
+    else:
+        table = ""
+        lookup = "return UINT64_C(0);"
+    return (
+        'extern "C" int pops_program_operator_authority_count() { return %d; }\n'
+        'extern "C" std::uint64_t pops_program_operator_authority_word('
+        'int operator_index, int word_index) {\n'
+        '  if (operator_index < 0 || operator_index >= %d || word_index < 0 || word_index >= 4)\n'
+        '    return UINT64_C(0);\n'
+        '  %s\n'
+        '  %s\n'
+        '}\n'
+        % (len(rows), len(rows), table, lookup)
+    )
 
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):

@@ -297,7 +297,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
     prelude_src = "\n".join("  " + ln for ln in prelude)
     body_src = "\n".join("    " + ln for ln in lines)
-    return prelude_src, body_src
+    authorities = tuple(dict.fromkeys(
+        var.get(("compiled_program_operator_authorities",), ())))
+    return prelude_src, body_src, authorities
 
 def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                                field_plans: Any = None) -> tuple | None:
@@ -316,10 +318,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; multiple "
             "hierarchy barriers require an explicit region schedule")
     solve = scoped[0]
-    if solve.attrs.get("hierarchy_solver") != "composite_tensor_fac":
-        raise NotImplementedError(
-            "AMR hierarchy-scoped solver %r is not lowerable; supported solver: "
-            "CompositeTensorFAC()" % solve.attrs.get("hierarchy_solver"))
+    from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
+
+    hierarchy_provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
+    hierarchy_provider.validate_node(solve, target="amr_system")
     split = next(index for index, value in enumerate(program._values) if value is solve)
     control = {"while", "range", "branch"}
     nested = [v.name for v in program._values if v.op in control]
@@ -398,8 +400,8 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     def emit_phase(phase: str) -> str:
         var = {}
         if phase == "solve":
-            # The normal AMR body is the flat-topology branch and executes the authenticated apply
-            # through BiCGStab. Only this gathered solve phase owns the refined direct-FAC call.
+            # The normal AMR body is the provider-declared flat fallback branch. This gathered
+            # phase owns one provider-direct hierarchy solve, independently of solver family.
             var[("direct_hierarchy_solve", solve.id)] = True
         lines = registrations() if phase == "gather" else []
         for index, value in enumerate(program._values):

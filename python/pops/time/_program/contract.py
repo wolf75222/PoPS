@@ -95,8 +95,6 @@ class _ProgramBase:
 
     # --- class-level constant tables (_ProgramConstants) ---
     _RESIDUAL_LOCAL_OPS: Any
-    _KRYLOV_METHODS: Any
-    _GMRES_RESTART_DEFAULT: Any
     _OPERATOR_KINDS: Any
     _CELL_CMPS: dict
     _REMOVABLE_OPS: Any

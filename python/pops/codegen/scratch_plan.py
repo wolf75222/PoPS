@@ -18,8 +18,10 @@ over a lowered ``pops.time.Program`` IR and reports, BEFORE any bind / run / all
   - the PERSISTENT solver bundles -- solution storage, matrix-free apply scratch/frozen resources,
     prepared affine problem/preconditioner fields, Krylov work vectors and optional multigrid
     hierarchy. These live for the whole solve (not a step-body scratch), so they are reported
-    separately. Exact per-bundle sub-counts come from typed IR; conditional boundary-JVP and
-    topology-dependent multigrid storage are bounded and labelled rather than hidden.
+    separately. Python reports only the structural Krylov lower bound: the native method provider
+    computes its exact workspace from the runtime vector distribution and metric before solve.
+    Conditional boundary-JVP and topology-dependent multigrid storage are labelled rather than
+    hidden.
 
 Nothing here binds, dlopens, allocates or reads a runtime array: the builder reads the Program IR
 (the same SSA value list ``_ir_hash`` digests) and the carried model's component counts only. It
@@ -31,6 +33,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.solvers._prepared_preconditioner_registry import (
+    prepared_preconditioner_allocation_plan_from_identity,
+)
 from pops.codegen.krylov_contract import validated_krylov_footprint
 
 # Scratch-allocating op families. A scratch buffer is owned by one flat node; we bucket each by the
@@ -73,10 +78,10 @@ class ScratchPlan:
       rejected: a list of ``{"scratch", "op", "reason"}`` -- a scratch that could NOT reuse an
         existing buffer, with the inspectable reason (a still-live occupant, or an aux/field barrier).
       persistent: disjoint Krylov-operator, solve and multigrid allocation owners that live for a
-        whole solve. Their exact workspace/problem/apply sub-counts, scalar values and collective
-        payload are reported separately; AMR owns one instance per materialized level.
-      conservative: True iff any reported persistent figure is conditional or topology-dependent.
-        Step-body reuse and each explicitly scoped Krylov sub-count remain exact.
+        whole solve. Exact problem/apply sub-counts and the provider-owned Krylov workspace lower
+        bound are reported separately; AMR owns one instance per materialized level.
+      conservative: True iff any reported persistent figure is conditional, provider-owned, or
+        topology-dependent. Step-body reuse and explicitly scoped fixed sub-counts remain exact.
       notes: inspectable assumptions -- exactly which figures are exact vs conservative.
     """
 
@@ -145,8 +150,11 @@ class ScratchPlan:
             lines.append("  persistent solver buffers (whole-solve, %s):" % qualification)
             for p in self.persistent:
                 maximum = p.get("buffers_max", p["buffers"])
-                count = (str(p["buffers"]) if maximum == p["buffers"]
-                         else "%d..%d" % (p["buffers"], maximum))
+                if maximum is None:
+                    count = ">=%d" % p["buffers"]
+                else:
+                    count = (str(p["buffers"]) if maximum == p["buffers"]
+                             else "%d..%d" % (p["buffers"], maximum))
                 lines.append("    %-13s %s x%s  (%s)"
                              % (p["name"], p["kind"], count, p["note"]))
         if self.notes:
@@ -256,9 +264,10 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     conservative = any(not item.get("exact", False) for item in persistent)
     if persistent:
         notes.append(
-            "prepared Krylov allocation owners and solution/apply/problem/workspace sub-counts are "
-            "derived from typed IR; conditional boundary-JVP buffers are bounded and only a geometric "
-            "multigrid hierarchy remains topology-dependent (%s)."
+            "prepared Krylov solution/problem/preconditioner structure is derived from typed IR; "
+            "the native method provider computes its exact workspace from the runtime vector "
+            "distribution and metric before solve. Conditional boundary-JVP buffers and geometric "
+            "multigrid storage remain conservative (%s)."
             % _MULTIGRID_LEVELS_NOTE)
 
     return ScratchPlan(program_name=getattr(program, "name", None),
@@ -449,55 +458,55 @@ def _persistent_solver_buffers(program: Any) -> list:
                 "note": "four live condensed tensor-coefficient fields (exact)",
             })
         elif v.op in _KRYLOV_OPS:
-            method = v.attrs.get("method", "krylov")
             footprint = validated_krylov_footprint(v.attrs, operator=v.inputs[0])
-            restart = footprint["restart"]
-            preconditioned = footprint["preconditioned"]
-            workspace = {
-                "richardson": 2,
-                "cg": 4,
-                "bicgstab": 9 if preconditioned else 7,
-                # Identity GMRES applies Arnoldi directly to the raw operator result, so it does
-                # not reserve the extra transformed-vector field.  A real preconditioner still
-                # owns that persistent vector across every restart cycle.
-                "gmres": restart + (4 if preconditioned else 3),
-            }[method]
-            preconditioner_buffers = 2 if preconditioned else 0
-            workspace_scalar_values = (
-                restart * (restart + 1) + 4 * restart + 1
-                if method == "gmres" else 0
+            method = v.attrs["method_provider"]["provider_id"]
+            preconditioner_allocation = (
+                prepared_preconditioner_allocation_plan_from_identity(
+                    v.attrs["preconditioner_provider"]
+                )
             )
-            collective_values = restart + 1 if method == "gmres" else 0
-            prepared_core = workspace + 2 + preconditioner_buffers
-            solve_buffers = 1 + prepared_core
+            preconditioner_buffers = preconditioner_allocation.prepared_buffers
+            workspace_min = 1
+            prepared_core_min = workspace_min + 2 + preconditioner_buffers
+            solve_buffers_min = 1 + prepared_core_min
             persistent.append({
                 "kind": "krylov",
                 "name": v.name,
-                "buffers": solve_buffers,
-                "buffers_max": solve_buffers,
+                "buffers": solve_buffers_min,
+                "buffers_max": None,
                 "operator_id": v.inputs[0].id,
                 "solution_buffers": 1,
-                "workspace_buffers": workspace,
+                "workspace_buffers": None,
+                "workspace_buffers_min": workspace_min,
                 "prepared_problem_buffers": 2,
                 "prepared_preconditioner_buffers": preconditioner_buffers,
-                "prepared_core_buffers": prepared_core,
-                "workspace_scalar_values": workspace_scalar_values,
-                "collective_values": collective_values,
+                "prepared_core_buffers": None,
+                "prepared_core_buffers_min": prepared_core_min,
+                "workspace_scalar_values": None,
+                "workspace_scaled_scalar_values": None,
+                "collective_values": None,
+                "reduction_value_capacity": None,
+                "workspace_state_words": None,
+                "native_workspace_authority": method,
                 "per_materialized_level": True,
-                "exact": True,
+                "exact": False,
                 "footprint": dict(footprint),
                 "note": (
-                    "%s solve owner: 1 solution + %d workspace + 2 A(0)/zero + "
-                    "%d M(0)/zero fields; %d scalar + %d collective values (exact); "
+                    "%s solve owner: 1 solution + at least 1 native workspace field + "
+                    "2 A(0)/zero + %d M(0)/zero fields; exact method storage is computed "
+                    "natively from the runtime vector distribution and metric before solve; "
                     "matrix-free resources are owned once by operator id %d"
-                    % (method, workspace, preconditioner_buffers, workspace_scalar_values,
-                       collective_values, v.inputs[0].id)
+                    % (method, preconditioner_buffers, v.inputs[0].id)
                 ),
             })
-            if v.attrs.get("preconditioner") == "geometric_mg":
+            for resource in preconditioner_allocation.scratch_resources:
                 persistent.append({
-                    "kind": "multigrid_preconditioner", "name": v.name, "buffers": 1,
-                    "exact": False, "note": _MULTIGRID_BUFFER_NOTE})
+                    "kind": resource.kind,
+                    "name": v.name,
+                    "buffers": resource.buffers,
+                    "exact": resource.exact,
+                    "note": resource.note,
+                })
         elif v.op in _ELLIPTIC_OPS:
             persistent.append({"kind": "multigrid", "name": v.name, "buffers": 1,
                                "exact": False, "note": _MULTIGRID_BUFFER_NOTE})

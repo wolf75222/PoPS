@@ -1,8 +1,10 @@
 """pops.solvers.preconditioners -- the preconditioner brick catalog (Spec 5 sec.5.7).
 
-Identity lowers to the native empty ``pops::ApplyFn`` and geometric multigrid lowers to
-``pops::GeometricMG``. Unwired Jacobi placeholders are absent. :func:`User` surfaces a loaded
-external preconditioner brick. This is the ONE public home of the catalog formerly parked under
+Identity lowers to the native identity provider and geometric multigrid lowers to
+``pops::GeometricMG``. Unwired Jacobi placeholders are absent. External providers register one
+typed compiler contract plus an authenticated header-only native component, then construct their
+descriptor with ``preconditioners.Prepared(provider, ...)``. This is the ONE public home formerly
+parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
 
 ADC-502 RATIFIES ``pops.solvers.preconditioners`` as that single home: a preconditioner configures
@@ -12,10 +14,101 @@ NO ``preconditioners`` submodule).
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
-from pops.descriptors import _external_descriptor, _native
+from pops.descriptors import _native
+from pops.solvers._prepared_preconditioner_registry import (
+    PreparedPreconditionerIntOption,
+    PreparedPreconditionerNativeEmission,
+    PreparedPreconditionerProvider,
+    PreparedPreconditionerScratchResource,
+    PreparedPreconditionerUsePolicy,
+    prepared_preconditioner_provider_by_emitter_id,
+    prepared_preconditioner_provider_by_id,
+    prepared_preconditioner_provider_from_identity,
+    register_prepared_preconditioner_provider,
+)
+from pops.native_components import PreparedNativeComponent
+
+_IDENTITY_PROVIDER = prepared_preconditioner_provider_by_id(
+    "pops.preconditioner.identity"
+)
+_GEOMETRIC_MG_PROVIDER = prepared_preconditioner_provider_by_id(
+    "pops.preconditioner.geometric-mg"
+)
+
+
+def _program_preconditioner_provider(descriptor: Any) -> PreparedPreconditionerProvider:
+    """Authenticate a descriptor against the executable provider registry.
+
+    Matching a convenient ``scheme`` string is insufficient: the descriptor must carry the exact
+    native provider authority minted by this module.  In particular, an external manifest
+    entry cannot impersonate a prepared provider until a real C++ factory ABI and matching emitter
+    are implemented.
+    """
+    capabilities = getattr(descriptor, "capabilities", None)
+    authority = (
+        capabilities.get("prepared_program_provider")
+        if isinstance(capabilities, Mapping)
+        else None
+    )
+    provider = prepared_preconditioner_provider_from_identity(authority)
+    if (
+        getattr(descriptor, "category", None) != "preconditioner"
+        or getattr(descriptor, "brick_type", None) != "native"
+        or getattr(descriptor, "name", None) != provider.descriptor_name
+        or getattr(descriptor, "native_id", None) != provider.native_id
+        or authority != provider.authority()
+    ):
+        raise ValueError(
+            "preconditioner descriptor %r is not authenticated for prepared Program execution"
+            % (getattr(descriptor, "name", descriptor),)
+        )
+    options = getattr(descriptor, "options", None)
+    if not isinstance(options, Mapping):
+        raise ValueError(
+            "preconditioner provider %r options must be an exact mapping" % provider.scheme
+        )
+    provider.prepare_options(options, where="preconditioner provider %r" % provider.scheme)
+    return provider
+
+
+def _native_program_preconditioner(
+    provider: PreparedPreconditionerProvider, **options: Any
+) -> Any:
+    """Mint the sole descriptor shape accepted by the prepared Program provider registry."""
+    return _native(
+        provider.descriptor_name,
+        provider.native_id,
+        provider.scheme,
+        category="preconditioner",
+        capabilities={"prepared_program_provider": provider.authority()},
+        **options,
+    )
+
+
+def _register_prepared_provider(
+    provider: PreparedPreconditionerProvider,
+) -> PreparedPreconditionerProvider:
+    """Register one immutable provider through the public prepared-preconditioner surface."""
+    return register_prepared_preconditioner_provider(provider)
+
+
+def _prepared_provider_descriptor(
+    provider: PreparedPreconditionerProvider, **options: Any
+) -> Any:
+    """Construct a descriptor from an exact registered provider, without name dispatch."""
+    if type(provider) is not PreparedPreconditionerProvider:
+        raise TypeError("preconditioners.Prepared requires an exact registered Provider")
+    registered = prepared_preconditioner_provider_by_emitter_id(provider.emitter_id)
+    if registered is not provider:
+        raise ValueError("preconditioners.Prepared provider is not the registered authority")
+    validated = provider.validate_options(
+        options, where="preconditioners.Prepared(%r)" % provider.scheme
+    )
+    return _native_program_preconditioner(provider, **validated)
 
 # ADC-644: the ONLY V-cycle-SHAPE knobs a geometric-multigrid PRECONDITIONER may carry. A Krylov
 # preconditioner must be a FIXED linear map M^{-1} (the same operator on every apply), so the meaningful
@@ -24,21 +117,8 @@ from pops.descriptors import _external_descriptor, _native
 # allowed; ``tolerance`` / ``max_cycles`` describe an ITERATIVE solve-to-convergence, which makes the
 # trip count -- hence the map -- depend on the input vector (a variable preconditioner that breaks the
 # Krylov recurrences), so they are refused loud.
-_PRECOND_MG_KNOBS = ("n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse")
+_PRECOND_MG_KNOBS = _GEOMETRIC_MG_PROVIDER.option_names
 _PRECOND_MG_ITERATIVE = ("tolerance", "max_cycles")
-
-
-def _check_precond_int(value: Any, param: str, minimum: int) -> int:
-    """Validate one GeometricMG knob at its exact signed C++ ``int`` boundary."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError("preconditioners.GeometricMG(%s=) must be a Python int; got %r"
-                        % (param, value))
-    from pops._ir.literals import exact_cpp_int
-    return exact_cpp_int(
-        value,
-        where="preconditioners.GeometricMG(%s=)" % param,
-        minimum=minimum,
-    )
 
 
 def _geometric_mg_precond(**o: Any) -> Any:
@@ -46,9 +126,10 @@ def _geometric_mg_precond(**o: Any) -> Any:
 
     Refuses an UNKNOWN kwarg loud (no silent ``**o`` swallow) and refuses the iterative-solve knobs
     ``tolerance`` / ``max_cycles`` (a preconditioner is a fixed linear map, not a solve-to-convergence).
-    The accepted knobs (``n_vcycles`` >= 1, ``pre_sweeps`` / ``post_sweeps`` / ``bottom_sweeps`` >= 0,
-    ``min_coarse`` >= 1) are validated and carried in the descriptor ``options`` dict; an empty option
-    set (``GeometricMG()``) keeps ``options`` empty so the default V-cycle stays byte-identical.
+    The accepted knobs (``n_vcycles`` / ``bottom_sweeps`` / ``min_coarse`` >= 1 and
+    ``pre_sweeps`` / ``post_sweeps`` >= 0) are validated by the shared native option schema and
+    carried in the descriptor ``options`` dict; an empty option set (``GeometricMG()``) keeps
+    ``options`` empty so the default V-cycle stays byte-identical.
     """
     iterative = [k for k in o if k in _PRECOND_MG_ITERATIVE]
     if iterative:
@@ -57,31 +138,24 @@ def _geometric_mg_precond(**o: Any) -> Any:
             "preconditioner must be a FIXED linear map (the same M^{-1} on every apply). Use the "
             "V-cycle-shape knobs %s (n_vcycles composes N fixed V-cycles)."
             % (sorted(iterative), list(_PRECOND_MG_KNOBS)))
-    unknown = [k for k in o if k not in _PRECOND_MG_KNOBS]
-    if unknown:
-        raise TypeError(
-            "preconditioners.GeometricMG got unknown option(s) %s; the allowed V-cycle-shape knobs are "
-            "%s" % (sorted(unknown), list(_PRECOND_MG_KNOBS)))
-    opts: dict = {}
-    if "n_vcycles" in o:
-        opts["n_vcycles"] = _check_precond_int(o["n_vcycles"], "n_vcycles", minimum=1)
-    if "pre_sweeps" in o:
-        opts["pre_sweeps"] = _check_precond_int(o["pre_sweeps"], "pre_sweeps", minimum=0)
-    if "post_sweeps" in o:
-        opts["post_sweeps"] = _check_precond_int(o["post_sweeps"], "post_sweeps", minimum=0)
-    if "bottom_sweeps" in o:
-        opts["bottom_sweeps"] = _check_precond_int(o["bottom_sweeps"], "bottom_sweeps", minimum=0)
-    if "min_coarse" in o:
-        opts["min_coarse"] = _check_precond_int(o["min_coarse"], "min_coarse", minimum=1)
-    return _native("geometric_mg", "pops::GeometricMG", "geometric_mg",
-                   category="preconditioner", **opts)
+    opts = _GEOMETRIC_MG_PROVIDER.validate_options(
+        o, where="preconditioners.GeometricMG"
+    )
+    return _native_program_preconditioner(_GEOMETRIC_MG_PROVIDER, **opts)
 
 
 preconditioners = SimpleNamespace(
-    Identity=lambda: _native(
-        "identity", "pops::ApplyFn", "identity", category="preconditioner"),
+    Identity=lambda: _native_program_preconditioner(_IDENTITY_PROVIDER),
     GeometricMG=_geometric_mg_precond,
-    User=lambda brick_id: _external_descriptor(brick_id, expect_category="preconditioner"),
+    Prepared=_prepared_provider_descriptor,
+    register=_register_prepared_provider,
+    Provider=PreparedPreconditionerProvider,
+    IntOption=PreparedPreconditionerIntOption,
+    NativeEmission=PreparedPreconditionerNativeEmission,
+    ScratchResource=PreparedPreconditionerScratchResource,
+    UsePolicy=PreparedPreconditionerUsePolicy,
+    NativeComponent=PreparedNativeComponent,
+    HeaderOnlyComponent=PreparedNativeComponent.header_only,
 )
 
 __all__ = ["preconditioners"]
