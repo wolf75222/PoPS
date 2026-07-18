@@ -507,15 +507,21 @@ TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProv
   blocks[0].state_identity = a_state;
   blocks[1].state_identity = b_state;
   blocks[0].boundary_plan = std::make_shared<PreparedBoundaryPlan>(
-      "case::amr::a::boundary", 1, std::vector<BCRec>{BCRec{}}, std::vector<int>{}, a_state);
+      "case::amr::a::boundary", 1, std::vector<BCRec>{BCRec{}}, std::vector<int>{}, a_state,
+      PreparedBoundaryReadDependencies{{b_state}, {}});
+  const auto boundary_plan = blocks[0].boundary_plan;
   blocks[0].boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
   const auto registry = blocks[0].boundary_field_registry;
-  blocks[0].level_rhs_at_point = [registry, b_state](const BoundaryEvaluationPoint& point,
-                                                     MultiFab& U, const MultiFab&, const Geometry&,
-                                                     MultiFab& R) {
-    const auto fields = (*registry)(point, U, nullptr, nullptr);
-    R.set_val(fields.state(b_state).fab(0).const_array()(0, 0, 0));
-  };
+  blocks[0].level_rhs_core_at_point_prepared =
+      [boundary_plan, registry, b_state](const BoundaryEvaluationPoint& point, MultiFab& U,
+                                         const MultiFab&, const Geometry&, MultiFab& R,
+                                         const PreparedGridBoundarySession&) {
+        GridContext context;
+        context.boundary_plan = boundary_plan;
+        context.boundary_field_registry = *registry;
+        const auto fields = bind_grid_boundary_fields(context, point, U, nullptr, nullptr);
+        R.set_val(fields.state(b_state).fab(0).const_array()(0, 0, 0));
+      };
   blocks[1].level_rhs_at_point = [](const BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
                                     const Geometry&, MultiFab& R) { R.set_val(Real(0)); };
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),

@@ -31,6 +31,17 @@
 
 namespace pops {
 
+/// Exact read-only storage dependencies owned directly by a boundary plan.
+///
+/// Native block closures may consume qualified states or fields even when that read is not owned
+/// by a dynamically loaded boundary component.  Declaring those reads here keeps the AMR/System
+/// storage registry closed and allocation-free without reverting to the historical "bind every
+/// state" behavior.
+struct PreparedBoundaryReadDependencies {
+  std::vector<std::string> states;
+  std::vector<std::string> fields;
+};
+
 /// Native boundary plan captured by every block closure.  Component BCs permit systems with
 /// different Dirichlet data per conservative component while the topology (periodic vs physical)
 /// remains common to the state.
@@ -122,11 +133,13 @@ class PreparedBoundaryPlan {
   PreparedBoundaryPlan() = default;
 
   PreparedBoundaryPlan(std::string identity, int required_depth, std::vector<BCRec> component_bc,
-                       std::vector<int> omitted_face_ordinals = {}, std::string state_identity = {})
+                       std::vector<int> omitted_face_ordinals = {}, std::string state_identity = {},
+                       PreparedBoundaryReadDependencies read_dependencies = {})
       : identity_(std::move(identity)),
         required_depth_(required_depth),
         component_bc_(std::move(component_bc)),
-        state_identity_(std::move(state_identity)) {
+        state_identity_(std::move(state_identity)),
+        read_dependencies_(std::move(read_dependencies)) {
     for (const int face : omitted_face_ordinals) {
       if (face < 0 || face >= 4 || omitted_faces_[static_cast<std::size_t>(face)])
         throw std::invalid_argument(
@@ -238,7 +251,7 @@ class PreparedBoundaryPlan {
   }
 
   std::vector<std::string> required_field_identities() const {
-    std::vector<std::string> result;
+    std::vector<std::string> result = read_dependencies_.fields;
     for (const auto& component : ghost_components_)
       append_unique_(result, component->spec().fields);
     for (const auto& component : residual_components_)
@@ -249,7 +262,7 @@ class PreparedBoundaryPlan {
   }
 
   std::vector<std::string> required_state_identities() const {
-    std::vector<std::string> result;
+    std::vector<std::string> result = read_dependencies_.states;
     for (const auto& component : ghost_components_)
       append_unique_(result, component->spec().states);
     for (const auto& component : residual_components_)
@@ -429,6 +442,7 @@ class PreparedBoundaryPlan {
   std::vector<BCRec> component_bc_;
   std::array<bool, 4> omitted_faces_{{false, false, false, false}};
   std::string state_identity_;
+  PreparedBoundaryReadDependencies read_dependencies_;
   std::vector<std::shared_ptr<PreparedGhostBoundaryComponent>> ghost_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryResidualComponent>> residual_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryJvpComponent>> jvp_components_;
@@ -527,7 +541,24 @@ class PreparedBoundaryPlan {
       throw std::runtime_error("PreparedBoundaryPlan required depth must be >= 1");
     if (component_bc_.empty())
       throw std::runtime_error("PreparedBoundaryPlan requires one BC record per component");
+    validate_read_dependencies_(read_dependencies_.states, "state");
+    validate_read_dependencies_(read_dependencies_.fields, "field");
     validate_topology();
+  }
+
+  static void validate_read_dependencies_(const std::vector<std::string>& identities,
+                                          std::string_view kind) {
+    std::vector<std::string_view> seen;
+    seen.reserve(identities.size());
+    for (const auto& identity : identities) {
+      if (identity.empty())
+        throw std::runtime_error("PreparedBoundaryPlan has an empty declared " + std::string(kind) +
+                                 " dependency");
+      if (std::find(seen.begin(), seen.end(), identity) != seen.end())
+        throw std::runtime_error("PreparedBoundaryPlan has a duplicate declared " +
+                                 std::string(kind) + " dependency");
+      seen.push_back(identity);
+    }
   }
 
   void validate_topology() const {

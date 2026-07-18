@@ -58,6 +58,24 @@ PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, s
 
 }  // namespace
 
+TEST(test_prepared_boundary_plan, explicit_read_dependencies_are_exact_and_strict) {
+  PreparedBoundaryPlan plan(
+      "case::boundary::read-dependencies", 1, {physical_bc()}, {}, "case::state::primary",
+      PreparedBoundaryReadDependencies{{"case::state::other"}, {"case::field::potential"}});
+  EXPECT_EQ(plan.required_state_identities(), std::vector<std::string>{"case::state::other"});
+  EXPECT_EQ(plan.required_field_identities(), std::vector<std::string>{"case::field::potential"});
+
+  EXPECT_THROW(
+      PreparedBoundaryPlan(
+          "case::boundary::duplicate-state", 1, {physical_bc()}, {}, "case::state::primary",
+          PreparedBoundaryReadDependencies{{"case::state::other", "case::state::other"}, {}}),
+      std::runtime_error);
+  EXPECT_THROW(
+      PreparedBoundaryPlan("case::boundary::empty-field", 1, {physical_bc()}, {},
+                           "case::state::primary", PreparedBoundaryReadDependencies{{}, {""}}),
+      std::runtime_error);
+}
+
 TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_producers) {
   const Box2D domain = Box2D::from_extents(4, 4);
   MultiFab state = scalar_field(domain, 2, 1);
