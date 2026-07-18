@@ -15,7 +15,6 @@ from typing import Any
 
 from pops._frozen_data import freeze_data
 from pops.identity import (
-    PREPARED_GMRES_MAX_RESTART,
     ScalarLiteral,
     canonical_bytes,
     exact_cpp_int,
@@ -24,6 +23,8 @@ from pops.identity import (
     scalar_data,
 )
 from pops.native_components import PreparedNativeComponent
+
+from ._native_contract import PREPARED_GMRES_MAX_RESTART
 
 
 _PROVIDER_SCHEMA_VERSION = 2

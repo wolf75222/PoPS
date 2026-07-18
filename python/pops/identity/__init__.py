@@ -4,8 +4,6 @@ from .digest import Identity, make_identity
 from .encoding import canonical_bytes, canonical_sha256
 from .scalar import (
     CPP_INT_MAX,
-    PREPARED_GMRES_MAX_RESTART,
-    PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH,
     ScalarLiteral,
     exact_cpp_int,
     exact_numeric_scalar,
@@ -26,8 +24,7 @@ from .semantic import (
 __all__ = [
     "Identity", "artifact_identity", "artifact_spec_identity", "binary_bundle_identity",
     "binary_identity",
-    "CPP_INT_MAX", "PREPARED_GMRES_MAX_RESTART",
-    "PREPARED_GMRES_ROBUST_DOT_PAYLOAD_WIDTH", "ScalarLiteral",
+    "CPP_INT_MAX", "ScalarLiteral",
     "canonical_bytes", "canonical_sha256", "exact_cpp_int", "exact_numeric_scalar",
     "make_identity", "model_semantic_data", "scalar_cpp", "scalar_data",
     "program_semantic_data", "semantic_identity", "semantic_identity_of",

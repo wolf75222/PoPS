@@ -261,6 +261,6 @@ def test_internal_ir_remains_a_dependency_sink():
 def test_solver_catalog_remains_a_dependency_sink():
     """The inert descriptor catalog may depend only on foundational exact identities."""
     dependencies = {dst for dst, _ in _build_edges().get("solvers", set())}
-    assert dependencies <= {"identity"}, (
-        "pops.solvers may depend only on pops.identity; got %s"
+    assert dependencies == {"identity"}, (
+        "pops.solvers must depend exactly on pops.identity and no other layer; got %s"
         % sorted(dependencies))
