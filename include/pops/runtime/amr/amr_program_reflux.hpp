@@ -392,45 +392,99 @@ inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const Ed
 
 // --- AmrRuntime member definitions (ADC-639 capture seams) -------------------------------------------
 
-inline void AmrRuntime::level_rhs_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R,
-                                               MultiFab& Fx, MultiFab& Fy) {
+inline void AmrRuntime::level_rhs_capture_into(
+    std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+    MultiFab& R, MultiFab& Fx, MultiFab& Fy) {
   if (!blocks_[b].level_flux_capture)
     throw std::runtime_error(
         "AmrRuntime::level_rhs_capture_into: block '" + blocks_[b].name +
         "' has no flux-materialising per-level residual closure (rebuild the AMR block via the "
         "production DSL target='amr_system')");
+  if (point.level != k)
+    throw std::invalid_argument("AMR reflux boundary point belongs to another level");
   fill_level_state_cf_ghosts(b, k, U);  // fine-level C/F ghost refresh, identical to level_rhs_into
+  if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+      blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+    if (!blocks_[b].level_flux_capture_prepared)
+      throw std::runtime_error("AMR reflux block lacks its prepared flux capture closure");
+    blocks_[b].level_flux_capture_prepared(
+        point, U, aux_[k], level_geom(k), Fx, Fy, R,
+        *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+    return;
+  }
+  if (blocks_[b].boundary_plan)
+    throw std::runtime_error("AMR reflux boundary plan has no persistent prepared session");
   blocks_[b].level_flux_capture(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 
-inline void AmrRuntime::level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U,
-                                                        MultiFab& R, MultiFab& Fx, MultiFab& Fy) {
+inline void AmrRuntime::level_neg_div_flux_capture_into(
+    std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+    MultiFab& R, MultiFab& Fx, MultiFab& Fy) {
   if (!blocks_[b].level_flux_capture_neg_div)
     throw std::runtime_error("AmrRuntime::level_neg_div_flux_capture_into: block '" +
                              blocks_[b].name +
                              "' has no flux-only flux-materialising per-level residual closure");
+  if (point.level != k)
+    throw std::invalid_argument("AMR reflux boundary point belongs to another level");
   fill_level_state_cf_ghosts(b, k, U);
+  if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+      blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+    if (!blocks_[b].level_flux_capture_neg_div_prepared)
+      throw std::runtime_error("AMR reflux block lacks its prepared flux-only capture closure");
+    blocks_[b].level_flux_capture_neg_div_prepared(
+        point, U, aux_[k], level_geom(k), Fx, Fy, R,
+        *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+    return;
+  }
+  if (blocks_[b].boundary_plan)
+    throw std::runtime_error("AMR reflux boundary plan has no persistent prepared session");
   blocks_[b].level_flux_capture_neg_div(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 
 inline void AmrRuntime::level_rhs_capture_into_temporal(
-    std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
-    const MultiFab& parent_old, const MultiFab& parent_new,
+    std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+    MultiFab& R, MultiFab& Fx, MultiFab& Fy, const MultiFab& parent_old, const MultiFab& parent_new,
     const runtime::amr::TemporalTransferContext& target_time) {
   if (!blocks_[b].level_flux_capture)
     throw std::runtime_error("AmrRuntime::level_rhs_capture_into_temporal: block has no capture");
+  if (point.level != k)
+    throw std::invalid_argument("AMR reflux boundary point belongs to another level");
   fill_level_state_cf_ghosts_temporal(b, k, U, parent_old, parent_new, target_time);
+  if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+      blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+    if (!blocks_[b].level_flux_capture_prepared)
+      throw std::runtime_error("AMR reflux block lacks its prepared flux capture closure");
+    blocks_[b].level_flux_capture_prepared(
+        point, U, aux_[k], level_geom(k), Fx, Fy, R,
+        *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+    return;
+  }
+  if (blocks_[b].boundary_plan)
+    throw std::runtime_error("AMR reflux boundary plan has no persistent prepared session");
   blocks_[b].level_flux_capture(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 
 inline void AmrRuntime::level_neg_div_flux_capture_into_temporal(
-    std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
-    const MultiFab& parent_old, const MultiFab& parent_new,
+    std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+    MultiFab& R, MultiFab& Fx, MultiFab& Fy, const MultiFab& parent_old, const MultiFab& parent_new,
     const runtime::amr::TemporalTransferContext& target_time) {
   if (!blocks_[b].level_flux_capture_neg_div)
     throw std::runtime_error(
         "AmrRuntime::level_neg_div_flux_capture_into_temporal: block has no capture");
+  if (point.level != k)
+    throw std::invalid_argument("AMR reflux boundary point belongs to another level");
   fill_level_state_cf_ghosts_temporal(b, k, U, parent_old, parent_new, target_time);
+  if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+      blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+    if (!blocks_[b].level_flux_capture_neg_div_prepared)
+      throw std::runtime_error("AMR reflux block lacks its prepared flux-only capture closure");
+    blocks_[b].level_flux_capture_neg_div_prepared(
+        point, U, aux_[k], level_geom(k), Fx, Fy, R,
+        *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+    return;
+  }
+  if (blocks_[b].boundary_plan)
+    throw std::runtime_error("AMR reflux boundary plan has no persistent prepared session");
   blocks_[b].level_flux_capture_neg_div(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 

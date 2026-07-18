@@ -21,6 +21,7 @@ _SPEC.loader.exec_module(_MODULE)
 
 fresh_state_refs = _MODULE.fresh_state_refs
 fresh_field_refs = _MODULE.fresh_field_refs
+codegen_field_plans = _MODULE.codegen_field_plans
 commits_by_block = _MODULE.commits_by_block
 state_refs = _MODULE.state_refs
 typed_field = _MODULE.typed_field
@@ -29,6 +30,6 @@ solve_field = _MODULE.solve_field
 solve_field_blocks = _MODULE.solve_field_blocks
 
 __all__ = [
-    "commits_by_block", "fresh_field_refs", "fresh_state_refs", "solve_field",
-    "solve_field_blocks", "state_refs", "typed_field", "typed_state",
+    "codegen_field_plans", "commits_by_block", "fresh_field_refs", "fresh_state_refs",
+    "solve_field", "solve_field_blocks", "state_refs", "typed_field", "typed_state",
 ]

@@ -22,6 +22,8 @@
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <functional>
 #include <optional>
@@ -144,8 +146,9 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
   return runtime;
 }
 
-static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n) {
-  sim.set_temporal_relations({1}, {1}, {"integral_only"});
+static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
+                                                      int temporal_ratio = 1) {
+  sim.set_temporal_relations({temporal_ratio}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
@@ -337,6 +340,166 @@ TEST(test_amr_history_ring, ProgramContextRejectsNonRatioTwoProviderBeforeStep) 
     EXPECT_NE(message.find("transition 0->1 resolved ratio 3"), std::string::npos);
   }
   EXPECT_EQ(rt.macro_step(), 0) << "provider validation must fail before the first native step";
+}
+
+TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreItExactly) {
+  constexpr int n = 8;
+  constexpr double macro_dt = 0.4;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_EQ(rt->nlev(), 2);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.configure_primary_clock("clock.macro");
+  context.declare_clock_relation("clock.macro", "clock.fast", 2);
+
+  struct ObservedSnapshot {
+    int level = -1;
+    OperatorEvaluationSnapshot snapshot;
+  };
+  std::vector<ObservedSnapshot> children;
+  std::vector<ObservedSnapshot> nested_children;
+  std::vector<ObservedSnapshot> stale_parent_entry_probes;
+  std::vector<ObservedSnapshot> stale_outer_probes;
+  std::vector<ObservedSnapshot> reminted_outers;
+  std::vector<ObservedSnapshot> parents_before;
+  std::vector<ObservedSnapshot> stale_parent_probes;
+  std::vector<ObservedSnapshot> parents_after;
+  const OperatorFingerprint authority{UINT64_C(11), UINT64_C(12), UINT64_C(13), UINT64_C(14)};
+  const OperatorFingerprint resources{UINT64_C(21), UINT64_C(22), UINT64_C(23), UINT64_C(24)};
+
+  context.install([&](double dt) {
+    context.advance_hierarchy(dt, [&](double) {
+      const auto take_snapshot = [&]() {
+        return context.operator_evaluation_snapshot(
+            authority, context.state(0), resources);
+      };
+      context.set_stage_time(1, 3);
+      parents_before.push_back({context.level(), take_snapshot()});
+      auto ticks = context.subcycle_scope("clock.macro", "clock.fast", 2);
+      for (int iteration = 0; iteration < 2; ++iteration) {
+        ticks.iteration(iteration);
+        auto child = context.logical_evaluation_scope(iteration, 2);
+        if (iteration == 0) {
+          const OperatorEvaluationSnapshot parent = parents_before.back().snapshot;
+          stale_parent_entry_probes.push_back(
+              {context.level(), context.probe_operator_evaluation(
+                                    authority, parent.topology, resources, parent.revision)});
+        }
+        context.set_stage_time(1, 2);
+        children.push_back({context.level(), take_snapshot()});
+        if (iteration == 0) {
+          const OperatorEvaluationSnapshot outer = children.back().snapshot;
+          {
+            auto nested_child = context.logical_evaluation_scope(0, 2);
+            context.set_stage_time(1, 2);
+            nested_children.push_back({context.level(), take_snapshot()});
+          }
+          stale_outer_probes.push_back(
+              {context.level(), context.probe_operator_evaluation(
+                                    authority, outer.topology, resources, outer.revision)});
+          reminted_outers.push_back({context.level(), take_snapshot()});
+          const OperatorEvaluationSnapshot& reminted = reminted_outers.back().snapshot;
+          EXPECT_TRUE(context.probe_operator_evaluation(
+                          authority, reminted.topology, resources, reminted.revision) == reminted);
+        }
+      }
+      ticks.finish();
+      const OperatorEvaluationSnapshot parent = parents_before.back().snapshot;
+      stale_parent_probes.push_back(
+          {context.level(), context.probe_operator_evaluation(
+                                authority, parent.topology, resources, parent.revision)});
+      parents_after.push_back({context.level(), take_snapshot()});
+    });
+  });
+  const double initial_time = sim.time();
+  sim.step(macro_dt);
+
+  ASSERT_EQ(children.size(), 6u);
+  ASSERT_EQ(nested_children.size(), 3u);
+  ASSERT_EQ(stale_parent_entry_probes.size(), 3u);
+  ASSERT_EQ(stale_outer_probes.size(), 3u);
+  ASSERT_EQ(reminted_outers.size(), 3u);
+  ASSERT_EQ(parents_before.size(), 3u);
+  ASSERT_EQ(stale_parent_probes.size(), 3u);
+  ASSERT_EQ(parents_after.size(), 3u);
+  const std::array<int, 6> expected_levels{0, 0, 1, 1, 1, 1};
+  const std::array<amr::Rational, 6> expected_phases{
+      amr::Rational(1, 4), amr::Rational(3, 4), amr::Rational(1, 8),
+      amr::Rational(3, 8), amr::Rational(5, 8), amr::Rational(7, 8)};
+  const std::array<double, 6> expected_dt{
+      macro_dt / 2.0, macro_dt / 2.0, macro_dt / 4.0,
+      macro_dt / 4.0, macro_dt / 4.0, macro_dt / 4.0};
+  const double coarse_child_dt = macro_dt / 2.0;
+  const double fine_level_dt = macro_dt / 2.0;
+  const double fine_child_dt = fine_level_dt / 2.0;
+  const std::array<double, 6> expected_time{
+      initial_time + 0.0 * coarse_child_dt + 0.5 * coarse_child_dt,
+      initial_time + 1.0 * coarse_child_dt + 0.5 * coarse_child_dt,
+      initial_time + 0.0 * fine_child_dt + 0.5 * fine_child_dt,
+      initial_time + 1.0 * fine_child_dt + 0.5 * fine_child_dt,
+      initial_time + fine_level_dt + 0.0 * fine_child_dt + 0.5 * fine_child_dt,
+      initial_time + fine_level_dt + 1.0 * fine_child_dt + 0.5 * fine_child_dt};
+  for (std::size_t index = 0; index < children.size(); ++index) {
+    const auto& observed = children[index];
+    EXPECT_EQ(observed.level, expected_levels[index]);
+    EXPECT_EQ(observed.snapshot.stage_numerator, expected_phases[index].numerator);
+    EXPECT_EQ(observed.snapshot.stage_denominator, expected_phases[index].denominator);
+    EXPECT_EQ(std::bit_cast<double>(observed.snapshot.dt_bits), expected_dt[index]);
+    EXPECT_EQ(std::bit_cast<double>(observed.snapshot.physical_time_bits), expected_time[index]);
+    if (index > 0)
+      EXPECT_NE(observed.snapshot.revision, children[index - 1].snapshot.revision);
+  }
+  for (std::size_t index = 0; index < parents_before.size(); ++index) {
+    const std::size_t outer_index = index * 2;
+    const OperatorEvaluationSnapshot& outer = children[outer_index].snapshot;
+    const OperatorEvaluationSnapshot& nested = nested_children[index].snapshot;
+    const OperatorEvaluationSnapshot& stale_outer = stale_outer_probes[index].snapshot;
+    const OperatorEvaluationSnapshot& reminted_outer = reminted_outers[index].snapshot;
+    EXPECT_EQ(stale_parent_entry_probes[index].level, parents_before[index].level);
+    EXPECT_NE(stale_parent_entry_probes[index].snapshot.revision,
+              parents_before[index].snapshot.revision);
+    EXPECT_EQ(nested_children[index].level, children[outer_index].level);
+    EXPECT_NE(nested.revision, outer.revision);
+    EXPECT_EQ(stale_outer_probes[index].level, children[outer_index].level);
+    EXPECT_NE(stale_outer.revision, outer.revision);
+    EXPECT_EQ(stale_outer.stage_numerator, outer.stage_numerator);
+    EXPECT_EQ(stale_outer.stage_denominator, outer.stage_denominator);
+    EXPECT_EQ(stale_outer.dt_bits, outer.dt_bits);
+    EXPECT_EQ(stale_outer.physical_time_bits, outer.physical_time_bits);
+    EXPECT_NE(reminted_outer.revision, outer.revision);
+    EXPECT_EQ(reminted_outer.stage_numerator, outer.stage_numerator);
+    EXPECT_EQ(reminted_outer.stage_denominator, outer.stage_denominator);
+    EXPECT_EQ(reminted_outer.dt_bits, outer.dt_bits);
+    EXPECT_EQ(reminted_outer.physical_time_bits, outer.physical_time_bits);
+
+    EXPECT_EQ(parents_after[index].level, parents_before[index].level);
+    EXPECT_EQ(stale_parent_probes[index].level, parents_before[index].level);
+    EXPECT_NE(stale_parent_probes[index].snapshot.revision,
+              parents_before[index].snapshot.revision);
+    EXPECT_EQ(stale_parent_probes[index].snapshot.stage_numerator,
+              parents_before[index].snapshot.stage_numerator);
+    EXPECT_EQ(stale_parent_probes[index].snapshot.stage_denominator,
+              parents_before[index].snapshot.stage_denominator);
+    EXPECT_EQ(stale_parent_probes[index].snapshot.dt_bits,
+              parents_before[index].snapshot.dt_bits);
+    EXPECT_EQ(stale_parent_probes[index].snapshot.physical_time_bits,
+              parents_before[index].snapshot.physical_time_bits);
+    EXPECT_EQ(parents_after[index].snapshot.stage_numerator,
+              parents_before[index].snapshot.stage_numerator);
+    EXPECT_EQ(parents_after[index].snapshot.stage_denominator,
+              parents_before[index].snapshot.stage_denominator);
+    EXPECT_EQ(parents_after[index].snapshot.dt_bits,
+              parents_before[index].snapshot.dt_bits);
+    EXPECT_EQ(parents_after[index].snapshot.physical_time_bits,
+              parents_before[index].snapshot.physical_time_bits);
+    EXPECT_NE(parents_after[index].snapshot.revision,
+              parents_before[index].snapshot.revision);
+  }
 }
 
 TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopology) {

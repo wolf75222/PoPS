@@ -114,7 +114,7 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
 
 
 def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | None:
-    """Read the exact installed AMR MG/FAC PODs without exposing the private executor."""
+    """Read one provider-owned native option schema without exposing the executor."""
     engines = getattr(executor, "_engines", None)
     candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
     reports: list[Any] = []
@@ -136,29 +136,46 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
         raise TypeError("native field solver configuration must be a mapping")
     result = copy.deepcopy(dict(row))
     expected = {
-        "schema_version", "provider_slot", "plan_identity", "solver", "hierarchy", "mg", "fac",
+        "schema_version", "provider_slot", "plan_identity", "provider_identity", "solver",
+        "hierarchy_policy", "option_schema_identity", "options",
     }
     if set(result) != expected or result["schema_version"] != 1 \
             or result["provider_slot"] != slot \
             or not isinstance(result["plan_identity"], str) \
             or not result["plan_identity"]:
         raise TypeError("native field solver configuration has an invalid schema")
-    if not isinstance(result["solver"], str) or not isinstance(result["hierarchy"], str):
-        raise TypeError("native field solver configuration requires typed solver identities")
-    nested = {
-        "mg": {
-            "rel_tol", "abs_tol", "max_cycles", "min_coarse", "pre_smooth",
-            "post_smooth", "bottom_sweeps", "coarse_threshold",
-        },
-        "fac": {
-            "max_iters", "fine_sweeps", "rel_tol", "abs_tol", "coarse_rel_tol",
-            "coarse_abs_tol", "coarse_cycles", "verbose",
-        },
-    }
-    for name, keys in nested.items():
-        if not isinstance(result[name], Mapping) or set(result[name]) != keys:
-            raise TypeError("native field solver configuration %s has an invalid schema" % name)
-        result[name] = dict(result[name])
+    for name in ("provider_identity", "solver", "option_schema_identity"):
+        if not isinstance(result[name], str) or not result[name]:
+            raise TypeError(
+                "native field solver configuration requires an exact %s" % name
+            )
+    hierarchy_policy = result["hierarchy_policy"]
+    if not isinstance(hierarchy_policy, Mapping) or set(hierarchy_policy) != {
+        "policy_id", "interface_version", "option_schema", "options",
+    }:
+        raise TypeError("native field solver hierarchy policy has an invalid schema")
+    hierarchy_policy = dict(hierarchy_policy)
+    for name in ("policy_id", "option_schema"):
+        if not isinstance(hierarchy_policy[name], str) or not hierarchy_policy[name]:
+            raise TypeError(
+                "native field solver hierarchy policy requires an exact %s" % name
+            )
+    version = hierarchy_policy["interface_version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise TypeError(
+            "native field solver hierarchy policy requires a positive interface_version"
+        )
+    if not isinstance(hierarchy_policy["options"], Mapping) or any(
+        type(key) is not str or not key for key in hierarchy_policy["options"]
+    ):
+        raise TypeError("native field solver hierarchy policy options have an invalid schema")
+    hierarchy_policy["options"] = dict(hierarchy_policy["options"])
+    result["hierarchy_policy"] = hierarchy_policy
+    if not isinstance(result["options"], Mapping) or any(
+        type(key) is not str or not key for key in result["options"]
+    ):
+        raise TypeError("native field solver configuration options have an invalid schema")
+    result["options"] = dict(result["options"])
     # RunReport payloads are semantic evidence and therefore never retain platform binary floats.
     # Preserve the native POD values exactly as canonical binary64 spellings before freeze_data().
     from pops.identity.semantic import semantic_value
@@ -173,10 +190,11 @@ def _field_provider_evidence(
     result = []
     for name, field_plan in sorted(install_plan.artifact.plan.field_plans.items()):
         options = field_plan.native_options
-        provider = options["solver_provider"]
-        provider_kind = provider["provider_kind"]
-        if provider_kind not in {"builtin_v1", "external_component_v1"}:
-            raise RuntimeError("resolved field plan carries an unknown provider kind")
+        from pops.fields._prepared_field_solver_registry import (
+            prepared_field_solver_binding_from_data,
+        )
+
+        binding = prepared_field_solver_binding_from_data(options["solver_provider"])
         slot = options["provider_slot"]
         patches = _field_topology_rows(executor, slot)
         digests = {row["topology_digest"] for row in patches}
@@ -188,31 +206,14 @@ def _field_provider_evidence(
         if len(digests) > 1 or len(provenances) > 1 or len(materialized_layouts) > 1:
             raise RuntimeError(
                 "one field-provider materialization returned inconsistent global topology facts")
-        topology = provider["topology"]
-        if provider_kind == "builtin_v1":
-            authority = {
-                "kind": "builtin",
-                "provider_kind": topology["provider_kind"],
-                "declared_provenance": topology["provenance"],
-                "declared_topology_digest": topology["topology_digest"],
-            }
-        else:
-            interface = topology["native_interface"]
-            authority = {
-                "kind": "component",
-                "component_id": topology["component_id"],
-                "component_manifest_identity": topology["component_manifest_identity"],
-                "source_package_identity": topology["source_package_identity"],
-                "interface_uri": interface["uri"],
-                "interface_version": topology["interface_version"],
-            }
         result.append({
             "field": name,
             "provider_slot": slot,
-            "provider_kind": provider_kind,
+            "provider": binding.to_data()["provider"],
             "source_layout_identity": layout_plan.qualified_id,
-            "topology_recipe_identity": provider["topology_recipe_identity"],
-            "authority": authority,
+            "topology_recipe_identity": binding.facts.layout["topology_identity"],
+            "topology_contract": binding.resolution.to_data()["topology_contract"],
+            "component_bindings": binding.resolution.to_data()["component_bindings"],
             "materialized": bool(patches),
             "materialized_layout_identity": (
                 next(iter(materialized_layouts)) if materialized_layouts else None

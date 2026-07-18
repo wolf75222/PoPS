@@ -32,8 +32,8 @@ else:
 
 def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
     """Reject Newton options absent from the compiled AMR package ABI. On the native side, the
-    Newton OPTIONS are now wired in single-block (coupler) AND multi-block (engine), and the
-    newton_diagnostics REPORT in native multi-block ; but the flat ABI of the .so loader transports NEITHER
+    Newton OPTIONS and newton_diagnostics REPORT use the unified runtime at every block count; the
+    flat ABI of the .so loader transports NEITHER
     the options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy) NOR the report. Passed
     via the loader, they would be taken at their defaults SILENTLY (iters=2, no report). We
     REJECT them explicitly (same spirit as the stride/mask rejection of the AMR production path). For these
@@ -142,11 +142,11 @@ class _AmrSystemEquation(_AmrSystem):
         # We FORWARD stride (multirate, capstone iv) AND the partial IMEX mask implicit_vars /
         # implicit_roles (capstone vii), exactly like the AmrSystem.add_block wrapper above:
         # the C++ AmrSystem::add_block SUPPORTS and validates them (empty -> full backward-Euler; a
-        # mask requested in explicit or in mono-block raises a clear error on the C++ side,
-        # amr_system.cpp:325-328 / :283-287). Do NOT duplicate these guards here.
+        # mask requested in explicit raises a clear error on the C++ side. Do NOT duplicate these
+        # guards here.
         if isinstance(model, ModelSpec):
-            # NATIVE model: Newton OPTIONS wired (mono + multi) + newton_diagnostics (native multi-block,
-            # rejected at C++ build in mono-block). No facade filtering: C++ AmrSystem::add_block validates.
+            # Native model: Newton options and diagnostics are wired at every block count. No facade
+            # filtering: C++ AmrSystem::add_block validates the complete contract.
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, getattr(time, "stride", 1),
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),

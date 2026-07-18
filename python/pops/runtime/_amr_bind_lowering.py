@@ -108,26 +108,17 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
         )
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
-    transitions = hierarchy.plan.transitions
-    if any(row.dimension != 2 or row.ratio != (2, 2) for row in transitions):
-        raise NotImplementedError(
-            "native AMR requires exact two-dimensional ratio-(2,2) transitions")
-    buffers = {row.buffer for row in transitions}
-    lookaheads = {row.lookahead for row in transitions}
-    if len(buffers) != 1 or len(lookaheads) != 1:
-        raise NotImplementedError(
-            "native AMR exposes one global nesting buffer/lookahead")
-    buffer = next(iter(buffers))
-    if len(set(buffer)) != 1:
-        raise NotImplementedError("native AMR cannot lower anisotropic nesting buffers")
+    from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
+
+    native_hierarchy = lower_native_hierarchy(hierarchy)
 
     cfg = AmrSystemConfig()
     cfg.n = cells[0]
     cfg.L = lengths[0]
     cfg.periodic = periodic
-    cfg.level_count = hierarchy.plan.level_count
-    cfg.regrid_margin = buffer[0]
-    cfg.regrid_grow = next(iter(lookaheads))
+    cfg.level_count = native_hierarchy.level_count
+    cfg.regrid_margin = native_hierarchy.nesting_buffer
+    cfg.regrid_grow = native_hierarchy.nesting_lookahead
     cfg.regrid_every = _regrid_every(data)
     cfg.explicit_bootstrap = True
 

@@ -6,7 +6,7 @@ from typed_program_support import commits_by_block, typed_state
 import pytest
 
 from pops.math import ValueExpr
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.solvers import CG
 from pops.time import FailRun, Program, ProgramValue
 from pops.time.handles import StateEndpointHandle
@@ -193,7 +193,11 @@ def _block_scalar_field(program, block, name):
     operator = program.matrix_free_operator("A_" + name)
     program.set_apply(operator, lambda _program, _out, value: value)
     return program.solve(
-        LinearProblem(operator, state.n), solver=CG(max_iter=1), name=name,
+        LinearProblem(
+            operator, state.n,
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
+        solver=CG(max_iter=1), name=name,
     ).consume(action=FailRun())
 
 

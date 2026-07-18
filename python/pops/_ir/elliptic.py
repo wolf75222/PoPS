@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from .expr import _BoardNode, _EllipticTerm
-from .literals import exact_numeric_scalar, exact_scale_prefix, scalar_literal
+from pops.identity.scalar import exact_numeric_scalar, exact_scale_prefix, scalar_literal
 
 
 def _as_elliptic(x: Any) -> Any:

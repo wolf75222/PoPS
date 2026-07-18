@@ -34,7 +34,10 @@
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext (the contract under test)
 #include <pops/runtime/system.hpp>
 
+#include <array>
+#include <bit>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -164,34 +167,44 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   sim.install_block_state_route("b", b_state);
   const std::vector<std::string> faces(4, "periodic");
   const std::vector<double> values(4, 0.0);
-  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state);
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state,
+                            PreparedBoundaryReadDependencies{{b_state}, {}});
   sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+  const auto a_plan = sim.grid_context("a").boundary_plan;
+  ASSERT_NE(a_plan, nullptr);
+  const auto b_read = a_plan->prepare_state_read(b_state);
 
-  GridContext a_context = sim.grid_context("a");
-  ASSERT_TRUE(static_cast<bool>(a_context.boundary_field_registry));
   constexpr int kGroupIdentity = 37;
   int observed_a_group = -1;
   int observed_b_group = -1;
   BlockClosures a_closures;
-  a_closures.rhs_at_point =
-      [factory = a_context.boundary_field_registry, b_state, &observed_a_group](
-          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, MultiFab& R) {
+  a_closures.rhs_core_at_point_prepared =
+      [b_read, &observed_a_group](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  MultiFab& U, MultiFab& R,
+                                  const PreparedGridBoundarySession& boundary) {
         observed_a_group = point.stage;
-        const auto fields = factory(point, U, nullptr, nullptr);
-        const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
+        const auto reads = boundary.bind_reads(point, U);
+        const Real observed = reads.state(b_read).fab(0).const_array()(0, 0, 0);
         R.set_val(observed);
       };
+  a_closures.boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+         const PreparedGridBoundarySession&) {};
   BlockClosures b_closures;
-  b_closures.rhs_at_point = [&observed_b_group](
-                                const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                MultiFab&, MultiFab& R) {
-    observed_b_group = point.stage;
-    R.set_val(Real(0));
-  };
+  b_closures.rhs_core_at_point_prepared =
+      [&observed_b_group](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab&,
+                          MultiFab& R, const PreparedGridBoundarySession&) {
+        observed_b_group = point.stage;
+        R.set_val(Real(0));
+      };
+  b_closures.boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+         const PreparedGridBoundarySession&) {};
   sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0, std::move(a_closures), {}, {}, 1,
                     true, 1);
   sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0, std::move(b_closures), {}, {}, 1,
                     true, 1);
+  sim.mark_bound();
   sim.block_state(0).set_val(Real(1));
   sim.block_state(1).set_val(Real(2));
   MultiFab stage_a = sim.block_state(0);
@@ -395,6 +408,121 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(sc.ncomp() == U.ncomp()) << "scratch_state_like ncomp";
   MultiFab sf = ctx.alloc_scalar_field(1, 1);
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
+}
+
+TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  System sim(cfg);
+  add_gas(sim);
+  sim.set_program_block_map({0});
+
+  ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
+  ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
+  ctx.declare_clock_relation("clock.fast", "clock.micro", 2);
+  constexpr double parent_dt = 0.4;
+  ctx.begin_step(parent_dt);
+  ctx.set_stage_time(1, 3);
+  const OperatorFingerprint authority{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)};
+  const OperatorFingerprint resources{UINT64_C(5), UINT64_C(6), UINT64_C(7), UINT64_C(8)};
+  const auto snapshot = [&]() {
+    return ctx.operator_evaluation_snapshot(authority, ctx.state(0), resources);
+  };
+  const OperatorEvaluationSnapshot parent_before = snapshot();
+
+  std::array<OperatorEvaluationSnapshot, 2> children;
+  OperatorEvaluationSnapshot nested;
+  OperatorEvaluationSnapshot parent_stale_on_entry;
+  OperatorEvaluationSnapshot parent_stale_after_exit;
+  OperatorEvaluationSnapshot outer_stale_after_nested_exit;
+  OperatorEvaluationSnapshot outer_before_exception;
+  OperatorEvaluationSnapshot outer_after_exception;
+  auto ticks = ctx.subcycle_scope("clock.macro", "clock.fast", 2);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    ticks.iteration(iteration);
+    auto child = ctx.logical_evaluation_scope(iteration, 2);
+    EXPECT_EQ(child.dt(), Real(parent_dt / 2.0));
+    if (iteration == 0) {
+      parent_stale_on_entry = ctx.probe_operator_evaluation(authority, parent_before.topology,
+                                                            resources, parent_before.revision);
+    }
+    ctx.set_stage_time(1, 2);
+    children[static_cast<std::size_t>(iteration)] = snapshot();
+    if (iteration != 0)
+      continue;
+
+    outer_before_exception = snapshot();
+    try {
+      auto micro_ticks = ctx.subcycle_scope("clock.fast", "clock.micro", 2);
+      micro_ticks.iteration(0);
+      auto micro = ctx.logical_evaluation_scope(0, 2);
+      EXPECT_EQ(micro.dt(), Real(parent_dt / 4.0));
+      ctx.set_stage_time(1, 2);
+      nested = snapshot();
+      throw std::runtime_error("exercise nested logical-evaluation unwind");
+    } catch (const std::runtime_error&) {
+    }
+    outer_stale_after_nested_exit = ctx.probe_operator_evaluation(
+        authority, outer_before_exception.topology, resources, outer_before_exception.revision);
+    outer_after_exception = snapshot();
+    EXPECT_TRUE(ctx.probe_operator_evaluation(authority, outer_after_exception.topology, resources,
+                                              outer_after_exception.revision) ==
+                outer_after_exception);
+  }
+  ticks.finish();
+  parent_stale_after_exit = ctx.probe_operator_evaluation(authority, parent_before.topology,
+                                                          resources, parent_before.revision);
+  const OperatorEvaluationSnapshot parent_after = snapshot();
+
+  const double child_dt = parent_dt / 2.0;
+  EXPECT_EQ(std::bit_cast<double>(children[0].dt_bits), child_dt);
+  EXPECT_EQ(std::bit_cast<double>(children[1].dt_bits), child_dt);
+  EXPECT_EQ(children[0].stage_numerator, 1);
+  EXPECT_EQ(children[0].stage_denominator, 4);
+  EXPECT_EQ(children[1].stage_numerator, 3);
+  EXPECT_EQ(children[1].stage_denominator, 4);
+  EXPECT_EQ(std::bit_cast<double>(children[0].physical_time_bits),
+            sim.time() + 0.0 * child_dt + 0.5 * child_dt);
+  EXPECT_EQ(std::bit_cast<double>(children[1].physical_time_bits),
+            sim.time() + 1.0 * child_dt + 0.5 * child_dt);
+  EXPECT_NE(children[0].revision, children[1].revision);
+  EXPECT_NE(children[0].physical_time_bits, children[1].physical_time_bits);
+
+  EXPECT_EQ(std::bit_cast<double>(nested.dt_bits), parent_dt / 4.0);
+  EXPECT_EQ(nested.stage_numerator, 1);
+  EXPECT_EQ(nested.stage_denominator, 8);
+  EXPECT_EQ(std::bit_cast<double>(nested.physical_time_bits), sim.time() + 0.5 * (child_dt / 2.0));
+  EXPECT_NE(nested.revision, outer_before_exception.revision);
+  EXPECT_EQ(outer_after_exception.stage_numerator, outer_before_exception.stage_numerator);
+  EXPECT_EQ(outer_after_exception.stage_denominator, outer_before_exception.stage_denominator);
+  EXPECT_EQ(outer_after_exception.dt_bits, outer_before_exception.dt_bits);
+  EXPECT_EQ(outer_after_exception.physical_time_bits, outer_before_exception.physical_time_bits);
+  EXPECT_NE(parent_stale_on_entry.revision, parent_before.revision);
+  EXPECT_NE(outer_stale_after_nested_exit.revision, outer_before_exception.revision);
+  EXPECT_EQ(outer_stale_after_nested_exit.stage_numerator, outer_before_exception.stage_numerator);
+  EXPECT_EQ(outer_stale_after_nested_exit.stage_denominator,
+            outer_before_exception.stage_denominator);
+  EXPECT_EQ(outer_stale_after_nested_exit.dt_bits, outer_before_exception.dt_bits);
+  EXPECT_EQ(outer_stale_after_nested_exit.physical_time_bits,
+            outer_before_exception.physical_time_bits);
+  EXPECT_NE(outer_after_exception.revision, outer_before_exception.revision);
+
+  EXPECT_NE(parent_stale_after_exit.revision, parent_before.revision);
+  EXPECT_EQ(parent_stale_after_exit.stage_numerator, parent_before.stage_numerator);
+  EXPECT_EQ(parent_stale_after_exit.stage_denominator, parent_before.stage_denominator);
+  EXPECT_EQ(parent_stale_after_exit.dt_bits, parent_before.dt_bits);
+  EXPECT_EQ(parent_stale_after_exit.physical_time_bits, parent_before.physical_time_bits);
+  EXPECT_EQ(parent_after.stage_numerator, parent_before.stage_numerator);
+  EXPECT_EQ(parent_after.stage_denominator, parent_before.stage_denominator);
+  EXPECT_EQ(parent_after.dt_bits, parent_before.dt_bits);
+  EXPECT_EQ(parent_after.physical_time_bits, parent_before.physical_time_bits);
+  EXPECT_NE(parent_after.revision, parent_before.revision);
+  EXPECT_TRUE(ctx.probe_operator_evaluation(authority, parent_after.topology, resources,
+                                            parent_after.revision) == parent_after);
 }
 
 TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {

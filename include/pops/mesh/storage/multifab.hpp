@@ -64,6 +64,12 @@ class MultiFab {
   /// Number of ghost layers.
   int n_grow() const { return ngrow_; }
 
+  /// Whether two field objects expose at least one identical owned buffer on this rank. MultiFab
+  /// storage is deep-owned, so exact buffer identity is the native alias contract; the object check
+  /// also remains true on an MPI rank owning no boxes. Prepared solvers use this at their public
+  /// boundary and keep it out of numerical loops.
+  bool shares_storage_with(const MultiFab& other) const { return this == &other; }
+
   /// Number of fabs OWNED by this rank (bound on local indices).
   int local_size() const { return static_cast<int>(fabs_.size()); }
   /// Local fab at index li (0 <= li < local_size()), for writing.
@@ -100,7 +106,7 @@ class MultiFab {
   /// memory = a targeted device_fence().
   void sync_host() const { pops::sync_host(); }
   /// Marks a DEVICE residence (before a kernel). No-op under unified memory.
-  void sync_device() { pops::sync_device(); }
+  void sync_device() const { pops::sync_device(); }
 
   /// Fills all cells (valid + ghosts) of every local fab with v. Synchronizes host residence first
   /// (a kernel may have written these fabs).
@@ -123,6 +129,28 @@ class MultiFab {
     if (!halo_cache_)
       halo_cache_ = std::make_shared<HaloScheduleCache>();
     return *halo_cache_;
+  }
+
+  /// Share the immutable-layout halo plan and its reusable communication-buffer pool. Prepared
+  /// solver work vectors have the same box/distribution/ghost layout and execute exchanges
+  /// sequentially, so one warmed cache removes lazy schedule and MPI-buffer allocation from the
+  /// iteration without introducing a global registry.
+  void share_halo_cache_from(const MultiFab& prototype) const {
+    if (ba_.boxes() != prototype.ba_.boxes() || dm_.ranks() != prototype.dm_.ranks() ||
+        ngrow_ != prototype.ngrow_)
+      throw_validation_error("pops/mesh/storage/multifab.hpp: share_halo_cache_from",
+                             "identical box, distribution, and ghost layout", "layout mismatch");
+    prototype.halo_cache();
+    halo_cache_ = prototype.halo_cache_;
+  }
+
+  /// Detach communication scratch after a value-preserving copy is promoted to an independent
+  /// concurrent execution session. MultiFab copy construction deliberately shares these caches for
+  /// sequential iso-layout use; a workspace-private clone must instead rebuild and warm its own
+  /// buffers before publication.
+  void detach_communication_caches() const noexcept {
+    halo_cache_.reset();
+    copy_cache_.reset();
   }
 
   /// Internal (ADC-607): memoized redistribution schedule used by parallel_copy when THIS MultiFab

@@ -22,6 +22,77 @@ else:
     _AmrSystem = object
 
 
+class _PreparedAmrFieldSolverInstall:
+    """AMR native primitives consumed by provider-owned field-solver installers."""
+
+    def __init__(self, engine: Any, field_plan: Any) -> None:
+        self.engine = engine
+        self.field_plan = field_plan
+        self.options = field_plan.native_install_data()
+        self.slot = self.options["provider_slot"]
+
+    def install_configured(self, binding: Any) -> None:
+        contract = binding.resolution.to_data()["native_contract"]
+        routes = self.options["provider_pack"]
+        output = self.options["output_route"]
+        hierarchy_policy = self.options["hierarchy_policy"]
+        if not isinstance(hierarchy_policy, Mapping) or set(hierarchy_policy) != {
+            "policy_id",
+            "interface_version",
+            "option_schema",
+            "options",
+        }:
+            raise TypeError("resolved AMR hierarchy-policy authority has an invalid shape")
+        from pops.identity import canonical_bytes
+
+        self.engine.set_field_solver_plan(
+            self.slot,
+            self.field_plan.identity.token,
+            self.options["provider_identity_text"],
+            canonical_bytes(output["owner_identity"]).hex(),
+            output["owner_block"],
+            output["key"],
+            [canonical_bytes(route["provider_identity"]).hex() for route in routes],
+            [route["owner_block"] for route in routes],
+            [route["key"] for route in routes],
+            [route["coefficient"] for route in routes],
+            contract["factory_route"],
+            hierarchy_policy["policy_id"],
+            hierarchy_policy["interface_version"],
+            hierarchy_policy["option_schema"],
+            hierarchy_policy["options"],
+            contract["schema_identity"],
+            contract["options"],
+        )
+        topology = binding.resolution.to_data()["topology_contract"]
+        self.engine._set_field_topology_authority(
+            self.slot,
+            topology["provider_id"],
+            binding.identity,
+            topology["topology_identity"],
+        )
+
+    def install_component(self, _binding: Any) -> None:
+        raise RuntimeError(
+            "component field solver reached AMR after its provider policy rejected the use"
+        )
+
+
+class _PreparedAmrFieldNullspaceInstall:
+    def __init__(self, engine: Any, slot: str) -> None:
+        self.engine = engine
+        self.slot = slot
+
+    def install_registered_nullspace(self, binding: Any) -> None:
+        contract = binding.resolution.to_data()["native_contract"]
+        self.engine.set_field_nullspace(
+            self.slot,
+            contract["provider_route"],
+            contract["schema_identity"],
+            contract["options"],
+        )
+
+
 class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
@@ -153,8 +224,7 @@ class _AmrSystemInstall(_AmrSystem):
             )
 
         for field_plan in field_plans.values():
-            self._register_field_plan_output(field_plan, resolved_models)
-            self._install_field_reaction(field_plan, params)
+            self._install_field_method_runtime(field_plan, resolved_models, params)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
         # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
@@ -328,47 +398,15 @@ class _AmrSystemInstall(_AmrSystem):
             raise ValueError("resolved AMR field install plan identity/target mismatch")
         field_plan.__post_init__()
         options = field_plan.native_install_data()
-        provider = options["solver_provider"]
-        if provider["provider_kind"] != "builtin_v1":
-            raise RuntimeError(
-                "external FieldSolver v2 must have been refused for AMR during resolve")
-        routes = options["provider_pack"]
-        output_route = options["output_route"]
-        from pops.identity import canonical_bytes
-        if provider["solver"]["route"] != "geometric_mg":
-            raise ValueError("resolved AMR field plan requires builtin geometric_mg")
-        mg = options["mg_options"]
-        from pops.solvers._numeric import native_float
-        fac = options["fac_options"]
-        native_fac = None if fac is None else dict(fac)
-        if native_fac is not None:
-            for name in ("rel_tol", "abs_tol", "coarse_rel_tol", "coarse_abs_tol"):
-                if native_fac[name] is not None:
-                    native_fac[name] = native_float(
-                        native_fac[name], where="AMR field plan FAC option %s" % name)
+        from pops.fields._prepared_field_solver_registry import (
+            prepared_field_solver_binding_from_data,
+            prepared_field_solver_provider_from_identity,
+        )
+
+        binding = prepared_field_solver_binding_from_data(options["solver_provider"])
+        provider = prepared_field_solver_provider_from_identity(binding.provider)
+        provider.install(_PreparedAmrFieldSolverInstall(self._s, field_plan), binding)
         slot = options["provider_slot"]
-        self._s.set_field_solver_plan(
-            slot, field_plan.identity.token, options["provider_identity_text"],
-            canonical_bytes(output_route["owner_identity"]).hex(),
-            output_route["owner_block"],
-            output_route["key"],
-            [canonical_bytes(route["provider_identity"]).hex()
-             for route in routes],
-            [route["owner_block"] for route in routes],
-            [route["key"] for route in routes],
-            [route["coefficient"] for route in routes],
-            provider["solver"]["route"], options["hierarchy"],
-            native_float(mg["abs_tol"],
-                         where="AMR field plan absolute tolerance"),
-            native_float(mg["rel_tol"],
-                         where="AMR field plan relative tolerance"),
-            mg["max_cycles"], mg["min_coarse"], mg["pre_smooth"],
-            mg["post_smooth"], mg["bottom_sweeps"],
-            mg["coarse_threshold"], native_fac)
-        topology = provider["topology"]
-        self._s._set_field_topology_authority(
-            slot, topology["provider_kind"], topology["provenance"],
-            topology["topology_digest"])
         faces = options["boundary_faces"]
         if faces is not None:
             self._s.set_field_boundary_plan(
@@ -382,11 +420,22 @@ class _AmrSystemInstall(_AmrSystem):
             [row["owner_block"] for row in dependencies["states"]],
             [row["component"] for row in dependencies["states"]],
             [], [], [])
-        self._s.set_field_nullspace(
-            slot, options["nullspace"] == "constant", options["gauge"] == "mean_zero")
+        self._install_field_nullspace(slot, field_plan)
         nonlinear = options.get("nonlinear")
         if nonlinear is not None:
             field_plan.nonlinear_provider.install(self._s, slot)
+
+    def _install_field_nullspace(self, slot: str, field_plan: Any) -> None:
+        from pops.fields._prepared_field_nullspace_registry import (
+            prepared_field_nullspace_binding_from_data,
+            prepared_field_nullspace_provider_from_identity,
+        )
+
+        binding = prepared_field_nullspace_binding_from_data(
+            field_plan.native_install_data()["nullspace_provider"]
+        )
+        provider = prepared_field_nullspace_provider_from_identity(binding.provider)
+        provider.install(_PreparedAmrFieldNullspaceInstall(self._s, slot), binding)
 
     def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
                                            compiled: Any) -> None:
@@ -396,7 +445,7 @@ class _AmrSystemInstall(_AmrSystem):
             raise ValueError(
                 "dynamic AMR field boundaries require a compiled artifact that owns their "
                 "generated device launchers")
-        handles = field_plan.boundary_parameter_handles()
+        handles = field_plan.provider_parameter_handles("boundary-kernel")
         missing = [handle.qualified_id for handle in handles if handle not in params]
         if missing:
             raise ValueError(
@@ -408,39 +457,21 @@ class _AmrSystemInstall(_AmrSystem):
         self._s.set_field_boundary_parameters(
             field_plan.native_options["provider_slot"], values)
 
-    def _install_field_reaction(self, field_plan: Any, params: Any) -> None:
-        """Bind one screened-Poisson scalar before the AMR runtime is materialized."""
-        effective = field_plan.native_reaction_value(params)
-        if effective is None:
-            return
-        self._s.set_field_reaction(
-            field_plan.native_options["provider_slot"], effective)
+    def _install_field_method_runtime(
+        self, field_plan: Any, models: Any, params: Any,
+    ) -> None:
+        """Offer opaque target resources to the method provider's authenticated installer."""
+        from pops.fields import PreparedFieldRuntimeInstallContext
 
-    def _register_field_plan_output(self, field_plan: Any, models: Any) -> None:
-        route = field_plan.native_options["output_route"]
-        block = route["owner_block"]
-        model = models.get(block)
-        if model is None:
-            raise ValueError("AMR field output route names unknown block %r" % block)
-        from pops.physics.aux import aux_component_index
-
-        declared = tuple(getattr(model, "aux_extra_names", ()) or ())
-        components = tuple(route["components"])
-        try:
-            indices = [aux_component_index(component, declared) for component in components]
-        except ValueError as error:
-            raise ValueError(
-                "AMR field output route %r is absent from block %r native aux layout: %s"
-                % (field_plan.name, block, ", ".join(components))
-            ) from error
-        indices.extend([-1] * (3 - len(indices)))
-        gradient_sign = route.get("gradient_sign")
-        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
-            raise ValueError("AMR field output route has no valid GradientOutput sign")
-        if indices[1] < 0 and gradient_sign != 1:
-            raise ValueError("AMR field output route carries a sign without gradient components")
-        self._s.register_elliptic_field(
-            block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
+        field_plan.install_runtime(
+            PreparedFieldRuntimeInstallContext(
+                target=field_plan.target,
+                engine=self._s,
+                resources={"models": models},
+                slot=field_plan.native_options["provider_slot"],
+            ),
+            params,
+        )
 
     def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any

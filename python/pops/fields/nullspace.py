@@ -51,6 +51,88 @@ class ConstantNullspace(Descriptor):
     def capabilities(self) -> Any:
         return CapabilitySet({"constant_kernel": True, "rhs_projection": False})
 
+    def _program_prepared_nullspace(self) -> tuple[Any, dict[str, Any]]:
+        """Bind the builtin through the same registered provider protocol as extensions."""
+        from ._prepared_nullspace_registry import constant_prepared_nullspace_provider
+
+        return constant_prepared_nullspace_provider(), {}
+
+    def _prepared_field_nullspace(self) -> tuple[Any, dict[str, Any]]:
+        """Bind field installation through its topology-aware provider protocol."""
+        from ._prepared_field_nullspace_builtins import constant_field_nullspace_provider
+
+        return constant_field_nullspace_provider(), {}
+
+
+class PreparedNullspace(Descriptor):
+    """A nullspace declaration backed by one registered native preparation provider.
+
+    ``options`` are inert authoring data.  The provider snapshots and validates them when a
+    :class:`pops.linalg.LinearProblem` is constructed, then emits a real C++
+    ``FieldNullspacePlan`` from its authenticated native component.
+    """
+
+    category = "nullspace"
+
+    def __init__(self, provider: Any, **options: Any) -> None:
+        from ._prepared_nullspace_registry import (
+            PreparedNullspaceProvider,
+            prepared_nullspace_provider_by_emitter_id,
+        )
+
+        if type(provider) is not PreparedNullspaceProvider:
+            raise TypeError("PreparedNullspace requires an exact registered Provider")
+        registered = prepared_nullspace_provider_by_emitter_id(provider.emitter_id)
+        if registered is not provider:
+            raise ValueError("PreparedNullspace provider is not the registered authority")
+        self.provider = provider
+        self.provider_options = dict(options)
+
+    def options(self) -> dict[str, Any]:
+        return dict(self.provider_options)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "provider": self.provider.authority(),
+            "options": self.options(),
+        }
+
+    def _program_prepared_nullspace(self) -> tuple[Any, dict[str, Any]]:
+        return self.provider, self.options()
+
+
+class PreparedFieldNullspace(Descriptor):
+    """A topology-aware field nullspace backed by one registered native provider."""
+
+    category = "nullspace"
+
+    def __init__(self, provider: Any, **options: Any) -> None:
+        from ._prepared_field_nullspace_registry import (
+            PreparedFieldNullspaceProvider,
+            prepared_field_nullspace_provider_by_resolver_id,
+        )
+
+        if type(provider) is not PreparedFieldNullspaceProvider:
+            raise TypeError("PreparedFieldNullspace requires an exact registered FieldProvider")
+        if prepared_field_nullspace_provider_by_resolver_id(provider.resolver_id) is not provider:
+            raise ValueError("PreparedFieldNullspace provider is not the registered authority")
+        self.provider = provider
+        self.provider_options = dict(options)
+
+    def options(self) -> dict[str, Any]:
+        return dict(self.provider_options)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "provider": self.provider.authority(),
+            "options": self.options(),
+        }
+
+    def _prepared_field_nullspace(self) -> tuple[Any, dict[str, Any]]:
+        return self.provider, self.options()
+
 
 @dataclass(frozen=True, slots=True)
 class ConnectedComponentsManifest:
@@ -167,7 +249,76 @@ class NullspaceCompatibility:
                 "rhs_projection": "forbidden"}
 
 
+from ._prepared_nullspace_registry import (  # noqa: E402 -- descriptors precede builtin registry
+    PreparedNullspaceContracts,
+    PreparedNullspaceNativeEmission,
+    PreparedNullspaceProvider,
+    PreparedNullspaceUse,
+    PreparedNullspaceUsePolicy,
+    register_prepared_nullspace_provider,
+)
+from pops.native_components import PreparedNativeComponent  # noqa: E402
+from ._prepared_field_nullspace_registry import (  # noqa: E402
+    PreparedFieldNullspaceBinding,
+    PreparedFieldNullspaceDefaultPolicy,
+    PreparedFieldNullspaceFacts,
+    PreparedFieldNullspaceProvider,
+    PreparedFieldNullspaceResolution,
+    PreparedFieldNullspaceResolutionValidator,
+    register_prepared_field_nullspace_provider,
+    register_prepared_field_nullspace_default_policy,
+)
+# Register the ready providers at catalog import.  The protocol registry itself remains free of
+# concrete nullspace families and native route names.
+from . import _prepared_field_nullspace_builtins as _field_nullspace_builtins  # noqa: E402,F401
+
+# The module itself is the nullspace catalog (``pops.fields.nullspace.Prepared(...)``), mirroring
+# the solver provider surface without introducing a second registry or a name dispatcher.
+Prepared = PreparedNullspace
+Provider = PreparedNullspaceProvider
+Contracts = PreparedNullspaceContracts
+NativeEmission = PreparedNullspaceNativeEmission
+Use = PreparedNullspaceUse
+UsePolicy = PreparedNullspaceUsePolicy
+NativeComponent = PreparedNativeComponent
+HeaderOnlyComponent = PreparedNativeComponent.header_only
+register = register_prepared_nullspace_provider
+FieldPrepared = PreparedFieldNullspace
+FieldProvider = PreparedFieldNullspaceProvider
+FieldBinding = PreparedFieldNullspaceBinding
+FieldDefaultPolicy = PreparedFieldNullspaceDefaultPolicy
+FieldFacts = PreparedFieldNullspaceFacts
+FieldResolution = PreparedFieldNullspaceResolution
+FieldResolutionValidator = PreparedFieldNullspaceResolutionValidator
+register_field_provider = register_prepared_field_nullspace_provider
+register_field_default_policy = register_prepared_field_nullspace_default_policy
+
+
 __all__ = [
-    "ConnectedComponentsManifest", "ConstantNullspace", "NullspaceBasis",
-    "NullspaceBasisVector", "NullspaceCompatibility", "RHSCompatibilityEvidence",
+    "ConnectedComponentsManifest",
+    "ConstantNullspace",
+    "Contracts",
+    "HeaderOnlyComponent",
+    "FieldBinding",
+    "FieldDefaultPolicy",
+    "FieldFacts",
+    "FieldPrepared",
+    "FieldProvider",
+    "FieldResolution",
+    "FieldResolutionValidator",
+    "NativeComponent",
+    "NativeEmission",
+    "NullspaceBasis",
+    "NullspaceBasisVector",
+    "NullspaceCompatibility",
+    "Prepared",
+    "PreparedNullspace",
+    "PreparedFieldNullspace",
+    "Provider",
+    "RHSCompatibilityEvidence",
+    "Use",
+    "UsePolicy",
+    "register",
+    "register_field_provider",
+    "register_field_default_policy",
 ]

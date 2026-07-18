@@ -219,6 +219,28 @@ def test_plan_python_bindings_change_runs_all(tmp_path):
     assert outputs["python_mode"] == "all"
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "include/pops/numerics/elliptic/linear/krylov_method_provider.hpp",
+        "include/pops/core/identity/prepared_provider_options.hpp",
+        "include/pops/mesh/layout/field_distribution.hpp",
+        "include/pops/mesh/storage/field_replica_consensus.hpp",
+    ],
+)
+def test_plan_python_native_elliptic_protocol_runs_all_external_provider_e2es(
+    tmp_path, header
+):
+    outputs, selected = _run_plan_python(tmp_path, [header])
+    assert outputs["python_mode"] == "subset"
+    assert "elliptic-native-provider-contract" in outputs["python_why"]
+    assert {
+        "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
+        "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
+        "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
+    } <= set(selected)
+
+
 def test_plan_python_changelog_only_selects_none(tmp_path):
     """A CHANGELOG-only change gracefully selects nothing (mode ``none``)."""
     outputs, selected = _run_plan_python(tmp_path, ["CHANGELOG.md"])
@@ -243,7 +265,7 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     build step would hit ``ninja: unknown target`` (seen live on
     test_amr_regrid_mpi_parity, whose ``mpi`` segment is an INFIX the old ``test_mpi_``
     prefix filter missed -- #435). Convention: every MPI-only suite carries an ``mpi``
-    name segment (and an ``mpi`` label / ``mpi_nproc``); the manifest-driven selector
+    name segment (and an ``mpi`` label / exact MPI launch contract); the manifest-driven selector
     must drop it. This asserts the same intent against the manifest API that replaced
     the CMake target scraper.
     """
@@ -276,7 +298,10 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_system_bz_multibox": (2, 4),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_fill_boundary_cache": (1, 2, 4),
-        "test_krylov_solver": (1, 2, 4),
+        "test_geometric_mg": (2,),
+        "test_generic_krylov": (1, 2, 4),
+        "test_krylov_workspace_reentrancy": (2,),
+        "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),
     }
     serial_targets = {
@@ -287,15 +312,44 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         suite["name"] for suite in all_suites if "mpi" in suite["labels"]
     }
     expected_count = sum(
-        len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
+        len(suite["mpi_nproc"])
+        + bool(suite["mpi_rank_parity"])
+        + len(suite["mpi_variants"])
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 70
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 71
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
+    assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
+    assert ctest_plan["test_mpi_amr_distributed_coarse_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
     assert ctest_plan["test_world_communicator_np2"] == 2
+
+
+def test_manifest_rejects_ambiguous_mpi_only_launch_contracts():
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "test_ambiguous_mpi",
+        "sources": ["tests/cpp/test_ambiguous_mpi.cpp"],
+        "labels": ["backend", "mpi"],
+        "mpi_nproc": [1],
+        "mpi_rank_parity": [1, 2],
+    }
+    with pytest.raises(SystemExit, match="exactly one of mpi_nproc or mpi_rank_parity"):
+        sel.manifest_cpp_suites({"cpp": {"suite": [suite]}}, include_mpi=True)
+
+
+def test_manifest_rejects_rank_parity_without_an_mpi_label():
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "test_unlabelled_parity",
+        "sources": ["tests/cpp/test_unlabelled_parity.cpp"],
+        "labels": ["backend"],
+        "mpi_rank_parity": [1, 2],
+    }
+    with pytest.raises(SystemExit, match="exactly one of mpi_nproc or mpi_rank_parity"):
+        sel.manifest_cpp_suites({"cpp": {"suite": [suite]}}, include_mpi=True)
 
 
 def _write_mpi_ctest_inventory(path, plan):
@@ -612,7 +666,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 60" in cpp_shards_block
     assert "timeout-minutes: 50" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 38m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '

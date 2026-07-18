@@ -162,7 +162,9 @@ def test_one_level_amr_resolve_preserves_level_by_level_capability() -> None:
     plan = _one_level_amr_plan(
         hierarchy_policy=LevelByLevelSolve(), solver=GeometricMG())
 
-    assert plan.native_options["hierarchy"] == "level_local"
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.level-local"
+    )
 
 
 def test_composite_fac_refuses_a_single_level_amr_backend() -> None:
@@ -192,6 +194,33 @@ def test_field_plan_lowers_complete_boundary_and_qualified_provider(condition: o
     assert "kind" not in options["provider_pack"][0]
     assert len(options["boundary_faces"]) == 4
     assert all(row.disposition != "rejected" for row in plan.coverage)
+
+
+def test_field_plan_preserves_a_nonzero_mean_gauge_in_the_opaque_provider_contract() -> None:
+    model = Model("nonzero-field-gauge-model")
+    (rho,) = model.state("U", components=["rho"])
+    operator = _field(model, "potential", rho)
+    problem = Case(name="nonzero-field-gauge-case")
+    problem.block("material", model)
+    problem.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
+        solver=GeometricMG(),
+        nullspace=ConstantNullspace(),
+        gauge=MeanValueGauge(3.25),
+    ))
+
+    plan = capture_field_plans(
+        problem, lambda value: value, target="system", layout=_LAYOUT
+    )["potential"]
+    from pops.fields._prepared_field_nullspace_registry import (
+        prepared_field_nullspace_binding_from_data,
+    )
+
+    binding = prepared_field_nullspace_binding_from_data(
+        plan.native_options["nullspace_provider"]
+    )
+    assert binding.resolution.native_contract["options"] == {"gauge.value": 3.25}
 
 
 def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() -> None:
@@ -322,7 +351,10 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
     plan = plans["potential"]
     assert plan.native_options["boundary_kernel_required"] is True
     assert plan.native_options["boundary_iterate_dependent"] is False
-    assert [handle.local_id for handle in plan.boundary_parameter_handles()] == ["wall_value"]
+    assert [
+        handle.local_id
+        for handle in plan.provider_parameter_handles("boundary-kernel")
+    ] == ["wall_value"]
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
     source = emit_field_boundaries(None, None, plans, "system")
@@ -396,7 +428,10 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
     source = emit_field_boundaries(None, None, plans, "system")
-    assert "context.states[0]->fab(li).const_array()" in source
+    assert (
+        "context.states[0]->fab(context.states[0]->local_index_of("
+        "iterate.global_index(li))).const_array()" in source
+    )
     assert "state0(i, j, 0)" in source
     assert "context.point.time" in source
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from pops._ir.literals import scalar_literal
+from pops.identity.scalar import scalar_literal
 
 
 def exact_coefficient(value: Any, where: str) -> Any:

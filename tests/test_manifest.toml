@@ -181,13 +181,13 @@ mpi_nproc = [1, 2, 4]
 name = "test_mpi_amr_compiled_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
+mpi_rank_parity = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_mpi_amr_distributed_coarse"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"]
 labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
+mpi_rank_parity = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
@@ -236,6 +236,12 @@ name = "test_mpi_external_lifecycle"
 sources = ["tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2]
+
+[[cpp.suite]]
+name = "test_mpi_field_nullspace_preflight"
+sources = ["tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_mpi_field_plan_consensus"
@@ -637,17 +643,36 @@ labels = ["unit", "elliptic", "fast"]
 name = "test_generic_krylov"
 sources = ["tests/cpp/unit/elliptic/test_generic_krylov.cpp"]
 labels = ["unit", "elliptic", "fast"]
+mpi_variants = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_krylov_workspace_reentrancy"
+sources = ["tests/cpp/unit/elliptic/test_krylov_workspace_reentrancy.cpp"]
+labels = ["unit", "elliptic", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_pure_field_algebra_extreme_dot"
+sources = ["tests/cpp/unit/elliptic/test_pure_field_algebra_extreme_dot.cpp"]
+labels = ["unit", "elliptic", "fast"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_scaled_scalar"
+sources = ["tests/cpp/unit/elliptic/test_scaled_scalar.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_krylov_collective_contract"
+sources = ["tests/cpp/unit/elliptic/test_krylov_collective_contract.cpp"]
+labels = ["unit", "elliptic", "mpi"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_geometric_mg"
 sources = ["tests/cpp/unit/elliptic/test_geometric_mg.cpp"]
 labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_krylov_solver"
-sources = ["tests/cpp/unit/elliptic/test_krylov_solver.cpp"]
-labels = ["unit", "elliptic", "fast"]
-mpi_variants = [1, 2, 4]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_newton_robustness"

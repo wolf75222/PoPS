@@ -330,6 +330,17 @@ inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n
   return {ba, DistributionMapping(ba.size(), n_ranks())};
 }
 
+inline DistributionMapping coupler_authoritative_coarse_mapping(
+    const BoxArray& coarse_boxes, const std::vector<AmrLevelMP>& levels) {
+  if (levels.empty())
+    throw std::invalid_argument("AmrCouplerMP requires a coarse level");
+  const MultiFab& coarse = levels.front().U;
+  if (coarse.box_array().boxes() != coarse_boxes.boxes())
+    throw std::invalid_argument(
+        "AmrCouplerMP coarse BoxArray disagrees with the authoritative level field");
+  return coarse.dmap();
+}
+
 }  // namespace detail
 
 /// Multi-patch E x B AMR coupler. @tparam Model: PhysicalModel (flux, source, elliptic_rhs,
@@ -358,12 +369,20 @@ class AmrCouplerMP {
   // Removing the replicated path is DEFERRED as long as the distributed one is not strictly
   // superior. mg_ receives the same flag (otherwise, under replicated MPI, the coarse would fall on
   // the single rank 0 and compute_aux would read a phi absent elsewhere). In serial, both coincide.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
   AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse, const BCRec& bc,
-               std::vector<AmrLevelMP> levels, std::function<bool(Real, Real)> active = {},
-               bool replicated_coarse = true)
+               std::vector<AmrLevelMP> levels, ActiveRegionProvider2D active = {},
+               bool replicated_coarse = true, FactoryT elliptic_factory = {})
       : model_(model),
         geom_(geom),
-        mg_(geom, ba_coarse, bc, std::move(active), replicated_coarse),
+        coarse_boxes_(ba_coarse),
+        coarse_mapping_(detail::coupler_authoritative_coarse_mapping(ba_coarse, levels)),
+        elliptic_bc_(bc),
+        mg_(make_elliptic_solver<Elliptic>(
+            {geom_, coarse_boxes_, coarse_mapping_, elliptic_bc_, std::move(active),
+             replicated_coarse ? FieldDistribution::Replicated : FieldDistribution::Distributed},
+            std::move(elliptic_factory))),
         stack_(geom.domain, std::move(levels), aux_comps<Model>()),
         replicated_coarse_(replicated_coarse) {}
 
@@ -745,7 +764,7 @@ class AmrCouplerMP {
     const Box2D& dom = stack_.domain();
     const Box2D fine_box = L[1].U.box_array()[0];
     if (!fac_built_ || !same_box(fac_fine_box_, fine_box)) {
-      fac_ = std::make_shared<CompositeFacPoisson>(geom_, mg_.box_array(), mg_.bc(), fine_box, 2);
+      fac_ = std::make_shared<CompositeFacPoisson>(geom_, coarse_boxes_, elliptic_bc_, fine_box, 2);
       fac_->set_options(fac_options_);  // ADC-614: apply the installed FAC knobs (default = kFAC*).
       fac_fine_box_ = fine_box;
       fac_built_ = true;
@@ -756,7 +775,7 @@ class AmrCouplerMP {
     fac_->solve();
     device_fence();
     // level-0 aux (coarse): phi + grad from phi_coarse (same centered stencils as the Option A path).
-    fill_ghosts(fac_->phi_coarse(), dom, mg_.bc());
+    fill_ghosts(fac_->phi_coarse(), dom, elliptic_bc_);
     detail::coupler_grad_phi(fac_->phi_coarse(), stack_.aux(0), Real(1) / (Real(2) * geom_.dx()),
                              Real(1) / (Real(2) * geom_.dy()));
     fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
@@ -789,6 +808,9 @@ class AmrCouplerMP {
   // is mutable. For a param-free model set_params is never called -> no mutation, bit-identical.
   mutable Model model_;
   Geometry geom_;
+  BoxArray coarse_boxes_;
+  DistributionMapping coarse_mapping_;
+  BCRec elliptic_bc_;
   Elliptic mg_;
   AmrLevelStack<AmrLevelMP> stack_;
   bool
@@ -830,7 +852,7 @@ class AmrCouplerMP {
   }
 
   // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill. Overrides only each
-  // declared component's physical-face ghosts; aux_halo_override(mg_.bc(), policy) keeps periodic faces
+  // declared component's physical-face ghosts; aux_halo_override(elliptic_bc_, policy) keeps periodic faces
   // periodic (so on a periodic domain this is a no-op). Mirror of SystemFieldSolver::apply_named_aux_bc.
   void apply_named_aux_bc() {
     if (named_aux_bc_.empty())
@@ -838,7 +860,8 @@ class AmrCouplerMP {
     for (const auto& [comp, policy] : named_aux_bc_) {
       if (comp >= stack_.aux(0).ncomp())
         continue;
-      fill_physical_bc(stack_.aux(0), stack_.domain(), aux_halo_override(mg_.bc(), policy), comp);
+      fill_physical_bc(stack_.aux(0), stack_.domain(), aux_halo_override(elliptic_bc_, policy),
+                       comp);
     }
   }
 };

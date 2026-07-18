@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pops._ir import Equation
-from pops._ir.literals import scalar_data
+from pops.identity.scalar import scalar_data
 from pops._ir.symbolic import ImmutableSymbolic
 from pops.provenance import ProvenanceRecord
 from pops.time.points import point_clock

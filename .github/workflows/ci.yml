@@ -191,6 +191,13 @@ jobs:
             mpi:
               - 'include/pops/parallel/**'
               - 'include/pops/runtime/**'
+              # Prepared linear algebra and storage-distribution providers own collective traces
+              # even when their paths do not contain the word "mpi".  Keep these complete native
+              # protocol boundaries on the real multi-rank gate.
+              - 'include/pops/core/identity/**'
+              - 'include/pops/numerics/elliptic/**'
+              - 'include/pops/mesh/storage/**'
+              - 'include/pops/mesh/layout/**'
               - 'include/**/*mpi*'
               - 'src/runtime/**'
               - 'src/**/*mpi*'
@@ -294,10 +301,10 @@ jobs:
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 30 min cold build + 15 min for the authenticated slow target.  The main step keeps five
-    # minutes for configure/inventory between those independently diagnosed phases; the outer job
-    # keeps ten more for checkout, toolchain/cache setup and the always() ccache save.  These are
-    # fail-safe ceilings and do not lengthen a healthy build.
+    # 38 min cold build + 7 min for the selected tests. The main step keeps five minutes for
+    # configure/inventory between those independently diagnosed phases; the outer job keeps ten
+    # more for checkout, toolchain/cache setup and the always() ccache save. These are fail-safe
+    # ceilings and do not lengthen a healthy build.
     timeout-minutes: 60
     needs: [changes, set-mode]
     strategy:
@@ -309,10 +316,11 @@ jobs:
     if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # Un cache par shard, borne a 512 Mo : 3 Go maximum par generation. Chaque shard ne construit
-      # qu'environ un sixieme des cibles, ce qui evite le thrashing du cache monolithique.
+      # Un cache par shard, borne a 768 Mo : 4.5 Go maximum par generation. Les cold builds mesures
+      # produisent 520-550 Mo d'objets ; cette marge evite que ccache evince ses propres premiers
+      # objets avant la sauvegarde tout en gardant les six caches strictement separes.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 512M
+      CCACHE_MAXSIZE: 768M
       # ADC-366 ccache cross-run/cross-checkout hit-rate (codegen-neutral, keys unchanged; paired with
       # -ffile-prefix-map on the cmake line below).
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -461,7 +469,11 @@ jobs:
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi
-          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m \
+          # A production-header invalidation leaves the AMR-heavy shards within a few targets of
+          # completion at the former 30-minute boundary (measured 144-148/153-155). Keep the cold
+          # path bounded, but allow those real compilations to finish instead of reporting a false
+          # test failure; warm ccache runs remain substantially shorter.
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 38m \
             cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0

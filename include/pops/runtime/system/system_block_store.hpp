@@ -44,6 +44,9 @@
 
 namespace pops {
 
+class PreparedGridBoundarySession;
+class ExecutionLane;
+
 /// ORDERED registry of the System blocks + state marshaling helpers. See contract above (OWNS
 /// BlockState + the vector; EXPOSES index/find + copy/write_state; DOES NOT OWN the domain/aux/Poisson).
 class SystemBlockStore {
@@ -178,6 +181,22 @@ class SystemBlockStore {
     std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
                        const MultiFab&, MultiFab&)>
         boundary_jvp_at_point;
+    std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                       const PreparedGridBoundarySession&)>
+        rhs_core_at_point_prepared;
+    std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                       const PreparedGridBoundarySession&)>
+        rhs_flux_only_core_at_point_prepared;
+    std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                       const PreparedGridBoundarySession&)>
+        boundary_residual_at_point_prepared;
+    std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                       const MultiFab&, MultiFab&, const PreparedGridBoundarySession&)>
+        boundary_jvp_at_point_prepared;
+    /// Sequential runtime session materialized once at bind, after block layouts and qualified
+    /// storage routes are frozen. Prepared Krylov workspaces own distinct lane-private sessions.
+    std::shared_ptr<ExecutionLane> boundary_lane;
+    std::shared_ptr<PreparedGridBoundarySession> boundary_session;
     /// Exact owner-qualified state Handle.  Installed from the compiled block plan rather than
     /// inferred from the optional physical-boundary authority.
     std::string state_identity;
@@ -261,6 +280,17 @@ class SystemBlockStore {
       if (states[block] == nullptr)
         continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
+      if (blocks[block].boundary_session) {
+        auto& core = flux ? blocks[block].rhs_flux_only_core_at_point_prepared
+                          : blocks[block].rhs_core_at_point_prepared;
+        if (!core || !blocks[block].boundary_residual_at_point_prepared)
+          throw std::runtime_error(
+              "SystemBlockStore block lacks its persistent prepared boundary closures");
+        core(point, *states[block], *rhs[block], *blocks[block].boundary_session);
+        blocks[block].boundary_residual_at_point_prepared(point, *states[block], *rhs[block],
+                                                          *blocks[block].boundary_session);
+        continue;
+      }
       if (interface_scheduler_.participates(block, point.level)) {
         auto& closure = flux ? blocks[block].rhs_flux_only_without_prepared_interfaces
                              : blocks[block].rhs_without_prepared_interfaces;
@@ -294,6 +324,15 @@ class SystemBlockStore {
       if (states[block] == nullptr)
         continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
+      if (blocks[block].boundary_session) {
+        auto& prepared = flux ? blocks[block].rhs_flux_only_core_at_point_prepared
+                              : blocks[block].rhs_core_at_point_prepared;
+        if (!prepared)
+          throw std::runtime_error(
+              "SystemBlockStore block lacks its persistent prepared core residual closure");
+        prepared(point, *states[block], *rhs[block], *blocks[block].boundary_session);
+        continue;
+      }
       auto& closure =
           flux ? blocks[block].rhs_flux_only_core_at_point : blocks[block].rhs_core_at_point;
       if (!closure)
@@ -302,6 +341,49 @@ class SystemBlockStore {
       closure(point, *states[block], *rhs[block]);
     }
     interface_scheduler_.apply(point, states, rhs);
+  }
+
+  /// Allocation-free scalar core route used by a prepared matrix-free operator. A block taking part
+  /// in a shared interface cannot be linearized independently: the coupled operator must supply every
+  /// participating state/output together, so this seam refuses instead of constructing a sparse
+  /// temporary vector and evaluating an incomplete interface batch.
+  void evaluate_rhs_core(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                         std::size_t block, MultiFab& state, MultiFab& rhs, bool flux_only) {
+    if (block >= blocks.size())
+      throw std::out_of_range("SystemBlockStore core RHS block index is out of range");
+    if (interface_scheduler_.participates(block, point.level))
+      throw std::runtime_error(
+          "System implicit core RHS requires a coupled shared-interface solve");
+    auto& closure =
+        flux_only ? blocks[block].rhs_flux_only_core_at_point : blocks[block].rhs_core_at_point;
+    if (blocks[block].boundary_session) {
+      auto& prepared = flux_only ? blocks[block].rhs_flux_only_core_at_point_prepared
+                                 : blocks[block].rhs_core_at_point_prepared;
+      if (!prepared)
+        throw std::runtime_error(
+            "SystemBlockStore block lacks its persistent prepared core residual closure");
+      prepared(point, state, rhs, *blocks[block].boundary_session);
+      return;
+    }
+    if (!closure)
+      throw std::runtime_error(
+          "SystemBlockStore block lacks a point-qualified core residual closure");
+    closure(point, state, rhs);
+  }
+
+  void evaluate_rhs_core_prepared(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  std::size_t block, MultiFab& state, MultiFab& rhs, bool flux_only,
+                                  const PreparedGridBoundarySession& boundary) {
+    if (block >= blocks.size())
+      throw std::out_of_range("SystemBlockStore prepared core RHS block index is out of range");
+    if (interface_scheduler_.participates(block, point.level))
+      throw std::runtime_error(
+          "System implicit core RHS requires a coupled shared-interface solve");
+    auto& closure = flux_only ? blocks[block].rhs_flux_only_core_at_point_prepared
+                              : blocks[block].rhs_core_at_point_prepared;
+    if (!closure)
+      throw std::runtime_error("SystemBlockStore block lacks a prepared core residual closure");
+    closure(point, state, rhs, boundary);
   }
 
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {

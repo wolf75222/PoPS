@@ -14,14 +14,14 @@ NO ``preconditioners`` submodule -- a preconditioner configures a solver, so it 
 solver descriptors, and the no-retro-compat regime forbids a second public path / shim.
 """
 from .operator import LinearOperator, MatrixFreeOperator
-from .problem import LinearProblem
+from .problem import LinearOperatorProperties, LinearProblem
 from .norms import L1, L2, LInf
 from .reductions import Dot, Norm2, dot, norm2
 from . import operator, problem, norms, reductions
 
 __all__ = [
     "LinearOperator", "MatrixFreeOperator",
-    "LinearProblem",
+    "LinearOperatorProperties", "LinearProblem",
     "L1", "L2", "LInf",
     "Dot", "Norm2", "dot", "norm2",
     "operator", "problem", "norms", "reductions",

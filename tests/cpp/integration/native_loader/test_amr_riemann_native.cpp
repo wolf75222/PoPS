@@ -89,6 +89,9 @@ struct Snap {
 };
 
 Snap run(AmrSystem& s, int nsteps) {
+  // Time subcycling is an independent execution contract. Keep it explicit even though this test
+  // deliberately chooses the same value as the spatial refinement ratio.
+  s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   s.set_refinement(1.2);
   const double dt = 2e-4;

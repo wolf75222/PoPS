@@ -6,13 +6,18 @@
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+#include <pops/runtime/program/coeff_elliptic_ops.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -40,25 +45,45 @@ struct ManufacturedRhs {
     const Real x = static_cast<Real>(geometry.x_cell(i));
     const Real y = static_cast<Real>(geometry.y_cell(j));
     const Real sin_sin = exact_solution(x, y);
-    const Real cos_cos = static_cast<Real>(
-        std::cos(kPi * static_cast<double>(x)) * std::cos(kPi * static_cast<double>(y)));
+    const Real cos_cos = static_cast<Real>(std::cos(kPi * static_cast<double>(x)) *
+                                           std::cos(kPi * static_cast<double>(y)));
     rhs(i, j, 0) = static_cast<Real>(-kPi * kPi) * (kAxx + kAyy) * sin_sin +
                    static_cast<Real>(kPi * kPi) * (kAxy + kAyx) * cos_cos;
   }
 };
 
+struct PreparedBenchmarkContext {
+  GridContext grid;
+
+  bool is_polar_geometry() const { return false; }
+  GridContext grid_context() const { return grid; }
+  void count_kernel() const {}
+};
+
+OperatorEvaluationSnapshot benchmark_snapshot(const MultiFab& prototype) {
+  return {{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)},
+          1,
+          0,
+          0,
+          1,
+          std::bit_cast<std::uint64_t>(1.0),
+          std::bit_cast<std::uint64_t>(0.0),
+          1,
+          detail::layout_fingerprint(prototype),
+          {UINT64_C(5), UINT64_C(6), UINT64_C(7), UINT64_C(8)}};
+}
+
 std::string parameters_json(const BenchmarkConfig& config, const BoxArray& boxes) {
   std::ostringstream out;
-  out << std::setprecision(17) << "{\"nx\":" << config.krylov_n
-      << ",\"ny\":" << config.krylov_n << ",\"tile\":" << config.krylov_tile
-      << ",\"boxes\":" << boxes.size() << ",\"global_valid_cells\":"
+  out << std::setprecision(17) << "{\"nx\":" << config.krylov_n << ",\"ny\":" << config.krylov_n
+      << ",\"tile\":" << config.krylov_tile << ",\"boxes\":" << boxes.size()
+      << ",\"global_valid_cells\":"
       << static_cast<long long>(config.krylov_n) * static_cast<long long>(config.krylov_n)
-      << ",\"operator\":\"div(A grad phi)\",\"axx\":" << kAxx
-      << ",\"ayy\":" << kAyy << ",\"axy\":" << kAxy << ",\"ayx\":" << kAyx
-      << ",\"boundary\":\"homogeneous_dirichlet\","
+      << ",\"operator\":\"div(A grad phi)\",\"axx\":" << kAxx << ",\"ayy\":" << kAyy
+      << ",\"axy\":" << kAxy << ",\"ayx\":" << kAyx << ",\"boundary\":\"homogeneous_dirichlet\","
       << "\"preconditioner\":\"geometric_mg_one_vcycle_diagonal_tensor\","
-      << "\"rel_tol\":" << config.krylov_rel_tol << ",\"abs_tol\":"
-      << config.krylov_abs_tol << ",\"max_iters\":" << config.krylov_max_iters << '}';
+      << "\"rel_tol\":" << config.krylov_rel_tol << ",\"abs_tol\":" << config.krylov_abs_tol
+      << ",\"max_iters\":" << config.krylov_max_iters << '}';
   return out.str();
 }
 
@@ -72,27 +97,48 @@ void run_tensor_krylov_case(const BenchmarkConfig& config, const RuntimeMetadata
   BCRec boundary;
   boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
 
-  GeometricMG op(geometry, boxes, boundary);
-  op.set_epsilon_anisotropic([](Real, Real) { return kAxx; },
-                             [](Real, Real) { return kAyy; });
-  op.set_cross_terms([](Real, Real) { return kAxy; }, [](Real, Real) { return kAyx; });
-  GeometricMG preconditioner(geometry, boxes, boundary);
-  preconditioner.set_epsilon_anisotropic([](Real, Real) { return kAxx; },
-                                         [](Real, Real) { return kAyy; });
-  for (int local = 0; local < op.rhs().local_size(); ++local)
-    for_each_cell(op.rhs().box(local),
-                  ManufacturedRhs{op.rhs().fab(local).array(), geometry});
-  op.phi().set_val(Real(0));
-  device_fence();
+  auto op = std::make_shared<GeometricMG>(geometry, boxes, boundary);
+  op->set_epsilon_anisotropic(constant_scalar_field_provider(kAxx),
+                              constant_scalar_field_provider(kAyy));
+  op->set_cross_terms(constant_scalar_field_provider(kAxy), constant_scalar_field_provider(kAyx));
+  MultiFab iterate(boxes, op->dmap(), 1, 1);
+  MultiFab rhs(boxes, op->dmap(), 1, 0);
+  for (int local = 0; local < rhs.local_size(); ++local)
+    for_each_cell(rhs.box(local), ManufacturedRhs{rhs.fab(local).array(), geometry});
 
-  TensorKrylovSolver solver(op, preconditioner, /*n_precond_vcycles=*/1);
+  ApplyFn apply = [op](MultiFab& out, const MultiFab& in) {
+    MultiFab& mutable_input = const_cast<MultiFab&>(in);
+    device_fence();
+    fill_ghosts(mutable_input, op->geom().domain, op->bc());
+    apply_laplacian(mutable_input, op->geom(), out, op->op_coef(), op->op_eps(), op->op_kappa(),
+                    op->op_eps_y(), op->op_a_xy(), op->op_a_yx());
+  };
+
+  auto context = std::make_shared<PreparedBenchmarkContext>();
+  context->grid.dom = domain;
+  context->grid.geom = geometry;
+  context->grid.bc = boundary;
+  auto mg = std::make_shared<runtime::program::GeometricMgPreconditioner>();
+  PreparedLinearPreconditioner preconditioner(
+      iterate, [context, mg](MultiFab& out, const MultiFab& in) { mg->apply(*context, out, in); },
+      [context, mg, &iterate]() { mg->prepare(*context, iterate); });
+  const KrylovFootprint footprint{1, 1, true};
+  OperatorEvaluationSnapshot snapshot = benchmark_snapshot(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, std::move(apply), std::move(preconditioner), LinearOperatorProperties::general(),
+      footprint, PreparedNullspacePolicy::nonsingular(), [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(iterate, bicgstab_krylov_method(), footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const KrylovControls controls{bicgstab_krylov_method(),
+                                static_cast<Real>(config.krylov_rel_tol),
+                                static_cast<Real>(config.krylov_abs_tol),
+                                config.krylov_max_iters};
+
   SolveReport report;
   std::vector<int> measured_iterations;
-  auto prepare = [&] { solver.phi().set_val(Real(0)); };
-  auto run = [&] {
-    report = solver.solve(static_cast<Real>(config.krylov_rel_tol), config.krylov_max_iters,
-                          static_cast<Real>(config.krylov_abs_tol));
-  };
+  auto prepare = [&] { PureFieldAlgebra::zero_valid(iterate); };
+  auto run = [&] { report = solve_prepared_affine(problem, workspace, iterate, rhs, controls); };
   auto observe = [&](bool measured) {
     if (!report.solved())
       throw std::runtime_error(std::string("tensor_krylov solve failed: ") + report.status_name());
@@ -104,22 +150,23 @@ void run_tensor_krylov_case(const BenchmarkConfig& config, const RuntimeMetadata
 
   // Validation is outside the timed interval: independently recompute the true residual and inspect
   // the manufactured-solution error over valid cells.
-  const double residual = static_cast<double>(solver.residual());
-  const double forcing_norm = std::sqrt(static_cast<double>(dot(solver.rhs(), solver.rhs())));
+  MultiFab residual_field(boxes, op->dmap(), 1, 1);
+  problem.true_residual(residual_field, rhs, iterate);
+  const double residual = static_cast<double>(PureFieldAlgebra::norm(residual_field));
+  const double forcing_norm = static_cast<double>(report.reference_residual_norm);
   const double relative_residual = forcing_norm > 0.0 ? residual / forcing_norm : residual;
   device_fence();
   barrier();
-  solver.phi().sync_host();
+  iterate.sync_host();
   double local_error = 0.0;
   long local_nonfinite = 0;
-  for (int local = 0; local < solver.phi().local_size(); ++local) {
-    const ConstArray4 phi = solver.phi().fab(local).const_array();
-    const Box2D valid = solver.phi().box(local);
+  for (int local = 0; local < iterate.local_size(); ++local) {
+    const ConstArray4 phi = iterate.fab(local).const_array();
+    const Box2D valid = iterate.box(local);
     for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
       for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-        const double exact = static_cast<double>(
-            exact_solution(static_cast<Real>(geometry.x_cell(i)),
-                           static_cast<Real>(geometry.y_cell(j))));
+        const double exact = static_cast<double>(exact_solution(
+            static_cast<Real>(geometry.x_cell(i)), static_cast<Real>(geometry.y_cell(j))));
         const double computed = static_cast<double>(phi(i, j, 0));
         if (!std::isfinite(exact) || !std::isfinite(computed)) {
           local_nonfinite = 1;
@@ -133,9 +180,8 @@ void run_tensor_krylov_case(const BenchmarkConfig& config, const RuntimeMetadata
   const double requested_stop =
       std::max(config.krylov_rel_tol * forcing_norm, config.krylov_abs_tol);
   const double residual_limit =
-      4.0 * requested_stop +
-      512.0 * static_cast<double>(std::numeric_limits<Real>::epsilon()) *
-          std::max(1.0, forcing_norm);
+      4.0 * requested_stop + 512.0 * static_cast<double>(std::numeric_limits<Real>::epsilon()) *
+                                 std::max(1.0, forcing_norm);
   const double dx = 1.0 / static_cast<double>(config.krylov_n);
   const double discretization_limit = 64.0 * dx * dx;
   const bool passed = report.solved() && !nonfinite_solution && std::isfinite(residual) &&
@@ -157,26 +203,23 @@ void run_tensor_krylov_case(const BenchmarkConfig& config, const RuntimeMetadata
              << ",\"true_relative_residual\":" << json_number(relative_residual)
              << ",\"residual_limit\":" << json_number(residual_limit)
              << ",\"manufactured_max_error\":" << json_number(max_error)
-             << ",\"resolution_scaled_error_limit\":" << json_number(discretization_limit)
-             << '}';
+             << ",\"resolution_scaled_error_limit\":" << json_number(discretization_limit) << '}';
 
   std::ostringstream iterations;
-  iterations << std::setprecision(17) << "{\"samples\":"
-             << json_integer_array(measured_iterations) << ",\"min\":" << iteration_stats.minimum
-             << ",\"median\":" << iteration_stats.median << ",\"max\":"
-             << iteration_stats.maximum << '}';
+  iterations << std::setprecision(17) << "{\"samples\":" << json_integer_array(measured_iterations)
+             << ",\"min\":" << iteration_stats.minimum << ",\"median\":" << iteration_stats.median
+             << ",\"max\":" << iteration_stats.maximum << '}';
 
   const std::string timing =
       "{\"unit\":\"seconds\",\"clock\":\"steady_clock\","
       "\"rank_aggregation\":\"max\",\"device_fence\":\"before_and_after\","
       "\"mpi_barrier\":\"before_and_after\",\"performance_threshold\":null,\"warmups\":" +
-      std::to_string(config.warmups) + ",\"repetitions\":" +
-      std::to_string(config.repetitions) + ",\"statistics\":" + stats_json(samples) + '}';
+      std::to_string(config.warmups) + ",\"repetitions\":" + std::to_string(config.repetitions) +
+      ",\"statistics\":" + stats_json(samples) + '}';
 
   writer.write(record_prefix(metadata, "tensor_krylov", "bicgstab_geometric_mg", "cold_repeated") +
                ",\"parameters\":" + parameters_json(config, boxes) + ",\"timing\":" + timing +
-               ",\"iterations\":" + iterations.str() + ",\"validation\":" +
-               validation.str() + '}');
+               ",\"iterations\":" + iterations.str() + ",\"validation\":" + validation.str() + '}');
 
   if (!passed)
     throw std::runtime_error("tensor_krylov numerical validation failed");

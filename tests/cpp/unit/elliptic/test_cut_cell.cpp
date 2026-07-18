@@ -24,7 +24,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace pops;
@@ -36,15 +35,13 @@ static GeometricMG make_mg(int nc, bool cut) {
   BoxArray ba(std::vector<Box2D>{dom});
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  std::function<Real(Real, Real)> ls = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) - kR;
-  };
-  std::function<bool(Real, Real)> active = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) < kR;
-  };
+  LevelSetProvider2D level_set = LevelSetProvider2D::trusted_extension(
+      {"pops.test.level-set.circle", 1}, exact_provider_parameters(kCx, kCy, kR),
+      [](Real x, Real y) { return std::hypot(x - kCx, y - kCy) - kR; });
+  ActiveRegionProvider2D active = active_region_from_level_set(level_set);
   // (geom, ba, bc, active, replicated, min_coarse, nu1, nu2, nbottom, cut_cell, levelset)
-  return GeometricMG(geom, ba, bc, active, false, 2, 2, 2, 50, cut,
-                     cut ? ls : std::function<Real(Real, Real)>{});
+  return GeometricMG(geom, ba, bc, active, FieldDistribution::Distributed, 2, 2, 2, 50, cut,
+                     cut ? level_set : LevelSetProvider2D{});
 }
 
 // erreur L2 (et L_inf) de phi_MG vs R^2 - r^2 sur les cellules interieures au disque.

@@ -9,7 +9,7 @@ try:
     from pops.physics._facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime
-    from typed_program_support import fresh_field_refs, state_refs
+    from typed_program_support import codegen_field_plans, fresh_field_refs, state_refs
 except Exception as exc:  # pops not importable here -> skip, never fake
     require_native_or_skip('test_operator_macros (pops unavailable: %s)' % exc)
 
@@ -188,6 +188,24 @@ def test_field_factories_consume_outcomes_with_default_and_custom_actions():
     for name, build in _field_factory_builders(_model("actions-custom")).items():
         actions = _recorded_solve_actions(build(custom))
         assert actions and all(action == custom for action in actions), name
+
+
+def test_field_reject_attempt_codegen_filters_selected_statuses_and_fails_closed():
+    from pops.time import RejectAttempt
+
+    model = _model("actions-codegen")
+    program = _field_factory_builders(model)["RungeKutta"](
+        RejectAttempt(statuses=("iteration_limit", "breakdown")))
+    source = emit_cpp_program(
+        program, model=model, field_plans=codegen_field_plans(program))
+    start = source.index("if (!field_report_")
+    end = source.index(" action=fail_run", start)
+    guard = source[start:end]
+
+    assert "SolveStatus::kIterationLimit" in guard
+    assert "SolveStatus::kBreakdown" in guard
+    assert "SolveStatus::kSingular" not in guard
+    assert "StepAttemptRejected" in guard
 
 
 def test_field_factories_reject_invalid_solve_actions():

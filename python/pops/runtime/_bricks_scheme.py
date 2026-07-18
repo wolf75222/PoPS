@@ -183,7 +183,7 @@ class Spatial:
         lowering boundary, so Decimal, Fraction and binary64 authoring values cannot collapse to
         the same accidental float identity.
         """
-        from pops._ir.literals import scalar_literal
+        from pops.identity.scalar import scalar_literal
 
         return {
             "schema_version": 1,

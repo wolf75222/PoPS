@@ -5,6 +5,8 @@
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
+#include <algorithm>
+
 namespace pops {
 
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
@@ -16,7 +18,8 @@ void System::install_program_step(std::function<void(double)> step) {
 // program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
-  require_assembling(p_->lifecycle_, "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
   // Program subsystem owns the cadence validation + storage (ADC-594): the guard message names
   // "System::set_program_cadence" verbatim (unchanged wording), keeping the pinned error intact.
   p_->program_.set_cadence(substeps, stride, "System");
@@ -38,15 +41,15 @@ MultiFab& System::block_state(int b) {
 void System::block_rhs_into(int b, MultiFab& U, MultiFab& R) {
   p_->sp[static_cast<std::size_t>(b)].rhs_into(U, R);
 }
-void System::block_rhs_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    int b, MultiFab& U, MultiFab& R) {
+void System::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                               MultiFab& U, MultiFab& R) {
   block_rhs_group(point, {b}, {&U}, {&R}, {0});
 }
-void System::block_rhs_group(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
-    const std::vector<MultiFab*>& requested_rhs, const std::vector<int>& requested_flux_only) {
+void System::block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                             const std::vector<int>& requested_blocks,
+                             const std::vector<MultiFab*>& requested_states,
+                             const std::vector<MultiFab*>& requested_rhs,
+                             const std::vector<int>& requested_flux_only) {
   if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
       requested_blocks.size() != requested_rhs.size() ||
       requested_blocks.size() != requested_flux_only.size())
@@ -71,24 +74,19 @@ void System::block_rhs_group(
   struct StageStateScope {
     std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
     ~StageStateScope() {
-      if (slot != nullptr) slot->reset();
+      if (slot != nullptr)
+        slot->reset();
     }
   } stage_scope;
   if (!p_->block_state_identities_.empty()) {
     if (p_->boundary_stage_states_)
       throw std::runtime_error("System boundary stage-state registry is already active");
-    std::map<std::string, MultiFab*> staged;
     for (std::size_t index = 0; index < p_->sp.size(); ++index) {
       const auto& identity = p_->sp[index].state_identity;
       if (identity.empty())
-        throw std::runtime_error(
-            "System materialized block has no exact qualified state identity");
-      if (states[index] != nullptr && !staged.emplace(identity, states[index]).second)
-        throw std::runtime_error(
-            "System boundary stage-state registry has a duplicate qualified identity");
+        throw std::runtime_error("System materialized block has no exact qualified state identity");
     }
-    p_->boundary_stage_states_.emplace(
-        Impl::BoundaryStageStateView{point, std::move(staged)});
+    p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, &states, -1, nullptr});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
   p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only);
@@ -99,26 +97,19 @@ bool System::block_has_boundary_linearization(int b) const {
     throw std::out_of_range("System boundary linearization block index is out of range");
   const auto& block = p_->sp[static_cast<std::size_t>(b)];
   const auto plan = p_->boundary_plans_.find(block.name);
-  return plan != p_->boundary_plans_.end() &&
-         plan->second->has_boundary_linearization();
+  return plan != p_->boundary_plans_.end() && plan->second->has_boundary_linearization();
 }
 
-void System::block_rhs_core_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    int b, MultiFab& U, MultiFab& R, bool flux_only) {
+void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    int b, MultiFab& U, MultiFab& R, bool flux_only) {
   if (b < 0 || b >= static_cast<int>(p_->sp.size()))
     throw std::out_of_range("System core RHS block index is out of range");
-  std::vector<MultiFab*> states(p_->sp.size(), nullptr);
-  std::vector<MultiFab*> rhs(p_->sp.size(), nullptr);
-  std::vector<int> modes(p_->sp.size(), 0);
   const auto block = static_cast<std::size_t>(b);
-  states[block] = &U;
-  rhs[block] = &R;
-  modes[block] = flux_only ? 1 : 0;
   struct StageStateScope {
     std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
     ~StageStateScope() {
-      if (slot != nullptr) slot->reset();
+      if (slot != nullptr)
+        slot->reset();
     }
   } stage_scope;
   if (!p_->block_state_identities_.empty()) {
@@ -126,37 +117,94 @@ void System::block_rhs_core_into_at(
       throw std::runtime_error("System boundary stage-state registry is already active");
     const auto& identity = p_->sp[block].state_identity;
     if (identity.empty())
-      throw std::runtime_error(
-          "System core RHS block has no exact qualified state identity");
-    p_->boundary_stage_states_.emplace(
-        Impl::BoundaryStageStateView{point, {{identity, &U}}});
+      throw std::runtime_error("System core RHS block has no exact qualified state identity");
+    p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, nullptr, b, &U});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
-  p_->blocks_.evaluate_rhs_core_with_interfaces(point, states, rhs, modes);
+  p_->blocks_.evaluate_rhs_core(point, block, U, R, flux_only);
+}
+
+void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    int b, MultiFab& U, MultiFab& R, bool flux_only,
+                                    const PreparedGridBoundarySession& boundary) {
+  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System prepared core RHS block index is out of range");
+  const auto block = static_cast<std::size_t>(b);
+  const auto expected_plan = p_->boundary_plans_.find(p_->sp[block].name);
+  const PreparedBoundaryPlan* expected =
+      expected_plan == p_->boundary_plans_.end() ? nullptr : expected_plan->second.get();
+  if (boundary.resolved_plan() != expected)
+    throw std::invalid_argument("System prepared core RHS boundary authority differs from block");
+  // This single-block prepared route is explicitly rejected for a shared interface above the
+  // closure boundary. Its boundary registry therefore binds U directly for the exact owner and the
+  // accepted live state for every other dependency; it must not mutate the System-wide grouped-RHS
+  // staging slot, which would couple otherwise independent Krylov execution lanes.
+  p_->blocks_.evaluate_rhs_core_prepared(point, block, U, R, flux_only, boundary);
 }
 
 void System::block_boundary_residual_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    int b, MultiFab& U, MultiFab& C) {
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C) {
   if (!block_has_boundary_linearization(b))
-    throw std::runtime_error(
-        "System block has no executable boundary residual/JVP pair");
-  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_residual_at_point;
+    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
+  auto& block = p_->sp[static_cast<std::size_t>(b)];
+  if (block.boundary_session) {
+    if (!block.boundary_residual_at_point_prepared)
+      throw std::runtime_error("System block lacks its prepared boundary residual closure");
+    block.boundary_residual_at_point_prepared(point, U, C, *block.boundary_session);
+    return;
+  }
+  auto& closure = block.boundary_residual_at_point;
   if (!closure)
     throw std::runtime_error("System block lacks its boundary residual closure");
   closure(point, U, C);
 }
 
-void System::block_boundary_jvp_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    int b, MultiFab& U, const MultiFab& V, MultiFab& J) {
+void System::block_boundary_residual_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
+    const PreparedGridBoundarySession& boundary) {
   if (!block_has_boundary_linearization(b))
-    throw std::runtime_error(
-        "System block has no executable boundary residual/JVP pair");
-  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_jvp_at_point;
+    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
+  const auto& block = p_->sp[static_cast<std::size_t>(b)];
+  const auto expected_plan = p_->boundary_plans_.find(block.name);
+  if (expected_plan == p_->boundary_plans_.end() ||
+      boundary.resolved_plan() != expected_plan->second.get())
+    throw std::invalid_argument("System prepared boundary residual authority differs from block");
+  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_residual_at_point_prepared;
+  if (!closure)
+    throw std::runtime_error("System block lacks its prepared boundary residual closure");
+  closure(point, U, C, boundary);
+}
+
+void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                        int b, MultiFab& U, const MultiFab& V, MultiFab& J) {
+  if (!block_has_boundary_linearization(b))
+    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
+  auto& block = p_->sp[static_cast<std::size_t>(b)];
+  if (block.boundary_session) {
+    if (!block.boundary_jvp_at_point_prepared)
+      throw std::runtime_error("System block lacks its prepared boundary JVP closure");
+    block.boundary_jvp_at_point_prepared(point, U, V, J, *block.boundary_session);
+    return;
+  }
+  auto& closure = block.boundary_jvp_at_point;
   if (!closure)
     throw std::runtime_error("System block lacks its boundary JVP closure");
   closure(point, U, V, J);
+}
+void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                        int b, MultiFab& U, const MultiFab& V, MultiFab& J,
+                                        const PreparedGridBoundarySession& boundary) {
+  if (!block_has_boundary_linearization(b))
+    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
+  const auto& block = p_->sp[static_cast<std::size_t>(b)];
+  const auto expected_plan = p_->boundary_plans_.find(block.name);
+  if (expected_plan == p_->boundary_plans_.end() ||
+      boundary.resolved_plan() != expected_plan->second.get())
+    throw std::invalid_argument("System prepared boundary JVP authority differs from block");
+  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_jvp_at_point_prepared;
+  if (!closure)
+    throw std::runtime_error("System block lacks its prepared boundary JVP closure");
+  closure(point, U, V, J, boundary);
 }
 // FLUX-ONLY residual R <- -div F(U) (ADC-425): the block's SourceFreeModel<Model> rhs path (built in
 // build_block), bit-identical to rhs_into minus the default source. Fails loud on a block installed
@@ -170,9 +218,8 @@ void System::block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R) {
         "requires add_block or a Production compiled block");
   s.rhs_flux_only(U, R);
 }
-void System::block_neg_div_flux_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    int b, MultiFab& U, MultiFab& R) {
+void System::block_neg_div_flux_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                        int b, MultiFab& U, MultiFab& R) {
   block_rhs_group(point, {b}, {&U}, {&R}, {1});
 }
 // SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the block's SourceInto<Model> path (built in
@@ -227,12 +274,19 @@ void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
 const std::vector<int>& System::program_block_map() const {
   return p_->program_.block_map_;
 }
+bool System::program_owns_operator_authority(
+    const std::array<std::uint64_t, 4>& authority) const noexcept {
+  return std::find(p_->program_.operator_authorities_.begin(),
+                   p_->program_.operator_authorities_.end(),
+                   authority) != p_->program_.operator_authorities_.end();
+}
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure and rejects an absent capability.
 void System::block_project(int b, MultiFab& u) {
   std::function<void(MultiFab&)>& proj = p_->sp[static_cast<std::size_t>(b)].project;
   if (!proj)
-    throw std::runtime_error("System::block_project: owning block declares no pointwise projection");
+    throw std::runtime_error(
+        "System::block_project: owning block declares no pointwise projection");
   proj(u);
 }
 // Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars

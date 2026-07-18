@@ -17,10 +17,10 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 PI = np.pi
 
 
-def _charge_model():
+def _charge_model(*, n0):
     return engine.Model(state=engine.FluidState(kind="compressible", gamma=1.4),
                      transport=engine.CompressibleFlux(), source=engine.NoSource(),
-                     elliptic=engine.ChargeDensity(charge=1.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=n0))
 
 
 def _charge_scalar():
@@ -37,10 +37,11 @@ def _density(n):
 
 
 def phi_set_poisson(eps, n=64):
+    density = _density(n)
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_equation("gas", model=_charge_model(),
+    sim.add_equation("gas", model=_charge_model(n0=float(density.mean())),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
-    sim.set_density("gas", _density(n).reshape(-1).tolist())
+    sim.set_density("gas", density.reshape(-1).tolist())
     sim.set_poisson(rhs="charge_density", solver="fft", epsilon=eps)
     sim.solve_fields()
     return np.array(sim.potential()).reshape(n, n)
@@ -57,10 +58,11 @@ def main():
     print("OK  set_poisson(epsilon) : phi(eps=2) == phi(eps=1)/2 (err %.1e)" % err)
 
     # meme resultat via l'EPM compose (div_eps_grad(2.0))
+    density = _density(n)
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_equation("gas", model=_charge_model(),
+    sim.add_equation("gas", model=_charge_model(n0=float(density.mean())),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
-    sim.set_density("gas", _density(n).reshape(-1).tolist())
+    sim.set_density("gas", density.reshape(-1).tolist())
     sim.add_elliptic_model("poisson",
                            engine.elliptic(operator=engine.div_eps_grad(2.0), rhs=engine.charge_density(),
                                         output=engine.electric_field_from_potential()),
@@ -120,12 +122,15 @@ def variable_epsilon_tests():
     sp = System(n=n, L=1.0, periodic=True)
     sp.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
-    sp.set_density("q", f)
+    # Keep the periodic RHS explicitly in the range of the Laplacian so this branch reaches the
+    # intended variable-coefficient/FFT refusal rather than failing first on nullspace compatibility.
+    sp.set_density("q", f - float(f.mean()))
     sp.set_epsilon_field(eps)
     try:
         sp.solve_fields()
         raise AssertionError("fft + eps(x) variable aurait du lever une erreur")
-    except RuntimeError:
+    except ValueError as exc:
+        assert "materialized diffusion coefficient" in str(exc)
         print("OK  eps(x) variable refuse avec solver='fft' (coefficient constant)")
 
 

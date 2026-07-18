@@ -256,7 +256,7 @@ def test_registered_strategy_and_controller_own_extension_and_restart_protocols(
 
 
 def test_registered_strategy_provider_owns_strict_restart_reconstruction():
-    from pops._ir.literals import scalar_data
+    from pops.identity.scalar import scalar_data
 
     @register_step_strategy_type
     @dataclass(frozen=True, slots=True)

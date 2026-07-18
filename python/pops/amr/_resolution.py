@@ -583,6 +583,9 @@ def _hierarchy(
             EventHandle(clock_owner, "amr.regrid.due.%s" % due_id),
         ),
     )
+    from pops.mesh._amr.hierarchy_native import prepared_hierarchy_native_provider
+
+    native_hierarchy_provider = prepared_hierarchy_native_provider("shared_n_level")
     capabilities = HierarchyProviderCapabilities(
         provider("shared_n_level", "amr_hierarchy_provider"),
         supported_dimensions=(2,),
@@ -590,7 +593,10 @@ def _hierarchy(
         max_materialized_level_count=2_147_483_647,
         supports_transactional_regrid=True,
         supports_lifecycle_events=True,
-        options=CanonicalOptions({"native_route": "shared_n_level"}),
+        options=CanonicalOptions({
+            "native_route": "shared_n_level",
+            "native_provider": native_hierarchy_provider.authority(),
+        }),
     )
     return resolve_hierarchy(
         plan,

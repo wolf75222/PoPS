@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from .expr import Expr, _wrap
-from .literals import exact_numeric_scalar, scalar_cpp, scalar_literal
+from pops.identity.scalar import exact_numeric_scalar, scalar_cpp, scalar_literal
 
 
 _RUNTIME_PARAM_INDICES: ContextVar[dict[str, int] | None] = ContextVar(

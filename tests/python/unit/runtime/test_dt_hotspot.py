@@ -44,7 +44,7 @@ def make_sim(n=32):
             state=engine.FluidState("isothermal", cs2=CS2),
             transport=engine.IsothermalFlux(),
             source=engine.NoSource(),
-            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
         ),
         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
         time=engine.Explicit(),

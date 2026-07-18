@@ -57,7 +57,7 @@ inline std::vector<int> AmrRuntime::default_aux_components() const {
   std::set<int> components;
   for (int component = 0; component < 3; ++component)
     detail::add_aux_component(components, component, aux_ncomp_);
-  for (const auto& [component, _] : named_aux_)
+  for (const auto& [component, _] : static_aux_)
     detail::add_aux_component(components, component, aux_ncomp_);
   return {components.begin(), components.end()};
 }
@@ -203,8 +203,8 @@ inline AmrRuntime::FieldSolveSnapshot AmrRuntime::capture_field_solve_snapshot(
   snapshot.packed_aux = pack_aux_components(snapshot.aux_components);
   if (scope.default_field) {
     snapshot.has_default = true;
-    snapshot.default_phi = mg_.phi();
-    snapshot.default_rhs = mg_.rhs();
+    snapshot.default_phi = default_field_solver_->phi_level(0);
+    snapshot.default_rhs = default_field_solver_->rhs_level(0);
   }
   for (const auto& [name, field] : named_fields_) {
     if (scope.named_fields == NamedFieldSnapshotScope::kNone ||
@@ -215,17 +215,17 @@ inline AmrRuntime::FieldSolveSnapshot AmrRuntime::capture_field_solve_snapshot(
     state.nullspace = field.nullspace;
     state.level_nullspace = field.level_nullspace;
     state.nullspace_ready = field.nullspace_ready;
-    if (field.fac) {
+    if (field.solver && field.solver->couples_hierarchy_levels()) {
       state.storage = FieldSolveSnapshot::NamedFieldState::Storage::kComposite;
-      for (int level = 0; level < field.fac->n_levels(); ++level) {
-        state.phi.push_back(field.fac->phi_level(level));
-        state.rhs.push_back(field.fac->rhs_level(level));
+      for (int level = 0; level < field.solver->level_count(); ++level) {
+        state.phi.push_back(field.solver->phi_level(level));
+        state.rhs.push_back(field.solver->rhs_level(level));
       }
-    } else if (!field.level_mg.empty()) {
+    } else if (field.solver) {
       state.storage = FieldSolveSnapshot::NamedFieldState::Storage::kLevelLocal;
-      for (const auto& solver : field.level_mg) {
-        state.phi.push_back(solver->phi());
-        state.rhs.push_back(solver->rhs());
+      for (int level = 0; level < field.solver->level_count(); ++level) {
+        state.phi.push_back(field.solver->phi_level(level));
+        state.rhs.push_back(field.solver->rhs_level(level));
       }
     }
     snapshot.named.emplace(name, std::move(state));
@@ -236,8 +236,8 @@ inline AmrRuntime::FieldSolveSnapshot AmrRuntime::capture_field_solve_snapshot(
 inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot&& snapshot) noexcept {
   device_fence();
   if (snapshot.has_default) {
-    mg_.phi() = std::move(snapshot.default_phi);
-    mg_.rhs() = std::move(snapshot.default_rhs);
+    default_field_solver_->phi_level(0) = std::move(snapshot.default_phi);
+    default_field_solver_->rhs_level(0) = std::move(snapshot.default_rhs);
   }
   unpack_aux_components(snapshot.packed_aux, snapshot.aux_components);
   for (auto& [name, state] : snapshot.named) {
@@ -247,25 +247,31 @@ inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot&& snapsh
     NamedField& field = found->second;
     using Storage = FieldSolveSnapshot::NamedFieldState::Storage;
     if (state.storage == Storage::kUnallocated) {
-      field.mg.reset();
-      field.level_mg.clear();
-      field.fac.reset();
+      invalidate_named_field_solver(field);
     } else if (state.storage == Storage::kComposite) {
-      if (!field.fac || state.phi.size() != static_cast<std::size_t>(field.fac->n_levels()) ||
+      if (!field.solver || !field.solver->couples_hierarchy_levels() ||
+          state.phi.size() != static_cast<std::size_t>(field.solver->level_count()) ||
           state.rhs.size() != state.phi.size())
         std::terminate();
-      for (int level = 0; level < field.fac->n_levels(); ++level) {
-        field.fac->phi_level(level) = std::move(state.phi[static_cast<std::size_t>(level)]);
-        field.fac->rhs_level(level) = std::move(state.rhs[static_cast<std::size_t>(level)]);
+      for (int level = 0; level < field.solver->level_count(); ++level) {
+        field.solver->phi_level(level) = std::move(state.phi[static_cast<std::size_t>(level)]);
+        field.solver->rhs_level(level) = std::move(state.rhs[static_cast<std::size_t>(level)]);
       }
     } else {
-      if (field.fac || state.phi.size() != field.level_mg.size() ||
+      if (!field.solver || field.solver->couples_hierarchy_levels() ||
+          state.phi.size() != static_cast<std::size_t>(field.solver->level_count()) ||
           state.rhs.size() != state.phi.size())
         std::terminate();
-      for (std::size_t level = 0; level < field.level_mg.size(); ++level) {
-        field.level_mg[level]->phi() = std::move(state.phi[level]);
-        field.level_mg[level]->rhs() = std::move(state.rhs[level]);
+      for (int level = 0; level < field.solver->level_count(); ++level) {
+        field.solver->phi_level(level) = std::move(state.phi[static_cast<std::size_t>(level)]);
+        field.solver->rhs_level(level) = std::move(state.rhs[static_cast<std::size_t>(level)]);
       }
+    }
+    if (!state.nullspace_ready) {
+      field.nullspace_workspace.reset();
+      field.level_nullspace_workspaces.clear();
+      field.nullspace_rhs_levels.clear();
+      field.nullspace_phi_levels.clear();
     }
     field.nullspace = std::move(state.nullspace);
     field.level_nullspace = std::move(state.level_nullspace);

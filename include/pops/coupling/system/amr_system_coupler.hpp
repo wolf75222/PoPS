@@ -22,9 +22,9 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // all_reduce_sum
+#include <pops/parallel/prepared_provider_consensus.hpp>
 
 #include <cstddef>
-#include <functional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -111,6 +111,17 @@ inline bool same_level_layout(const BoxArray& a_ba, const DistributionMapping& a
          a_dy == b_dy;
 }
 
+inline DistributionMapping amr_system_authoritative_coarse_mapping(
+    const BoxArray& coarse_boxes, const std::vector<std::vector<AmrLevelMP>>& block_levels) {
+  if (block_levels.empty() || block_levels.front().empty())
+    throw std::invalid_argument("AmrSystemCoupler requires a coarse level");
+  const MultiFab& coarse = block_levels.front().front().U;
+  if (coarse.box_array().boxes() != coarse_boxes.boxes())
+    throw std::invalid_argument(
+        "AmrSystemCoupler coarse BoxArray disagrees with the authoritative level field");
+  return coarse.dmap();
+}
+
 // LAYOUT CONSISTENCY guard between blocks (point 1 of the capstone). The aux is SHARED per level: all
 // blocks MUST live on EXACTLY the same grid at each level, otherwise the rewiring
 // levels[k].aux = &aux_[k] and the advance read an inconsistent grid (silent out-of-bound access).
@@ -161,13 +172,15 @@ class AmrSystemCoupler {
   // geometry / dx). AMR analog of the bz_ of SystemAssembler (non-AMR path). A block that
   // reads B_z (n_aux=4) sees it at all levels, a base block (3) ignores the component. Without
   // a block with an extra field (width 3) or if bz is empty: no-op -> bit-identical to history.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
   AmrSystemCoupler(System system, const Geometry& geom, const BoxArray& ba_coarse,
                    const BCRec& bcPhi, RhsAssembler rhs_assembler,
                    std::vector<std::vector<AmrLevelMP>> block_levels,
                    Periodicity base_per = Periodicity{true, true}, bool replicated_coarse = true,
                    PoissonCadence cadence = PoissonCadence::OncePerStep,
-                   std::function<bool(Real, Real)> active = {},
-                   std::function<Real(Real, Real)> bz = {})
+                   ActiveRegionProvider2D active = {}, ScalarFieldProvider2D bz = {},
+                   FactoryT elliptic_factory = {})
       : system_(std::move(system)),
         rhs_assembler_(std::move(rhs_assembler)),
         geom_(geom),
@@ -177,9 +190,14 @@ class AmrSystemCoupler {
         aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
         cadence_(cadence),
-        mg_(geom, ba_coarse, bcPhi, std::move(active), replicated_coarse),
+        coarse_mapping_(detail::amr_system_authoritative_coarse_mapping(ba_coarse, block_levels)),
+        mg_(make_elliptic_solver<Elliptic>(
+            {geom_, ba_coarse, coarse_mapping_, bcPhi_, std::move(active),
+             replicated_coarse ? FieldDistribution::Replicated : FieldDistribution::Distributed},
+            std::move(elliptic_factory))),
         block_levels_(std::move(block_levels)),
         bz_(std::move(bz)) {
+    require_prepared_provider_collective_consensus(bz_);
     // Construction checks (Codex review): without them, a malformed hierarchy
     // causes a silent out-of-bound access in the wiring / the advance.
     if (block_levels_.size() != System::n_blocks)
@@ -218,9 +236,11 @@ class AmrSystemCoupler {
     fill_bz();  // populates B_z per level (no-op if no block requests it or if bz is empty)
   }
 
-  // Setter (parity with the ctor: alternative to set B_z after construction). Immediately
-  // re-populates the aux channel of each level. Effective no-op if the aux width <= base.
-  void set_bz(std::function<Real(Real, Real)> bz) {
+  // Collective setter (parity with the collective ctor): all ranks must call it with an identical
+  // prepared-provider contract. Immediately re-populates the aux channel of each level. Effective
+  // no-op if the aux width <= base.
+  void set_bz(ScalarFieldProvider2D bz) {
+    require_prepared_provider_collective_consensus(bz);
     bz_ = std::move(bz);
     fill_bz();
   }
@@ -443,13 +463,14 @@ class AmrSystemCoupler {
   PoissonCadence cadence_;
   mutable int solve_count_ = 0;
   int macro_step_ = 0;  // macro-step counter (per-block stride cadence)
+  DistributionMapping coarse_mapping_;
   Elliptic mg_;
   std::vector<std::vector<AmrLevelMP>> block_levels_;  // [block][level]
   std::vector<MultiFab> aux_;                          // [level], shared
   int aux_ncomp_ =
       kAuxBaseComps;  // width of the shared aux channel (max aux_comps over the blocks)
   int nlev_ = 0;
-  std::function<Real(Real, Real)> bz_;  // external B_z(x, y) (empty if not provided)
+  ScalarFieldProvider2D bz_;  // prepared external B_z(x, y) (empty if not provided)
 };
 
 // Default implicit on AMR: backward-Euler (Newton) on the model source, applied

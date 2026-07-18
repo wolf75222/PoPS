@@ -96,10 +96,14 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
         std::string(context.communicator_datatype_identity) != "none")
       throw std::invalid_argument(
           "serial component execution context cannot hide MPI handles or identities");
-  } else if (std::string(context.communicator_identity) != "MPI_COMM_WORLD" ||
-             std::string(context.communicator_datatype_identity) != "MPI_DOUBLE") {
+  } else if (std::string(context.communicator_datatype_identity) != "MPI_DOUBLE") {
+    // An execution lane owns a communicator duplicated from the authenticated world-congruent rank
+    // space. Its Fortran handle may legally be zero just like a predefined handle, so structural
+    // ABI validation cannot use a numeric sentinel or require the MPI_COMM_WORLD handle itself.
+    // Session owners authenticate the exact duplicate against their ExecutionLane before
+    // invocation; this boundary validates the typed datatype contract and non-empty identity.
     throw std::invalid_argument(
-        "distributed component execution context supports only exact MPI_COMM_WORLD/MPI_DOUBLE");
+        "distributed component execution context requires an exact MPI_DOUBLE datatype authority");
   }
 }
 

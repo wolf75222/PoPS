@@ -48,8 +48,17 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     )
 
     assert "pops_install_program_amr" in amr_source
-    assert "AmrProgramContext ctx(sys)" in amr_source
+    assert 'extern "C" void pops_install_program(void* sys)' not in amr_source
+    assert "make_shared<pops::runtime::program::AmrProgramContext>(sys)" in amr_source
+    assert "_make_level_program" in amr_source
+    assert "ctx.program_resource_topology_epoch()" in amr_source
+    assert "ctx.program_resource_topology_generation()" in amr_source
+    assert "_refresh_level_programs();" in amr_source
     assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
+    level_advance = amr_source.split("auto _advance_level", 1)[1].split("};", 1)[0]
+    assert level_advance.index("_refresh_level_programs();") < level_advance.index(
+        "_level_programs->at"
+    ), "a transactional regrid must refresh resources before the first level-bundle access"
     assert "pops_install_program(" in system_source
     assert "pops_install_program_amr" not in system_source
 

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 from pops.codegen.cpp_writer import _cpp_identifier
 
 # Re-export the moved helpers + the brick emitter so the public surface of

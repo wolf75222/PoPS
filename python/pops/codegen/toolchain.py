@@ -64,10 +64,8 @@ def _native_loader_manifest_compile_flags(module: Any) -> list[str]:
 # "<category> <relpath>\n<sha256(content)>\n" for every installed row in
 # include/pops_headers.manifest. api, abi, sdk-root and sdk-support all enter the published ABI;
 # test-only or untracked files never do.
-def pops_header_signature(include: Any) -> str:
-    """Signature of the exact normalized installed-header contract under ``include``."""
-    import hashlib
-
+def _installed_pops_header_rows(include: Any) -> tuple[tuple[str, str], ...]:
+    """Return the exact installed PoPS SDK rows authenticated by the header signature."""
     manifest = os.path.join(include, "pops_headers.manifest")
     try:
         with open(manifest, encoding="utf-8") as source:
@@ -102,8 +100,30 @@ def pops_header_signature(include: Any) -> str:
         raise RuntimeError(
             "PoPS installed-header manifest has empty categories: %s" % ", ".join(missing))
 
+    return tuple(sorted(installed))
+
+
+def pops_authenticated_header_paths(include: Any) -> frozenset[str]:
+    """Canonical paths of every compiler header covered by ``pops_header_signature``.
+
+    The root directory itself is deliberately not an authority: an unmanifested file placed next to
+    the SDK must not become an implicit build input merely because the compiler can find it.
+    """
+    paths = []
+    for _category, rel in _installed_pops_header_rows(include):
+        path = os.path.join(include, *rel.split("/"))
+        if not os.path.isfile(path):
+            raise RuntimeError("PoPS installed header is missing: %s" % rel)
+        paths.append(os.path.realpath(path))
+    return frozenset(paths)
+
+
+def pops_header_signature(include: Any) -> str:
+    """Signature of the exact normalized installed-header contract under ``include``."""
+    import hashlib
+
     entries = []
-    for category, rel in sorted(installed):
+    for category, rel in _installed_pops_header_rows(include):
         path = os.path.join(include, *rel.split("/"))
         try:
             with open(path, "rb") as source:
@@ -265,13 +285,40 @@ def _default_cxx(cxx: Any = None) -> Any:
 _STD_ALIAS = {"c++23": "c++2b", "c++20": "c++2a"}
 
 
+_NATIVE_COMPILE_ENVIRONMENT_DENYLIST = frozenset({
+    # Compiler include search injection.
+    "CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "INCLUDE",
+    # Linker/library injection. Native plugin libraries are supplied as authenticated absolute
+    # paths or closed toolchain flags, never by ambient process search paths.
+    "LIBRARY_PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "LIB", "LIBPATH",
+    # Ambient flags and compiler-driver redirection.
+    "CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS", "GCC_EXEC_PREFIX", "COMPILER_PATH",
+    "DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES",
+})
+
+
+def native_compile_environment(environment: Any = None) -> dict[str, str]:
+    """Return the explicit native-build environment with ambient injection channels removed.
+
+    PATH, SDKROOT, the active conda prefix and platform deployment variables remain available: they
+    select the compiler/toolchain already recorded by the artifact contract. Include and link search
+    paths, however, must come from the authenticated command line.
+    """
+    source = os.environ if environment is None else environment
+    result = {str(key): str(value) for key, value in source.items()}
+    for name in _NATIVE_COMPILE_ENVIRONMENT_DENYLIST:
+        result.pop(name, None)
+    return result
+
+
 def _run_compile(cmd: Any, what: Any) -> None:
     """Run the compilation command @p cmd CAPTURING stderr : on failure, raises a
     SELF-CONTAINED RuntimeError (command + compiler output + remedies) instead of the raw
     CalledProcessError whose message contains only the command line (real bug : the user sees
     only a 'returned non-zero exit status 1' drowned in the traceback)."""
     import subprocess
-    r = subprocess.run(cmd, capture_output=True)
+    r = subprocess.run(cmd, capture_output=True, env=native_compile_environment())
     if r.returncode != 0:
         err = (r.stderr or b"").decode(errors="replace").strip()
         out = (r.stdout or b"").decode(errors="replace").strip()  # MSVC cl writes errors on STDOUT

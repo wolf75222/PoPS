@@ -10,8 +10,9 @@
 /// performance-critical native algorithms use MPI directly; the process contract below therefore
 /// requires full MPI thread support rather than pretending that a header-local lock can serialize
 /// calls issued by every executable and shared object in the process.
-/// Contract: every collective operates on MPI_COMM_WORLD; each rank must call them
-/// in the same order (otherwise deadlock). The sum_inplace / or_inplace bricks feed
+/// Contract: the argument-free communicator helpers operate on MPI_COMM_WORLD; execution-scoped
+/// overloads operate on their explicit CommunicatorView. Each rank must call collectives in the
+/// same order on each communicator (otherwise deadlock). The sum_inplace / or_inplace bricks feed
 /// respectively the multi-patch AMR reflux and the gathering of regrid tags before
 /// clustering; all_reduce_min guarantees a global dt identical on all ranks.
 ///
@@ -26,10 +27,15 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
+#include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -37,6 +43,21 @@
 #include <vector>
 
 namespace pops {
+
+namespace detail {
+
+inline std::atomic<std::uint64_t>& exact_consensus_dynamic_storage_counter() noexcept {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+
+}  // namespace detail
+
+/// Diagnostic count of calls to the exact-consensus helper that materializes dynamic vectors.
+/// Prepared hot paths can snapshot this after bind and prove they never re-enter that helper.
+inline std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
+  return detail::exact_consensus_dynamic_storage_counter().load(std::memory_order_relaxed);
+}
 
 #ifdef POPS_HAS_MPI
 
@@ -303,6 +324,22 @@ inline void all_reduce_max_inplace(char* buf, std::size_t n) {
   }
 }
 
+/// Broadcast an exact bounded byte payload from one canonical rank. Large payloads are chunked only
+/// at the MPI native count limit; callers that need a tighter memory bound own their scientific
+/// chunking. In serial this is an identity.
+inline void broadcast_bytes_inplace(char* buf, std::size_t n, int root = 0) {
+  if (!detail::comm_active_unlocked() || n == 0)
+    return;
+  while (n != 0) {
+    const int count =
+        static_cast<int>(std::min(n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(MPI_Bcast(buf, count, MPI_BYTE, root, MPI_COMM_WORLD),
+                                "MPI_Bcast(byte payload)");
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
 /// Batched structural consensus for canonical integral payloads.
 inline void all_reduce_min_inplace(long* buf, std::size_t n) {
   if (!detail::comm_active_unlocked() || n == 0)
@@ -364,15 +401,333 @@ inline long all_reduce_max(long x) {
 inline long all_reduce_min(long x) {
   return x;
 }
-inline void all_reduce_sum_inplace(double*, int) {}        // serial: identity
-inline void all_reduce_max_inplace(double*, int) {}        // serial: identity
-inline void all_reduce_or_inplace(char*, std::size_t) {}   // serial: identity
-inline void all_reduce_min_inplace(char*, std::size_t) {}  // serial: identity
-inline void all_reduce_max_inplace(char*, std::size_t) {}  // serial: identity
-inline void all_reduce_min_inplace(long*, std::size_t) {}  // serial: identity
-inline void all_reduce_max_inplace(long*, std::size_t) {}  // serial: identity
+inline void all_reduce_sum_inplace(double*, int) {}                  // serial: identity
+inline void all_reduce_max_inplace(double*, int) {}                  // serial: identity
+inline void all_reduce_or_inplace(char*, std::size_t) {}             // serial: identity
+inline void all_reduce_min_inplace(char*, std::size_t) {}            // serial: identity
+inline void all_reduce_max_inplace(char*, std::size_t) {}            // serial: identity
+inline void broadcast_bytes_inplace(char*, std::size_t, int = 0) {}  // serial: identity
+inline void all_reduce_min_inplace(long*, std::size_t) {}            // serial: identity
+inline void all_reduce_max_inplace(long*, std::size_t) {}            // serial: identity
 
 #endif
+
+/// Non-owning native communicator used by execution-scoped collectives.  The process-world
+/// helpers above remain the default control-plane API; prepared concurrent execution obtains one
+/// of these views from an owning ExecutionLane instead.  A view must not outlive that lane.
+class CommunicatorView {
+ public:
+#ifdef POPS_HAS_MPI
+  explicit CommunicatorView(MPI_Comm communicator = MPI_COMM_NULL) noexcept
+      : communicator_(communicator) {}
+
+  [[nodiscard]] MPI_Comm native_handle() const noexcept { return communicator_; }
+  [[nodiscard]] bool active() const noexcept {
+    return communicator_ != MPI_COMM_NULL && detail::comm_active_unlocked();
+  }
+#else
+  CommunicatorView() noexcept = default;
+  [[nodiscard]] bool active() const noexcept { return false; }
+#endif
+
+  [[nodiscard]] int rank() const {
+#ifdef POPS_HAS_MPI
+    if (!active())
+      return 0;
+    int value = 0;
+    detail::require_mpi_success(MPI_Comm_rank(communicator_, &value),
+                                "MPI_Comm_rank(execution communicator)");
+    return value;
+#else
+    return 0;
+#endif
+  }
+
+  [[nodiscard]] int size() const {
+#ifdef POPS_HAS_MPI
+    if (!active())
+      return 1;
+    int value = 1;
+    detail::require_mpi_success(MPI_Comm_size(communicator_, &value),
+                                "MPI_Comm_size(execution communicator)");
+    return value;
+#else
+    return 1;
+#endif
+  }
+
+ private:
+#ifdef POPS_HAS_MPI
+  MPI_Comm communicator_ = MPI_COMM_NULL;
+#endif
+};
+
+/// Non-owning view of the process world. This does not initialize MPI.
+inline CommunicatorView world_communicator_view() noexcept {
+#ifdef POPS_HAS_MPI
+  return CommunicatorView{MPI_COMM_WORLD};
+#else
+  return CommunicatorView{};
+#endif
+}
+
+// Explicit-communicator counterparts used by independently ordered execution lanes.  They mirror
+// the world helpers exactly, including chunking and the serial identity, but never silently fall
+// back to MPI_COMM_WORLD when the supplied communicator is inactive.
+inline void barrier(const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active())
+    detail::require_mpi_success(MPI_Barrier(communicator.native_handle()),
+                                "MPI_Barrier(execution communicator)");
+#else
+  (void)communicator;
+#endif
+}
+
+inline double all_reduce_sum(double value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_SUM, communicator.native_handle()),
+      "MPI_Allreduce(double sum, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline double all_reduce_max(double value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MAX, communicator.native_handle()),
+      "MPI_Allreduce(double max, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline double all_reduce_min(double value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MIN, communicator.native_handle()),
+      "MPI_Allreduce(double min, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline long all_reduce_sum(long value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  long result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_LONG, MPI_SUM, communicator.native_handle()),
+      "MPI_Allreduce(long sum, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline long all_reduce_max(long value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  long result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_LONG, MPI_MAX, communicator.native_handle()),
+      "MPI_Allreduce(long max, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline long all_reduce_min(long value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  long result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_LONG, MPI_MIN, communicator.native_handle()),
+      "MPI_Allreduce(long min, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+inline void all_reduce_sum_inplace(double* buffer, int count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, MPI_DOUBLE, MPI_SUM,
+                                              communicator.native_handle()),
+                                "MPI_Allreduce(double inplace sum, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_max_inplace(double* buffer, int count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, MPI_DOUBLE, MPI_MAX,
+                                              communicator.native_handle()),
+                                "MPI_Allreduce(double inplace max, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_or_inplace(char* buffer, std::size_t count,
+                                  const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, buffer, chunk, MPI_CHAR, MPI_BOR, communicator.native_handle()),
+        "MPI_Allreduce(char inplace or, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_min_inplace(char* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, buffer, chunk, MPI_CHAR, MPI_MIN, communicator.native_handle()),
+        "MPI_Allreduce(char inplace min, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_max_inplace(char* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, buffer, chunk, MPI_CHAR, MPI_MAX, communicator.native_handle()),
+        "MPI_Allreduce(char inplace max, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void broadcast_bytes_inplace(char* buffer, std::size_t count, int root,
+                                    const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Bcast(buffer, chunk, MPI_BYTE, root, communicator.native_handle()),
+        "MPI_Bcast(byte payload, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)root;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_min_inplace(long* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, buffer, chunk, MPI_LONG, MPI_MIN, communicator.native_handle()),
+        "MPI_Allreduce(long inplace min, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_max_inplace(long* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return;
+  while (count != 0) {
+    const int chunk = static_cast<int>(
+        std::min(count, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, buffer, chunk, MPI_LONG, MPI_MAX, communicator.native_handle()),
+        "MPI_Allreduce(long inplace max, execution communicator)");
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
 
 /// Read-only MPI lifecycle facts.  These observers never initialize MPI.
 inline bool mpi_initialized_by_pops() noexcept {
@@ -424,38 +779,104 @@ inline int mpi_thread_level() noexcept {
 /// lengths agree, concatenation is unambiguous and element-wise minima/maxima provide an exact (not
 /// hashed) equality witness.  Callers own canonical ordering; field-plan registries pass std::map
 /// iteration order over (provider_slot, plan_identity).
-inline bool all_ranks_agree_exact_ordered_byte_pairs(
-    const std::vector<std::pair<std::string_view, std::string_view>>& values) {
+using ExactOrderedBytePair = std::pair<std::string_view, std::string_view>;
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(std::span<const ExactOrderedBytePair> values,
+                                                     const CommunicatorView& communicator) {
+  detail::exact_consensus_dynamic_storage_counter().fetch_add(1, std::memory_order_relaxed);
+  const long invalid_count =
+      all_reduce_max(values.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()) ||
+                             values.size() > std::numeric_limits<std::size_t>::max() / 2u
+                         ? 1L
+                         : 0L,
+                     communicator);
+  if (invalid_count != 0)
+    throw std::length_error("exact collective consensus pair count exceeds long capacity");
   const long local_count = static_cast<long>(values.size());
-  const long minimum_count = all_reduce_min(local_count);
-  const long maximum_count = all_reduce_max(local_count);
+  const long minimum_count = all_reduce_min(local_count, communicator);
+  const long maximum_count = all_reduce_max(local_count, communicator);
   if (minimum_count != maximum_count)
     return false;
 
-  std::vector<long> minimum_lengths;
-  minimum_lengths.reserve(values.size() * 2);
+  long invalid_lengths_local = 0;
   std::size_t payload_size = 0;
   for (const auto& value : values) {
-    minimum_lengths.push_back(static_cast<long>(value.first.size()));
-    minimum_lengths.push_back(static_cast<long>(value.second.size()));
+    if (value.first.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()) ||
+        value.second.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()) ||
+        value.first.size() > std::numeric_limits<std::size_t>::max() - payload_size ||
+        value.second.size() >
+            std::numeric_limits<std::size_t>::max() - payload_size - value.first.size()) {
+      invalid_lengths_local = 1;
+      break;
+    }
     payload_size += value.first.size() + value.second.size();
   }
-  std::vector<long> maximum_lengths(minimum_lengths);
-  all_reduce_min_inplace(minimum_lengths.data(), minimum_lengths.size());
-  all_reduce_max_inplace(maximum_lengths.data(), maximum_lengths.size());
+  if (all_reduce_max(invalid_lengths_local, communicator) != 0)
+    throw std::length_error("exact collective consensus payload size overflows capacity");
+
+  std::vector<long> minimum_lengths;
+  std::vector<long> maximum_lengths;
+  long length_allocation_failure_local = 0;
+  try {
+    minimum_lengths.resize(values.size() * 2u);
+    maximum_lengths.resize(values.size() * 2u);
+  } catch (...) {
+    length_allocation_failure_local = 1;
+  }
+  if (all_reduce_max(length_allocation_failure_local, communicator) != 0)
+    throw std::bad_alloc();
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    minimum_lengths[2u * index] = static_cast<long>(values[index].first.size());
+    minimum_lengths[2u * index + 1u] = static_cast<long>(values[index].second.size());
+  }
+  std::copy(minimum_lengths.begin(), minimum_lengths.end(), maximum_lengths.begin());
+  all_reduce_min_inplace(minimum_lengths.data(), minimum_lengths.size(), communicator);
+  all_reduce_max_inplace(maximum_lengths.data(), maximum_lengths.size(), communicator);
   if (minimum_lengths != maximum_lengths)
     return false;
 
   std::vector<char> minimum;
-  minimum.reserve(payload_size);
-  for (const auto& value : values) {
-    minimum.insert(minimum.end(), value.first.begin(), value.first.end());
-    minimum.insert(minimum.end(), value.second.begin(), value.second.end());
+  std::vector<char> maximum;
+  long payload_allocation_failure_local = 0;
+  try {
+    minimum.resize(payload_size);
+    maximum.resize(payload_size);
+  } catch (...) {
+    payload_allocation_failure_local = 1;
   }
-  std::vector<char> maximum(minimum);
-  all_reduce_min_inplace(minimum.data(), minimum.size());
-  all_reduce_max_inplace(maximum.data(), maximum.size());
+  if (all_reduce_max(payload_allocation_failure_local, communicator) != 0)
+    throw std::bad_alloc();
+  auto destination = minimum.begin();
+  for (const auto& value : values) {
+    destination = std::copy(value.first.begin(), value.first.end(), destination);
+    destination = std::copy(value.second.begin(), value.second.end(), destination);
+  }
+  std::copy(minimum.begin(), minimum.end(), maximum.begin());
+  all_reduce_min_inplace(minimum.data(), minimum.size(), communicator);
+  all_reduce_max_inplace(maximum.data(), maximum.size(), communicator);
   return minimum == maximum;
+}
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(
+    std::initializer_list<ExactOrderedBytePair> values, const CommunicatorView& communicator) {
+  return all_ranks_agree_exact_ordered_byte_pairs(
+      std::span<const ExactOrderedBytePair>(values.begin(), values.size()), communicator);
+}
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(
+    const std::vector<ExactOrderedBytePair>& values, const CommunicatorView& communicator) {
+  return all_ranks_agree_exact_ordered_byte_pairs(
+      std::span<const ExactOrderedBytePair>(values.data(), values.size()), communicator);
+}
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(
+    std::initializer_list<ExactOrderedBytePair> values) {
+  return all_ranks_agree_exact_ordered_byte_pairs(values, world_communicator_view());
+}
+
+inline bool all_ranks_agree_exact_ordered_byte_pairs(
+    const std::vector<ExactOrderedBytePair>& values) {
+  return all_ranks_agree_exact_ordered_byte_pairs(values, world_communicator_view());
 }
 
 }  // namespace pops

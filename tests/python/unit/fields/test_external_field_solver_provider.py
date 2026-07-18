@@ -110,35 +110,34 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
         layout=Uniform(cartesian_grid(n=8, periodic=False)),
     )["potential"]
 
-    external = plan.native_options["solver_provider"]
-    assert external["provider_kind"] == "external_component_v1"
-    assert external["topology"]["component_id"] == topology.component_manifest.component_id
-    assert external["solver"]["component_id"] == solver.component_manifest.component_id
-    assert external["request"] == {
+    from pops.fields._prepared_field_solver_registry import (
+        prepared_field_solver_binding_from_data,
+    )
+
+    external = prepared_field_solver_binding_from_data(
+        plan.native_options["solver_provider"]
+    )
+    assert external.provider["provider_id"] == "pops.fields.external-field-solver"
+    topology_binding, solver_binding = plan.component_bindings()
+    assert topology_binding["component_id"] == topology.component_manifest.component_id
+    assert solver_binding["component_id"] == solver.component_manifest.component_id
+    assert external.resolution.native_contract["options"] == {
         "relative_tolerance": 1.0e-10,
         "absolute_tolerance": 1.0e-12,
         "max_iterations": 17,
     }
-    assert plan.native_options["mg_options"] == {
-        "schema_version": 1,
-        "kind": "external_field_solver_options",
-        "rel_tol": 1.0e-10,
-        "abs_tol": 1.0e-12,
-        "max_cycles": 17,
-        "min_coarse": 2,
-        "pre_smooth": 2,
-        "post_smooth": 2,
-        "bottom_sweeps": 50,
-        "coarse_threshold": 0,
-    }
-    assert plan.component_bindings() == (external["topology"], external["solver"])
+    assert external.resolution.native_contract["schema_identity"] == (
+        "pops.external.field-solver-request@2"
+    )
     plan.require_component_inputs((topology, solver))
 
     # Artifact state is recursively immutable, but the Python/native boundary must receive an
     # ordinary detached carrier: external component parameters are serialized to JSON at install.
     native = plan.native_install_data()
     assert type(native) is dict
-    assert type(native["solver_provider"]["topology"]["parameters"]) is dict
+    assert type(
+        native["solver_provider"]["resolution"]["component_bindings"][0]["parameters"]
+    ) is dict
     json.dumps(native["solver_provider"], sort_keys=True, allow_nan=False)
 
 
@@ -184,7 +183,9 @@ def test_external_pair_canonicalizes_nested_parameters_without_weakening_identit
     )["potential"]
 
     plan.require_component_inputs((topology, solver))
-    assert plan.native_install_data()["solver_provider"]["solver"]["parameters"] == {
+    assert plan.native_install_data()["solver_provider"]["resolution"][
+        "component_bindings"
+    ][1]["parameters"] == {
         "options": options,
     }
 
@@ -202,7 +203,7 @@ def test_external_field_solver_v2_refuses_amr_during_resolve(tmp_path):
             _case(provider), lambda value: value, target="amr_system",
             layout=Uniform(cartesian_grid(n=8, periodic=False)),
         )
-    assert error.value.gate == "field.solver.layout_incompatible"
+    assert error.value.gate == "field.solver.provider_incompatible"
 
 
 def test_external_solver_and_topology_roles_are_not_interchangeable(tmp_path):

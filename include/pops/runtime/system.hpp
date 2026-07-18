@@ -3,10 +3,12 @@
 #include <limits>
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
+#include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
@@ -19,6 +21,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -47,6 +50,7 @@ class WorldCommunicator;
 namespace runtime::program {
 class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
+class ProgramContext;
 }  // namespace runtime::program
 
 namespace runtime::multiblock {
@@ -238,6 +242,8 @@ class System {
   /// Block-qualified context used by generated packages.  It captures the exact prepared boundary
   /// authority installed before block construction, so two blocks may use different physical data.
   POPS_EXPORT GridContext grid_context(const std::string& name);
+  /// Index-qualified twin for an already authenticated Program block map.
+  POPS_EXPORT GridContext grid_context(int block);
   /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
   /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
@@ -245,7 +251,8 @@ class System {
                                          const std::vector<std::string>& face_types,
                                          const std::vector<double>& face_values, int ncomp,
                                          const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {});
+                                         const std::string& state_identity = {},
+                                         PreparedBoundaryReadDependencies read_dependencies = {});
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
@@ -326,6 +333,11 @@ class System {
                    int pre_smooth = kMGDefaultPreSmooth, int post_smooth = kMGDefaultPostSmooth,
                    int bottom_sweeps = kMGDefaultBottomSweeps,
                    int coarse_threshold = kMGDefaultCoarseThreshold);
+  /// Materialize one immutable provider instance from an already registered family. Provider-owned
+  /// code authenticates and decodes @p options; the System core only stores the returned route.
+  POPS_EXPORT std::string register_configured_field_solver_provider(
+      const std::string& family_route, const std::string& provider_route,
+      const PreparedProviderOptions& options);
 
   /// Install one fully resolved field solver route keyed by the digest of its block-qualified
   /// provider identity. ``plan_identity`` independently commits the complete resolved semantics.
@@ -339,17 +351,24 @@ class System {
                              const std::vector<std::string>& provider_blocks,
                              const std::vector<std::string>& provider_keys,
                              const std::vector<double>& provider_coefficients,
-                             const std::string& solver, double abs_tol, double rel_tol,
-                             int max_cycles, int min_coarse, int pre_smooth, int post_smooth,
-                             int bottom_sweeps, int coarse_threshold);
+                             const std::string& backend_provider_route);
   /// Install the resolved scalar reaction coefficient of one named screened field.
   void set_field_reaction(const std::string& provider_slot, double reaction);
-  /// Couple the exact generated FieldTopology and FieldSolver component tables to an already
-  /// authenticated field plan.  Both components stay owned until the System is destroyed.
-  POPS_EXPORT void install_field_solver_components(
+  /// Register one exact generated FieldTopology+FieldSolver provider under @p provider_slot.
+  /// The same route can be selected by the principal Poisson field or any named field; registration
+  /// does not depend on a pre-existing field plan. Returns the provider's manifest-qualified exact
+  /// identity while the stable slot remains the selection route.
+  POPS_EXPORT std::string register_field_solver_provider(
       const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
       std::shared_ptr<component::LoadedComponent> topology,
       std::shared_ptr<component::LoadedComponent> solver);
+  /// Adds a native field-nullspace provider before binding. Builtins and extensions use this same
+  /// registry; the System core never interprets a mathematical nullspace family name.
+  POPS_EXPORT void register_field_nullspace_provider(
+      std::shared_ptr<const FieldNullspaceProvider> provider);
+  /// Select the provider for the principal field configured by set_poisson.
+  void set_default_field_nullspace(const std::string& nullspace_provider_identity,
+                                   const PreparedProviderOptions& options);
   POPS_EXPORT void set_field_topology_authority(const std::string& provider_slot,
                                                 const std::string& provider_kind,
                                                 const std::string& provenance,
@@ -383,9 +402,11 @@ class System {
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
 
-  /// Declare the constant kernel and its explicit mean-zero gauge.
-  void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
-                           bool mean_zero_gauge);
+  /// Select one prepared nullspace provider. The schema and scalar values remain opaque to System;
+  /// the selected provider validates them after the concrete operator/layout facts are available.
+  void set_field_nullspace(const std::string& provider_slot,
+                           const std::string& nullspace_provider_identity,
+                           const PreparedProviderOptions& options);
 
   /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
   /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
@@ -801,11 +822,20 @@ class System {
   POPS_EXPORT bool block_has_boundary_linearization(int b) const;
   POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           int b, MultiFab& U, MultiFab& R, bool flux_only);
+  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          int b, MultiFab& U, MultiFab& R, bool flux_only,
+                                          const PreparedGridBoundarySession& boundary);
   POPS_EXPORT void block_boundary_residual_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C);
+  POPS_EXPORT void block_boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
+      const PreparedGridBoundarySession& boundary);
   POPS_EXPORT void block_boundary_jvp_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
       const MultiFab& V, MultiFab& J);
+  POPS_EXPORT void block_boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
+      const MultiFab& V, MultiFab& J, const PreparedGridBoundarySession& boundary);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The
@@ -849,7 +879,7 @@ class System {
   /// A fresh scalar field co-distributed with the System mesh: block 0's BoxArray and
   /// DistributionMapping, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
   /// compiled time Program allocates for a matrix-free Krylov solve (the residual / search-direction
-  /// fields that feed cg_solve / bicgstab_solve via ProgramContext::laplacian); shares the block
+  /// fields owned by a KrylovWorkspace and fed through ProgramContext::laplacian); shares the block
   /// (ba, dm) so a per-cell kernel pairs it with the state and aux by local fab index.
   POPS_EXPORT MultiFab alloc_scalar_field(int n_comp, int n_ghost);
   /// @name Multistep history (epic ADC-399 / ADC-406a)
@@ -1167,6 +1197,11 @@ class System {
                                                   /// @}
 
  private:
+  friend class runtime::program::ProgramContext;
+  /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
+  /// an authenticated apply token; installation writes Impl directly and no public setter exists.
+  POPS_EXPORT bool program_owns_operator_authority(
+      const std::array<std::uint64_t, 4>& authority) const noexcept;
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

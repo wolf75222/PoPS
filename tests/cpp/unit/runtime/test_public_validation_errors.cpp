@@ -9,7 +9,6 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/program/program_context.hpp>
@@ -49,13 +48,10 @@ TEST(PublicValidationErrors, ProgramWireIdsNeverFallback) {
                                 {"LinearSolveMethod", "99"}));
   EXPECT_TRUE(ThrowsWithMessage([] { validate_linear_solve_method(kLinearSolveReserved4, "test"); },
                                 {"LinearSolveMethod", "4"}));
-  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_write_role(kPhi, "test"); },
-                                {"AssemblyFieldRole", "6"}));
-  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_read_role(kFlux, "test"); },
-                                {"AssemblyFieldRole", "5"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_prepared_field_slot("", "test"); },
+                                {"prepared field-slot identity", "non-empty"}));
   EXPECT_NO_THROW(validate_linear_solve_method(kLinearSolveBicgstab, "test"));
-  EXPECT_NO_THROW(validate_assembly_write_role(kFlux, "test"));
-  EXPECT_NO_THROW(validate_assembly_read_role(kPhi, "test"));
+  EXPECT_NO_THROW(validate_prepared_field_slot("pops.test.operator.extra-slot", "test"));
 }
 
 TEST(PublicValidationErrors, Fab2DRejectsZeroComponents) {
@@ -202,17 +198,4 @@ TEST(PublicValidationErrors, CsProgramStackValidationRejectsUnusedResult) {
       },
       {"test CsProgram", "exactly one result", "final stack_depth=2"}))
       << "CsProgram stack validation rejects unused result in release";
-}
-
-TEST(PublicValidationErrors, TensorKrylovSolverRejectsAliasedOperatorAndPreconditioner) {
-  EXPECT_TRUE(ThrowsWithMessage(
-      [&] {
-        Geometry geom{Box2D::from_extents(4, 4), 0.0, 1.0, 0.0, 1.0};
-        BCRec bc;
-        GeometricMG mg(geom, BoxArray::from_domain(geom.domain, 4), bc);
-        TensorKrylovSolver solver(mg, mg);
-        (void)solver;
-      },
-      {"TensorKrylovSolver", "op and precond are distinct", "alias"}))
-      << "TensorKrylovSolver rejects aliased operator/preconditioner in release";
 }

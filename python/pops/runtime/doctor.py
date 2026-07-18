@@ -298,10 +298,10 @@ def capabilities() -> Any:
             "system_polar": ["explicit (ssprk2|ssprk3)",
                              "metric-aware explicit Program.solve graph"],
             "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
-                              "mono-block AND native multi-block (.so loaders : explicit rejection) ; "
+                              "native at every block count (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
-                              "newton_report : System + AMR native multi-block (mono-block AMR and "
-                              ".so loaders : explicit rejection)",
+                              "newton_report : System + AMR native at every block count "
+                              "(.so loaders : explicit rejection)",
         },
         "stability_policy": {
             "system": ["transport (max_wave_speed | stability_speed)", "source_frequency",
@@ -336,7 +336,8 @@ def capabilities() -> Any:
                    "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
-            "system_cartesian": "explicit Program.solve(LinearProblem(...), solver=GMRES/BiCGStab) ; "
+            "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
+                                "solver=GMRES/BiCGStab) ; "
                                 "authored roles/fields ; generic matrix-free operator",
             "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
                             "PolarTensorKrylovSolver provider",

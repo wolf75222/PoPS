@@ -109,6 +109,14 @@ def validate_input_clocks(
     for value in inputs:
         if not isinstance(value, ProgramValue):
             continue
+        # A completed top-level matrix-free operator is an install-time prepared resource, not a
+        # time-varying field value.  Its ApplyFn may therefore be reused by a solve on a child clock;
+        # the rhs/guess/result and every live dt/resource refresh remain ordinary values checked
+        # against that solve's exact evaluation clock.  Keep this exception deliberately narrower
+        # than vtype alone so synchronize/control-flow aliases cannot become implicit clock casts.
+        if (value.vtype == "matrix_free_op" and value.op == "matrix_free_operator"
+                and value.region == TOP_LEVEL_REGION):
+            continue
         if value.clock == expected or constructing_synchronize:
             continue
         raise ValueError(

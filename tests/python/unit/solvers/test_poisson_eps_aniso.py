@@ -85,7 +85,8 @@ def anisotropic_epsilon_tests():
     try:
         sp.solve_fields()
         raise AssertionError("fft + eps anisotrope aurait du lever une erreur")
-    except RuntimeError:
+    except ValueError as exc:
+        assert "FFT provider does not accept a materialized diffusion coefficient" in str(exc)
         print("OK  eps anisotrope refuse avec solver='fft' (coefficient constant)")
 
 

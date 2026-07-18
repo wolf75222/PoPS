@@ -15,7 +15,7 @@ from fractions import Fraction
 from typing import Any
 from urllib.parse import quote
 
-from pops._ir.literals import ScalarLiteral
+from pops.identity.scalar import ScalarLiteral
 from pops.model.handles import Handle, OperatorHandle as ModelOperatorHandle, OwnerPath, ParamHandle
 from pops.problem._snapshot_callable import (
     canonical_callable_reference as _canonical_callable_reference,

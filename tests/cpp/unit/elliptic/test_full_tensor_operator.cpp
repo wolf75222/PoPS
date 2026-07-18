@@ -40,6 +40,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <utility>
 
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
@@ -66,6 +68,23 @@ double eps_x_field(double x, double /*y*/) {
 }
 double eps_y_field(double /*x*/, double y) {
   return 1.0 + 0.3 * y;
+}
+
+ScalarFieldProvider2D eps_x_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.full-tensor.epsilon-x", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_x_field(x, y)); });
+}
+
+ScalarFieldProvider2D eps_y_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.full-tensor.epsilon-y", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_y_field(x, y)); });
+}
+
+ScalarFieldProvider2D constant_coefficient_provider(std::string implementation, Real value) {
+  return ScalarFieldProvider2D::trusted_extension(
+      {implementation, 1}, exact_provider_parameters(value), [value](Real, Real) { return value; });
 }
 
 // Foncteur de remplissage MMS (C) : pose phi = phi_exact (sin(pi x) sin(pi y)) et f = div(A grad phi)
@@ -126,7 +145,8 @@ double gap_identity(int n) {
 
   // operateur PLEIN avec Axy = Ayx = 0 (donc A = I).
   GeometricMG mg_full(geom, ba, bc);
-  mg_full.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  mg_full.set_cross_terms(constant_scalar_field_provider(Real(0)),
+                          constant_scalar_field_provider(Real(0)));
   fill(mg_full);
   const Real r_full = mg_full.current_residual();
 
@@ -153,16 +173,15 @@ double gap_diagonal(int n) {
 
   // anisotrope SEUL (reference) : div(diag(eps_x, eps_y) grad phi).
   GeometricMG mg_aniso(geom, ba, bc);
-  mg_aniso.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                                   [](Real x, Real y) { return Real(eps_y_field(x, y)); });
+  mg_aniso.set_epsilon_anisotropic(eps_x_provider(), eps_y_provider());
   fill(mg_aniso);
   const Real r_aniso = mg_aniso.current_residual();
 
   // PLEIN : meme bloc diagonal + Axy = Ayx = 0. Doit etre bit-identique.
   GeometricMG mg_full(geom, ba, bc);
-  mg_full.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                                  [](Real x, Real y) { return Real(eps_y_field(x, y)); });
-  mg_full.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  mg_full.set_epsilon_anisotropic(eps_x_provider(), eps_y_provider());
+  mg_full.set_cross_terms(constant_scalar_field_provider(Real(0)),
+                          constant_scalar_field_provider(Real(0)));
   fill(mg_full);
   const Real r_full = mg_full.current_residual();
 
@@ -180,10 +199,11 @@ double operator_mms_resid(int n, double axx, double ayy, double cxy, double cyx)
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
 
   GeometricMG mg(geom, ba, bc);
-  mg.set_epsilon_anisotropic([axx](Real, Real) { return Real(axx); },
-                             [ayy](Real, Real) { return Real(ayy); });
-  mg.set_cross_terms([cxy](Real, Real) { return Real(cxy); },
-                     [cyx](Real, Real) { return Real(cyx); });
+  mg.set_epsilon_anisotropic(
+      constant_coefficient_provider("pops.test.full-tensor.constant-xx", Real(axx)),
+      constant_coefficient_provider("pops.test.full-tensor.constant-yy", Real(ayy)));
+  mg.set_cross_terms(constant_coefficient_provider("pops.test.full-tensor.constant-xy", Real(cxy)),
+                     constant_coefficient_provider("pops.test.full-tensor.constant-yx", Real(cyx)));
 
   // phi = phi_exact (donnee EXACTE au centre des cellules) ; f = div(A grad phi) analytique.
   const double csum = cxy + cyx;
@@ -206,9 +226,11 @@ void observe_mg_solve(int n, double c, double& r0_out, double& rN_out, int& nc_o
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
 
   GeometricMG mg(geom, ba, bc);
-  mg.set_epsilon_anisotropic([](Real, Real) { return Real(1); },
-                             [](Real, Real) { return Real(1); });
-  mg.set_cross_terms([c](Real, Real) { return Real(c); }, [c](Real, Real) { return Real(c); });
+  mg.set_epsilon_anisotropic(constant_scalar_field_provider(Real(1)),
+                             constant_scalar_field_provider(Real(1)));
+  mg.set_cross_terms(
+      constant_coefficient_provider("pops.test.full-tensor.observation-xy", Real(c)),
+      constant_coefficient_provider("pops.test.full-tensor.observation-yx", Real(c)));
 
   const double csum = 2 * c;
   Array4 af = mg.rhs().fab(0).array();

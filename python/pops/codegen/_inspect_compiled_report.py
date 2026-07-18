@@ -132,7 +132,7 @@ class CompiledReport(Report):
             for field in self.fields:
                 lines.append("    %-14s solver=%s provider=%s plan=%s"
                              % (field.get("name"), field.get("solver"),
-                                field.get("provider_kind"), field.get("identity")))
+                                field.get("provider_identity"), field.get("identity")))
         else:
             lines.append("    (none)")
         prog = self.program
@@ -244,15 +244,15 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     field_plans = getattr(getattr(compiled, "plan", None), "field_plans", {}) or {}
     for name, field_plan in sorted(field_plans.items()):
         native = field_plan.native_install_data()
-        provider = native["solver_provider"]
-        provider_kind = provider["provider_kind"]
-        solver = provider["solver"]
-        solver_label = (solver["route"] if provider_kind == "builtin_v1"
-                        else solver["component_id"])
+        from pops.fields._prepared_field_solver_registry import (
+            prepared_field_solver_binding_from_data,
+        )
+
+        binding = prepared_field_solver_binding_from_data(native["solver_provider"])
         fields.append({
             "name": name,
-            "solver": solver_label,
-            "provider_kind": provider_kind,
+            "solver": binding.provider["provider_id"],
+            "provider_identity": binding.identity,
             "identity": field_plan.identity.token,
         })
 

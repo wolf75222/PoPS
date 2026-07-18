@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 from inspect import signature
+from pathlib import Path
 
 import pops
 import pytest
@@ -27,6 +29,26 @@ _PUBLIC = (
 )
 
 
+def _assert_fresh_python(source: str) -> None:
+    """Run a public-import assertion against this exact package in a fresh interpreter."""
+    package_parent = str(Path(pops.__file__).resolve().parent.parent)
+    isolated_source = (
+        "import sys\n"
+        f"sys.path.insert(0, {package_parent!r})\n"
+        f"{source}"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", isolated_source],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "fresh Python public-API check failed:\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
 def _retired_names() -> tuple[str, ...]:
     return (
         "Pro" + "blem",
@@ -47,34 +69,48 @@ def _retired_names() -> tuple[str, ...]:
 
 
 def test_root_contract_is_exact_and_does_not_load_native_code() -> None:
-    assert tuple(pops.__all__) == _PUBLIC
-    assert "pops._pops" not in sys.modules
-    for removed in _retired_names():
-        assert not hasattr(pops, removed)
-    for absent_submodule in ("restart", "schedule"):
-        assert absent_submodule not in dir(pops)
-        assert not hasattr(pops, absent_submodule)
+    _assert_fresh_python(
+        f"""
+import sys
+import pops
+
+assert tuple(pops.__all__) == {_PUBLIC!r}
+assert "pops._pops" not in sys.modules
+for removed in {_retired_names()!r}:
+    assert not hasattr(pops, removed)
+for absent_submodule in ("restart", "schedule"):
+    assert absent_submodule not in dir(pops)
+    assert not hasattr(pops, absent_submodule)
+"""
+    )
 
 
 def test_case_authoring_validation_and_inspection_are_pure_python() -> None:
-    model = pops.Model("transport")
-    state = model.state("U", components=("u",))
-    case = pops.Case("two_instances")
-    left = case.block("left", model)
-    right = case.block("right", model)
+    _assert_fresh_python(
+        """
+import sys
+import pops
 
-    left_state = case.qualify(state, block=left)
-    right_state = case.qualify(state, block=right)
-    assert left_state != right_state
-    assert left_state.block_ref == left
-    assert right_state.block_ref == right
+model = pops.Model("transport")
+state = model.state("U", components=("u",))
+case = pops.Case("two_instances")
+left = case.block("left", model)
+right = case.block("right", model)
 
-    report = pops.inspect(case)
-    assert report["name"] == "two_instances"
-    assert set(report["blocks"]) == {"left", "right"}
-    assert pops.validate(case) is case
-    assert case.frozen
-    assert "pops._pops" not in sys.modules
+left_state = case.qualify(state, block=left)
+right_state = case.qualify(state, block=right)
+assert left_state != right_state
+assert left_state.block_ref == left
+assert right_state.block_ref == right
+
+report = pops.inspect(case)
+assert report["name"] == "two_instances"
+assert set(report["blocks"]) == {"left", "right"}
+assert pops.validate(case) is case
+assert case.frozen
+assert "pops._pops" not in sys.modules
+"""
+    )
 
 
 def test_case_has_one_registration_spelling_per_family() -> None:

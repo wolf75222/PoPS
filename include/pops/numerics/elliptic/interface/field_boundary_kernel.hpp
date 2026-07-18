@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -63,15 +64,20 @@ struct FieldBoundaryFailure {
   }
 };
 
-/// All dependencies are resolved to direct buffers before entering a nonlinear/linear iteration.
-/// The arrays themselves are host-side tables captured by a generated batch launcher; a per-cell
-/// kernel sees only the Array4 values the launcher selects.  There is no Python callback, string map,
-/// virtual dispatch or registry lookup in a face-cell loop.
+/// All dependencies are resolved to prepared execution views before entering a nonlinear/linear
+/// iteration. Each distribution describes its view, independently of the iterate distribution. A
+/// generated launcher resolves iterate global-patch ids to dependency-local ids once per local patch;
+/// this supports replicated dependencies in a distributed solve without assuming equal local-index
+/// order. A source that does not materialize every patch needed by the iterate must be remapped by the
+/// runtime before installation. The device kernel sees only the selected Array4 values: no Python
+/// callback, string map, virtual dispatch or registry lookup enters a face-cell loop.
 struct FieldBoundaryExecutionContext {
   FieldLogicalTimePoint point{};
   const MultiFab* const* states = nullptr;
+  const FieldDistribution* state_distributions = nullptr;
   int state_count = 0;
   const MultiFab* const* fields = nullptr;
+  const FieldDistribution* field_distributions = nullptr;
   int field_count = 0;
   // Host-owned carrier selected by the launcher before a device submission.  Generated launchers
   // copy the exact scalars they use into their named POD functor; a std::vector pointer is therefore

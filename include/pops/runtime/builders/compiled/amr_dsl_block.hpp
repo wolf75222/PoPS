@@ -35,18 +35,12 @@
 /// @brief add_compiled_model on the AmrSystem side: wires a COMPILED model (a CompositeModel, generated
 ///        by the DSL or hand-written, known at COMPILE time) as a block of an AMR hierarchy,
 ///        EXACTLY the production path of AmrSystem::add_block but WITHOUT going through the ModelSpec
-///        dispatch (the model is already a concrete type). A SINGLE compiled block -> historical
-///        mono-block AmrCouplerMP path (bit-identical); SEVERAL compiled blocks or a MIX of compiled +
-///        native (capstone v, multi-block production DSL) -> AmrRuntime runtime engine on the shared
-///        hierarchy, the compiled block being materialized there as a type-erased AmrRuntimeBlock.
+///        dispatch (the model is already a concrete type). One or many compiled/native blocks use
+///        the same AmrRuntime engine and materialize each block as an AmrRuntimeBlock.
 ///
-/// Refined counterpart of add_compiled_model(System&, ...) (dsl_block.hpp). The AMR coupler build
-/// machinery (AmrCouplerMP<Model> + conservative reflux + regrid) is instantiated HERE, from the CALLING
-/// translation unit, on the concrete Model type -- like block_builder.hpp for the flat System.
-/// The type-erased closures enter AmrSystem through AmrSystem::set_compiled_block (a non-template method)
-/// which freezes TWO builders: the mono-block one (detail::build_amr_compiled / dispatch_amr_compiled,
-/// SHARED with the native ModelSpec path of add_block once the type is resolved by detail::dispatch_model)
-/// AND the multi-block one (detail::dispatch_amr_block, also SHARED with add_block in native multi-block).
+/// Refined counterpart of add_compiled_model(System&, ...) (dsl_block.hpp). The runtime block build
+/// is instantiated here on the concrete Model type and enters AmrSystem through one type-erased
+/// AmrCompiledBlockBuilder.
 
 namespace pops {
 
@@ -177,43 +171,6 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
   if (cpl->levels().size() > 1)
     cpl->regrid(crit);  // no regrid on a mono-level hierarchy (amr-schur)
-  // ADC-645: opt-in COMPOSITE FAC field solve (set_poisson(composite=true)). The coupler's
-  // compute_aux gate (2 levels, ONE mono-box fine patch, replicated coarse) silently falls back to
-  // Option A outside its scope; surface it HERE, at build (before the first update), as a loud
-  // refusal instead -- the caller explicitly opted out of the Option A solve. Checked after the
-  // initial regrid so the mono-box condition sees the materialized fine patch. composite=false
-  // (default) skips all of this: Option A, bit-identical.
-  if (bp.poisson.composite) {
-    const bool replicated = !bp.mesh.distribute_coarse;
-    const bool two_levels = cpl->levels().size() == 2;
-    const bool mono_box_fine = two_levels && cpl->levels()[1].U.box_array().size() == 1;
-    if (!replicated || !two_levels || !mono_box_fine)
-      throw std::runtime_error(
-          "AmrSystem::set_poisson : composite=true requires the coupler's composite scope (2 "
-          "levels, ONE mono-box fine patch, replicated coarse) ; got levels=" +
-          std::to_string(cpl->levels().size()) + (replicated ? "" : ", distributed coarse") +
-          (two_levels && !mono_box_fine ? ", multi-box fine patch" : "") +
-          ". Use composite=false (the Option A coarse solve + gradient injection).");
-    cpl->set_composite_poisson(true);
-    // Composite-FAC knobs: the <= 0 -> kFAC*-default idiom shared with the Schur stage below.
-    CompositeFacOptions fo;
-    if (bp.poisson.fac_max_iters > 0)
-      fo.max_iters = bp.poisson.fac_max_iters;
-    if (bp.poisson.fac_fine_sweeps > 0)
-      fo.fine_sweeps = bp.poisson.fac_fine_sweeps;
-    if (bp.poisson.fac_rel_tol > 0.0)
-      fo.rel_tol = static_cast<Real>(bp.poisson.fac_rel_tol);
-    if (bp.poisson.fac_abs_tol > 0.0)
-      fo.abs_tol = static_cast<Real>(bp.poisson.fac_abs_tol);
-    if (bp.poisson.fac_coarse_rel_tol > 0.0)
-      fo.coarse_rel_tol = static_cast<Real>(bp.poisson.fac_coarse_rel_tol);
-    if (bp.poisson.fac_coarse_abs_tol > 0.0)
-      fo.coarse_abs_tol = static_cast<Real>(bp.poisson.fac_coarse_abs_tol);
-    if (bp.poisson.fac_coarse_cycles > 0)
-      fo.coarse_cycles = bp.poisson.fac_coarse_cycles;
-    fo.verbose = bp.poisson.fac_verbose;
-    cpl->set_fac_options(fo);
-  }
   // model-NAMED aux (ADC-291): seed the static named fields onto the coupler's shared aux BEFORE the
   // first update/step (like density/B_z seeding). The coupler re-applies them in compute_aux each
   // update, so they persist across regrid and reach every level via the aux injection. Empty -> no-op.
@@ -371,18 +328,18 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
 /// dmaps / dx/dy per level, the coarse grid (Geometry + ba) for the Poisson, and the ownership
 /// policy. build_amr_block allocates the block on top of it.
 struct SharedAmrLayout {
-  Geometry geom;                         // geometry of the coarse level (Poisson)
-  BoxArray ba_coarse;                    // BoxArray of the coarse grid
-  DistributionMapping dm_coarse;         // DistributionMapping of the coarse grid
-  std::vector<BoxArray> ba;              // [level] shared BoxArray (coarse + fines)
-  std::vector<DistributionMapping> dm;   // [level] shared DistributionMapping
-  std::vector<Real> dx, dy;              // [level] mesh spacing
-  std::vector<int> refinement_ratios;    // transition k -> k+1
-  bool replicated_coarse = true;         // ownership of level 0
-  BCRec poisson_bc;                      // BC of the coarse Poisson
-  std::function<bool(Real, Real)> wall;  // conducting-wall predicate (empty = none)
-  int n = 128;                           // coarse cells per direction
-  Periodicity base_per{true, true};      // periodicity of the base domain
+  Geometry geom;                        // geometry of the coarse level (Poisson)
+  BoxArray ba_coarse;                   // BoxArray of the coarse grid
+  DistributionMapping dm_coarse;        // DistributionMapping of the coarse grid
+  std::vector<BoxArray> ba;             // [level] shared BoxArray (coarse + fines)
+  std::vector<DistributionMapping> dm;  // [level] shared DistributionMapping
+  std::vector<Real> dx, dy;             // [level] mesh spacing
+  std::vector<int> refinement_ratios;   // transition k -> k+1
+  bool replicated_coarse = true;        // ownership of level 0
+  BCRec poisson_bc;                     // BC of the coarse Poisson
+  ActiveRegionProvider2D wall;          // conducting-wall predicate (empty = none)
+  int n = 128;                          // coarse cells per direction
+  Periodicity base_per{true, true};     // periodicity of the base domain
   /// Per-block prepared boundary authorities owned by AmrSystem::Impl. The map and plans outlive
   /// every deferred block builder/closure.
   const std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>>* boundary_plans = nullptr;
@@ -757,6 +714,64 @@ AmrRuntimeBlock build_amr_block(
       gc.boundary_field_registry = *boundary_field_registry;
       apply_grid_boundary_jvp(U, V, J, gc, point);
     };
+    b.level_rhs_core_at_point_prepared =
+        [model, rprim, tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& R,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::RhsCoreInto<Limiter, Flux, Model>{model, gc, rprim, Real(0), nullptr}(point, U, R,
+                                                                                        boundary);
+        };
+    b.level_neg_div_flux_core_at_point_prepared =
+        [model, rprim, tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& R,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::RhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+              SourceFreeModel<Model>{model}, gc, rprim, Real(0), nullptr}(point, U, R, boundary);
+        };
+    b.level_boundary_residual_at_point_prepared =
+        [tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& C,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::BoundaryResidualInto{gc}(point, U, C, boundary);
+        };
+    b.level_boundary_jvp_at_point_prepared =
+        [tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& V, const MultiFab& aux, const Geometry& geom, MultiFab& J,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::BoundaryJvpInto{gc}(point, U, V, J, boundary);
+        };
     if (boundary_plan && boundary_plan->has_omitted_faces()) {
       b.level_rhs_without_prepared_interfaces = b.level_rhs_at_point;
       b.level_neg_div_flux_without_prepared_interfaces = b.level_neg_div_flux_at_point;
@@ -793,9 +808,9 @@ AmrRuntimeBlock build_amr_block(
                                                               const Geometry& geom, MultiFab& Fx,
                                                               MultiFab& Fy, MultiFab& R) {
       if (boundary_plan)
-        boundary_plan->fill_same_level_and_physical(U, geom.domain);
-      else
-        pops::fill_ghosts(U, geom.domain, tbc);
+        throw std::logic_error(
+            "resolved AMR reflux boundary plan requires its persistent prepared session");
+      pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
@@ -804,12 +819,30 @@ AmrRuntimeBlock build_amr_block(
                                        MultiFab& Fx, MultiFab& Fy, MultiFab& R) {
       const SourceFreeModel<Model> sm{model};
       if (boundary_plan)
-        boundary_plan->fill_same_level_and_physical(U, geom.domain);
-      else
-        pops::fill_ghosts(U, geom.domain, tbc);
+        throw std::logic_error(
+            "resolved AMR reflux boundary plan requires its persistent prepared session");
+      pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
+    b.level_flux_capture_prepared = [model, rprim](
+                                        const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                        MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                        MultiFab& Fx, MultiFab& Fy, MultiFab& R,
+                                        const PreparedGridBoundarySession& boundary) {
+      boundary.fill_same_level_and_physical(U, point);
+      pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+      pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+    };
+    b.level_flux_capture_neg_div_prepared =
+        [model, rprim](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                       const MultiFab& aux, const Geometry& geom, MultiFab& Fx, MultiFab& Fy,
+                       MultiFab& R, const PreparedGridBoundarySession& boundary) {
+          const SourceFreeModel<Model> sm{model};
+          boundary.fill_same_level_and_physical(U, point);
+          pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+          pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+        };
   }
   // CFL SPEED of the block: SAME policy as System (make_max_speed) -- stability lambda*
   // (HasStabilitySpeed trait) if the model declares it, otherwise max_wave_speed (historical fallback,
@@ -1206,17 +1239,14 @@ inline std::vector<int> resolve_implicit_components_compiled(
 /// build is DEFERRED (like add_block): the captured closures are invoked at the first
 /// step/mass/density via ensure_built(), after set_refinement / set_poisson / set_density.
 ///
-/// MONO-BLOCK (a single add_compiled_model): historical AmrCouplerMP<Model> path (mono_builder),
-/// bit-identical. MULTI-BLOCK (>= 2 blocks, compiled and/or native mixed; capstone v): the block is
-/// materialized as a type-erased AmrRuntimeBlock on the layout SHARED by the multi_builder, exactly
-/// like native add_block. We freeze BOTH builders here (the facade chooses the routing at ensure_built).
+/// Every block count materializes the same type-erased AmrRuntimeBlock on the shared layout.
 /// @p time: "explicit" (SSPRK2/Heun), "euler", "ssprk3", or "imex" (forward-Euler transport
 /// plus stiff implicit source via backward_euler_source). Unknown treatments are refused.
-/// @p stride: HOLD-THEN-CATCH-UP cadence of the block in multi-block (1 = each macro-step).
-/// @p implicit_vars / @p implicit_roles: partial IMEX mask of the block (multi-block; requires time=imex).
+/// @p stride: HOLD-THEN-CATCH-UP cadence of the block (1 = each macro-step).
+/// @p implicit_vars / @p implicit_roles: partial IMEX mask of the block (requires time=imex).
 /// @p pos_floor: Zhang-Shu positivity floor (ADC-322; 0 = inactive, bit-identical). Stored on the block
-///   (mono path reads AmrBuildParams::pos_floor) AND forwarded to the multi-block builder, so the .so
-///   floors the Density-role face states like a native add_block.
+///   and forwarded to the runtime builder, so the .so floors the Density-role face states like a
+///   native add_block.
 /// @throws std::runtime_error if the system is already built or if time/recon are out of domain.
 template <class Model>
 void add_compiled_model(
@@ -1227,11 +1257,9 @@ void add_compiled_model(
     const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0) {
   if (substeps < 1)
     throw std::runtime_error("add_compiled_model(AmrSystem): substeps >= 1");
-  // PROJECTION PONCTUELLE post-pas (ADC-177) : DESORMAIS CABLEE sur AmrSystem. Appliquee PAR NIVEAU
-  // a la fin de l'avance du pas (apres le reflux), aussi bien sur le coupleur mono-bloc
-  // (build_amr_compiled -> cpl->levels()) que sur le multi-bloc natif (build_amr_block ->
-  // AmrRuntime::step -> project_per_level). Cell-local + idempotente : conservation preservee (les
-  // flux-registres sont deja regles). No-op si le modele ne declare pas m.project.
+  // PROJECTION PONCTUELLE post-pas (ADC-177): applied per level by the unique AmrRuntime route after
+  // reflux. Cell-local + idempotent: conservation is preserved and models without a projection are
+  // a no-op.
   // The flat loader ABI already carries the canonical time token. Lower it once to the stable
   // AmrTimeMethod wire and freeze it in both deferred builders; no scheme falls back to Euler.
   AmrTimeMethod time_method = AmrTimeMethod::kEuler;
@@ -1254,30 +1282,20 @@ void add_compiled_model(
                              "' (valid: " + kReconRouteTokensCsv + ")");
   const bool recon_prim = (recon == "primitive");
   const bool imex = (time == "imex");
-  // (1) MONO-BLOCK builder: captures the concrete Model + the scheme, materializes the AmrCouplerMP at the
-  // lazy build (refine/poisson/density parameters frozen at that point).
-  auto mono_builder = [model, limiter, riemann, recon_prim, imex,
-                       time_method](const AmrBuildParams& bp) {
-    AmrBuildParams p = bp;
-    p.physics.recon_prim = recon_prim;
-    p.physics.imex = imex;
-    p.physics.time_method = static_cast<int>(time_method);
-    return detail::dispatch_amr_compiled(model, limiter, riemann, p);
-  };
-  // (2) MULTI-BLOCK builder: captures the SAME concrete Model/scheme, materializes the AmrRuntimeBlock of the
-  // block on the SHARED layout (common to all blocks, created once at ensure_built). Resolves ITSELF
+  // The runtime builder captures the concrete Model/scheme and materializes an AmrRuntimeBlock on
+  // the shared layout for both one and many blocks. It resolves
   // the partial IMEX mask against cons_vars of the concrete Model (known here), then calls dispatch_amr_block
   // -- EXACTLY the native path of add_block, only the point of type resolution differs (here at
   // the add, there from a ModelSpec at build). FUNCTOR without a cross-TU extended lambda in the kernel:
   // dispatch_amr_block captures advance_amr<Limiter, Flux> (named template function), device-clean
   // recipe #64/#97; the outer lambda only orchestrates (no device kernel in its body).
-  auto multi_builder = [model, limiter, riemann, time_method](
-                           const detail::SharedAmrLayout& S, const std::string& bname,
-                           const std::vector<double>& density, bool has_density,
-                           const std::vector<double>& state, bool has_state, double bgamma,
-                           int bsub, bool brecon_prim, bool bimex, int bstride,
-                           const std::vector<std::string>& ivars,
-                           const std::vector<std::string>& iroles, double bpos_floor) {
+  auto runtime_builder = [model, limiter, riemann, time_method](
+                             const detail::SharedAmrLayout& S, const std::string& bname,
+                             const std::vector<double>& density, bool has_density,
+                             const std::vector<double>& state, bool has_state, double bgamma,
+                             int bsub, bool brecon_prim, bool bimex, int bstride,
+                             const std::vector<std::string>& ivars,
+                             const std::vector<std::string>& iroles, double bpos_floor) {
     const std::vector<int> impl_components =
         bimex
             ? resolve_implicit_components_compiled(bname, Model::conservative_vars(), ivars, iroles)
@@ -1291,10 +1309,9 @@ void add_compiled_model(
                                       NewtonOptions{}, has_state ? &state : nullptr,
                                       /*newton_diagnostics=*/false, time_method, bpos_floor);
   };
-  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(mono_builder),
-                         std::move(multi_builder), name, recon_prim, imex,
-                         static_cast<int>(time_method), stride, implicit_vars, implicit_roles,
-                         pos_floor);
+  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(runtime_builder), name,
+                         recon_prim, imex, static_cast<int>(time_method), stride, implicit_vars,
+                         implicit_roles, pos_floor);
 }
 
 }  // namespace pops

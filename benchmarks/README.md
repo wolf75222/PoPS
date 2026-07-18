@@ -8,9 +8,9 @@ measurements and numerical checks; it does not impose machine-specific milliseco
 - `arith_halo`: real `MultiFab` arithmetic followed by periodic `fill_boundary`. It compares
   `saxpy` with alias-safe `lincomb` using measured `A B B A` blocks and reports the paired
   geometric time ratio.
-- `tensor_krylov`: real `TensorKrylovSolver`/BiCGStab with a constant nonsymmetric coefficient
-  tensor and a manufactured solution, using one diagonal-tensor `GeometricMG` V-cycle as
-  preconditioner.
+- `tensor_krylov`: real prepared generic BiCGStab with a constant nonsymmetric coefficient tensor
+  and a manufactured solution, using one persistent diagonal `GeometricMG` V-cycle as the explicit
+  prepared preconditioner.
 
 No other PoPS kernel or solver is represented by this harness.
 

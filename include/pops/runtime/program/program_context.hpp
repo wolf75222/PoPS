@@ -1,29 +1,37 @@
 #pragma once
 
 #include <algorithm>
-#include <chrono>
 #include <array>
+#include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>      // Real, POPS_HD
-#include <pops/runtime/program/profiler.hpp>   // Profiler / ProfileScope (per-node timing, ADC-459)
+#include <pops/core/foundation/types.hpp>     // Real, POPS_HD
+#include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope (per-node timing, ADC-459)
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/wire_ids.hpp>   // stable compiled-Program numeric protocol
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/execution/for_each.hpp>  // for_each_cell (per-cell coeff / reconstruct kernels + negated divergence copy)
 #include <pops/mesh/geometry/geometry.hpp>  // Geometry (mesh metric of the Laplacian / gradient)
-#include <pops/mesh/storage/fab2d.hpp>      // Array4 / ConstArray4 (per-cell handles)
-#include <pops/mesh/storage/mf_arith.hpp>   // saxpy (linear combine over a MultiFab)
-#include <pops/mesh/storage/multifab.hpp>   // MultiFab
+#include <pops/mesh/layout/field_distribution.hpp>  // FieldDistribution
+#include <pops/mesh/storage/fab2d.hpp>              // Array4 / ConstArray4 (per-cell handles)
+#include <pops/mesh/storage/mf_arith.hpp>           // saxpy (linear combine over a MultiFab)
+#include <pops/mesh/storage/multifab.hpp>           // MultiFab
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
-#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (solve_linear_matfree seam)
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
@@ -60,6 +68,81 @@ namespace program {
 
 class ProgramContext {
  public:
+  /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
+  /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
+  /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
+  /// nested Program.subcycle bodies cannot leak a child clock into their parent evaluation.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const ProgramContext& owner, int iteration, int count)
+        : owner_(&owner),
+          saved_dt_(owner.current_dt_),
+          saved_stage_(owner.stage_time_),
+          saved_phase_begin_(owner.logical_phase_begin_),
+          saved_phase_span_(owner.logical_phase_span_),
+          saved_physical_offset_(owner.logical_physical_time_offset_) {
+      if (count <= 0 || iteration < 0 || iteration >= count)
+        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
+      if (!std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
+        throw std::logic_error("Program logical evaluation requires a prepared parent dt");
+      const double child_dt = saved_dt_ / static_cast<double>(count);
+      const double child_offset =
+          saved_physical_offset_ + static_cast<double>(iteration) * child_dt;
+      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_offset))
+        throw std::overflow_error("Program logical evaluation child window is not finite");
+      const amr::Rational child_fraction(iteration, count);
+      const amr::Rational child_span = saved_phase_span_ * amr::Rational(1, count);
+      const amr::Rational child_begin = saved_phase_begin_ + saved_phase_span_ * child_fraction;
+
+      owner.invalidate_active_operator_snapshot_();
+      child_dt_ = child_dt;
+      owner.current_dt_ = child_dt;
+      owner.stage_time_ = amr::Rational(0, 1);
+      owner.logical_phase_begin_ = child_begin;
+      owner.logical_phase_span_ = child_span;
+      owner.logical_physical_time_offset_ = child_offset;
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          saved_dt_(other.saved_dt_),
+          saved_stage_(other.saved_stage_),
+          saved_phase_begin_(other.saved_phase_begin_),
+          saved_phase_span_(other.saved_phase_span_),
+          saved_physical_offset_(other.saved_physical_offset_),
+          child_dt_(other.child_dt_) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("Program logical evaluation scope is no longer active");
+      return static_cast<Real>(child_dt_);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->current_dt_ = saved_dt_;
+      owner_->stage_time_ = saved_stage_;
+      owner_->logical_phase_begin_ = saved_phase_begin_;
+      owner_->logical_phase_span_ = saved_phase_span_;
+      owner_->logical_physical_time_offset_ = saved_physical_offset_;
+      owner_->invalidate_active_operator_snapshot_();
+      owner_ = nullptr;
+    }
+
+    const ProgramContext* owner_ = nullptr;
+    double saved_dt_ = 0.0;
+    amr::Rational saved_stage_{0, 1};
+    amr::Rational saved_phase_begin_{0, 1};
+    amr::Rational saved_phase_span_{1, 1};
+    double saved_physical_offset_ = 0.0;
+    double child_dt_ = 0.0;
+  };
+
   explicit ProgramContext(System* sys) : sys_(sys) {}
   /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
   explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
@@ -78,6 +161,9 @@ class ProgramContext {
       throw std::invalid_argument("Program boundary clock requires a finite positive dt");
     current_dt_ = dt;
     stage_time_ = amr::Rational(0, 1);
+    logical_phase_begin_ = amr::Rational(0, 1);
+    logical_phase_span_ = amr::Rational(1, 1);
+    logical_physical_time_offset_ = 0.0;
   }
 
   /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
@@ -130,6 +216,9 @@ class ProgramContext {
                                                    const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
   }
+  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(*this, iteration, count);
+  }
   void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
                                    Real offset) const {
     clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
@@ -180,6 +269,32 @@ class ProgramContext {
                                          MultiFab& u_stage) const {
     count_kernel();
     return sys_->solve_fields_from_state_at(point, provider_slot, sys_block(b), u_stage);
+  }
+  template <class Body>
+  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::string& provider_slot, int b,
+                                    MultiFab& evaluation_state, MultiFab& restore_state,
+                                    Body&& body) const {
+    const auto restore = [&]() {
+      const SolveReport restored =
+          solve_fields_from_state_at(point, provider_slot, b, restore_state);
+      if (!restored.solved_value_available())
+        throw_field_solve_failure_(restored, "restoring the frozen field state");
+    };
+    const SolveReport prepared =
+        solve_fields_from_state_at(point, provider_slot, b, evaluation_state);
+    if (!prepared.solved_value_available()) {
+      restore();
+      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
+    }
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      const std::exception_ptr failure = std::current_exception();
+      restore();
+      std::rethrow_exception(failure);
+    }
+    restore();
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -304,15 +419,33 @@ class ProgramContext {
     count_kernel();
     sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
   }
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only, boundary);
+  }
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                                  MultiFab& u, MultiFab& c) const {
     count_kernel();
     sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
   }
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c,
+                                 const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c, boundary);
+  }
   void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                             MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
     sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
+  }
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j,
+                            const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j, boundary);
   }
 
   struct RhsGroupRequest {
@@ -422,16 +555,31 @@ class ProgramContext {
   /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
   GridContext grid_context() const { return sys_->grid_context(); }
 
+  /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
+  /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
+  /// unqualified mesh BC and cannot borrow a block's native boundary components.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
+      const MultiFab&, const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(), lane);
+  }
+
+  /// Materialize the exact boundary authority of one authenticated Program block.  The Program
+  /// index is resolved through the installed name map before any component state is prepared.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
+      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(sys_block(block)), lane,
+                                                         prototype, point);
+  }
+
   /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
   /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
   /// templated assembly free function writes straight into the level-0-bound scratch the codegen
-  /// allocated, byte-for-byte as before. The @p role tag (a field id defined by the assembly module) is
-  /// ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy, redirect the write
-  /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
-  MultiFab& assembly_target(MultiFab& field, int role) const {
-    validate_assembly_write_role(role, "ProgramContext::assembly_target");
-    if (sys_->program_is_polar() && role >= 0 && role < 4)
-      polar_coeffs_[static_cast<std::size_t>(role)] = &field;
+  /// allocated, byte-for-byte as before. The opaque prepared field-slot identity is ignored here; it
+  /// exists so an AMR provider can redirect the write to its own per-level storage without extending
+  /// this context for every new operator envelope.
+  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_target");
     return field;
   }
 
@@ -439,72 +587,124 @@ class ProgramContext {
   /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
   /// ProgramContext redirects the READ to the current level's published composite field on a refined
   /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, int role) const {
-    validate_assembly_read_role(role, "ProgramContext::assembly_source");
+  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_source");
     return field;
   }
   /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
   MultiFab& linear_solution(MultiFab& field) const { return field; }
 
-  /// Solve the matrix-free linear system A(phi) = rhs of a compiled Program (ADC-633). On the uniform
-  /// System this dispatches by @p method to the SAME matrix-free Krylov call the codegen used to emit
-  /// INLINE (cg / bicgstab / gmres / richardson) with byte-identical arguments, so a uniform Program's
-  /// trajectory is unchanged; only the emission indirects through this seam. The AMR ProgramContext
-  /// OVERRIDES this method to route a refined hierarchy through its composite elliptic. @p method:
-  /// 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson (LinearSolveMethod). @p precond is the
-  /// preconditioner ApplyFn (empty = unpreconditioned); @p restart is the GMRES basis size (ignored by
-  /// the others). The SolveReport is returned to generated code, which must consume it before
-  /// publishing @p sol as a solved value.
-  SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
-                                   const ApplyFn& precond, int method, Real tol, int max_iter,
-                                   int restart, Real omega) const {
-    validate_linear_solve_method(method, "ProgramContext::solve_linear_matfree");
-    if (sys_->program_is_polar()) {
-      // The generated coefficient assembly registered the four tensor fields through
-      // assembly_target.  Solve the same authored mathematical operator with the generic polar metric
-      // backend; no source-stage/physics vocabulary enters this dispatch.
-      for (std::size_t c = 0; c < polar_coeffs_.size(); ++c)
-        if (!polar_coeffs_[c]) {
-          SolveReport report;
-          report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-          return report;
-        }
-      if (method != kLinearSolveBicgstab) {
-        SolveReport report;
-        report.mark_failed(SolveStatus::kCapabilityFailure);
-        return report;
-      }
-      if (!polar_tensor_)
-        polar_tensor_ = std::make_shared<PolarTensorKrylovSolver>(
-            sys_->program_polar_geometry(), sol.box_array(), sys_->grid_context().bc,
-            PolarPrecond::RadialLine);
-      polar_tensor_->set_coefficients(polar_coeffs_[0], polar_coeffs_[1], polar_coeffs_[2],
-                                      polar_coeffs_[3]);
-      // The Program authors -div(A grad phi)=rhs. PolarTensorKrylovSolver owns the equivalent
-      // +div(A grad phi) operator, hence its RHS is the exact negation.  Keep the authored initial
-      // guess and do not publish a failed partial iterate.
-      pops::lincomb(polar_tensor_->phi(), Real(1), sol, Real(0), sol);
-      pops::lincomb(polar_tensor_->rhs(), Real(-1), rhs, Real(0), rhs);
-      const SolveReport report = polar_tensor_->solve(tol, max_iter);
-      if (report.solved()) {
-        pops::lincomb(sol, Real(1), polar_tensor_->phi(), Real(0), polar_tensor_->phi());
-      }
-      return report;
+  /// Authenticate the exact operator evaluation point. Generated code supplies a canonical 256-bit
+  /// Program/operator authority plus the prepared field/resource identities; the context supplies the
+  /// monotonic evaluation revision and exact native clock values.
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
+                                                          const MultiFab& prototype,
+                                                          OperatorFingerprint resources) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const GridContext gc = sys_->grid_context();
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
+    if (sys_->program_is_polar())
+      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
+    else
+      ::pops::detail::fingerprint_geometry(topology, gc.geom);
+    ::pops::detail::fingerprint_boundary(topology, gc.bc);
+    if (gc.boundary_plan) {
+      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
+      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->state_identity());
+      ::pops::detail::fingerprint_mix(
+          topology, static_cast<std::uint64_t>(gc.boundary_plan->required_depth()));
+    } else {
+      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
     }
-    switch (method) {
-      case kLinearSolveCg:
-        return pops::cg_solve(apply, sol, rhs, tol, max_iter);
-      case kLinearSolveGmres:
-        return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-      case kLinearSolveRichardson:
-        return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
-      case kLinearSolveBicgstab:
-        return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-      default:
-        SolveReport report;
-        report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-        return report;  // validated above; keeps exhaustive behavior explicit for defensive builds
-    }
+    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Program operator snapshot revision exhausted");
+    const std::uint64_t revision = ++operator_snapshot_revision_;
+    invalidate_active_operator_snapshot_();
+    OperatorEvaluationSnapshot snapshot =
+        operator_evaluation_snapshot_(authority, topology, resources, revision);
+    active_operator_snapshot_revision_ = revision;
+    return snapshot;
+  }
+
+  /// Recompute the current native identity without advancing the monotonic counter. A requested
+  /// revision is reproduced only while it is the context's active mint; logical-scope entry/exit
+  /// clears that authority, so an exactly restored outer clock still probes unequal until reminted.
+  /// The uniform mesh fingerprint remains reusable, keeping the Krylov probe free of layout walks.
+  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                       OperatorFingerprint topology,
+                                                       OperatorFingerprint resources,
+                                                       std::uint64_t revision) const {
+    const std::uint64_t probe_revision =
+        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
+    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
+  }
+
+ private:
+  void invalidate_active_operator_snapshot_() const noexcept {
+    active_operator_snapshot_revision_ = 0;
+  }
+
+  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
+                                                           OperatorFingerprint topology,
+                                                           OperatorFingerprint resources,
+                                                           std::uint64_t revision) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const double evaluation_time = static_cast<double>(physical_time()) +
+                                   logical_physical_time_offset_ +
+                                   stage_time_.value() * current_dt_;
+    return {authority,
+            revision,
+            static_cast<std::int64_t>(macro_step()),
+            evaluation_stage.numerator,
+            evaluation_stage.denominator,
+            std::bit_cast<std::uint64_t>(current_dt_),
+            std::bit_cast<std::uint64_t>(evaluation_time),
+            UINT64_C(1),
+            topology,
+            resources};
+  }
+
+ public:
+  /// Capability for an operator body emitted inside this compiled Program artifact. Direct C++
+  /// extensions cannot construct the token and therefore remain on the verified apply path.
+  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
+      OperatorFingerprint authority) const {
+    if (sys_ == nullptr || !sys_->program_owns_operator_authority(authority))
+      throw std::invalid_argument(
+          "compiled Program requested an operator authority not owned by its installed artifact");
+    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
+  }
+
+  /// Execute an already prepared affine problem with its bound persistent workspace. The raw callback,
+  /// integer method wire, lazy preconditioner path and per-call scratch allocations no longer exist.
+  SolveReport solve_prepared_linear(const PreparedAffineLinearProblem& problem,
+                                    KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
+                                    const KrylovControls& controls) const {
+    return pops::solve_prepared_affine(problem, workspace, sol, rhs, controls);
+  }
+
+  /// Physical ownership of fields allocated for one generated Program resource bundle. A uniform
+  /// System partitions its one mesh across communicator ranks; exposing the descriptor through the
+  /// same context protocol as AMR keeps generic codegen independent from the runtime target.
+  const PreparedVectorDistribution& program_resource_vector_distribution() const noexcept {
+    return PreparedVectorDistribution::Distributed;
+  }
+  FieldDistribution program_resource_field_storage_distribution() const noexcept {
+    return FieldDistribution::Distributed;
+  }
+  int program_resource_field_level() const noexcept { return 0; }
+  /// Resolve the topology-dependent part of an authored field-nullspace plan at the same boundary
+  /// that allocates its persistent Program resource. Generic codegen supplies only the mathematical
+  /// basis/gauge; the context owns layout scope, physical measure and communicator ownership.
+  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
+    const GridContext gc = grid_context();
+    const Real measure = gc.geom.dx() * gc.geom.dy();
+    for (FieldNullspaceBasis& basis : plan.bases)
+      basis.cell_measure = {measure};
   }
 
   /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
@@ -554,6 +754,90 @@ class ProgramContext {
     }
   }
 
+  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "lane-isolated ProgramContext::laplacian requires a prepared polar operator session");
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(in, gc.geom.domain, gc.bc, lane);
+    apply_laplacian(in, gc.geom, out);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "prepared ProgramContext::laplacian requires a polar operator provider");
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "prepared ProgramContext::laplacian requires a polar operator provider");
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+
+  /// Metric-aware tensor div(A grad(in)). The authored ApplyFn remains the sole mathematical
+  /// operator on Cartesian and polar meshes; solver dispatch never swaps it for a second loop with
+  /// different tolerances, preconditioning or residual semantics.
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_grid_ghosts(in, gc);
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_grid_ghosts(in, gc, lane);
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    const GridContext& gc = boundary.context();
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    const GridContext& gc = boundary.context();
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
   /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
   /// needs >= 2 components). Fills @p phi's ghosts then forwards to pops::field_postprocess with
   /// store_phi=false (the gradient lands in components 0/1) and the centered factors cx = 1/(2 dx),
@@ -562,6 +846,34 @@ class ProgramContext {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(phi, gc.geom.domain, gc.bc);
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(phi, gc.geom.domain, gc.bc, lane);
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(phi);
+    const GridContext& gc = boundary.context();
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(phi, point);
+    const GridContext& gc = boundary.context();
     const Real cx = Real(1) / (Real(2) * gc.geom.dx());
     const Real cy = Real(1) / (Real(2) * gc.geom.dy());
     field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
@@ -586,6 +898,34 @@ class ProgramContext {
     apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
   }
 
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
+    if (&fy != &fx)
+      fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
+    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(fx);
+    if (&fy != &fx)
+      boundary.fill(fy);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(fx, point);
+    if (&fy != &fx)
+      boundary.fill(fy, point);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
   /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
@@ -604,6 +944,23 @@ class ProgramContext {
                   0);  // 1-component divergence scratch (no ghosts needed)
     for (int c = 0; c < r.ncomp(); ++c) {
       apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);  // divc(.,0) = div(fx_c, fy_c)
+      for (int li = 0; li < r.local_size(); ++li) {
+        const ConstArray4 d = divc.fab(li).const_array();
+        Array4 rv = r.fab(li).array();
+        const int comp = c;
+        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
+      }
+    }
+  }
+
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
+    fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
+    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    for (int c = 0; c < r.ncomp(); ++c) {
+      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);
       for (int li = 0; li < r.local_size(); ++li) {
         const ConstArray4 d = divc.fab(li).const_array();
         Array4 rv = r.fab(li).array();
@@ -775,6 +1132,11 @@ class ProgramContext {
   void fill_boundary(MultiFab& x) const {
     const GridContext gc = sys_->grid_context();
     fill_ghosts(x, gc.geom.domain, gc.bc);
+  }
+
+  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(x, gc.geom.domain, gc.bc, lane);
   }
 
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
@@ -954,26 +1316,39 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
             0,
             stage,
-            stage_time_,
+            evaluation_stage,
             current_dt_,
-            static_cast<double>(physical_time()) + stage_time_.value() * current_dt_};
+            static_cast<double>(physical_time()) + logical_physical_time_offset_ +
+                stage_time_.value() * current_dt_};
   }
 
   static std::runtime_error block_map_error_(std::string message) {
     return std::runtime_error(std::move(message));
   }
 
+  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
+                                                      const char* detail) {
+    if (report.action == SolveAction::kRejectAttempt)
+      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
+    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
+                             report.status_name() + " (" + detail + ")");
+  }
+
   mutable ClockScheduleState clock_schedule_;
   mutable std::string primary_clock_;
   mutable amr::Rational stage_time_{0, 1};
   mutable double current_dt_ = 0.0;
-  mutable std::array<MultiFab*, 4> polar_coeffs_{{nullptr, nullptr, nullptr, nullptr}};
-  mutable std::shared_ptr<PolarTensorKrylovSolver> polar_tensor_;
+  mutable amr::Rational logical_phase_begin_{0, 1};
+  mutable amr::Rational logical_phase_span_{1, 1};
+  mutable double logical_physical_time_offset_ = 0.0;
+  mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   System* sys_;

@@ -43,7 +43,7 @@ def model_hash(model: Any, params: Any = None) -> str:
     # Import the helper lazily to avoid pulling pops.dsl at import time.
     # aux_total_n_aux and roles_for live in dsl; we read them from the model
     # package which is stdlib-only (no C extension).
-    from pops._ir.literals import scalar_data
+    from pops.identity.scalar import scalar_data
     from pops._ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
 
     def _scalar_token(value: Any) -> str:

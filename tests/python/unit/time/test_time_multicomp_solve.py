@@ -4,7 +4,7 @@
 ADC-416 extends ``P.matrix_free_operator`` + typed ``P.solve(LinearProblem(...))`` from scalar-only to vector /
 state-valued (multi-component) fields -- the foundation the full condensed_schur macro builds on. The
 operator declares ``domain="state"`` (or ``"vector"``) with an ``ncomp``; its apply runs on an ncomp
-buffer and the runtime Krylov loop (``pops::cg_solve`` etc.) reduces its inner products over ALL
+buffer and the prepared runtime Krylov loop reduces its inner products over ALL
 components (pops::dot_all), so EVERY component is solved -- a component-0-only norm would converge on
 component 0 alone and leave the rest unsolved.
 
@@ -13,7 +13,8 @@ component 0 alone and leave the rest unsolved.
     (``ctx.alloc_scalar_field(2, 1)``); the scalar default is unchanged (ncomp=1, ``alloc(1, 1)``); the
     ncomp / domain validation fires (ncomp<1, domain!=range_, a too-small scalar_field rhs).
 
-(B) End-to-end parity (skips unless the full toolchain is present): a 2-component block (rho, e, zero
+(B) Internal native-ABI parity (skips unless the full toolchain is present): a 2-component block
+    installed through the private ``_system`` seam (rho, e, zero
     flux); A = a state-valued matrix_free_operator (ncomp=2) with apply out = in - alpha*Lap(in)
     (alpha=0.1, SPD per component). The Program solves (I - alpha*Lap) x = U on the 2-component state via
     cg and commits U = x. compile_problem -> install_program -> set rho0/e0 to DIFFERENT smooth fields
@@ -22,14 +23,15 @@ component 0 alone and leave the rest unsolved.
     match is the regression guard for the full-component norm: with a comp-0-only dot the loop would stop
     on component 0's residual and leave component 1 unsolved). A scalar (ncomp=1) solve still matches the
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
-    / a visible Kokkos -- never fakes the engine.
+    / a visible Kokkos -- never fakes the engine. This is not labelled as public DSL lifecycle
+    coverage; that contract is exercised by ``test_public_krylov_lifecycle.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.model import StateSpace
 
 from pops.numerics.reconstruction import FirstOrder
@@ -72,7 +74,10 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         method = CG(max_iter=max_iter, rel_tol=tol)
     P.set_apply(A, apply)
     phi = P.solve(
-        LinearProblem(A, U), solver=method,
+        LinearProblem(
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
+        solver=method,
     ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
     P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
@@ -97,7 +102,10 @@ def test_state_operator_builds(t):
     space = StateSpace("U", ("c0", "c1"))
     U = typed_state(P, "blk", space=space)
     phi = P.solve(
-        LinearProblem(A, U), solver=CG(max_iter=50, rel_tol=1e-10),
+        LinearProblem(
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
+        solver=CG(max_iter=50, rel_tol=1e-10),
     ).consume(action=FailRun())
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
@@ -154,14 +162,25 @@ def test_solve_rhs_component_count(t):
     rhs_small = P.scalar_field("rhs2", ncomp=2)  # too few components for the ncomp=3 operator
     try:
         P.solve(
-            LinearProblem(A, rhs_small), solver=krylov.CG(max_iter=10))
+            LinearProblem(A, rhs_small, nullspace=None), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
-    # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
+    rhs_wide = P.scalar_field("rhs4", ncomp=4)
+    try:
+        P.solve(
+            LinearProblem(A, rhs_wide, nullspace=None), solver=krylov.CG(max_iter=10))
+    except ValueError as exc:
+        assert "component" in str(exc), str(exc)
+    else:
+        raise AssertionError("a wider rhs requires an explicit component view")
+    # An exactly matching scalar_field and structurally matching typed State are accepted.
     outcome = P.solve(
-        LinearProblem(A, P.scalar_field("rhs3", ncomp=3)),
+        LinearProblem(
+            A, P.scalar_field("rhs3", ncomp=3),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=krylov.CG(max_iter=10),
     )
     token = next(value for value in P._values if value.op == "solve_linear")
@@ -169,7 +188,10 @@ def test_solve_rhs_component_count(t):
     outcome.consume(action=FailRun())
     state_space = StateSpace("U", ("c0", "c1", "c2"))
     P.solve(
-        LinearProblem(A, typed_state(P, "blk", space=state_space)),
+        LinearProblem(
+            A, typed_state(P, "blk", space=state_space),
+            properties=LinearOperatorProperties.symmetric_positive_definite(),
+            nullspace=None),
         solver=krylov.CG(max_iter=10),
     ).consume(action=FailRun())
 
@@ -183,7 +205,7 @@ def test_typed_state_component_count_is_checked_at_author_time(t):
     P.set_apply(A, lambda _P, _out, x: x)
     try:
         P.solve(
-            LinearProblem(A, rhs), solver=krylov.CG(max_iter=10))
+            LinearProblem(A, rhs, nullspace=None), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "StateSpace" in str(exc) and "2 component" in str(exc) and "ncomp=3" in str(exc), str(exc)
     else:
@@ -194,10 +216,27 @@ def test_multicomp_codegen(t):
     src = emit_cpp_program(_mc_program(t, 2))
     n = src.count("ctx.alloc_scalar_field(2, 1)")  # lap scratch + accumulator + solution
     assert n >= 3, "the 2-component solve allocates 2-component scratch/acc/solution\n%s" % src
-    assert "ctx.solve_linear_matfree" in src and "ctx.laplacian" in src, src
+    assert "ctx.solve_prepared_linear" in src and "ctx.laplacian" in src, src
     # the scalar path still allocates 1-component fields only
     src1 = emit_cpp_program(_mc_program(t, 1))
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1
+
+
+def test_multicomp_geometric_mg_preconditioner_is_rejected_before_codegen(t):
+    from pops.solvers import preconditioners
+
+    try:
+        _mc_program(
+            t, 2,
+            method=krylov.GMRES(
+                max_iter=20, rel_tol=1e-9,
+                preconditioner=preconditioners.GeometricMG()),
+        )
+    except ValueError as exc:
+        assert "preconditioner 'geometric_mg'" in str(exc) and "scalar-only" in str(exc), str(exc)
+    else:
+        raise AssertionError(
+            "scalar GeometricMG must not masquerade as a block preconditioner")
 
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----

@@ -13,11 +13,14 @@
 
 #include <pops/mesh/index/box2d.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace pops {
+
+struct HaloExchangeStorage;
 
 /// One halo copy/transfer: the ghost @p region of box @p dst is filled from the shifted valid region
 /// of box @p src (shift sx, sy in cells for the periodic wrap; 0 for an interior neighbor). @p src and
@@ -75,20 +78,30 @@ class HaloScheduleCache {
   /// Drops every cached schedule, forcing a rebuild on the next fill_boundary. Used by tests to
   /// compare the cached path against a fresh rebuild; not needed in production (regrid drops the
   /// whole cache by reassigning the MultiFab).
-  void clear() { entries_.clear(); }
+  void clear() {
+    entries_.clear();
+    exchange_pool_.clear();
+  }
 
   /// Number of cached schedules (test/instrumentation hook).
   std::size_t size() const { return entries_.size(); }
+  std::size_t exchange_pool_size() const { return exchange_pool_.size(); }
+
+  /// Borrow persistent communication storage for one schedule/component width. Multiple in-flight
+  /// exchanges receive distinct leases; blocking repeated fills reuse capacities without allocating.
+  std::shared_ptr<HaloExchangeStorage> acquire_exchange(
+      const std::shared_ptr<const HaloSchedule>& schedule, int ncomp);
 
  private:
   std::vector<std::shared_ptr<HaloSchedule>> entries_;
+  std::vector<std::shared_ptr<HaloExchangeStorage>> exchange_pool_;
 };
 
 namespace detail {
-/// Process-wide count of halo-schedule (re)builds. A single instance across translation units (an
-/// inline function with a function-local static). NOT thread-safe; instrumentation only.
-inline std::int64_t& halo_schedule_build_counter() {
-  static std::int64_t n = 0;
+/// Process-wide count of halo-schedule (re)builds. Independent execution lanes may warm their
+/// private caches concurrently, so even this instrumentation counter must not introduce a data race.
+inline std::atomic<std::int64_t>& halo_schedule_build_counter() {
+  static std::atomic<std::int64_t> n{0};
   return n;
 }
 }  // namespace detail
@@ -97,12 +110,12 @@ inline std::int64_t& halo_schedule_build_counter() {
 /// does NOT increment it, so a stable layout filled K times reports 1. Test hook for cache
 /// engagement; not part of the public numerical API.
 inline std::int64_t halo_schedule_build_count() {
-  return detail::halo_schedule_build_counter();
+  return detail::halo_schedule_build_counter().load(std::memory_order_relaxed);
 }
 
 /// Resets the build counter (tests).
 inline void reset_halo_schedule_build_count() {
-  detail::halo_schedule_build_counter() = 0;
+  detail::halo_schedule_build_counter().store(0, std::memory_order_relaxed);
 }
 
 }  // namespace pops

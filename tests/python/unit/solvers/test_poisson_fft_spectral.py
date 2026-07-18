@@ -108,8 +108,8 @@ sim.set_poisson(
     wall=Disc(radius=0.4),
 )
 msg = err_msg(sim.solve_fields)
-chk("fft_spectral" in msg and "wall" in msg,
-    "spectral FFT refusal names the incompatible wall geometry")
+chk("fft_spectral" in msg and "active-region field" in msg,
+    "spectral FFT refusal names the incompatible active-region field")
 sim2 = _system(32)
 msg = err_msg(lambda: sim2.set_poisson(
     rhs="charge_density", solver="dct", bc=Periodic()))
@@ -127,7 +127,7 @@ def rhs_with(solver):
         state=engine.FluidState("isothermal", cs2=0.0),
         transport=engine.IsothermalFlux(cs2=0.0),
         source=engine.PotentialForce(charge=1.0),
-        elliptic=engine.ChargeDensity(charge=1.0),
+        elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
     )
     sim = _system(n, model=source_only)
     sim.set_poisson(

@@ -21,6 +21,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -107,22 +108,22 @@ class CopyScheduleCache {
 };
 
 namespace detail {
-/// Process-wide count of copy-schedule (re)builds. A single instance across translation units (an
-/// inline function with a function-local static). NOT thread-safe; instrumentation only.
-inline std::int64_t& copy_schedule_build_counter() {
-  static std::int64_t n = 0;
+/// Process-wide counters are atomic because independent execution lanes may warm private caches
+/// concurrently. They remain instrumentation only and use relaxed ordering.
+inline std::atomic<std::int64_t>& copy_schedule_build_counter() {
+  static std::atomic<std::int64_t> n{0};
   return n;
 }
 /// Process-wide count of copy-schedule cache HITS (a parallel_copy that reused a memoized plan).
-inline std::int64_t& copy_schedule_hit_counter() {
-  static std::int64_t n = 0;
+inline std::atomic<std::int64_t>& copy_schedule_hit_counter() {
+  static std::atomic<std::int64_t> n{0};
   return n;
 }
 /// Process-wide count of copy-schedule cache MISSES (a parallel_copy that built a fresh plan). Equal
 /// to the build counter by construction (a miss always builds); kept as a separate name so the
 /// hit/miss pair reads symmetrically at the profiler seam.
-inline std::int64_t& copy_schedule_miss_counter() {
-  static std::int64_t n = 0;
+inline std::atomic<std::int64_t>& copy_schedule_miss_counter() {
+  static std::atomic<std::int64_t> n{0};
   return n;
 }
 }  // namespace detail
@@ -131,23 +132,23 @@ inline std::int64_t& copy_schedule_miss_counter() {
 /// does NOT increment it, so a stable layout pair copied K times reports 1. Test hook for cache
 /// engagement; not part of the public numerical API.
 inline std::int64_t copy_schedule_build_count() {
-  return detail::copy_schedule_build_counter();
+  return detail::copy_schedule_build_counter().load(std::memory_order_relaxed);
 }
 
 /// Number of parallel_copy calls served from the cache (hits) and rebuilt (misses). A stable layout
 /// pair copied K times reports 1 miss and K-1 hits. Test / profiler hooks.
 inline std::int64_t copy_schedule_hit_count() {
-  return detail::copy_schedule_hit_counter();
+  return detail::copy_schedule_hit_counter().load(std::memory_order_relaxed);
 }
 inline std::int64_t copy_schedule_miss_count() {
-  return detail::copy_schedule_miss_counter();
+  return detail::copy_schedule_miss_counter().load(std::memory_order_relaxed);
 }
 
 /// Resets the build / hit / miss counters (tests).
 inline void reset_copy_schedule_build_count() {
-  detail::copy_schedule_build_counter() = 0;
-  detail::copy_schedule_hit_counter() = 0;
-  detail::copy_schedule_miss_counter() = 0;
+  detail::copy_schedule_build_counter().store(0, std::memory_order_relaxed);
+  detail::copy_schedule_hit_counter().store(0, std::memory_order_relaxed);
+  detail::copy_schedule_miss_counter().store(0, std::memory_order_relaxed);
 }
 
 }  // namespace pops

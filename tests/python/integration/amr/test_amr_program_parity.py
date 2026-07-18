@@ -6,6 +6,10 @@ type ``ProgramContext``). The SAME generated body therefore compiles against ``A
 duck-typed structural mirror that drives the body recursively over the AMR hierarchy. The
 ``{amr_install}`` codegen slot passes the identical body to ``advance_hierarchy``.
 
+This is deliberately an internal native-facade parity test: it imports ``_system`` and
+``_engine_descriptors`` to compare the two C++ contexts directly. It is not presented as public DSL
+lifecycle coverage.
+
 This test asserts:
 
   1) (host-side, no compiler) the codegen emits a recursive install wrapper for ``target='amr_system'``
@@ -199,14 +203,17 @@ def test_codegen_emits_amr_install_wrapper():
     )
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
-    chk("AmrProgramContext ctx(sys)" in body,
+    chk("make_shared<pops::runtime::program::AmrProgramContext>(sys)" in body,
         "the AMR install constructs an AmrProgramContext over the AmrSystem")
     chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
         "the wrapper delegates to the explicit parent/child clock driver")
     chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
         "exact SSPRK2 stage abscissae are emitted")
-    chk("ctx.set_level(" not in body and "ctx.couple_levels(" not in body,
-        "level traversal and synchronization are not duplicated in generated code")
+    chk("_make_level_program" in body and "ctx.program_resource_topology_epoch()" in body
+        and "ctx.program_resource_topology_generation()" in body,
+        "per-level Program resources refresh after regrid, rollback, and checkpoint rebuild")
+    chk("ctx.set_level(level)" in body and "ctx.couple_levels(" not in body,
+        "generated traversal only materializes level-local resources; native sync remains owned")
     chk("the per-level AMR macro-step driver" not in body
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")

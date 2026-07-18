@@ -140,7 +140,7 @@ class CompositeFacPoisson {
         ratio_(ratio),
         ba_f_(fine_boxes),
         dm_f_(fine_boxes.size(), n_ranks()),
-        mg_(geom_c, ba_c, bc, {}, /*replicated=*/true),
+        mg_(geom_c, ba_c, bc, {}, FieldDistribution::Replicated),
         phi_c_(ba_c, dm_c_, 1, 1),
         phi_f_(ba_f_, dm_f_, 1, 1),
         f_c_(ba_c, dm_c_, 1, 0),
@@ -151,6 +151,8 @@ class CompositeFacPoisson {
         boundary_view_c_(ba_c, dm_c_, 1, 1),
         eps_c_(ba_c, dm_c_, 1, 1),
         eps_f_(ba_f_, dm_f_, 1, 1),
+        eps_y_c_(ba_c, dm_c_, 1, 1),
+        eps_y_f_(ba_f_, dm_f_, 1, 1),
         axy_c_(ba_c, dm_c_, 1, 1),
         ayx_c_(ba_c, dm_c_, 1, 1),
         axy_f_(ba_f_, dm_f_, 1, 1),
@@ -173,6 +175,8 @@ class CompositeFacPoisson {
     phi_f_.set_val(Real(0));
     eps_c_.set_val(Real(1));  // default permittivity 1 -> operator = Laplacian (scalar)
     eps_f_.set_val(Real(1));
+    eps_y_c_.set_val(Real(1));
+    eps_y_f_.set_val(Real(1));
     axy_c_.set_val(Real(0));  // default cross terms 0 -> diagonal block only
     ayx_c_.set_val(Real(0));
     axy_f_.set_val(Real(0));
@@ -231,10 +235,10 @@ class CompositeFacPoisson {
           "CompositeFacPoisson reaction must be finite and strictly positive");
     reaction_ = reaction;
     has_reaction_ = true;
-    mg_.set_reaction([reaction](Real, Real) { return reaction; });
+    mg_.set_reaction(constant_scalar_field_provider(reaction));
     for (auto& level : level_mg_)
       if (level)
-        level->set_reaction([reaction](Real, Real) { return reaction; });
+        level->set_reaction(constant_scalar_field_provider(reaction));
   }
   /// Cross terms a_xy / a_yx (at cell centers) PER LEVEL: FULL tensor A = diag(eps,eps) +
   /// [[0,a_xy],[a_yx,0]]. This is the condensed Schur operator at B_z != 0 (a_xy = c rho w/det,
@@ -262,6 +266,13 @@ class CompositeFacPoisson {
   MultiFab& rhs_level(int k) { return k == 0 ? f_c_ : (k == 1 ? f_f_ : f_lv_[k - 2]); }
   MultiFab& phi_level(int k) { return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]); }
   MultiFab& eps_level(int k) { return k == 0 ? eps_c_ : (k == 1 ? eps_f_ : eps_lv_[k - 2]); }
+  MultiFab& eps_y_level(int k) {
+    return k == 0 ? eps_y_c_ : (k == 1 ? eps_y_f_ : eps_y_lv_[k - 2]);
+  }
+  void use_anisotropic_coefficient(bool value) {
+    has_eps_y_ = value;
+    has_eps_ = has_eps_ || value;
+  }
   MultiFab& a_xy_level(int k) { return k == 0 ? axy_c_ : (k == 1 ? axy_f_ : axy_lv_[k - 2]); }
   MultiFab& a_yx_level(int k) { return k == 0 ? ayx_c_ : (k == 1 ? ayx_f_ : ayx_lv_[k - 2]); }
   /// Geometry of level k (k == 0 coarse, k == 1 fine, k >= 2 refined 2^k over the coarse).
@@ -446,7 +457,13 @@ class CompositeFacPoisson {
       device_fence();
       fill_ghosts(eps_c_, geom_c_.domain, coeff_bc(bc_));
       fill_cf_coarse_to_fine(eps_c_, eps_f_);
-      mg_.set_epsilon(eps_c_);
+      if (has_eps_y_) {
+        fill_ghosts(eps_y_c_, geom_c_.domain, coeff_bc(bc_));
+        fill_cf_coarse_to_fine(eps_y_c_, eps_y_f_);
+        mg_.set_epsilon_anisotropic(eps_c_, eps_y_c_);
+      } else {
+        mg_.set_epsilon(eps_c_);
+      }
     }
     if (has_cross_) {
       device_fence();
@@ -812,6 +829,8 @@ class CompositeFacPoisson {
           phi_f_.fab(li).const_array();  // const view (same memory) for cross stencil
       const ConstArray4 F = f_f_.fab(li).const_array();
       const ConstArray4 E = eps_f_.fab(li).const_array();
+      const ConstArray4 EY =
+          has_eps_y_ ? eps_y_f_.fab(li).const_array() : eps_f_.fab(li).const_array();
       const ConstArray4 AXY = axy_f_.fab(li).const_array();
       const ConstArray4 AYX = ayx_f_.fab(li).const_array();
       for (int s = 0; s < sweeps; ++s)
@@ -823,8 +842,8 @@ class CompositeFacPoisson {
               // FACE permittivities (harmonic mean of the 2 centers); eps==1 -> faces == 1.
               const Real exm = he ? eps_harmonic(E(i, j, 0), E(i - 1, j, 0)) : Real(1);
               const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
-              const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
-              const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
+              const Real eym = he ? eps_harmonic(EY(i, j, 0), EY(i, j - 1, 0)) : Real(1);
+              const Real eyp = he ? eps_harmonic(EY(i, j, 0), EY(i, j + 1, 0)) : Real(1);
               const Real diag =
                   (exm + exp) * idx2 + (eym + eyp) * idy2 + (has_reaction_ ? reaction_ : Real(0));
               const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
@@ -852,8 +871,8 @@ class CompositeFacPoisson {
     // 9-point stencil stays consistent at the interface; only the NORMAL flux is explicitly joined C-F
     // (the cross flux, tangential and small for the Schur step, is carried by the volume stencil).
     apply_laplacian(operator_view, geom_c_, lap_c_, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
-                    /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &axy_c_ : nullptr,
-                    has_cross_ ? &ayx_c_ : nullptr);
+                    /*kappa=*/nullptr, has_eps_y_ ? &eps_y_c_ : nullptr,
+                    has_cross_ ? &axy_c_ : nullptr, has_cross_ ? &ayx_c_ : nullptr);
     if (has_reaction_)
       apply_constant_reaction_(lap_c_, operator_view);
     device_fence();
@@ -875,6 +894,8 @@ class CompositeFacPoisson {
     // patches (right border of one, left border of the other) gets TWO corrections, one per face: correct.
     const ConstArray4 PC = phi_c_.fab(0).const_array();
     const ConstArray4 EC = eps_c_.fab(0).const_array();
+    const ConstArray4 EYC =
+        has_eps_y_ ? eps_y_c_.fab(0).const_array() : eps_c_.fab(0).const_array();
     const bool he = has_eps_;
     const Real idx2 = Real(1) / (geom_c_.dx() * geom_c_.dx());
     const Real idy2 = Real(1) / (geom_c_.dy() * geom_c_.dy());
@@ -882,6 +903,8 @@ class CompositeFacPoisson {
     for (int g = 0; g < phi_f_.local_size(); ++g) {
       const ConstArray4 PF = phi_f_.fab(g).const_array();
       const ConstArray4 EF = eps_f_.fab(g).const_array();
+      const ConstArray4 EYF =
+          has_eps_y_ ? eps_y_f_.fab(g).const_array() : eps_f_.fab(g).const_array();
       const int Ic0 = patch_coarse_[g].lo[0], Ic1 = patch_coarse_[g].hi[0];
       const int Jc0 = patch_coarse_[g].lo[1], Jc1 = patch_coarse_[g].hi[1];
       // Faces NORMAL TO X: bordering columns I = Ic0-1 (covered +x face) and I = Ic1+1 (-x face).
@@ -917,26 +940,26 @@ class CompositeFacPoisson {
       for (int I = Ic0; I <= Ic1; ++I) {
         if (!cov_.covered(I, Jc0 - 1)) {
           const int J = Jc0 - 1;
-          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J + 1, 0)) : Real(1);
+          const Real efc = he ? eps_harmonic(EYC(I, J, 0), EYC(I, J + 1, 0)) : Real(1);
           const Real coarse_c = efc * (PC(I, J + 1, 0) - PC(I, J, 0)) * idy2;
           Real fine_sum = Real(0);
           for (int t = 0; t < r; ++t) {
             const int iff = r * I + t;
             const Real eff =
-                he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
+                he ? eps_harmonic(EYF(iff, r * Jc0 - 1, 0), EYF(iff, r * Jc0, 0)) : Real(1);
             fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
           }
           R(I, J, 0) += coarse_c - fine_sum * idy2;
         }
         if (!cov_.covered(I, Jc1 + 1)) {
           const int J = Jc1 + 1;
-          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J - 1, 0)) : Real(1);
+          const Real efc = he ? eps_harmonic(EYC(I, J, 0), EYC(I, J - 1, 0)) : Real(1);
           const Real coarse_c = efc * (PC(I, J - 1, 0) - PC(I, J, 0)) * idy2;
           Real fine_sum = Real(0);
           for (int t = 0; t < r; ++t) {
             const int iff = r * I + t;
             const Real eff =
-                he ? eps_harmonic(EF(iff, r * Jc1 + r - 1, 0), EF(iff, r * Jc1 + r, 0)) : Real(1);
+                he ? eps_harmonic(EYF(iff, r * Jc1 + r - 1, 0), EYF(iff, r * Jc1 + r, 0)) : Real(1);
             fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
           }
           R(I, J, 0) += coarse_c - fine_sum * idy2;
@@ -960,10 +983,10 @@ class CompositeFacPoisson {
   void record_residual(int iteration, Real residual) {
     if (!verbose_)
       return;
-    diagnostics_.record("elliptic.fac.residual", "CompositeFacPoisson", "info",
-                        iteration < 0 ? "initial composite hierarchy residual"
-                                      : "FAC iteration composite hierarchy residual",
-                        iteration, static_cast<double>(residual));
+    (void)diagnostics_.try_record("elliptic.fac.residual", "CompositeFacPoisson", "info",
+                                  iteration < 0 ? "initial composite hierarchy residual"
+                                                : "FAC iteration composite hierarchy residual",
+                                  iteration, static_cast<double>(residual));
   }
 
   Geometry geom_c_, geom_f_;
@@ -975,7 +998,8 @@ class CompositeFacPoisson {
   DistributionMapping dm_f_;
   GeometricMG mg_;  ///< coarse solver (initial + corrections), homogeneous Dirichlet
   MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, lap_c_, lap_f_, boundary_view_c_;
-  MultiFab eps_c_, eps_f_;  ///< variable permittivity per level (condensed Schur operator B_z=0)
+  MultiFab eps_c_, eps_f_;                  ///< x-normal diagonal coefficient per level
+  MultiFab eps_y_c_, eps_y_f_;              ///< optional y-normal diagonal coefficient per level
   MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< cross terms per level (full tensor, Schur B_z!=0)
   std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
   CoverageMask cov_;
@@ -983,6 +1007,7 @@ class CompositeFacPoisson {
   RuntimeDiagnosticsReport diagnostics_ =
       make_runtime_diagnostics_report("pops.numerics.elliptic.composite_fac_poisson");
   bool has_eps_ = false;    ///< true: div(eps grad phi) operator; false: scalar Laplacian (Phase 1)
+  bool has_eps_y_ = false;  ///< true: y faces use eps_y; false: isotropic y faces reuse eps
   bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
   bool has_reaction_ = false;  ///< true: constant Helmholtz term -reaction_*phi on every level
   Real reaction_ = Real(0);
@@ -1017,7 +1042,7 @@ class CompositeFacPoisson {
   std::vector<Geometry> geom_lv_;  ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
   std::vector<BoxArray> ba_lv_;    ///< ba_lv_[k-2] = the level-k patch tiling
   std::vector<DistributionMapping> dm_lv_;
-  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, lap_lv_, eps_lv_, axy_lv_, ayx_lv_;
+  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, lap_lv_, eps_lv_, eps_y_lv_, axy_lv_, ayx_lv_;
   // Uniform per-level metadata, index m in [0, L-1] (covers level 0/1 as well as k >= 2 so the driver
   // loops without special-casing). cov_of_[m] = coverage of level m by level m+1 (finest: none).
   // foot_of_[m][g] = PatchRange of patch g of level m on level m-1 (empty at m == 0).
@@ -1031,7 +1056,7 @@ class CompositeFacPoisson {
   std::vector<std::unique_ptr<FluxRegister>> flux_registers_;
   std::unique_ptr<FluxRegister> coarse_average_register_;
   std::vector<MultiFab> correction_residual_replicated_, correction_eps_replicated_,
-      correction_axy_replicated_, correction_ayx_replicated_;
+      correction_eps_y_replicated_, correction_axy_replicated_, correction_ayx_replicated_;
 
   // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
   // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy

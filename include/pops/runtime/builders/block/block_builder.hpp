@@ -152,6 +152,17 @@ struct BlockRhsEval {
   void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                  MultiFab& R) const {
     fill_grid_ghosts(U, *ctx, point);
+    eval_core_filled(U, R);
+  }
+
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    fill_grid_ghosts(U, boundary, point);
+    eval_core_filled(U, R);
+  }
+
+ private:
+  void eval_core_filled(MultiFab& U, MultiFab& R) const {
     if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces()) {
       assemble_rhs_without_prepared_interfaces<Limiter, Flux>(model, U, *ctx, R, recon_prim,
                                                               pos_floor);
@@ -183,6 +194,11 @@ struct RhsCoreInto {
     BlockRhsEval<Limiter, Flux, Model>{model, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}
         .eval_core(point, U, R);
   }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    BlockRhsEval<Limiter, Flux, Model>{model, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}
+        .eval_core(point, U, R, boundary);
+  }
 };
 
 struct BoundaryResidualInto {
@@ -191,6 +207,10 @@ struct BoundaryResidualInto {
                   MultiFab& R) const {
     add_grid_boundary_residual(U, R, ctx, point);
   }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    add_grid_boundary_residual(U, R, boundary, point);
+  }
 };
 
 struct BoundaryJvpInto {
@@ -198,6 +218,11 @@ struct BoundaryJvpInto {
   void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                   const MultiFab& V, MultiFab& J) const {
     apply_grid_boundary_jvp(U, V, J, ctx, point);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  const MultiFab& V, MultiFab& J,
+                  const PreparedGridBoundarySession& boundary) const {
+    apply_grid_boundary_jvp(U, V, J, boundary, point);
   }
 };
 
@@ -711,6 +736,13 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
   bc.boundary_residual_at_point = detail::BoundaryResidualInto{ctx};
   bc.boundary_jvp_at_point = detail::BoundaryJvpInto{ctx};
+  bc.rhs_core_at_point_prepared =
+      detail::RhsCoreInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
+  bc.rhs_flux_only_core_at_point_prepared =
+      detail::RhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+          SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
+  bc.boundary_residual_at_point_prepared = detail::BoundaryResidualInto{ctx};
+  bc.boundary_jvp_at_point_prepared = detail::BoundaryJvpInto{ctx};
   if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
     bc.rhs_without_prepared_interfaces =
         detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};

@@ -71,7 +71,7 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
   }
 
   // --- (1) COARSE-ONLY : un seul solve grossier ---
-  GeometricMG mg0(geom_c, ba_c, bc, {}, /*replicated=*/true);
+  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
   for (int li = 0; li < mg0.rhs().local_size(); ++li) {
     Array4 a = mg0.rhs().fab(li).array();
     const ConstArray4 s = f_c.fab(li).const_array();

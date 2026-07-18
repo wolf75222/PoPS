@@ -16,7 +16,7 @@ from .expr import (
     Expr, _wrap,
     Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign,
 )
-from .literals import (
+from pops.identity.scalar import (
     exact_decimal_add,
     exact_decimal_divide,
     exact_decimal_multiply,

@@ -2,6 +2,7 @@
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/config/component_interfaces.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
 
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -229,10 +231,10 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   ambiguous_distributed.communicator_datatype_identity = "none";
   EXPECT_THROW(pops::component::validate_execution_context(ambiguous_distributed),
                std::invalid_argument);
-  auto fabricated_distributed = packed_distributed;
-  fabricated_distributed.communicator_identity = "mpi:custom";
-  EXPECT_THROW(pops::component::validate_execution_context(fabricated_distributed),
-               std::invalid_argument);
+  auto lane_distributed = packed_distributed;
+  lane_distributed.communicator_identity = "case::solver::execution-lane";
+  EXPECT_NO_THROW(pops::component::validate_execution_context(lane_distributed))
+      << "typed duplicated/subset communicator identities are first-class ABI authorities";
   auto hidden_serial_handle = execution;
   hidden_serial_handle.communicator_f_handle = 7;
   EXPECT_THROW(pops::component::validate_execution_context(hidden_serial_handle),
@@ -1020,6 +1022,32 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::publish_output(writer_api, &writer_state, writer_request, receipt),
                std::runtime_error);
   EXPECT_EQ(writer_state.publish_count, 1);
+}
+
+TEST(ComponentInterfaces, PreparedExecutionContextBindsExactExecutionLaneAuthority) {
+  const PopsExecutionContextV1 execution = abi::host_execution_context();
+  const pops::component::PreparedExecutionContextV1 prepared(
+      execution.execution_identity, execution.context_version, execution.memory_space,
+      execution.backend_identity, execution.device_identity, execution.scalar_type,
+      execution.storage_precision, execution.compute_precision, execution.accumulation_precision,
+      execution.reduction_precision, execution.stream_handle, execution.stream_identity,
+      execution.communicator_f_handle, execution.communicator_datatype_f_handle,
+      execution.communicator_identity, execution.communicator_datatype_identity);
+  const auto lane =
+      pops::ExecutionLane::duplicate_world_collectively("case::runtime::component-lane");
+  const auto bound = prepared.for_lane(lane);
+
+  EXPECT_TRUE(bound.matches_lane(lane));
+  const PopsExecutionContextV1 view = bound.view();
+#ifdef POPS_HAS_MPI
+  EXPECT_EQ(std::string_view(view.communicator_identity), lane.identity());
+  EXPECT_STREQ(view.communicator_datatype_identity, "MPI_DOUBLE");
+#else
+  EXPECT_STREQ(view.communicator_identity, "serial");
+  EXPECT_STREQ(view.communicator_datatype_identity, "none");
+  EXPECT_EQ(view.communicator_f_handle, 0);
+  EXPECT_EQ(view.communicator_datatype_f_handle, 0);
+#endif
 }
 
 }  // namespace

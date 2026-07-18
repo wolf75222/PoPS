@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .literals import exact_numeric_scalar, exact_scale_prefix, multiply_exact_scalars, scalar_literal
+from pops.identity.scalar import exact_numeric_scalar, exact_scale_prefix, multiply_exact_scalars, scalar_literal
 from .symbolic import ImmutableSymbolic, freeze_symbolic_metadata
 
 class Expr(ImmutableSymbolic):

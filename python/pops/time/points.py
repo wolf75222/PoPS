@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from pops._ir.literals import ScalarLiteral, scalar_literal
+from pops.identity.scalar import ScalarLiteral, scalar_literal
 from pops.model.ownership import OwnerPath
 
 

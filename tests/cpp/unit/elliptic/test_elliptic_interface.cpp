@@ -16,7 +16,6 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>  // EllipticSolver
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>            // GeometricMG
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>       // TensorKrylovSolver, SolveReport
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>  // PoissonFFTSolver, DistributedFFTSolver
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver, PolarEllipticSolver
 
@@ -29,11 +28,17 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
+
+static_assert(!std::is_reference_v<decltype(EllipticBuildRequest::geometry)>);
+static_assert(!std::is_reference_v<decltype(EllipticBuildRequest::boxes)>);
+static_assert(!std::is_reference_v<decltype(EllipticBuildRequest::mapping)>);
 
 // =====================================================================================
 // (1) EllipticOperator : role d'operateur (coefficients + geom + bc). GeometricMG le porte.
@@ -55,14 +60,150 @@ static_assert(
 // (2) LinearSolver : solveur ITERATIF a solve(rel_tol, max_iters) -> resultat non void.
 static_assert(LinearSolver<GeometricMG>,
               "GeometricMG doit modeler LinearSolver (solve(rel_tol, max_cycles) -> int)");
-static_assert(
-    LinearSolver<TensorKrylovSolver>,
-    "TensorKrylovSolver doit modeler LinearSolver (solve(rel_tol, max_iters) -> SolveReport)");
 
-// Le contrat de socle (rhs/phi/solve()/residual/geom) reste EllipticSolver : tout
-// LinearSolver l'est. On le reverifie pour les deux solveurs iteratifs.
+// Le contrat objet historique (rhs/phi/solve()/residual/geom) reste EllipticSolver pour
+// GeometricMG. Le Krylov generique n'est volontairement pas force dans ce concept : son contrat
+// final est le protocole prepare explicite (PreparedAffineLinearProblem + KrylovWorkspace +
+// solve_prepared_affine), valide exhaustivement par test_generic_krylov.
 static_assert(EllipticSolver<GeometricMG>, "GeometricMG modele EllipticSolver");
-static_assert(EllipticSolver<TensorKrylovSolver>, "TensorKrylovSolver modele EllipticSolver");
+static_assert(EllipticFactory<DefaultEllipticFactory<GeometricMG>, GeometricMG>,
+              "GeometricMG accepte la factory typee de distribution du champ");
+static_assert(
+    !EllipticFactory<DefaultEllipticFactory<PoissonFFTSolver>, PoissonFFTSolver>,
+    "un booleen spectral FFT ne doit jamais modeler implicitement la distribution du champ");
+struct ExplicitFftDistributionFactory {
+  std::string contract{"pops.test.explicit-fft-factory@1"};
+
+  [[nodiscard]] std::string_view collective_contract() const noexcept { return contract; }
+
+  [[nodiscard]] EllipticOperatorContract expected_operator_contract(
+      const EllipticBuildRequest& request) const {
+    return PoissonFFTSolver::expected_operator_contract(request, false);
+  }
+
+  [[nodiscard]] FieldDistribution materialized_distribution(
+      const EllipticBuildRequest&) const noexcept {
+    return FieldDistribution::Distributed;
+  }
+
+  [[nodiscard]] bool supports(const EllipticBuildRequest& request) const noexcept {
+    return request.distribution == FieldDistribution::Distributed && !request.active;
+  }
+
+  EllipticFactoryBuildResult<PoissonFFTSolver> build(EllipticBuildRequest request) const noexcept {
+    return capture_local_elliptic_factory_build<PoissonFFTSolver>([request = std::move(
+                                                                       request)]() mutable {
+      if (request.distribution != FieldDistribution::Distributed)
+        throw std::invalid_argument("PoissonFFTSolver requires a distributed single-rank field");
+      return PoissonFFTSolver(request.geometry, request.boxes, request.boundary,
+                              std::move(request.active), false);
+    });
+  }
+};
+static_assert(
+    EllipticFactory<ExplicitFftDistributionFactory, PoissonFFTSolver>,
+    "un backend a options propres doit pouvoir fournir sa factory sans changer le coupler");
+
+struct FaultyFftMaterializationFactory {
+  bool declared_spectral = false;
+  bool materialized_spectral = false;
+
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return "pops.test.faulty-fft-materialization-factory@1";
+  }
+  [[nodiscard]] EllipticOperatorContract expected_operator_contract(
+      const EllipticBuildRequest& request) const {
+    return PoissonFFTSolver::expected_operator_contract(request, declared_spectral);
+  }
+  [[nodiscard]] FieldDistribution materialized_distribution(
+      const EllipticBuildRequest&) const noexcept {
+    return FieldDistribution::Distributed;
+  }
+  [[nodiscard]] bool supports(const EllipticBuildRequest& request) const noexcept {
+    return request.distribution == FieldDistribution::Distributed;
+  }
+  EllipticFactoryBuildResult<PoissonFFTSolver> build(EllipticBuildRequest request) const noexcept {
+    return capture_local_elliptic_factory_build<PoissonFFTSolver>(
+        [request = std::move(request), spectral = materialized_spectral]() mutable {
+          return PoissonFFTSolver(request.geometry, request.boxes, request.boundary,
+                                  std::move(request.active), spectral);
+        });
+  }
+};
+static_assert(EllipticFactory<FaultyFftMaterializationFactory, PoissonFFTSolver>);
+
+struct TestActiveRegionSource {
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.elliptic-interface.active-region", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(true); }
+  [[nodiscard]] bool operator()(Real, Real) const noexcept { return true; }
+};
+
+TEST(test_elliptic_interface, build_request_validation_is_pure_and_owns_ghost_contract) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  EllipticBuildRequest request{Geometry{domain, 0.0, 1.0, 0.0, 1.0},
+                               BoxArray(std::vector<Box2D>{domain}),
+                               DistributionMapping(std::vector<int>{0}),
+                               BCRec{},
+                               {},
+                               FieldDistribution::Distributed};
+  EXPECT_TRUE(detail::elliptic_build_request_is_valid(request, 0, 2));
+  EXPECT_FALSE(detail::elliptic_build_request_is_valid(request, 2, 2));
+
+  request.rhs_ghosts = 1;
+  EXPECT_FALSE(detail::elliptic_build_request_is_valid(request, 0, 2));
+  request.rhs_ghosts = 0;
+  request.phi_ghosts = -1;
+  EXPECT_FALSE(detail::elliptic_build_request_is_valid(request, 0, 2));
+
+  request.phi_ghosts = 1;
+  request.distribution = FieldDistribution::Replicated;
+  request.mapping = DistributionMapping(std::vector<int>{1});
+  EXPECT_TRUE(detail::elliptic_build_request_is_valid(request, 1, 2));
+  EXPECT_FALSE(detail::elliptic_build_request_is_valid(request, 0, 2));
+}
+
+TEST(test_elliptic_interface, postbuild_rejects_backend_that_ignores_physical_boundary) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  BCRec boundary;
+  boundary.xlo = BCType::Dirichlet;
+  boundary.xhi = BCType::Dirichlet;
+  EXPECT_THROW(
+      (void)make_elliptic_solver<PoissonFFTSolver>({Geometry{domain, 0.0, 1.0, 0.0, 1.0},
+                                                    BoxArray(std::vector<Box2D>{domain}),
+                                                    DistributionMapping(std::vector<int>{0}),
+                                                    boundary,
+                                                    {},
+                                                    FieldDistribution::Distributed},
+                                                   FaultyFftMaterializationFactory{}),
+      std::invalid_argument);
+}
+
+TEST(test_elliptic_interface, postbuild_rejects_backend_that_ignores_declared_option) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  EXPECT_THROW((void)make_elliptic_solver<PoissonFFTSolver>(
+                   {Geometry{domain, 0.0, 1.0, 0.0, 1.0},
+                    BoxArray(std::vector<Box2D>{domain}),
+                    DistributionMapping(std::vector<int>{0}),
+                    BCRec{},
+                    {},
+                    FieldDistribution::Distributed},
+                   FaultyFftMaterializationFactory{/*declared_spectral=*/false,
+                                                   /*materialized_spectral=*/true}),
+               std::invalid_argument);
+}
+
+TEST(test_elliptic_interface, postbuild_rejects_backend_that_ignores_active_region) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  EXPECT_THROW(
+      (void)make_elliptic_solver<PoissonFFTSolver>(
+          {Geometry{domain, 0.0, 1.0, 0.0, 1.0}, BoxArray(std::vector<Box2D>{domain}),
+           DistributionMapping(std::vector<int>{0}), BCRec{},
+           ActiveRegionProvider2D(TestActiveRegionSource{}), FieldDistribution::Distributed},
+          FaultyFftMaterializationFactory{}),
+      std::invalid_argument);
+}
 
 // GAP DOCUMENTE : les solveurs DIRECTS resolvent en une passe, sans tolerance iterative.
 // Ils modelent EllipticSolver (cartesien) ou PolarEllipticSolver (polaire) mais PAS
@@ -80,12 +221,9 @@ static_assert(!LinearSolver<DistributedFFTSolver>,
 static_assert(!LinearSolver<PolarPoissonSolver>,
               "PolarPoissonSolver est DIRECT : non-LinearSolver attendu");
 
-// Le resultat d'arret est bien NON void pour chaque solveur iteratif (l'invariant commun).
+// Le resultat d'arret du solveur objet iteratif est bien NON void.
 static_assert(!std::is_same_v<decltype(std::declval<GeometricMG&>().solve(Real(1e-8), 1)), void>,
               "GeometricMG::solve(tol, iters) rend un compte rendu (int), pas void");
-static_assert(
-    !std::is_same_v<decltype(std::declval<TensorKrylovSolver&>().solve(Real(1e-8), 1)), void>,
-    "TensorKrylovSolver::solve(tol, iters) rend un compte rendu (SolveReport), pas void");
 
 // =====================================================================================
 // (3) FieldPostProcessor : phi -> aux/grad. field_postprocess (fonction libre) le modele.

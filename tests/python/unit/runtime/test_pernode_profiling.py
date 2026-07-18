@@ -86,7 +86,8 @@ def test_no_profiling_intent_still_valid_cpp():
     """A Program with NO profiling intent still emits valid, complete C++ (the scope is unconditional
     and cheap-when-disabled). The chrono header and the stable ABI surface are present."""
     src = emit_cpp_program(_forward_euler())
-    for tok in ("#include <chrono>", "pops::runtime::program::ProgramContext ctx(sys)",
+    for tok in ("#include <chrono>",
+                "make_shared<pops::runtime::program::ProgramContext>(sys)",
                 "pops_install_program", "ctx.install(", "std::chrono::steady_clock::now()"):
         assert tok in src, "generated source missing %r" % tok
     # The body is balanced and the per-node opens precede their closes (a close after each node block).

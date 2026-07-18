@@ -1,14 +1,24 @@
 #pragma once
 
+#include <functional>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include <pops/core/foundation/types.hpp>      // Real
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/storage/multifab.hpp>      // MultiFab
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/linear/prepared_affine_problem.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
-#include <pops/runtime/context/grid_context.hpp>                // GridContext (System aux seam)
-#include <pops/runtime/numerical_defaults.hpp>  // kMGDefault* (V-cycle shape defaults)
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/context/grid_context.hpp>  // GridContext (System aux seam)
+#include <pops/runtime/numerical_defaults.hpp>    // kMGDefault* (V-cycle shape defaults)
 
 /// @file
 /// @brief Schur-free tensor-coefficient elliptic infrastructure a compiled time Program lowers to.
@@ -28,10 +38,53 @@ namespace pops {
 namespace runtime {
 namespace program {
 
-// The AssemblyFieldRole enum (kEpsX..kPhi, the write/read-redirection wire ids) lives on the always-
-// included facade program_context.hpp so every generated .so sees it, whether or not it pulls THIS header
-// (a condensed-only Program includes block_inverse.hpp, not this). AmrTensorElliptic::target switches
-// on the same ints.
+namespace detail {
+
+inline void require_collective_vector_layout(const PreparedVectorDistribution& distribution,
+                                             const MultiFab& field, const char* where,
+                                             const ExecutionLane& lane) {
+  const PreparedProviderIdentity identity = distribution.provider_identity();
+  bool matches = false;
+  long callback_failure_local = 0;
+  try {
+    matches = distribution.layout_matches(field);
+  } catch (...) {
+    callback_failure_local = 1;
+  }
+  if (all_reduce_max(callback_failure_local, lane) != 0)
+    throw std::invalid_argument(std::string(where) +
+                                ": vector-distribution layout predicate failed on at least one "
+                                "execution-lane rank for provider '" +
+                                std::string(identity.name) + "'");
+  if (all_reduce_max(matches ? 0L : 1L, lane) != 0)
+    throw std::invalid_argument(std::string(where) + ": vector layout rejected by provider '" +
+                                std::string(identity.name) + "'");
+
+  std::string local_layout_contract;
+  callback_failure_local = 0;
+  try {
+    local_layout_contract = distribution.layout_contract(field);
+  } catch (...) {
+    callback_failure_local = 1;
+  }
+  if (all_reduce_max(callback_failure_local, lane) != 0)
+    throw std::invalid_argument(std::string(where) +
+                                ": vector-distribution layout contract failed on at least one "
+                                "execution-lane rank for provider '" +
+                                std::string(identity.name) + "'");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-vector-distribution"), distribution.collective_contract()},
+           {std::string_view("prepared-vector-layout"), local_layout_contract}},
+          lane))
+    throw std::invalid_argument(std::string(where) +
+                                ": vector distribution contract differs between execution-lane "
+                                "ranks");
+}
+
+}  // namespace detail
+
+// Prepared hierarchy providers receive stable field-slot identities from the emitted assembly.  The
+// facade treats those identities opaquely; only the selected provider maps them to concrete storage.
 
 /// out = div(A grad in), A = [[eps_x, a_xy], [a_yx, eps_y]] -- the coefficiented matrix-free matvec of a
 /// tensor elliptic operator. Fills @p in's ghosts (transport BC) then forwards to the SAME
@@ -42,81 +95,225 @@ namespace program {
 template <class Ctx>
 inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
                                   const MultiFab& eps_x, const MultiFab& eps_y,
-                                  const MultiFab& a_xy, const MultiFab& a_yx) {
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const ExecutionLane& lane) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  fill_ghosts(in, gc.geom.domain, gc.bc);
+  fill_ghosts(in, gc.geom.domain, gc.bc, lane);
   apply_laplacian(in, gc.geom, out, /*coef=*/nullptr, /*eps=*/&eps_x, /*kappa=*/nullptr,
                   /*eps_y=*/&eps_y, /*a_xy=*/&a_xy, /*a_yx=*/&a_yx);
 }
 
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx) {
+  const ExecutionLane lane = ExecutionLane::world();
+  apply_laplacian_coeff(ctx, out, in, eps_x, eps_y, a_xy, a_yx, lane);
+}
+
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const PreparedGridBoundarySession& boundary) {
+  ctx.tensor_laplacian(out, in, eps_x, eps_y, a_xy, a_yx, boundary);
+}
+
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const PreparedGridBoundarySession& boundary,
+                                  const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  ctx.tensor_laplacian(out, in, eps_x, eps_y, a_xy, a_yx, boundary, point);
+}
+
 /// A geometric-multigrid V-cycle reused as a Krylov preconditioner (ADC-516). Owns the CACHED
-/// GeometricMG the apply builds once and reuses across every Krylov iteration / step. Kept off the
+/// GeometricMG prepared before iteration and reused across every Krylov iteration / step. Kept off the
 /// generic facade so it carries no MG state; the codegen allocates ONE persistent instance (alloc-once,
 /// like the matrix-free scratch) and captures it into the preconditioner ApplyFn lambda alongside the
 /// context.
 struct GeometricMgPreconditioner {
-  /// ADC-644: the V-cycle SHAPE of the preconditioner map. A Krylov preconditioner must stay a FIXED
-  /// linear map, so the configurable knobs are the V-cycle shape (pre/post/bottom sweeps, coarsest-grid
-  /// floor) and how many composed fixed V-cycles form the map (n_vcycles). The DEFAULT ctor reproduces
-  /// the historical single-V-cycle preconditioner bit-for-bit (nu1=nu2=2, nbottom=50, min_coarse=2, one
-  /// vcycle -- the same emplace args and loop count as before ADC-644).
+  /// ADC-644: the V-cycle SHAPE of the preconditioner map. The configurable knobs are fixed before
+  /// preparation: pre/post/bottom sweeps, coarsest-grid floor and the number of composed V-cycles.
+  /// PreparedLinearPreconditioner subtracts the raw zero response, including non-homogeneous physical
+  /// boundaries, so this deterministic fixed-trip map becomes a linear Krylov preconditioner. The
+  /// DEFAULT ctor reproduces the historical single-V-cycle configuration bit-for-bit (nu1=nu2=2,
+  /// nbottom=50, min_coarse=2, one vcycle -- the same emplace args and loop count as before ADC-644).
   GeometricMgPreconditioner(int nu1 = kMGDefaultPreSmooth, int nu2 = kMGDefaultPostSmooth,
                             int nbottom = kMGDefaultBottomSweeps,
                             int min_coarse = kMGDefaultMinCoarse, int n_vcycles = 1)
-      : nu1_(nu1), nu2_(nu2), nbottom_(nbottom), min_coarse_(min_coarse), n_vcycles_(n_vcycles) {}
+      : nu1_(nu1), nu2_(nu2), nbottom_(nbottom), min_coarse_(min_coarse), n_vcycles_(n_vcycles) {
+    if (nu1_ < 0 || nu2_ < 0 || nbottom_ < 1 || min_coarse_ < 1 || n_vcycles_ < 1)
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner requires nu1/nu2 >= 0, nbottom/min_coarse/n_vcycles >= 1");
+  }
 
-  /// out <- M^{-1}(in): ONE geometric-multigrid V-cycle of the bare 5-point Laplacian, used as a
-  /// matrix-free Krylov PRECONDITIONER (the ``preconditioner=preconditioners.GeometricMG()`` route of
-  /// P.solve_linear for GMRES / BiCGStab, ADC-516). It REUSES the already-wired pops::GeometricMG (the
-  /// same V-cycle the field solve runs) -- no new numerical kernel: set the level-0 rhs to @p in, start
-  /// from phi = 0, run a SINGLE @c vcycle(), copy the result into @p out.
+  std::uint64_t preparation_generation() const { return preparation_generation_; }
+  [[nodiscard]] std::size_t persistent_field_count() const noexcept {
+    return mg ? mg->persistent_field_count() : 0u;
+  }
+
+  /// Build all hierarchy/storage state before the first Krylov iteration. Re-preparing the same
+  /// authenticated topology is a no-op; a geometry, boundary-plan, box, distribution, component, or
+  /// ghost-layout change rebuilds the cache at this explicit preparation boundary.
+  template <class Ctx>
+  void prepare(const Ctx& ctx, const MultiFab& prototype, const ExecutionLane& lane,
+               const PreparedVectorDistribution& vector_distribution =
+                   PreparedVectorDistribution::Distributed,
+               FieldDistribution storage_distribution = FieldDistribution::Distributed) {
+    if (prototype.ncomp() != 1)
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner supports exactly one component; a multi-component "
+          "operator requires a genuinely block-aware preconditioner");
+    if (ctx.is_polar_geometry())
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner is Cartesian-only; polar operators require an explicit "
+          "metric-aware prepared preconditioner");
+    const GridContext gc = ctx.grid_context();
+    BCRec prepared_bc = gc.bc;
+    prepared_bc.dx = gc.geom.dx();
+    prepared_bc.dy = gc.geom.dy();
+    detail::require_collective_vector_layout(vector_distribution, prototype,
+                                             "GeometricMgPreconditioner::prepare", lane);
+    if (!field_distribution_is_valid(storage_distribution))
+      throw std::invalid_argument("GeometricMgPreconditioner received invalid field ownership");
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, vector_distribution);
+    ::pops::detail::fingerprint_geometry(topology, gc.geom);
+    ::pops::detail::fingerprint_boundary(topology, prepared_bc);
+    if (gc.boundary_plan)
+      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
+    else
+      ::pops::detail::fingerprint_mix(topology, "legacy-bc-only");
+    ::pops::detail::fingerprint_mix(topology, lane.identity());
+    if (mg && prepared_topology_ && *prepared_topology_ == topology)
+      return;
+    mg.reset();
+    prepared_topology_.reset();
+    prepared_lane_identity_.clear();
+    struct PreparedMgFactory {
+      int min_coarse;
+      int nu1;
+      int nu2;
+      int nbottom;
+      std::string contract;
+
+      std::string_view collective_contract() const noexcept { return contract; }
+      EllipticOperatorContract expected_operator_contract(
+          const EllipticBuildRequest& request) const {
+        return GeometricMG::expected_operator_contract(request, min_coarse, nu1, nu2, nbottom);
+      }
+      FieldDistribution materialized_distribution(
+          const EllipticBuildRequest& request) const noexcept {
+        return request.distribution;
+      }
+      bool supports(const EllipticBuildRequest&) const noexcept { return true; }
+      EllipticFactoryBuildResult<GeometricMG> build(EllipticBuildRequest request) const noexcept {
+        return capture_local_elliptic_factory_build<GeometricMG>(
+            [this, request = std::move(request)]() mutable {
+              return GeometricMG(request.geometry, request.boxes, request.mapping, request.boundary,
+                                 std::move(request.active), min_coarse, nu1, nu2, nbottom,
+                                 kMGDefaultCoarseThreshold, request.distribution);
+            });
+      }
+    };
+    std::string factory_contract{"pops.preconditioner.geometric-mg@1"};
+    factory_contract.append(
+        exact_provider_parameters(min_coarse_, nu1_, nu2_, nbottom_, n_vcycles_));
+    GeometricMG prepared = make_elliptic_solver<GeometricMG>(
+        {gc.geom, prototype.box_array(), prototype.dmap(), prepared_bc, {}, storage_distribution},
+        PreparedMgFactory{min_coarse_, nu1_, nu2_, nbottom_, std::move(factory_contract)}, lane);
+    mg.emplace(std::move(prepared));
+    if (!PureFieldAlgebra::same_vector_space(mg->phi(), prototype))
+      throw std::logic_error(
+          "GeometricMgPreconditioner failed to preserve the prepared distribution");
+    // Materialize halo schedules, MPI buffer capacities and every lazy V-cycle resource now. The
+    // zero probe is mathematically neutral and happens once, before a Krylov iteration can begin.
+    PureFieldAlgebra::zero_valid(mg->rhs());
+    PureFieldAlgebra::zero_valid(mg->phi());
+    mg->vcycle(lane);
+    PureFieldAlgebra::zero_valid(mg->rhs());
+    PureFieldAlgebra::zero_valid(mg->phi());
+    if (preparation_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+      mg.reset();
+      prepared_lane_identity_.clear();
+      throw std::overflow_error("GeometricMgPreconditioner preparation generation overflow");
+    }
+    prepared_lane_identity_ = lane.identity();
+    prepared_topology_ = topology;
+    ++preparation_generation_;
+  }
+
+  /// Sequential/control-path compatibility wrapper. Generated prepared sessions always use the
+  /// overload above and retain their private execution lane for every subsequent application.
+  template <class Ctx>
+  void prepare(const Ctx& ctx, const MultiFab& prototype,
+               const PreparedVectorDistribution& vector_distribution =
+                   PreparedVectorDistribution::Distributed,
+               FieldDistribution storage_distribution = FieldDistribution::Distributed) {
+    const ExecutionLane lane = ExecutionLane::world();
+    prepare(ctx, prototype, lane, vector_distribution, storage_distribution);
+  }
+
+  /// out <- M^{-1}(in): a fixed configured number of geometric-multigrid V-cycles of the bare
+  /// 5-point Laplacian, used as a matrix-free Krylov PRECONDITIONER (the
+  /// ``preconditioner=preconditioners.GeometricMG()`` route of P.solve_linear for GMRES / BiCGStab,
+  /// ADC-516). It REUSES the already-wired pops::GeometricMG (the same V-cycle the field solve runs)
+  /// -- no new numerical kernel: set the level-0 rhs to @p in, start from phi = 0, run the configured
+  /// @c vcycle() composition, copy the result into @p out.
   ///
-  /// EXACTLY ONE V-cycle from a ZERO guess is mandatory: a preconditioner must be a FIXED linear map
-  /// M^{-1} (the same operator on every Krylov apply) for GMRES / BiCGStab to converge. Iterating to a
-  /// tolerance (``solve()``) would make the trip count -- hence the map -- depend on the input vector, a
-  /// VARIABLE (nonlinear) preconditioner that breaks the Krylov recurrences. The V-cycle of the bare
-  /// Laplacian is symmetric-positive and history-free, so one cycle from phi=0 is a valid stationary
-  /// M^{-1} approximating L^{-1}.
+  /// A FIXED number of V-cycles from a ZERO guess is mandatory. Iterating to a tolerance
+  /// (``solve()``) would make the trip count -- hence the map -- depend on the input vector, creating
+  /// a variable preconditioner that breaks ordinary GMRES / BiCGStab recurrences. The configured
+  /// composition is deterministic and history-free; PreparedLinearPreconditioner subtracts its exact
+  /// raw zero response so the solver consumes a fixed linear M^{-1} approximating L^{-1}.
   ///
-  /// The GeometricMG instance is built ONCE (lazily, on the first call) on the System mesh (geometry +
-  /// block-0 BoxArray/DistributionMapping + transport BC) and CACHED in @c mg, co-distributed with the
+  /// The GeometricMG instance is built ONCE by prepare() on the System mesh and CACHED in @c mg,
+  /// co-distributed with the
   /// Krylov scratch so its level-0 phi/rhs pair @p in / @p out by local fab index. @p in is the Krylov
   /// vector (logically read-only); @p out is fully overwritten. The matvec budget is decided C++-side
   /// inside the Krylov loop, so this apply is invisible to the IR.
   template <class Ctx>
-  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
-    ctx.count_kernel();
-    if (!mg) {
-      // Build once, on the System mesh: a scratch scalar field exposes block 0's BoxArray /
-      // DistributionMapping (the same the Krylov solve allocates its r/p/Ap from), and grid_context()
-      // gives the geometry + transport BC. The default V-cycle parameters (nu1=nu2=2, nbottom=50) match
-      // the field-solve GeometricMG.
-      const GridContext gc = ctx.grid_context();
-      const MultiFab tmpl = ctx.alloc_scalar_field(1, 1);
-      // ADC-644: build the V-cycle with the configured shape knobs. The defaults reproduce the
-      // pre-644 emplace (min_coarse=2, nu1=nu2=2, nbottom=50), so a default-constructed
-      // GeometricMgPreconditioner is bit-identical.
-      mg.emplace(gc.geom, tmpl.box_array(), gc.bc, std::function<bool(Real, Real)>{},
-                 /*replicated=*/false, min_coarse_, nu1_, nu2_, nbottom_);
-    }
+  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in, const ExecutionLane& lane) {
+    if (!mg || !prepared_topology_)
+      throw std::logic_error("GeometricMgPreconditioner::apply called before prepare");
+    if (prepared_lane_identity_ != lane.identity())
+      throw std::logic_error(
+          "GeometricMgPreconditioner::apply execution lane differs from prepare");
     GeometricMG& m = *mg;
+    if (!PureFieldAlgebra::same_vector_space(m.phi(), in) ||
+        !PureFieldAlgebra::same_vector_space(m.phi(), out))
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner apply fields disagree with its prepared vector space");
+    ctx.count_kernel();
     // rhs <- in (the vector to precondition); phi <- 0 (a fixed-linear cycle starts cold).
-    ctx.lincomb(m.rhs(), Real(1), in, Real(0), in);
-    m.phi().set_val(Real(0));
+    PureFieldAlgebra::copy(m.rhs(), in);
+    PureFieldAlgebra::zero_valid(m.phi());
     // n_vcycles_ composed V-cycles (default 1): still a FIXED linear map M^{-1}. phi carries forward
     // across the loop so N cycles compose the same stationary iteration.
     for (int i = 0; i < n_vcycles_; ++i)
-      m.vcycle();
-    ctx.lincomb(out, Real(1), m.phi(), Real(0), out);  // out <- phi
+      m.vcycle(lane);
+    PureFieldAlgebra::copy(out, m.phi());
   }
 
+  template <class Ctx>
+  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
+    const ExecutionLane lane = ExecutionLane::world();
+    apply(ctx, out, in, lane);
+  }
+
+ private:
   int nu1_ = kMGDefaultPreSmooth;         ///< ADC-644: pre-smoothing sweeps (V-cycle shape).
   int nu2_ = kMGDefaultPostSmooth;        ///< ADC-644: post-smoothing sweeps.
   int nbottom_ = kMGDefaultBottomSweeps;  ///< ADC-644: coarsest-grid (bottom) sweeps.
   int min_coarse_ = kMGDefaultMinCoarse;  ///< ADC-644: per-axis coarsening floor.
   int n_vcycles_ = 1;                     ///< ADC-644: composed fixed V-cycles forming the map.
-  std::optional<GeometricMG> mg;          ///< the cached V-cycle (built lazily on the first apply)
+  std::optional<GeometricMG> mg;          ///< the cached V-cycle (built explicitly by prepare)
+  std::optional<OperatorFingerprint> prepared_topology_{};
+  std::string prepared_lane_identity_{};
+  std::uint64_t preparation_generation_ = 0;
 };
 
 }  // namespace program

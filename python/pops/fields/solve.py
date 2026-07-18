@@ -1,8 +1,11 @@
 """Capability-resolved field solve plans and publication-safe outcomes."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+import math
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from ._identity import field_identity
@@ -34,6 +37,31 @@ def _tags(values: Any, *, where: str, allowed: frozenset[str]) -> tuple[str, ...
     return tuple(sorted(values))
 
 
+def _hierarchy_policy_options(value: Any) -> Mapping[str, bool | int | float | str]:
+    """Freeze the provider-owned scalar option envelope used by the native authority."""
+    if not isinstance(value, Mapping):
+        raise TypeError("resolved hierarchy policy options must be a mapping")
+    result: dict[str, bool | int | float | str] = {}
+    for key, item in value.items():
+        if type(key) is not str or not key:
+            raise TypeError("resolved hierarchy policy option names must be exact strings")
+        if type(item) is bool or type(item) is str:
+            result[key] = item
+        elif type(item) is int:
+            if item < -(1 << 63) or item > (1 << 63) - 1:
+                raise ValueError("resolved hierarchy policy integer option exceeds int64")
+            result[key] = item
+        elif type(item) is float:
+            if not math.isfinite(item):
+                raise ValueError("resolved hierarchy policy options require finite binary64")
+            result[key] = item
+        else:
+            raise TypeError(
+                "resolved hierarchy policy options support exact bool/int/float/string values"
+            )
+    return MappingProxyType(result)
+
+
 class FieldArtifactUnavailable(RuntimeError):
     """Structured refusal raised before codegen/native artifact creation."""
 
@@ -48,39 +76,79 @@ class FieldArtifactUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedHierarchyPolicy:
-    mode: str
-    capability: Handle
+    """Opaque, versioned hierarchy-policy authority selected before provider validation."""
+
+    policy_id: str
+    interface_version: int
+    option_schema: str
+    options: Mapping[str, bool | int | float | str]
+    capability: Handle | None = None
 
     def __post_init__(self) -> None:
-        if self.mode not in ("composite", "level_local"):
-            raise ValueError("resolved hierarchy mode must be composite or level_local")
-        _handle(self.capability, where="ResolvedHierarchyPolicy.capability",
-                kinds=frozenset(("field_solve_capability",)))
+        for name in ("policy_id", "option_schema"):
+            value = getattr(self, name)
+            if type(value) is not str or not value:
+                raise TypeError("ResolvedHierarchyPolicy.%s must be an exact identity" % name)
+        if type(self.interface_version) is not int or self.interface_version < 1:
+            raise TypeError("ResolvedHierarchyPolicy.interface_version must be positive")
+        object.__setattr__(self, "options", _hierarchy_policy_options(self.options))
+        if self.capability is not None:
+            _handle(
+                self.capability,
+                where="ResolvedHierarchyPolicy.capability",
+                kinds=frozenset(("field_solve_capability",)),
+            )
+
+    def authority(self) -> dict[str, Any]:
+        return {
+            "policy_id": self.policy_id,
+            "interface_version": self.interface_version,
+            "option_schema": self.option_schema,
+            "options": dict(self.options),
+        }
+
+    def with_capability(self, capability: Handle) -> ResolvedHierarchyPolicy:
+        if self.capability is not None and self.capability != capability:
+            raise ValueError("resolved hierarchy policy uses a foreign capability proof")
+        return ResolvedHierarchyPolicy(
+            self.policy_id,
+            self.interface_version,
+            self.option_schema,
+            self.options,
+            capability,
+        )
 
     def to_data(self) -> dict[str, Any]:
-        return {"mode": self.mode, "capability": self.capability.canonical_identity()}
+        return {
+            "authority": self.authority(),
+            "capability": (
+                None if self.capability is None else self.capability.canonical_identity()
+            ),
+        }
 
 
 @dataclass(frozen=True, slots=True)
 class FieldSolveCapabilities:
     handle: Handle
-    hierarchy_modes: tuple[str, ...]
-    layout_mode: str
+    inferred_hierarchy: ResolvedHierarchyPolicy
     native_contracts: tuple[str, ...]
     boundary_contributions: tuple[str, ...]
 
-    _HIERARCHY = frozenset(("composite", "level_local"))
     _NATIVE = frozenset(("residual", "jacobian", "jvp", "restart"))
     _BOUNDARY = frozenset(("dirichlet", "neumann", "mixed", "periodic"))
 
     def __post_init__(self) -> None:
         _handle(self.handle, where="FieldSolveCapabilities.handle",
                 kinds=frozenset(("field_solve_capability",)))
-        object.__setattr__(self, "hierarchy_modes", _tags(
-            self.hierarchy_modes, where="FieldSolveCapabilities.hierarchy_modes",
-            allowed=self._HIERARCHY))
-        if self.layout_mode not in self._HIERARCHY:
-            raise ValueError("FieldSolveCapabilities.layout_mode is unsupported")
+        if not isinstance(self.inferred_hierarchy, ResolvedHierarchyPolicy):
+            raise TypeError(
+                "FieldSolveCapabilities.inferred_hierarchy must be a resolved authority"
+            )
+        object.__setattr__(
+            self,
+            "inferred_hierarchy",
+            self.inferred_hierarchy.with_capability(self.handle),
+        )
         object.__setattr__(self, "native_contracts", _tags(
             self.native_contracts, where="FieldSolveCapabilities.native_contracts",
             allowed=self._NATIVE))
@@ -88,14 +156,15 @@ class FieldSolveCapabilities:
             self.boundary_contributions,
             where="FieldSolveCapabilities.boundary_contributions", allowed=self._BOUNDARY))
 
-    def resolve_hierarchy(self, requested: str) -> ResolvedHierarchyPolicy:
-        mode = self.layout_mode if requested == "infer_from_layout" else requested
-        if mode not in self._HIERARCHY:
-            raise ValueError("unknown hierarchy policy %r" % requested)
-        if mode not in self.hierarchy_modes:
-            raise FieldArtifactUnavailable(
-                code="field.hierarchy.unsupported", missing=(mode,), capability=self.handle)
-        return ResolvedHierarchyPolicy(mode, self.handle)
+    def inferred_hierarchy_policy(self) -> ResolvedHierarchyPolicy:
+        return self.inferred_hierarchy
+
+    def bind_hierarchy_policy(
+        self, policy: ResolvedHierarchyPolicy
+    ) -> ResolvedHierarchyPolicy:
+        if not isinstance(policy, ResolvedHierarchyPolicy):
+            raise TypeError("field hierarchy policy must return ResolvedHierarchyPolicy")
+        return policy.with_capability(self.handle)
 
     def require(self, residual: FieldResidualContract) -> None:
         missing_native = tuple(sorted(self._NATIVE - set(self.native_contracts)))
@@ -113,8 +182,7 @@ class FieldSolveCapabilities:
 
     def to_data(self) -> dict[str, Any]:
         return {"handle": self.handle.canonical_identity(),
-                "hierarchy_modes": list(self.hierarchy_modes),
-                "layout_mode": self.layout_mode,
+                "inferred_hierarchy": self.inferred_hierarchy.to_data(),
                 "native_contracts": list(self.native_contracts),
                 "boundary_contributions": list(self.boundary_contributions)}
 
@@ -237,6 +305,7 @@ class FieldSolveResolver:
             raise TypeError(
                 "FieldHierarchyPolicy.resolve() must return ResolvedHierarchyPolicy"
             )
+        hierarchy = self.capabilities.bind_hierarchy_policy(hierarchy)
         domain = FieldOperatorDomain(residual.identity, residual.unknown, layout)
         if preconditioner is not None and preconditioner.domain != domain:
             raise ValueError("preconditioner domain does not authenticate the residual domain")

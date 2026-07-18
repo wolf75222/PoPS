@@ -260,23 +260,30 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_EQ(rt.regrid_count(), 0);
 
   const AmrRuntime::StepSnapshot accepted = rt.step_snapshot();
+  const std::uint64_t accepted_materialization = rt.topology_materialization_generation();
   const std::vector<Box2D> accepted_finest = rt.levels(0)[2].U.box_array().boxes();
   rt.step(Real(1e-4));  // regrids the finest level from tags on its level-1 parent
+  const std::uint64_t regridded_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_GT(regridded_materialization, accepted_materialization);
   EXPECT_FALSE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
   EXPECT_TRUE(all_level_states_finite(rt));
 
   // This is the exact engine operation the AmrSystem accepted-attempt coordinator invokes after a
   // StepAttemptRejected.  Topology, cadence and every level return to the accepted image.
   rt.restore_step_snapshot(accepted);
+  const std::uint64_t restored_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.regrid_count(), 0);
+  EXPECT_GT(restored_materialization, regridded_materialization)
+      << "restoring an older epoch still invalidates concrete layout-bound resources";
   EXPECT_TRUE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
 
   rt.step(Real(1e-4));
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.regrid_count(), 1) << "the accepted retry commits one regrid exactly once";
+  EXPECT_GT(rt.topology_materialization_generation(), restored_materialization);
 
   AmrBuildParams invalid;
   invalid.mesh.n = N;

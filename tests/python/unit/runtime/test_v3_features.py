@@ -4,9 +4,8 @@
   (A) CoupledSource.frequency : la 'CFL de couplage' declaree borne le pas
       (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, sans compilateur ; et un couplage
       REJETE ne laisse AUCUNE borne fantome (frequence enregistree apres validation, revue v3) ;
-  (B) options Newton sur AMR : OPTIONS cablees en multi-blocs natif ET en mono-bloc (run fini,
-      fail_policy acceptee) ; newton_diagnostics (rapport newton_report) cable en MULTI-BLOCS natif,
-      REJETE en mono-bloc (le coupleur n'agrege pas de rapport) ;
+  (B) options Newton sur AMR : OPTIONS et newton_diagnostics cablees en multi-blocs natif ET en
+      mono-bloc (run fini, fail_policy acceptee, rapports newton_report coherents) ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
       grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
@@ -47,11 +46,12 @@ def chk(cond, label):
         fails += 1
 
 
-def iso_model(charge=1.0):
+def iso_model(charge=1.0, *, n0=1.0, elliptic_alpha=None):
+    alpha = charge if elliptic_alpha is None else elliptic_alpha
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
                      source=engine.PotentialForce(charge=charge),
-                     elliptic=engine.ChargeDensity(charge=charge))
+                     elliptic=engine.BackgroundDensity(alpha=alpha, n0=n0))
 
 
 def gaussian(n):
@@ -63,12 +63,20 @@ def gaussian(n):
 # --- (A) CoupledSource.frequency ---------------------------------------------------
 print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
+rho16 = gaussian(n)
+rho16_mean = float(rho16.mean())
 sim = System(n=n, L=1.0, periodic=True)
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-sim.add_equation("a", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
-sim.add_equation("b", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
-sim.set_density("a", gaussian(n).ravel())
-sim.set_density("b", gaussian(n).ravel())
+# This density-exchange fixture sources the potential from the conserved total-density contrast.
+# Both blocks therefore use the same elliptic sign while retaining their opposite force charges.
+sim.add_equation(
+    "a", iso_model(+1.0, n0=rho16_mean, elliptic_alpha=1.0),
+    spatial=engine.Spatial(limiter=Minmod()))
+sim.add_equation(
+    "b", iso_model(-1.0, n0=rho16_mean, elliptic_alpha=1.0),
+    spatial=engine.Spatial(limiter=Minmod()))
+sim.set_density("a", rho16.ravel())
+sim.set_density("b", rho16.ravel())
 src = CoupledSource("friction").frequency(500.0)  # mu = 500 -> dt = 0.4/500 = 8e-4 << transport
 na = src.block("a").role("density")
 k = src.param("k", 1e-3)
@@ -94,17 +102,17 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
     f"couplage rejete = ZERO borne fantome (dt {dt2:.3e}, borne {sim.last_dt_bound()!r})")
 
 # --- (B) options Newton sur AMR ------------------------------------------------------
-print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
+print("== (B) AMR : options Newton et diagnostics cablees en mono ET multi-blocs ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
-amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
+amr.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
               time=engine.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
-amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
+amr.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
               time=engine.Explicit())
-amr.set_density("e1", gaussian(16).ravel())
-amr.set_density("e2", gaussian(16).ravel())
+amr.set_density("e1", rho16.ravel())
+amr.set_density("e2", rho16.ravel())
 amr.step(2e-3)
 chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
@@ -113,9 +121,9 @@ mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 mono.set_temporal_relations([2], [1], ["integral_only"])
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 mono.set_refinement(1e30)
-mono.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+mono.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
-mono.set_density("e", gaussian(16).ravel())
+mono.set_density("e", rho16.ravel())
 mono.step(2e-3)  # build paresseux mono-bloc : les options sont threadees au coupleur, ne leve plus
 chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
@@ -124,30 +132,34 @@ amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amrd.set_temporal_relations([2], [1], ["integral_only"])
 amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amrd.set_refinement(1e30)
-amrd.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
+amrd.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amrd.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
+amrd.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.Explicit())
-amrd.set_density("e1", gaussian(16).ravel())
-amrd.set_density("e2", gaussian(16).ravel())
+amrd.set_density("e1", rho16.ravel())
+amrd.set_density("e2", rho16.ravel())
 amrd.step(2e-3)
 rep = amrd.newton_report("e1")
 chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0,
     f"multi-blocs : newton_report dict coherent (residu {rep['max_residual']:.2e}, "
     f"converged {rep['converged']})")
-# newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
+# newton_diagnostics en MONO-BLOC : le coupleur publie lui aussi un rapport natif coherent.
 monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 monod.set_temporal_relations([2], [1], ["integral_only"])
 monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 monod.set_refinement(1e30)
-monod.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+monod.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                 time=engine.IMEX(newton_diagnostics=True))
-monod.set_density("e", gaussian(16).ravel())
-try:
-    monod.step(2e-3)  # build paresseux mono-bloc -> rejet explicite de newton_diagnostics
-    chk(False, "mono-bloc + newton_diagnostics aurait du lever au build")
-except RuntimeError as e:
-    chk("MULTI-BLOC" in str(e), f"mono-bloc diagnostics rejete : {str(e)[:70]}")
+monod.set_density("e", rho16.ravel())
+monod.step(2e-3)
+mono_report = monod.newton_report("e")
+chk(
+    mono_report["enabled"]
+    and mono_report["converged"]
+    and np.isfinite(mono_report["max_residual"])
+    and mono_report["n_failed"] == 0,
+    "mono-bloc : newton_report natif coherent",
+)
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
@@ -155,9 +167,9 @@ amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr3.set_refinement(1e30)
-amr3.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
-amr3.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
-rho0 = gaussian(16)
+amr3.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
+amr3.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
+rho0 = rho16
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))
 amr3.set_density("e2", rho0.ravel())

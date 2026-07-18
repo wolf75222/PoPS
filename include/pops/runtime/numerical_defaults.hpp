@@ -28,8 +28,7 @@ inline constexpr Real kNewtonFiniteAbsLimit = Real(1e300);
 
 // Krylov family defaults.
 inline constexpr Real kKrylovDefaultRelTol = Real(1e-10);
-inline constexpr int kTensorKrylovDefaultMaxIters = 200;
-inline constexpr int kSchurKrylovCartesianMaxIters = 400;
+inline constexpr int kPolarTensorKrylovDefaultMaxIters = 400;
 inline constexpr int kSchurKrylovPolarMaxIters = 600;
 inline constexpr Real kKrylovBreakdownTiny = Real(1e-300);
 

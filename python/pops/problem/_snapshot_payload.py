@@ -372,7 +372,7 @@ def _semantic_option_data(value: Any, *, where: str) -> Any:
     if isinstance(value, (list, tuple)):
         return [_semantic_option_data(item, where=where) for item in value]
     if isinstance(value, (Decimal, Fraction)):
-        from pops._ir.literals import scalar_literal
+        from pops.identity.scalar import scalar_literal
         return scalar_literal(value).to_data()
     return semantic_value(value, where=where)
 

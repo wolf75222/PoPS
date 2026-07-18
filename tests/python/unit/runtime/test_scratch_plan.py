@@ -10,7 +10,8 @@ compile, NO .so on disk -- and assert that
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
   - the REJECTED reuse names an inspectable REASON (a still-live occupant, an aux/field barrier);
-  - the PERSISTENT Krylov / multigrid solver buffers appear for a solve and are labelled conservative;
+  - persistent Krylov bundles report solution, apply, prepared-problem, workspace and both private
+    operator-session field sets separately, while multigrid remains explicitly topology-dependent;
   - ``to_dict`` / ``to_json`` / ``str`` / ``repr`` work and round-trip through JSON.
 
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
@@ -67,7 +68,7 @@ def _ssprk3(name="ssprk3"):
     return P
 
 
-def _krylov(name="krylov_demo"):
+def _krylov(name="krylov_demo", *, preconditioner=None):
     """A Program with a typed matrix-free linear solve -- exercises the persistent path."""
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     U = temporal.n
@@ -82,15 +83,114 @@ def _krylov(name="krylov_demo"):
         return -1.0 * lap
 
     from pops.linalg import LinearProblem
-    from pops.solvers.krylov import CG
+    from pops.solvers.krylov import GMRES
     from pops.time import FailRun
     P.set_apply(A, _apply)
     P.solve(
-        LinearProblem(A, buf), solver=CG(max_iter=10),
+        LinearProblem(A, buf, nullspace=None),
+        solver=GMRES(max_iter=10, restart=3, preconditioner=preconditioner),
     ).consume(action=FailRun())
     P.commit(
         temporal.next,
         P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
+    return P
+
+
+def _nested_subcycled_krylov(name="nested_subcycled_krylov", *, preconditioner=None):
+    """One solve two logical-clock body blocks below the Program's top-level value list."""
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    U = temporal.n
+    A = P.matrix_free_operator("op", domain="state", range_="state", ncomp=1)
+
+    def _apply(p, _out, value):
+        lap = p.scalar_field("lap")
+        p.laplacian(lap, value)
+        return value - p.dt * lap
+
+    from pops.linalg import LinearProblem
+    from pops.solvers.krylov import GMRES
+    from pops.time import FailRun, SampleAndHold
+    from pops.time.points import Clock, TimePoint
+    P.set_apply(A, _apply)
+    fast = Clock("fast", owner=P.owner_path)
+    micro = Clock("micro", owner=P.owner_path)
+    fast_state = P.synchronize(
+        U, at=TimePoint(fast), relation=SampleAndHold(), name="to_fast")
+
+    def fast_tick(builder, value):
+        micro_state = builder.synchronize(
+            value, at=TimePoint(micro), relation=SampleAndHold(), name="to_micro")
+
+        def micro_tick(inner, micro_value):
+            return inner.solve(
+                LinearProblem(A, micro_value, nullspace=None),
+                solver=GMRES(max_iter=10, restart=3, preconditioner=preconditioner),
+            ).consume(action=FailRun())
+
+        advanced = builder.subcycle(
+            micro_state, clock=micro, within=fast, count=2,
+            body_fn=micro_tick, name="micro_ticks")
+        return builder.synchronize(
+            advanced, at=TimePoint(fast), relation=SampleAndHold(), name="to_fast_tick")
+
+    advanced = P.subcycle(
+        fast_state, clock=fast, within=P.clock, count=2,
+        body_fn=fast_tick, name="fast_ticks")
+    returned = P.synchronize(
+        advanced, at=temporal.next.point, relation=SampleAndHold(), name="to_macro")
+    P.commit(temporal.next, returned)
+    return P
+
+
+def _structured_region_krylov(kind, name="structured_region_krylov"):
+    """Author prepared solves under while/range/branch regions, never the top-level SSA list."""
+    P, _, _, _, _, temporal = typed_program_state(
+        "%s_%s" % (name, kind), block_name="plasma")
+    U = temporal.n
+    A = P.matrix_free_operator("op", domain="state", range_="state", ncomp=1)
+
+    def _apply(builder, _out, value):
+        lap = builder.scalar_field("lap")
+        builder.laplacian(lap, value)
+        return value - builder.dt * lap
+
+    from pops.linalg import LinearProblem
+    from pops.solvers.krylov import GMRES
+    from pops.time import FailRun
+    P.set_apply(A, _apply)
+
+    def solve(builder, value):
+        return builder.solve(
+            LinearProblem(A, value, nullspace=None),
+            solver=GMRES(max_iter=10, restart=3),
+        ).consume(action=FailRun())
+
+    if kind == "while_cond":
+        advanced = P.while_(
+            U,
+            lambda builder, value: builder.norm2(solve(builder, value)) > 0,
+            lambda _builder, value: value,
+        )
+    elif kind == "while_body":
+        advanced = P.while_(
+            U,
+            lambda builder, value: builder.norm2(value) > 0,
+            solve,
+        )
+    elif kind == "range":
+        advanced = P.range(U, 2, solve)
+    elif kind == "branch":
+        advanced = P.branch(
+            P.norm2(U) > 0,
+            lambda builder: solve(builder, U),
+            lambda builder: solve(builder, U),
+        )
+    else:
+        raise ValueError("unknown structured region %r" % kind)
+    P.commit(
+        temporal.next,
+        P.value("advanced", advanced, at=temporal.next.point),
     )
     return P
 
@@ -232,20 +332,223 @@ def test_persistent_multigrid_buffers():
     plan = build_scratch_plan(P)
     mg = [p for p in plan.persistent if p["kind"] == "multigrid"]
     chk(len(mg) == 3, "3 field solves -> 3 multigrid persistent buffers")
-    chk(plan.conservative is True, "the plan declares itself conservative (persistent buffers)")
-    chk(any("conservative" in n.lower() for n in plan.notes),
-        "a note states the persistent counts are conservative")
+    chk(plan.conservative is True,
+        "the plan is conservative while topology-dependent multigrid buffers remain")
+    chk(any("geometric multigrid" in n.lower() and "conservative" in n.lower()
+            for n in plan.notes),
+        "a note scopes the remaining uncertainty to the multigrid hierarchy")
 
 
 def test_persistent_krylov_buffers():
-    """A solve_linear (Krylov) node contributes persistent Krylov work vectors."""
+    """A solve_linear reports the complete per-level generated bundle transparently."""
     print("== persistent Krylov work vectors for a solve_linear ==")
     P = _krylov()
     plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+    operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
-    chk(krylov[0]["buffers"] >= 1, "the Krylov entry reports >= 1 work vector")
-    chk("conservative" in krylov[0]["note"].lower(), "the Krylov count is labelled conservative")
+    chk(len(operators) == 1, "one reusable matrix-free operator -> one persistent entry")
+    chk(krylov[0]["workspace_buffers"] is None
+        and krylov[0]["workspace_buffers_min"] == 1,
+        "Python exposes only the universal native-workspace lower bound")
+    chk(krylov[0]["prepared_problem_buffers"] == 2,
+        "the prepared affine problem owns zero and A(0)")
+    chk(krylov[0]["prepared_preconditioner_buffers"] == 0,
+        "the identity preconditioner owns no affine-linearization fields")
+    chk(krylov[0]["workspace_scalar_values"] is None
+        and krylov[0]["collective_values"] is None,
+        "provider-owned scalar and collective storage is not guessed in Python")
+    chk(krylov[0]["solution_buffers"] == 1,
+        "the published persistent solution is counted separately")
+    chk(operators[0]["apply_scratch_buffers"] == 1
+        and operators[0]["apply_accumulator_buffers"] == 1,
+        "the authored Laplacian scratch and generated apply accumulator are counted")
+    chk(krylov[0]["prepared_problem_operator_session_buffers_min"] == 2,
+        "the prepared problem owns one private clone of the two-field operator template")
+    chk(krylov[0]["workspace_operator_session_buffers_min"] == 2,
+        "the bound workspace owns an independent two-field operator session")
+    chk(krylov[0]["operator_session_buffers_min"] == 4
+        and krylov[0]["operator_session_buffers_min"]
+        == krylov[0]["prepared_problem_operator_session_buffers_min"]
+        + krylov[0]["workspace_operator_session_buffers_min"],
+        "the two private operator sessions contribute four fields without aliasing")
+    chk(krylov[0]["prepared_core_buffers"] is None
+        and krylov[0]["prepared_core_buffers_min"] == 7,
+        "the prepared core includes workspace, A(0)/zero and both operator sessions")
+    chk(krylov[0]["buffers"] == 8 and krylov[0]["buffers_max"] is None
+        and operators[0]["buffers"] == operators[0]["buffers_max"] == 2
+        and krylov[0]["buffers"] + operators[0]["buffers"] == 10,
+        "the solve owner exposes eight fields plus its separate two-field operator template")
+    chk(krylov[0]["exact"] is False,
+        "the native method provider remains the sole exact workspace authority")
+    chk(krylov[0]["per_materialized_level"] is True,
+        "AMR multiplicity is explicit: one complete bundle per materialized level")
+    chk(plan.conservative is True,
+        "the plan exposes both provider-owned Krylov and topology-dependent MG uncertainty")
+
+    from pops.solvers import preconditioners
+    prepared = build_scratch_plan(
+        _krylov("preconditioned_krylov", preconditioner=preconditioners.GeometricMG()))
+    prepared_krylov = [p for p in prepared.persistent if p["kind"] == "krylov"][0]
+    prepared_resources = [
+        p for p in prepared.persistent if p["kind"] == "multigrid_preconditioner"
+    ]
+    prepared_operator = [
+        p for p in prepared.persistent if p["kind"] == "matrix_free_operator"][0]
+    chk(prepared_krylov["workspace_buffers"] is None
+        and prepared_krylov["workspace_buffers_min"] == 2,
+        "the preconditioned workspace lower bound includes recurrence storage and M(0)")
+    chk(prepared_krylov["prepared_problem_buffers"] == 2,
+        "the preconditioned problem still owns exactly zero and A(0)")
+    chk(prepared_krylov["prepared_problem_operator_session_buffers_min"] == 2,
+        "the preconditioned problem keeps its private two-field operator session")
+    chk(prepared_krylov["workspace_operator_session_buffers_min"] == 2,
+        "the preconditioned workspace keeps a distinct two-field operator session")
+    chk(prepared_krylov["operator_session_buffers_min"] == 4
+        and prepared_krylov["operator_session_buffers_min"]
+        == prepared_krylov["prepared_problem_operator_session_buffers_min"]
+        + prepared_krylov["workspace_operator_session_buffers_min"],
+        "preconditioning does not alias the problem and workspace operator sessions")
+    chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
+        "an affine prepared preconditioner owns zero and M_raw(0)")
+    chk(prepared_krylov["workspace_scalar_values"] is None
+        and prepared_krylov["collective_values"] is None,
+        "native scalar and collective storage remains provider-owned")
+    chk(prepared_krylov["prepared_core_buffers"] is None
+        and prepared_krylov["prepared_core_buffers_min"] == 10,
+        "the preconditioned core includes workspace, problem, preconditioner and both sessions")
+    chk(prepared_krylov["buffers"] == 11
+        and prepared_krylov["buffers_max"] is None
+        and prepared_operator["buffers"] == prepared_operator["buffers_max"] == 2
+        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 13,
+        "the preconditioned solve exposes eleven fields plus its two-field operator template")
+    chk(prepared_krylov["exact"] is False,
+        "the exact workspace is computed by the native provider at materialization")
+    chk(
+        len(prepared_resources) == 1
+        and prepared_resources[0]["buffers"] == 1
+        and prepared_resources[0]["exact"] is False,
+        "the provider contract contributes its one topology-dependent MG resource",
+    )
+
+
+def test_persistent_krylov_buffers_descend_nested_subcycles_once():
+    """A solve nested under recursive subcycle bodies remains one persistent allocation owner."""
+    print("== persistent Krylov owner inside nested subcycles ==")
+    P = _nested_subcycled_krylov()
+    chk(not any(value.op == "solve_linear" for value in P._values),
+        "the regression solve is absent from the top-level Program value list")
+    plan = build_scratch_plan(P)
+    krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+    operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
+    chk(len(krylov) == 1,
+        "recursive subcycle traversal reports the nested solve exactly once")
+    chk(len(operators) == 1,
+        "the top-level matrix-free operator remains one shared allocation owner")
+    chk(krylov[0]["workspace_buffers"] is None
+        and krylov[0]["workspace_buffers_min"] == 1
+        and krylov[0]["prepared_problem_buffers"] == 2,
+        "the nested solve keeps the same provider-owned workspace lower bound")
+    chk(krylov[0]["prepared_problem_operator_session_buffers_min"] == 2
+        and krylov[0]["workspace_operator_session_buffers_min"] == 2
+        and krylov[0]["operator_session_buffers_min"] == 4,
+        "the nested solve reports both private two-field operator sessions")
+    chk(krylov[0]["prepared_core_buffers"] is None
+        and krylov[0]["prepared_core_buffers_min"] == 7
+        and krylov[0]["buffers"] == 8
+        and krylov[0]["buffers_max"] is None,
+        "the nested solve retains the exact eight-field structural lower bound")
+    chk(operators[0]["buffers"] == operators[0]["buffers_max"] == 2,
+        "the nested solve's reusable operator template remains a separate two-field owner")
+    chk(krylov[0]["operator_id"] == operators[0]["operator_id"],
+        "the nested solve references the separately counted shared operator owner")
+
+
+def test_nested_preconditioner_provider_contributes_its_native_header_once():
+    """Provider headers are planned from recursive IR, not a top-level scheme-name branch."""
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.solvers import preconditioners
+
+    source = emit_cpp_program(
+        _nested_subcycled_krylov(
+            "nested_preconditioned_krylov",
+            preconditioner=preconditioners.GeometricMG(),
+        )
+    )
+    chk(
+        source.count("#include <pops/runtime/program/coeff_elliptic_ops.hpp>") == 1,
+        "the nested provider's contract contributes one deduplicated native include",
+    )
+
+
+def test_persistent_krylov_buffers_descend_every_structured_region_once():
+    """Prepared owners under cond/body/true/false blocks are all visible before compilation."""
+    print("== persistent Krylov owners inside every structured control-flow region ==")
+    for kind, expected_solves in (
+            ("while_cond", 1), ("while_body", 1), ("range", 1), ("branch", 2)):
+        P = _structured_region_krylov(kind)
+        chk(not any(value.op == "solve_linear" for value in P._values),
+            "%s regression solves remain outside the top-level SSA list" % kind)
+        plan = build_scratch_plan(P)
+        krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
+        operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
+        chk(len(krylov) == expected_solves,
+            "%s reports each distinct nested solve exactly once" % kind)
+        chk(len(operators) == 1,
+            "%s keeps the shared top-level operator as one allocation owner" % kind)
+        chk(all(entry["operator_id"] == operators[0]["operator_id"] for entry in krylov),
+            "%s nested solves retain exact shared-operator provenance" % kind)
+
+
+def test_scratch_plan_rejects_tampered_krylov_footprint():
+    """Inspection authenticates the duplicate footprint against its typed operator."""
+    print("== scratch_plan() rejects a tampered Krylov footprint ==")
+    P = _krylov()
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    footprint["preconditioned"] = "false"
+    attrs["krylov_footprint"] = footprint
+    # Model stale/corrupted serialized IR at the inert inspection trust boundary.
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("preconditioned" in str(exc) and "boolean" in str(exc),
+            "the shared footprint validator rejects string-to-bool coercion")
+    else:
+        chk(False, "a tampered Krylov footprint must not produce an exact scratch plan")
+
+    P = _krylov("tampered_ghost_depth")
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    footprint["input_ghosts"] = 0
+    attrs["krylov_footprint"] = footprint
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("input_ghosts" in str(exc) and "operator" in str(exc),
+            "the duplicate ghost depth is bound to the typed operator stencil")
+    else:
+        chk(False, "an undersized Krylov halo must be rejected before code generation")
+
+    P = _krylov("tampered_component_count")
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    attrs["ncomp"] = 2
+    footprint["components"] = 2
+    attrs["krylov_footprint"] = footprint
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("component count" in str(exc) and "operator" in str(exc),
+            "paired solve/footprint tampering cannot override the operator component count")
+    else:
+        chk(False, "a forged Krylov component count must be rejected before code generation")
 
 
 def test_no_persistent_without_solve():

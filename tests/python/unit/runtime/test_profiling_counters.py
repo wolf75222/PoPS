@@ -48,7 +48,7 @@ sim.add_equation("gas",
               engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                         transport=engine.IsothermalFlux(),
                         source=engine.NoSource(),
-                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0)),
               spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()), time=engine.Explicit())
 rho = np.ones((N, N), dtype=float)
 sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
@@ -91,7 +91,7 @@ sim_off.add_equation("gas",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
                             source=engine.NoSource(),
-                            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+                            elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit())
 sim_off.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))

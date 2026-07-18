@@ -12,7 +12,7 @@ Sub-packages:
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
 * :mod:`pops.solvers.nonlinear` -- executable global ``Newton`` and cell-local ``LocalNewton``;
 * :mod:`pops.solvers.elliptic` -- executable GeometricMG and constrained FFT field solvers;
-* :mod:`pops.solvers.preconditioners` -- Identity / Jacobi / BlockJacobi / GeometricMG / User;
+* :mod:`pops.solvers.preconditioners` -- authenticated builtin and registered prepared providers;
 * :mod:`pops.solvers.options` / :mod:`pops.solvers.tolerances` -- the typed smoother / coarse /
   tolerance sub-descriptors the elliptic solver takes;
 * :mod:`pops.solvers.requirements` -- the solver capability vocabulary.
@@ -35,7 +35,17 @@ from .local import DenseLU
 from .nonlinear import LocalNewton, Newton
 from .preconditioners import preconditioners
 from .scopes import Hierarchy, Level, SolveScope
-from .providers import CompositeTensorFAC
+from .providers import (
+    CompositeTensorFAC,
+    PreparedHierarchyConvergenceContract,
+    PreparedHierarchyFlatExecution,
+    PreparedHierarchyKrylovFallback,
+    PreparedHierarchySolverProvider,
+    PreparedHierarchySolverUseFacts,
+    PreparedHierarchySolverUsePolicy,
+    prepared_hierarchy_solver_provider_by_id,
+    register_prepared_hierarchy_solver_provider,
+)
 
 # The flat solver factory surface (``solvers.CG()`` ... ``solvers.Newton()``), the one public
 # factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
@@ -56,5 +66,10 @@ __all__ = [
     "CG", "BiCGStab", "GMRES", "Richardson",
     "Newton", "LocalNewton", "DenseLU",
     "SolveScope", "Level", "Hierarchy", "CompositeTensorFAC",
+    "PreparedHierarchyConvergenceContract", "PreparedHierarchyFlatExecution",
+    "PreparedHierarchyKrylovFallback",
+    "PreparedHierarchySolverProvider", "PreparedHierarchySolverUseFacts",
+    "PreparedHierarchySolverUsePolicy",
+    "prepared_hierarchy_solver_provider_by_id", "register_prepared_hierarchy_solver_provider",
     "solvers",
 ]

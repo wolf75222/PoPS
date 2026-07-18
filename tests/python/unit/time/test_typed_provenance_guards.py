@@ -190,7 +190,7 @@ def test_where_dot_and_linear_problem_reject_cross_block_fields():
     operator = program.set_apply(operator, lambda _builder, _out, value: value)
     with pytest.raises(ValueError, match="same block"):
         program.solve(
-            LinearProblem(operator, left, initial_guess=right),
+            LinearProblem(operator, left, initial_guess=right, nullspace=None),
             solver=CG(max_iter=2),
     )
 

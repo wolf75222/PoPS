@@ -69,7 +69,7 @@ DEFERRED_GROUPS: dict = {
     "condensed": {
         # ADC-633 WIRED the condensed-implicit Program on the hierarchy and ADC-637 made the generic
         # condensed_* ops the sole route: per-level assembly runs through AmrProgramContext::grid_context /
-        # assembly_target / assembly_source, and solve_linear_matfree dispatches flat->matrix-free BiCGStab
+        # assembly_target / assembly_source, and solve_prepared_linear dispatches flat->prepared BiCGStab
         # / refined->composite FAC. No throw stub remains, so header_methods is EMPTY -> the group is GREEN.
         "issue": "ADC-633",
         "op_source": "program_emit_kernels._CONDENSED_OPS",

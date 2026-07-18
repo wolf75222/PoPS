@@ -62,7 +62,7 @@ def transport_model():
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
                      source=engine.NoSource(),
-                         elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
+                         elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0))
 
 
 def _public_multistage_artifact(name, method):

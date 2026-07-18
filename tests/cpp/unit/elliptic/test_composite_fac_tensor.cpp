@@ -1,12 +1,13 @@
 // Solveur elliptique COMPOSITE FAC a TENSEUR PLEIN (use_cross_terms) : test MMS. C'est l'operateur
 // condense de Schur a B_z != 0 -> A = I + c rho B^-1 = diag(eps,eps) + [[0,a_xy],[a_yx,0]] avec
-// a_yx = -a_xy (antisymetrique), NON auto-adjoint. Phase 3b du Schur composite.
+// a_yx = -a_xy (antisymetrique), NON auto-adjoint, avec eps_x != eps_y.
 //
 // Solution manufacturee u = sin(3 pi x) sin(3 pi y), coefficients lisses :
-//   eps  = 1 + 0.3 sin(2 pi x) sin(2 pi y)   (> 0)
+//   eps_x = 1 + 0.3 sin(2 pi x) sin(2 pi y),
+//   eps_y = 1 + 0.2 cos(2 pi x) cos(2 pi y)  (> 0 et distincts)
 //   a_xy = 0.2 sin(2 pi x) sin(2 pi y),  a_yx = -a_xy.
 // Avec a_yx = -a_xy, le terme (a_xy + a_yx) u_xy s'annule et il reste, pour le second membre :
-//   f = div(A grad u) = eps Lap u + eps_x u_x + eps_y u_y + a_xy_x u_y - a_xy_y u_x.
+//   f = div(A grad u), avec les deux derivees diagonales traitees independamment.
 // On compare, zone interieure du patch, le COMPOSITE au COARSE-ONLY (GeometricMG tenseur plein) : le
 // patch fin doit REDUIRE l'erreur (phi + grad phi) -- la FAC tient avec les termes croises (explicites,
 // petits pour le pas Schur ou c = theta^2 dt^2 alpha).
@@ -32,8 +33,11 @@ static constexpr double kPi = 3.14159265358979323846;
 static double u_exact(double x, double y) {
   return std::sin(3 * kPi * x) * std::sin(3 * kPi * y);
 }
-static double eps_xy(double x, double y) {
+static double eps_x_xy(double x, double y) {
   return 1.0 + 0.3 * std::sin(2 * kPi * x) * std::sin(2 * kPi * y);
+}
+static double eps_y_xy(double x, double y) {
+  return 1.0 + 0.2 * std::cos(2 * kPi * x) * std::cos(2 * kPi * y);
 }
 static double axy_xy(double x, double y) {
   return 0.2 * std::sin(2 * kPi * x) * std::sin(2 * kPi * y);
@@ -45,11 +49,14 @@ static double f_rhs(double x, double y) {
   const double u = u_exact(x, y);
   const double ux = 3 * kPi * std::cos(3 * kPi * x) * std::sin(3 * kPi * y);
   const double uy = 3 * kPi * std::sin(3 * kPi * x) * std::cos(3 * kPi * y);
-  const double ex = 0.6 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
-  const double ey = 0.6 * kPi * std::sin(2 * kPi * x) * std::cos(2 * kPi * y);
+  const double eps_x_dx =
+      0.6 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
+  const double eps_y_dy =
+      -0.4 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
   const double axyx = 0.4 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
   const double axyy = 0.4 * kPi * std::sin(2 * kPi * x) * std::cos(2 * kPi * y);
-  return eps_xy(x, y) * (-18.0 * kPi * kPi * u) + ex * ux + ey * uy + axyx * uy - axyy * ux;
+  return -(eps_x_xy(x, y) + eps_y_xy(x, y)) * 9.0 * kPi * kPi * u +
+         eps_x_dx * ux + eps_y_dy * uy + axyx * uy - axyy * ux;
 }
 
 template <class Setter>
@@ -81,16 +88,19 @@ TEST(test_composite_fac_tensor, full_tensor_composite_beats_coarse_only) {
   Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
 
   // --- coarse-only tenseur plein (GeometricMG.set_epsilon + set_cross_terms) ---
-  MultiFab eps_c(ba_c, dm_c, 1, 1), axy_c(ba_c, dm_c, 1, 1), ayx_c(ba_c, dm_c, 1, 1);
-  fill(eps_c, geom_c, eps_xy);
+  MultiFab eps_x_c(ba_c, dm_c, 1, 1), eps_y_c(ba_c, dm_c, 1, 1);
+  MultiFab axy_c(ba_c, dm_c, 1, 1), ayx_c(ba_c, dm_c, 1, 1);
+  fill(eps_x_c, geom_c, eps_x_xy);
+  fill(eps_y_c, geom_c, eps_y_xy);
   fill(axy_c, geom_c, axy_xy);
   fill(ayx_c, geom_c, ayx_xy);
   device_fence();
-  fill_ghosts(eps_c, dom, BCRec{});
+  fill_ghosts(eps_x_c, dom, BCRec{});
+  fill_ghosts(eps_y_c, dom, BCRec{});
   fill_ghosts(axy_c, dom, BCRec{});
   fill_ghosts(ayx_c, dom, BCRec{});
-  GeometricMG mg0(geom_c, ba_c, bc, {}, /*replicated=*/true);
-  mg0.set_epsilon(eps_c);
+  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
+  mg0.set_epsilon_anisotropic(eps_x_c, eps_y_c);
   mg0.set_cross_terms(axy_c, ayx_c);
   fill(mg0.rhs(), geom_c, f_rhs);
   mg0.phi().set_val(0.0);
@@ -99,13 +109,16 @@ TEST(test_composite_fac_tensor, full_tensor_composite_beats_coarse_only) {
 
   // --- composite tenseur plein ---
   CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
-  fill(fac.eps_coarse(), geom_c, eps_xy);
-  fill(fac.eps_fine(), geom_f, eps_xy);
+  fill(fac.eps_coarse(), geom_c, eps_x_xy);
+  fill(fac.eps_fine(), geom_f, eps_x_xy);
+  fill(fac.eps_y_level(0), geom_c, eps_y_xy);
+  fill(fac.eps_y_level(1), geom_f, eps_y_xy);
   fill(fac.a_xy_coarse(), geom_c, axy_xy);
   fill(fac.a_xy_fine(), geom_f, axy_xy);
   fill(fac.a_yx_coarse(), geom_c, ayx_xy);
   fill(fac.a_yx_fine(), geom_f, ayx_xy);
   fac.use_variable_coefficient(true);
+  fac.use_anisotropic_coefficient(true);
   fac.use_cross_terms(true);
   fill(fac.rhs_coarse(), geom_c, f_rhs);
   fill(fac.rhs_fine(), geom_f, f_rhs);

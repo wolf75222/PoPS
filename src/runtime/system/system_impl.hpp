@@ -38,7 +38,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // sum
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>      // fill_ghosts, fill_boundary
+#include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts, fill_boundary
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared by System/AmrSystem)
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_aux: install-time requirement validation (ADC-446)
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext: wraps the System for the .so dt_bound call (ADC-417)
@@ -51,6 +51,7 @@
 #include <limits>  // std::numeric_limits (per-block CFL: dt = min over blocks)
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -94,7 +95,8 @@ inline bool newton_options_non_default(const NewtonOptions& newton, bool diagnos
          newton.fail_policy != kNewtonDefaultFailPolicy;
 }
 
-inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newton, bool diagnostics) {
+inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newton,
+                                                       bool diagnostics) {
   EffectiveNewtonOptions out;
   out.max_iters = newton.max_iters;
   out.rel_tol = static_cast<double>(newton.rel_tol);
@@ -210,7 +212,16 @@ struct System::Impl {
   std::map<std::string, std::string> boundary_field_routes_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
-    std::map<std::string, MultiFab*> states;
+    const std::vector<MultiFab*>* states = nullptr;
+    int single_block = -1;
+    MultiFab* single_state = nullptr;
+
+    MultiFab* state(std::size_t block) const {
+      if (states != nullptr)
+        return block < states->size() ? (*states)[block] : nullptr;
+      return single_block >= 0 && block == static_cast<std::size_t>(single_block) ? single_state
+                                                                                  : nullptr;
+    }
   };
   std::optional<BoundaryStageStateView> boundary_stage_states_;
   // Effective numerical/physical block/stage options + OPT-IN IMEX Newton reports, EXTRACTED into
@@ -285,10 +296,7 @@ struct System::Impl {
   // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, periodic_, aux) so
   // fields_ / stepper_ back-pointers read a fully-built layout. The reference aliases above then bind
   // to domain_.*, and fields_(this) / stepper_(this) capture Impl (bit-identical addresses).
-  explicit Impl(const SystemConfig& c)
-      : domain_(c),
-        fields_(this),
-        stepper_(this) {}
+  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), stepper_(this) {}
 
   // Elliptic solve + field derivation (Batch B). OWNS the solvers (ell_/pell_), the Poisson
   // config, the coefficient fields and the aux application buffers (B_z, T_e). owner_ = this: the
@@ -407,52 +415,89 @@ struct System::Impl {
                         eb_thresholds_.cut_theta_min,
                         boundary_plan};
     if (boundary_plan && !boundary_plan->state_identity().empty()) {
+      struct BoundaryRegistryRoutes {
+        std::once_flag once;
+        std::vector<std::size_t> state_owners;
+        std::vector<MultiFab*> fields;
+      };
+      auto routes = std::make_shared<BoundaryRegistryRoutes>();
+      const auto required_states = boundary_plan->required_state_identities();
+      const auto required_fields = boundary_plan->required_field_identities();
+      const auto required_directions = boundary_plan->required_direction_identities();
+      const auto residual_outputs = boundary_plan->residual_output_identities();
+      const auto jvp_outputs = boundary_plan->jvp_output_identities();
+      const auto all_outputs = boundary_plan->all_output_identities();
+      const auto output_slot = [&all_outputs](const std::vector<std::string>& identities) {
+        if (identities.empty())
+          return std::size_t{0};
+        const auto found = std::find(all_outputs.begin(), all_outputs.end(), identities.front());
+        if (found == all_outputs.end())
+          throw std::logic_error("System boundary output route was not prepared");
+        return static_cast<std::size_t>(std::distance(all_outputs.begin(), found));
+      };
+      const std::size_t residual_output_slot = output_slot(residual_outputs);
+      const std::size_t jvp_output_slot = output_slot(jvp_outputs);
       context.boundary_field_registry =
-          [this, block_name, boundary_plan](
-              const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
-              const MultiFab* direction, MultiFab* output) {
-            detail::BoundaryFieldRegistry fields;
+          [this, block_name, boundary_plan, routes, required_states, required_fields,
+           required_directions, residual_outputs, jvp_outputs, residual_output_slot,
+           jvp_output_slot](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            MultiFab& state, const MultiFab* direction, MultiFab* output,
+                            detail::BoundaryFieldRegistry& fields) {
             if (boundary_stage_states_ && boundary_stage_states_->point != point)
               throw std::runtime_error(
                   "System boundary stage-state registry was used at a different evaluation point");
-            for (const auto& candidate : sp) {
-              if (candidate.state_identity.empty())
-                throw std::runtime_error(
-                    "System boundary state route has no exact qualified identity");
-              const MultiFab* storage = nullptr;
-              if (boundary_stage_states_) {
-                const auto staged = boundary_stage_states_->states.find(candidate.state_identity);
-                if (staged != boundary_stage_states_->states.end()) storage = staged->second;
+            std::call_once(routes->once, [&]() {
+              routes->state_owners.reserve(required_states.size());
+              for (const auto& identity : required_states) {
+                const auto found =
+                    std::find_if(sp.begin(), sp.end(), [&identity](const auto& candidate) {
+                      return candidate.state_identity == identity;
+                    });
+                if (found == sp.end())
+                  throw std::runtime_error(
+                      "System boundary state dependency has no exact provider route");
+                routes->state_owners.push_back(
+                    static_cast<std::size_t>(std::distance(sp.begin(), found)));
               }
+              routes->fields.reserve(required_fields.size());
+              for (const auto& identity : required_fields) {
+                const auto route = boundary_field_routes_.find(identity);
+                if (route == boundary_field_routes_.end())
+                  throw std::runtime_error(
+                      "System boundary field dependency has no exact provider route");
+                routes->fields.push_back(&fields_.provider_potential(route->second));
+              }
+            });
+            for (std::size_t slot = 0; slot < routes->state_owners.size(); ++slot) {
+              const std::size_t candidate_index = routes->state_owners[slot];
+              const auto& candidate = sp[candidate_index];
+              const MultiFab* storage = nullptr;
+              if (boundary_stage_states_)
+                storage = boundary_stage_states_->state(candidate_index);
               if (storage == nullptr)
                 storage = candidate.name == block_name ? &state : &candidate.U;
-              fields.bind_state(candidate.state_identity, *storage);
+              fields.bind_state_slot(slot, *storage);
             }
-            for (const auto& identity : boundary_plan->required_field_identities()) {
-              const auto route = boundary_field_routes_.find(identity);
-              if (route == boundary_field_routes_.end())
-                throw std::runtime_error(
-                    "System boundary field dependency has no exact provider route");
-              fields.bind_field(identity, fields_.provider_potential(route->second));
-            }
+            for (std::size_t slot = 0; slot < routes->fields.size(); ++slot)
+              fields.bind_field_slot(slot, *routes->fields[slot]);
             if (direction != nullptr) {
-              for (const auto& identity : boundary_plan->required_direction_identities()) {
+              for (std::size_t slot = 0; slot < required_directions.size(); ++slot) {
+                const auto& identity = required_directions[slot];
                 if (identity != boundary_plan->state_identity())
                   throw std::runtime_error(
                       "System boundary JVP direction has no exact native block storage route");
-                fields.bind_direction(identity, *direction);
+                fields.bind_direction_slot(slot, *direction);
               }
             }
             if (output != nullptr) {
-              const auto identities = direction == nullptr
-                  ? boundary_plan->residual_output_identities()
-                  : boundary_plan->jvp_output_identities();
+              const auto& identities = direction == nullptr ? residual_outputs : jvp_outputs;
               if (identities.size() > 1)
                 throw std::runtime_error(
                     "System boundary operation requires multiple mutable output storages");
-              if (!identities.empty()) fields.bind_output(identities.front(), *output);
+              if (!identities.empty())
+                fields.bind_output_slot(
+                    direction == nullptr ? residual_output_slot : jvp_output_slot, *output);
             }
-            return fields;
           };
     }
     return context;
@@ -493,11 +538,9 @@ struct System::Impl {
                                            const MultiFab& U_stage) {
     return fields_.solve_named_field_from_state(field, block_idx, U_stage);
   }
-  void register_elliptic_field(const std::string& block, const std::string& field,
-                               int phi_comp, int gx_comp, int gy_comp,
-                               int gradient_sign) {
-    fields_.register_named_field(
-        block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
+  void register_elliptic_field(const std::string& block, const std::string& field, int phi_comp,
+                               int gx_comp, int gy_comp, int gradient_sign) {
+    fields_.register_named_field(block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
   }
 
   // State marshaling DELEGATED to the store (Batch B.3): copy_comp0 / copy_state / write_state carry the
@@ -547,57 +590,57 @@ struct System::Impl {
   }
 
   struct AcceptedSnapshot {
-      std::vector<MultiFab> states;
-      MultiFab aux;
-      typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
-      double time;
-      int macro_step;
-      Real last_program_dt;
-      std::map<std::string, Real> program_diagnostics;
-      pops::runtime::program::CacheManager cache;
-      pops::runtime::program::HistoryManager history;
-      pops::runtime::program::Profiler profiler;
-      std::map<std::string, NewtonReport> newton_reports;
-      std::string last_dt_reason;
+    std::vector<MultiFab> states;
+    MultiFab aux;
+    typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
+    double time;
+    int macro_step;
+    Real last_program_dt;
+    std::map<std::string, Real> program_diagnostics;
+    pops::runtime::program::CacheManager cache;
+    pops::runtime::program::HistoryManager history;
+    pops::runtime::program::Profiler profiler;
+    std::map<std::string, NewtonReport> newton_reports;
+    std::string last_dt_reason;
 
-      explicit AcceptedSnapshot(Impl& impl)
-          : aux(impl.aux),
-            fields(impl.fields_.step_snapshot()),
-            time(impl.t),
-            macro_step(impl.macro_step_),
-            last_program_dt(impl.program_.last_dt_),
-            program_diagnostics(impl.program_.diagnostics_),
-            cache(impl.program_.cache_),
-            history(impl.program_.hist_),
-            profiler(impl.program_.profiler_),
-            last_dt_reason(impl.stepper_.last_dt_reason()) {
-        states.reserve(impl.sp.size());
-        for (const auto& block : impl.sp)
-          states.emplace_back(block.U);
-        for (const auto& [name, report] : impl.diagnostics_.newton_reports)
-          if (report)
-            newton_reports.emplace(name, *report);
-      }
+    explicit AcceptedSnapshot(Impl& impl)
+        : aux(impl.aux),
+          fields(impl.fields_.step_snapshot()),
+          time(impl.t),
+          macro_step(impl.macro_step_),
+          last_program_dt(impl.program_.last_dt_),
+          program_diagnostics(impl.program_.diagnostics_),
+          cache(impl.program_.cache_),
+          history(impl.program_.hist_),
+          profiler(impl.program_.profiler_),
+          last_dt_reason(impl.stepper_.last_dt_reason()) {
+      states.reserve(impl.sp.size());
+      for (const auto& block : impl.sp)
+        states.emplace_back(block.U);
+      for (const auto& [name, report] : impl.diagnostics_.newton_reports)
+        if (report)
+          newton_reports.emplace(name, *report);
+    }
 
-      void restore(Impl& impl) const {
-        for (std::size_t i = 0; i < states.size(); ++i)
-          impl.sp[i].U = states[i];
-        impl.aux = aux;
-        impl.fields_.restore_step_snapshot(fields);
-        impl.t = time;
-        impl.macro_step_ = macro_step;
-        impl.program_.last_dt_ = last_program_dt;
-        impl.program_.diagnostics_ = program_diagnostics;
-        impl.program_.cache_ = cache;
-        impl.program_.hist_ = history;
-        impl.program_.profiler_ = profiler;
-        for (auto& [name, report] : impl.diagnostics_.newton_reports) {
-          const auto saved = newton_reports.find(name);
-          if (report && saved != newton_reports.end())
-            *report = saved->second;
-        }
-        impl.stepper_.restore_last_dt_reason(last_dt_reason);
+    void restore(Impl& impl) const {
+      for (std::size_t i = 0; i < states.size(); ++i)
+        impl.sp[i].U = states[i];
+      impl.aux = aux;
+      impl.fields_.restore_step_snapshot(fields);
+      impl.t = time;
+      impl.macro_step_ = macro_step;
+      impl.program_.last_dt_ = last_program_dt;
+      impl.program_.diagnostics_ = program_diagnostics;
+      impl.program_.cache_ = cache;
+      impl.program_.hist_ = history;
+      impl.program_.profiler_ = profiler;
+      for (auto& [name, report] : impl.diagnostics_.newton_reports) {
+        const auto saved = newton_reports.find(name);
+        if (report && saved != newton_reports.end())
+          *report = saved->second;
       }
+      impl.stepper_.restore_last_dt_reason(last_dt_reason);
+    }
   };
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
@@ -704,7 +747,8 @@ inline void validate_system_config(const SystemConfig& c) {
 // legacy setter as the remedy, so it cannot read as a validation bypass. mark_bound() is called LAST by
 // the Python bind flow, so the install sequence itself never trips this; a direct engine script that
 // never binds keeps bound == false and is unaffected. Called at the TOP of each structural setter.
-inline void require_assembling(const pops::runtime::system::SystemLifecycle& lifecycle, const char* what) {
+inline void require_assembling(const pops::runtime::system::SystemLifecycle& lifecycle,
+                               const char* what) {
   if (lifecycle.frozen())
     throw std::runtime_error(
         std::string("System::") + what +

@@ -9,14 +9,14 @@ exactement conservative pour le pas d'ordre 3 (cf. subcycle_level_mp / ssprk3_ad
 On verifie cote Python :
   (a) AMR ssprk3 MONO-BLOC et MULTI-BLOCS tournent (etat fini) AVEC patchs fins actifs, et la MASSE
       de chaque bloc est conservee a ~machine (reflux + average_down par etage) ;
-  (b) DEFAUT bit-identique : add_block sans ssprk3 (Explicit() == Euler avant) reste deterministe
-      (deux runs euler explicit -> dmax == 0), verrou du threading time_method ;
+  (b) DEFAUT bit-identique : le temps omis est exactement le preset SSPRK2 explicite ;
   (c) ORDRE : l'erreur L1 (temporelle, isolee par reference Richardson ssprk3 a dt/8) du pas ssprk3
       est NETTEMENT plus petite que celle du pas euler (explicit) au MEME dt -- ssprk3 ordre 3 >> 1 ;
   (d) imex + ssprk3 : combinaison REJETEE explicitement (ssprk3 = transport explicite, exclusif du
       traitement IMEX de la source ; selecteur time.kind unique, parite avec System) ;
-  (e) loader .so + ssprk3 : REJETE explicitement (l'ABI plate du loader natif AMR ne transporte pas
-      la methode temporelle -> jamais un repli kEuler silencieux).
+
+Le chemin loader natif n'est pas simule ici. Sa vraie compilation et sa parite numerique SSPRK3 sont
+couvertes par ``integration/native_loader/test_ssprk3_production.py``.
 
 Test PUR Python (aucune compilation .so) : ne gate sur rien, toujours execute.
 """
@@ -24,6 +24,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
+import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
@@ -39,7 +40,12 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
+    return engine.Model(
+        engine.Scalar(),
+        engine.ExB(B0=B0),
+        engine.NoSource(),
+        engine.BackgroundDensity(alpha=q, n0=1.0),
+    )
 
 
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
@@ -92,23 +98,25 @@ def _check_multi(n=32):
           "bloc conservee (di=%.2e, de=%.2e)" % (sim.n_patches(), di, de))
 
 
-# --- (b) defaut bit-identique : euler explicit deterministe (verrou du threading time_method) ---
-def _check_default_bit_identical(n=32):
-    def run_euler():
+# --- (b) defaut bit-identique : defaut == preset SSPRK2 explicite -------------------------------
+def _check_default_ssprk2_bit_identical(n=32):
+    def run(time=None):
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s.set_temporal_relations([2], [1], ["integral_only"])
-        s.add_equation("ne", _scalar_charge(+1.0),
-                    spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
+        kwargs = {"spatial": engine.Spatial(limiter=Minmod(), flux=Rusanov())}
+        if time is not None:
+            kwargs["time"] = time
+        s.add_equation("ne", _scalar_charge(+1.0), **kwargs)
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.002, 10)
         return np.asarray(s.density())
 
-    a = run_euler()
-    b = run_euler()
+    a = run()
+    b = run(engine.Explicit(method="ssprk2"))
     dmax = float(np.abs(a - b).max())
-    assert dmax == 0.0, "defaut euler non bit-identique (dmax=%.3e) : threading time_method casse" % dmax
-    print("OK  (b) defaut (add_block sans ssprk3 = euler avant) bit-identique : dmax == 0")
+    assert dmax == 0.0, "temps par defaut != SSPRK2 explicite (dmax=%.3e)" % dmax
+    print("OK  (b) temps omis == Explicit(method='ssprk2') bit-identique : dmax == 0")
 
 
 # --- (c) ordre : erreur L1 temporelle ssprk3 << euler au meme dt (reference Richardson ssprk3 dt/8) --
@@ -119,7 +127,8 @@ def _build_advect(n, kind):
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.add_equation("ne", _scalar_charge(+1.0),
                 spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
-                time=engine.Explicit(ssprk3=True) if kind == "ssprk3" else engine.Explicit())
+                time=(engine.Explicit(method="ssprk3") if kind == "ssprk3"
+                      else engine.Explicit(method="euler")))
     s.set_poisson(bc=Periodic())
     s.set_density("ne", _bump(n, 0.40))
     return s
@@ -186,49 +195,21 @@ def _check_imex_ssprk3_rejected(n=16):
     add("ssprk3")
     add("imex")
     # ssprk3 + masque implicite (IMEX partiel) -> rejet.
-    for kw in (dict(implicit_vars=["rho"]), dict(newton_diagnostics=True)):
-        try:
+    for kw, reason in (
+        (dict(implicit_vars=["rho"]), "implicit_vars / implicit_roles require time='imex'"),
+        (dict(newton_diagnostics=True), "newton_diagnostics requires time='imex'"),
+    ):
+        with pytest.raises(RuntimeError, match=reason):
             add("ssprk3", **kw)
-        except Exception:
-            pass
-        else:
-            raise AssertionError("imex+ssprk3 NON rejete (add_block ssprk3 + %r accepte)" % kw)
     print("OK  (d) imex + ssprk3 rejete : ssprk3 (transport explicite) exclusif du traitement IMEX")
-
-
-# --- (e) loader .so + ssprk3 : rejet explicite (ABI plate ne transporte pas la methode) ---
-def _check_native_loader_rejects_ssprk3(n=16):
-    s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    s.set_temporal_relations([2], [1], ["integral_only"])
-    # The private binding is deliberately named _install_native_block; it validates time before
-    # dlopen, so no real package is required to observe the rejection.
-    try:
-        s._s._install_native_block(
-            "b", "/tmp/_pops_ssprk3_inexistant.so", "minmod", "rusanov",
-            "conservative", "ssprk3", 1.4, 1)
-    except Exception as e:
-        assert "ssprk3" in str(e), "rejet .so present mais message inattendu : %s" % e
-    else:
-        raise AssertionError("loader .so + ssprk3 NON rejete (option silencieusement ignoree)")
-    # explicit reste accepte au stade validation (echoue plus loin faute de .so reel) : le rejet est
-    # SPECIFIQUE a ssprk3, pas un refus generique de add_native_block. NB : chemin SANS 'ssprk3'
-    # dans le nom -- dlopen echoie le chemin dans son message, ce qui piegerait l'assertion.
-    try:
-        s._s._install_native_block(
-            "b", "/tmp/_pops_loader_inexistant.so", "minmod", "rusanov",
-            "conservative", "explicit", 1.4, 1)
-    except Exception as e:
-        assert "ssprk3" not in str(e), "explicit rejete pour cause de ssprk3 (rejet trop large)"
-    print("OK  (e) loader .so + ssprk3 rejete explicitement (ABI plate sans methode temporelle)")
 
 
 def main():
     _check_mono()
     _check_multi()
-    _check_default_bit_identical()
+    _check_default_ssprk2_bit_identical()
     _check_order()
     _check_imex_ssprk3_rejected()
-    _check_native_loader_rejects_ssprk3()
     print("OK test_amr_ssprk3")
 
 

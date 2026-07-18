@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -49,6 +50,21 @@ static ModelSpec exb_charge(double q, double B0) {
   s.source = "none";
   s.elliptic = "charge";
   s.q = q;
+  s.B0 = B0;
+  return s;
+}
+
+// A single periodic species needs an explicitly authored neutralizing background: q*n alone has a
+// non-zero constant-mode moment and is not a solvable periodic Poisson problem.  This is used only
+// by the mono-block routing parity check below; the two-block case remains the physical q0*n0+q1*n1
+// co-located system source.
+static ModelSpec exb_neutralized_charge(double q, double B0, double n0) {
+  ModelSpec s;
+  s.transport = "exb";
+  s.source = "none";
+  s.elliptic = "background";
+  s.alpha = q;
+  s.n0 = n0;
   s.B0 = B0;
   return s;
 }
@@ -80,6 +96,8 @@ TEST(test_amr_system_twoblock, Runs) {
   // contribuent reellement au RHS somme (sinon n0 == n1 le rendrait identiquement nul).
   std::vector<double> rho0 = bump(N, 1.0, 0.40);
   std::vector<double> rho1 = bump(N, 1.0, 0.20);
+  const double mono_background =
+      std::accumulate(rho0.begin(), rho0.end(), 0.0) / static_cast<double>(rho0.size());
 
   // ============================================================================================
   // (b) POISSON SOMME CO-LOCALISE, au niveau du moteur AmrRuntime + build_amr_block (cette PR).
@@ -233,7 +251,8 @@ TEST(test_amr_system_twoblock, Runs) {
       cfg.periodic = true;
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
-      sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+      sim.add_block("ne", exb_neutralized_charge(q0, B0, mono_background), "none", "rusanov",
+                    "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", rho0);
       sim.advance(0.01, 5);

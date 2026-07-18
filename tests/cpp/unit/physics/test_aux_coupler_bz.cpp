@@ -20,7 +20,6 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
-#include <functional>
 
 using namespace pops;
 
@@ -54,8 +53,7 @@ TEST(AuxCouplerBz, FullPathAppliesBzGrowth) {
 
   BzGrow model;
   // active vide ; B_z = constante c.
-  Coupler<BzGrow> cpl(model, geom, ba, bc, bc, std::function<bool(Real, Real)>{},
-                      [c](Real, Real) { return c; });
+  Coupler<BzGrow> cpl(model, geom, ba, bc, bc, {}, constant_scalar_field_provider(c));
 
   MultiFab U(ba, dm, 1, 1);
   U.set_val(1.0);

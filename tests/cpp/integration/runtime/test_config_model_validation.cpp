@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
@@ -114,6 +115,29 @@ TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
     }
     EXPECT_TRUE(ok) << "System config valide construit (nx == 16)";
   }
+}
+
+TEST(ConfigModelValidation, SystemRejectsAmbiguousDiffusionCoefficientShapes) {
+  const std::vector<double> scalar(8 * 8, 2.0);
+  const std::vector<double> diagonal_x(8 * 8, 3.0);
+  const std::vector<double> diagonal_y(8 * 8, 4.0);
+
+  System scalar_first(SystemConfig{8, 1.0, false});
+  scalar_first.set_epsilon_field(scalar);
+  EXPECT_TRUE(raises_with(
+      [&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
+      "cannot be combined"));
+
+  System diagonal_first(SystemConfig{8, 1.0, false});
+  diagonal_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y);
+  EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); },
+                          "cannot be combined"));
+
+  // Reconfiguration within the same exact shape is intentional and remains available while the
+  // System is assembling; only a physically ambiguous shape change is rejected.
+  EXPECT_NO_THROW(scalar_first.set_epsilon_field(std::vector<double>(8 * 8, 5.0)));
+  EXPECT_NO_THROW(diagonal_first.set_epsilon_anisotropic_field(
+      std::vector<double>(8 * 8, 6.0), std::vector<double>(8 * 8, 7.0)));
 }
 
 // ================================================================================================

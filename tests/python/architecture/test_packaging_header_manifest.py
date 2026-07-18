@@ -340,3 +340,13 @@ def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_p
             "pops/runtime/program/amr_program_context.hpp",
         ),
     )
+    _compile_staged_root(
+        compiler=compiler,
+        wheel_include=wheel_include,
+        kokkos_include=kokkos_include,
+        temporary=tmp_path,
+        name="field_nullspace_workspace_public_api",
+        roots=(
+            "pops/numerics/elliptic/interface/field_nullspace_workspace.hpp",
+        ),
+    )

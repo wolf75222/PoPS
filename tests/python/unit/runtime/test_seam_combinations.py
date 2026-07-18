@@ -50,14 +50,14 @@ def _model(transport: str) -> engine.Model:
             state=engine.FluidState("isothermal", cs2=0.5),
             transport=engine.IsothermalFlux(),
             source=engine.PotentialForce(charge=1.0),
-            elliptic=engine.ChargeDensity(charge=1.0),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
         )
     if transport == "compressible":
         return engine.Model(
             state=engine.FluidState("compressible", gamma=1.4),
             transport=engine.CompressibleFlux(),
             source=engine.PotentialForce(charge=-1.0),
-            elliptic=engine.ChargeDensity(charge=-1.0),
+            elliptic=engine.BackgroundDensity(alpha=-1.0, n0=1.0),
         )
     raise AssertionError("unknown manifest transport %r" % transport)
 

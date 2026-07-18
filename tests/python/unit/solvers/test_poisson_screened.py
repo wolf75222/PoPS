@@ -71,16 +71,24 @@ def test_screened_plan_carries_one_exact_qualified_scalar_and_refuses_fft() -> N
     )["screened"]
 
     reaction = plan.native_options["reaction"]
-    handles = plan.reaction_parameter_handles()
+    handles = plan.provider_parameter_handles("native-install")
     assert reaction["kind"] == "scalar_bind_parameter"
     assert reaction["multiplier"] == 1.0
     assert len(handles) == 1
     assert handles[0].param_kind == "runtime"
     assert reaction["parameter"]["qualified_id"] == handles[0].qualified_id
-    assert plan.native_options["nullspace"] == "none"
+    from pops.fields._prepared_field_nullspace_registry import (
+        prepared_field_nullspace_binding_from_data,
+    )
+
+    nullspace = prepared_field_nullspace_binding_from_data(
+        plan.native_options["nullspace_provider"]
+    )
+    assert nullspace.facts.kernel_components == 0
+    assert nullspace.resolution.singular is False
 
     fft_case, _ = _screened_registration(solver=FFT(), boundary=Periodic())
-    with pytest.raises(LoweringRejection, match="requires the native GeometricMG"):
+    with pytest.raises(LoweringRejection, match="does not implement a screened operator"):
         capture_field_plans(
             fft_case,
             lambda value: value,
@@ -140,8 +148,8 @@ def test_screened_exact_constants_lower_without_a_fictitious_bind_slot(
         "kind": "scalar_constant",
         "value": 0.5,
     }
-    assert plan.reaction_parameter_handles() == ()
-    assert plan.native_reaction_value({}) == 0.5
+    assert plan.provider_parameter_handles("native-install") == ()
+    assert plan.bind_native_options({}) == {"reaction": 0.5}
 
 
 @pytest.mark.parametrize(
@@ -161,13 +169,19 @@ def test_constant_reaction_reaches_both_native_install_protocols(
         def set_field_reaction(self, slot, value):
             installed.append((slot, value))
 
+        def register_elliptic_field(self, *args):
+            return None
+
     host = type("InstallHost", (), {"_s": Native()})()
+    models = {
+        "charge": type("CompiledModel", (), {"aux_extra_names": ("screened_phi",)})()
+    }
     if installer == "system":
         from pops.runtime._system_unified_install import _SystemUnifiedInstall
-        _SystemUnifiedInstall._install_field_reaction(host, plan, {})
+        _SystemUnifiedInstall._install_field_method_runtime(host, plan, models, {})
     else:
         from pops.runtime._amr_system_install import _AmrSystemInstall
-        _AmrSystemInstall._install_field_reaction(host, plan, {})
+        _AmrSystemInstall._install_field_method_runtime(host, plan, models, {})
     assert installed == [(plan.native_options["provider_slot"], 0.5)]
 
 
@@ -176,7 +190,9 @@ def test_refined_composite_screened_amr_lowers_to_the_reaction_capable_fac() -> 
         cartesian_grid(n=16, periodic=False), max_levels=2, ratio=2)
     plan = _constant_screened_plan(
         coefficient_kind="literal", target="amr_system", layout=layout)
-    assert plan.native_options["hierarchy"] == "composite"
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
     assert plan.native_options["reaction"] == {
         "schema_version": 1,
         "kind": "scalar_constant",

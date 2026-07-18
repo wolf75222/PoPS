@@ -32,6 +32,8 @@
 // stay in the runtime, delegating their STORAGE to this struct's hist_ / cache_ members. This header
 // therefore has NO Kokkos / MultiFab-allocation dependency beyond the MultiFab type the rings hold.
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <stdexcept>
@@ -152,6 +154,10 @@ struct ProgramRuntimeState {
   /// install records it; serialized in the checkpoint so a restart against a DIFFERENT Program is
   /// rejected fail-loud. Used by BOTH runtimes.
   std::string installed_hash_;
+  /// Exact prepared-operator authorities exported by the installed artifact and authenticated by
+  /// the native loader before its install entry runs. Contexts may issue an unverified hot-apply
+  /// capability only for a member of this table.
+  std::vector<std::array<std::uint64_t, 4>> operator_authorities_;
   /// NAME-based block binding (ADC-457): program-index -> runtime-block-index map. Entry p holds the
   /// runtime block index the Program's block p names. EMPTY = identity (positional convention). Used
   /// by BOTH runtimes; read by the (Amr)ProgramContext.

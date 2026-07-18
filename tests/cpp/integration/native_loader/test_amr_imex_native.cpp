@@ -14,7 +14,8 @@
 // Deux modeles, pour couvrir les deux exigences sans toucher aux briques de production (write-set) :
 //
 //   (A) PARITE 3 CHEMINS + IMEX ACTIF, modele ModelSpec-atteignable
-//       CompositeModel<Euler, PotentialForce, ChargeDensity> (source="potential", elliptic="charge") :
+//       CompositeModel<Euler, PotentialForce, BackgroundDensity>
+//       (source="potential", elliptic="background") :
 //         - add_compiled_model(AmrSystem&) == add_block(ModelSpec) == add_native_block(.so), dmax==0,
 //           sous time="imex" -> le drapeau IMEX est cable a l'IDENTIQUE sur les trois entrees ;
 //         - IMEX != explicite sur le MEME etat -> le pas implicite est bien pris (non silencieux) ;
@@ -39,7 +40,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, ChargeDensity, BackgroundDensity
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -65,19 +66,20 @@ constexpr double kQom =
     200.0;  // q/m de PotentialForce : assez fort pour IMEX != explicite, sans exploser
 
 // (A) modele ModelSpec-atteignable : Euler + force du potentiel (source raide self-consistent) + charge.
-using PotModel = CompositeModel<Euler, PotentialForce, ChargeDensity>;
+using PotModel = CompositeModel<Euler, PotentialForce, BackgroundDensity>;
 PotModel make_pot() {
   return PotModel{Euler{static_cast<Real>(kGamma)}, PotentialForce{static_cast<Real>(kQom)},
-                  ChargeDensity{Real(1)}};
+                  BackgroundDensity{Real(1), Real(1)}};
 }
 ModelSpec make_pot_spec() {
   ModelSpec spec;
   spec.transport = "compressible";
   spec.source = "potential";
-  spec.elliptic = "charge";
+  spec.elliptic = "background";
   spec.gamma = kGamma;
   spec.qom = kQom;
-  spec.q = 1.0;
+  spec.alpha = 1.0;
+  spec.n0 = 1.0;
   return spec;
 }
 
@@ -105,11 +107,17 @@ StiffModel make_stiff(double eps) {
 
 std::vector<double> bubble(int n) {
   std::vector<double> rho(static_cast<std::size_t>(n) * n);
+  double perturbation_sum = 0.0;
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
       const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
+      const double perturbation = 0.5 * std::exp(-(x * x + y * y) / 0.02);
+      rho[static_cast<std::size_t>(j) * n + i] = perturbation;
+      perturbation_sum += perturbation;
     }
+  const double perturbation_mean = perturbation_sum / static_cast<double>(rho.size());
+  for (double& value : rho)
+    value += 1.0 - perturbation_mean;
   return rho;
 }
 
@@ -157,7 +165,7 @@ std::string loader_source() {
 #include <cstring>
 #include <string>
 namespace pops_generated {
-using PotModel = pops::CompositeModel<pops::Euler, pops::PotentialForce, pops::ChargeDensity>;
+using PotModel = pops::CompositeModel<pops::Euler, pops::PotentialForce, pops::BackgroundDensity>;
 struct StiffRelax {
   pops::Real inv_eps = pops::Real(0);
   pops::Real u_eq[4] = {pops::Real(1), pops::Real(0), pops::Real(0), pops::Real(2.5)};
@@ -196,7 +204,8 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
       *s, name,
       pops_generated::PotModel{pops::Euler{static_cast<pops::Real>(gamma)},
                               pops::PotentialForce{static_cast<pops::Real>()CPP" +
-         std::to_string(kQom) + R"CPP()}, pops::ChargeDensity{pops::Real(1)}},
+         std::to_string(kQom) + R"CPP()},
+                              pops::BackgroundDensity{pops::Real(1), pops::Real(1)}},
       limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
 }
 )CPP";
@@ -227,14 +236,22 @@ struct Snap {
   int n_patches = 0;
 };
 
+void configure_refined_execution(AmrSystem& system) {
+  // Time subcycling is independent from mesh refinement and must remain authored explicitly.
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  // The centered BackgroundDensity source has zero integral by construction, so the periodic
+  // nullspace is physically compatible without any silent mean projection.
+  system.set_poisson("charge_density", "geometric_mg", "periodic");
+  system.set_refinement(1.2);
+}
+
 // @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
 // densite, avance) est commun. Construit son propre AmrSystem (pas de fuite).
 template <class Setup>
 Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Setup setup) {
   AmrSystem s(make_cfg(n));
   setup(s);
-  s.set_poisson("charge_density", "geometric_mg");
-  s.set_refinement(1.2);
+  configure_refined_execution(s);
   s.set_density("gas", rho);
   for (int k = 0; k < nsteps; ++k)
     s.step(dt);
@@ -298,8 +315,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   {
     AmrSystem s(make_cfg(n));
     add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-    s.set_poisson("charge_density", "geometric_mg");
-    s.set_refinement(1.2);
+    configure_refined_execution(s);
     s.set_density("gas", rho);
     const double m0 = s.mass();
     for (int k = 0; k < nsteps; ++k)
@@ -320,18 +336,28 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
                          kGamma);
     });
-    Snap B_expl = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
-      add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "explicit",
-                         kGamma);
-    });
+    Snap B_expl;
+    bool explicit_rejected_nonfinite = false;
+    try {
+      B_expl = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
+        add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative",
+                           "explicit", kGamma);
+      });
+    } catch (const FieldNullspaceInvalidEvaluation&) {
+      // The final runtime is fail-closed: once the unstable explicit state becomes non-finite, the
+      // next field solve rejects it before NaNs can be published as a completed step.
+      explicit_rejected_nonfinite = true;
+    }
     chk(all_finite(B_imex.density) && maxabs(B_imex.density) < 1e3,
         "[B] IMEX stable sur source raide (fini, borne)");
-    chk(!all_finite(B_expl.density) || maxabs(B_expl.density) > 1e3,
+    chk(explicit_rejected_nonfinite || !all_finite(B_expl.density) || maxabs(B_expl.density) > 1e3,
         "[B] explicite EXPLOSE sur source raide (non fini ou >> borne)");
     std::printf(
         "OK  [B] source raide (eps=%.0e, dt=%.0e) : IMEX max=%.3e (stable) | explicite %s\n", eps,
         dtB, maxabs(B_imex.density),
-        all_finite(B_expl.density) ? "borne >> 1" : "NON FINI (explose)");
+        explicit_rejected_nonfinite
+            ? "REJETE NON FINI (fail-closed)"
+            : (all_finite(B_expl.density) ? "borne >> 1" : "NON FINI (explose)"));
   }
 
   // (B2) PARITE add_compiled_model == add_block sous IMEX en regime NON explosif (eps modere) :
@@ -385,8 +411,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       {
         AmrSystem A(make_cfg(n));
         A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-        A.set_poisson("charge_density", "geometric_mg");
-        A.set_refinement(1.2);
+        configure_refined_execution(A);
         A.set_density("gas", rho);
         for (int k = 0; k < nsteps; ++k)
           A.step(dtA);
@@ -394,8 +419,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
         AmrSystem B(make_cfg(n));
         add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
                            kGamma);
-        B.set_poisson("charge_density", "geometric_mg");
-        B.set_refinement(1.2);
+        configure_refined_execution(B);
         B.set_density("gas", rho);
         for (int k = 0; k < nsteps; ++k)
           B.step(dtA);
@@ -410,8 +434,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
         const std::string bname = "stiff:" + std::to_string(eps);
         AmrSystem A(make_cfg(n));
         A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-        A.set_poisson("charge_density", "geometric_mg");
-        A.set_refinement(1.2);
+        configure_refined_execution(A);
         A.set_density("gas", rho);
         for (int k = 0; k < nsteps; ++k)
           A.step(dtB);
@@ -419,8 +442,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
         AmrSystem B(make_cfg(n));
         add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
                            kGamma);
-        B.set_poisson("charge_density", "geometric_mg");
-        B.set_refinement(1.2);
+        configure_refined_execution(B);
         B.set_density("gas", rho);
         for (int k = 0; k < nsteps; ++k)
           B.step(dtB);

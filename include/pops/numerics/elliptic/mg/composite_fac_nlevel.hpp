@@ -57,6 +57,7 @@ struct FacRedBlackFivePointSorKernel {
   Array4 phi;
   ConstArray4 rhs;
   ConstArray4 eps;
+  ConstArray4 eps_y;
   Real idx2;
   Real idy2;
   Real omega;
@@ -69,8 +70,8 @@ struct FacRedBlackFivePointSorKernel {
       return;
     const Real exm = has_eps ? eps_harmonic(eps(i, j, 0), eps(i - 1, j, 0)) : Real(1);
     const Real exp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i + 1, j, 0)) : Real(1);
-    const Real eym = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j - 1, 0)) : Real(1);
-    const Real eyp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j + 1, 0)) : Real(1);
+    const Real eym = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j - 1, 0)) : Real(1);
+    const Real eyp = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j + 1, 0)) : Real(1);
     const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
     const Real nb = (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
                     (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
@@ -147,12 +148,14 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
     ba_lv_.push_back(bak);
     dm_lv_.push_back(dmk);
     MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0), lapk(bak, dmk, 1, 0);
-    MultiFab epk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1), ayk(bak, dmk, 1, 1);
+    MultiFab epk(bak, dmk, 1, 1), eyk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1),
+        ayk(bak, dmk, 1, 1);
     phik.set_val(Real(0));
     fk.set_val(Real(0));
     rk.set_val(Real(0));
     lapk.set_val(Real(0));
     epk.set_val(Real(1));
+    eyk.set_val(Real(1));
     axk.set_val(Real(0));
     ayk.set_val(Real(0));
     phi_lv_.push_back(std::move(phik));
@@ -160,6 +163,7 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
     res_lv_.push_back(std::move(rk));
     lap_lv_.push_back(std::move(lapk));
     eps_lv_.push_back(std::move(epk));
+    eps_y_lv_.push_back(std::move(eyk));
     axy_lv_.push_back(std::move(axk));
     ayx_lv_.push_back(std::move(ayk));
   }
@@ -209,11 +213,11 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
       const Box2D pb = bam[0];
       Geometry gp{pb, gm.xlo + pb.lo[0] * gm.dx(), gm.xlo + (pb.hi[0] + 1) * gm.dx(),
                   gm.ylo + pb.lo[1] * gm.dy(), gm.ylo + (pb.hi[1] + 1) * gm.dy()};
-      level_mg_[m] = std::make_unique<GeometricMG>(gp, bam, dir, std::function<bool(Real, Real)>{},
-                                                   /*replicated=*/true);
+      level_mg_[m] = std::make_unique<GeometricMG>(gp, bam, dir, ActiveRegionProvider2D{},
+                                                   FieldDistribution::Replicated);
     } else {
-      level_mg_[m] = std::make_unique<GeometricMG>(gm, bam, dir, std::function<bool(Real, Real)>{},
-                                                   /*replicated=*/false);
+      level_mg_[m] = std::make_unique<GeometricMG>(gm, bam, dir, ActiveRegionProvider2D{},
+                                                   FieldDistribution::Distributed);
     }
   }
 
@@ -233,10 +237,12 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
 
   correction_residual_replicated_.clear();
   correction_eps_replicated_.clear();
+  correction_eps_y_replicated_.clear();
   correction_axy_replicated_.clear();
   correction_ayx_replicated_.clear();
   correction_residual_replicated_.resize(static_cast<std::size_t>(L));
   correction_eps_replicated_.resize(static_cast<std::size_t>(L));
+  correction_eps_y_replicated_.resize(static_cast<std::size_t>(L));
   correction_axy_replicated_.resize(static_cast<std::size_t>(L));
   correction_ayx_replicated_.resize(static_cast<std::size_t>(L));
   for (int m = 1; m + 1 < L; ++m) {
@@ -245,6 +251,7 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
     const DistributionMapping& rdm = mgk.rhs().dmap();
     correction_residual_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 0);
     correction_eps_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
+    correction_eps_y_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
     correction_axy_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
     correction_ayx_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
   }
@@ -286,7 +293,14 @@ inline void CompositeFacPoisson::setup_level_coeffs_() {
     fill_ghosts(eps_c_, geom_c_.domain, coeff_bc(bc_));
     for (int k = 1; k < L; ++k)
       fill_cf_field_(k, eps_level(k), eps_level(k - 1));
-    mg_.set_epsilon(eps_c_);
+    if (has_eps_y_) {
+      fill_ghosts(eps_y_c_, geom_c_.domain, coeff_bc(bc_));
+      for (int k = 1; k < L; ++k)
+        fill_cf_field_(k, eps_y_level(k), eps_y_level(k - 1));
+      mg_.set_epsilon_anisotropic(eps_c_, eps_y_c_);
+    } else {
+      mg_.set_epsilon(eps_c_);
+    }
   }
   if (has_cross_) {
     device_fence();
@@ -377,6 +391,8 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
     const ConstArray4 Pc = phim.fab(li).const_array();
     const ConstArray4 F = f_eff.fab(li).const_array();
     const ConstArray4 E = eps_level(m).fab(li).const_array();
+    const ConstArray4 EY = has_eps_y_ ? eps_y_level(m).fab(li).const_array()
+                                     : eps_level(m).fab(li).const_array();
     const ConstArray4 AXY = a_xy_level(m).fab(li).const_array();
     const ConstArray4 AYX = a_yx_level(m).fab(li).const_array();
     if (finest_unmasked && !hc) {
@@ -384,7 +400,8 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
         for (int color = 0; color < 2; ++color)
           for_each_cell(
               vb, detail::FacRedBlackFivePointSorKernel{
-                      P, F, E, idx2, idy2, omega, has_reaction_ ? reaction_ : Real(0), color, he});
+                      P, F, E, EY, idx2, idy2, omega,
+                      has_reaction_ ? reaction_ : Real(0), color, he});
       continue;
     }
     // CoverageMask is host storage. The intermediate-level mask and the nine-point same-color
@@ -400,8 +417,8 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
               continue;  // covered by a finer patch: value from average-down, not relaxed
             const Real exm = he ? eps_harmonic(E(i, j, 0), E(i - 1, j, 0)) : Real(1);
             const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
-            const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
-            const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
+            const Real eym = he ? eps_harmonic(EY(i, j, 0), EY(i, j - 1, 0)) : Real(1);
+            const Real eyp = he ? eps_harmonic(EY(i, j, 0), EY(i, j + 1, 0)) : Real(1);
             const Real diag =
                 (exm + exp) * idx2 + (eym + eyp) * idy2 + (has_reaction_ ? reaction_ : Real(0));
             const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
@@ -441,6 +458,7 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
   // mono-box level and a distributed intermediate level.
   MultiFab& phi_m = phi_level(m);
   MultiFab& eps_m = eps_level(m);
+  MultiFab& eps_y_m = has_eps_y_ ? eps_y_level(m) : eps_level(m);
   auto read_m = [&](const MultiFab& mf, int I, int J) -> Real {
     for (int li = 0; li < mf.local_size(); ++li)
       if (mf.fab(li).grown_box().contains(I, J))
@@ -450,6 +468,7 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
   const BoxArray& child = (m + 1 == 1) ? ba_f_ : ba_lv_[(m + 1) - 2];
   MultiFab& phi_child = phi_level(m + 1);
   MultiFab& eps_child = eps_level(m + 1);
+  MultiFab& eps_y_child = has_eps_y_ ? eps_y_level(m + 1) : eps_level(m + 1);
   // FluxRegister over the level-m grid: single-writer per (cell,direction) slot (4/cell), gather()
   // sums (x,0,0,..) exactly, then a fixed-order fold. Serial: gather() is the identity -> bit-identical.
   FluxRegister& reg = *flux_registers_[static_cast<std::size_t>(m)];
@@ -464,6 +483,7 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
       continue;
     const ConstArray4 PF = phi_child.fab(li).const_array();
     const ConstArray4 EF = eps_child.fab(li).const_array();
+    const ConstArray4 EYF = eps_y_child.fab(li).const_array();
     // x-normal faces: left border column I = Ic0-1 (fine face i = r*Ic0), right I = Ic1+1.
     for (int J = Jc0; J <= Jc1; ++J) {
       if (!cov.covered(Ic0 - 1, J)) {
@@ -496,26 +516,30 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
     for (int I = Ic0; I <= Ic1; ++I) {
       if (!cov.covered(I, Jc0 - 1)) {
         const int J = Jc0 - 1;
-        const Real efc = he ? eps_harmonic(read_m(eps_m, I, J), read_m(eps_m, I, J + 1)) : Real(1);
+        const Real efc =
+            he ? eps_harmonic(read_m(eps_y_m, I, J), read_m(eps_y_m, I, J + 1)) : Real(1);
         const Real coarse_c = efc * (read_m(phi_m, I, J + 1) - read_m(phi_m, I, J)) * idy2;
         Real fine_sum = Real(0);
         for (int t = 0; t < r; ++t) {
           const int iff = r * I + t;
           const Real eff =
-              he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
+              he ? eps_harmonic(EYF(iff, r * Jc0 - 1, 0), EYF(iff, r * Jc0, 0)) : Real(1);
           fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
         }
         reg.add(I, J, 3, coarse_c - fine_sum * idy2);  // +y face of (I,J)
       }
       if (!cov.covered(I, Jc1 + 1)) {
         const int J = Jc1 + 1;
-        const Real efc = he ? eps_harmonic(read_m(eps_m, I, J), read_m(eps_m, I, J - 1)) : Real(1);
+        const Real efc =
+            he ? eps_harmonic(read_m(eps_y_m, I, J), read_m(eps_y_m, I, J - 1)) : Real(1);
         const Real coarse_c = efc * (read_m(phi_m, I, J - 1) - read_m(phi_m, I, J)) * idy2;
         Real fine_sum = Real(0);
         for (int t = 0; t < r; ++t) {
           const int iff = r * I + t;
           const Real eff =
-              he ? eps_harmonic(EF(iff, r * Jc1 + r - 1, 0), EF(iff, r * Jc1 + r, 0)) : Real(1);
+              he ? eps_harmonic(EYF(iff, r * Jc1 + r - 1, 0),
+                                EYF(iff, r * Jc1 + r, 0))
+                 : Real(1);
           fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
         }
         reg.add(I, J, 2, coarse_c - fine_sum * idy2);  // -y face of (I,J)
@@ -559,7 +583,8 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   MultiFab& lap = lap_level_(m);
   MultiFab& operator_view = (m == 0 && has_boundary_kernel_) ? boundary_view_c_ : phim;
   apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr, has_eps_ ? &eps_level(m) : nullptr,
-                  /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &a_xy_level(m) : nullptr,
+                  /*kappa=*/nullptr, has_eps_y_ ? &eps_y_level(m) : nullptr,
+                  has_cross_ ? &a_xy_level(m) : nullptr,
                   has_cross_ ? &a_yx_level(m) : nullptr);
   if (has_reaction_)
     apply_constant_reaction_(lap, operator_view);
@@ -757,7 +782,13 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     if (has_eps_) {
       MultiFab& eps_rep = correction_eps_replicated_[static_cast<std::size_t>(m)];
       broadcast(eps_rep, eps_level(m));
-      mgk.set_epsilon(eps_rep);
+      if (has_eps_y_) {
+        MultiFab& eps_y_rep = correction_eps_y_replicated_[static_cast<std::size_t>(m)];
+        broadcast(eps_y_rep, eps_y_level(m));
+        mgk.set_epsilon_anisotropic(eps_rep, eps_y_rep);
+      } else {
+        mgk.set_epsilon(eps_rep);
+      }
     }
     if (has_cross_) {
       MultiFab& axy_rep = correction_axy_replicated_[static_cast<std::size_t>(m)];
@@ -785,8 +816,12 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     return;
   }
   // serial (or a distributed multi-patch mg): feed the level fields directly.
-  if (has_eps_)
-    mgk.set_epsilon(eps_level(m));
+  if (has_eps_) {
+    if (has_eps_y_)
+      mgk.set_epsilon_anisotropic(eps_level(m), eps_y_level(m));
+    else
+      mgk.set_epsilon(eps_level(m));
+  }
   if (has_cross_)
     mgk.set_cross_terms(a_xy_level(m), a_yx_level(m));
   copy0_(mgk.rhs(), res_level_(m));

@@ -13,17 +13,19 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
 (A) Pure Python, always runs:
     - ``P.divergence`` records a 3-input scalar_field op, validates its operands, and serializes;
     - the div(grad) Helmholtz apply (gradient -> divergence) lowers to ``ctx.gradient`` + a
-      ``ctx.divergence`` + ``ctx.solve_linear_matfree``, with the gradient buffer allocated 2-component
+      ``ctx.divergence`` + ``ctx.solve_prepared_linear``, with the gradient buffer allocated 2-component
       (``ctx.alloc_scalar_field(2, 1)``);
     - a standalone divergence-of-a-known-field check: the offline centered FV divergence of
       f = (cos 2pi x, sin 2pi y) matches the analytic div f = -2pi sin 2pi x + 2pi cos 2pi y to the
       discretization error -- the reference the compiled ctx.divergence reproduces;
     - the generic matrix-free ``Program.solve`` path retains the complete div(grad) operator.
 
-(B) End-to-end parity (skips unless the full toolchain is present): the div(grad) Helmholtz Program is
+(B) Internal native-ABI parity (skips unless the full toolchain is present): through the private
+    ``_system`` seam, the div(grad) Helmholtz Program is
     compiled + installed + stepped, then compared to an OFFLINE numpy CG on the identical discrete
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
-    / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
+    / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine. It is not
+    counted as public lifecycle coverage; see ``test_public_krylov_lifecycle.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
@@ -71,7 +73,7 @@ def _divgrad_program(t, *, name="divgrad", solver=None, tol=1e-10, max_iter=200,
     P.set_apply(A, apply)
     endpoint = typed_state(P, "blk", state_name="U").next
     phi = P.solve(
-        LinearProblem(A, U, at=endpoint.point), solver=solver,
+        LinearProblem(A, U, at=endpoint.point, nullspace=None), solver=solver,
     ).consume(action=FailRun())
     final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -96,7 +98,7 @@ def test_divergence_records_and_validates(t):
     U = typed_state(P, "blk")
     endpoint = typed_state(P, "blk", state_name="U").next
     phi = P.solve(
-        LinearProblem(A, U, at=endpoint.point),
+        LinearProblem(A, U, at=endpoint.point, nullspace=None),
         solver=BiCGStab(max_iter=50, rel_tol=1e-8),
     ).consume(action=FailRun())
     final = P.value("phi_next", phi, at=endpoint.point)
@@ -146,7 +148,7 @@ def test_scalar_field_ncomp_validates(t):
 def test_divgrad_codegen(t):
     src = emit_cpp_program(_divgrad_program(
         t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)))
-    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_linear_matfree",
+    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_prepared_linear",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
 

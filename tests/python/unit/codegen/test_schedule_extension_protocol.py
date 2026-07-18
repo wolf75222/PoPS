@@ -9,10 +9,11 @@ import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from tests.python.support.requirements import require_native_or_skip
+
 
 def _skip(message):
-    print("skip test_schedule_extension_protocol (%s)" % message)
-    sys.exit(0)
+    require_native_or_skip("test_schedule_extension_protocol: %s" % message)
 
 
 try:

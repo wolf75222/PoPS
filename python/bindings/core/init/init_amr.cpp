@@ -7,6 +7,7 @@
 #include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <limits>
+#include <string_view>
 
 // ADC-365: the AMR (AmrSystemConfig + AmrSystem) bindings.
 //
@@ -18,54 +19,57 @@
 // name and the .def names are unchanged, so the legacy-name architecture gate still finds them here.
 namespace {
 
-pops::CompositeFacOptions amr_fac_options_from_python(const py::object& value) {
-  pops::CompositeFacOptions options;
-  if (value.is_none())
-    return options;
-  if (!py::isinstance<py::dict>(value))
-    throw std::invalid_argument("AMR field FAC options must be a mapping or None");
-  const py::dict row = py::cast<py::dict>(value);
-  const char* keys[] = {"schema_version", "kind",    "max_iters",      "fine_sweeps",
-                        "rel_tol",        "abs_tol", "coarse_rel_tol", "coarse_abs_tol",
-                        "coarse_cycles",  "verbose"};
-  if (row.size() != 10)
-    throw std::invalid_argument("AMR field FAC options have an invalid schema");
-  for (const char* key : keys)
-    if (!row.contains(key))
-      throw std::invalid_argument("AMR field FAC options have an invalid schema");
-  if (PyBool_Check(row["schema_version"].ptr()) || py::cast<int>(row["schema_version"]) != 1 ||
-      py::cast<std::string>(row["kind"]) != "composite_fac")
-    throw std::invalid_argument("AMR field FAC options require schema-v1 composite_fac");
+pops::PreparedProviderOptionValue prepared_provider_option_from_python(const py::handle& value,
+                                                                       std::string_view key) {
+  if (PyBool_Check(value.ptr()))
+    return value.ptr() == Py_True;
+  if (PyLong_CheckExact(value.ptr())) {
+    int overflow = 0;
+    const long long signed_value = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (PyErr_Occurred())
+      throw py::error_already_set();
+    if (overflow == 0)
+      return static_cast<std::int64_t>(signed_value);
+    if (overflow < 0)
+      throw std::overflow_error("AMR provider option '" + std::string(key) +
+                                "' is below int64 range");
+    const unsigned long long unsigned_value = PyLong_AsUnsignedLongLong(value.ptr());
+    if (PyErr_Occurred())
+      throw py::error_already_set();
+    return static_cast<std::uint64_t>(unsigned_value);
+  }
+  if (PyFloat_CheckExact(value.ptr()))
+    return PyFloat_AS_DOUBLE(value.ptr());
+  if (PyUnicode_CheckExact(value.ptr()))
+    return py::cast<std::string>(value);
+  throw py::type_error("AMR provider option '" + std::string(key) +
+                       "' must be exactly bool, int64/uint64, float64 or str");
+}
 
-  const auto optional_int = [&row](const char* key, int& destination) {
-    const py::handle item = row[key];
-    if (item.is_none())
-      return;
-    if (PyBool_Check(item.ptr()) || !PyLong_Check(item.ptr()))
-      throw std::invalid_argument(std::string("AMR field FAC option '") + key +
-                                  "' must be an int or None");
-    destination = py::cast<int>(item);
-  };
-  const auto optional_real = [&row](const char* key, pops::Real& destination) {
-    const py::handle item = row[key];
-    if (item.is_none())
-      return;
-    if (PyBool_Check(item.ptr()))
-      throw std::invalid_argument(std::string("AMR field FAC option '") + key +
-                                  "' must be a real scalar or None");
-    destination = static_cast<pops::Real>(py::cast<double>(item));
-  };
-  optional_int("max_iters", options.max_iters);
-  optional_int("fine_sweeps", options.fine_sweeps);
-  optional_real("rel_tol", options.rel_tol);
-  optional_real("abs_tol", options.abs_tol);
-  optional_real("coarse_rel_tol", options.coarse_rel_tol);
-  optional_real("coarse_abs_tol", options.coarse_abs_tol);
-  optional_int("coarse_cycles", options.coarse_cycles);
-  if (!PyBool_Check(row["verbose"].ptr()))
-    throw std::invalid_argument("AMR field FAC option 'verbose' must be bool");
-  options.verbose = py::cast<bool>(row["verbose"]);
+pops::PreparedProviderOptions prepared_provider_options_from_python(
+    const std::string& schema_identity, const py::dict& values) {
+  if (!PyDict_CheckExact(values.ptr()))
+    throw py::type_error("AMR provider options must be an exact dict");
+  pops::PreparedProviderOptions options;
+  options.schema_identity = schema_identity;
+  for (const auto pair : values) {
+    if (!PyUnicode_CheckExact(pair.first.ptr()))
+      throw py::type_error("AMR provider option keys must be exact strings");
+    const std::string key = py::cast<std::string>(pair.first);
+    if (key.empty())
+      throw py::value_error("AMR provider option keys must be non-empty");
+    options.values.emplace(key, prepared_provider_option_from_python(pair.second, key));
+  }
+  (void)options.exact_contract();
   return options;
+}
+
+py::dict prepared_provider_options_to_python(const pops::PreparedProviderOptions& options) {
+  py::dict result;
+  for (const auto& [key, value] : options.values) {
+    std::visit([&](const auto& typed) { result[py::str(key)] = py::cast(typed); }, value);
+  }
+  return result;
 }
 
 pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dict& row,
@@ -173,9 +177,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // -> full backward-Euler. Only meaningful with time="imex" and MULTI-BLOCK (cf. add_block).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // IMEX Newton options (wave 3, System parity): OPTIONS wired in MONO-BLOCK (coupler)
-          // AND MULTI-BLOCK (engine). newton_diagnostics (newton_report report): native MULTI-BLOCK
-          // only (mono-block rejected at build; .so loaders rejected at the Python facade).
+          // IMEX Newton options and newton_diagnostics use the native unified AMR runtime at every
+          // block count. Compiled .so loaders reject values their flat ABI cannot transport.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -186,12 +189,21 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
           py::arg("positivity_floor") = 0.0)
-      .def("_install_boundary_plan", &AmrSystem::install_boundary_plan, py::arg("name"),
-           py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-           py::arg("face_values"), py::arg("ncomp"),
-           py::arg("omitted_interface_faces") = std::vector<int>{},
-           py::arg("state_identity") = std::string{},
-           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
+      .def(
+          "_install_boundary_plan",
+          [](AmrSystem& system, const std::string& name, const std::string& identity,
+             int required_depth, const std::vector<std::string>& face_types,
+             const std::vector<double>& face_values, int ncomp,
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
+            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
+                                         ncomp, omitted_interface_faces, state_identity,
+                                         PreparedBoundaryReadDependencies{});
+          },
+          py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
+          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("omitted_interface_faces") = std::vector<int>{},
+          py::arg("state_identity") = std::string{},
+          "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native AMR block storage.")
@@ -280,7 +292,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("level") = 0)
       .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN, native MULTI-BLOCK): dict {enabled, converged,
+      // Newton report (IMEX diagnostics OPT-IN, native AMR runtime): dict {enabled, converged,
       // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
       // levels/substeps of the LAST advance of the block. failed_cell = (i, j) or None. EXACT shape of
       // the System.newton_report binding (parity, including failed_cell tuple/None).
@@ -370,24 +382,15 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
       .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
       .def(
-          "set_poisson", &AmrSystem::set_poisson,
-          "Configures the coarse Poisson of the AMR hierarchy (cf. System.set_poisson). On AMR the "
-          "solver is ALWAYS GeometricMG and the right-hand side ALWAYS the sum of the elliptic "
-          "bricks. rhs: 'charge_density' | 'composite'. solver: 'geometric_mg' only (no "
-          "FFT on the hierarchy). bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall: "
-          "'none' | 'circle' (circular conducting wall, requires wall_radius > 0). "
-          "composite (ADC-645): True opts the FIELD solve into the composite FAC path (the fine "
-          "patch refines the elliptic); scope = single block, 2 levels, one mono-box fine patch, "
-          "replicated coarse -- out of scope REFUSES at build (never a silent fallback). The fac_* "
-          "knobs (<= 0 = the kFAC* defaults) tune that solve; "
-          "inert when composite is False (the historical Option A solve, bit-identical).",
+          "set_poisson",
+          [](AmrSystem& system, const std::string& rhs, const std::string& solver,
+             const std::string& bc, const std::string& wall,
+             double wall_radius) { system.set_poisson(rhs, solver, bc, wall, wall_radius); },
+          "Configures the default AMR field through the registered native provider. The Python "
+          "shortcut selects provider defaults; resolved provider-specific options are installed by "
+          "the compiled field-plan pipeline.",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
-          py::arg("composite") = false, py::arg("fac_max_iters") = 0,
-          py::arg("fac_fine_sweeps") = 0, py::arg("fac_rel_tol") = 0.0,
-          py::arg("fac_abs_tol") = 0.0, py::arg("fac_coarse_rel_tol") = 0.0,
-          py::arg("fac_coarse_abs_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
-          py::arg("fac_verbose") = false)
+          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
       .def(
           "set_field_solver_plan",
           [](AmrSystem& system, const std::string& provider_slot, const std::string& plan_identity,
@@ -397,56 +400,49 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& provider_blocks,
              const std::vector<std::string>& provider_keys,
              const std::vector<double>& provider_coefficients, const std::string& solver,
-             const std::string& hierarchy, double abs_tol, double rel_tol, int max_cycles,
-             int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
-             int coarse_threshold, const py::object& fac_options) {
+             const std::string& hierarchy_policy_id,
+             std::uint64_t hierarchy_policy_interface_version,
+             const std::string& hierarchy_policy_option_schema,
+             const py::dict& hierarchy_policy_options, const std::string& schema_identity,
+             const py::dict& options) {
+            const AmrFieldHierarchyPolicyAuthority hierarchy_policy{
+                hierarchy_policy_id,
+                hierarchy_policy_interface_version,
+                prepared_provider_options_from_python(hierarchy_policy_option_schema,
+                                                      hierarchy_policy_options),
+            };
             system.set_field_solver_plan(
                 provider_slot, plan_identity, provider_identity, output_owner_identity,
                 output_block, output_key, provider_identities, provider_blocks, provider_keys,
-                provider_coefficients, solver, hierarchy, abs_tol, rel_tol, max_cycles, min_coarse,
-                pre_smooth, post_smooth, bottom_sweeps, coarse_threshold,
-                amr_fac_options_from_python(fac_options));
+                provider_coefficients, solver, hierarchy_policy,
+                prepared_provider_options_from_python(schema_identity, options));
           },
           py::arg("provider_slot"), py::arg("plan_identity"), py::arg("provider_identity"),
           py::arg("output_owner_identity"), py::arg("output_block"), py::arg("output_key"),
           py::arg("provider_identities"), py::arg("provider_blocks"), py::arg("provider_keys"),
-          py::arg("provider_coefficients"), py::arg("solver"), py::arg("hierarchy"),
-          py::arg("abs_tol"), py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
-          py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
-          py::arg("coarse_threshold"), py::arg("fac_options"))
+          py::arg("provider_coefficients"), py::arg("solver"), py::arg("hierarchy_policy_id"),
+          py::arg("hierarchy_policy_interface_version"), py::arg("hierarchy_policy_option_schema"),
+          py::arg("hierarchy_policy_options"), py::arg("schema_identity"), py::arg("options"))
       .def(
           "field_solver_configuration",
           [](const AmrSystem& system, const std::string& provider_slot) {
             const AmrFieldSolverConfiguration config =
                 system.field_solver_configuration(provider_slot);
-            const GeometricMgOptions& mg = config.mg;
-            const CompositeFacOptions& fac = config.fac;
-            py::dict mg_row;
-            mg_row["rel_tol"] = mg.rel_tol;
-            mg_row["abs_tol"] = mg.abs_tol;
-            mg_row["max_cycles"] = mg.max_cycles;
-            mg_row["min_coarse"] = mg.min_coarse;
-            mg_row["pre_smooth"] = mg.nu1;
-            mg_row["post_smooth"] = mg.nu2;
-            mg_row["bottom_sweeps"] = mg.nbottom;
-            mg_row["coarse_threshold"] = mg.coarse_threshold;
-            py::dict fac_row;
-            fac_row["max_iters"] = fac.max_iters;
-            fac_row["fine_sweeps"] = fac.fine_sweeps;
-            fac_row["rel_tol"] = fac.rel_tol;
-            fac_row["abs_tol"] = fac.abs_tol;
-            fac_row["coarse_rel_tol"] = fac.coarse_rel_tol;
-            fac_row["coarse_abs_tol"] = fac.coarse_abs_tol;
-            fac_row["coarse_cycles"] = fac.coarse_cycles;
-            fac_row["verbose"] = fac.verbose;
             py::dict result;
             result["schema_version"] = 1;
             result["provider_slot"] = provider_slot;
             result["plan_identity"] = config.plan_identity;
+            result["provider_identity"] = config.provider_identity;
             result["solver"] = config.solver;
-            result["hierarchy"] = config.hierarchy;
-            result["mg"] = std::move(mg_row);
-            result["fac"] = std::move(fac_row);
+            py::dict hierarchy_policy;
+            hierarchy_policy["policy_id"] = config.hierarchy_policy.policy_id;
+            hierarchy_policy["interface_version"] = config.hierarchy_policy.interface_version;
+            hierarchy_policy["option_schema"] = config.hierarchy_policy.options.schema_identity;
+            hierarchy_policy["options"] =
+                prepared_provider_options_to_python(config.hierarchy_policy.options);
+            result["hierarchy_policy"] = std::move(hierarchy_policy);
+            result["option_schema_identity"] = config.options.schema_identity;
+            result["options"] = prepared_provider_options_to_python(config.options);
             return result;
           },
           py::arg("provider_slot"))
@@ -485,8 +481,25 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
-      .def("set_field_nullspace", &AmrSystem::set_field_nullspace, py::arg("provider_slot"),
-           py::arg("constant_kernel"), py::arg("mean_zero_gauge"));
+      .def(
+          "set_field_nullspace",
+          [](AmrSystem& system, const std::string& provider_slot,
+             const std::string& provider_identity, const std::string& schema_identity,
+             const py::dict& options) {
+            system.set_field_nullspace(
+                provider_slot, provider_identity,
+                prepared_provider_options_from_python(schema_identity, options));
+          },
+          py::arg("provider_slot"), py::arg("provider_identity"), py::arg("schema_identity"),
+          py::arg("options"))
+      .def(
+          "set_default_field_nullspace",
+          [](AmrSystem& system, const std::string& provider_identity,
+             const std::string& schema_identity, const py::dict& options) {
+            system.set_default_field_nullspace(
+                provider_identity, prepared_provider_options_from_python(schema_identity, options));
+          },
+          py::arg("provider_identity"), py::arg("schema_identity"), py::arg("options"));
 }
 
 // Physics wiring: dt bounds, fields, and coupled source stages.
@@ -792,9 +805,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // next selected finer footprint.
       .def("composite_reduce", &AmrSystem::composite_reduce, py::arg("block"), py::arg("kind"),
            py::arg("comp") = 0, py::arg("levels") = std::vector<int>{})
-      .def("composite_reduce_field", &AmrSystem::composite_reduce_field,
-           py::arg("provider_slot"), py::arg("kind"), py::arg("comp") = 0,
-           py::arg("levels") = std::vector<int>{})
+      .def("composite_reduce_field", &AmrSystem::composite_reduce_field, py::arg("provider_slot"),
+           py::arg("kind"), py::arg("comp") = 0, py::arg("levels") = std::vector<int>{})
       // ADC-592: runtime freeze lifecycle (parity with System). mark_bound() (called LAST by the
       // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
       // running (running derived from macro_step()).

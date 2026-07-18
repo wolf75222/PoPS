@@ -153,7 +153,7 @@ class _ExprCpp:
 
 
 def _parameter_handles(plan: Any) -> tuple[Any, ...]:
-    return plan.boundary_parameter_handles()
+    return plan.provider_parameter_handles("boundary-kernel")
 
 
 def _face_struct(face: int, condition: Any, *, symbol: int, cpp: _ExprCpp,
@@ -225,21 +225,27 @@ def _face_struct(face: int, condition: Any, *, symbol: int, cpp: _ExprCpp,
     dependency_checks = []
     if cpp.used_states:
         dependency_checks.append(
-            "  if (context.states == nullptr || context.state_count <= %d)\n"
+            "  if (context.states == nullptr || context.state_distributions == nullptr || "
+            "context.state_count <= %d)\n"
             "    throw std::runtime_error(\"dynamic field boundary state carrier is incomplete\");"
             % max(cpp.used_states))
     if cpp.used_fields:
         dependency_checks.append(
-            "  if (context.fields == nullptr || context.field_count <= %d)\n"
+            "  if (context.fields == nullptr || context.field_distributions == nullptr || "
+            "context.field_count <= %d)\n"
             "    throw std::runtime_error(\"dynamic field boundary field carrier is incomplete\");"
             % max(cpp.used_fields))
     dependency_setup = "\n".join(dependency_checks)
 
     def law_args(local_index: str) -> str:
         args = ["iterate.fab(%s).const_array()" % local_index]
-        args.extend("context.states[%d]->fab(%s).const_array()" % (index, local_index)
+        args.extend(
+            "context.states[%d]->fab(context.states[%d]->local_index_of("
+            "iterate.global_index(%s))).const_array()" % (index, index, local_index)
                     for index in sorted(cpp.used_states))
-        args.extend("context.fields[%d]->fab(%s).const_array()" % (index, local_index)
+        args.extend(
+            "context.fields[%d]->fab(context.fields[%d]->local_index_of("
+            "iterate.global_index(%s))).const_array()" % (index, index, local_index)
                     for index in sorted(cpp.used_fields))
         point_names = {
             "time": "time", "dt": "dt", "step": "step", "substep": "substep",

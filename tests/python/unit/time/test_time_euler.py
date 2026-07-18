@@ -66,12 +66,12 @@ def err_msg(fn):
 
 
 def transport_model():
-    # NoSource + brique elliptique inerte (jamais resolue : pas de set_poisson) : l'avance
-    # est un PUR transport, condition de l'identite de Shu-Osher du test (2).
+    # NoSource + fond discret neutralisant : l'avance est un PUR transport, condition de
+    # l'identite de Shu-Osher du test (2), même si le runtime resout le champ periodique.
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
                      source=engine.NoSource(),
-                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0))
 
 
 def make_sim(method):

@@ -76,8 +76,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                 _LifecycleMixin):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
-    SINGLE-BLOCK (1 add_block) : historical AmrCouplerMP path (dynamic regrid, reflux). MULTI-BLOCK
-    (>= 2 add_block) : N blocks co-located on ONE SHARED AMR hierarchy (AmrRuntime engine),
+    One or several blocks are co-located on one shared AMR hierarchy through the same AmrRuntime,
     SYSTEM Poisson with co-located SUMMED right-hand side (Sum_b q_b n_b), conservation PER BLOCK. The
     blocks may have DIFFERENT SPATIAL SCHEMES, a per-block TEMPORAL TREATMENT (explicit /
     imex), MULTIRATE (substeps / stride), COUPLED inter-species SOURCES and the multi-block production
@@ -156,12 +155,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         )
 
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg", *,
-                    bc: Any = None, wall: Any = None, composite: bool = False,
-                    fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
-                    fac_rel_tol: float = 0.0, fac_abs_tol: float = 0.0,
-                    fac_coarse_rel_tol: float = 0.0,
-                    fac_coarse_abs_tol: float = 0.0,
-                    fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
+                    bc: Any = None, wall: Any = None) -> Any:
         """Configure AMR Poisson with typed boundary and wall selectors.
 
         ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
@@ -174,38 +168,17 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
         self._set_poisson_native(
             rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
-            wall_radius=wall_radius, composite=composite,
-            fac_max_iters=fac_max_iters, fac_fine_sweeps=fac_fine_sweeps,
-            fac_rel_tol=fac_rel_tol, fac_abs_tol=fac_abs_tol,
-            fac_coarse_rel_tol=fac_coarse_rel_tol,
-            fac_coarse_abs_tol=fac_coarse_abs_tol,
-            fac_coarse_cycles=fac_coarse_cycles, fac_verbose=fac_verbose)
+            wall_radius=wall_radius)
 
     def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
-                            wall_radius: Any = 0.0, composite: bool = False,
-                            fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
-                            fac_rel_tol: float = 0.0, fac_abs_tol: float = 0.0,
-                            fac_coarse_rel_tol: float = 0.0,
-                            fac_coarse_abs_tol: float = 0.0,
-                            fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
+                            wall_radius: Any = 0.0) -> Any:
         """Private token-level seam used by resolved AMR installation."""
         _guard_assembling(self, "set_poisson")
         if not isinstance(bc, str) or not isinstance(wall, str):
             raise TypeError("_set_poisson_native requires native bc and wall tokens")
         self._s.set_poisson(
             rhs=rhs, solver=solver, bc=bc, wall=wall,
-            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"),
-            composite=bool(composite), fac_max_iters=int(fac_max_iters),
-            fac_fine_sweeps=int(fac_fine_sweeps),
-            fac_rel_tol=native_real(
-                fac_rel_tol, where="AmrSystem.set_poisson.fac_rel_tol"),
-            fac_abs_tol=native_real(
-                fac_abs_tol, where="AmrSystem.set_poisson.fac_abs_tol"),
-            fac_coarse_rel_tol=native_real(
-                fac_coarse_rel_tol, where="AmrSystem.set_poisson.fac_coarse_rel_tol"),
-            fac_coarse_abs_tol=native_real(
-                fac_coarse_abs_tol, where="AmrSystem.set_poisson.fac_coarse_abs_tol"),
-            fac_coarse_cycles=int(fac_coarse_cycles), fac_verbose=bool(fac_verbose))
+            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"))
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
@@ -303,9 +276,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         resolved with ``pops.resolve(case, layout=...)``, compiled with ``pops.compile(plan)`` and
         wired by ``pops.bind`` (which calls this internally); ``add_block`` stays private.
 
-        Refined counterpart of System.add_block. The 1st add_block opens the single-block path
-        (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
-        on THE SAME hierarchy (AmrRuntime engine, system Poisson with summed right-hand side).
+        Refined counterpart of System.add_block. Every block count uses the same AmrRuntime engine;
+        subsequent blocks are co-located on the shared hierarchy and contribute to the summed
+        system-Poisson right-hand side.
         In multi-block the name indexes set_density(name) / mass(name) / density(name). The arguments
         are marshaled to the C++ facade (AmrSystem::add_block), which validates the block against the model.
         For a compiled DSL model (.so) or a dispatch on the model type, use add_equation.
@@ -320,9 +293,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             (conservative / primitive).
         @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
             ``pops.lib.time`` factory. It carries cadence, any implicit mask and Newton options,
-            threaded to C++. newton_diagnostics is
-            wired in native multi-block and rejected at the C++ build in single-block (the coupler does not
-            aggregate a report).
+            threaded to C++. newton_diagnostics is wired for native blocks at every block count;
+            compiled .so loaders reject it because their flat ABI does not transport the report.
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
@@ -353,10 +325,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                 "pops.Case (the uniform route wires it).")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
-        # against the block names/roles : empty -> full backward-Euler. The options are wired in single-block
-        # (coupler) AND multi-block ; newton_diagnostics is wired in native MULTI-BLOCK and REJECTED at the
-        # C++ build in single-block (the coupler does not aggregate a report) -- no facade-side filtering here
-        # (the facade does not yet know the total number of blocks : the single/multi decision is at build).
+        # against the block names/roles : empty -> full backward-Euler. Options and diagnostics are
+        # wired for native blocks at every block count; compiled .so loaders are rejected upstream
+        # when their flat ABI cannot transport the requested Newton contract.
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),

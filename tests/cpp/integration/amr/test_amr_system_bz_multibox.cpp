@@ -42,7 +42,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -86,6 +85,12 @@ Real bz_field(Real x, Real y) {
   return Real(1) + x + Real(2) * y;
 }
 
+ScalarFieldProvider2D bz_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.scalar-field.affine-2d", 1}, exact_provider_parameters(Real(1), Real(1), Real(2)),
+      bz_field);
+}
+
 // Lit la composante B_z (comp kAuxBaseComps) du fab local li d'un MultiFab, a la cellule (i,j).
 Real read_bz(const MultiFab& A, int li, int i, int j) {
   return A.fab(li).const_array()(i, j, kAuxBaseComps);
@@ -117,7 +122,7 @@ TEST(test_amr_system_bz_multibox, Runs) {
   using BaseBlk = EquationBlock<InertMB, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 
   // Fabrique : coupleur frais (etats remis a u0g pour le bloc B_z, 1 pour le bloc inerte).
-  auto build = [&](std::function<Real(Real, Real)> bz_user, bool use_setter, Real u0g) {
+  auto build = [&](ScalarFieldProvider2D bz_user, bool use_setter, Real u0g) {
     MultiFab UgC(ba_coarse, dm_coarse, 1, 2), UgF(ba_fine, dm_fine, 1, 2);
     MultiFab UbC(ba_coarse, dm_coarse, 1, 2), UbF(ba_fine, dm_fine, 1, 2);
     UgC.set_val(u0g);
@@ -142,11 +147,11 @@ TEST(test_amr_system_bz_multibox, Runs) {
 
     ChargeDensityRhs charge{{{Real(0), 0}, {Real(0), 0}}};  // charges nulles -> phi = 0
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
-    auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
-                                     Periodicity{true, true},
-                                     /*replicated_coarse=*/false,  // grossier multi-box reparti
-                                     PoissonCadence::OncePerStep, std::function<bool(Real, Real)>{},
-                                     use_setter ? std::function<Real(Real, Real)>{} : bz_user);
+    auto sim = std::make_unique<Sim>(
+        system, geom, ba_coarse, BCRec{}, charge, std::move(bl), Periodicity{true, true},
+        /*replicated_coarse=*/false,  // grossier multi-box reparti
+        PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
+        use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
     return sim;
@@ -167,7 +172,7 @@ TEST(test_amr_system_bz_multibox, Runs) {
 
   // --- (A) peuplement multi-box, echantillonne a la resolution du niveau --------------------
   {
-    auto sim = build(bz_field, /*use_setter=*/false, /*u0g=*/Real(2));
+    auto sim = build(bz_provider(), /*use_setter=*/false, /*u0g=*/Real(2));
     EXPECT_EQ(sim->aux_ncomp(), 4) << "shared_aux_width_max_4";
     EXPECT_GE(ba_coarse.size(), 2)
         << "coarse_is_multibox";  // garde-fou : le decoupage a bien eu lieu
@@ -247,7 +252,7 @@ TEST(test_amr_system_bz_multibox, Runs) {
 
   // --- (D) setter set_bz : meme resultat multi-box que par le ctor -------------------------
   {
-    auto sim = build(bz_field, /*use_setter=*/true, /*u0g=*/Real(2));
+    auto sim = build(bz_provider(), /*use_setter=*/true, /*u0g=*/Real(2));
     EXPECT_TRUE(bz_all_boxes_ok(sim->aux(0), geom)) << "set_bz_populates_coarse_all_boxes";
     EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf)) << "set_bz_populates_fine_all_boxes";
   }

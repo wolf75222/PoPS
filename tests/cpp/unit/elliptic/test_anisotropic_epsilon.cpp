@@ -47,6 +47,18 @@ double eps_y_field(double /*x*/, double y) {
   return 1.0 + 0.3 * y;
 }
 
+ScalarFieldProvider2D eps_x_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.anisotropic-epsilon.x", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_x_field(x, y)); });
+}
+
+ScalarFieldProvider2D eps_y_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.anisotropic-epsilon.y", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_y_field(x, y)); });
+}
+
 // f = div(diag(eps_x, eps_y) grad phi) (analytique).
 double rhs_exact(double x, double y) {
   const double s = std::sin(kPi * x) * std::sin(kPi * y);
@@ -65,8 +77,7 @@ double solve_mms(int n) {
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;  // phi=0 au bord (exact)
 
   GeometricMG mg(geom, ba, bc);
-  mg.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                             [](Real x, Real y) { return Real(eps_y_field(x, y)); });
+  mg.set_epsilon_anisotropic(eps_x_provider(), eps_y_provider());
 
   Array4 af = mg.rhs().fab(0).array();
   for_each_cell(
@@ -110,14 +121,13 @@ double degenerate_aniso_residual_gap(int n) {
 
   // operateur isotrope eps = eps_x (faces x et y partagent eps_x)
   GeometricMG mg_iso(geom, ba, bc);
-  mg_iso.set_epsilon([](Real x, Real y) { return Real(eps_x_field(x, y)); });
+  mg_iso.set_epsilon(eps_x_provider());
   fill_phi_rhs(mg_iso);
   const Real r_iso = mg_iso.current_residual();
 
   // operateur anisotrope DEGENERE eps_x = eps_y = eps_x : doit etre bit-identique a l'isotrope
   GeometricMG mg_aniso(geom, ba, bc);
-  mg_aniso.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                                   [](Real x, Real y) { return Real(eps_x_field(x, y)); });
+  mg_aniso.set_epsilon_anisotropic(eps_x_provider(), eps_x_provider());
   fill_phi_rhs(mg_aniso);
   const Real r_aniso = mg_aniso.current_residual();
 
@@ -135,9 +145,8 @@ double solve_mms_kappa(int n) {
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
 
   GeometricMG mg(geom, ba, bc);
-  mg.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                             [](Real x, Real y) { return Real(eps_y_field(x, y)); });
-  mg.set_reaction([](Real, Real) { return Real(KAPPA); });
+  mg.set_epsilon_anisotropic(eps_x_provider(), eps_y_provider());
+  mg.set_reaction(constant_scalar_field_provider(Real(KAPPA)));
 
   Array4 af = mg.rhs().fab(0).array();
   for_each_cell(dom, [af, geom](int i, int j) {

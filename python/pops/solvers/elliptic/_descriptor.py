@@ -132,14 +132,15 @@ class GeometricMG(Descriptor):
                                             variable_epsilon=True, screened=True,
                                             periodic_bc=True, wall_bc=True))
 
-    def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
-        del target, layout
-        return {
-            "native_solver": "geometric_mg",
-            "linear": True,
-            "screened": True,
-            "mg_options": self.native_mg_options(),
-            "fac_options": self.amr_fac_options(),
+    def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
+        """Bind through the same authenticated provider protocol as external solvers."""
+        from ._prepared_field_providers import (
+            geometric_mg_field_solver_provider,
+        )
+
+        return geometric_mg_field_solver_provider(), {
+            "mg": self.mg_options(),
+            "fac": None if self.fac is None else self.fac.options(),
         }
 
     def native_mg_options(self) -> dict[str, Any]:
@@ -332,17 +333,11 @@ class FFT(Descriptor):
     def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
 
-    def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
-        del layout
-        if target == "amr_system":
-            raise ValueError("FFT cannot lower a field solve on an AMR hierarchy")
-        return {
-            "native_solver": "fft_spectral" if self.spectral else "fft",
-            "linear": True,
-            # System::set_field_solver_plan has one closed GeometricMgOptions POD in its ABI even
-            # for direct FFT routes.  Capture the inert values now so bind never invents them.
-            "mg_options": native_geometric_mg_defaults(),
-        }
+    def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
+        """Bind through the same authenticated provider protocol as every field solver."""
+        from ._prepared_field_providers import fft_field_solver_provider
+
+        return fft_field_solver_provider(), {"spectral": self.spectral}
 
     def options(self) -> dict:
         return {"spectral": self.spectral}

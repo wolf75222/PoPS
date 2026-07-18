@@ -20,6 +20,7 @@
 
 #include <array>
 #include <cmath>
+#include <numeric>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -81,6 +82,11 @@ TEST(test_amr_seed_no_refine, Runs) {
 #endif
   const int n = 64;
   const std::vector<double> rho = bubble(n);
+  // The periodic gravity solve requires a mean-free density contrast.  Use the exact discrete mean
+  // of this sampled bubble as the physical neutralizing background; no solver-side projection is
+  // permitted by the prepared nullspace contract.
+  const double rho0 =
+      std::accumulate(rho.begin(), rho.end(), 0.0) / static_cast<double>(rho.size());
 
   AmrSystemConfig cfg;
   cfg.n = n;
@@ -93,7 +99,8 @@ TEST(test_amr_seed_no_refine, Runs) {
     AmrSystemConfig c = cfg;
     c.regrid_every = 0;
     AmrSystem A(c);
-    add_compiled_model(A, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
+    add_compiled_model(A, "gas",
+                       Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, rho0}},
                        "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
     A.set_poisson("charge_density", "geometric_mg");
     A.set_density("gas", rho);
@@ -118,7 +125,9 @@ TEST(test_amr_seed_no_refine, Runs) {
     AmrSystemConfig c = cfg;
     c.regrid_every = 4;
     AmrSystem B(c);
-    add_compiled_model(B, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
+    B.set_temporal_relations({2}, {1}, {"integral_only"});
+    add_compiled_model(B, "gas",
+                       Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, rho0}},
                        "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
     B.set_poisson("charge_density", "geometric_mg");
     B.set_refinement(1.2);
@@ -142,7 +151,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     spec.gamma = 1.4;
     spec.sign = -1.0;
     spec.four_pi_G = 1.0;
-    spec.rho0 = 1.0;
+    spec.rho0 = rho0;
     C.add_block("gas", spec, "minmod", "rusanov", "conservative", "explicit", 1);
     C.set_poisson("charge_density", "geometric_mg");
     C.set_density("gas", rho);
@@ -157,6 +166,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     AmrSystemConfig c = cfg;
     c.regrid_every = 4;
     AmrSystem D(c);
+    D.set_temporal_relations({2}, {1}, {"integral_only"});
     ModelSpec spec;
     spec.transport = "compressible";
     spec.source = "gravity";
@@ -164,7 +174,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     spec.gamma = 1.4;
     spec.sign = -1.0;
     spec.four_pi_G = 1.0;
-    spec.rho0 = 1.0;
+    spec.rho0 = rho0;
     D.add_block("gas", spec, "minmod", "rusanov", "conservative", "explicit", 1);
     D.set_poisson("charge_density", "geometric_mg");
     D.set_refinement(1.2);

@@ -23,13 +23,9 @@ from pathlib import Path
 
 import pytest
 
-try:
-    from pops.codegen.env import CodegenEnv, resolve_log_level
-    from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.numerics.terms import DefaultSource, Flux
-except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
-    print("skip test_pops_env (pops unavailable: %s)" % exc)
-    sys.exit(0)
+from pops.codegen.env import CodegenEnv, resolve_log_level
+from pops.codegen.loader import CompiledModel, CompiledProblem
+from pops.numerics.terms import DefaultSource, Flux
 
 from tests.python.unit.runtime._typed_program import (
     typed_compiled_artifact,
@@ -78,6 +74,22 @@ def _handle(env, program=None):
         codegen_env=env,
     )
     return typed_compiled_artifact(component, model)
+
+
+def _write_fake_compile_outputs(cmd, payload=b"FAKE-SO"):
+    """Publish the two outputs guaranteed by a successful compiler invocation."""
+    output = Path(cmd[cmd.index("-o") + 1])
+    dependency_file = Path(cmd[cmd.index("-MF") + 1])
+    generated = Path(next(item for item in cmd if item.endswith("problem.cpp")))
+
+    def dep_escape(path):
+        return str(path).replace("\\", "\\\\").replace(" ", "\\ ").replace("$", "$$")
+
+    output.write_bytes(payload)
+    dependency_file.write_text(
+        "%s: %s\n" % (dep_escape(output), dep_escape(generated)),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +188,11 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         return ("c++", [], [])
 
     def _fake_run_compile(cmd, where):
+        del where
         # The compile command's "-o <so_path>" output is the artifact; create a placeholder so the
-        # cache-hit path on a second call is exercised too.
-        out = cmd[cmd.index("-o") + 1]
-        with open(out, "w", encoding="utf-8") as handle:
-            handle.write("// mock .so placeholder\n")
+        # cache-hit path on a second call is exercised too. The compiler-observed dependency
+        # contract is part of the same success seam, so publish its depfile as well.
+        _write_fake_compile_outputs(cmd, b"// mock .so placeholder\n")
 
     monkeypatch.setattr(cd, "pops_loader_build_flags", _fake_build_flags)
     monkeypatch.setattr(cd, "pops_header_signature", lambda include: "MOCKSIG")
@@ -226,8 +238,11 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     monkeypatch.setattr(cd, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
     monkeypatch.setattr(cd, "pops_header_signature", lambda include: "MOCKSIG")
     monkeypatch.setattr(cd, "_probe_cxx_std", lambda cc, std: std or "c++23")
-    monkeypatch.setattr(cd, "_run_compile",
-                        lambda cmd, where: open(cmd[cmd.index("-o") + 1], "w").write("// mock\n"))
+    monkeypatch.setattr(
+        cd,
+        "_run_compile",
+        lambda cmd, where: _write_fake_compile_outputs(cmd, b"// mock\n"),
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
@@ -237,6 +252,29 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
             model=module, time=program, force=True, debug=True, include=INCLUDE)
         assert compiled.codegen_env.keep_generated is True
         assert compiled.generated_sources and os.path.exists(compiled.generated_sources[0])
+
+
+def test_compile_problem_rejects_external_optflag_inputs_before_compiler_invocation(
+    monkeypatch, tmp_path,
+):
+    from pops.codegen import _compile_drivers as cd
+
+    monkeypatch.setenv("POPS_CODEGEN_DIR", str(tmp_path))
+    monkeypatch.setenv("POPS_DSL_OPTFLAGS", "-O3 @/tmp/untrusted-native-input.rsp")
+    monkeypatch.setattr(cd, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
+    monkeypatch.setattr(cd, "pops_header_signature", lambda include: "MOCKSIG")
+    monkeypatch.setattr(cd, "_probe_cxx_std", lambda cc, std: std or "c++23")
+    monkeypatch.setattr(
+        cd,
+        "_run_compile",
+        lambda *_: pytest.fail("unsafe POPS_DSL_OPTFLAGS reached the compiler"),
+    )
+    program, module = _program_fixture("unsafe-optflags")
+
+    with pytest.raises(ValueError, match="closed path-free.*allowlist"):
+        cd.compile_problem(
+            model=module, time=program, force=True, include=INCLUDE
+        )
 
 
 def test_compile_problem_rejects_autotune_before_compiler_discovery(monkeypatch):

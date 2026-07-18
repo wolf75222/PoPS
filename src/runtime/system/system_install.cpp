@@ -42,8 +42,8 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // stiff source (order 1), "imexrk_ars222" = IMEX-RK family scheme ARS(2,2,2)
   // (order 2, distinct PARALLEL advance, Cartesian only). The RK math stays a CORE FUNCTOR
   // (build_block). "imex" and "imexrk_ars222" share the @c imex flag; @c method distinguishes them.
-  if (time != "explicit" && time != "ssprk3" && time != "euler" &&
-      time != "imex" && time != "imexrk_ars222")
+  if (time != "explicit" && time != "ssprk3" && time != "euler" && time != "imex" &&
+      time != "imexrk_ars222")
     throw std::runtime_error(
         "System::add_block : time 'explicit'|'ssprk3'|'euler'|'imex'|'imexrk_ars222' "
         "(received '" +
@@ -304,6 +304,12 @@ POPS_EXPORT GridContext System::grid_context(const std::string& name) {
   return p_->grid_ctx(name);
 }
 
+POPS_EXPORT GridContext System::grid_context(int block) {
+  if (block < 0 || block >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System::grid_context block index is out of range");
+  return p_->grid_ctx(p_->sp[static_cast<std::size_t>(block)].name);
+}
+
 namespace {
 BCType prepared_bc_type(const std::string& token) {
   if (token == "periodic")
@@ -342,8 +348,8 @@ void set_prepared_face(BCRec& bc, int face, BCType type, Real value) {
 }
 }  // namespace
 
-POPS_EXPORT void System::install_block_state_route(
-    const std::string& name, const std::string& state_identity) {
+POPS_EXPORT void System::install_block_state_route(const std::string& name,
+                                                   const std::string& state_identity) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_block_state_route");
   if (!P->sp.empty())
@@ -354,26 +360,24 @@ POPS_EXPORT void System::install_block_state_route(
         "System block state route requires unique non-empty block/state identities");
   for (const auto& [_, installed_identity] : P->block_state_identities_)
     if (installed_identity == state_identity)
-      throw std::runtime_error(
-          "System block state route has a duplicate qualified state identity");
+      throw std::runtime_error("System block state route has a duplicate qualified state identity");
   P->block_state_identities_.emplace(name, state_identity);
 }
 
-POPS_EXPORT void System::install_boundary_plan(const std::string& name,
-                                               const std::string& identity,
+POPS_EXPORT void System::install_boundary_plan(const std::string& name, const std::string& identity,
                                                int required_depth,
                                                const std::vector<std::string>& face_types,
                                                const std::vector<double>& face_values, int ncomp,
                                                const std::vector<int>& omitted_interface_faces,
-                                               const std::string& state_identity) {
+                                               const std::string& state_identity,
+                                               PreparedBoundaryReadDependencies read_dependencies) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_plan");
   if (name.empty() || state_identity.empty())
     throw std::runtime_error(
         "System::install_boundary_plan requires block and state-qualified identities");
   const auto state_route = P->block_state_identities_.find(name);
-  if (state_route == P->block_state_identities_.end() ||
-      state_route->second != state_identity)
+  if (state_route == P->block_state_identities_.end() || state_route->second != state_identity)
     throw std::runtime_error(
         "System::install_boundary_plan state differs from the exact block state route");
   if (P->boundary_plans_.count(name) != 0)
@@ -387,23 +391,20 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name,
     for (int face = 0; face < 4; ++face) {
       set_prepared_face(components[static_cast<std::size_t>(comp)], face,
                         prepared_bc_type(face_types[static_cast<std::size_t>(face)]),
-                        static_cast<Real>(
-                            face_values[static_cast<std::size_t>(4 * comp + face)]));
+                        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + face)]));
     }
   }
   auto plan = std::make_shared<PreparedBoundaryPlan>(identity, required_depth,
-                                                     std::move(components),
-                                                     omitted_interface_faces,
-                                                     state_identity);
+                                                     std::move(components), omitted_interface_faces,
+                                                     state_identity, std::move(read_dependencies));
   for (const auto& [_, installed] : P->boundary_plans_)
     if (installed->state_identity() == state_identity)
-      throw std::runtime_error(
-          "System::install_boundary_plan duplicate qualified state identity");
+      throw std::runtime_error("System::install_boundary_plan duplicate qualified state identity");
   P->boundary_plans_.emplace(name, std::move(plan));
 }
 
-POPS_EXPORT void System::install_boundary_field_route(
-    const std::string& field_identity, const std::string& provider_slot) {
+POPS_EXPORT void System::install_boundary_field_route(const std::string& field_identity,
+                                                      const std::string& provider_slot) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_field_route");
   if (field_identity.empty() || provider_slot.empty() ||
@@ -454,8 +455,7 @@ POPS_EXPORT void System::install_field_boundary_jvp_component(
   require_assembling(P->lifecycle_, "install_field_boundary_jvp_component");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
-    throw std::runtime_error(
-        "System field boundary JVP requires an installed block boundary plan");
+    throw std::runtime_error("System field boundary JVP requires an installed block boundary plan");
   found->second->install_jvp_component(std::move(spec), std::move(component));
 }
 
@@ -466,22 +466,19 @@ POPS_EXPORT void System::install_interface_flux_component(
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_interface_flux_component");
   if (route.identity.empty() || spec.interface_identity != route.identity)
-    throw std::invalid_argument(
-        "System shared-interface route/spec identity mismatch");
+    throw std::invalid_argument("System shared-interface route/spec identity mismatch");
   if (!spec.execution)
-    throw std::invalid_argument(
-        "System shared-interface component lacks exact ExecutionContext");
+    throw std::invalid_argument("System shared-interface component lacks exact ExecutionContext");
   spec.normal_axis = route.left_axis == runtime::multiblock::InterfaceAxis::X ? 0 : 1;
   spec.outward_sign = route.left_side == runtime::multiblock::InterfaceSide::Low ? -1 : 1;
-  spec.face_measure = spec.normal_axis == 0 ? static_cast<double>(P->geom.dy())
-                                            : static_cast<double>(P->geom.dx());
+  spec.face_measure =
+      spec.normal_axis == 0 ? static_cast<double>(P->geom.dy()) : static_cast<double>(P->geom.dx());
   const PopsExecutionContextV1 execution = spec.execution->view();
   P->blocks_.install_interface_flux(
       std::move(route), P->geom, P->geom, execution,
       [spec = std::move(spec), component = std::move(component)]() mutable {
-        auto prepared =
-            std::make_shared<runtime::multiblock::PreparedInterfaceFluxComponent>(
-                std::move(spec), std::move(component));
+        auto prepared = std::make_shared<runtime::multiblock::PreparedInterfaceFluxComponent>(
+            std::move(spec), std::move(component));
         return runtime::multiblock::InterfaceFluxEvaluator(
             [prepared](const runtime::multiblock::BoundaryEvaluationPoint& point,
                        const runtime::multiblock::InterfaceFluxBatch& batch) {
@@ -490,8 +487,8 @@ POPS_EXPORT void System::install_interface_flux_component(
       });
 }
 
-POPS_EXPORT std::size_t System::interface_evaluation_count(
-    const std::string& identity, int level) const {
+POPS_EXPORT std::size_t System::interface_evaluation_count(const std::string& identity,
+                                                           int level) const {
   return p_->blocks_.interface_evaluation_count(identity, level);
 }
 
@@ -504,11 +501,11 @@ POPS_EXPORT void System::discard_interface_flux_components() {
 // Installs a block from already-built closures (by dispatch_model on the add_block side, or by
 // block_builder on the add_compiled_model side). Centralizes the creation of the species (U, names, scheme).
 POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
-                                      const VariableSet& cons_vars, const VariableSet& prim_vars,
-                                      double gamma, BlockClosures closures,
-                                      std::function<Real(const MultiFab&)> max_speed,
-                                      std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
-                                      int substeps, bool evolve, int stride) {
+                                       const VariableSet& cons_vars, const VariableSet& prim_vars,
+                                       double gamma, BlockClosures closures,
+                                       std::function<Real(const MultiFab&)> max_speed,
+                                       std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
+                                       int substeps, bool evolve, int stride) {
   if (stride < 1)
     throw std::runtime_error("System::install_block : stride >= 1");
   Impl* P = p_.get();
@@ -520,8 +517,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
     const auto state_route = P->block_state_identities_.find(name);
     if (state_route == P->block_state_identities_.end()) {
       P->sp.pop_back();
-      throw std::runtime_error(
-          "System materialized block has no exact qualified state route");
+      throw std::runtime_error("System materialized block has no exact qualified state route");
     }
     P->sp.back().state_identity = state_route->second;
   }
@@ -552,11 +548,15 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().rhs_flux_only_without_prepared_interfaces =
       std::move(closures.rhs_flux_only_without_prepared_interfaces);
   P->sp.back().rhs_core_at_point = std::move(closures.rhs_core_at_point);
-  P->sp.back().rhs_flux_only_core_at_point =
-      std::move(closures.rhs_flux_only_core_at_point);
-  P->sp.back().boundary_residual_at_point =
-      std::move(closures.boundary_residual_at_point);
+  P->sp.back().rhs_flux_only_core_at_point = std::move(closures.rhs_flux_only_core_at_point);
+  P->sp.back().boundary_residual_at_point = std::move(closures.boundary_residual_at_point);
   P->sp.back().boundary_jvp_at_point = std::move(closures.boundary_jvp_at_point);
+  P->sp.back().rhs_core_at_point_prepared = std::move(closures.rhs_core_at_point_prepared);
+  P->sp.back().rhs_flux_only_core_at_point_prepared =
+      std::move(closures.rhs_flux_only_core_at_point_prepared);
+  P->sp.back().boundary_residual_at_point_prepared =
+      std::move(closures.boundary_residual_at_point_prepared);
+  P->sp.back().boundary_jvp_at_point_prepared = std::move(closures.boundary_jvp_at_point_prepared);
   EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
   opt.name = name;
   if (opt.route.empty())
@@ -648,7 +648,8 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
                               const std::string& recon, const std::string& time, double gamma,
                               int substeps, bool evolve, int stride,
                               const std::vector<double>& params, double positivity_floor) {
-  require_assembling(p_->lifecycle_, "add_native_block");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
@@ -677,73 +678,63 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
-                         const std::string& wall, double wall_radius, double epsilon, double abs_tol,
-                         double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
-                         int post_smooth, int bottom_sweeps, int coarse_threshold) {
+                         const std::string& wall, double wall_radius, double epsilon,
+                         double abs_tol, double rel_tol, int max_cycles, int min_coarse,
+                         int pre_smooth, int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (!std::isfinite(epsilon) || epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
-  if (!std::isfinite(abs_tol) || abs_tol < 0.0)
-    throw std::runtime_error("System::set_poisson : finite abs_tol >= 0 required");
-  // ADC-613: the GeometricMG V-cycle knobs. Refuse out-of-domain values STRUCTURALLY here (the
-  // Python descriptor already refuses, but the native seam is a public API in its own right and
-  // must never silently accept a degenerate cycle). Defaults are the kMG* constants -> historical.
-  if (!std::isfinite(rel_tol) || rel_tol <= 0.0)
-    throw std::runtime_error("System::set_poisson : finite rel_tol > 0 required");
-  if (max_cycles < 1)
-    throw std::runtime_error("System::set_poisson : max_cycles >= 1 required");
-  if (min_coarse < 1)
-    throw std::runtime_error("System::set_poisson : min_coarse >= 1 required");
-  if (pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0)
-    throw std::runtime_error("System::set_poisson : pre_smooth/post_smooth/bottom_sweeps >= 0 "
-                             "required");
-  // ADC-644: the total-cell coarsening ceiling. 0 (the default sentinel) = disabled (only min_coarse
-  // governs); a positive value stops coarsening at that unknown count. Negative is refused.
-  if (coarse_threshold < 0)
-    throw std::runtime_error("System::set_poisson : coarse_threshold >= 0 required (0 = disabled)");
+  using FieldSolver = field_solver::SystemFieldSolver<Impl>;
+  if (solver == "geometric_mg") {
+    GeometricMgOptions mg_options;
+    mg_options.rel_tol = static_cast<Real>(rel_tol);
+    mg_options.abs_tol = static_cast<Real>(abs_tol);
+    mg_options.max_cycles = max_cycles;
+    mg_options.min_coarse = min_coarse;
+    mg_options.nu1 = pre_smooth;
+    mg_options.nu2 = post_smooth;
+    mg_options.nbottom = bottom_sweeps;
+    mg_options.coarse_threshold = coarse_threshold;
+    // This convenience preset only assembles a provider-owned option carrier. The provider family
+    // authenticates the schema and validates every value; the System plan never sees MG controls.
+    p_->fields_.reconfigure_primary_provider_preset(
+        "geometric_mg", FieldSolver::geometric_mg_provider_options(mg_options));
+  } else if (solver != "polar" && !p_->fields_.has_elliptic_provider(solver)) {
+    throw std::runtime_error("System::set_poisson: unknown elliptic provider route '" + solver +
+                             "'");
+  }
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
   p_->fields_.p_has_explicit_bc = false;
-  p_->fields_.p_nullspace_const = false;
-  p_->fields_.p_mean_zero_gauge = false;
+  p_->fields_.p_nullspace_ = {};
+  p_->fields_.p_nullspace_ready_ = false;
   p_->fields_.p_wall = wall;
   p_->fields_.p_wall_radius = wall_radius;
   p_->fields_.p_eps_ = static_cast<Real>(epsilon);
-  p_->fields_.p_abs_tol_ =
-      static_cast<Real>(abs_tol);  // absolute floor of the V-cycle (0 = relative only)
-  // Resolve the V-cycle knobs into the options POD the field solver forwards to GeometricMG (ctor
-  // args + solve(rel, cyc, abs)). abs_tol feeds both p_abs_tol_ (the pre-613 field) and the POD.
-  p_->fields_.p_mg_opts_.rel_tol = static_cast<Real>(rel_tol);
-  p_->fields_.p_mg_opts_.abs_tol = static_cast<Real>(abs_tol);
-  p_->fields_.p_mg_opts_.max_cycles = max_cycles;
-  p_->fields_.p_mg_opts_.min_coarse = min_coarse;
-  p_->fields_.p_mg_opts_.nu1 = pre_smooth;
-  p_->fields_.p_mg_opts_.nu2 = post_smooth;
-  p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
-  p_->fields_.p_mg_opts_.coarse_threshold = coarse_threshold;  // ADC-644: total-cell coarsening ceiling.
   p_->fields_.ell_.reset();
 }
 
-void System::set_field_solver_plan(const std::string& provider_slot,
-                                   const std::string& plan_identity,
-                                   const std::string& provider_identity,
-                                   const std::string& output_owner_identity,
-                                   const std::string& output_block,
-                                   const std::string& output_key,
-                                   const std::vector<std::string>& provider_identities,
-                                   const std::vector<std::string>& provider_blocks,
-                                   const std::vector<std::string>& provider_keys,
-                                   const std::vector<double>& provider_coefficients,
-                                   const std::string& solver,
-                                   double abs_tol, double rel_tol,
-                                   int max_cycles, int min_coarse, int pre_smooth,
-                                   int post_smooth, int bottom_sweeps, int coarse_threshold) {
+POPS_EXPORT std::string System::register_configured_field_solver_provider(
+    const std::string& family_route, const std::string& provider_route,
+    const PreparedProviderOptions& options) {
+  require_assembling(p_->lifecycle_, "register_configured_field_solver_provider");
+  if (family_route.empty() || provider_route.empty())
+    throw std::invalid_argument(
+        "register_configured_field_solver_provider requires exact non-empty routes");
+  return p_->fields_.register_configured_elliptic_provider(family_route, provider_route, options);
+}
+
+void System::set_field_solver_plan(
+    const std::string& provider_slot, const std::string& plan_identity,
+    const std::string& provider_identity, const std::string& output_owner_identity,
+    const std::string& output_block, const std::string& output_key,
+    const std::vector<std::string>& provider_identities,
+    const std::vector<std::string>& provider_blocks, const std::vector<std::string>& provider_keys,
+    const std::vector<double>& provider_coefficients, const std::string& backend_provider_route) {
   require_assembling(p_->lifecycle_, "set_field_solver_plan");
   if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
-      output_owner_identity.empty() ||
-      output_block.empty() ||
-      output_key.empty())
+      output_owner_identity.empty() || output_block.empty() || output_key.empty())
     throw std::runtime_error(
         "System::set_field_solver_plan requires qualified plan/provider identities");
   const std::size_t provider_count = provider_identities.size();
@@ -759,18 +750,13 @@ void System::set_field_solver_plan(const std::string& provider_slot,
     if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
         !finite_native_real(provider_coefficients[i]))
       throw std::runtime_error("System::set_field_solver_plan invalid provider-pack entry");
-  const bool external = solver == "external_component_v1";
-  if (!external && solver != "geometric_mg" && solver != "fft" && solver != "fft_spectral")
-    throw std::runtime_error("System::set_field_solver_plan unknown solver '" + solver + "'");
-  if (!finite_native_real(abs_tol) || abs_tol < 0.0 ||
-      !finite_native_real(rel_tol) || (external ? rel_tol < 0.0 : rel_tol <= 0.0) ||
-      max_cycles < 1 || min_coarse < 1 ||
-      pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
-    throw std::runtime_error("System::set_field_solver_plan invalid multigrid options");
+  if (backend_provider_route.empty())
+    throw std::runtime_error("System::set_field_solver_plan requires a provider identity");
+  if (!p_->fields_.has_elliptic_provider(backend_provider_route))
+    throw std::runtime_error("System::set_field_solver_plan names an unregistered provider route");
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
   if (existing != p_->fields_.named_field_plans_.end())
-    throw std::runtime_error(
-        "System::set_field_solver_plan duplicate provider slot");
+    throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
   field_solver::SystemFieldSolver<Impl>::FieldSolveConfig plan;
   plan.plan_identity = plan_identity;
   plan.provider_identity = provider_identity;
@@ -782,20 +768,10 @@ void System::set_field_solver_plan(const std::string& provider_slot,
   for (std::size_t i = 0; i < provider_count; ++i)
     plan.providers.push_back({provider_identities[i], provider_blocks[i], provider_keys[i],
                               static_cast<Real>(provider_coefficients[i])});
-  plan.solver = solver;
-  plan.mg_opts.rel_tol = static_cast<Real>(rel_tol);
-  plan.mg_opts.abs_tol = static_cast<Real>(abs_tol);
-  plan.mg_opts.max_cycles = max_cycles;
-  plan.mg_opts.min_coarse = min_coarse;
-  plan.mg_opts.nu1 = pre_smooth;
-  plan.mg_opts.nu2 = post_smooth;
-  plan.mg_opts.nbottom = bottom_sweeps;
-  plan.mg_opts.coarse_threshold = coarse_threshold;
-  auto [inserted, unique] =
-      p_->fields_.named_field_plans_.emplace(provider_slot, std::move(plan));
+  plan.backend_provider_identity = backend_provider_route;
+  auto [inserted, unique] = p_->fields_.named_field_plans_.emplace(provider_slot, std::move(plan));
   if (!unique)
-    throw std::runtime_error(
-        "System::set_field_solver_plan duplicate provider slot");
+    throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
   p_->fields_.invalidate_field_plan_consensus();
   auto registered = p_->fields_.named_fields_.find(provider_slot);
   if (registered != p_->fields_.named_fields_.end()) {
@@ -803,6 +779,7 @@ void System::set_field_solver_plan(const std::string& provider_slot,
     registered->second.plan = inserted->second;
     registered->second.prepared_providers.clear();
     registered->second.backend.reset();
+    registered->second.nullspace_ready = false;
   }
 }
 
@@ -811,26 +788,38 @@ void System::set_field_reaction(const std::string& provider_slot, double reactio
   p_->fields_.set_named_reaction(provider_slot, static_cast<Real>(reaction));
 }
 
-POPS_EXPORT void System::install_field_solver_components(
-    const std::string& provider_slot,
-    runtime::field::PreparedFieldSolverSpec spec,
+POPS_EXPORT std::string System::register_field_solver_provider(
+    const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
     std::shared_ptr<component::LoadedComponent> topology,
     std::shared_ptr<component::LoadedComponent> solver) {
-  require_assembling(p_->lifecycle_, "install_field_solver_components");
-  p_->fields_.install_external_solver(
-      provider_slot, std::move(spec), std::move(topology), std::move(solver));
+  require_assembling(p_->lifecycle_, "register_field_solver_provider");
+  return p_->fields_.register_external_solver_provider(provider_slot, std::move(spec),
+                                                       std::move(topology), std::move(solver));
 }
 
-POPS_EXPORT void System::set_field_topology_authority(
-    const std::string& provider_slot, const std::string& provider_kind,
-    const std::string& provenance, const std::string& topology_digest) {
+POPS_EXPORT void System::register_field_nullspace_provider(
+    std::shared_ptr<const FieldNullspaceProvider> provider) {
+  require_assembling(p_->lifecycle_, "register_field_nullspace_provider");
+  p_->fields_.register_field_nullspace_provider(std::move(provider));
+}
+
+void System::set_default_field_nullspace(const std::string& nullspace_provider_identity,
+                                         const PreparedProviderOptions& options) {
+  require_assembling(p_->lifecycle_, "set_default_field_nullspace");
+  p_->fields_.set_primary_nullspace_provider(
+      FieldNullspaceProviderSelection{nullspace_provider_identity, options});
+}
+
+POPS_EXPORT void System::set_field_topology_authority(const std::string& provider_slot,
+                                                      const std::string& provider_kind,
+                                                      const std::string& provenance,
+                                                      const std::string& topology_digest) {
   require_assembling(p_->lifecycle_, "set_field_topology_authority");
-  p_->fields_.set_topology_authority(
-      provider_slot, provider_kind, provenance, topology_digest);
+  p_->fields_.set_topology_authority(provider_slot, provider_kind, provenance, topology_digest);
 }
 
-POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow>
-System::field_topology_report(const std::string& provider_slot) const {
+POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> System::field_topology_report(
+    const std::string& provider_slot) const {
   return p_->fields_.topology_report(provider_slot);
 }
 
@@ -854,8 +843,8 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
     const Real a = static_cast<Real>(alpha[face]);
     const Real b = static_cast<Real>(beta[face]);
     const Real v = static_cast<Real>(value[face]);
-    if (!std::isfinite(alpha[face]) || !std::isfinite(beta[face]) ||
-        !std::isfinite(value[face]) || (a == Real(0) && b == Real(0) && kind[face] != "periodic"))
+    if (!std::isfinite(alpha[face]) || !std::isfinite(beta[face]) || !std::isfinite(value[face]) ||
+        (a == Real(0) && b == Real(0) && kind[face] != "periodic"))
       throw std::runtime_error("System::set_field_boundary_plan invalid Robin coefficients");
     if (kind[face] == "periodic") {
       *types[face] = BCType::Periodic;
@@ -890,18 +879,20 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
     registered->second.has_plan = true;
     registered->second.plan = plan;
     registered->second.backend.reset();
+    registered->second.nullspace_ready = false;
   }
+  p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_boundary_dependencies(
-    const std::string& provider_slot, const std::vector<std::string>& state_blocks,
-    const std::vector<int>& state_components,
-    const std::vector<std::string>& field_blocks,
-    const std::vector<std::string>& field_keys,
-    const std::vector<int>& field_components) {
+void System::set_field_boundary_dependencies(const std::string& provider_slot,
+                                             const std::vector<std::string>& state_blocks,
+                                             const std::vector<int>& state_components,
+                                             const std::vector<std::string>& field_blocks,
+                                             const std::vector<std::string>& field_keys,
+                                             const std::vector<int>& field_components) {
   require_assembling(p_->lifecycle_, "set_field_boundary_dependencies");
-  if (state_blocks.size() != state_components.size() ||
-      field_blocks.size() != field_keys.size() || field_blocks.size() != field_components.size())
+  if (state_blocks.size() != state_components.size() || field_blocks.size() != field_keys.size() ||
+      field_blocks.size() != field_components.size())
     throw std::runtime_error("System::set_field_boundary_dependencies pack shape mismatch");
   const auto invalid_text = [](const auto& value) { return value.empty(); };
   const auto invalid_component = [](int value) { return value < 0; };
@@ -925,7 +916,9 @@ void System::set_field_boundary_dependencies(
     registered->second.plan = plan;
     registered->second.has_plan = true;
     registered->second.backend.reset();
+    registered->second.nullspace_ready = false;
   }
+  p_->fields_.invalidate_field_plan_consensus();
 }
 
 void System::set_field_boundary_kernel(const std::string& provider_slot,
@@ -945,7 +938,9 @@ void System::set_field_boundary_kernel(const std::string& provider_slot,
     registered->second.plan = plan;
     registered->second.has_plan = true;
     registered->second.backend.reset();
+    registered->second.nullspace_ready = false;
   }
+  p_->fields_.invalidate_field_plan_consensus();
 }
 
 void System::set_field_logical_timepoint(const std::string& provider_slot,
@@ -967,6 +962,12 @@ void System::set_field_logical_timepoint(const std::string& provider_slot,
 
 void System::set_field_boundary_parameters(const std::string& provider_slot,
                                            const std::vector<double>& parameters) {
+  if (std::any_of(parameters.begin(), parameters.end(), [](double value) {
+        return !std::isfinite(value) ||
+               !std::isfinite(static_cast<double>(static_cast<Real>(value)));
+      }))
+    throw std::invalid_argument(
+        "System::set_field_boundary_parameters requires finite native-real values");
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_boundary_parameters unknown provider slot");
@@ -985,6 +986,7 @@ void System::set_field_boundary_parameters(const std::string& provider_slot,
     if (registered->second.backend && installed.has_boundary_kernel)
       registered->second.backend->configure_boundary(installed);
   }
+  p_->fields_.invalidate_field_plan_consensus();
 }
 
 void System::set_field_newton_plan(const std::string& provider_slot, double tolerance,
@@ -995,10 +997,10 @@ void System::set_field_newton_plan(const std::string& provider_slot, double tole
   auto found = p_->fields_.named_field_plans_.find(provider_slot);
   if (found == p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_newton_plan unknown field provider slot");
-  FieldNewtonOptions options{static_cast<Real>(tolerance), max_iterations,
-                             static_cast<Real>(linear_tolerance), linear_max_iterations,
-                             restart, static_cast<Real>(armijo),
-                             static_cast<Real>(minimum_step)};
+  FieldNewtonOptions options{
+      static_cast<Real>(tolerance),   max_iterations, static_cast<Real>(linear_tolerance),
+      linear_max_iterations,          restart,        static_cast<Real>(armijo),
+      static_cast<Real>(minimum_step)};
   validate_field_newton_options(options);
   found->second.has_newton = true;
   found->second.newton = options;
@@ -1007,32 +1009,17 @@ void System::set_field_newton_plan(const std::string& provider_slot, double tole
     installed->second.plan.has_newton = true;
     installed->second.plan.newton = options;
     installed->second.backend.reset();
+    installed->second.nullspace_ready = false;
   }
+  p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
-                                 bool mean_zero_gauge) {
+void System::set_field_nullspace(const std::string& provider_slot,
+                                 const std::string& nullspace_provider_identity,
+                                 const PreparedProviderOptions& options) {
   require_assembling(p_->lifecycle_, "set_field_nullspace");
-  if (mean_zero_gauge && !constant_kernel)
-    throw std::runtime_error("System::set_field_nullspace mean-zero gauge requires constant kernel");
-  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
-  if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_nullspace unknown provider slot");
-  auto& plan = plan_it->second;
-  plan.nullspace = {};
-  if (constant_kernel) {
-    plan.nullspace = constant_mean_zero_nullspace(
-        provider_slot + ":topology-nullspace", "derived:uniform-connected-component:0",
-        p_->geom.dx() * p_->geom.dy());
-    if (!mean_zero_gauge)
-      plan.nullspace.gauges.clear();
-  }
-  auto registered = p_->fields_.named_fields_.find(provider_slot);
-  if (registered != p_->fields_.named_fields_.end()) {
-    registered->second.has_plan = true;
-    registered->second.plan = plan;
-    registered->second.backend.reset();
-  }
+  p_->fields_.set_named_nullspace_provider(
+      provider_slot, FieldNullspaceProviderSelection{nullspace_provider_identity, options});
 }
 
 namespace {
@@ -1053,14 +1040,17 @@ GeometryMode parse_geometry_mode(const std::string& mode, const char* err_contex
 void System::set_disc_domain(double cx, double cy, double R, const std::string& mode,
                              double kappa_min, double face_open_eps, double cut_theta_min) {
   Impl* P = p_.get();
-  require_assembling(P->lifecycle_, "set_disc_domain");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(P->lifecycle_,
+                     "set_disc_domain");  // frozen once pops.bind completes (ADC-592)
   // ADC-615: resolve the cut-cell thresholds (each <= 0 keeps the kEb* default). Refuse out-of-domain
   // values STRUCTURALLY -- a degenerate clamp is a structural error, never a silent fallback.
   if (kappa_min < 0.0 || face_open_eps < 0.0 || cut_theta_min < 0.0)
-    throw std::runtime_error("System::set_disc_domain : kappa_min / face_open_eps / cut_theta_min "
-                             ">= 0 required (0 = keep the default)");
+    throw std::runtime_error(
+        "System::set_disc_domain : kappa_min / face_open_eps / cut_theta_min "
+        ">= 0 required (0 = keep the default)");
   if (kappa_min > 1.0 || cut_theta_min > 1.0)
-    throw std::runtime_error("System::set_disc_domain : kappa_min / cut_theta_min must be in (0, 1]");
+    throw std::runtime_error(
+        "System::set_disc_domain : kappa_min / cut_theta_min must be in (0, 1]");
   // CARTESIAN only: polar already bounds the ring by its radial walls (r_min / r_max,
   // zero radial flux) -> a Cartesian disc mask makes no sense on the (r, theta) grid.
   if (P->polar_)
@@ -1111,7 +1101,8 @@ void System::set_disc_domain(double cx, double cy, double R, const std::string& 
 
 void System::set_geometry_mode(const std::string& mode) {
   Impl* P = p_.get();
-  require_assembling(P->lifecycle_, "set_geometry_mode");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(P->lifecycle_,
+                     "set_geometry_mode");  // frozen once pops.bind completes (ADC-592)
   const GeometryMode gmode = parse_geometry_mode(mode, "System::set_geometry_mode");
   // An embedded-boundary mode (staircase/cutcell) only makes sense with a fixed domain: otherwise the
   // stepper would fall back on the full transport (the mask / level set does not exist), a silent
@@ -1150,17 +1141,15 @@ std::vector<double> System::disc_mask() const {
 }
 
 void System::set_epsilon_field(const std::vector<double>& eps) {
-  require_assembling(p_->lifecycle_, "set_epsilon_field");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "set_epsilon_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(eps.size()) != n * n)
     throw std::runtime_error("System::set_epsilon_field : size != n*n");
   for (double e : eps)
     if (!(e > 0.0))
       throw std::runtime_error("System::set_epsilon_field : permittivity eps(x) > 0 required");
-  p_->fields_.p_eps_field_ = eps;
-  p_->fields_.has_eps_field_ = true;
-  p_->fields_.ell_
-      .reset();  // the operator will be rebuilt with the eps field at the next solve_fields
+  p_->fields_.configure_scalar_diffusion_coefficient(eps);
 }
 
 void System::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
@@ -1179,15 +1168,12 @@ void System::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
     if (!(e > 0.0))
       throw std::runtime_error(
           "System::set_epsilon_anisotropic_field : permittivity eps_y(x) > 0 required");
-  p_->fields_.p_eps_x_field_ = eps_x;
-  p_->fields_.p_eps_y_field_ = eps_y;
-  p_->fields_.has_eps_xy_field_ = true;
-  p_->fields_.ell_
-      .reset();  // operator rebuilt as div(diag(eps_x, eps_y) grad phi) at the next solve_fields
+  p_->fields_.configure_diagonal_diffusion_coefficient(eps_x, eps_y);
 }
 
 void System::set_reaction_field(const std::vector<double>& kappa) {
-  require_assembling(p_->lifecycle_, "set_reaction_field");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "set_reaction_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(kappa.size()) != n * n)
     throw std::runtime_error("System::set_reaction_field : size != n*n");
@@ -1199,6 +1185,7 @@ void System::set_reaction_field(const std::vector<double>& kappa) {
   p_->fields_.p_kappa_field_ = kappa;
   p_->fields_.has_kappa_field_ = true;
   p_->fields_.ell_.reset();  // operator rebuilt with - kappa phi at the next solve_fields
+  p_->fields_.p_nullspace_ready_ = false;
 }
 
 POPS_EXPORT void System::ensure_aux_width(int ncomp) {
@@ -1226,7 +1213,7 @@ void System::set_magnetic_field(const std::vector<double>& bz) {
 void System::set_electron_temperature_from(const std::string& name) {
   require_assembling(p_->lifecycle_,
                      "set_electron_temperature_from");  // frozen once pops.bind completes (ADC-592)
-  const int idx = p_->index(name);  // raises if unknown block
+  const int idx = p_->index(name);                      // raises if unknown block
   if (p_->sp[static_cast<std::size_t>(idx)].ncomp != 4)
     throw std::runtime_error(
         "System::set_electron_temperature_from : block '" + name +
@@ -1331,7 +1318,8 @@ std::vector<double> System::aux_field_component(int comp) const {
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
-  require_assembling(p_->lifecycle_, "add_coupled_source");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "add_coupled_source");  // frozen once pops.bind completes (ADC-592)
   // Bytecode description grouped into a POD (ADC-214): local aliases to keep the body readable (the
   // names and the semantics are strictly those of the old flat parameters).
   const std::vector<std::string>& in_blocks = prog_desc.in_blocks;
@@ -1540,6 +1528,5 @@ void System::add_coupling_operator(const CouplingOperator& op) {
 const std::vector<CouplingOperatorView>& System::coupled_operators() const {
   return p_->coupling_.coupled_operators;
 }
-
 
 }  // namespace pops

@@ -41,7 +41,7 @@ def canonical_hash_data(value: Any, *, where: str = "module hash") -> Any:
                 item, sort_keys=True, separators=(",", ":"), allow_nan=False),
         )
     if isinstance(value, (Fraction, Decimal)):
-        from pops._ir.literals import scalar_literal
+        from pops.identity.scalar import scalar_literal
 
         return {"protocol": "pops.scalar.v1", "value": scalar_literal(value).to_data()}
     if isinstance(value, float):

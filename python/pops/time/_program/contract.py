@@ -95,8 +95,6 @@ class _ProgramBase:
 
     # --- class-level constant tables (_ProgramConstants) ---
     _RESIDUAL_LOCAL_OPS: Any
-    _KRYLOV_METHODS: Any
-    _GMRES_RESTART_DEFAULT: Any
     _OPERATOR_KINDS: Any
     _CELL_CMPS: dict
     _REMOVABLE_OPS: Any
@@ -198,7 +196,8 @@ class _ProgramBase:
     def record_scalar(self, name: Any, value: Any) -> Any: ...
 
     # --- solve / commit / board sugar (_ProgramSolve) ---
-    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any,
+    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
+                      nullspace_contract: Any, gauge_contract: Any,
                       initial_guess: Any = None, name: Any = None,
                       at: Any = None, scope: Any = None) -> Any: ...
     def solve(self, problem: Any, *, solver: Any, name: Any = None) -> Any: ...

@@ -10,10 +10,14 @@ transitional pops.lib.solvers shim is removed). The descriptors compute nothing;
 metadata is asserted.
 """
 import pytest
+from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 
+from pops.solvers.krylov._native_contract import PREPARED_GMRES_MAX_RESTART
+
 pops = pytest.importorskip("pops")
+
 solvers = pytest.importorskip("pops.solvers")
 elliptic = pytest.importorskip("pops.solvers.elliptic")
 krylov = pytest.importorskip("pops.solvers.krylov")
@@ -43,13 +47,13 @@ def test_solvers_is_top_level_and_exposed():
 # --- Krylov solvers (moved from pops.lib.solvers) ----------------------------------------
 
 def test_krylov_native_ids_and_schemes():
-    assert krylov.CG(max_iter=200).native_id == "pops::cg_solve"
+    assert krylov.CG(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.CG(max_iter=200).scheme == "cg"
-    assert krylov.BiCGStab(max_iter=200).native_id == "pops::bicgstab_solve"
+    assert krylov.BiCGStab(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.BiCGStab(max_iter=200).scheme == "bicgstab"
-    assert krylov.GMRES(max_iter=200).native_id == "pops::gmres_solve"
+    assert krylov.GMRES(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.GMRES(max_iter=200).scheme == "gmres"
-    assert krylov.Richardson(max_iter=200).native_id == "pops::richardson_solve"
+    assert krylov.Richardson(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.Richardson(max_iter=200).scheme == "richardson"
     for d in (krylov.CG(max_iter=200), krylov.GMRES(max_iter=200),
               krylov.BiCGStab(max_iter=200), krylov.Richardson(max_iter=200)):
@@ -83,6 +87,21 @@ def test_krylov_nonpositive_or_nonint_max_iter_is_refused(factory, bad):
         factory(max_iter=bad)
 
 
+def test_krylov_integer_controls_match_the_native_signed_int_capacity():
+    cpp_int_max = (1 << 31) - 1
+
+    for factory in (krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson):
+        assert factory(max_iter=cpp_int_max).options["max_iter"] == cpp_int_max
+        with pytest.raises(ValueError, match="max_iter"):
+            factory(max_iter=cpp_int_max + 1)
+
+    assert krylov.GMRES(
+        max_iter=1, restart=PREPARED_GMRES_MAX_RESTART
+    ).options["method_options"]["restart"] == PREPARED_GMRES_MAX_RESTART
+    with pytest.raises(ValueError, match="restart"):
+        krylov.GMRES(max_iter=1, restart=PREPARED_GMRES_MAX_RESTART + 1)
+
+
 def test_krylov_descriptors_compute_nothing():
     d = krylov.GMRES(max_iter=200)
     assert not hasattr(d, "eval")
@@ -95,8 +114,26 @@ def test_krylov_descriptors_compute_nothing():
 
 def test_krylov_lower_carries_native_id_and_scheme():
     rec = krylov.CG(max_iter=200).lower().to_dict()
-    assert rec["native_id"] == "pops::cg_solve"
+    assert rec["native_id"] == "pops::solve_prepared_affine"
     assert rec["scheme"] == "cg"
+
+
+@pytest.mark.parametrize("factory", [krylov.CG, krylov.BiCGStab, krylov.GMRES,
+                                      krylov.Richardson])
+def test_krylov_absolute_tolerance_is_exact_and_nonnegative(factory):
+    assert factory(max_iter=10).options["abs_tol"] == 0
+    absolute = Fraction(1, 10**12)
+    assert factory(max_iter=10, abs_tol=absolute).options["abs_tol"] == absolute
+    absolute_only = factory(max_iter=10, rel_tol=0, abs_tol=absolute)
+    assert absolute_only.options["rel_tol"] == 0
+    assert absolute_only.options["abs_tol"] == absolute
+    prepared = absolute_only.prepare_program_solve()
+    assert prepared.tolerance == 0
+    assert prepared.absolute_tolerance == absolute
+    with pytest.raises(ValueError, match="abs_tol"):
+        factory(max_iter=10, abs_tol=-1)
+    with pytest.raises(ValueError, match="at least one stopping threshold"):
+        factory(max_iter=10, rel_tol=0, abs_tol=0)
 
 
 def test_krylov_declare_amr_route_capabilities():
@@ -126,7 +163,9 @@ def test_nonlinear_surface_contains_only_executable_descriptors():
         "max_iterations": 12,
         "finite_difference_step": 1e-6,
     }
-    assert nonlinear.Newton().available().ok is True
+    global_newton = nonlinear.Newton(restart=51)
+    assert global_newton.options()["restart"] == 51
+    assert global_newton.available().ok is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
@@ -282,6 +321,22 @@ def test_preconditioners_catalog():
     assert identity.native_id == "pops::ApplyFn"
     for removed in ("Jacobi", "BlockJacobi"):
         assert not hasattr(pre, removed)
+    for extension in (
+        "Prepared", "register", "Provider", "IntOption", "ScratchResource",
+        "NativeComponent", "HeaderOnlyComponent"
+    ):
+        assert callable(getattr(pre, extension))
+
+
+def test_prepared_preconditioner_descriptor_requires_authenticated_provider():
+    from pops.descriptors import _native
+    from pops.time._program.solve import _lower_preconditioner
+
+    forged = _native(
+        "identity", "pops::ApplyFn", "identity", category="preconditioner"
+    )
+    with pytest.raises(ValueError, match="not authenticated"):
+        _lower_preconditioner(forged)
 
 
 # --- requirements vocabulary -------------------------------------------------------------
@@ -309,7 +364,7 @@ def test_lib_solvers_shim_is_removed():
     # The one public home resolves the flat factory namespace and the preconditioners.
     ns = solvers.solvers
     assert ns.GMRES(max_iter=200).scheme == "gmres"
-    assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
+    assert ns.CG(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert ns.Newton().available().ok is True
     assert ns.LocalNewton().scheme == "newton"
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
@@ -353,6 +408,107 @@ def test_precond_geometric_mg_carries_validated_shape_knobs():
                          "min_coarse": 4}
 
 
+def test_precond_geometric_mg_option_schema_matches_native_constructor_contract():
+    from pops.solvers._prepared_preconditioner_registry import (
+        prepared_preconditioner_provider_by_id,
+    )
+
+    provider = prepared_preconditioner_provider_by_id(
+        "pops.preconditioner.geometric-mg"
+    )
+    assert [
+        (option.name, option.default, option.minimum, option.maximum)
+        for option in provider.options
+    ] == [
+        ("pre_sweeps", 2, 0, (1 << 31) - 1),
+        ("post_sweeps", 2, 0, (1 << 31) - 1),
+        ("bottom_sweeps", 50, 1, (1 << 31) - 1),
+        ("min_coarse", 2, 1, (1 << 31) - 1),
+        ("n_vcycles", 1, 1, (1 << 31) - 1),
+    ]
+    assert preconditioners.GeometricMG(
+        pre_sweeps=0,
+        post_sweeps=0,
+        bottom_sweeps=1,
+        min_coarse=1,
+        n_vcycles=1,
+    ).options == {
+        "pre_sweeps": 0,
+        "post_sweeps": 0,
+        "bottom_sweeps": 1,
+        "min_coarse": 1,
+        "n_vcycles": 1,
+    }
+
+
+def test_preconditioner_provider_consumes_option_protocol_without_core_type_dispatch():
+    from pops.solvers._prepared_preconditioner_registry import (
+        PreparedPreconditionerNativeEmission,
+        PreparedPreconditionerProvider,
+        PreparedPreconditionerUsePolicy,
+    )
+    from pops.native_components import PreparedNativeComponent
+
+    @dataclass(frozen=True, slots=True)
+    class EnumOption:
+        name: str
+        default: str
+        choices: tuple[str, ...]
+
+        def validate(self, value, *, where):
+            if type(value) is not str or value not in self.choices:
+                raise ValueError("%s %s is not a supported enum value" % (where, self.name))
+            return value
+
+        def resolve(self, values, *, where):
+            return self.validate(values.get(self.name, self.default), where=where)
+
+        def emit_cpp_literal(self, value):
+            return "Mode::%s" % value.capitalize()
+
+        def contract_data(self, value):
+            return value
+
+        def authority(self):
+            return {
+                "schema_version": 1,
+                "type_id": "pops.test.prepared-preconditioner.option.enum@1",
+                "name": self.name,
+                "default": self.default,
+                "choices": list(self.choices),
+            }
+
+    provider = PreparedPreconditionerProvider(
+        provider_id="pops.test.prepared-enum",
+        interface_version=1,
+        options_schema="pops.test.prepared-enum.options@1",
+        scheme="test_enum",
+        descriptor_name="test_enum",
+        display_name="test enum",
+        native_id="TestEnum",
+        validator_id="pops.test.prepared-enum.validate@1",
+        planner_id="pops.test.prepared-enum.plan@1",
+        emitter_id="test.enum@1",
+        preconditioned=True,
+        prepared_buffers=0,
+        use_policy=PreparedPreconditionerUsePolicy(
+            "pops.test.enum.use", 1,
+            {"methods": ("gmres",)}, lambda _use, _where: None,
+        ),
+        options=(EnumOption("mode", "safe", ("safe", "fast")),),
+        emitter=lambda *_args: PreparedPreconditionerNativeEmission("TestEnum{}"),
+        native_component=PreparedNativeComponent.pops_builtin(
+            "pops.test.prepared-enum"
+        ),
+    )
+    assert provider.resolved_cpp_option_literals({}, where="test") == ("Mode::Safe",)
+    assert provider.resolved_cpp_option_literals(
+        {"mode": "fast"}, where="test"
+    ) == ("Mode::Fast",)
+    with pytest.raises(ValueError, match="mode"):
+        provider.resolved_cpp_option_literals({"mode": "unknown"}, where="test")
+
+
 @pytest.mark.parametrize("kw", [{"tolerance": 1e-6}, {"max_cycles": 10}])
 def test_precond_geometric_mg_refuses_iterative_knobs(kw):
     # A Krylov preconditioner must be a FIXED linear map; tolerance/max_cycles describe an iterative
@@ -366,10 +522,42 @@ def test_precond_geometric_mg_refuses_unknown_kwarg():
         preconditioners.GeometricMG(bogus=1)
 
 
-@pytest.mark.parametrize("kw", [{"n_vcycles": 0}, {"min_coarse": 0}, {"pre_sweeps": -1}])
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"n_vcycles": 0},
+        {"min_coarse": 0},
+        {"bottom_sweeps": 0},
+        {"pre_sweeps": -1},
+        {"post_sweeps": -1},
+    ],
+)
 def test_precond_geometric_mg_refuses_out_of_domain(kw):
     with pytest.raises((ValueError, TypeError)):
         preconditioners.GeometricMG(**kw)
+
+
+def test_precond_geometric_mg_refuses_bool_and_reauthenticates_mutated_options():
+    with pytest.raises(TypeError, match="pre_sweeps"):
+        preconditioners.GeometricMG(pre_sweeps=True)
+
+    from pops.time._program.solve import _lower_preconditioner
+
+    mutated = preconditioners.GeometricMG()
+    mutated.options["bottom_sweeps"] = 0
+    with pytest.raises(ValueError, match="bottom_sweeps"):
+        _lower_preconditioner(mutated)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"],
+)
+def test_precond_geometric_mg_integer_knobs_match_native_int_capacity(name):
+    cpp_int_max = (1 << 31) - 1
+    assert preconditioners.GeometricMG(**{name: cpp_int_max}).options[name] == cpp_int_max
+    with pytest.raises(ValueError, match=name):
+        preconditioners.GeometricMG(**{name: cpp_int_max + 1})
 
 
 # --- ADC-644: DirectSmallGrid threshold is None by default (wired, not dropped) -----------------
@@ -422,6 +610,16 @@ def test_composite_fac_defaults_and_domain():
             CompositeFAC(**bad)
 
 
+@pytest.mark.parametrize("name", ["max_iters", "fine_sweeps", "coarse_cycles"])
+def test_composite_fac_integer_knobs_match_native_int_capacity(name):
+    from pops.solvers.options import CompositeFAC
+
+    cpp_int_max = (1 << 31) - 1
+    assert getattr(CompositeFAC(**{name: cpp_int_max}), name) == cpp_int_max
+    with pytest.raises(ValueError, match=name):
+        CompositeFAC(**{name: cpp_int_max + 1})
+
+
 def test_solver_tolerances_retain_exact_domains_until_native_lowering():
     rel = Relative(Fraction(1, 3), AbsoluteFloor(Decimal("1e-30")))
     absolute = Absolute(Decimal("1e-24"))
@@ -456,11 +654,12 @@ def test_geometric_mg_fac_slot():
 
 
 def test_richardson_omega_and_krylov_rel_tol():
-    # omega: carried only when set (omit-when-default keeps the descriptor identity unchanged).
+    # Provider-owned options are explicit even at their preset default.
     d = krylov.Richardson(max_iter=100)
-    assert "omega" not in d.options and "rel_tol" not in d.options
+    assert d.options["method_options"]["relaxation"] == {"kind": "integer", "value": "1"}
+    assert "rel_tol" not in d.options
     d2 = krylov.Richardson(max_iter=100, omega=0.8)
-    assert d2.options["omega"] == 0.8
+    assert d2.options["method_options"]["relaxation"]["kind"] == "binary64"
     with pytest.raises(ValueError, match="omega"):
         krylov.Richardson(max_iter=100, omega=0.0)
     # rel_tol on every factory; out-of-domain refuses.
@@ -479,8 +678,9 @@ def test_krylov_descriptor_controls_preserve_exact_number_domains():
 
     assert descriptor.options["rel_tol"] == Decimal("1e-12")
     assert isinstance(descriptor.options["rel_tol"], Decimal)
-    assert descriptor.options["omega"] == Fraction(2, 3)
-    assert isinstance(descriptor.options["omega"], Fraction)
+    assert descriptor.options["method_options"]["relaxation"] == {
+        "kind": "rational", "numerator": "2", "denominator": "3"
+    }
 
     from pops._ir import ScalarLiteral
     annotated = ScalarLiteral.from_value(Fraction(1, 2), unit="s")

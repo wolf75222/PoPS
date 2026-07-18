@@ -173,21 +173,9 @@ def validate_amr_authorities(plan: Any) -> None:
                 "coarse/fine transition; temporal ratios are never inferred from spatial ratios")
     elif execution.relations:
         raise ValueError("synchronous AMRExecution must not carry temporal relations")
-    if hierarchy.provider.options.to_data().get("native_route") != "shared_n_level":
-        raise NotImplementedError(
-            "native AMR hierarchy requires native_route='shared_n_level'"
-        )
-    if any(row.dimension != 2 or row.ratio != (2, 2) for row in transitions):
-        raise NotImplementedError(
-            "native AMR hierarchy supports only exact two-dimensional ratio-(2,2) transitions"
-        )
-    buffers = {row.buffer for row in transitions}
-    lookaheads = {row.lookahead for row in transitions}
-    if len(buffers) != 1 or len(lookaheads) != 1 \
-            or any(len(set(row)) != 1 for row in buffers):
-        raise NotImplementedError(
-            "native AMR requires one isotropic buffer and one lookahead across transitions"
-        )
+    from pops.mesh._amr.hierarchy_native import validate_native_hierarchy
+
+    validate_native_hierarchy(hierarchy)
     cluster_options = hierarchy.plan.clustering.options.to_data()
     from pops.identity.semantic import semantic_value
 

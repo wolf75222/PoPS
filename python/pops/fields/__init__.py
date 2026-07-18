@@ -29,6 +29,8 @@ from .nullspace import (
     NullspaceBasis,
     NullspaceBasisVector,
     NullspaceCompatibility,
+    PreparedFieldNullspace,
+    PreparedNullspace,
     RHSCompatibilityEvidence,
 )
 from .operator import (
@@ -38,7 +40,17 @@ from .operator import (
     FieldProviderPack,
     SourceDensity,
 )
-from .methods import CellCenteredSecondOrder
+from .methods import CellCenteredSecondOrder, PreparedFieldMethod
+from .lowering import (
+    PreparedFieldLoweringBinding,
+    PreparedFieldLoweringEvidence,
+    PreparedFieldLoweringProvider,
+    PreparedFieldLoweringRequest,
+    PreparedFieldLoweringResolution,
+    PreparedFieldRuntimeInstallContext,
+    PreparedFieldRuntimePreflightContext,
+    register_prepared_field_lowering_provider,
+)
 from .boundary_values import (
     BoundaryValue,
     LogicalTimeCoordinate,
@@ -52,7 +64,7 @@ from .poisson import (
     PoissonOperator,
     ScreenedPoissonOperator,
 )
-from .providers import ExternalFieldSolver
+from .providers import ExternalFieldSolver, PreparedFieldSolver
 from .policies import (
     FailFieldRead,
     FieldAttemptRejected,
@@ -97,6 +109,14 @@ __all__ = [
     "AnisotropicPoissonOperator",
     "CompositeHierarchySolve",
     "CellCenteredSecondOrder",
+    "PreparedFieldMethod",
+    "PreparedFieldLoweringBinding",
+    "PreparedFieldLoweringEvidence",
+    "PreparedFieldLoweringProvider",
+    "PreparedFieldLoweringRequest",
+    "PreparedFieldLoweringResolution",
+    "PreparedFieldRuntimeInstallContext",
+    "PreparedFieldRuntimePreflightContext",
     "BoundaryValue",
     "ConnectedComponentsManifest",
     "ConstantNullspace",
@@ -147,6 +167,8 @@ __all__ = [
     "PeriodicContribution",
     "PinnedValueGauge",
     "PoissonOperator",
+    "PreparedNullspace",
+    "PreparedFieldNullspace",
     "Provisional",
     "PreconditionerBinding",
     "RHSCompatibilityEvidence",
@@ -158,6 +180,7 @@ __all__ = [
     "ResolvedHierarchyPolicy",
     "ScreenedPoissonOperator",
     "ExternalFieldSolver",
+    "PreparedFieldSolver",
     "SolveOutcome",
     "SolveStatus",
     "SourceDensity",
@@ -174,4 +197,5 @@ __all__ = [
     "outputs",
     "policies",
     "rhs",
+    "register_prepared_field_lowering_provider",
 ]

@@ -3,8 +3,9 @@
 
 `emit_cpp_program` now lowers a DYNAMIC matrix-free linear solve: a ``matrix_free_operator`` whose
 apply ``out <- A(in)`` is an IR sub-block (``P.set_apply``, built from ``P.laplacian`` + the affine
-algebra) lowered to a C++ ``pops::ApplyFn`` lambda, and ``P.solve(LinearProblem(...), solver=...)``
-lowered to the runtime context's generic ``solve_linear_matfree`` seam. The iteration is DYNAMIC and
+algebra) lowered to a fresh C++ prepared-operator session, and
+``P.solve(LinearProblem(...), solver=...)``
+lowered to the runtime context's typed ``solve_prepared_linear`` seam. The iteration is DYNAMIC and
 lives C++-side, inside the loop -- the IR carries
 only the apply, the rhs, the method / tolerance / iteration budget. The persistent scratch (the
 Laplacian output, the solution field) is allocated ONCE at install time (a ``std::shared_ptr``
@@ -12,36 +13,47 @@ captured into the step closure), reused across every step and every Krylov itera
 
 (A) Codegen (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` solved by
     cg / bicgstab / richardson lowers to the apply lambda + ``ctx.laplacian`` +
-    ``ctx.solve_linear_matfree``; the spec validation errors fire (max_iter absent /
+    ``ctx.solve_prepared_linear``; the spec validation errors fire (max_iter absent /
     <= 0 -> ValueError "dynamic solver loops require max_iter"; tol <= 0 -> error; unknown method ->
     error; operator not a matrix_free_operator -> error).
 
-(B) End-to-end parity (skips unless the full toolchain is present): a 1-variable model (rho, zero
+(B) Internal native-ABI parity (skips unless the full toolchain is present): a 1-variable model
+    installed through the private ``_system`` seam (rho, zero
     flux); A = matrix_free_operator with apply out = in - alpha*Lap(in) (alpha = 0.1, SPD); the
     Program solves (I - alpha*Lap) phi = U via cg (tol 1e-10, max_iter 200) and commits U = phi.
     compile_problem -> install_program -> set a smooth periodic rho0 -> step once -> get_state, vs an
     OFFLINE numpy CG on the SAME discrete periodic 5-point system. Asserts max|compiled - offline| <=
-    1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
-    without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
+    1e-6, the solve changed the state, and the offline solve took > 1 iteration. Pytest-skips
+    explicitly without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
+    fakes the engine.
+    Public lifecycle acceptance is separate in ``test_public_krylov_lifecycle.py``.
 """
-from tests.python.support.requirements import require_native_or_skip
-from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+import pytest
 
-from pops.linalg import LinearProblem
+from pops.codegen import _compile_drivers as compile_drivers
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.numerics.reconstruction import FirstOrder
-from pops.time import FailRun, RejectAttempt
 from pops.numerics.riemann import Rusanov
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.time import FailRun, RejectAttempt
+from tests.python.support.requirements import require_native_or_skip
+from typed_program_support import typed_state
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        require_native_or_skip('test_time_solve_linear (pops.time unavailable: %s)' % exc)
+        require_native_or_skip(
+            'test_time_solve_linear (pops.time unavailable: %s)' % exc,
+            optional_skip=pytest.skip,
+        )
     return t
+
+
+@pytest.fixture(scope="module")
+def t():
+    return _pops_time()
 
 
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned for CG)
@@ -69,7 +81,7 @@ def _precond(scheme):
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
-                   preconditioner=None, action=None):
+                   preconditioner=None, action=None, operator_uses_dt=False):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; Program.solve
@@ -82,7 +94,8 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     def apply(P, out, x):
         lap = P.scalar_field("lap")
         P.laplacian(lap, x)
-        return x - alpha * lap  # out = in - alpha*Lap(in)
+        coefficient = P.dt if operator_uses_dt else alpha
+        return x - coefficient * lap  # out = in - coefficient*Lap(in)
 
     P.set_apply(A, apply)
     endpoint = typed_state(P, "blk", state_name="U").next
@@ -90,7 +103,12 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     solver = _krylov(
         method, max_iter=max_iter, rel_tol=tol, preconditioner=preconditioner)
     phi = P.solve(
-        LinearProblem(A, rhs, at=endpoint.point), solver=solver,
+        LinearProblem(
+            A, rhs, at=endpoint.point,
+            properties=(LinearOperatorProperties.symmetric_positive_definite()
+                        if method == "cg" else LinearOperatorProperties.general()),
+            nullspace=None),
+        solver=solver,
     ).consume(action=action or FailRun())
     P.commit(endpoint, phi)
     return P
@@ -99,48 +117,55 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="cg"))
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
+    for frag in ("pops::PreparedAffineOperatorSessionFactory make_apply_A", "ctx.laplacian",
+                 "return pops::PreparedAffineOperatorSessionCallbacks{",
+                 "ctx.solve_prepared_linear",
+                 "pops::PreparedAffineLinearProblem", "pops::KrylovWorkspace",
                  "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
 
 def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
-    src = emit_cpp_program(_solve_program(t, method="cg", action=RejectAttempt()))
+    src = emit_cpp_program(_solve_program(
+        t, method="cg", action=RejectAttempt(statuses=("iteration_limit",))))
     assert "#include <pops/runtime/program/step_transaction.hpp>" in src, src
     assert "pops::runtime::program::StepAttemptRejected" in src, src
     assert "solve_linear failed" in src, src
+    assert ".status == pops::SolveStatus::kIterationLimit" in src, src
+    assert ".status == pops::SolveStatus::kBreakdown" not in src, src
+    assert "action=fail_run" in src, src
 
 
 def test_bicgstab_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="bicgstab"))
-    assert "ctx.solve_linear_matfree" in src, src
-    assert "pops::ApplyFn{}" in src, "bicgstab uses the identity (empty) preconditioner\n%s" % src
+    assert "ctx.solve_prepared_linear" in src, src
+    assert "PreparedLinearPreconditioner::identity()" in src, src
 
 
 def test_richardson_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="richardson"))
-    assert "ctx.solve_linear_matfree" in src, src
+    assert "ctx.solve_prepared_linear" in src, src
 
 
 # ---- (A') GeometricMG preconditioner (ADC-516): the complete non-identity route ----
 def _solve_call(src):
     """The single generic context solve line of @p src."""
-    return [ln for ln in src.splitlines() if "ctx.solve_linear_matfree(" in ln][0]
+    return [ln for ln in src.splitlines() if "ctx.solve_prepared_linear(" in ln][0]
 
 
 def test_gmres_gmg_precond_codegen(t):
-    # GMRES + GeometricMG lowers to a REAL ApplyFn (one V-cycle of the wired multigrid), NOT the empty
-    # identity ApplyFn. ADC-637: the precond V-cycle cache lives in a persistent
-    # pops::runtime::program::GeometricMgPreconditioner (re-homed to the Schur-free coeff_elliptic_ops.hpp)
-    # the named lambda forwards apply() to.
+    # GMRES + GeometricMG lowers to a real workspace-session factory, not an identity callback.
+    # Every factory invocation creates a private GeometricMgPreconditioner state whose prepare/apply
+    # callbacks are captured together; mutable V-cycle storage is never shared between workspaces.
     src = emit_cpp_program(_solve_program(t, method="gmres", preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, (
         "the MG V-cycle preconditioner state must be emitted\n%s" % src)
     assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
-    assert "pops::ApplyFn precond_mg" in src, "a named real precond ApplyFn must be emitted\n%s" % src
-    call = _solve_call(src)
-    assert "precond_mg" in call, "gmres_solve must take the real precond, got: %s" % call
-    assert "pops::ApplyFn{}" not in call, "gmres+gmg must NOT pass the empty ApplyFn: %s" % call
+    assert "->prepare(ctx," in src, "MG must be built before the Krylov loop\n%s" % src
+    assert "pops::PreparedLinearPreconditionerSessionFactory make_precond_mg_session" in src, (
+        "a named native session factory must be emitted\n%s" % src)
+    assert "return pops::PreparedLinearPreconditionerSessionCallbacks{" in src, src
+    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
 
 
 def test_bicgstab_gmg_precond_codegen(t):
@@ -148,30 +173,32 @@ def test_bicgstab_gmg_precond_codegen(t):
                          preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
     assert "->apply(ctx," in src, src
-    call = _solve_call(src)
-    assert "precond_mg" in call and "pops::ApplyFn{}" not in call, call
+    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
 
 
 def test_identity_precond_byte_identical(t):
-    # The identity (default) path is unchanged: the empty ApplyFn{}, no MG apply emitted. The explicit
-    # Identity() descriptor and the None default lower to the SAME source.
+    # Identity owns no mutable native session. The explicit Identity() descriptor and the None
+    # default therefore lower to the same direct prepared identity source.
     src_default = emit_cpp_program(_solve_program(t, method="gmres"))
     src_identity = emit_cpp_program(_solve_program(t, method="gmres",
                                   preconditioner=_precond("identity")))
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
-    assert "pops::ApplyFn{}" in _solve_call(src_default), "identity gmres keeps the empty ApplyFn"
+    assert "PreparedLinearPreconditioner::identity()" in src_default
+    assert "PreparedLinearPreconditionerSessionFactory" not in src_default
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"
 
 
 def test_cg_gmg_precond_rejected(t):
-    # CG / Richardson have no preconditioner slot in the matrix-free path: a non-identity precond is an
-    # honest capability limit (ValueError naming GMRES/BiCGStab), not a transitional reject.
+    # The provider contract rejects methods that do not authenticate a supported placement.  Keep the
+    # assertion capability-based: the registry core must not recover a hard-coded method-name list.
     for method in ("cg", "richardson"):
         try:
             _solve_program(t, method=method, preconditioner=_precond("geometric_mg"))
         except ValueError as exc:
-            assert (method in str(exc) and "native preconditioner slot" in str(exc)
-                    and "GMRES or BiCGStab" in str(exc)), str(exc)
+            assert (
+                "preconditioner 'geometric_mg'" in str(exc)
+                and "method preconditioning placement" in str(exc)
+            ), str(exc)
         else:
             raise AssertionError("%s + GeometricMG must raise ValueError" % method)
 
@@ -191,7 +218,7 @@ def test_string_precond_rejected(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
         P.solve(
-            LinearProblem(A, U),
+            LinearProblem(A, U, nullspace=None),
             solver=_krylov(
                 "gmres", max_iter=10, preconditioner="geometric_mg"),
         )
@@ -213,6 +240,21 @@ def test_solve_validates(t):
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
 
+def test_prepared_codegen_has_frozen_snapshot_and_no_context_algebra_in_apply(t):
+    src = emit_cpp_program(_solve_program(t, method="cg", operator_uses_dt=True))
+    apply_body = src.split("pops::ApplyFn apply = ", 1)[1].split(
+        "return pops::PreparedAffineOperatorSessionCallbacks", 1
+    )[0]
+    assert "operator_evaluation_snapshot" in src
+    assert "probe_operator_evaluation" in src
+    assert "->prepare(*operator_snapshot" in src
+    assert "->bind(*prepared_problem" in src
+    assert "pops::PureFieldAlgebra" in apply_body
+    assert "ctx.axpy" not in apply_body and "ctx.lincomb" not in apply_body
+    assert "session_apply_dt" in src
+    assert "*apply_dt" in apply_body
+
+
 def test_max_iter_required(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
@@ -221,7 +263,7 @@ def test_max_iter_required(t):
     for bad in (None, 0, -5):
         try:
             P.solve(
-                LinearProblem(A, U), solver=_krylov("cg", max_iter=bad))
+                LinearProblem(A, U, nullspace=None), solver=_krylov("cg", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -236,7 +278,7 @@ def test_tol_positive(t):
     for bad in (0.0, -1e-8):
         try:
             P.solve(
-                LinearProblem(A, U),
+                LinearProblem(A, U, nullspace=None),
                 solver=_krylov("cg", max_iter=10, rel_tol=bad),
             )
         except ValueError as exc:
@@ -253,7 +295,7 @@ def test_string_method_rejected(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in ("cg", "minres"):
         try:
-            P.solve(LinearProblem(A, U), solver=bad)
+            P.solve(LinearProblem(A, U, nullspace=None), solver=bad)
         except TypeError as exc:
             assert "solver" in str(exc) and "typed descriptor" in str(exc), str(exc)
         else:
@@ -265,7 +307,7 @@ def test_operator_must_be_matrix_free(t):
     U = typed_state(P, "blk")
     try:
         P.solve(
-            LinearProblem(U, U), solver=_krylov("cg", max_iter=10))
+            LinearProblem(U, U, nullspace=None), solver=_krylov("cg", max_iter=10))
     except ValueError as exc:
         assert "operator" in str(exc), str(exc)
     else:
@@ -322,19 +364,26 @@ def _discrete_helmholtz(n, alpha):
     return apply
 
 
-def _run_section_b(t):
+def test_native_compiled_cg_matches_offline_periodic_helmholtz(t):
     try:
         import numpy as np
 
         import pops.runtime._engine_descriptors as engine
+        from pops.runtime._system import System
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
+        require_native_or_skip(
+            '-- (B) skipped: pops/numpy unavailable: %s --' % exc,
+            optional_skip=pytest.skip,
+        )
         return None
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
+        require_native_or_skip(
+            '-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --',
+            optional_skip=pytest.skip,
+        )
         return None
 
     from pops.physics._facade import Model
@@ -358,7 +407,10 @@ def _run_section_b(t):
             model=passive_model("solve_prog"),
             time=_solve_program(t, name="solve_step", method="cg", tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:200])
+        require_native_or_skip(
+            '-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:200],
+            optional_skip=pytest.skip,
+        )
         return None
 
     assert compiled.program_name == "solve_step", "handle carries the program name"
@@ -366,7 +418,10 @@ def _run_section_b(t):
     try:
         compiled_model = passive_model("solve_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
-        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:200])
+        require_native_or_skip(
+            '-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:200],
+            optional_skip=pytest.skip,
+        )
         return None
     sim.add_equation("blk", compiled_model,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
@@ -392,10 +447,9 @@ def _run_section_b(t):
     assert err <= 1e-6, "compiled matrix-free CG == offline numpy CG (max|d| = %.2e)" % err
     assert moved > 1e-6, "the solve must change the state from U0 (max|d| = %.2e)" % moved
     assert iters > 1, "the offline (and compiled) solve must take > 1 iteration, got %d" % iters
-    return (err, iters)
 
 
-def _run_section_b_gmg_precond(t):
+def test_native_gmres_geometric_mg_matches_offline_periodic_helmholtz(t):
     """(B') GMRES + GeometricMG preconditioner convergence (ADC-516), Kokkos/_pops-gated.
 
     Solves the SAME periodic Helmholtz system as (B) -- (I - alpha*Lap) phi = U -- but with GMRES
@@ -408,14 +462,21 @@ def _run_section_b_gmg_precond(t):
         import numpy as np
 
         import pops.runtime._engine_descriptors as engine
+        from pops.runtime._system import System
     except Exception as exc:  # noqa: BLE001
-        require_native_or_skip("-- (B') skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip(
+            "-- (B') skipped: pops/numpy unavailable: %s --" % exc,
+            optional_skip=pytest.skip,
+        )
         return None
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        require_native_or_skip("-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip(
+            "-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --",
+            optional_skip=pytest.skip,
+        )
         return None
 
     from pops.physics._facade import Model
@@ -438,7 +499,10 @@ def _run_section_b_gmg_precond(t):
         compiled = compile_drivers.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
         compiled_model = passive_model("solve_gmg_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        require_native_or_skip("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip(
+            "-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200],
+            optional_skip=pytest.skip,
+        )
         return None
 
     sim.add_equation("blk", compiled_model,
@@ -461,19 +525,3 @@ def _run_section_b_gmg_precond(t):
     # Convergence: the preconditioned GMRES reaches the SAME solution (unique) as the offline CG.
     assert err <= 1e-6, "compiled gmres+GeometricMG == offline solution (max|d| = %.2e)" % err
     assert moved > 1e-6, "the preconditioned solve must change the state (max|d| = %.2e)" % moved
-    return (err, iters)
-
-
-def _run():
-    t = _pops_time()
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for fn in fns:
-        fn(t)
-        print("ok", fn.__name__)
-    print("PASS test_time_solve_linear (A: %d checks)" % len(fns))
-    _run_section_b(t)
-    _run_section_b_gmg_precond(t)
-
-
-if __name__ == "__main__":
-    _run()

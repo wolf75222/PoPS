@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -63,7 +64,7 @@ def _emit(*, sources, field_coupled=False):
     operator = program.set_apply(operator, apply)
     linear_rhs = program.value("linear_rhs", -1 * iterate, at=point)
     correction = program.solve(
-        LinearProblem(operator, linear_rhs, at=point),
+        LinearProblem(operator, linear_rhs, at=point, nullspace=None),
         solver=krylov.GMRES(max_iter=4, rel_tol=1.0e-8, restart=2),
     ).consume(action=FailRun())
     endpoint = program.value("next", 1 * correction, at=temporal.next.point)
@@ -96,7 +97,9 @@ def _names(operator, jacvec):
 
 
 def _apply_source(source, operator):
-    start = source.index("pops::ApplyFn apply_A%d" % operator.id)
+    factory = source.index(
+        "pops::PreparedAffineOperatorSessionFactory make_apply_A%d_session" % operator.id)
+    start = source.index("pops::ApplyFn apply =", factory)
     return source[start:source.index("\n  };", start) + len("\n  };")]
 
 
@@ -107,7 +110,9 @@ def test_apply_captures_point_and_only_conditionally_allocates_boundary_scratch(
 
     point_allocation = source.index(
         "std::make_shared<pops::runtime::multiblock::BoundaryEvaluationPoint>()")
-    apply_declaration = source.index("pops::ApplyFn apply_A%d" % operator.id)
+    factory = source.index(
+        "pops::PreparedAffineOperatorSessionFactory make_apply_A%d_session" % operator.id)
+    apply_declaration = source.index("pops::ApplyFn apply =", factory)
     begin_step = source.index("ctx.begin_step(dt)")
     point_refresh = source.index("*%s = ctx.boundary_evaluation_point(" % names["point"])
     assert point_allocation < apply_declaration < begin_step < point_refresh
@@ -131,14 +136,18 @@ def test_step_refresh_uses_r0_exact_explicit_stage_and_separates_boundary_residu
     assert preceding.rfind("ctx.set_stage_time(1, 3);") > preceding.rfind("ctx.begin_step(dt)")
 
     residual = (
-        "ctx.boundary_residual_into_at(*%s, 0, *jac_uk%d_%d, *%s);"
-        % (names["point"], operator.id, jacvec.id, names["boundary_work"])
+        "ctx.boundary_residual_into_at(*%s, 0, *jac_uk%d_%d, *%s, "
+        "*operator_boundary_session%d_0);"
+        % (names["point"], operator.id, jacvec.id, names["boundary_work"], operator.id)
     )
     subtract = (
-        "ctx.axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+        "pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
         % (names["r0_core"], names["boundary_work"])
     )
-    assert source.index(refresh) < source.index(residual) < source.index(subtract)
+    prepare_call = source.index("->prepare(", source.index(refresh))
+    prepare_body = source[source.index("pops::PreparedResourceFn prepare ="):prepare_call]
+    assert source.index(refresh) < prepare_call
+    assert prepare_body.index(residual) < prepare_body.index(subtract)
 
 
 @pytest.mark.parametrize(("sources", "flux_only"), [(None, "false"), ([], "true")])
@@ -148,16 +157,20 @@ def test_apply_uses_point_qualified_core_and_exact_boundary_jvp(sources, flux_on
     apply_source = _apply_source(source, operator)
 
     assert (
-        "ctx.rhs_core_into_at(*%s, 0, *jac_up%d_%d, *jac_rp%d_%d, %s);"
-        % (names["point"], operator.id, jacvec.id, operator.id, jacvec.id, flux_only)
+        "ctx.rhs_core_into_at(*%s, 0, *jac_up%d_%d, *jac_rp%d_%d, %s, "
+        "*operator_boundary_session%d_0);"
+        % (names["point"], operator.id, jacvec.id, operator.id, jacvec.id, flux_only,
+           operator.id)
     ) in apply_source
     assert (
         "ctx.boundary_jvp_into_at(*%s, 0, *jac_uk%d_%d, "
-        "const_cast<pops::MultiFab&>(in), *%s);"
-        % (names["point"], operator.id, jacvec.id, names["boundary_work"])
+        "const_cast<pops::MultiFab&>(in), *%s, *operator_boundary_session%d_0);"
+        % (names["point"], operator.id, jacvec.id, names["boundary_work"], operator.id)
     ) in apply_source
-    assert "ctx.axpy(out, -*%s, *%s);" % (names["cdt"], names["boundary_work"]) \
-        in apply_source
+    assert (
+        "pops::PureFieldAlgebra::axpy(out, -*%s, *%s);"
+        % (names["cdt"], names["boundary_work"])
+    ) in apply_source
     assert "ctx.rhs_into" not in apply_source
     assert "ctx.neg_div_flux_default_into" not in apply_source
     assert "ctx.boundary_evaluation_point" not in apply_source
@@ -182,24 +195,84 @@ def test_field_coupled_apply_restores_the_frozen_provider_after_the_perturbed_rh
         % names["field_slot"]
     ) in source
     assert names["field_slot"] in apply_source.splitlines()[0]
-    perturbed_solve = (
-        "ctx.solve_fields_from_state_at(*%s, %s, 0, *jac_up%d_%d);"
-        % (names["point"], names["field_slot"], operator.id, jacvec.id)
-    )
-    frozen_solve = (
-        "ctx.solve_fields_from_state_at(*%s, %s, 0, *jac_uk%d_%d);"
-        % (names["point"], names["field_slot"], operator.id, jacvec.id)
+    transactional_evaluation = (
+        "ctx.evaluate_with_field_state_at(*%s, %s, 0, *jac_up%d_%d, "
+        "*jac_uk%d_%d, [&]() {"
+        % (
+            names["point"], names["field_slot"], operator.id, jacvec.id,
+            operator.id, jacvec.id,
+        )
     )
     perturbed_rhs = "ctx.rhs_core_into_at(*%s" % names["point"]
     boundary_jvp = "ctx.boundary_jvp_into_at(*%s" % names["point"]
-    assert apply_source.count("ctx.solve_fields_from_state_at(") == 2
+    assert apply_source.count("ctx.evaluate_with_field_state_at(") == 1
+    assert "ctx.solve_fields_from_state_at(" not in apply_source
+    transaction_end = apply_source.index("});", apply_source.index(transactional_evaluation))
     assert (
-        apply_source.index(perturbed_solve)
+        apply_source.index(transactional_evaluation)
         < apply_source.index(perturbed_rhs)
-        < apply_source.index(frozen_solve)
+        < transaction_end
         < apply_source.index(boundary_jvp)
     )
     assert "ctx.solve_fields_from_state(0, *jac_up" not in apply_source
+
+
+def test_provider_concurrency_matches_the_real_external_context_contract():
+    independent, independent_operator, _, _ = _emit(sources=None, field_coupled=False)
+    exclusive, exclusive_operator, _, _ = _emit(sources=None, field_coupled=True)
+    assert (
+        "make_apply_A%d_session, pops::PreparedOperatorConcurrency::Independent);"
+        % independent_operator.id
+    ) in independent
+    assert (
+        "make_apply_A%d_session, pops::PreparedOperatorConcurrency::Exclusive);"
+        % exclusive_operator.id
+    ) in exclusive
+
+
+def test_reused_operator_session_refreshes_private_state_time_and_point_before_boundary_prepare():
+    source, operator, jacvec, _ = _emit(sources=None)
+    names = _names(operator, jacvec)
+    prepare_start = source.index("pops::PreparedResourceFn prepare =")
+    prepare_end = source.index("\n    };", prepare_start)
+    prepare = source[prepare_start:prepare_end]
+    refresh_state = (
+        "pops::PureFieldAlgebra::copy_allocated(*jac_uk%d_%d, "
+        "*template_jac_uk%d_%d);"
+        % (operator.id, jacvec.id, operator.id, jacvec.id)
+    )
+    refresh_dt = (
+        "*%s = *template_%s;" % (names["cdt"], names["cdt"])
+    )
+    refresh_point = (
+        "*%s = *template_%s;" % (names["point"], names["point"])
+    )
+    boundary_prepare = "ctx.boundary_residual_into_at(*%s" % names["point"]
+    assert prepare.index(refresh_state) < prepare.index(refresh_dt)
+    assert prepare.index(refresh_dt) < prepare.index(refresh_point)
+    assert prepare.index(refresh_point) < prepare.index(boundary_prepare)
+
+    private_fields = re.findall(
+        r"auto session_(\w+) = std::make_shared<pops::MultiFab>\(\*\1\);", source)
+    private_scalars = re.findall(
+        r"auto session_(\w+) = std::make_shared<pops::Real>\(\*\1\);", source)
+    private_points = re.findall(
+        r"auto session_(\w+) = std::make_shared<"
+        r"pops::runtime::multiblock::BoundaryEvaluationPoint>\(\*\1\);",
+        source,
+    )
+    assert private_fields and private_scalars and private_points
+    for name in private_fields:
+        assert (
+            f"pops::PureFieldAlgebra::copy_allocated(*{name}, *template_{name});"
+            in prepare
+        )
+    for name in (*private_scalars, *private_points):
+        assert f"*{name} = *template_{name};" in prepare
+
+    apply_start = source.index("pops::ApplyFn apply =", prepare_end)
+    apply_capture = source[apply_start:source.index("](", apply_start)]
+    assert "template_" not in apply_capture
 
 
 def test_codegen_refuses_to_invent_a_missing_r0_stage_point():

@@ -8,6 +8,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 import errno
 import os
+import re
+import shlex
 from threading import Lock
 import tempfile
 import time
@@ -17,14 +19,85 @@ from typing import Any
 
 # Optimization flags shared by generated libraries on the sole production path.
 # Default -O3 -DNDEBUG: hot-loop asserts disarmed + full vectorization -> parity with a native block (at
-# -O2 without -DNDEBUG the generated kernel is ~1.48x). $POPS_DSL_OPTFLAGS overrides; affects NEITHER the
-# ABI NOR portability.
+# -O2 without -DNDEBUG the generated kernel is ~1.48x). $POPS_DSL_OPTFLAGS may override this only
+# through the closed path-free vocabulary below. The flags do not alter the ABI contract; explicit
+# ISA choices and every other accepted codegen option remain part of the artifact identity.
 _DSL_OPTFLAGS_DEFAULT = "-O3 -DNDEBUG"
 
+# This is deliberately a closed vocabulary. ``POPS_DSL_OPTFLAGS`` participates in a native
+# compiler command whose other inputs are content-authenticated. Accepting a generic compiler token
+# here would re-open hidden build inputs through response files, forced includes, search paths,
+# compiler plugins, object files or linker options. Additions therefore belong here one semantic
+# flag at a time and must remain path-free.
+_DSL_CODEGEN_EXACT_FLAGS = frozenset({
+    "-DNDEBUG",
+    "-UNDEBUG",
+    "-fassociative-math",
+    "-ffast-math",
+    "-ffinite-math-only",
+    "-finline-functions",
+    "-finline-functions-called-once",
+    "-fmath-errno",
+    "-fno-associative-math",
+    "-fno-fast-math",
+    "-fno-finite-math-only",
+    "-fno-inline-functions",
+    "-fno-inline-functions-called-once",
+    "-fno-math-errno",
+    "-fno-omit-frame-pointer",
+    "-fno-reciprocal-math",
+    "-fno-semantic-interposition",
+    "-fno-signed-zeros",
+    "-fno-slp-vectorize",
+    "-fno-strict-aliasing",
+    "-fno-trapping-math",
+    "-fno-tree-vectorize",
+    "-fno-unroll-loops",
+    "-fno-vectorize",
+    "-fomit-frame-pointer",
+    "-freciprocal-math",
+    "-fsigned-zeros",
+    "-fslp-vectorize",
+    "-fstrict-aliasing",
+    "-ftrapping-math",
+    "-ftree-vectorize",
+    "-funroll-loops",
+    "-fvectorize",
+})
+_DSL_CODEGEN_FLAG_PATTERNS = (
+    re.compile(r"-O(?:0|1|2|3|s|z|g|fast)\Z"),
+    re.compile(r"-(?:march|mcpu|mtune)=[A-Za-z0-9][A-Za-z0-9_.+-]*\Z"),
+    re.compile(r"-ffp-contract=(?:fast|off|on)\Z"),
+)
 
-def _dsl_optflags() -> list:
-    """Optimization flags list for the production DSL .so (cf. _DSL_OPTFLAGS_DEFAULT)."""
-    return os.environ.get("POPS_DSL_OPTFLAGS", _DSL_OPTFLAGS_DEFAULT).split()
+
+def _is_safe_dsl_codegen_flag(flag: str) -> bool:
+    # ``native`` is path-free but host-dependent. The artifact cache is architecture-scoped, not
+    # CPU-feature scoped, so accepting it could reuse an instruction-set-specific binary on a
+    # different machine. Require an explicit CPU/ISA token that enters the artifact identity.
+    if flag.endswith("=native"):
+        return False
+    return flag in _DSL_CODEGEN_EXACT_FLAGS or any(
+        pattern.fullmatch(flag) is not None for pattern in _DSL_CODEGEN_FLAG_PATTERNS
+    )
+
+
+def _dsl_optflags() -> list[str]:
+    """Return the closed, path-free optimization flags for a production DSL artifact."""
+    raw = os.environ.get("POPS_DSL_OPTFLAGS", _DSL_OPTFLAGS_DEFAULT)
+    try:
+        flags = shlex.split(raw, posix=True)
+    except ValueError as exc:
+        raise ValueError("POPS_DSL_OPTFLAGS is not a valid shell-style token list") from exc
+    for flag in flags:
+        if not _is_safe_dsl_codegen_flag(flag):
+            raise ValueError(
+                "POPS_DSL_OPTFLAGS rejects unsupported token %r; only the closed path-free "
+                "optimization/codegen allowlist is accepted (no include/search paths, forced "
+                "includes, object/response files, linker options, plugins or toolchain overrides)"
+                % flag
+            )
+    return flags
 
 
 def _platform_cache_key() -> str:
@@ -33,8 +106,7 @@ def _platform_cache_key() -> str:
     key, a .so x86_64 (Rosetta) or -march=native would be reused on another machine/arch via
     a shared cache (NFS, synchronized home) -> SIGILL (illegal instruction) or cryptic dlopen."""
     import platform
-    return "arch=%s;optflags=%s" % (platform.machine(),
-                                    os.environ.get("POPS_DSL_OPTFLAGS", _DSL_OPTFLAGS_DEFAULT))
+    return "arch=%s;optflags=%s" % (platform.machine(), " ".join(_dsl_optflags()))
 
 
 # --- Out-of-source build cache -----------------------------------------------

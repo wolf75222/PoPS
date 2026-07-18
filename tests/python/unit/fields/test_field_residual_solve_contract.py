@@ -17,6 +17,7 @@ from pops.fields import (
     FieldResidualContract,
     FieldResidualDependencies,
     FieldRestartContract,
+    FieldHierarchyPolicy,
     FieldSolveCapabilities,
     FieldSolveResolver,
     FieldValidity,
@@ -32,6 +33,7 @@ from pops.fields import (
     PreconditionerBinding,
     Provisional,
     RHSCompatibilityEvidence,
+    ResolvedHierarchyPolicy,
     SolveOutcome,
     SolveStatus,
 )
@@ -154,11 +156,21 @@ def _residual_contract():
         contributions, residual, jacobian, jvp, coverage, restart)
 
 
-def _capabilities(*, hierarchy=("composite", "level_local"), layout="composite",
+def _hierarchy_policy(name="composite"):
+    return ResolvedHierarchyPolicy(
+        "pops.field-hierarchy.%s" % name,
+        1,
+        "pops.field-hierarchy.options.empty@1",
+        {},
+    )
+
+
+def _capabilities(*, inferred="composite",
                   native=("residual", "jacobian", "jvp", "restart"),
                   boundaries=("dirichlet", "neumann", "mixed", "periodic")):
     return FieldSolveCapabilities(
-        _h("native_fields", "field_solve_capability", CASE), tuple(hierarchy), layout,
+        _h("native_fields", "field_solve_capability", CASE),
+        _hierarchy_policy(inferred),
         tuple(native), tuple(boundaries))
 
 
@@ -256,19 +268,37 @@ def test_hierarchy_and_native_contracts_resolve_by_capabilities_before_codegen()
     capabilities = _capabilities()
     resolver = FieldSolveResolver(capabilities)
     assert resolver.resolve(
-        residual, CompositeHierarchySolve(), _layout()).hierarchy.mode == "composite"
+        residual, CompositeHierarchySolve(), _layout()
+    ).hierarchy.policy_id == "pops.field-hierarchy.composite"
     assert resolver.resolve(
-        residual, LevelByLevelSolve(), _layout()).hierarchy.mode == "level_local"
+        residual, LevelByLevelSolve(), _layout()
+    ).hierarchy.policy_id == "pops.field-hierarchy.level-local"
     assert resolver.resolve(
-        residual, InferHierarchyFromLayout(), _layout()).hierarchy.mode == "composite"
-    with pytest.raises(ValueError, match="unknown hierarchy policy"):
-        capabilities.resolve_hierarchy("coarse")
+        residual, InferHierarchyFromLayout(), _layout()
+    ).hierarchy.policy_id == "pops.field-hierarchy.composite"
 
-    unsupported_hierarchy = FieldSolveResolver(_capabilities(hierarchy=("level_local",)))
-    with pytest.raises(FieldArtifactUnavailable) as hierarchy_error:
-        unsupported_hierarchy.resolve(residual, CompositeHierarchySolve(), _layout())
-    assert hierarchy_error.value.report["artifact_created"] is False
-    assert hierarchy_error.value.report["missing"] == ["composite"]
+    class ExternalCoupledHierarchy(FieldHierarchyPolicy):
+        def options(self):
+            return self.resolved_authority().authority()
+
+        def resolved_authority(self):
+            return ResolvedHierarchyPolicy(
+                "tests.field-hierarchy.coupled-graph",
+                3,
+                "tests.field-hierarchy.coupled-graph.options@2",
+                {"overlap": 2},
+            )
+
+    external = resolver.resolve(
+        residual, ExternalCoupledHierarchy(), _layout()
+    ).hierarchy
+    assert external.authority() == {
+        "policy_id": "tests.field-hierarchy.coupled-graph",
+        "interface_version": 3,
+        "option_schema": "tests.field-hierarchy.coupled-graph.options@2",
+        "options": {"overlap": 2},
+    }
+    assert external.capability == capabilities.handle
 
     missing_jvp = FieldSolveResolver(
         _capabilities(native=("residual", "jacobian", "restart")))

@@ -217,6 +217,21 @@ PYTHON_SMOKE_TESTS = (
     "tests/python/unit/runtime/test_capabilities.py",
 )
 
+# Native prepared-provider protocol headers are consumed through generated extension modules, not
+# Python imports.  Their three external-provider E2Es are therefore an explicit protocol closure:
+# import-graph selection alone cannot discover this cross-language dependency.
+PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS = (
+    "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
+    "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
+    "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
+)
+PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES = (
+    "include/pops/numerics/elliptic/",
+    "include/pops/core/identity/prepared_provider",
+    "include/pops/mesh/layout/field_distribution.hpp",
+    "include/pops/mesh/storage/field_replica_consensus.hpp",
+)
+
 
 def normalize(path: str) -> str:
     cleaned = path.strip().replace("\\", "/")
@@ -275,18 +290,22 @@ def manifest_cpp_suites(manifest: dict, *, include_mpi: bool = False) -> list[di
         if not name:
             raise SystemExit("invalid C++ suite without name in tests/test_manifest.toml")
         # MPI-only suites are built solely in the ci-mpi job; keep them out of the serial
-        # selection or the gate hits `ninja: unknown target`. The manifest label/mpi_nproc
-        # is the primary filter; the `mpi` NAME SEGMENT check is a belt-and-braces guard for
-        # a suite that forgets the label (see #435, test_amr_regrid_mpi_parity).
+        # selection or the gate hits `ninja: unknown target`. The manifest label and exact MPI
+        # launch contract are the primary filter; the `mpi` NAME SEGMENT check is a
+        # belt-and-braces guard for a suite that forgets the label (see #435,
+        # test_amr_regrid_mpi_parity).
         if not include_mpi and (
-            "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_")
+            "mpi" in labels
+            or suite.get("mpi_nproc")
+            or suite.get("mpi_rank_parity")
+            or "mpi" in name.split("_")
         ):
             continue
         sources = [normalize(str(source)) for source in suite.get("sources", [])]
         if not sources:
             raise SystemExit(f"C++ suite {name} has no sources in tests/test_manifest.toml")
         ranks_by_field: dict[str, tuple[int, ...]] = {}
-        for field in ("mpi_nproc", "mpi_variants"):
+        for field in ("mpi_nproc", "mpi_rank_parity", "mpi_variants"):
             raw_ranks = suite.get(field, [])
             if not isinstance(raw_ranks, list):
                 raise SystemExit(f"C++ suite {name} has invalid {field}; expected a TOML array")
@@ -301,14 +320,21 @@ def manifest_cpp_suites(manifest: dict, *, include_mpi: bool = False) -> list[di
                 raise SystemExit(f"C++ suite {name} must sort {field} in ascending order")
             ranks_by_field[field] = ranks
         mpi_nproc = ranks_by_field["mpi_nproc"]
+        mpi_rank_parity = ranks_by_field["mpi_rank_parity"]
         mpi_variants = ranks_by_field["mpi_variants"]
-        if ("mpi" in labels) != bool(mpi_nproc):
+        mpi_only_contracts = int(bool(mpi_nproc)) + int(bool(mpi_rank_parity))
+        if mpi_only_contracts != int("mpi" in labels):
             raise SystemExit(
-                f"C++ suite {name} must pair its mpi label with an exact mpi_nproc rank set"
+                f"C++ suite {name} must pair its mpi label with exactly one of "
+                "mpi_nproc or mpi_rank_parity"
             )
-        if mpi_variants and ("mpi" in labels or mpi_nproc):
+        if mpi_rank_parity and len(mpi_rank_parity) < 2:
             raise SystemExit(
-                f"C++ suite {name} cannot mix mpi_variants with an MPI-only label/mpi_nproc"
+                f"C++ suite {name} mpi_rank_parity must contain at least two ranks"
+            )
+        if mpi_variants and ("mpi" in labels or mpi_nproc or mpi_rank_parity):
+            raise SystemExit(
+                f"C++ suite {name} cannot mix mpi_variants with an MPI-only launch contract"
             )
         suites.append(
             {
@@ -316,6 +342,7 @@ def manifest_cpp_suites(manifest: dict, *, include_mpi: bool = False) -> list[di
                 "labels": labels,
                 "sources": sources,
                 "mpi_nproc": mpi_nproc,
+                "mpi_rank_parity": mpi_rank_parity,
                 "mpi_variants": mpi_variants,
             }
         )
@@ -346,12 +373,14 @@ def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
 
 
 def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
-    """Return every manifest-owned MPI CTest name and its exact process count.
+    """Return every manifest-owned MPI CTest name and its exact processor reservation.
 
-    MPI-only suites and serial suites with ``mpi_variants`` both register CTest
-    names as ``<target>_np<n>``.  Keeping the complete projection here lets CI
-    authenticate the configured inventory by identity, label and ``PROCESSORS``
-    instead of accepting any unrelated set with the same aggregate count.
+    ``mpi_nproc`` and serial ``mpi_variants`` register one ``<target>_np<n>`` CTest
+    per rank count. ``mpi_rank_parity`` registers one ``<target>_rank_parity`` CTest
+    which sequentially launches every declared rank count and reserves their maximum.
+    Keeping the complete projection here lets CI authenticate the configured inventory
+    by identity, label and ``PROCESSORS`` instead of accepting an unrelated set with the
+    same aggregate count.
     """
     plan: dict[str, int] = {}
     for suite in manifest_cpp_suites(manifest, include_mpi=True):
@@ -360,6 +389,11 @@ def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
             if name in plan:
                 raise SystemExit(f"duplicate manifest-owned MPI CTest name: {name}")
             plan[name] = nproc
+        if suite["mpi_rank_parity"]:
+            name = f"{suite['name']}_rank_parity"
+            if name in plan:
+                raise SystemExit(f"duplicate manifest-owned MPI CTest name: {name}")
+            plan[name] = max(suite["mpi_rank_parity"])
     if not plan:
         raise SystemExit("test manifest declares no MPI CTest launches")
     return dict(sorted(plan.items()))
@@ -1346,6 +1380,20 @@ def compute_python_selection(changed_files: str, force_all: bool) -> PythonSelec
             if label_hits:
                 selected.update(label_hits)
                 why.add("manifest-labels")
+
+        if not full and any(
+            startswith_any(path, PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES)
+            for path in changed
+        ):
+            protocol_hits = {
+                test for test in PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS
+                if test in all_test_set
+            }
+            selected.update(protocol_hits)
+            if protocol_hits:
+                why.add("elliptic-native-provider-contract")
+            for test in protocol_hits:
+                add_reason(reasons, test, "elliptic-native-provider-contract")
 
         if not full and selected:
             _apply_cross_test_closure(selected, reasons)

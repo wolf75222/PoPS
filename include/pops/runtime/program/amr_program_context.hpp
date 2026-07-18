@@ -1,8 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -12,28 +15,32 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
-#include <pops/core/foundation/types.hpp>                         // Real, POPS_HD
-#include <pops/mesh/boundary/physical_bc.hpp>                     // fill_ghosts
-#include <pops/mesh/execution/for_each.hpp>                       // for_each_cell, device_fence
-#include <pops/mesh/geometry/geometry.hpp>                        // Geometry
-#include <pops/mesh/storage/mf_arith.hpp>                         // saxpy / lincomb
-#include <pops/mesh/storage/multifab.hpp>                         // MultiFab
+#include <pops/core/foundation/types.hpp>           // Real, POPS_HD
+#include <pops/mesh/boundary/physical_bc.hpp>       // fill_ghosts
+#include <pops/mesh/execution/for_each.hpp>         // for_each_cell, device_fence
+#include <pops/mesh/geometry/geometry.hpp>          // Geometry
+#include <pops/mesh/layout/field_distribution.hpp>  // FieldDistribution
+#include <pops/mesh/storage/mf_arith.hpp>           // saxpy / lincomb
+#include <pops/mesh/storage/multifab.hpp>           // MultiFab
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
-#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (flat solve_linear_matfree)
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>           // GeometricMG (Krylov precond)
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine the driver wraps)
-#include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite solver
+#include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (the engine the driver wraps)
+#include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>  // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
 #include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
 
@@ -72,6 +79,79 @@ class AmrProgramContext {
 
     bool bound() const { return epoch != std::numeric_limits<std::uint64_t>::max(); }
   };
+  /// Logical-clock child interval nested inside the current AMR level window.  The hierarchy driver
+  /// remains the authority for level substeps; this move-only companion further partitions that exact
+  /// window for Program.subcycle and restores it on normal, nested, and exceptional exits.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
+        : owner_(&owner),
+          saved_window_(owner.current_window_),
+          saved_dt_(owner.current_level_dt_),
+          saved_stage_(owner.stage_time_) {
+      if (count <= 0 || iteration < 0 || iteration >= count)
+        throw std::invalid_argument(
+            "AMR Program logical evaluation requires a valid child iteration");
+      if (!saved_window_ || !std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
+        throw std::logic_error(
+            "AMR Program logical evaluation requires a prepared parent level window");
+      const double child_dt = saved_dt_ / static_cast<double>(count);
+      const double child_physical_time =
+          saved_window_->begin.physical_time + static_cast<double>(iteration) * child_dt;
+      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_physical_time))
+        throw std::overflow_error("AMR Program logical evaluation child window is not finite");
+      const amr::Rational parent_span = saved_window_->end.phase - saved_window_->begin.phase;
+      const amr::Rational child_begin_phase =
+          saved_window_->begin.phase + parent_span * amr::Rational(iteration, count);
+      const amr::Rational child_end_phase =
+          saved_window_->begin.phase + parent_span * amr::Rational(iteration + 1, count);
+      amr::ClockStamp child_begin = saved_window_->begin;
+      child_begin.phase = child_begin_phase;
+      child_begin.physical_time = child_physical_time;
+      amr::ClockStamp child_end = child_begin;
+      child_end.phase = child_end_phase;
+      child_end.physical_time = child_physical_time + child_dt;
+
+      owner.invalidate_active_operator_snapshot_();
+      child_dt_ = child_dt;
+      owner.current_window_ = amr::ClockWindow{child_begin, child_end};
+      owner.current_level_dt_ = child_dt;
+      owner.stage_time_ = amr::Rational(0, 1);
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          saved_window_(other.saved_window_),
+          saved_dt_(other.saved_dt_),
+          saved_stage_(other.saved_stage_),
+          child_dt_(other.child_dt_) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("AMR Program logical evaluation scope is no longer active");
+      return static_cast<Real>(child_dt_);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->current_window_ = saved_window_;
+      owner_->current_level_dt_ = saved_dt_;
+      owner_->stage_time_ = saved_stage_;
+      owner_->invalidate_active_operator_snapshot_();
+      owner_ = nullptr;
+    }
+
+    const AmrProgramContext* owner_ = nullptr;
+    std::optional<amr::ClockWindow> saved_window_;
+    double saved_dt_ = 0.0;
+    amr::Rational saved_stage_{0, 1};
+    double child_dt_ = 0.0;
+  };
   /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
   /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
   /// blocks must be materialized -- install_program forces the build before install()).
@@ -83,26 +163,72 @@ class AmrProgramContext {
           "multi-block AmrRuntime build before installing a compiled time Program over the "
           "hierarchy");
     require_supported_program_refinement_ratios_(*eng_);
+    stage_restore_scratch_.reserve(eng_->n_blocks());
+    hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
   }
   /// Direct ctor (C++ tests / the driver): an engine + the facade carrying the param / block-map stores.
   AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {
     // Keep the established contract-test seam: argument/rate validation must be exercisable before
     // any topology lookup. Every executable driver supplies a real engine and is ratio-validated here;
     // the production void* constructor above remains fail-closed when the engine was not built.
-    if (eng_ != nullptr) require_supported_program_refinement_ratios_(*eng_);
+    if (eng_ != nullptr) {
+      require_supported_program_refinement_ratios_(*eng_);
+      stage_restore_scratch_.reserve(eng_->n_blocks());
+    }
+    if (facade_ != nullptr)
+      hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
   }
 
-  // --- driver state (mutable: every seam method is const, like ProgramContext::mg_precond_) ----------
+  // --- driver state (mutable: every seam method mirrors the const ProgramContext surface) ------------
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
+  /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
+  /// generated Programs then rematerialize every per-level persistent field/problem/workspace once,
+  /// before entering the next hierarchy advance. Compatible steps retain the same bundles.
+  std::uint64_t program_resource_topology_epoch() const { return eng_->topology_epoch(); }
+  /// Runtime-only companion to the checkpointed epoch. This changes whenever hierarchy storage is
+  /// reconstructed, including checkpoint restore and rejected-attempt rollback, so an equal restored
+  /// epoch/nlev pair can never authenticate stale layout-bound Program resources.
+  std::uint64_t program_resource_topology_generation() const {
+    return eng_->topology_materialization_generation();
+  }
+  /// Exact ownership of the level whose install-time Program resources are being materialized.
+  /// Generated prepared solvers must not infer replication from rank-local DistributionMapping
+  /// metadata: a replicated level intentionally names the current rank as its local owner.
+  const PreparedVectorDistribution& program_resource_vector_distribution() const {
+    return eng_->level_is_replicated(level_) ? PreparedVectorDistribution::Replicated
+                                             : PreparedVectorDistribution::Distributed;
+  }
+  FieldDistribution program_resource_field_storage_distribution() const {
+    return eng_->level_is_replicated(level_) ? FieldDistribution::Replicated
+                                             : FieldDistribution::Distributed;
+  }
+  int program_resource_field_level() const { return level_; }
+  /// Materialize absolute hierarchy metadata for the current level's persistent prepared resource.
+  /// The generated solver remains topology-agnostic; AMR alone owns level numbering, per-level
+  /// ownership and metric resolution.
+  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
+    if (level_ < 0 || level_ >= nlev())
+      throw std::out_of_range("AMR Program field-nullspace resource level is out of range");
+    const Geometry geometry = eng_->level_geom(level_);
+    const Real measure = geometry.dx() * geometry.dy();
+    for (FieldNullspaceBasis& basis : plan.bases) {
+      basis.cell_measure.assign(static_cast<std::size_t>(nlev()), Real(0));
+      basis.cell_measure[static_cast<std::size_t>(level_)] = measure;
+    }
+  }
   int nlev() const { return eng_->nlev(); }
-  bool has_refined_hierarchy() const { return configured_tensor_elliptic().has_fine_patches(); }
+  bool uses_prepared_krylov_fallback() const {
+    return configured_hierarchy_tensor_solver_().execution_path() ==
+           HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
+  }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
   void reset_step() const {
     default_solve_report_.reset();
-    named_solve_reports_.clear();
+    for (auto& [_, report] : named_solve_reports_)
+      report = SolveReport{};
     flux_ledger_.clear();
     flux_contributions_.clear();
     rate_provenance_.clear();
@@ -195,6 +321,9 @@ class AmrProgramContext {
   ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
                                                    const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
+  }
+  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(*this, iteration, count);
   }
   void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
                                    Real offset) const {
@@ -341,17 +470,38 @@ class AmrProgramContext {
     eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
                                  flux_only);
   }
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
+                                 flux_only, boundary);
+  }
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                                  MultiFab& u, MultiFab& c) const {
     count_kernel();
     eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
                                           point, u, c);
   }
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c,
+                                 const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
+                                          point, u, c, boundary);
+  }
   void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                             MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
     eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
                                      v, j);
+  }
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j,
+                            const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
+                                     v, j, boundary);
   }
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
@@ -461,15 +611,16 @@ class AmrProgramContext {
   SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     if (level_ == 0) {
       MultiFab& live = state(b);
-      MultiFab saved = live;  // stash the live state
+      MultiFab& saved = stage_state_scratch_for_(b, level_, live);
+      PureFieldAlgebra::copy_allocated(saved, live);
       default_solve_report_.reset();
       SolveReport report;
       try {
-        live = u_stage;  // solve from the stage state
+        PureFieldAlgebra::copy_allocated(live, u_stage);
         report = eng_->solve_default_field();
-        live = std::move(saved);  // restore the live state (the commit owns it)
+        PureFieldAlgebra::copy_allocated(live, saved);
       } catch (...) {
-        live = std::move(saved);
+        PureFieldAlgebra::copy_allocated(live, saved);
         throw;
       }
       if (report.solved())
@@ -495,45 +646,72 @@ class AmrProgramContext {
                   "a fine-level stage perturbation requires a composite field solver");
     named_solve_reports_.erase(provider_slot);
     MultiFab& live = eng_->level_state(static_cast<std::size_t>(sys_block(b)), point.level);
-    MultiFab saved = live;
+    MultiFab& saved = stage_state_scratch_for_(b, point.level, live);
+    PureFieldAlgebra::copy_allocated(saved, live);
     SolveReport report;
     try {
-      live = u_stage;
+      PureFieldAlgebra::copy_allocated(live, u_stage);
       report = eng_->solve_named_fields(&provider_slot);
-      live = std::move(saved);
+      PureFieldAlgebra::copy_allocated(live, saved);
     } catch (...) {
-      live = std::move(saved);
+      PureFieldAlgebra::copy_allocated(live, saved);
+      named_solve_reports_.insert_or_assign(provider_slot, SolveReport{});
       throw;
     }
-    if (report.solved())
-      named_solve_reports_[provider_slot] = report;
+    named_solve_reports_.insert_or_assign(provider_slot, report);
     return report;
+  }
+  template <class Body>
+  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::string& provider_slot, int b,
+                                    MultiFab& evaluation_state, MultiFab& restore_state,
+                                    Body&& body) const {
+    const auto restore = [&]() {
+      const SolveReport restored =
+          solve_fields_from_state_at(point, provider_slot, b, restore_state);
+      if (!restored.solved_value_available())
+        throw_field_solve_failure_(restored, "restoring the frozen field state");
+    };
+    const SolveReport prepared =
+        solve_fields_from_state_at(point, provider_slot, b, evaluation_state);
+    if (!prepared.solved_value_available()) {
+      restore();
+      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
+    }
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      const std::exception_ptr failure = std::current_exception();
+      restore();
+      std::rethrow_exception(failure);
+    }
+    restore();
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
   SolveReport solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     if (level_ != 0) {
       const auto cached = named_solve_reports_.find(field);
-      if (cached == named_solve_reports_.end())
+      if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
             "AmrProgramContext::solve_fields_from_state(field): fine-level reuse requires an "
             "accepted coarse SolveReport");
       return cached->second;  // the coarse solve publishes/injects every level once per stage
     }
-    named_solve_reports_.erase(field);
     MultiFab& live = state(b);
-    MultiFab published = live;
+    MultiFab& published = stage_state_scratch_for_(b, level_, live);
+    PureFieldAlgebra::copy_allocated(published, live);
     SolveReport report;
     try {
-      live = u_stage;
+      PureFieldAlgebra::copy_allocated(live, u_stage);
       report = eng_->solve_named_fields(&field);
-      live = std::move(published);
+      PureFieldAlgebra::copy_allocated(live, published);
     } catch (...) {
-      live = std::move(published);
+      PureFieldAlgebra::copy_allocated(live, published);
+      named_solve_reports_.insert_or_assign(field, SolveReport{});
       throw;
     }
-    if (report.solved())
-      named_solve_reports_[field] = report;
+    named_solve_reports_.insert_or_assign(field, report);
     return report;
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
@@ -549,7 +727,7 @@ class AmrProgramContext {
                                        const std::vector<const MultiFab*>& u_stages) const {
     if (level_ != 0) {
       const auto cached = named_solve_reports_.find(field);
-      if (cached == named_solve_reports_.end())
+      if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
             "AmrProgramContext::solve_fields_from_blocks(field): fine-level reuse requires an "
             "accepted coarse SolveReport");
@@ -558,22 +736,19 @@ class AmrProgramContext {
     if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
       throw std::runtime_error(
           "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
-    named_solve_reports_.erase(field);
-    std::vector<MultiFab*> live;
-    std::vector<MultiFab> published;
-    live.reserve(u_stages.size());
-    published.reserve(u_stages.size());
+    stage_restore_scratch_.clear();
     for (std::size_t p = 0; p < u_stages.size(); ++p) {
       if (u_stages[p] == nullptr)
         continue;
       MultiFab& state_value = state(static_cast<int>(p));
-      live.push_back(&state_value);
-      published.push_back(state_value);
-      state_value = *u_stages[p];
+      MultiFab& published = stage_state_scratch_for_(static_cast<int>(p), level_, state_value);
+      PureFieldAlgebra::copy_allocated(published, state_value);
+      stage_restore_scratch_.push_back({&state_value, &published});
+      PureFieldAlgebra::copy_allocated(state_value, *u_stages[p]);
     }
     auto restore = [&]() {
-      for (std::size_t i = 0; i < live.size(); ++i)
-        *live[i] = std::move(published[i]);
+      for (const auto& [live, published] : stage_restore_scratch_)
+        PureFieldAlgebra::copy_allocated(*live, *published);
     };
     SolveReport report;
     try {
@@ -581,10 +756,10 @@ class AmrProgramContext {
       restore();
     } catch (...) {
       restore();
+      named_solve_reports_.insert_or_assign(field, SolveReport{});
       throw;
     }
-    if (report.solved())
-      named_solve_reports_[field] = report;
+    named_solve_reports_.insert_or_assign(field, report);
     return report;
   }
 
@@ -614,6 +789,19 @@ class AmrProgramContext {
     gc.geom = g;
     gc.aux = &const_cast<MultiFab&>(eng_->aux(level_));
     return gc;
+  }
+
+  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
+      const MultiFab&, const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(grid_context(), lane);
+  }
+
+  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
+      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(
+        eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_), lane,
+        prototype, point);
   }
 
   // --- scratch (per-level) --------------------------------------------------------------------------
@@ -691,10 +879,82 @@ class AmrProgramContext {
     fill_ghosts(in, g.domain, eng_->transport_bc());
     apply_laplacian(in, g, out);
   }
+  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
+    apply_laplacian(in, g, out);
+  }
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc());
+    apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
+    apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
   void gradient(MultiFab& out, MultiFab& phi) const {
     count_kernel();
     const Geometry g = eng_->level_geom(level_);
     fill_ghosts(phi, g.domain, eng_->transport_bc());
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(phi, g.domain, eng_->transport_bc(), lane);
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(phi);
+    const Geometry& g = boundary.context().geom;
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(phi, point);
+    const Geometry& g = boundary.context().geom;
     const Real cx = Real(1) / (Real(2) * g.dx());
     const Real cy = Real(1) / (Real(2) * g.dy());
     field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
@@ -707,20 +967,31 @@ class AmrProgramContext {
       fill_ghosts(fy, g.domain, eng_->transport_bc());
     apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
   }
-  void geometric_mg_precond_apply(MultiFab& out, const MultiFab& in) const {
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
     count_kernel();
-    if (!mg_precond_) {
-      const Geometry g = eng_->level_geom(level_);
-      const MultiFab tmpl = eng_->level_scalar_field(level_, 1, 1);
-      mg_precond_.emplace(g, tmpl.box_array(), eng_->poisson_bc());
-    }
-    GeometricMG& mg = *mg_precond_;
-    lincomb(mg.rhs(), Real(1), in, Real(0), in);
-    mg.phi().set_val(Real(0));
-    mg.vcycle();
-    lincomb(out, Real(1), mg.phi(), Real(0), out);
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(fx, g.domain, eng_->transport_bc(), lane);
+    if (&fy != &fx)
+      fill_ghosts(fy, g.domain, eng_->transport_bc(), lane);
+    apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
   }
-
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(fx);
+    if (&fy != &fx)
+      boundary.fill(fy);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(fx, point);
+    if (&fy != &fx)
+      boundary.fill(fy, point);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
   // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
@@ -736,6 +1007,11 @@ class AmrProgramContext {
   void fill_boundary(MultiFab& x) const {
     const Geometry g = eng_->level_geom(level_);
     fill_ghosts(x, g.domain, eng_->transport_bc());
+  }
+
+  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(x, g.domain, eng_->transport_bc(), lane);
   }
 
   // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
@@ -895,104 +1171,259 @@ class AmrProgramContext {
   // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its
   // grid_context() (per level) + assembly_target / assembly_source (write/read redirect), those kernels
   // run the SAME assembly PER LEVEL as direct body calls (they read the level_ cursor live). On a FLAT
-  // hierarchy the emitted matrix-free BiCGStab runs on level 0, bit-identical to the uniform Program; on a
-  // REFINED hierarchy the tensor elliptic is solved compositely (AmrTensorElliptic + CompositeFacPoisson).
-  // No coupling/schur call remains on any path -- the generated .so carries all scheme kernels.
+  // hierarchy a provider may delegate to the separately prepared level-local Krylov contract or own
+  // storage, solve and publication directly. No coupling/schur call remains on either path -- the
+  // generated .so carries all scheme kernels.
 
   /// Assembly WRITE redirection (ADC-633). On a REFINED hierarchy each assembled coefficient / RHS / flux
   /// field must live on the CURRENT level, not the level-0-bound emitted scratch: the kernel writes
   /// THROUGH here into AmrTensorElliptic's per-level buffer. On a FLAT hierarchy (no fine patch) the
   /// emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform path --
-  /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
-  MultiFab& assembly_target(MultiFab& field, int role) const {
-    validate_assembly_write_role(role, "AmrProgramContext::assembly_target");
-    if (!tensor_elliptic_)
+  /// the flat bit-parity gate). The prepared slot identity is opaque to this context and interpreted
+  /// only by the selected hierarchy provider.
+  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "AmrProgramContext::assembly_target");
+    if (!hierarchy_tensor_solver_)
       return field;
-    AmrTensorElliptic& s = *tensor_elliptic_;
-    if (!s.has_fine_patches())
-      return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
-    return s.target(role, level_);
+    PreparedHierarchyTensorSolver& solver = *hierarchy_tensor_solver_;
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+      return field;
+    if (std::find(hierarchy_tensor_assembly_field_slots_.begin(),
+                  hierarchy_tensor_assembly_field_slots_.end(),
+                  field_slot_identity) == hierarchy_tensor_assembly_field_slots_.end())
+      throw std::invalid_argument("hierarchy assembly used an undeclared provider field slot");
+    return solver.assembly_target(field_slot_identity, level_);
   }
   /// Reconstruction READ redirection (ADC-633): the fine-level reconstruction reads the level's published
   /// composite potential (the emitted level-0 solution cannot hold a fine level's phi). Flat / no fine
-  /// patch: identity (returns the emitted solution). @p role is kPhi.
-  MultiFab& assembly_source(MultiFab& field, int role) const {
-    validate_assembly_read_role(role, "AmrProgramContext::assembly_source");
-    if (!tensor_elliptic_)
+  /// patch: identity (returns the emitted solution). The provider-neutral slot identity remains
+  /// authenticated even though the selected provider owns its published solution storage.
+  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "AmrProgramContext::assembly_source");
+    if (!hierarchy_tensor_solver_)
       return field;
-    AmrTensorElliptic& s = *tensor_elliptic_;
-    if (!s.has_fine_patches())
+    PreparedHierarchyTensorSolver& solver = *hierarchy_tensor_solver_;
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
       return field;
-    return s.phi(level_);
+    if (field_slot_identity != hierarchy_tensor_solution_field_slot_)
+      throw std::invalid_argument("hierarchy read used an undeclared provider solution slot");
+    return solver.solution(level_);
   }
   /// Resolve a hierarchy-scoped solve value for the current publish/reconstruct pass.  Flat AMR is
   /// the identity; a refined hierarchy returns the level solution published by the one composite solve.
   MultiFab& linear_solution(MultiFab& field) const {
-    if (!tensor_elliptic_)
+    if (!hierarchy_tensor_solver_)
       return field;
-    AmrTensorElliptic& s = *tensor_elliptic_;
-    return s.has_fine_patches() ? s.phi(level_) : field;
+    PreparedHierarchyTensorSolver& solver = *hierarchy_tensor_solver_;
+    return solver.execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider
+               ? solver.solution(level_)
+               : field;
+  }
+  /// Resolve a provider-owned published solution when code generation authenticated that the flat
+  /// execution strategy is direct. This overload avoids manufacturing unused Krylov storage merely
+  /// to satisfy a fallback-shaped API.
+  MultiFab& hierarchy_solution() const {
+    PreparedHierarchyTensorSolver& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error(
+          "provider-owned hierarchy solution requested on a prepared Krylov fallback path");
+    return solver.solution(level_);
   }
   /// Gather the authored initial guess for the current hierarchy level.  The no-argument overload is
   /// the explicit zero-guess contract; the field overload carries a per-level scalar history such as
   /// condensed-Schur phi^n.  Emitted only inside the refined gather loop.
   void stage_linear_initial_guess() const {
-    configured_tensor_elliptic().stage_initial_guess(level_, nullptr);
+    PreparedHierarchyTensorSolver& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error("hierarchy initial guess staging requires direct provider execution");
+    solver.stage_initial_guess(level_, nullptr);
   }
   void stage_linear_initial_guess(const MultiFab& guess) const {
-    configured_tensor_elliptic().stage_initial_guess(level_, &guess);
+    PreparedHierarchyTensorSolver& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error("hierarchy initial guess staging requires direct provider execution");
+    solver.stage_initial_guess(level_, &guess);
   }
-  /// Install the direct hierarchy-solver binding and native FAC controls emitted from
-  /// CompositeTensorFAC. The block/component identity is authenticated by code generation.
-  void configure_composite_tensor_fac(int program_block, int ncomp, int fine_sweeps,
-                                      Real coarse_rel_tol, Real coarse_abs_tol, int coarse_cycles,
-                                      int verbose) const {
-    if (ncomp != 1)
-      throw std::invalid_argument("composite tensor FAC requires exactly one component");
-    if (tensor_elliptic_ && (tensor_program_block_ != program_block || tensor_ncomp_ != ncomp))
-      throw std::logic_error("composite tensor FAC is already configured for another block");
-    if (!tensor_elliptic_) {
-      tensor_elliptic_ = std::make_shared<AmrTensorElliptic>(eng_, sys_block(program_block), ncomp);
-      tensor_program_block_ = program_block;
-      tensor_ncomp_ = ncomp;
-    }
-    tensor_elliptic_->configure_composite_tensor_fac(fine_sweeps, coarse_rel_tol, coarse_abs_tol,
-                                                     coarse_cycles, verbose);
+  /// Register a hierarchy provider carried by a verified compiled native component.  The facade
+  /// authenticates and installs the declaration collectively; this context never branches on the
+  /// provider identity and retains the same registry used by the subsequent generic configure call.
+  void register_hierarchy_tensor_solver_provider(
+      std::shared_ptr<const HierarchyTensorSolverProvider> provider) const {
+    if (facade_ == nullptr || hierarchy_tensor_solver_registry_ == nullptr)
+      throw std::logic_error(
+          "hierarchy tensor-solver component registration requires an AMR facade");
+    facade_->register_program_hierarchy_tensor_solver_provider(std::move(provider));
   }
-  /// Solve an authored matrix-free operator. This seam is always Krylov; direct composite hierarchy
-  /// solves use solve_composite_tensor_fac so no accepted apply/preconditioner/method is ignored.
-  SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
-                                   const ApplyFn& precond, int method, Real tol, int max_iter,
-                                   int restart, Real omega) const {
-    validate_linear_solve_method(method, "AmrProgramContext::solve_linear_matfree");
-    switch (method) {
-      case kLinearSolveCg:
-        return pops::cg_solve(apply, sol, rhs, tol, max_iter);
-      case kLinearSolveGmres:
-        return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-      case kLinearSolveRichardson:
-        return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
-      case kLinearSolveBicgstab:
-        return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-      default:
-        SolveReport report;
-        report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-        return report;  // validated above
+  /// Install one exact hierarchy-solver binding. The block/component identity, operator envelope,
+  /// field slots and opaque provider options are authenticated by code generation.
+  void configure_hierarchy_tensor_solver(int program_block, int ncomp,
+                                         const std::string& provider_identity,
+                                         const std::string& plan_identity,
+                                         const std::string& operator_contract_identity,
+                                         const std::vector<std::string>& assembly_field_slots,
+                                         const std::string& solution_field_slot,
+                                         const PreparedProviderOptions& options) const {
+    if (hierarchy_tensor_solver_registry_ == nullptr)
+      throw std::logic_error("hierarchy tensor-solver registry is unavailable");
+    if (operator_contract_identity.empty() || assembly_field_slots.empty() ||
+        solution_field_slot.empty() ||
+        std::any_of(assembly_field_slots.begin(), assembly_field_slots.end(),
+                    [](const std::string& slot) { return slot.empty(); }) ||
+        std::set<std::string>(assembly_field_slots.begin(), assembly_field_slots.end()).size() !=
+            assembly_field_slots.size())
+      throw std::invalid_argument("hierarchy tensor solver requires exact unique field slots");
+    ExactContractBuilder selection;
+    selection.text("pops.hierarchy.tensor-solver-selection")
+        .scalar(std::uint32_t{1})
+        .text(provider_identity)
+        .text(plan_identity)
+        .text(operator_contract_identity)
+        .sequence(assembly_field_slots,
+                  [](ExactContractBuilder& item, const std::string& slot) { item.text(slot); })
+        .text(solution_field_slot)
+        .bytes(options.exact_contract());
+    const std::string selection_contract = std::move(selection).release();
+    const std::uint64_t topology_epoch = eng_->topology_epoch();
+    if (hierarchy_tensor_solver_) {
+      if (hierarchy_tensor_selection_contract_ != selection_contract ||
+          hierarchy_tensor_program_block_ != program_block || hierarchy_tensor_ncomp_ != ncomp)
+        throw std::logic_error("hierarchy tensor solver is already configured differently");
+      if (hierarchy_tensor_topology_epoch_ == topology_epoch)
+        return;
     }
+    HierarchyTensorSolverBuildRequest request;
+    request.runtime = eng_;
+    request.block = sys_block(program_block);
+    request.components = ncomp;
+    request.levels = eng_->nlev();
+    request.level_populated.reserve(static_cast<std::size_t>(request.levels));
+    request.level_distributions.reserve(static_cast<std::size_t>(request.levels));
+    for (int level = 0; level < request.levels; ++level) {
+      request.level_populated.push_back(
+          eng_->level_state(static_cast<std::size_t>(request.block), level).box_array().size() !=
+          0);
+      request.level_distributions.push_back(eng_->level_is_replicated(level)
+                                                ? FieldDistribution::Replicated
+                                                : FieldDistribution::Distributed);
+    }
+    request.plan_identity = plan_identity;
+    request.operator_contract_identity = operator_contract_identity;
+    request.assembly_field_slots = assembly_field_slots;
+    request.solution_field_slot = solution_field_slot;
+    request.options = options;
+    hierarchy_tensor_solver_ = prepare_hierarchy_tensor_solver_collectively(
+        *hierarchy_tensor_solver_registry_, provider_identity, std::move(request));
+    hierarchy_tensor_selection_contract_ = selection_contract;
+    hierarchy_tensor_program_block_ = program_block;
+    hierarchy_tensor_ncomp_ = ncomp;
+    hierarchy_tensor_topology_epoch_ = topology_epoch;
+    hierarchy_tensor_assembly_field_slots_ = assembly_field_slots;
+    hierarchy_tensor_solution_field_slot_ = solution_field_slot;
+  }
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
+                                                          const MultiFab& prototype,
+                                                          OperatorFingerprint resources) const {
+    if (!current_window_ || !std::isfinite(current_level_dt_) || current_level_dt_ <= 0.0)
+      throw std::logic_error("AMR operator snapshot requested outside a prepared level window");
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
+    ::pops::detail::fingerprint_geometry(topology, eng_->level_geom(level_));
+    ::pops::detail::fingerprint_boundary(topology, eng_->transport_bc());
+    ::pops::detail::fingerprint_mix(topology, "amr-level-local");
+    ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(level_));
+    ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(nlev()));
+    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("AMR operator snapshot revision exhausted");
+    const std::uint64_t revision = ++operator_snapshot_revision_;
+    invalidate_active_operator_snapshot_();
+    OperatorEvaluationSnapshot snapshot =
+        operator_evaluation_snapshot_(authority, topology, resources, revision);
+    active_operator_snapshot_revision_ = revision;
+    return snapshot;
   }
 
-  /// Solve the configured scalar tensor operator directly over a refined hierarchy. The flat branch
-  /// continues through solve_linear_matfree for byte-faithful Krylov parity.
-  SolveReport solve_composite_tensor_fac(int program_block, int ncomp, Real rel_tol, Real abs_tol,
-                                         int max_iter) const {
+  /// Recompute only the allocation-free dynamic identity. The requested evaluation revision is
+  /// reproduced only while it remains the context's active mint; logical-scope entry/exit clears
+  /// that authority even when the exact AMR parent window is later restored. The independent
+  /// topology revision continues to change across engine-epoch or active-level transitions.
+  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                       OperatorFingerprint topology,
+                                                       OperatorFingerprint resources,
+                                                       std::uint64_t revision) const {
+    const std::uint64_t probe_revision =
+        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
+    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
+  }
+
+ private:
+  void invalidate_active_operator_snapshot_() const noexcept {
+    active_operator_snapshot_revision_ = 0;
+  }
+
+  std::uint64_t operator_topology_revision_() const {
+    const std::uint64_t epoch = eng_->topology_epoch();
+    if (observed_operator_topology_epoch_ != epoch || observed_operator_level_ != level_) {
+      if (operator_topology_revision_counter_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("AMR operator topology revision exhausted");
+      observed_operator_topology_epoch_ = epoch;
+      observed_operator_level_ = level_;
+      ++operator_topology_revision_counter_;
+    }
+    return operator_topology_revision_counter_;
+  }
+
+  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
+                                                           OperatorFingerprint topology,
+                                                           OperatorFingerprint resources,
+                                                           std::uint64_t revision) const {
+    if (!current_window_ || !std::isfinite(current_level_dt_) || current_level_dt_ <= 0.0)
+      throw std::logic_error("AMR operator snapshot requested outside a prepared level window");
+    const amr::ClockStamp clock = evaluation_clock_();
+    return {authority,
+            revision,
+            clock.macro_step,
+            clock.phase.numerator,
+            clock.phase.denominator,
+            std::bit_cast<std::uint64_t>(current_level_dt_),
+            std::bit_cast<std::uint64_t>(clock.physical_time),
+            operator_topology_revision_(),
+            topology,
+            resources};
+  }
+
+ public:
+  /// AMR counterpart of ProgramContext's compiled-artifact capability. The authority is checked
+  /// against the level-local evaluation snapshot before the unverified hot path can be enabled.
+  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
+      OperatorFingerprint authority) const {
+    if (facade_ == nullptr || !facade_->program_owns_operator_authority(authority))
+      throw std::invalid_argument(
+          "compiled AMR Program requested an operator authority not owned by its installed "
+          "artifact");
+    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
+  }
+
+  /// Level-local prepared Krylov route. Direct composite hierarchy solves remain a separate typed
+  /// backend and never discard an authored prepared operator.
+  SolveReport solve_prepared_linear(const PreparedAffineLinearProblem& problem,
+                                    KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
+                                    const KrylovControls& controls) const {
+    return pops::solve_prepared_affine(problem, workspace, sol, rhs, controls);
+  }
+
+  /// Solve the configured operator through the provider-owned direct hierarchy path. A provider may
+  /// select this path for one or many levels; topology shape and solver family remain provider-private.
+  SolveReport solve_hierarchy_tensor(int program_block, int ncomp, Real rel_tol, Real abs_tol,
+                                     int max_iter) const {
     require_tensor_binding(program_block, ncomp);
-    AmrTensorElliptic& s = configured_tensor_elliptic();
-    if (!s.has_fine_patches()) {
+    PreparedHierarchyTensorSolver& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider) {
       SolveReport report;
       report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
       return report;
     }
-    return s.solve_composite(rel_tol, abs_tol, max_iter);
+    const HierarchyTensorSolveControls controls{rel_tol, abs_tol, max_iter};
+    return solve_prepared_hierarchy_tensor_collectively(solver, controls);
   }
 
   // --- named-flux primitive: DEFERRED on AMR, fail loud ----------------------------------------------
@@ -1076,6 +1507,30 @@ class AmrProgramContext {
     return std::runtime_error(std::move(message));
   }
 
+  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
+                                                      const char* detail) {
+    if (report.action == SolveAction::kRejectAttempt)
+      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
+    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
+                             report.status_name() + " (" + detail + ")");
+  }
+
+  MultiFab& stage_state_scratch_for_(int program_block, int level,
+                                     const MultiFab& prototype) const {
+    const std::pair<int, int> key{program_block, level};
+    auto insertion = stage_state_scratch_.try_emplace(key, prototype.box_array(), prototype.dmap(),
+                                                      prototype.ncomp(), prototype.n_grow());
+    MultiFab& scratch = insertion.first->second;
+    const bool compatible = scratch.box_array().boxes() == prototype.box_array().boxes() &&
+                            scratch.dmap().ranks() == prototype.dmap().ranks() &&
+                            scratch.ncomp() == prototype.ncomp() &&
+                            scratch.n_grow() == prototype.n_grow();
+    if (!compatible)
+      scratch =
+          MultiFab(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow());
+    return scratch;
+  }
+
   /// Fail loud for an op the codegen can emit but the installed AMR Program path does not wire (named-flux /
   /// scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the caller's signature
   /// stays byte-faithful to ProgramContext (the duck-typing requirement) without fabricating a value. @p
@@ -1086,21 +1541,17 @@ class AmrProgramContext {
                              " is not wired on the AMR Program path; " + std::move(detail));
   }
 
-  /// The exact block/component composite tensor-elliptic driver a condensed-implicit Program routes to
-  /// on a REFINED hierarchy (ADC-633). It is created by configure_composite_tensor_fac.
-  /// Held via shared_ptr so a copy of the context (the install closure captures ctx BY VALUE) SHARES
-  /// the same per-Program elliptic driver -- AmrTensorElliptic owns a unique_ptr (move-only), so a bare
-  /// value member would delete the context copy constructor the [=] install lambda needs.
-  AmrTensorElliptic& configured_tensor_elliptic() const {
-    if (!tensor_elliptic_)
-      throw std::logic_error("composite tensor FAC must be configured before hierarchy access");
-    return *tensor_elliptic_;
+  PreparedHierarchyTensorSolver& configured_hierarchy_tensor_solver_() const {
+    if (!hierarchy_tensor_solver_)
+      throw std::logic_error("hierarchy tensor solver must be configured before hierarchy access");
+    return *hierarchy_tensor_solver_;
   }
 
   void require_tensor_binding(int program_block, int ncomp) const {
-    if (!tensor_elliptic_ || tensor_program_block_ != program_block || tensor_ncomp_ != ncomp)
+    if (!hierarchy_tensor_solver_ || hierarchy_tensor_program_block_ != program_block ||
+        hierarchy_tensor_ncomp_ != ncomp)
       throw std::logic_error(
-          "composite tensor FAC block/component binding does not match the configured solver");
+          "hierarchy tensor block/component binding does not match the configured solver");
   }
 
   // --- ADC-639 conservative-reflux helpers ---------------------------------------------------------
@@ -1123,6 +1574,7 @@ class AmrProgramContext {
     }
     MultiFab Fx(BoxArray(std::move(fxb)), ref.dmap(), nc, 0);
     MultiFab Fy(BoxArray(std::move(fyb)), ref.dmap(), nc, 0);
+    const auto boundary_point = boundary_point_(rate_id);
     if (active_parent_ && active_parent_->child_level == level_) {
       const amr::Rational target_phase = active_parent_->child_window.begin.phase +
                                          stage_time_ * (active_parent_->child_window.end.phase -
@@ -1143,15 +1595,15 @@ class AmrProgramContext {
       const MultiFab& old_parent = active_parent_->old_states.at(static_cast<std::size_t>(b));
       const MultiFab& new_parent = active_parent_->new_states.at(static_cast<std::size_t>(b));
       if (mode == ResidualCapture::FluxOnly)
-        eng_->level_neg_div_flux_capture_into_temporal(sb, level_, u, r, Fx, Fy, old_parent,
-                                                       new_parent, target);
+        eng_->level_neg_div_flux_capture_into_temporal(sb, level_, boundary_point, u, r, Fx, Fy,
+                                                       old_parent, new_parent, target);
       else
-        eng_->level_rhs_capture_into_temporal(sb, level_, u, r, Fx, Fy, old_parent, new_parent,
-                                              target);
+        eng_->level_rhs_capture_into_temporal(sb, level_, boundary_point, u, r, Fx, Fy, old_parent,
+                                              new_parent, target);
     } else if (mode == ResidualCapture::FluxOnly) {
-      eng_->level_neg_div_flux_capture_into(sb, level_, u, r, Fx, Fy);
+      eng_->level_neg_div_flux_capture_into(sb, level_, boundary_point, u, r, Fx, Fy);
     } else {
-      eng_->level_rhs_capture_into(sb, level_, u, r, Fx, Fy);
+      eng_->level_rhs_capture_into(sb, level_, boundary_point, u, r, Fx, Fy);
     }
     EdgeFlux ef;
     // COARSE role: the level-k coarse flux at the faces bordering each level-(k+1) patch (a child exists).
@@ -2118,10 +2570,16 @@ class AmrProgramContext {
   mutable int level_ = 0;
   mutable std::optional<SolveReport> default_solve_report_;
   mutable std::map<std::string, SolveReport> named_solve_reports_;
-  mutable std::optional<GeometricMG> mg_precond_;
-  mutable std::shared_ptr<AmrTensorElliptic> tensor_elliptic_;
-  mutable int tensor_program_block_{-1};
-  mutable int tensor_ncomp_{0};
+  mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
+  mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
+  std::shared_ptr<const HierarchyTensorSolverProviderRegistry> hierarchy_tensor_solver_registry_;
+  mutable std::unique_ptr<PreparedHierarchyTensorSolver> hierarchy_tensor_solver_;
+  mutable std::string hierarchy_tensor_selection_contract_;
+  mutable int hierarchy_tensor_program_block_{-1};
+  mutable int hierarchy_tensor_ncomp_{0};
+  mutable std::uint64_t hierarchy_tensor_topology_epoch_{std::numeric_limits<std::uint64_t>::max()};
+  mutable std::vector<std::string> hierarchy_tensor_assembly_field_slots_;
+  mutable std::string hierarchy_tensor_solution_field_slot_;
 
   // --- ADC-639 conservative-reflux state -----------------------------------------------------------
   // Persistent per-(runtime block,parent level) coarse-role redistribution targets. Their own
@@ -2144,6 +2602,12 @@ class AmrProgramContext {
   mutable std::vector<AmrProgramSyncEvent> accepted_sync_report_;
   mutable std::vector<amr::ClockStamp> level_clocks_;
   mutable std::uint64_t accepted_state_revision_ = 0;
+  mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
+  mutable std::uint64_t operator_topology_revision_counter_ = 0;
+  mutable std::uint64_t observed_operator_topology_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable int observed_operator_level_ = -1;
   mutable amr::Rational stage_time_{0, 1};
   mutable std::optional<ActiveParentWindow> active_parent_;
   mutable std::optional<amr::ClockWindow> current_window_;

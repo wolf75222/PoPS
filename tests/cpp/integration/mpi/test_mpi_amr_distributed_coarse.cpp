@@ -24,13 +24,14 @@
 //   (5) MG CONVERGE : phi reste fini et le champ non trivial (pas de divergence du multigrille
 //       geometrique sur le grossier multi-box). Couvert par (1) : un MG diverge -> NaN -> echec.
 //
-// Independant du backend : Kokkos Serial (CI, CPU) et Cuda (GH200). Le script ROMEO relance le MEME
-// binaire en np=1/2/4 et diff cmax (bit-identique attendu).
+// Independant du backend : Kokkos Serial (CI, CPU) et Cuda (GH200). Le CTest rank-parity relance le
+// MEME binaire en np=1/2/4 et compare sa signature cmax (bit-identique attendu).
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler
+#include <pops/coupling/amr/amr_regrid_coupler.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr/composite_reduction.hpp>
@@ -63,8 +64,8 @@ static double native_composite_field_error() {
   const std::vector<const MultiFab*> values{&coarse, &fine};
   const std::vector<std::pair<Real, Real>> metrics{{Real(0.25), Real(0.25)},
                                                    {Real(0.125), Real(0.125)}};
-  const double integral = runtime::amr::composite_reduce_fields(
-      values, metrics, false, "sum", 0, {0, 1});
+  const double integral =
+      runtime::amr::composite_reduce_fields(values, metrics, false, "sum", 0, {0, 1});
   return std::fabs(integral - 1.25);
 }
 
@@ -103,6 +104,49 @@ static bool bootstrap_volume_average_replicates_parent() {
   return all_reduce_max(local_error) == 0.0;
 }
 
+// A regrid may preserve the exact BoxArray while assigning a patch to another rank.  Its old-fine
+// carry-over is a global overlap copy, not a rank-local copy: every new owner must receive the
+// previous fine value before the remapped field is published.
+static bool regrid_owner_change_preserves_old_fine() {
+  const int np = n_ranks();
+  const int fine_box_width = 4;
+  const int fine_height = 8;
+  std::vector<Box2D> fine_boxes;
+  std::vector<int> old_owners;
+  std::vector<int> new_owners;
+  fine_boxes.reserve(static_cast<std::size_t>(np));
+  old_owners.reserve(static_cast<std::size_t>(np));
+  new_owners.reserve(static_cast<std::size_t>(np));
+  for (int rank = 0; rank < np; ++rank) {
+    fine_boxes.push_back(
+        Box2D{{rank * fine_box_width, 0}, {(rank + 1) * fine_box_width - 1, fine_height - 1}});
+    old_owners.push_back(rank);
+    new_owners.push_back((rank + 1) % np);
+  }
+
+  const Box2D coarse_domain = Box2D::from_extents((np * fine_box_width) / 2, fine_height / 2);
+  MultiFab parent(BoxArray({coarse_domain}), DistributionMapping({my_rank()}), 1, 0);
+  MultiFab old_fine(BoxArray(fine_boxes), DistributionMapping(std::move(old_owners)), 1, 0);
+  parent.set_val(Real(-1));
+  old_fine.set_val(Real(7));
+
+  MultiFab remapped = regrid_field_on_layout(
+      BoxArray(std::move(fine_boxes)), DistributionMapping(std::move(new_owners)), parent, old_fine,
+      /*pk=*/0, /*ngf=*/0, /*coarse_replicated=*/true, /*refinement_ratio=*/2);
+  device_fence();
+
+  double local_error = 0.0;
+  for (int local = 0; local < remapped.local_size(); ++local) {
+    const ConstArray4 values = remapped.fab(local).const_array();
+    const Box2D valid = remapped.box(local);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        local_error =
+            std::fmax(local_error, std::fabs(static_cast<double>(values(i, j, 0) - Real(7))));
+  }
+  return all_reduce_max(local_error) == 0.0;
+}
+
 static std::vector<double> four_bubbles(int n) {
   std::vector<double> rho(static_cast<std::size_t>(n) * n);
   const double cx[4] = {0.25, 0.75, 0.25, 0.75};
@@ -117,6 +161,15 @@ static std::vector<double> four_bubbles(int n) {
       }
       rho[static_cast<std::size_t>(j) * n + i] = r;
     }
+  // Periodic self-gravity requires an RHS orthogonal to the constant nullspace. Preserve the four
+  // non-trivial peaks but encode their neutralizing background in the fixture; no solver-side
+  // projection is permitted.
+  double mean = 0.0;
+  for (double value : rho)
+    mean += value;
+  mean /= static_cast<double>(rho.size());
+  for (double& value : rho)
+    value += 1.0 - mean;
   return rho;
 }
 
@@ -210,6 +263,7 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2, le moins agressif pour le MG geometrique).
 
   AmrSystem sys(cfg);
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
@@ -251,15 +305,18 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   const double dt = 1e-3;
 
   const bool bootstrap_restriction_ok = bootstrap_volume_average_replicates_parent();
+  const bool regrid_owner_change_ok = regrid_owner_change_preserves_old_fine();
   const double composite_field_error = native_composite_field_error();
   const Result rep = run(n, nsteps, dt, /*distribute=*/false);  // oracle : grossier replique
   const Result dis = run(n, nsteps, dt, /*distribute=*/true);   // mode scalable : grossier reparti
 
   // (1) ecart REPARTI vs REPLIQUE sur la densite grossiere globale (n*n sur chaque rang).
-  double dmax = 0;
-  if (dis.dens.size() == rep.dens.size())
+  double dmax = std::numeric_limits<double>::infinity();
+  if (dis.dens.size() == rep.dens.size()) {
+    dmax = 0.0;
     for (std::size_t k = 0; k < dis.dens.size(); ++k)
       dmax = std::fmax(dmax, std::fabs(dis.dens[k] - rep.dens[k]));
+  }
 
   // checksums du champ reparti.
   double csum = 0, csumsq = 0, cmax = 0;
@@ -314,11 +371,17 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
       std::printf("FAIL volume-average bootstrap absent d'une copie grossiere repliquee\n");
       ++fails;
     }
-    if (!(composite_field_error < 1e-14)) {
-      std::printf("FAIL reduction composite native du champ (error=%.3e)\n",
-                  composite_field_error);
+    if (!regrid_owner_change_ok) {
+      std::printf("FAIL regrid: carry-over fine perdu lors d'un changement de proprietaire MPI\n");
       ++fails;
     }
+    if (!(composite_field_error < 1e-14)) {
+      std::printf("FAIL reduction composite native du champ (error=%.3e)\n", composite_field_error);
+      ++fails;
+    }
+    // Only cmax is promised bit-identical across rank counts for the genuinely distributed coarse
+    // path. Additive reductions may differ in their last bits, so they remain per-launch checks.
+    std::printf("POPS_MPI_PARITY_SIGNATURE_test_mpi_amr_distributed_coarse cmax=%.17e\n", cmax);
     std::printf(
         "AMRDIST np=%d distribute_npf=%d replicated_npf=%d | cmax=%.17e | "
         "dist_vs_repl_dmax=%.3e | cmax_crossrank_spread=%.3e | "
@@ -334,8 +397,9 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
         "AMRDIST exec=%s | conservation: dm_dist=%.3e dm_repl=%.3e | csum=%.17e csumsq=%.17e\n",
         space, std::fabs(dis.mass - dis.m0), std::fabs(rep.mass - rep.m0), csum, csumsq);
 
-    if (!(dis.dens.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL densite repartie de mauvaise taille\n");
+    if (!(dis.dens.size() == static_cast<std::size_t>(n) * n &&
+          rep.dens.size() == static_cast<std::size_t>(n) * n)) {
+      std::printf("FAIL densite repartie ou repliquee de mauvaise taille\n");
       ++fails;
     }
     if (!(rep_state_dmax == 0.0 && rep_phi_dmax == 0.0)) {

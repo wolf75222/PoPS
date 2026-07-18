@@ -12,9 +12,6 @@ class _ProgramConstants:
 
     _RESIDUAL_LOCAL_OPS = frozenset({"state", "source", "apply", "linear_combine"})
 
-    _KRYLOV_METHODS = frozenset({"cg", "bicgstab", "richardson", "gmres"})
-    _GMRES_RESTART_DEFAULT = 30  # GMRES(m) restart length when the caller does not override it
-
     _OPERATOR_KINDS = frozenset({"scalar", "vector", "state"})
 
     _CELL_CMPS = {">": "cell_gt", ">=": "cell_ge", "<": "cell_lt", "<=": "cell_le"}

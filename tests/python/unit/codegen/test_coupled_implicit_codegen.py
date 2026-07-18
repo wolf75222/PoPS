@@ -12,7 +12,7 @@ from pops._ir.expr import Const  # noqa: E402
 from pops.solvers.nonlinear import LocalNewton  # noqa: E402
 
 
-def _program(*, consume=True, coefficient=1):
+def _program(*, consume=True, coefficient=1, action=None):
     module = model.Module("implicit_exchange")
     electrons = module.state_space("electron_state", ("ne", "pex", "pey"))
     ions = module.state_space("ion_state", ("ni", "pix", "piy"))
@@ -55,7 +55,7 @@ def _program(*, consume=True, coefficient=1):
             ion_next: program.value("ion_identity", ion_n, at=ion_next.point),
         })
         return module, program, outcome
-    solved = outcome.consume(action=time.RejectAttempt())
+    solved = outcome.consume(action=time.RejectAttempt() if action is None else action)
     program.commit_many({
         electron_next: solved[electron_n.block],
         ion_next: solved[ion_n.block],
@@ -77,6 +77,20 @@ def test_coupled_implicit_is_one_native_newton_kernel_with_explicit_action():
     assert source.count("ctx.commit_many(") == 1
     assert "{&u0, &ci2_electrons}" in source
     assert "{&u1, &ci2_ions}" in source
+
+
+def test_coupled_reject_attempt_codegen_filters_selected_statuses_and_fails_closed():
+    _module, program, _solved = _program(
+        action=time.RejectAttempt(statuses=("iteration_limit",)))
+    source = emit_cpp_program(program, model=None)
+    start = source.index("if (!ci_report_")
+    end = source.index(" action=fail_run", start)
+    guard = source[start:end]
+
+    assert "SolveStatus::kIterationLimit" in guard
+    assert "SolveStatus::kSingular" not in guard
+    assert "SolveStatus::kInvalidEvaluation" not in guard
+    assert "StepAttemptRejected" in guard
 
 
 def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_typed_problem_kind():

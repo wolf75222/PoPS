@@ -203,27 +203,93 @@ function(pops_add_test name)
 endfunction()
 
 function(pops_add_mpi_rank_test name nproc)
+  set(options)
+  set(oneValueArgs GTEST_FILTER)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "" ${ARGN})
   if(NOT TARGET ${name})
     message(FATAL_ERROR "MPI CTest entry ${name}_np${nproc} needs target ${name}")
+  endif()
+  set(_gtest_filter_arg)
+  if(ARG_GTEST_FILTER)
+    list(APPEND _gtest_filter_arg "--gtest_filter=${ARG_GTEST_FILTER}")
   endif()
   add_test(NAME ${name}_np${nproc}
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${nproc}
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}>
                    --gtest_output=xml:${_pops_gtest_xml_dir}/${name}_np${nproc}.xml
+                   ${_gtest_filter_arg}
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(${name}_np${nproc} PROPERTIES
     LABELS "backend;mpi;medium"
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${nproc}"
     PROCESSORS ${nproc}
+    TIMEOUT 600)
+endfunction()
+
+function(pops_add_mpi_rank_parity_test name)
+  set(options)
+  set(oneValueArgs SIGNATURE_PREFIX)
+  set(multiValueArgs RANKS)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(NOT TARGET ${name})
+    message(FATAL_ERROR "MPI rank-parity CTest entry needs target ${name}")
+  endif()
+  if(NOT ARG_SIGNATURE_PREFIX MATCHES "^[A-Za-z0-9_.:-]+$")
+    message(FATAL_ERROR
+      "MPI rank-parity suite ${name} needs an alphanumeric SIGNATURE_PREFIX")
+  endif()
+  list(LENGTH ARG_RANKS _rank_count)
+  if(_rank_count LESS 2)
+    message(FATAL_ERROR "MPI rank-parity suite ${name} needs at least two RANKS")
+  endif()
+
+  set(_seen_ranks)
+  set(_max_rank 0)
+  set(_previous_rank 0)
+  foreach(_rank IN LISTS ARG_RANKS)
+    if(NOT _rank MATCHES "^[1-9][0-9]*$")
+      message(FATAL_ERROR "MPI rank-parity suite ${name} has invalid rank ${_rank}")
+    endif()
+    if(_rank IN_LIST _seen_ranks)
+      message(FATAL_ERROR "MPI rank-parity suite ${name} repeats rank ${_rank}")
+    endif()
+    if(_rank LESS_EQUAL _previous_rank)
+      message(FATAL_ERROR "MPI rank-parity suite ${name} RANKS must be sorted")
+    endif()
+    list(APPEND _seen_ranks ${_rank})
+    set(_previous_rank ${_rank})
+    set(_max_rank ${_rank})
+  endforeach()
+
+  set(_test_name ${name}_rank_parity)
+  add_test(NAME ${_test_name}
+    COMMAND ${CMAKE_COMMAND}
+      "-DPOPS_MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+      "-DPOPS_MPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+      "-DPOPS_MPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+      "-DPOPS_MPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+      "-DPOPS_MPI_TEST_EXECUTABLE=$<TARGET_FILE:${name}>"
+      "-DPOPS_MPI_RANKS=${ARG_RANKS}"
+      "-DPOPS_MPI_SIGNATURE_PREFIX=${ARG_SIGNATURE_PREFIX}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_mpi_rank_parity.cmake")
+  set_tests_properties(${_test_name} PROPERTIES
+    LABELS "backend;mpi;medium"
+    PROCESSORS ${_max_rank}
     TIMEOUT 600)
 endfunction()
 
 function(pops_add_mpi_gtest_suite name)
   set(options)
   set(oneValueArgs)
-  set(multiValueArgs EXTRA_LIBS RANKS COMPILE_DEFINITIONS)
+  set(multiValueArgs EXTRA_LIBS RANKS RANK_PARITY COMPILE_DEFINITIONS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(ARG_RANKS AND ARG_RANK_PARITY)
+    message(FATAL_ERROR "MPI suite ${name} cannot mix RANKS and RANK_PARITY")
+  endif()
   if(NOT ARG_RANKS)
-    set(ARG_RANKS 1 2 4)
+    if(NOT ARG_RANK_PARITY)
+      set(ARG_RANKS 1 2 4)
+    endif()
   endif()
   pops_test_source(_src ${name})
   pops_add_gtest_suite(NAME ${name}
@@ -232,9 +298,15 @@ function(pops_add_mpi_gtest_suite name)
     COMPILE_DEFINITIONS ${ARG_COMPILE_DEFINITIONS}
     LABELS backend mpi medium
     NO_DISCOVER)
-  foreach(_np IN LISTS ARG_RANKS)
-    pops_add_mpi_rank_test(${name} ${_np})
-  endforeach()
+  if(ARG_RANK_PARITY)
+    pops_add_mpi_rank_parity_test(${name}
+      RANKS ${ARG_RANK_PARITY}
+      SIGNATURE_PREFIX "POPS_MPI_PARITY_SIGNATURE_${name}")
+  else()
+    foreach(_np IN LISTS ARG_RANKS)
+      pops_add_mpi_rank_test(${name} ${_np})
+    endforeach()
+  endif()
 endfunction()
 
 # A lifecycle test needs complete control over main(): its first executable statement must be the
@@ -381,8 +453,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
-  test_krylov_solver
   test_numerical_defaults
+  test_pure_field_algebra_extreme_dot
+  test_scaled_scalar
   test_flux_interfaces
   test_fallback_diagnostics
   test_structured_solver_diagnostics
@@ -390,6 +463,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_program_context_schur_free
   test_platform_manifest
   test_generic_krylov
+  test_krylov_workspace_reentrancy
   test_solver_codegen_generated
   test_dispatch_tags
   test_scheme_dispatch
@@ -461,6 +535,10 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+# The generic hierarchy tensor-provider contract is owned by AmrSystem at runtime.  Keep the test in
+# the standard inventory, but link the AMR facade implementation that supplies its provider registry.
+target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
+target_link_libraries(test_multiblock_interface_scheduler PRIVATE pops_runtime_amr)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
@@ -660,15 +738,17 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_hybrid_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_cutcell_multibox 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_amr_compiled_parity 1 2 4)
+  set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_amr_distributed_coarse 1 2 4)
+  set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_field_nullspace_preflight 2)
+  set(POPS_MPI_RANKS_test_krylov_collective_contract 2)
   set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
@@ -680,7 +760,10 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
-  set(POPS_MPI_RANKS_test_krylov_solver 1 2 4)
+  set(POPS_MPI_RANKS_test_generic_krylov 1 2 4)
+  set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
+  set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
+  set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
@@ -700,6 +783,8 @@ if(POPS_HAS_MPI)
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_coupled_source
+    test_mpi_field_nullspace_preflight
+    test_krylov_collective_contract
     test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
@@ -737,9 +822,26 @@ if(POPS_HAS_MPI)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
-    pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
+    if(DEFINED POPS_MPI_RANK_PARITY_${_test})
+      if(DEFINED POPS_MPI_RANKS_${_test})
+        message(FATAL_ERROR "MPI suite ${_test} declares both rank and rank-parity launches")
+      endif()
+      pops_add_mpi_gtest_suite(${_test}
+        EXTRA_LIBS ${_extra_libs}
+        RANK_PARITY ${POPS_MPI_RANK_PARITY_${_test}})
+    else()
+      pops_add_mpi_gtest_suite(${_test}
+        EXTRA_LIBS ${_extra_libs}
+        RANKS ${POPS_MPI_RANKS_${_test}})
+    endif()
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  set_tests_properties(test_mpi_field_nullspace_preflight_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_krylov_collective_contract_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
   # This regression consumes two MPI processor slots and exercises transport, not on-node
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
   set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
@@ -754,15 +856,63 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
-    test_krylov_solver
+    test_generic_krylov
+    test_krylov_workspace_reentrancy
+    test_pure_field_algebra_extreme_dot
+    test_geometric_mg
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
     test_world_communicator
   )
+  string(CONCAT POPS_GENERIC_KRYLOV_MPI_FILTER
+    "GenericKrylov.footprint_authenticates_layout_and_preconditioner_presence:"
+    "GenericKrylov.cg_converges_on_spd_operator:"
+    "GenericKrylov.bicgstab_converges_with_identity_preconditioner:"
+    "GenericKrylov.gmres_converges_on_spd_operator:"
+    "GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:"
+    "GenericKrylov.arbitrary_halo_depth_is_a_first_class_prepared_footprint:"
+    "GenericKrylov.mpi_variant_distributes_real_work_to_every_rank:"
+    "GenericKrylov.geometric_preconditioner_preserves_a_custom_distribution:"
+    "GenericKrylov.every_method_solves_two_components_and_preconditioned_routes:"
+    "GenericKrylov.every_method_is_invariant_to_extreme_finite_equation_scaling:"
+    "GenericKrylov.every_method_solves_a_compatible_periodic_nullspace_problem:"
+    "GenericKrylov.every_method_reports_an_incompatible_rhs_before_gauge_or_iteration:"
+    "GenericKrylov.nonfinite_nullspace_rhs_is_invalid_not_incompatible:"
+    "GenericKrylov.periodic_nullspace_solve_is_collective_safe_with_an_empty_rank:"
+    "GenericKrylov.mpi_empty_rank_runs_restarted_gmres_and_preconditioned_bicgstab:"
+    "GenericKrylov.generic_methods_linearize_real_dirichlet_and_robin_preconditioners:"
+    "GenericKrylov.prepared_full_tensor_bicgstab_converges_where_the_diagonal_vcycle_stalls:"
+    "GenericKrylov.prepared_tensor_identity_matches_the_geometric_mg_reference:"
+    "GenericKrylov.prepared_physical_boundary_offsets_use_the_effective_rhs_and_a_linear_preconditioner:"
+    "GenericKrylov.prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms:"
+    "GenericKrylov.failed_solves_report_no_solved_value:"
+    "GenericKrylov.bicgstab_omega_breakdown_commits_alpha_then_fails_honestly:"
+    "GenericKrylov.snapshot_mutation_is_refused_and_workspace_is_reused:"
+    "GenericKrylov.prepared_hot_solves_allocate_no_fab_or_communication_storage:"
+    "GenericKrylov.rank_local_snapshot_drift_is_refused_collectively_at_all_safe_boundaries:"
+    "test_krylov_method_provider.*:"
+    "test_vector_distribution_provider.*"
+  )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
-      pops_add_mpi_rank_test(${_test} ${_np})
+      if(_test STREQUAL "test_generic_krylov")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "${POPS_GENERIC_KRYLOV_MPI_FILTER}")
+      elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly:test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind:test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze")
+      elseif(_test STREQUAL "test_geometric_mg")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER "GeometricMgCollectiveContract.*")
+      else()
+        pops_add_mpi_rank_test(${_test} ${_np})
+      endif()
     endforeach()
   endforeach()
 endif()

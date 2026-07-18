@@ -412,6 +412,27 @@ does not pretend that a single constant mode covers an unknown disconnected topo
 topology replacement increments a runtime epoch embedded in the nullspace recipe, so no coverage mask
 survives a regrid or restart hierarchy rebuild.
 
+That derivation belongs only to an installed `FieldDiscretization` provider. A generic matrix-free
+`LinearProblem` has no such provider authority and therefore never infers a nullspace from its stencil,
+BC names, periodic axes, or preconditioner. Its author must always write `nullspace=None` or pair
+`nullspace=ConstantNullspace()` with exactly one `MeanValueGauge(value)`. The latter route is scalar-only.
+Because a right constant kernel alone does not prove invariance of the mean-zero complement, it also
+requires at least the explicit `LinearOperatorProperties.symmetric_operator()` certificate.
+Both choices are snapshotted into exact schema-v1 `nullspace_contract` / `gauge_contract` IR records;
+mutating the authoring gauge later cannot alter graph identity or lowering. Until a provider exports a
+real complement-preservation certificate, the constant-nullspace Krylov route accepts only
+`preconditioners.Identity()`. The hierarchy-wide `CompositeTensorFAC` route rejects that contract
+rather than pretending that a per-level gauge is a composite AMR gauge.
+
+`LinearOperatorProperties` independently carries exactly three Boolean facts: symmetry, global
+positive-definiteness, and positive-definiteness on the declared nullspace complement. Its four
+canonical certificates are `general()`, `symmetric_operator()`,
+`symmetric_positive_definite()`, and
+`symmetric_positive_definite_on_nullspace_complement()`. Global and complement
+positive-definiteness are mutually exclusive. Consequently CG requires the global SPD certificate
+when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
+methods or upgrades a certificate from stencil metadata.
+
 Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v3
 reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
 before its first write, then restores the hierarchy through the final clock update inside one native
@@ -563,7 +584,7 @@ fluxes; at coarse/fine interfaces the FluxRegister reflux closes the same balanc
 freezes density during its implicit sub-flow, so any density change comes from the explicitly authored
 transport/coupling sub-flows. The AMR conservation suites validate the resulting ledger at round-off.
 
-**MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_krylov_solver`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
+**MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_generic_krylov`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
 **Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
@@ -721,7 +742,7 @@ include/pops/
   mesh/               Box2D, BoxArray, Fab2D, MultiFab, Geometry (+ PolarGeometry), for_each_cell, fill_boundary, CL physiques, refinement AMR
   physics/            briques generiques (etat/transport/source/elliptique) -> CompositeModel ; flux Euler, hyperbolique iso, pendants polaires
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
-  numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver, composite FAC AMR (mg/composite_fac_poisson)
+  numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Krylov generique prepare, Poisson FFT (mono + bandes), polaire direct + tensoriel, composite FAC AMR (mg/composite_fac_poisson)
   numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
   coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, sources couplees
   runtime/            moteurs prives System / AmrSystem, installation authentifiee, block builders, canal aux extensible

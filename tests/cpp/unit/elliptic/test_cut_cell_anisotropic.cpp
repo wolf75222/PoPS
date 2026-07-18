@@ -19,7 +19,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace pops;
@@ -31,20 +30,24 @@ static GeometricMG make_mg(int nc) {
   BoxArray ba(std::vector<Box2D>{dom});
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  std::function<Real(Real, Real)> ls = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) - kR;
-  };
-  std::function<bool(Real, Real)> active = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) < kR;
-  };
-  return GeometricMG(geom, ba, bc, active, false, 2, 2, 2, 50, /*cut_cell=*/true, ls);
+  LevelSetProvider2D level_set = LevelSetProvider2D::trusted_extension(
+      {"pops.test.level-set.circle", 1}, exact_provider_parameters(kCx, kCy, kR),
+      [](Real x, Real y) { return std::hypot(x - kCx, y - kCy) - kR; });
+  ActiveRegionProvider2D active = active_region_from_level_set(level_set);
+  return GeometricMG(geom, ba, bc, active, FieldDistribution::Distributed, 2, 2, 2, 50,
+                     /*cut_cell=*/true, level_set);
 }
 
 // Erreur L2 de phi vs R^2 - r^2 sur le disque, operateur anisotrope (eps_x, eps_y constants).
 static double solve_err_aniso(int nc, double ex, double ey) {
   GeometricMG mg = make_mg(nc);
-  mg.set_epsilon_anisotropic([ex](Real, Real) { return Real(ex); },
-                             [ey](Real, Real) { return Real(ey); });
+  mg.set_epsilon_anisotropic(
+      ScalarFieldProvider2D::trusted_extension({"pops.test.cut-cell-anisotropic.epsilon-x", 1},
+                                               exact_provider_parameters(ex),
+                                               [ex](Real, Real) { return Real(ex); }),
+      ScalarFieldProvider2D::trusted_extension({"pops.test.cut-cell-anisotropic.epsilon-y", 1},
+                                               exact_provider_parameters(ey),
+                                               [ey](Real, Real) { return Real(ey); }));
   mg.rhs().set_val(Real(-2.0 * (ex + ey)));  // f = div(diag(ex,ey) grad(R^2-r^2)) = -2(ex+ey)
   mg.phi().set_val(0.0);
   mg.solve_robust(1e-10, 300);
@@ -86,8 +89,8 @@ TEST(test_cut_cell_anisotropic, aniso_order2_l2) {
 TEST(test_cut_cell_anisotropic, degenerate_matches_isotropic) {
   const int nc = 256;
   GeometricMG mg_a = make_mg(nc);
-  mg_a.set_epsilon_anisotropic([](Real, Real) { return Real(1); },
-                               [](Real, Real) { return Real(1); });
+  mg_a.set_epsilon_anisotropic(constant_scalar_field_provider(Real(1)),
+                               constant_scalar_field_provider(Real(1)));
   mg_a.rhs().set_val(Real(-4.0));
   mg_a.phi().set_val(0.0);
   mg_a.solve_robust(1e-10, 300);
