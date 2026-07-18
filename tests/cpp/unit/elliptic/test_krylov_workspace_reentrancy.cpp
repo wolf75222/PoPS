@@ -975,6 +975,8 @@ TEST(test_krylov_workspace_reentrancy,
   const char* expected_ranks = std::getenv("POPS_TEST_EXPECT_RANKS");
   if (expected_ranks != nullptr)
     ASSERT_EQ(n_ranks(), std::atoi(expected_ranks));
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "a remote neighbor requires multiple MPI ranks";
 
   MPI_Comm embedding_owned = MPI_COMM_NULL;
   ASSERT_EQ(MPI_Comm_dup(MPI_COMM_WORLD, &embedding_owned), MPI_SUCCESS);
