@@ -65,12 +65,14 @@ struct NormalizedDifferenceKernel {
 struct ExactValueMismatchKernel {
   ConstArray4 left, right;
   int component;
-  POPS_HD Real operator()(int i, int j) const {
+  POPS_HD void operator()(int i, int j, Real& mismatch) const {
     const std::uint64_t left_bits =
         Kokkos::bit_cast<std::uint64_t>(left(i, j, component));
     const std::uint64_t right_bits =
         Kokkos::bit_cast<std::uint64_t>(right(i, j, component));
-    return left_bits == right_bits ? Real(0) : Real(1);
+    const Real differs = left_bits == right_bits ? Real(0) : Real(1);
+    if (differs > mismatch)
+      mismatch = differs;
   }
 };
 
@@ -122,6 +124,10 @@ inline Real local_max_abs(const MultiFab& field) {
 
 inline bool local_exact_values_equal(const MultiFab& left, const MultiFab& right) {
   static_assert(sizeof(Real) == sizeof(std::uint64_t));
+  if (left.box_array().boxes() != right.box_array().boxes() ||
+      left.dmap().ranks() != right.dmap().ranks() || left.ncomp() != right.ncomp() ||
+      left.local_size() != right.local_size())
+    throw std::invalid_argument("exact field comparison requires one vector space");
   left.sync_device();
   right.sync_device();
   for (int local = 0; local < left.local_size(); ++local) {
@@ -129,8 +135,9 @@ inline bool local_exact_values_equal(const MultiFab& left, const MultiFab& right
     const ConstArray4 right_values = right.fab(local).const_array();
     const Box2D valid = left.box(local);
     for (int component = 0; component < left.ncomp(); ++component) {
-      if (for_each_cell_reduce_max(
-              valid, ExactValueMismatchKernel{left_values, right_values, component}) != Real(0))
+      if (reduce_max_cell(valid,
+                          ExactValueMismatchKernel{left_values, right_values, component}) !=
+          Real(0))
         return false;
     }
   }

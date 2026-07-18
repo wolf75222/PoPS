@@ -45,6 +45,9 @@ enum class PreparedProblemControlOperation : long {
   Prepare = 1,
   BindWorkspace = 2,
   MaterializeSolve = 3,
+  ApplyLinear = 4,
+  TrueResidual = 5,
+  ApplyPreconditioner = 6,
 };
 
 struct PreparedProblemControlConsensus {
@@ -214,7 +217,8 @@ using PreparedAllocationCountFn = std::function<std::size_t()>;
 /// Concurrency guaranteed by an affine-operator provider across independently prepared sessions.
 /// Independent providers own all mutable state per session. Exclusive providers remain fully
 /// prepared and allocation-stable but borrow an external mutable context that permits only one
-/// active solve invocation per PreparedAffineLinearProblem.
+/// active prepare, bind/probe, public direct apply, or solve across every copy of that provider
+/// source.
 enum class PreparedOperatorConcurrency : std::uint8_t { Independent = 0, Exclusive = 1 };
 
 /// Allocation-free outcome of one hot operator/preconditioner application. A failed status is
@@ -1877,6 +1881,19 @@ class PreparedAffineLinearProblem {
 
   /// A_lin(v) = A(v) - A(0), valid for search directions even when boundaries/sources make A affine.
   void apply_linear(MultiFab& out, const MultiFab& direction) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::ApplyLinear, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::apply_linear cannot use its public operator session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(operator_field_failure_(direction), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, direction));
@@ -1888,6 +1905,19 @@ class PreparedAffineLinearProblem {
 
   /// Scientific residual R(u) = b - A(u), never a preconditioned or Arnoldi estimate.
   void true_residual(MultiFab& out, const MultiFab& rhs, const MultiFab& iterate) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::TrueResidual, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::true_residual cannot use its public operator session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(vector_field_failure_(rhs), operator_field_failure_(iterate));
     failure = std::max(failure, operator_field_failure_(out));
@@ -1901,6 +1931,19 @@ class PreparedAffineLinearProblem {
   }
 
   void apply_preconditioner(MultiFab& out, const MultiFab& in) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::ApplyPreconditioner, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::apply_preconditioner cannot use its public session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(operator_field_failure_(in), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, in));
@@ -1943,7 +1986,7 @@ class PreparedAffineLinearProblem {
 
   class MutationReservation final {
    public:
-    explicit MutationReservation(PreparedAffineLinearProblem* problem) noexcept
+    explicit MutationReservation(const PreparedAffineLinearProblem* problem) noexcept
         : problem_(problem) {}
     MutationReservation(const MutationReservation&) = delete;
     MutationReservation& operator=(const MutationReservation&) = delete;
@@ -1953,10 +1996,10 @@ class PreparedAffineLinearProblem {
     }
 
    private:
-    PreparedAffineLinearProblem* problem_ = nullptr;
+    const PreparedAffineLinearProblem* problem_ = nullptr;
   };
 
-  [[nodiscard]] bool try_reserve_mutation_() noexcept {
+  [[nodiscard]] bool try_reserve_mutation_() const noexcept {
     std::size_t expected = 0;
     if (!active_use_reservations_.compare_exchange_strong(
             expected, kMutationReservation, std::memory_order_acq_rel,
@@ -1968,7 +2011,7 @@ class PreparedAffineLinearProblem {
     return false;
   }
 
-  void release_mutation_() noexcept {
+  void release_mutation_() const noexcept {
     operator_provider_.release_source_();
     active_use_reservations_.store(0, std::memory_order_release);
   }
