@@ -325,7 +325,7 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
 
     # The unavoidable seventh five-minute TU shares one shard, but LPT must leave enough room
     # around that pair: <= 650 s of target compilation plus the observed ~6 min shared runtime
-    # build stays comfortably inside the workflow's 30 min watchdog.
+    # build stays comfortably inside the workflow's 38 min cold-build watchdog.
     full_shards = sel.cpp_target_shards(sorted(build), 6)
     build_loads = [sum(build[target] for target in shard) for shard in full_shards]
     assert max(build_loads) <= 650.0
