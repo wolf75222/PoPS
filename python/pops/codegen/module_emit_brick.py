@@ -32,7 +32,7 @@ from pops.codegen.module_emit_riemann import (
     _emit_roe_roles,
 )
 from pops._ir.expr import Const
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 
 
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,

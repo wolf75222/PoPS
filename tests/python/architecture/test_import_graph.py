@@ -2,14 +2,14 @@
 
 The sub-packages form a directed acyclic dependency stack:
 
-    _ir       imports nothing else in pops
+    _ir       -> identity                        (canonical scalar identity codec)
     identity  imports nothing else in pops
     frames    -> identity
     domain    -> frames, identity
     model     -> _ir, identity, params
     problem   -> _ir, identity, model
-    physics   -> _ir, model, problem
-    time      -> _ir, model, params
+    physics   -> _ir, identity, model, problem
+    time      -> _ir, identity, model, params
     mesh      -> domain, frames, identity, model, params
     amr       -> _ir, identity, mesh, model, time
     layouts   -> amr, mesh
@@ -43,7 +43,7 @@ POPS = REPO_ROOT / "python" / "pops"
 
 # Allowed downstream targets for each layer (what it MAY import within pops).
 ALLOWED = {
-    "_ir": set(),
+    "_ir": {"identity"},
     "identity": set(),
     "representations": set(),
     "spaces": set(),
@@ -54,8 +54,8 @@ ALLOWED = {
     "domain": {"frames", "identity"},
     "model": {"_ir", "identity", "params"},
     "problem": {"_ir", "identity", "model"},
-    "physics": {"_ir", "model", "problem"},
-    "time": {"_ir", "model", "params"},
+    "physics": {"_ir", "identity", "model", "problem"},
+    "time": {"_ir", "identity", "model", "params"},
     "initial": {"model"},
     "mesh": {"domain", "frames", "identity", "model", "params"},
     "amr": {"_ir", "identity", "mesh", "model", "time"},
@@ -251,11 +251,11 @@ def test_params_remains_a_dependency_sink():
 
 
 def test_internal_ir_remains_a_dependency_sink():
-    """Exact symbolic values may be consumed everywhere; the IR must never depend back."""
-    dependencies = sorted(dst for dst, _ in _build_edges().get("_ir", set()))
-    assert not dependencies, (
-        "pops._ir is the foundational symbolic sink and must have no layered module-scope "
-        "dependencies; got %s" % dependencies)
+    """The IR depends only on the foundational canonical scalar identity codec."""
+    dependencies = {dst for dst, _ in _build_edges().get("_ir", set())}
+    assert dependencies == {"identity"}, (
+        "pops._ir may depend only on pops.identity canonical scalars; got %s"
+        % sorted(dependencies))
 
 
 def test_solver_catalog_remains_a_dependency_sink():

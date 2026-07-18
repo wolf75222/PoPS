@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from pops._ir.literals import CPP_INT_MAX, exact_cpp_int, scalar_literal
+from pops.identity.scalar import CPP_INT_MAX, exact_cpp_int, scalar_literal
 from pops.fields._prepared_nullspace_registry import (
     prepared_nullspace_contracts_from_attrs,
 )

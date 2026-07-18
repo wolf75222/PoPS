@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pops._ir.literals import scalar_data, scalar_literal
+from pops.identity.scalar import scalar_data, scalar_literal
 from pops.fields import ConstantNullspace, MeanValueGauge
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.native_components import PreparedNativeComponent

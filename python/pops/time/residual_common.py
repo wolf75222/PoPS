@@ -5,7 +5,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from typing import Any, ClassVar
 
-from pops._ir.literals import ScalarLiteral, scalar_data
+from pops.identity.scalar import ScalarLiteral, scalar_data
 
 
 def residual_name(value: Any, where: str) -> str:

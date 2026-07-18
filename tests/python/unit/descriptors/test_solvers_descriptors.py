@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 
-from pops._ir.literals import PREPARED_GMRES_MAX_RESTART
+from pops.identity.scalar import PREPARED_GMRES_MAX_RESTART
 
 pops = pytest.importorskip("pops")
 

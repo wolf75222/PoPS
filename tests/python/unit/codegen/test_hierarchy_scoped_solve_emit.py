@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pops._ir.literals import scalar_cpp, scalar_data
+from pops.identity.scalar import scalar_cpp, scalar_data
 from pops.linalg import LinearProblem
 from pops.params import ConstParam
 from pops.solvers import CompositeTensorFAC, Hierarchy

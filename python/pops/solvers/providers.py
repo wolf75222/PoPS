@@ -364,7 +364,7 @@ class PreparedHierarchyConvergenceContract:
         }
 
     def values(self, options: Mapping[str, Any], *, where: str) -> tuple[Any, Any, int]:
-        from pops._ir.literals import exact_cpp_int
+        from pops.identity.scalar import exact_cpp_int
         from pops.model._bind_schema_data import literal_value
 
         try:
@@ -552,7 +552,7 @@ class PreparedHierarchySolverProvider:
             where="hierarchy provider %r" % self.provider_id,
         )
         self.flat_execution.validate_ir(attrs, where="hierarchy solve")
-        from pops._ir.literals import exact_cpp_int, scalar_data
+        from pops.identity.scalar import exact_cpp_int, scalar_data
 
         relative, absolute, maximum = self.convergence.values(
             options, where="hierarchy solve"
@@ -717,7 +717,7 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
         values = CompositeTensorFAC().canonical_options()
     if set(values) != _COMPOSITE_OPTION_NAMES:
         raise TypeError("%s options do not match the provider schema" % where)
-    from pops._ir.literals import exact_cpp_int, scalar_data
+    from pops.identity.scalar import exact_cpp_int, scalar_data
     from pops.model._bind_schema_data import literal_value
 
     maximum = exact_cpp_int(values["max_iter"], where=where + " max_iter", minimum=1)
@@ -819,7 +819,7 @@ def _author_composite_tensor_fac(
     name: Any,
     provider: PreparedHierarchySolverProvider,
 ) -> Any:
-    from pops._ir.literals import scalar_literal
+    from pops.identity.scalar import scalar_literal
     from pops.fields._prepared_nullspace_registry import (
         PreparedNullspaceContracts,
         prepared_nullspace_provider_from_identity,
@@ -970,7 +970,7 @@ def _emit_composite_tensor_fac(
     provider: PreparedHierarchySolverProvider,
     options: Mapping[str, Any],
 ) -> PreparedHierarchySolverNativeEmission:
-    from pops._ir.literals import scalar_cpp
+    from pops.identity.scalar import scalar_cpp
     from pops.model._bind_schema_data import literal_value
 
     fine = options["fine_sweeps"]
@@ -1183,7 +1183,7 @@ class CompositeTensorFAC:
         return _COMPOSITE_PROVIDER.capabilities
 
     def canonical_options(self) -> dict[str, Any]:
-        from pops._ir.literals import scalar_data
+        from pops.identity.scalar import scalar_data
 
         return {
             "max_iter": self.max_iter,

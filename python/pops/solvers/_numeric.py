@@ -9,7 +9,7 @@ def exact_finite_real(value: Any, *, where: str) -> Any:
     """Retain an exact Python scalar, rejecting annotations and non-numeric payloads."""
     # Lazy by design: solver descriptors remain an import-graph sink. Scalar inspection is needed
     # only when a numeric option is actually authored, never while importing pops.solvers.
-    from pops._ir.literals import scalar_literal
+    from pops.identity.scalar import scalar_literal
     if isinstance(value, bool):
         raise TypeError("%s must be a real scalar, not bool" % where)
     try:
@@ -51,7 +51,7 @@ def optional_positive_int(value: Any, *, where: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("%s must be a Python int or None (got %r)" % (where, value))
-    from pops._ir.literals import exact_cpp_int
+    from pops.identity.scalar import exact_cpp_int
     return exact_cpp_int(value, where=where, minimum=1)
 
 

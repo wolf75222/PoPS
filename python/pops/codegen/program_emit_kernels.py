@@ -17,7 +17,7 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 from pops.fields._prepared_nullspace_registry import prepared_nullspace_provider_from_attrs
 from pops.solvers._prepared_preconditioner_registry import prepared_preconditioner_provider_from_attrs
 from pops.solvers.krylov._prepared_method_registry import prepared_krylov_method_provider_from_attrs

@@ -9,7 +9,7 @@ from enum import Enum
 from fractions import Fraction
 from typing import Any, ClassVar, cast
 
-from pops._ir.literals import ScalarLiteral, scalar_data
+from pops.identity.scalar import ScalarLiteral, scalar_data
 from pops.model.ownership import OwnerPath
 from pops.time.points import Clock, StagePoint, TimePoint
 

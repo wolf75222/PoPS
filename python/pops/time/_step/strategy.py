@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar
 
-from pops._ir.literals import scalar_data
+from pops.identity.scalar import scalar_data
 
 
 _STRATEGY_TYPES: dict[str, type[StepStrategy]] = {}

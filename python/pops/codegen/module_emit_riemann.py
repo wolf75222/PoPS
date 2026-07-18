@@ -23,7 +23,7 @@ from pops.codegen.module_emit_helpers import (
     _prim_block,
     _roles_for,
 )
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 
 
 def _emit_hllc(model: Any, nc: Any) -> list:

@@ -14,7 +14,7 @@ from pops.identity import Identity, make_identity
 
 def _scalar_data(value: Any) -> dict[str, Any]:
     """Serialize an exact scalar without making the solver catalog import the symbolic IR."""
-    from pops._ir.literals import scalar_data
+    from pops.identity.scalar import scalar_data
 
     return scalar_data(value)
 

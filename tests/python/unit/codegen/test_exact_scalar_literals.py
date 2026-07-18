@@ -218,6 +218,9 @@ def test_literals_outside_the_real_target_range_fail_with_a_clear_lowering_error
 def test_solver_controls_keep_exact_literals_until_codegen():
     from pops.linalg import LinearProblem
     from pops.solvers.krylov import Richardson
+    from pops.solvers.krylov._prepared_method_registry import (
+        prepared_krylov_method_provider_from_attrs,
+    )
 
     program = Program("exact_solver_controls")
     time_state = _state(program, temporal=True)
@@ -234,11 +237,21 @@ def test_solver_controls_keep_exact_literals_until_codegen():
 
     solve = next(node for node in program._values if node.op == "solve_linear")
     assert solve.attrs["tol"].to_data() == {"kind": "decimal", "value": "1E-12"}
-    assert solve.attrs["omega"].to_data() == {
-        "kind": "rational", "numerator": "2", "denominator": "3"}
+    relaxation = {"kind": "rational", "numerator": "2", "denominator": "3"}
+    assert solve.attrs["method_options"] == {"relaxation": relaxation}
+    provider = prepared_krylov_method_provider_from_attrs(solve.attrs)
+    assert provider.provider_id == "pops.krylov.richardson"
+    assert provider.prepare_options(solve.attrs["method_options"]) == {
+        "relaxation": relaxation
+    }
+    method_cpp = (
+        "pops::richardson_krylov_method("
+        "static_cast<pops::Real>((pops::Real(2) / pops::Real(3))))"
+    )
+    assert provider.emit_cpp(solve) == method_cpp
     source = emit_cpp_program(program)
     assert "pops::Real(1E-12)" in source
-    assert "(pops::Real(2) / pops::Real(3))" in source
+    assert method_cpp in source
 
 
 def test_solver_iteration_budget_rejects_bool():

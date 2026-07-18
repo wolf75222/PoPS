@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 from pops.time.references import block_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,

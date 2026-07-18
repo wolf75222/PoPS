@@ -42,7 +42,7 @@ from .expr import (
 )
 from .handle_expr import ValueExpr
 from .param_values import parameter_value
-from .literals import ScalarLiteral, scalar_cpp, scalar_data, scalar_literal, scalar_to_native
+from pops.identity.scalar import ScalarLiteral, scalar_cpp, scalar_data, scalar_literal, scalar_to_native
 from .symbolic import SourceLocation, SymbolicTruthValueError
 
 # -- reference / witness values -------------------------------------------

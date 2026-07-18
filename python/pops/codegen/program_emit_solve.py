@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops._ir.literals import exact_cpp_int, scalar_cpp
+from pops.identity.scalar import exact_cpp_int, scalar_cpp
 from pops.fields._prepared_nullspace_registry import (
     prepared_nullspace_contracts_from_attrs,
 )

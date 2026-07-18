@@ -258,7 +258,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             nullspace_contract=nullspace_contract,
             where="solve_linear preconditioner %r" % preconditioner_provider.scheme,
         )
-        from pops._ir.literals import exact_cpp_int, scalar_literal
+        from pops.identity.scalar import exact_cpp_int, scalar_literal
 
         try:
             tol_literal = scalar_literal(tol)

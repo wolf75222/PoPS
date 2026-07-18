@@ -14,15 +14,15 @@ from threading import RLock
 from typing import Any
 
 from pops._frozen_data import freeze_data
-from pops._ir.literals import (
+from pops.identity import (
     PREPARED_GMRES_MAX_RESTART,
     ScalarLiteral,
+    canonical_bytes,
     exact_cpp_int,
     exact_numeric_scalar,
     scalar_cpp,
     scalar_data,
 )
-from pops.identity import canonical_bytes
 from pops.native_components import PreparedNativeComponent
 
 

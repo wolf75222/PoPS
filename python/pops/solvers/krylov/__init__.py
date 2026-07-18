@@ -46,7 +46,7 @@ _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True
 
 def _exact_control(value: Any, where: str) -> Any:
     # Lazy to keep the catalog-layer import graph (solvers -> no symbolic implementation module).
-    from pops._ir.literals import exact_numeric_scalar
+    from pops.identity.scalar import exact_numeric_scalar
 
     return exact_numeric_scalar(value, where=where)
 
@@ -65,7 +65,7 @@ def _check_max_iter(name: str, max_iter: Any) -> int:
             "%s: max_iter is required (dynamic solver loops require max_iter); pass a positive "
             "int, e.g. %s(max_iter=200)" % (name, name)
         )
-    from pops._ir.literals import exact_cpp_int
+    from pops.identity.scalar import exact_cpp_int
 
     try:
         return exact_cpp_int(max_iter, where="%s: max_iter" % name, minimum=1)

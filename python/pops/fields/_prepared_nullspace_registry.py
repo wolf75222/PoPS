@@ -14,7 +14,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any, Protocol
 
-from pops._ir.literals import ScalarLiteral
+from pops.identity.scalar import ScalarLiteral
 from pops.identity import canonical_bytes
 from pops.native_components import PreparedNativeComponent
 
@@ -449,7 +449,7 @@ def _constant_author(
     if options:
         raise TypeError("%s constant provider takes no options" % where)
     from pops.fields.gauges import MeanValueGauge
-    from pops._ir.literals import scalar_literal
+    from pops.identity.scalar import scalar_literal
 
     if type(gauge) is not MeanValueGauge:
         raise TypeError("%s constant nullspace requires exactly MeanValueGauge(value)" % where)
@@ -513,7 +513,7 @@ def _emit_constant(
     plan_identity: str,
     _provider: PreparedNullspaceProvider,
 ) -> PreparedNullspaceNativeEmission:
-    from pops._ir.literals import scalar_cpp
+    from pops.identity.scalar import scalar_cpp
 
     gauge = contracts.gauge
     expression = (

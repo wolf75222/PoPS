@@ -12,7 +12,7 @@ import math
 from decimal import Decimal
 from typing import Any
 
-from pops._ir.literals import ScalarLiteral, scalar_data, scalar_literal
+from pops.identity.scalar import ScalarLiteral, scalar_data, scalar_literal
 
 
 def _unannotated_literal(value: Any, *, where: str) -> ScalarLiteral:

@@ -1,4 +1,9 @@
-"""Exact scalar literals used by symbolic expressions and time coefficients."""
+"""Canonical cross-language scalar values and exact native spellings.
+
+This module is the single source of truth for lossless scalar identity.  The symbolic IR
+re-exports it, while dependency-sink catalogs such as :mod:`pops.solvers` consume it directly
+through :mod:`pops.identity` without importing compiler IR.
+"""
 
 from __future__ import annotations
 

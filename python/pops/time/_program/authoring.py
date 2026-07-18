@@ -1,7 +1,7 @@
 """Program control flow, field ops, reductions and decorator authoring."""
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
-from pops._ir.literals import scalar_literal
+from pops.identity.scalar import scalar_literal
 from pops.time._program.dump import _ProgramDump
 from pops.time._program.constants import _ProgramConstants
 from pops.time._authoring import atomic_authoring

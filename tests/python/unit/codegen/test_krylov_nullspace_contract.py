@@ -175,7 +175,7 @@ def test_constant_nullspace_codegen_emits_the_prepared_policy_and_gauge_snapshot
 def test_registered_header_provider_owns_contract_validation_and_native_plan_emission(
     tmp_path,
 ):
-    from pops._ir.literals import scalar_cpp, scalar_literal
+    from pops.identity.scalar import scalar_cpp, scalar_literal
     from pops.fields import nullspace
 
     include_root = tmp_path / "include"

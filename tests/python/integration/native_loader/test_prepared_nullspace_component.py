@@ -72,7 +72,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_nullspace_plan_calls() noexcept {
 
 
 def _provider(include_root: Path):
-    from pops._ir.literals import scalar_cpp, scalar_literal
+    from pops.identity.scalar import scalar_cpp, scalar_literal
     from pops.fields import MeanValueGauge, nullspace
 
     def author(options, gauge, _properties, where):

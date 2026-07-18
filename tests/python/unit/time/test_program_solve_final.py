@@ -8,7 +8,7 @@ import inspect
 import pytest
 
 import pops
-from pops._ir.literals import PREPARED_GMRES_MAX_RESTART, scalar_data
+from pops.identity.scalar import PREPARED_GMRES_MAX_RESTART, scalar_data
 from pops.fields import ConstantNullspace, MeanValueGauge
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.solvers import CG, DenseLU, GMRES

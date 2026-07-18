@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops._ir.literals import scalar_cpp
+from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
 
 from pops.codegen.program_emit_kernels import (
