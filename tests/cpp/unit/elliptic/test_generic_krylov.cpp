@@ -2619,15 +2619,34 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   EXPECT_NEAR(warm.reference_residual_norm, forcing_reference, forcing_reference * Real(1e-14))
       << "the reference is ||b-A(0)||, not the warm-start residual";
 
+  // Exercise the inclusive absolute floor on an exactly representable boundary.  Reusing the
+  // Helmholtz norm above would compare two deliberately different reduction algorithms whose
+  // OpenMP summation orders may differ by one ULP, even though the mathematical fields agree.
+  ApplyFn identity = [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); };
+  MultiFab unit_rhs(*ba_, *dm_, 1, 0);
   MultiFab zero(*ba_, *dm_, 1, 1);
-  zero.set_val(0.0);
-  const SolveReport absolute =
-      run_prepared(*A_, zero, *rhs_, bicgstab_krylov_method(), LinearOperatorProperties::general(),
-                   Real(0), forcing_reference, 50);
+  unit_rhs.set_val(Real(1));
+  zero.set_val(Real(0));
+  const Real exact_unit_norm = static_cast<Real>(kN);  // sqrt(kN*kN), exact for kN=32.
+  ASSERT_EQ(PureFieldAlgebra::norm(unit_rhs), exact_unit_norm);
+  const SolveReport absolute = run_prepared(identity, zero, unit_rhs, bicgstab_krylov_method(),
+                                            LinearOperatorProperties::general(), Real(0),
+                                            exact_unit_norm, 50);
   EXPECT_TRUE(absolute.solved());
   EXPECT_EQ(absolute.iters, 0);
+  EXPECT_EQ(absolute.reference_residual_norm, exact_unit_norm);
+  EXPECT_EQ(absolute.residual_norm, exact_unit_norm);
 
-  ApplyFn identity = [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); };
+  MultiFab below_floor(*ba_, *dm_, 1, 1);
+  below_floor.set_val(Real(0));
+  const SolveReport below = run_prepared(identity, below_floor, unit_rhs,
+                                         bicgstab_krylov_method(),
+                                         LinearOperatorProperties::general(), Real(0),
+                                         exact_unit_norm / Real(2), 50);
+  EXPECT_TRUE(below.solved());
+  EXPECT_EQ(below.iters, 1);
+  EXPECT_EQ(below.residual_norm, Real(0));
+
   MultiFab zero_rhs(*ba_, *dm_, 1, 0);
   MultiFab zero_solution(*ba_, *dm_, 1, 1);
   zero_rhs.set_val(Real(0));

@@ -758,8 +758,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
     assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
+    openmp_cpp_build = openmp_block[
+        openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
+        openmp_block.index("- name: Test (ctest, backend Kokkos OpenMP)")
+    ]
+    assert "if: matrix.kind == 'cpp'" in openmp_cpp_build
+    assert "timeout-minutes: 43" in openmp_cpp_build
     assert (
-        'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 30m'
+        'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m'
         in openmp_block
     )
     assert 'cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"' in openmp_block

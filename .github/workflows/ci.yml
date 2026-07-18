@@ -1434,9 +1434,9 @@ jobs:
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
     name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    # C++ shards keep a 30-minute build watchdog and a 7-minute test watchdog (15 minutes only
-    # for the shard owning the measured slow polar-ring target).  The Python lane retains its
-    # existing 45-minute module-build guard.  The outer envelope is setup/cache/cleanup margin.
+    # C++ shards keep a 38-minute cold-build watchdog and a 7-minute test watchdog. The Python lane
+    # retains its existing 45-minute module-build guard. The outer envelope is setup/cache/cleanup
+    # margin.
     timeout-minutes: 70
     needs: set-mode
     strategy:
@@ -1612,7 +1612,10 @@ jobs:
 
       - name: Configure + build (backend Kokkos OpenMP)
         if: matrix.kind == 'cpp'
-        timeout-minutes: 35
+        # A cold production-header invalidation leaves the two heaviest shards within 10-13 targets
+        # of completion at 30 minutes.  Keep five minutes around the independently bounded build for
+        # configure/reporting without misclassifying a progressing compilation as a test failure.
+        timeout-minutes: 43
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
         run: |
@@ -1655,7 +1658,7 @@ jobs:
             echo "::error::OpenMP C++ shard ${{ matrix.shard }} selected no targets from the forced complete suite"
             exit 1
           fi
-          run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 30m \
+          run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m \
             cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
 
       - name: Test (ctest, backend Kokkos OpenMP)
