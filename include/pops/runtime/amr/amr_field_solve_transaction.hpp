@@ -57,7 +57,7 @@ inline std::vector<int> AmrRuntime::default_aux_components() const {
   std::set<int> components;
   for (int component = 0; component < 3; ++component)
     detail::add_aux_component(components, component, aux_ncomp_);
-  for (const auto& [component, _] : named_aux_)
+  for (const auto& [component, _] : static_aux_)
     detail::add_aux_component(components, component, aux_ncomp_);
   return {components.begin(), components.end()};
 }

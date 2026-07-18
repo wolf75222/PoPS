@@ -20,6 +20,7 @@
 #include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
+#include <pops/core/state/aux_names.hpp>  // canonical B_z component shared with the device Aux layout
 
 #include <algorithm>  // std::find, std::sort (partial IMEX mask resolution: sorted unique indices)
 #include <array>      // std::array<int, 3>: named-elliptic-field aux components (ADC-428)
@@ -88,21 +89,21 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
            row.ghost_depth == std::vector<int>{1} && row.dimension == 2 &&
            row.refinement_ratio == 2;
   };
-  registry.add({"pops.lib.amr.transfer::face_divergence_preserving", face_accepts,
-                [](const TransferRouteDescriptor& row) {
-                  PreparedTransferKernel kernel;
-                  (void)row;
-                  kernel.face_vector = [](const MultiFab& coarse_x, const MultiFab& coarse_y,
-                                          MultiFab& fine_x, MultiFab& fine_y,
-                                          const SpatialTransferContext& context) {
-                    // One prepared vector operation owns both oriented carriers.  The two normal-face
-                    // reconstructions are applied in the same transaction and preserve the discrete flux
-                    // balance as a pair; no scalar face route exists.
-                    detail::bootstrap_prolong_face_vector(coarse_x, coarse_y, fine_x, fine_y,
-                                                          context);
-                  };
-                  return kernel;
-                }});
+  registry.add(
+      {"pops.lib.amr.transfer::face_divergence_preserving", face_accepts,
+       [](const TransferRouteDescriptor& row) {
+         PreparedTransferKernel kernel;
+         (void)row;
+         kernel.face_vector = [](const MultiFab& coarse_x, const MultiFab& coarse_y,
+                                 MultiFab& fine_x, MultiFab& fine_y,
+                                 const SpatialTransferContext& context) {
+           // One prepared vector operation owns both oriented carriers.  The two normal-face
+           // reconstructions are applied in the same transaction and preserve the discrete flux
+           // balance as a pair; no scalar face route exists.
+           detail::bootstrap_prolong_face_vector(coarse_x, coarse_y, fine_x, fine_y, context);
+         };
+         return kernel;
+       }});
   registry.add({"pops.lib.amr.transfer::node_bilinear",
                 exact("node", "node", "primitive", "prolongation", 2, {1}),
                 [](const TransferRouteDescriptor&) {
@@ -259,7 +260,7 @@ struct AmrSystem::Impl {
     std::vector<double> state;
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
-    bool newton_diagnostics = false;  // newton_report: native MULTI-BLOCK (single/.so REJECTED)
+    bool newton_diagnostics = false;  // newton_report: native runtime; compiled .so rejected
     // Stable temporal-method wire: 0=kEuler, 1=kSsprk3 (both historical values), 2=kSsprk2.
     // Materialized strictly to AmrTimeMethod at build (single-block via make_build_params,
     // multi-block via dispatch_amr_block). Any SSP method is mutually exclusive with imex.
@@ -360,7 +361,7 @@ struct AmrSystem::Impl {
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (n*n row-major).
   // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
   // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
-  std::map<int, AmrRuntime::NamedAuxField> named_aux_;
+  std::map<int, AmrRuntime::StaticAuxField> named_aux_;
   // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
   // into the engine (bp.named_aux.halo_policies for the coupler; runtime->set_named_aux_bc for the runtime).
   std::map<int, AuxHaloPolicy> named_aux_bc_;
@@ -861,15 +862,19 @@ struct AmrSystem::Impl {
                 "AmrSystem::bootstrap tagging", blocks[b].name, runtime->block_cons_vars(b),
                 refine_var_name, refine_var_role);
           }
-          runtime->set_bootstrap_threshold_tag(
-              b, component, static_cast<Real>(refine_threshold),
-              "pops.amr.tagging.component-threshold@1");
+          runtime->set_bootstrap_threshold_tag(b, component, static_cast<Real>(refine_threshold),
+                                               "pops.amr.tagging.component-threshold@1");
         }
       }
     }
-    // Model-NAMED aux fields (ADC-291): push the pending coarse fields into the runtime engine, which
-    // re-applies them onto the shared aux each solve_fields (so they persist across the union regrid)
-    // and injects them to the fine levels. Empty -> no-op (bit-identical).
+    // Canonical B_z and model-NAMED aux fields share one native static-field authority. The runtime
+    // validates that a block declared each component, publishes coarse->fine immediately, and
+    // re-applies the fields after every field solve and hierarchy growth.
+    if (!bz_field.empty()) {
+      constexpr int bz_component = aux_canonical_index("B_z");
+      static_assert(bz_component == 3);
+      runtime->set_static_aux_component(bz_component, bz_field);
+    }
     for (const auto& kv : named_aux_)
       runtime->set_named_aux(kv.first, kv.second);
     for (const auto& kv : named_aux_bc_)
@@ -1083,16 +1088,16 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
         "AmrSystem::add_block : positivity_floor >= 0 and finite (0 = inactive)");
   // IMEX source Newton options grouped into a POD (ADC-214; wave 3 audit, parity
   // System::add_block). Defaults {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none),
-  // bit-identical. SUPPORT: MULTI-BLOCK engine (AmrRuntime) only -- the single-block (AmrCouplerMP)
-  // keeps iters=2 frozen, non-default options are REJECTED there at build (ensure_built), never ignored.
+  // bit-identical. Native blocks use these options through the unified AmrRuntime at every block
+  // count; compiled .so loaders reject non-default options instead of ignoring them.
   // Range check shared with System::add_block (validate_newton_options, in implicit_stepper.hpp).
   validate_newton_options(newton, "AmrSystem::add_block");
   const bool newton_non_default = amr_newton_options_non_default(newton);
   if (time != "imex" && newton_non_default)
     throw std::runtime_error("AmrSystem::add_block : Newton options require time='imex'");
   // newton_diagnostics (newton_report) requires time='imex' (the report comes from the IMEX source
-  // Newton), parity with System::add_block. SUPPORT: native MULTI-BLOCK only -- the single-block
-  // (coupler) and the .so loaders reject it (at build / at the facade), never an empty report.
+  // Newton), parity with System::add_block. Native blocks support it at every block count; compiled
+  // .so loaders reject it at the facade, never producing an empty report.
   if (time != "imex" && newton_diagnostics)
     throw std::runtime_error("AmrSystem::add_block : newton_diagnostics requires time='imex'");
   // Explicit SSPRK2 and SSPRK3 are method-of-lines advances with effective reflux fluxes. IMEX is a
@@ -1120,9 +1125,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
         "AmrSystem::add_block : implicit_vars / implicit_roles require time='imex' "
         "(the implicit mask only applies to the IMEX source step ; got time='" +
         time + "')");
-  // MULTI-BLOCK (capstone v): a 2nd block (or more) switches to the AmrRuntime runtime engine
-  // (shared hierarchy, co-located summed Poisson). The single block stays on AmrCouplerMP
-  // (bit-identical). An already COMPILED block (set_compiled_block / add_compiled_model) CAN now mix
+  // Every block count uses the AmrRuntime engine (shared hierarchy, co-located summed Poisson). An
+  // already COMPILED block (set_compiled_block / add_compiled_model) CAN mix
   // with a native block: its runtime builder (compiled_block_builder) materializes an
   // AmrRuntimeBlock on the SAME shared layout, exactly like a native block (cf. build_multi). A
   // single hard guard: the compiled block must have been registered WITH a runtime builder (an .so
@@ -1147,7 +1151,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
       newton;  // Newton options grouped into a POD (ADC-214; wave 3, single-block AND multi-block)
   b.newton_non_default = newton_non_default;
   b.newton_diagnostics =
-      newton_diagnostics;          // newton_report (native multi-block; single/.so rejected)
+      newton_diagnostics;          // newton_report (native runtime; compiled .so rejected)
   b.pos_floor = positivity_floor;  // Zhang-Shu floor (ADC-259); threaded at build (single/multi)
   b.substeps = substeps;
   b.stride = stride;
@@ -1381,11 +1385,13 @@ POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
     P->runtime->discard_interface_fluxes();
 }
 
-POPS_EXPORT void AmrSystem::set_compiled_block(
-    int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
-    const std::string& name, bool recon_prim, bool imex, int time_method, int stride,
-    const std::vector<std::string>& implicit_vars,
-    const std::vector<std::string>& implicit_roles, double pos_floor) {
+POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
+                                               AmrCompiledBlockBuilder runtime_builder,
+                                               const std::string& name, bool recon_prim, bool imex,
+                                               int time_method, int stride,
+                                               const std::vector<std::string>& implicit_vars,
+                                               const std::vector<std::string>& implicit_roles,
+                                               double pos_floor) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
   require_assembling_amr(p_->bound_,
@@ -1919,18 +1925,17 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
                              "; the right-hand side = sum of the "
                              "block's elliptic bricks)");
   const auto field_provider = p_->field_solver_registry_->resolve(solver);
-  AmrFieldSolverOptions provider_options =
-      solver_options.schema_identity.empty() ? field_provider->default_field_options()
-                                             : solver_options;
-  const PreparedProviderSupport option_support =
-      field_provider->accepts_options(provider_options);
+  AmrFieldSolverOptions provider_options = solver_options.schema_identity.empty()
+                                               ? field_provider->default_field_options()
+                                               : solver_options;
+  const PreparedProviderSupport option_support = field_provider->accepts_options(provider_options);
   if (!option_support.well_formed())
     throw std::runtime_error(
         "AmrSystem::set_poisson : provider returned a malformed option decision");
   if (!option_support.accepted())
-    throw std::runtime_error(
-        "AmrSystem::set_poisson : provider rejected its field options (code " +
-        std::to_string(option_support.code) + "): " + std::string(option_support.reason));
+    throw std::runtime_error("AmrSystem::set_poisson : provider rejected its field options (code " +
+                             std::to_string(option_support.code) +
+                             "): " + std::string(option_support.reason));
   (void)provider_options.exact_contract();
   p_->p_rhs = rhs;
   p_->p_solver = solver;
@@ -1973,8 +1978,7 @@ void AmrSystem::set_field_solver_plan(
   // hierarchy policies remain opaque here and are validated by the provider against the exact build
   // request; the facade never grows a switch when an extension adds one.
   const auto resolved_provider = p_->field_solver_registry_->resolve(solver);
-  const PreparedProviderSupport option_support =
-      resolved_provider->accepts_options(solver_options);
+  const PreparedProviderSupport option_support = resolved_provider->accepts_options(solver_options);
   if (!option_support.well_formed())
     throw std::runtime_error(
         "AmrSystem::set_field_solver_plan provider returned a malformed option decision");
@@ -2025,14 +2029,13 @@ void AmrSystem::register_field_nullspace_provider(
     std::shared_ptr<const FieldNullspaceProvider> provider) {
   require_assembling_amr(p_->bound_, "register_field_nullspace_provider");
   if (p_->built)
-    throw std::runtime_error(
-        "AmrSystem::register_field_nullspace_provider: system already built");
+    throw std::runtime_error("AmrSystem::register_field_nullspace_provider: system already built");
   p_->field_nullspace_provider_registry_->add(std::move(provider));
   p_->field_plan_consensus_verified_ = false;
 }
 
-void AmrSystem::set_default_field_nullspace(
-    const std::string& nullspace_provider_identity, const PreparedProviderOptions& options) {
+void AmrSystem::set_default_field_nullspace(const std::string& nullspace_provider_identity,
+                                            const PreparedProviderOptions& options) {
   require_assembling_amr(p_->bound_, "set_default_field_nullspace");
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_default_field_nullspace: system already built");
@@ -2286,8 +2289,8 @@ void AmrSystem::set_field_nullspace(const std::string& provider_slot,
   auto found = p_->field_plans_.find(provider_slot);
   if (found == p_->field_plans_.end())
     throw std::runtime_error("AmrSystem::set_field_nullspace unknown provider slot");
-  const auto provider = p_->field_nullspace_provider_registry_->resolve(
-      nullspace_provider_identity);
+  const auto provider =
+      p_->field_nullspace_provider_registry_->resolve(nullspace_provider_identity);
   if (!provider->accepts_options(options))
     throw std::runtime_error("AmrSystem::set_field_nullspace provider rejected its options");
   FieldNullspaceProviderSelection selection{nullspace_provider_identity, options};
@@ -3364,8 +3367,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   }
   std::vector<pops::runtime::program::ProgramOperatorAuthority> operator_authorities;
   try {
-    operator_authorities =
-        pops::runtime::program::read_program_operator_authorities(h);
+    operator_authorities = pops::runtime::program::read_program_operator_authorities(h);
   } catch (...) {
     pops::dynlib::close(h);
     throw;

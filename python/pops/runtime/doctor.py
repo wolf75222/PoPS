@@ -298,10 +298,10 @@ def capabilities() -> Any:
             "system_polar": ["explicit (ssprk2|ssprk3)",
                              "metric-aware explicit Program.solve graph"],
             "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
-                              "mono-block AND native multi-block (.so loaders : explicit rejection) ; "
+                              "native at every block count (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
-                              "newton_report : System + AMR native multi-block (mono-block AMR and "
-                              ".so loaders : explicit rejection)",
+                              "newton_report : System + AMR native at every block count "
+                              "(.so loaders : explicit rejection)",
         },
         "stability_policy": {
             "system": ["transport (max_wave_speed | stability_speed)", "source_frequency",

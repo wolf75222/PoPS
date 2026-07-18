@@ -56,7 +56,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>  // std::numeric_limits (initial dt = +inf, min over the blocks)
-#include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied each solve
+#include <map>     // static_aux_: externally supplied aux fields, re-applied each solve
 #include <memory>
 #include <optional>
 #include <set>
@@ -155,12 +155,13 @@ inline std::string exact_amr_field_solve_config_contract(const AmrFieldSolveConf
       .text(plan.output_owner_identity)
       .text(plan.output_block)
       .text(plan.output_key)
-      .sequence(plan.providers, [](ExactContractBuilder& item, const FieldProviderBinding& value) {
-        item.text(value.identity)
-            .text(value.owner_block)
-            .text(value.native_key)
-            .scalar(value.coefficient);
-      })
+      .sequence(plan.providers,
+                [](ExactContractBuilder& item, const FieldProviderBinding& value) {
+                  item.text(value.identity)
+                      .text(value.owner_block)
+                      .text(value.native_key)
+                      .scalar(value.coefficient);
+                })
       .text(plan.solver)
       .bytes(plan.hierarchy_policy.exact_contract())
       .text(plan.bc)
@@ -261,8 +262,7 @@ inline SolveReport solve_prepared_amr_field_solver_collectively(AmrPreparedField
   if (all_reduce_max(provider_failed ? 1L : 0L) != 0)
     throw std::runtime_error("AMR field-solver provider failed on at least one MPI rank");
 
-  const bool malformed =
-      !solve_report_is_publishable(report, std::numeric_limits<int>::max());
+  const bool malformed = !solve_report_is_publishable(report, std::numeric_limits<int>::max());
   if (all_reduce_max(malformed ? 1L : 0L) != 0)
     throw std::runtime_error("AMR field-solver provider published a malformed SolveReport");
 
@@ -286,8 +286,8 @@ class AmrFieldSolverProvider {
   [[nodiscard]] virtual AmrFieldSolverOptions default_field_options() const = 0;
   /// Optional provider-owned default for a particular use envelope. Providers that only accept
   /// explicit authored policies return std::nullopt; the core never invents or interprets one.
-  [[nodiscard]] virtual std::optional<AmrFieldHierarchyPolicyAuthority>
-  default_hierarchy_policy(std::string_view use_contract_identity) const = 0;
+  [[nodiscard]] virtual std::optional<AmrFieldHierarchyPolicyAuthority> default_hierarchy_policy(
+      std::string_view use_contract_identity) const = 0;
   [[nodiscard]] virtual PreparedProviderSupport accepts_options(
       const AmrFieldSolverOptions& options) const noexcept = 0;
   [[nodiscard]] virtual PreparedProviderSupport supports(
@@ -313,10 +313,8 @@ inline std::string exact_amr_field_solver_provider_declaration(
       .text(provider.identity())
       .scalar(provider.interface_version())
       .text(provider.collective_contract())
-      .sequence(capabilities,
-                [](ExactContractBuilder& item, const std::string& capability) {
-                  item.text(capability);
-                })
+      .sequence(capabilities, [](ExactContractBuilder& item,
+                                 const std::string& capability) { item.text(capability); })
       .bytes(provider.default_field_options().exact_contract());
   return std::move(contract).release();
 }
@@ -351,9 +349,7 @@ struct AmrFieldSolverSupportAssessment {
   PreparedProviderSupport options;
   PreparedProviderSupport request;
 
-  [[nodiscard]] bool accepted() const noexcept {
-    return options.accepted() && request.accepted();
-  }
+  [[nodiscard]] bool accepted() const noexcept { return options.accepted() && request.accepted(); }
   [[nodiscard]] std::string exact_contract() const {
     if (!options.well_formed() || !request.well_formed() ||
         (!options.accepted() && request.accepted()))
@@ -369,8 +365,8 @@ struct AmrFieldSolverSupportAssessment {
 
 inline AmrFieldSolverSupportAssessment inspect_amr_field_solver_support(
     const AmrFieldSolverProvider& provider, const AmrFieldSolverBuildRequest& request) {
-  AmrFieldSolverSupportAssessment support{
-      provider.accepts_options(request.plan.solver_options), provider.supports(request)};
+  AmrFieldSolverSupportAssessment support{provider.accepts_options(request.plan.solver_options),
+                                          provider.supports(request)};
   (void)support.exact_contract();
   return support;
 }
@@ -389,21 +385,19 @@ inline AmrFieldSolverSupportAssessment inspect_amr_field_solver_support_collecti
     inspection_failed = true;
   }
   if (all_reduce_max(inspection_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "AMR field solver support inspection failed on at least one MPI rank");
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"amr-field-solver-provider", declaration},
-           {"amr-field-solver-support", support_contract}}))
+    throw std::runtime_error("AMR field solver support inspection failed on at least one MPI rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-field-solver-provider", declaration},
+                                                 {"amr-field-solver-support", support_contract}}))
     throw std::runtime_error(
         "AMR field solver declaration or support decision differs across MPI ranks");
   if (!support.options.accepted())
-    throw std::invalid_argument(
-        "AMR field solver provider rejected options (code " +
-        std::to_string(support.options.code) + "): " + std::string(support.options.reason));
+    throw std::invalid_argument("AMR field solver provider rejected options (code " +
+                                std::to_string(support.options.code) +
+                                "): " + std::string(support.options.reason));
   if (!support.request.accepted())
-    throw std::invalid_argument(
-        "AMR field solver provider rejected request (code " +
-        std::to_string(support.request.code) + "): " + std::string(support.request.reason));
+    throw std::invalid_argument("AMR field solver provider rejected request (code " +
+                                std::to_string(support.request.code) +
+                                "): " + std::string(support.request.reason));
   return support;
 }
 
@@ -860,7 +854,7 @@ struct AmrRuntimeBlock {
 /// AmrSystemCoupler algorithm (solve_fields + step) over closures rather than a CoupledSystem.
 class AmrRuntime {
  public:
-  using NamedAuxField = std::vector<Real, fab_allocator<Real>>;
+  using StaticAuxField = std::vector<Real, fab_allocator<Real>>;
 
   struct BootstrapStaggeredField {
     runtime::amr::TransferCentering centering{};
@@ -1015,8 +1009,8 @@ class AmrRuntime {
       default_provider = field_solver_registry_->resolve(default_plan.solver);
       if (default_plan.solver_options.schema_identity.empty())
         default_plan.solver_options = default_provider->default_field_options();
-      const auto hierarchy_policy = default_provider->default_hierarchy_policy(
-          "pops.amr.field-solver-use.default@1");
+      const auto hierarchy_policy =
+          default_provider->default_hierarchy_policy("pops.amr.field-solver-use.default@1");
       if (!hierarchy_policy)
         throw std::runtime_error(
             "default AMR field provider requires an explicit hierarchy policy");
@@ -1028,22 +1022,16 @@ class AmrRuntime {
       throw std::runtime_error(
           "AmrRuntime: default field solver provider declaration failed on at least one rank");
     const AmrFieldSolverBuildRequest default_request{
-        geom_,
-        coarse_hierarchy,
-        bcPhi_,
-        wall_active_,
-        replicated_coarse_,
-        "pops.amr.field-solver-use.default@1",
+        geom_,        coarse_hierarchy,   bcPhi_,
+        wall_active_, replicated_coarse_, "pops.amr.field-solver-use.default@1",
         default_plan};
     try {
-      default_provider_declaration =
-          exact_amr_field_solver_provider_declaration(*default_provider);
+      default_provider_declaration = exact_amr_field_solver_provider_declaration(*default_provider);
     } catch (...) {
       default_declaration_failed = true;
     }
     if (all_reduce_max(default_declaration_failed ? 1L : 0L) != 0)
-      throw std::runtime_error(
-          "AmrRuntime: default field solver provider declaration is invalid");
+      throw std::runtime_error("AmrRuntime: default field solver provider declaration is invalid");
     (void)inspect_amr_field_solver_support_collectively(*default_provider, default_request);
     try {
       expected_default_contract = default_provider->expected_prepared_contract(default_request);
@@ -1105,12 +1093,10 @@ class AmrRuntime {
           "AmrRuntime: default field solver materialization differs across MPI ranks");
 
     FieldNullspaceProviderRequest default_nullspace_request;
-    default_nullspace_request.plan_identity =
-        "pops://amr/default-field/nullspace-plan@1";
+    default_nullspace_request.plan_identity = "pops://amr/default-field/nullspace-plan@1";
     default_nullspace_request.operator_facts = field_nullspace_operator_facts_from_bc_rec(
         bcPhi_, /*has_reaction=*/false, static_cast<bool>(wall_active_));
-    default_nullspace_request.topology.identity =
-        "pops://amr/default-field/coarse-layout@1";
+    default_nullspace_request.topology.identity = "pops://amr/default-field/coarse-layout@1";
     default_nullspace_request.topology.exact_layout_contract = actual_default_contract;
     default_nullspace_request.topology.field_component = 0;
     if (!wall_active_)
@@ -1121,19 +1107,18 @@ class AmrRuntime {
     default_nullspace_request.topology.level_distributions = {
         PreparedVectorDistribution(default_field_solver_->level_distribution(0))};
     default_field_nullspace_ =
-        prepare_field_nullspace(default_field_nullspace, std::move(default_nullspace_request))
-            .plan;
+        prepare_field_nullspace(default_field_nullspace, std::move(default_nullspace_request)).plan;
     default_field_nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace>(
         default_field_nullspace_,
         std::vector<const MultiFab*>{&default_field_solver_->phi_level(0)},
-        std::vector<PreparedVectorDistribution>{PreparedVectorDistribution(
-            default_field_solver_->level_distribution(0))});
+        std::vector<PreparedVectorDistribution>{
+            PreparedVectorDistribution(default_field_solver_->level_distribution(0))});
 
     // Width of the SHARED aux channel: max of the blocks' aux_comps (>= kAuxBaseComps). Counterpart of
     // AmrSystemCoupler::system_aux_comps: a block reading an extra field (B_z, T_e) has the room at
-    // each level, a base block ignores the extra components. PR1 does not POPULATE multi-block B_z (no
-    // bz_ here), but we size the channel to the widest anyway so that load_aux<aux_comps<Model>> never
-    // reads out of bounds. Without an extra-field block -> kAuxBaseComps (3), identical to the base case.
+    // each level, a base block ignores the extra components. Externally supplied canonical and named
+    // fields are published through set_static_aux_component after construction. Without an extra-field
+    // block -> kAuxBaseComps (3), identical to the base case.
     aux_ncomp_ = kAuxBaseComps;
     for (const auto& b : blocks_)
       if (b.aux_ncomp > aux_ncomp_)
@@ -2335,31 +2320,48 @@ class AmrRuntime {
   /// the union.
   void set_phi_tag_predicate(TagPredicate crit) { phi_tag_ = std::move(crit); }
 
-  /// Registers a model-NAMED aux field (ADC-291) at shared-channel component @p comp (= kAuxNamedBase
-  /// + k for the k-th named field of a block), as a coarse base-level field @p field (n*n row-major,
-  /// global cell index j*nx+i). The field is STATIC (external to the elliptic): solve_fields re-applies
-  /// it onto the coarse aux every macro-step AFTER field_postprocess (which only writes phi/grad,
-  /// comps 0..2) and BEFORE the coarse->fine injection, so it reaches every level and SURVIVES a regrid
-  /// (regrid re-solves). AMR counterpart of System::set_aux_field_component. No-op default: without a
-  /// named field the map is empty and the path is bit-identical. @p comp must be >= kAuxNamedBase and
-  /// within the channel (the facade validates and resolves the name).
+  /// Registers an externally supplied aux component as a coarse global row-major field. This is the
+  /// single native storage/publication authority for canonical inputs such as B_z and model-named
+  /// fields. It re-applies the field after elliptic postprocessing and hierarchy growth, then publishes
+  /// it to every active level. An undeclared component or malformed coarse field is rejected here.
   template <class Allocator>
-  void set_named_aux(int comp, std::vector<Real, Allocator> field) {
-    NamedAuxField stored;
-    if constexpr (std::is_same_v<Allocator, typename NamedAuxField::allocator_type>)
+  void set_static_aux_component(int comp, std::vector<Real, Allocator> field) {
+    if (comp < 0 || comp >= aux_ncomp_)
+      throw std::runtime_error("AmrRuntime::set_static_aux_component: component " +
+                               std::to_string(comp) + " is outside the declared aux width " +
+                               std::to_string(aux_ncomp_));
+    const std::size_t expected =
+        static_cast<std::size_t>(dom_.nx()) * static_cast<std::size_t>(dom_.ny());
+    if (field.size() != expected)
+      throw std::runtime_error("AmrRuntime::set_static_aux_component: field size " +
+                               std::to_string(field.size()) + " differs from coarse cell count " +
+                               std::to_string(expected));
+    StaticAuxField stored;
+    if constexpr (std::is_same_v<Allocator, typename StaticAuxField::allocator_type>)
       stored = std::move(field);
     else
       stored.assign(field.begin(), field.end());
-    named_aux_[comp] = std::move(stored);
+    static_aux_[comp] = std::move(stored);
     if (!aux_.empty()) {
-      apply_named_aux();
-      // A bound named aux is a hierarchy-wide field, not merely a coarse-level seed.  Program
+      apply_static_aux();
+      // A bound static aux is a hierarchy-wide field, not merely a coarse-level seed. Program
       // projections and rate kernels read aux_[level] directly, including before the first elliptic
       // solve, so publish the newly bound component through the same coarse-to-fine authority used
       // after solve_fields.  Restricting the publication to this component avoids disturbing any
       // independently solved aux fields.
       publish_aux_components({comp});
     }
+  }
+
+  /// Registers a model-named aux field. Canonical/reserved components use their typed facade paths
+  /// and call set_static_aux_component only after their own contract has been validated.
+  template <class Allocator>
+  void set_named_aux(int comp, std::vector<Real, Allocator> field) {
+    if (comp < kAuxNamedBase)
+      throw std::runtime_error("AmrRuntime::set_named_aux: component " + std::to_string(comp) +
+                               " is reserved; named aux starts at " +
+                               std::to_string(kAuxNamedBase));
+    set_static_aux_component(comp, std::move(field));
   }
 
   /// Registers a per-field aux HALO policy (ADC-369) for the named component @p comp: solve_fields
@@ -2369,10 +2371,10 @@ class AmrRuntime {
   /// System::set_aux_field_halo_component.
   void set_named_aux_bc(int comp, AuxHaloPolicy policy) {
     named_aux_bc_[comp] = policy;
-    if (!aux_.empty() && named_aux_.count(comp) != 0) {
+    if (!aux_.empty() && static_aux_.count(comp) != 0) {
       // A halo policy installed after the value is still part of the same bound field contract.
       // Re-publish that component so its hierarchy ghosts cannot retain the previous policy.
-      apply_named_aux();
+      apply_static_aux();
       publish_aux_components({comp});
     }
   }
@@ -2412,12 +2414,8 @@ class AmrRuntime {
     }
     const BCRec field_boundary = plan.has_explicit_bc ? plan.explicit_bc : bcPhi_;
     const AmrFieldSolverBuildRequest request{
-        geom_,
-        hierarchy_,
-        field_boundary,
-        wall_active_,
-        replicated_coarse_,
-        "pops.amr.field-solver-use.named@1",
+        geom_,        hierarchy_,         field_boundary,
+        wall_active_, replicated_coarse_, "pops.amr.field-solver-use.named@1",
         plan};
     const auto provider = field_solver_registry_->resolve(plan.solver);
     (void)inspect_amr_field_solver_support_collectively(*provider, request);
@@ -2887,8 +2885,7 @@ class AmrRuntime {
     for (auto& b : blocks_)
       b.add_elliptic_rhs((*b.levels)[0].U, default_field_solver_->rhs_level(0));
     default_field_nullspace_workspace_->require_compatible(default_field_solver_->rhs_level(0));
-    const SolveReport report =
-        solve_prepared_amr_field_solver_collectively(*default_field_solver_);
+    const SolveReport report = solve_prepared_amr_field_solver_collectively(*default_field_solver_);
     if (!report.solved())
       return report;
     default_field_nullspace_workspace_->apply_gauge(default_field_solver_->phi_level(0));
@@ -2900,11 +2897,11 @@ class AmrRuntime {
     const Real cx = Real(1) / (2 * geom_.dx()), cy = Real(1) / (2 * geom_.dy());
     field_postprocess(default_field_solver_->phi_level(0), aux_[0], cx, cy,
                       FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
-    // 3b. model-NAMED aux (ADC-291): re-apply the static named fields onto the coarse valid cells
+    // 3b. external static aux: re-apply canonical and model-named fields onto the coarse valid cells
     // BEFORE fill_ghosts (so their ghosts are filled) and the injection (so they reach every level).
-    // No-op when no named field was set; field_postprocess wrote only comps 0..2, so this never clobbers
-    // phi/grad. This is what makes named aux survive a regrid (regrid re-solves -> re-applies).
-    apply_named_aux();
+    // No-op when no static field was set; field_postprocess wrote only comps 0..2, so this never clobbers
+    // phi/grad. This is what makes supplied aux survive a regrid (regrid re-solves -> re-applies).
+    apply_static_aux();
     publish_aux_components(default_aux_components());
     return report;
   }
@@ -3418,16 +3415,16 @@ class AmrRuntime {
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
-    if (!named_aux_.empty()) {
+    if (!static_aux_.empty()) {
       // The hierarchy may grow after bind-time aux publication.  A newly bootstrapped level must
       // therefore receive every static named aux before any following bootstrap materializer or
       // compiled Program can observe it.  Reuse the single coarse-to-fine publication authority and
       // restrict it to externally bound components so analytic/elliptic providers keep ownership of
       // their own aux slots.
-      apply_named_aux();
+      apply_static_aux();
       std::vector<int> components;
-      components.reserve(named_aux_.size());
-      for (const auto& [component, _] : named_aux_)
+      components.reserve(static_aux_.size());
+      for (const auto& [component, _] : static_aux_)
         if (component >= 0 && component < aux_ncomp_)
           components.push_back(component);
       publish_aux_components(components);
@@ -4307,19 +4304,19 @@ class AmrRuntime {
   // is at its line budget). block_index_by_name_ resolves a named block.
   std::size_t block_index_by_name_(const std::string& name) const;
 
-  // Re-applies the model-NAMED aux fields (ADC-291) onto the COARSE shared aux valid cells. Mirror of
+  // Re-applies externally supplied static aux fields onto the COARSE shared aux valid cells. Mirror of
   // SystemFieldSolver::apply_named_aux_one (cartesian System): per LOCAL fab (MPI-safe), valid cells
   // only, global flat index j*nx+i. The coarse layout is frozen across regrid (only fine levels are
   // rebuilt), so the stored coarse field stays valid; solve_fields runs the coarse->fine injection
-  // right after, carrying the named comps to every level. No-op without a named field.
-  void apply_named_aux() {
-    if (named_aux_.empty() || aux_.empty())
+  // right after, carrying the selected comps to every level. No-op without a supplied field.
+  void apply_static_aux() {
+    if (static_aux_.empty() || aux_.empty())
       return;
     const int row = dom_.nx();
-    // NamedAuxField is backed by fab_allocator (Kokkos SharedSpace on native builds). Host writes
-    // completed at set_named_aux; mark device residency before exposing its pointer to kernels.
+    // StaticAuxField is backed by fab_allocator (Kokkos SharedSpace on native builds). Host writes
+    // completed at the setter; mark device residency before exposing its pointer to kernels.
     sync_device();
-    for (const auto& [comp, field] : named_aux_) {
+    for (const auto& [comp, field] : static_aux_) {
       if (field.empty() || comp >= aux_ncomp_)
         continue;
       for (int li = 0; li < aux_[0].local_size(); ++li) {
@@ -4444,12 +4441,8 @@ class AmrRuntime {
       return;
     const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
     const AmrFieldSolverBuildRequest request{
-        geom_,
-        hierarchy_,
-        boundary,
-        wall_active_,
-        replicated_coarse_,
-        "pops.amr.field-solver-use.named@1",
+        geom_,        hierarchy_,         boundary,
+        wall_active_, replicated_coarse_, "pops.amr.field-solver-use.named@1",
         nf.plan};
     std::shared_ptr<const AmrFieldSolverProvider> provider;
     bool declaration_failed = false;
@@ -4557,9 +4550,8 @@ class AmrRuntime {
     return mask;
   }
 
-  PreparedFieldNullspace prepare_field_nullspace(
-      const FieldNullspaceProviderSelection& selection,
-      FieldNullspaceProviderRequest request) const {
+  PreparedFieldNullspace prepare_field_nullspace(const FieldNullspaceProviderSelection& selection,
+                                                 FieldNullspaceProviderRequest request) const {
     return prepare_field_nullspace_collectively(*nullspace_provider_registry_, selection,
                                                 std::move(request));
   }
@@ -4574,18 +4566,16 @@ class AmrRuntime {
     nf.nullspace_rhs_levels.clear();
     nf.nullspace_phi_levels.clear();
     const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
-    const FieldNullspaceOperatorFacts operator_facts =
-        field_nullspace_operator_facts_from_bc_rec(
-            boundary, nf.plan.has_reaction, static_cast<bool>(wall_active_));
+    const FieldNullspaceOperatorFacts operator_facts = field_nullspace_operator_facts_from_bc_rec(
+        boundary, nf.plan.has_reaction, static_cast<bool>(wall_active_));
     if (nf.solver->couples_hierarchy_levels()) {
       FieldNullspaceProviderRequest request;
       request.plan_identity = nf.plan.provider_identity + ":topology-nullspace";
       request.operator_facts = operator_facts;
-      request.topology.identity = nf.plan.topology_digest + ":composite-layout:" +
-                                  std::to_string(nf.solver->level_count()) + ":epoch:" +
-                                  std::to_string(topology_epoch_);
-      request.topology.exact_layout_contract =
-          std::string(nf.solver->exact_prepared_contract());
+      request.topology.identity = nf.plan.topology_digest +
+                                  ":composite-layout:" + std::to_string(nf.solver->level_count()) +
+                                  ":epoch:" + std::to_string(topology_epoch_);
+      request.topology.exact_layout_contract = std::string(nf.solver->exact_prepared_contract());
       request.topology.field_component = 0;
       if (!wall_active_)
         request.topology.connected_component_contract =
@@ -4600,8 +4590,7 @@ class AmrRuntime {
             .bytes(request.topology.exact_layout_contract)
             .scalar(static_cast<std::uint64_t>(topology_epoch_))
             .scalar(static_cast<std::int64_t>(k));
-        request.topology.coverage_contracts.push_back(
-            std::move(coverage_contract).release());
+        request.topology.coverage_contracts.push_back(std::move(coverage_contract).release());
         const Geometry g = level_geom(k);
         request.topology.cell_measure.push_back(g.dx() * g.dy());
         request.topology.level_distributions.emplace_back(nf.solver->level_distribution(k));
@@ -4623,17 +4612,15 @@ class AmrRuntime {
           nf.nullspace, std::move(layouts), std::move(distributions));
     } else {
       nf.level_nullspace.reserve(static_cast<std::size_t>(nf.solver->level_count()));
-      nf.level_nullspace_workspaces.reserve(
-          static_cast<std::size_t>(nf.solver->level_count()));
+      nf.level_nullspace_workspaces.reserve(static_cast<std::size_t>(nf.solver->level_count()));
       for (int k = 0; k < nf.solver->level_count(); ++k) {
         FieldNullspaceProviderRequest request;
-        request.plan_identity = nf.plan.provider_identity + ":topology-nullspace:level:" +
-                                std::to_string(k);
+        request.plan_identity =
+            nf.plan.provider_identity + ":topology-nullspace:level:" + std::to_string(k);
         request.operator_facts = operator_facts;
         request.topology.identity = nf.plan.topology_digest + ":level:" + std::to_string(k) +
                                     ":epoch:" + std::to_string(topology_epoch_);
-        request.topology.exact_layout_contract =
-            std::string(nf.solver->exact_prepared_contract());
+        request.topology.exact_layout_contract = std::string(nf.solver->exact_prepared_contract());
         request.topology.first_level = k;
         request.topology.field_component = 0;
         if (!wall_active_)
@@ -4646,10 +4633,9 @@ class AmrRuntime {
         nf.level_nullspace.push_back(
             prepare_field_nullspace(nf.plan.nullspace, std::move(request)).plan);
         nf.level_nullspace_workspaces.push_back(std::make_unique<FieldNullspaceWorkspace>(
-            nf.level_nullspace.back(),
-            std::vector<const MultiFab*>{&nf.solver->phi_level(k)},
-            std::vector<PreparedVectorDistribution>{PreparedVectorDistribution(
-                nf.solver->level_distribution(k))},
+            nf.level_nullspace.back(), std::vector<const MultiFab*>{&nf.solver->phi_level(k)},
+            std::vector<PreparedVectorDistribution>{
+                PreparedVectorDistribution(nf.solver->level_distribution(k))},
             k));
       }
     }
@@ -4771,10 +4757,10 @@ class AmrRuntime {
   std::map<std::string, BootstrapCacheState> bootstrap_caches_;
   std::unique_ptr<StepSnapshot> bootstrap_snapshot_;
   bool bootstrap_pending_ = false;
-  // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
-  // (n*n row-major). STATIC user fields re-applied by solve_fields each macro-step (so they persist
-  // across regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
-  std::map<int, NamedAuxField> named_aux_;
+  // Externally supplied static aux fields: canonical B_z and model-named components -> coarse
+  // base-level field (n*n row-major). Re-applied by solve_fields each macro-step and after hierarchy
+  // growth so they persist across regrid. Empty by default -> bit-identical.
+  std::map<int, StaticAuxField> static_aux_;
   // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
   // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;

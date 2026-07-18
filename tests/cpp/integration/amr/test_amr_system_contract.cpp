@@ -1,5 +1,7 @@
 // Contrat mono-bloc de la facade AmrSystem : les parametres NON cables doivent etre REFUSES
-// explicitement (std::runtime_error), plus de no-op silencieux. Avant ce nettoyage, set_poisson
+// explicitement, plus de no-op silencieux. Les identites de provider inconnues sont des arguments
+// invalides (std::invalid_argument), tandis que les configurations runtime incoherentes restent des
+// std::runtime_error. Avant ce nettoyage, set_poisson
 // stockait rhs/solver sans jamais les valider (on pouvait croire que solver='fft' tournait sur la
 // hierarchie alors qu'AmrCouplerMP cable toujours GeometricMG), et add_block acceptait n'importe
 // quel time. Ce test verrouille les refus et les schemas temporels reellement cables. Il compile
@@ -10,7 +12,10 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -25,6 +30,18 @@ static ModelSpec exb_spec() {
   s.transport = "exb";
   s.source = "none";
   s.elliptic = "charge";
+  return s;
+}
+
+static ModelSpec magnetic_fluid_spec() {
+  ModelSpec s;
+  s.transport = "isothermal";
+  s.source = "magnetic";
+  s.elliptic = "background";
+  s.cs2 = 1.0;
+  s.qom = 1.0;
+  s.alpha = 1.0;
+  s.n0 = 1.0;
   return s;
 }
 
@@ -43,14 +60,14 @@ TEST(test_amr_system_contract, Runs) {
         AmrSystem s(cfg);
         s.set_poisson("charge_density", "fft");
       },
-      std::runtime_error)
+      std::invalid_argument)
       << "set_poisson refuse solver='fft' (seul geometric_mg est cable sur AMR)";
   EXPECT_THROW(
       {
         AmrSystem s(cfg);
         s.set_poisson("charge_density", "inconnu");
       },
-      std::runtime_error)
+      std::invalid_argument)
       << "set_poisson refuse un solver inconnu";
   EXPECT_THROW(
       {
@@ -157,5 +174,61 @@ TEST(test_amr_system_contract, Runs) {
     AmrSystem s(c2);
     s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
     (void)s.mass();  // ensure_built : mono-bloc avec regrid, pas de refus
-  }) << "mono-bloc + regrid_every > 0 reste autorise (regrid AmrCouplerMP intact)";
+  }) << "mono-bloc + regrid_every > 0 reste autorise par le runtime AMR unifie";
+
+  // --- B_z : le champ accepte doit atteindre le vrai canal aux, en mono- ET multi-bloc --------
+  // Deux runs strictement identiques, B_z=0 puis B_z=2, isolent la source de Lorentz sans dupliquer
+  // ici le detail du programme temporel AMR. Une implementation qui stocke seulement B_z sans le
+  // publier produit deux etats identiques et echoue.
+  for (const int block_count : {1, 2}) {
+    auto run = [&](double magnetic_field) {
+      AmrSystemConfig magnetic_cfg = cfg;
+      magnetic_cfg.n = 8;
+      magnetic_cfg.regrid_every = 0;
+      AmrSystem s(magnetic_cfg);
+      if (block_count == 2)
+        s.set_temporal_relations({2}, {1}, {"integral_only"});
+      const std::size_t cells =
+          static_cast<std::size_t>(magnetic_cfg.n) * static_cast<std::size_t>(magnetic_cfg.n);
+      std::vector<double> state(3 * cells, 0.0);
+      for (std::size_t cell = 0; cell < cells; ++cell) {
+        state[cell] = 1.0;
+        state[cells + cell] = 1.0;
+      }
+      for (int block = 0; block < block_count; ++block) {
+        const std::string name = "magnetic_" + std::to_string(block);
+        s.add_block(name, magnetic_fluid_spec(), "none", "rusanov", "conservative", "euler", 1);
+        s.set_conservative_state(name, state);
+      }
+      s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
+      s.advance(0.01, 1);
+      std::vector<std::vector<double>> states;
+      states.reserve(static_cast<std::size_t>(block_count));
+      for (int block = 0; block < block_count; ++block)
+        states.push_back(s.block_level_state_global("magnetic_" + std::to_string(block), 0));
+      return states;
+    };
+
+    const auto without_field = run(0.0);
+    const auto with_field = run(2.0);
+    for (int block = 0; block < block_count; ++block) {
+      const auto& baseline = without_field[static_cast<std::size_t>(block)];
+      const auto& actual = with_field[static_cast<std::size_t>(block)];
+      ASSERT_EQ(actual.size(), baseline.size());
+      const std::size_t cells = actual.size() / 3;
+      double max_delta = 0.0;
+      double transverse_delta = 0.0;
+      for (std::size_t cell = 0; cell < cells; ++cell) {
+        for (int component = 0; component < 3; ++component) {
+          const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
+          ASSERT_TRUE(std::isfinite(actual[index]));
+          max_delta = std::max(max_delta, std::fabs(actual[index] - baseline[index]));
+        }
+        transverse_delta += actual[2 * cells + cell] - baseline[2 * cells + cell];
+      }
+      transverse_delta /= static_cast<double>(cells);
+      EXPECT_GT(max_delta, 1e-3) << "B_z must change the native block trajectory";
+      EXPECT_LT(transverse_delta, -1e-3) << "positive B_z must rotate +m_x toward negative m_y";
+    }
+  }
 }

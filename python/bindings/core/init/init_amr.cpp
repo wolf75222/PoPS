@@ -177,9 +177,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // -> full backward-Euler. Only meaningful with time="imex" and MULTI-BLOCK (cf. add_block).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // IMEX Newton options (wave 3, System parity): OPTIONS wired in MONO-BLOCK (coupler)
-          // AND MULTI-BLOCK (engine). newton_diagnostics (newton_report report): native MULTI-BLOCK
-          // only (mono-block rejected at build; .so loaders rejected at the Python facade).
+          // IMEX Newton options and newton_diagnostics use the native unified AMR runtime at every
+          // block count. Compiled .so loaders reject values their flat ABI cannot transport.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -284,7 +283,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("level") = 0)
       .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN, native MULTI-BLOCK): dict {enabled, converged,
+      // Newton report (IMEX diagnostics OPT-IN, native AMR runtime): dict {enabled, converged,
       // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
       // levels/substeps of the LAST advance of the block. failed_cell = (i, j) or None. EXACT shape of
       // the System.newton_report binding (parity, including failed_cell tuple/None).
@@ -376,9 +375,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,
-             const std::string& bc, const std::string& wall, double wall_radius) {
-            system.set_poisson(rhs, solver, bc, wall, wall_radius);
-          },
+             const std::string& bc, const std::string& wall,
+             double wall_radius) { system.set_poisson(rhs, solver, bc, wall, wall_radius); },
           "Configures the default AMR field through the registered native provider. The Python "
           "shortcut selects provider defaults; resolved provider-specific options are installed by "
           "the compiled field-plan pipeline.",
@@ -404,20 +402,18 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
                 prepared_provider_options_from_python(hierarchy_policy_option_schema,
                                                       hierarchy_policy_options),
             };
-            system.set_field_solver_plan(provider_slot, plan_identity, provider_identity,
-                                         output_owner_identity, output_block, output_key,
-                                         provider_identities, provider_blocks, provider_keys,
-                                         provider_coefficients, solver, hierarchy_policy,
-                                         prepared_provider_options_from_python(schema_identity,
-                                                                               options));
+            system.set_field_solver_plan(
+                provider_slot, plan_identity, provider_identity, output_owner_identity,
+                output_block, output_key, provider_identities, provider_blocks, provider_keys,
+                provider_coefficients, solver, hierarchy_policy,
+                prepared_provider_options_from_python(schema_identity, options));
           },
           py::arg("provider_slot"), py::arg("plan_identity"), py::arg("provider_identity"),
           py::arg("output_owner_identity"), py::arg("output_block"), py::arg("output_key"),
           py::arg("provider_identities"), py::arg("provider_blocks"), py::arg("provider_keys"),
-          py::arg("provider_coefficients"), py::arg("solver"),
-          py::arg("hierarchy_policy_id"), py::arg("hierarchy_policy_interface_version"),
-          py::arg("hierarchy_policy_option_schema"), py::arg("hierarchy_policy_options"),
-          py::arg("schema_identity"), py::arg("options"))
+          py::arg("provider_coefficients"), py::arg("solver"), py::arg("hierarchy_policy_id"),
+          py::arg("hierarchy_policy_interface_version"), py::arg("hierarchy_policy_option_schema"),
+          py::arg("hierarchy_policy_options"), py::arg("schema_identity"), py::arg("options"))
       .def(
           "field_solver_configuration",
           [](const AmrSystem& system, const std::string& provider_slot) {
@@ -431,10 +427,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             result["solver"] = config.solver;
             py::dict hierarchy_policy;
             hierarchy_policy["policy_id"] = config.hierarchy_policy.policy_id;
-            hierarchy_policy["interface_version"] =
-                config.hierarchy_policy.interface_version;
-            hierarchy_policy["option_schema"] =
-                config.hierarchy_policy.options.schema_identity;
+            hierarchy_policy["interface_version"] = config.hierarchy_policy.interface_version;
+            hierarchy_policy["option_schema"] = config.hierarchy_policy.options.schema_identity;
             hierarchy_policy["options"] =
                 prepared_provider_options_to_python(config.hierarchy_policy.options);
             result["hierarchy_policy"] = std::move(hierarchy_policy);
@@ -494,8 +488,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           [](AmrSystem& system, const std::string& provider_identity,
              const std::string& schema_identity, const py::dict& options) {
             system.set_default_field_nullspace(
-                provider_identity,
-                prepared_provider_options_from_python(schema_identity, options));
+                provider_identity, prepared_provider_options_from_python(schema_identity, options));
           },
           py::arg("provider_identity"), py::arg("schema_identity"), py::arg("options"));
 }

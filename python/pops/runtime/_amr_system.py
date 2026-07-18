@@ -276,9 +276,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         resolved with ``pops.resolve(case, layout=...)``, compiled with ``pops.compile(plan)`` and
         wired by ``pops.bind`` (which calls this internally); ``add_block`` stays private.
 
-        Refined counterpart of System.add_block. The 1st add_block opens the single-block path
-        (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
-        on THE SAME hierarchy (AmrRuntime engine, system Poisson with summed right-hand side).
+        Refined counterpart of System.add_block. Every block count uses the same AmrRuntime engine;
+        subsequent blocks are co-located on the shared hierarchy and contribute to the summed
+        system-Poisson right-hand side.
         In multi-block the name indexes set_density(name) / mass(name) / density(name). The arguments
         are marshaled to the C++ facade (AmrSystem::add_block), which validates the block against the model.
         For a compiled DSL model (.so) or a dispatch on the model type, use add_equation.
@@ -293,9 +293,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             (conservative / primitive).
         @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
             ``pops.lib.time`` factory. It carries cadence, any implicit mask and Newton options,
-            threaded to C++. newton_diagnostics is
-            wired in native multi-block and rejected at the C++ build in single-block (the coupler does not
-            aggregate a report).
+            threaded to C++. newton_diagnostics is wired for native blocks at every block count;
+            compiled .so loaders reject it because their flat ABI does not transport the report.
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
@@ -326,10 +325,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                 "pops.Case (the uniform route wires it).")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
-        # against the block names/roles : empty -> full backward-Euler. The options are wired in single-block
-        # (coupler) AND multi-block ; newton_diagnostics is wired in native MULTI-BLOCK and REJECTED at the
-        # C++ build in single-block (the coupler does not aggregate a report) -- no facade-side filtering here
-        # (the facade does not yet know the total number of blocks : the single/multi decision is at build).
+        # against the block names/roles : empty -> full backward-Euler. Options and diagnostics are
+        # wired for native blocks at every block count; compiled .so loaders are rejected upstream
+        # when their flat ABI cannot transport the requested Newton contract.
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),

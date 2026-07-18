@@ -39,11 +39,8 @@
 /// One or SEVERAL blocks (species, described by ModelSpec of generic bricks) carried on an
 /// AMR hierarchy. Like System but on an adaptive mesh.
 ///
-/// MONO-BLOCK (1 add_block): a single-model AmrCouplerMP<Model> (coarse + one fine level tracked by
-/// regrid, conservative reflux). Historical path, UNTOUCHED -> bit-identical.
-///
-/// MULTI-BLOCK (>= 2 add_block, capstone, docs/AMR_MULTIBLOCK_DESIGN.md): N blocks co-located on
-/// ONE SHARED AMR hierarchy (same BoxArray + DistributionMapping + dx/dy per level, guarded by
+/// One and many-block systems use the same AmrRuntime engine. Every block is co-located on ONE
+/// SHARED AMR hierarchy (same BoxArray + DistributionMapping + dx/dy per level, guarded by
 /// same_layout_or_throw). All blocks live on ALL patches. A single aux per level (phi,
 /// grad phi) and a single coarse Poisson whose right-hand side is the CO-LOCATED SUM of the blocks'
 /// elliptic bricks (f = Sum_b q_b n_b read at the same cells). Conservation PER BLOCK (reflux +
@@ -348,31 +345,28 @@ class AmrSystem {
   ///                "imex" (stiff source handled IMPLICITLY by backward_euler_source; the transport
   ///                stays explicit, carried by the conservative reflux; cf. capstone vii). Any other
   ///                treatment is refused.
-  /// @param substeps explicit substeps of the block (>= 1): the effective step is split into substeps
-  ///                equal pieces (MULTI-BLOCK only; in mono-block, carried by AmrCouplerMP).
+  /// @param substeps explicit substeps of the block (>= 1): the effective step is split into equal
+  ///                pieces by the unified AMR runtime.
   /// @param stride  HOLD-THEN-CATCH-UP cadence of the block (>= 1; default 1 = each macro-step). stride=M
   ///                holds the block M-1 macro-steps then catches it up by an effective step M*dt (multirate).
-  ///                MULTI-BLOCK only (a single block always advances every step). step_cfl honors
-  ///                the cadence: dt = cfl*h*min_b(substeps_b/(stride_b*w_b)), mirror of System::step_cfl.
+  ///                step_cfl honors the cadence: dt =
+  ///                cfl*h*min_b(substeps_b/(stride_b*w_b)), mirror of System::step_cfl.
   /// @param implicit_vars / implicit_roles  partial IMEX mask CARRIED BY THE BLOCK (cf. System::add_block):
   ///                conserved components handled IMPLICITLY, by NAME (implicit_vars) or by physical
   ///                ROLE (implicit_roles). EMPTY (default) -> full backward-Euler (all
-  ///                components implicit). Only meaningful with time="imex": requesting them in explicit
-  ///                is an ERROR (no silent ignore). MULTI-BLOCK only (the mono-block
-  ///                AmrCouplerMP carries its IMEX without a mask; a mask there is therefore refused).
+  ///                components implicit). Only meaningful with time="imex": requesting them in
+  ///                explicit is an ERROR (no silent ignore).
   /// @throws std::runtime_error if a block is already defined, if substeps < 1, if stride < 1, if time
   ///         is not in {explicit, euler, ssprk3, imex}, if recon is not in {conservative,
   ///         primitive}, or if an implicit mask is requested outside IMEX / with a name-role absent from the block.
   /// @param newton  options of the IMEX source Newton grouped in a POD (ADC-214; cf.
   ///                 NewtonOptions; parity with System::add_block): max_iters / rel_tol / abs_tol /
   ///                 fd_eps / damping / fail_policy. Default {} = historical constants, bit-identical.
-  ///                 SUPPORT (wave 3, settled): these OPTIONS are wired in MONO-BLOCK (coupler
-  ///                 AmrCouplerMP) AND in MULTI-BLOCK (AmrRuntime engine); the .so loaders
-  ///                 reject them (flat ABI). fail_policy='throw' works everywhere. fail_policy='warn'
-  ///                 requires the structured Newton report, therefore native multi-block.
-  /// @param newton_diagnostics  aggregated Newton report (newton_report): wired in NATIVE MULTI-BLOCK
-  ///                 only (the mono-block rejects it at build, the .so loaders at the facade). Stays
-  ///                 flat (a separate bool, outside the homogeneous family of convergence options).
+  ///                 These options are wired for native blocks at every block count; compiled .so
+  ///                 loaders reject non-default values because their flat ABI does not transport them.
+  /// @param newton_diagnostics  aggregated Newton report (newton_report), wired for native blocks at
+  ///                 every block count. Compiled .so loaders reject it explicitly. Stays flat (a
+  ///                 separate bool, outside the homogeneous family of convergence options).
   /// @param positivity_floor  Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors
   ///                 the Density-role face states (reconstruct_pp / zhang_shu_scale) AND the C/F fine
   ///                 ghost means to >= floor. Default 0 = inactive, bit-identical. Guarantee = face /
@@ -390,8 +384,8 @@ class AmrSystem {
                  double positivity_floor = 0.0);
 
   /// Report of the implicit (IMEX) source Newton of a block, AGGREGATED over the levels and substeps of
-  /// the block's LAST advance. Exists only if the block was added with newton_diagnostics=true IN
-  /// NATIVE MULTI-BLOCK (explicit error otherwise: mono-block, .so loader, or block without diagnostics).
+  /// the block's LAST advance. Exists only if a native block was added with
+  /// newton_diagnostics=true; compiled loaders reject that option before build.
   /// Flat copy (no dependence on the numerics header on the caller side), parity with System::SourceNewtonReport.
   struct SourceNewtonReport {
     bool enabled;           ///< a report was computed (at least one IMEX advance played)
@@ -405,8 +399,8 @@ class AmrSystem {
     double failed_comp;  ///< conserved component of the worst residual of that cell (-1 unknown)
     std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
   };
-  /// @throws std::runtime_error if the block is unknown, in mono-block, on a .so loader, or if the block
-  ///         did not enable newton_diagnostics. Forces the lazy build (ensure_built).
+  /// @throws std::runtime_error if the block is unknown or did not enable newton_diagnostics.
+  ///         Forces the lazy build (ensure_built).
   SourceNewtonReport newton_report(const std::string& name);
 
   /// Registers a COMPILED block (add_compiled_model path, header amr_dsl_block.hpp). The single
@@ -426,9 +420,8 @@ class AmrSystem {
   /// of the loader would fail. Symmetric with the POPS_EXPORT methods of System (grid_context/install_block).
   POPS_EXPORT void set_compiled_block(
       int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
-      const std::string& name = std::string(),
-      bool recon_prim = false, bool imex = false, int time_method = 0, int stride = 1,
-      const std::vector<std::string>& implicit_vars = {},
+      const std::string& name = std::string(), bool recon_prim = false, bool imex = false,
+      int time_method = 0, int stride = 1, const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0);
 
   /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
@@ -694,7 +687,8 @@ class AmrSystem {
 
   /// Sets the magnetic field B_z(x, y) of the coarse level (n*n row-major), required by the Schur-condensed
   /// source stage (Lorentz term Omega = B_z). AMR counterpart of System::set_magnetic_field.
-  /// MONO-BLOCK only (the condensed AMR stage is wired on the mono-block coupler AmrCouplerMP).
+  /// Available on one- and multi-block AMR. The coarse field is published to every active level and
+  /// re-applied after field solves and regrids by the native shared-aux runtime.
   /// @throws std::runtime_error if the system is already built or if bz is not of size n*n.
   void set_magnetic_field(const std::vector<double>& bz);
 
