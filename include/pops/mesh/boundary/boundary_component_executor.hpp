@@ -56,6 +56,8 @@ class BoundaryFieldRegistry {
     }
   }
 
+  [[nodiscard]] std::uint64_t binding_epoch() const noexcept { return epoch_; }
+
   void bind_state(std::string_view identity, const MultiFab& field) {
     bind_const_(states_, identity, field, "state");
   }

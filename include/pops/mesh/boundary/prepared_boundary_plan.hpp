@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,6 +32,47 @@
 #include <vector>
 
 namespace pops {
+
+class PreparedBoundaryPlan;
+class PreparedBoundaryReadView;
+
+/// Opaque slot for one exact state dependency of an immutable prepared-plan revision.
+class PreparedBoundaryStateRead final {
+ public:
+  PreparedBoundaryStateRead(const PreparedBoundaryStateRead&) = default;
+  PreparedBoundaryStateRead& operator=(const PreparedBoundaryStateRead&) = default;
+
+ private:
+  friend class PreparedBoundaryPlan;
+  friend class PreparedBoundaryReadView;
+
+  PreparedBoundaryStateRead(const PreparedBoundaryPlan* owner, std::size_t slot,
+                            std::size_t component_revision)
+      : owner_(owner), slot_(slot), component_revision_(component_revision) {}
+
+  const PreparedBoundaryPlan* owner_;
+  std::size_t slot_;
+  std::size_t component_revision_;
+};
+
+/// Opaque slot for one exact solved-field dependency of an immutable prepared-plan revision.
+class PreparedBoundaryFieldRead final {
+ public:
+  PreparedBoundaryFieldRead(const PreparedBoundaryFieldRead&) = default;
+  PreparedBoundaryFieldRead& operator=(const PreparedBoundaryFieldRead&) = default;
+
+ private:
+  friend class PreparedBoundaryPlan;
+  friend class PreparedBoundaryReadView;
+
+  PreparedBoundaryFieldRead(const PreparedBoundaryPlan* owner, std::size_t slot,
+                            std::size_t component_revision)
+      : owner_(owner), slot_(slot), component_revision_(component_revision) {}
+
+  const PreparedBoundaryPlan* owner_;
+  std::size_t slot_;
+  std::size_t component_revision_;
+};
 
 /// Exact read-only storage dependencies owned directly by a boundary plan.
 ///
@@ -80,6 +123,9 @@ class PreparedBoundaryPlan {
       return *this;
     }
     ~Session() = default;
+
+    /// Refuse use after the owning plan's component table changed or after this session moved.
+    void validate_current() const { validate_current_(); }
 
     void fill_same_level_and_physical(MultiFab& state, const Box2D& domain) const;
     void fill_same_level_and_physical(
@@ -272,6 +318,32 @@ class PreparedBoundaryPlan {
     return result;
   }
 
+  /// Resolve a qualified state dependency once while constructing a native closure. The returned
+  /// token is owner- and revision-bound, so a session cannot silently consume a same-index slot
+  /// from another plan or from a subsequently modified component table.
+  [[nodiscard]] PreparedBoundaryStateRead prepare_state_read(std::string_view identity) const {
+    const auto identities = required_state_identities();
+    const auto found = std::find(identities.begin(), identities.end(), identity);
+    if (identity.empty() || found == identities.end())
+      throw std::invalid_argument("PreparedBoundaryPlan has no declared state read dependency '" +
+                                  std::string(identity) + "'");
+    return PreparedBoundaryStateRead(
+        this, static_cast<std::size_t>(std::distance(identities.begin(), found)),
+        component_revision_);
+  }
+
+  /// Field twin of prepare_state_read().
+  [[nodiscard]] PreparedBoundaryFieldRead prepare_field_read(std::string_view identity) const {
+    const auto identities = required_field_identities();
+    const auto found = std::find(identities.begin(), identities.end(), identity);
+    if (identity.empty() || found == identities.end())
+      throw std::invalid_argument("PreparedBoundaryPlan has no declared field read dependency '" +
+                                  std::string(identity) + "'");
+    return PreparedBoundaryFieldRead(
+        this, static_cast<std::size_t>(std::distance(identities.begin(), found)),
+        component_revision_);
+  }
+
   std::vector<std::string> all_output_identities() const {
     auto result = residual_output_identities();
     append_unique_(result, jvp_output_identities());
@@ -437,6 +509,8 @@ class PreparedBoundaryPlan {
   }
 
  private:
+  friend class PreparedBoundaryReadView;
+
   std::string identity_;
   int required_depth_ = 0;
   std::vector<BCRec> component_bc_;

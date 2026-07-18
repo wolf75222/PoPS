@@ -76,6 +76,50 @@ TEST(test_prepared_boundary_plan, explicit_read_dependencies_are_exact_and_stric
       std::runtime_error);
 }
 
+TEST(test_prepared_boundary_plan, prepared_read_tokens_are_owner_bound_and_epoch_checked) {
+  const Box2D domain = Box2D::from_extents(3, 3);
+  MultiFab primary = scalar_field(domain, 1, 1);
+  MultiFab coupled = scalar_field(domain, 1, 1);
+  MultiFab auxiliary = scalar_field(domain, 1, 0);
+  auto plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::boundary::prepared-reads", 1, std::vector<BCRec>{physical_bc()}, std::vector<int>{},
+      "case::state::primary",
+      PreparedBoundaryReadDependencies{{"case::state::coupled"}, {"case::field::auxiliary"}});
+  auto foreign_plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::boundary::foreign-reads", 1, std::vector<BCRec>{physical_bc()}, std::vector<int>{},
+      "case::state::primary", PreparedBoundaryReadDependencies{{"case::state::coupled"}, {}});
+  const auto coupled_read = plan->prepare_state_read("case::state::coupled");
+  const auto auxiliary_read = plan->prepare_field_read("case::field::auxiliary");
+  const auto foreign_read = foreign_plan->prepare_state_read("case::state::coupled");
+  EXPECT_THROW((void)plan->prepare_state_read("case::state::missing"), std::invalid_argument);
+
+  GridContext context;
+  context.dom = domain;
+  context.geom = Geometry(domain, Real(0), Real(1), Real(0), Real(1));
+  context.boundary_plan = plan;
+  int bindings = 0;
+  context.boundary_field_registry = [&](const auto&, MultiFab&, const MultiFab*, MultiFab*,
+                                        detail::BoundaryFieldRegistry& registry) {
+    ++bindings;
+    registry.bind_state_slot(0, coupled);
+    registry.bind_field_slot(0, auxiliary);
+  };
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.prepared-reads", 0,   0,  0, 0,
+                                                           amr::Rational(0, 1),    0.1, 0.0};
+  const auto lane = ExecutionLane::world("case::boundary::prepared-read-lane");
+  EXPECT_THROW(PreparedGridBoundarySession(context, lane), std::invalid_argument);
+  PreparedGridBoundarySession session(context, lane, primary, point);
+
+  const auto first = session.bind_reads(point, primary);
+  EXPECT_EQ(&first.state(coupled_read), &coupled);
+  EXPECT_EQ(&first.field(auxiliary_read), &auxiliary);
+  const auto second = session.bind_reads(point, primary);
+  EXPECT_THROW((void)first.state(coupled_read), std::logic_error);
+  EXPECT_THROW((void)second.state(foreign_read), std::invalid_argument);
+  EXPECT_EQ(&second.state(coupled_read), &coupled);
+  EXPECT_EQ(bindings, 3);
+}
+
 TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_producers) {
   const Box2D domain = Box2D::from_extents(4, 4);
   MultiFab state = scalar_field(domain, 2, 1);

@@ -251,7 +251,8 @@ class System {
                                          const std::vector<std::string>& face_types,
                                          const std::vector<double>& face_values, int ncomp,
                                          const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {});
+                                         const std::string& state_identity = {},
+                                         PreparedBoundaryReadDependencies read_dependencies = {});
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.

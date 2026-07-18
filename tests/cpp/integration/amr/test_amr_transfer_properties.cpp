@@ -10,7 +10,9 @@
 #include <pops/mesh/layout/refinement.hpp>
 
 #include <cmath>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -44,7 +46,9 @@ ModelSpec exb_model() {
   return spec;
 }
 
-AmrRuntime bootstrap_runtime(int cells = 8) {
+constexpr Real kPreparedBoundarySentinel = Real(37.25);
+
+AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = false) {
   AmrBuildParams params;
   params.mesh.n = cells;
   params.mesh.L = 1.0;
@@ -58,8 +62,37 @@ AmrRuntime bootstrap_runtime(int cells = 8) {
         std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
         false, 1));
   });
-  return AmrRuntime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
-                    layout.base_per, layout.replicated_coarse, layout.wall);
+  if (install_prepared_boundary) {
+    auto& block = blocks.front();
+    const std::string state_identity = "case::bootstrap::transport::state::U";
+    block.state_identity = state_identity;
+    block.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+        "case::bootstrap::transport::boundary", 1,
+        std::vector<BCRec>(static_cast<std::size_t>(block.ncomp), BCRec{}), std::vector<int>{},
+        state_identity);
+    const PreparedBoundaryPlan* const expected_plan = block.boundary_plan.get();
+    block.boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
+    block.level_rhs_core_at_point_prepared =
+        [expected_plan](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                        const MultiFab&, const Geometry&, MultiFab& rhs,
+                        const PreparedGridBoundarySession& boundary) {
+          if (boundary.resolved_plan() != expected_plan)
+            throw std::logic_error("bootstrap boundary session retained the wrong prepared plan");
+          rhs.set_val(kPreparedBoundarySentinel);
+        };
+    block.level_boundary_residual_at_point_prepared =
+        [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
+           const Geometry&, MultiFab&, const PreparedGridBoundarySession&) {};
+    block.level_rhs_at_point = [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                                  const MultiFab&, const Geometry&, MultiFab&) {
+      throw std::runtime_error("legacy bootstrap boundary fallback was selected");
+    };
+  }
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  if (install_prepared_boundary)
+    runtime.install_boundary_storage_routes({});
+  return runtime;
 }
 
 }  // namespace
@@ -220,4 +253,42 @@ TEST(test_amr_transfer_properties, AnalyticEveryLevelCacheEpochAndL0L1L2Rollback
   EXPECT_EQ(cache.epoch, 2u);
   runtime.rollback_bootstrap_level();
   EXPECT_THROW(runtime.bootstrap_cache("patch-topology"), std::runtime_error);
+}
+
+TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionAtNewLevel) {
+  AmrRuntime runtime = bootstrap_runtime(8, true);
+  const std::vector<double> baseline = runtime.block_level_state(0, 0);
+  runtime.set_bootstrap_threshold_tag(0, 0, Real(0.5), "test.tag-provider::component-above");
+
+  runtime.begin_bootstrap_plan();
+  runtime.bootstrap_next_level(2);
+  ASSERT_EQ(runtime.nlev(), 2);
+
+  MultiFab& fine = runtime.level_state(0, 1);
+  MultiFab fine_rhs(fine.box_array(), fine.dmap(), fine.ncomp(), 0);
+  const runtime::multiblock::BoundaryEvaluationPoint fine_point{
+      "clock.bootstrap-fine", 0, 1, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  EXPECT_NO_THROW(runtime.level_rhs_into_at(0, 1, fine_point, fine, fine_rhs));
+  for (int local = 0; local < fine_rhs.local_size(); ++local) {
+    const ConstArray4 values = fine_rhs.fab(local).const_array();
+    const Box2D valid = fine_rhs.box(local);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        for (int component = 0; component < fine_rhs.ncomp(); ++component)
+          EXPECT_DOUBLE_EQ(values(i, j, component), kPreparedBoundarySentinel);
+  }
+
+  runtime.rollback_bootstrap_level();
+  ASSERT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.block_level_state(0, 0), baseline);
+
+  MultiFab& coarse = runtime.level_state(0, 0);
+  MultiFab coarse_rhs(coarse.box_array(), coarse.dmap(), coarse.ncomp(), 0);
+  const runtime::multiblock::BoundaryEvaluationPoint coarse_point{
+      "clock.bootstrap-rollback", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  EXPECT_NO_THROW(runtime.level_rhs_into_at(0, 0, coarse_point, coarse, coarse_rhs));
+  if (coarse_rhs.local_size() > 0)
+    EXPECT_DOUBLE_EQ(
+        coarse_rhs.fab(0).const_array()(coarse_rhs.box(0).lo[0], coarse_rhs.box(0).lo[1], 0),
+        kPreparedBoundarySentinel);
 }

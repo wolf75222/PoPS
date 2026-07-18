@@ -50,6 +50,7 @@
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
 #include <cmath>   // std::isfinite (reject a degenerate dt)
@@ -2181,7 +2182,8 @@ class AmrRuntime {
       const auto plan = block.boundary_plan;
       struct BoundaryRegistryRoutes {
         std::mutex mutex;
-        std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+        std::atomic<std::uint64_t> materialization_generation{
+            std::numeric_limits<std::uint64_t>::max()};
         std::vector<std::size_t> state_owners;
         std::vector<std::vector<MultiFab*>> fields_by_level;
       };
@@ -2213,9 +2215,11 @@ class AmrRuntime {
             if (boundary_stage_states_ && boundary_stage_states_->point != point)
               throw std::runtime_error(
                   "AmrRuntime boundary stage-state registry was used at a different point");
-            if (routes->materialization_generation != topology_materialization_generation_) {
+            if (routes->materialization_generation.load(std::memory_order_acquire) !=
+                topology_materialization_generation_) {
               std::scoped_lock lock(routes->mutex);
-              if (routes->materialization_generation != topology_materialization_generation_) {
+              if (routes->materialization_generation.load(std::memory_order_relaxed) !=
+                  topology_materialization_generation_) {
                 routes->state_owners.clear();
                 routes->fields_by_level.clear();
                 routes->state_owners.reserve(required_states.size());
@@ -2238,7 +2242,8 @@ class AmrRuntime {
                     level_fields.push_back(&provider_potential_level(route->second, level));
                   }
                 }
-                routes->materialization_generation = topology_materialization_generation_;
+                routes->materialization_generation.store(topology_materialization_generation_,
+                                                         std::memory_order_release);
               }
             }
             for (std::size_t slot = 0; slot < routes->state_owners.size(); ++slot) {
@@ -3684,6 +3689,11 @@ class AmrRuntime {
     }
     invalidate_named_field_topology();
     record_topology_replacement_();
+    // Boundary sessions own level-layout-specific lanes, registries and provider routes.  The
+    // bootstrap grows the hierarchy before the next parent can be tagged, so publish sessions for
+    // every materialized level now; retaining the pre-bootstrap vector would either omit the new
+    // level or expose stale topology-bound routes.
+    materialize_boundary_sessions_();
   }
 
   void commit_bootstrap_level() {

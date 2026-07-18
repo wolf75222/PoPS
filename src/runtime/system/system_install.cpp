@@ -369,7 +369,8 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
                                                const std::vector<std::string>& face_types,
                                                const std::vector<double>& face_values, int ncomp,
                                                const std::vector<int>& omitted_interface_faces,
-                                               const std::string& state_identity) {
+                                               const std::string& state_identity,
+                                               PreparedBoundaryReadDependencies read_dependencies) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_plan");
   if (name.empty() || state_identity.empty())
@@ -393,8 +394,9 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
                         static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + face)]));
     }
   }
-  auto plan = std::make_shared<PreparedBoundaryPlan>(
-      identity, required_depth, std::move(components), omitted_interface_faces, state_identity);
+  auto plan = std::make_shared<PreparedBoundaryPlan>(identity, required_depth,
+                                                     std::move(components), omitted_interface_faces,
+                                                     state_identity, std::move(read_dependencies));
   for (const auto& [_, installed] : P->boundary_plans_)
     if (installed->state_identity() == state_identity)
       throw std::runtime_error("System::install_boundary_plan duplicate qualified state identity");

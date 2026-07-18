@@ -6,6 +6,7 @@
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>  // BCRec
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
@@ -432,7 +433,8 @@ class AmrSystem {
                                          const std::vector<std::string>& face_types,
                                          const std::vector<double>& face_values, int ncomp,
                                          const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {});
+                                         const std::string& state_identity = {},
+                                         PreparedBoundaryReadDependencies read_dependencies = {});
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);

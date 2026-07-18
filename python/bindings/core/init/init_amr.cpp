@@ -189,12 +189,21 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
           py::arg("positivity_floor") = 0.0)
-      .def("_install_boundary_plan", &AmrSystem::install_boundary_plan, py::arg("name"),
-           py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-           py::arg("face_values"), py::arg("ncomp"),
-           py::arg("omitted_interface_faces") = std::vector<int>{},
-           py::arg("state_identity") = std::string{},
-           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
+      .def(
+          "_install_boundary_plan",
+          [](AmrSystem& system, const std::string& name, const std::string& identity,
+             int required_depth, const std::vector<std::string>& face_types,
+             const std::vector<double>& face_values, int ncomp,
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
+            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
+                                         ncomp, omitted_interface_faces, state_identity,
+                                         PreparedBoundaryReadDependencies{});
+          },
+          py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
+          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("omitted_interface_faces") = std::vector<int>{},
+          py::arg("state_identity") = std::string{},
+          "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native AMR block storage.")

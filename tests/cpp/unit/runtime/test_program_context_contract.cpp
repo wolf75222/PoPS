@@ -167,34 +167,44 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   sim.install_block_state_route("b", b_state);
   const std::vector<std::string> faces(4, "periodic");
   const std::vector<double> values(4, 0.0);
-  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state);
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state,
+                            PreparedBoundaryReadDependencies{{b_state}, {}});
   sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+  const auto a_plan = sim.grid_context("a").boundary_plan;
+  ASSERT_NE(a_plan, nullptr);
+  const auto b_read = a_plan->prepare_state_read(b_state);
 
-  GridContext a_context = sim.grid_context("a");
-  ASSERT_TRUE(static_cast<bool>(a_context.boundary_field_registry));
   constexpr int kGroupIdentity = 37;
   int observed_a_group = -1;
   int observed_b_group = -1;
   BlockClosures a_closures;
-  a_closures.rhs_at_point =
-      [factory = a_context.boundary_field_registry, b_state, &observed_a_group](
-          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, MultiFab& R) {
+  a_closures.rhs_core_at_point_prepared =
+      [b_read, &observed_a_group](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  MultiFab& U, MultiFab& R,
+                                  const PreparedGridBoundarySession& boundary) {
         observed_a_group = point.stage;
-        const auto fields = factory(point, U, nullptr, nullptr);
-        const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
+        const auto reads = boundary.bind_reads(point, U);
+        const Real observed = reads.state(b_read).fab(0).const_array()(0, 0, 0);
         R.set_val(observed);
       };
+  a_closures.boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+         const PreparedGridBoundarySession&) {};
   BlockClosures b_closures;
-  b_closures.rhs_at_point = [&observed_b_group](
-                                const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                MultiFab&, MultiFab& R) {
-    observed_b_group = point.stage;
-    R.set_val(Real(0));
-  };
+  b_closures.rhs_core_at_point_prepared =
+      [&observed_b_group](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab&,
+                          MultiFab& R, const PreparedGridBoundarySession&) {
+        observed_b_group = point.stage;
+        R.set_val(Real(0));
+      };
+  b_closures.boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+         const PreparedGridBoundarySession&) {};
   sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0, std::move(a_closures), {}, {}, 1,
                     true, 1);
   sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0, std::move(b_closures), {}, {}, 1,
                     true, 1);
+  sim.mark_bound();
   sim.block_state(0).set_val(Real(1));
   sim.block_state(1).set_val(Real(2));
   MultiFab stage_a = sim.block_state(0);
@@ -437,8 +447,8 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
     auto child = ctx.logical_evaluation_scope(iteration, 2);
     EXPECT_EQ(child.dt(), Real(parent_dt / 2.0));
     if (iteration == 0) {
-      parent_stale_on_entry = ctx.probe_operator_evaluation(
-          authority, parent_before.topology, resources, parent_before.revision);
+      parent_stale_on_entry = ctx.probe_operator_evaluation(authority, parent_before.topology,
+                                                            resources, parent_before.revision);
     }
     ctx.set_stage_time(1, 2);
     children[static_cast<std::size_t>(iteration)] = snapshot();
@@ -457,16 +467,15 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
     } catch (const std::runtime_error&) {
     }
     outer_stale_after_nested_exit = ctx.probe_operator_evaluation(
-        authority, outer_before_exception.topology, resources,
-        outer_before_exception.revision);
+        authority, outer_before_exception.topology, resources, outer_before_exception.revision);
     outer_after_exception = snapshot();
-    EXPECT_TRUE(ctx.probe_operator_evaluation(
-                    authority, outer_after_exception.topology, resources,
-                    outer_after_exception.revision) == outer_after_exception);
+    EXPECT_TRUE(ctx.probe_operator_evaluation(authority, outer_after_exception.topology, resources,
+                                              outer_after_exception.revision) ==
+                outer_after_exception);
   }
   ticks.finish();
-  parent_stale_after_exit = ctx.probe_operator_evaluation(
-      authority, parent_before.topology, resources, parent_before.revision);
+  parent_stale_after_exit = ctx.probe_operator_evaluation(authority, parent_before.topology,
+                                                          resources, parent_before.revision);
   const OperatorEvaluationSnapshot parent_after = snapshot();
 
   const double child_dt = parent_dt / 2.0;
@@ -486,19 +495,15 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
   EXPECT_EQ(std::bit_cast<double>(nested.dt_bits), parent_dt / 4.0);
   EXPECT_EQ(nested.stage_numerator, 1);
   EXPECT_EQ(nested.stage_denominator, 8);
-  EXPECT_EQ(std::bit_cast<double>(nested.physical_time_bits),
-            sim.time() + 0.5 * (child_dt / 2.0));
+  EXPECT_EQ(std::bit_cast<double>(nested.physical_time_bits), sim.time() + 0.5 * (child_dt / 2.0));
   EXPECT_NE(nested.revision, outer_before_exception.revision);
   EXPECT_EQ(outer_after_exception.stage_numerator, outer_before_exception.stage_numerator);
   EXPECT_EQ(outer_after_exception.stage_denominator, outer_before_exception.stage_denominator);
   EXPECT_EQ(outer_after_exception.dt_bits, outer_before_exception.dt_bits);
-  EXPECT_EQ(outer_after_exception.physical_time_bits,
-            outer_before_exception.physical_time_bits);
+  EXPECT_EQ(outer_after_exception.physical_time_bits, outer_before_exception.physical_time_bits);
   EXPECT_NE(parent_stale_on_entry.revision, parent_before.revision);
-  EXPECT_NE(outer_stale_after_nested_exit.revision,
-            outer_before_exception.revision);
-  EXPECT_EQ(outer_stale_after_nested_exit.stage_numerator,
-            outer_before_exception.stage_numerator);
+  EXPECT_NE(outer_stale_after_nested_exit.revision, outer_before_exception.revision);
+  EXPECT_EQ(outer_stale_after_nested_exit.stage_numerator, outer_before_exception.stage_numerator);
   EXPECT_EQ(outer_stale_after_nested_exit.stage_denominator,
             outer_before_exception.stage_denominator);
   EXPECT_EQ(outer_stale_after_nested_exit.dt_bits, outer_before_exception.dt_bits);

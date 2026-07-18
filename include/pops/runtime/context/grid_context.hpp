@@ -9,10 +9,14 @@
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
 #include <pops/parallel/execution_lane.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 /// @file
 /// @brief Block grid context plus closures, shared between System (which installs them) and
@@ -74,6 +78,47 @@ struct GridContext {
   std::function<void(MultiFab&)> coarse_fine_fill{};
 };
 
+/// Ephemeral, allocation-free read view over one boundary-session binding epoch.
+///
+/// Prepared read tokens carry their exact plan owner and component-table revision. A view also
+/// captures the registry epoch, so retaining it across another boundary operation fails explicitly
+/// instead of observing a silently rebound storage pointer.
+class PreparedBoundaryReadView final {
+ public:
+  [[nodiscard]] const MultiFab& state(const PreparedBoundaryStateRead& read) const {
+    validate_(read.owner_, read.component_revision_);
+    return registry_->state_at(read.slot_);
+  }
+
+  [[nodiscard]] const MultiFab& field(const PreparedBoundaryFieldRead& read) const {
+    validate_(read.owner_, read.component_revision_);
+    return registry_->field_at(read.slot_);
+  }
+
+ private:
+  friend class PreparedGridBoundarySession;
+
+  PreparedBoundaryReadView(const PreparedBoundaryPlan* plan,
+                           const detail::BoundaryFieldRegistry* registry,
+                           std::uint64_t binding_epoch)
+      : plan_(plan), registry_(registry), binding_epoch_(binding_epoch) {}
+
+  void validate_(const PreparedBoundaryPlan* owner, std::size_t component_revision) const {
+    if (plan_ == nullptr || registry_ == nullptr)
+      throw std::logic_error("prepared boundary read view is empty");
+    if (owner != plan_)
+      throw std::invalid_argument("prepared boundary read token belongs to another plan");
+    if (component_revision != plan_->component_revision_)
+      throw std::logic_error("prepared boundary read token predates the current plan revision");
+    if (binding_epoch_ != registry_->binding_epoch())
+      throw std::logic_error("prepared boundary read view is stale after a later binding");
+  }
+
+  const PreparedBoundaryPlan* plan_;
+  const detail::BoundaryFieldRegistry* registry_;
+  std::uint64_t binding_epoch_;
+};
+
 /// Move-only execution state for one exact GridContext on one ExecutionLane.
 ///
 /// A resolved boundary plan may own native component state.  That state is materialized here once,
@@ -87,8 +132,13 @@ class PreparedGridBoundarySession final {
     if (context_.boundary_plan && context_.boundary_plan->has_component_boundaries())
       throw std::invalid_argument(
           "component boundary session requires its exact prototype and preparation point");
-    if (context_.boundary_plan)
+    if (context_.boundary_plan) {
       plan_session_.emplace(context_.boundary_plan->make_session(lane));
+      configure_registry_();
+      if (!required_states_.empty() || !required_fields_.empty())
+        throw std::invalid_argument(
+            "boundary read dependencies require an exact prototype and preparation point");
+    }
   }
 
   PreparedGridBoundarySession(GridContext context, const ExecutionLane& lane, MultiFab& prototype,
@@ -97,22 +147,22 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan)
       return;
     plan_session_.emplace(context_.boundary_plan->make_session(lane));
-    // Built-in BCs have no component registry or executor workspace to materialize.  Keep their
-    // prepared plan session (and therefore their exact lane), but do not invent a state identity
-    // merely to pass through the component-only binder below.
+    configure_registry_();
+    // Resolve every declared read route once while the session is materialized. Subsequent RHS
+    // applications only advance the registry epoch and rebind pointers into these stable slots.
+    if (!required_states_.empty() || !required_fields_.empty() ||
+        context_.boundary_plan->has_component_boundaries())
+      bind_registry_(preparation_point, prototype, nullptr, nullptr);
+    // Built-in BCs have no component executor workspace to materialize. Keep their prepared plan
+    // session and read registry, but do not invent component work for them.
     if (!context_.boundary_plan->has_component_boundaries())
       return;
-    registry_.configure_states(context_.boundary_plan->required_state_identities());
-    registry_.configure_directions(context_.boundary_plan->required_direction_identities());
-    registry_.configure_fields(context_.boundary_plan->required_field_identities());
-    registry_.configure_outputs(context_.boundary_plan->all_output_identities());
-    bind_registry_(preparation_point, prototype, nullptr, nullptr);
     plan_session_->prepare_ghost_executor(prototype, registry_, context_.geom);
-    if (!context_.boundary_plan->residual_output_identities().empty()) {
+    if (!residual_outputs_.empty()) {
       bind_registry_(preparation_point, prototype, nullptr, &prototype);
       plan_session_->prepare_residual_executor(registry_, context_.geom);
     }
-    if (!context_.boundary_plan->jvp_output_identities().empty()) {
+    if (!jvp_outputs_.empty()) {
       bind_registry_(preparation_point, prototype, &prototype, &prototype);
       plan_session_->prepare_jvp_executor(registry_, context_.geom);
     }
@@ -128,6 +178,21 @@ class PreparedGridBoundarySession final {
   bool has_resolved_plan() const noexcept { return plan_session_.has_value(); }
   const PreparedBoundaryPlan* resolved_plan() const noexcept {
     return context_.boundary_plan.get();
+  }
+
+  /// Rebind the exact read-only state/field dependencies for one evaluation point.
+  ///
+  /// The returned view aliases session-owned storage and remains valid only until the next boundary
+  /// operation on this lane. Slot identities and capacity are prepared by the constructor; this
+  /// method performs no allocation or dependency discovery in the numerical path.
+  PreparedBoundaryReadView bind_reads(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                      MultiFab& state) const {
+    if (!plan_session_)
+      throw std::logic_error("boundary read dependencies require a resolved prepared plan");
+    plan_session_->validate_current();
+    bind_registry_(point, state, nullptr, nullptr);
+    return PreparedBoundaryReadView(context_.boundary_plan.get(), &registry_,
+                                    registry_.binding_epoch());
   }
 
   /// Mesh-only/operator fill.  A component-backed plan deliberately refuses this route because an
@@ -183,6 +248,23 @@ class PreparedGridBoundarySession final {
   }
 
  private:
+  void configure_registry_() {
+    required_states_ = context_.boundary_plan->required_state_identities();
+    required_directions_ = context_.boundary_plan->required_direction_identities();
+    required_fields_ = context_.boundary_plan->required_field_identities();
+    residual_outputs_ = context_.boundary_plan->residual_output_identities();
+    jvp_outputs_ = context_.boundary_plan->jvp_output_identities();
+    all_outputs_ = context_.boundary_plan->all_output_identities();
+    registry_.configure_states(required_states_);
+    registry_.configure_directions(required_directions_);
+    registry_.configure_fields(required_fields_);
+    registry_.configure_outputs(all_outputs_);
+    if (residual_outputs_.size() == 1)
+      residual_output_slot_ = registry_.output_index(residual_outputs_.front());
+    if (jvp_outputs_.size() == 1)
+      jvp_output_slot_ = registry_.output_index(jvp_outputs_.front());
+  }
+
   const ExecutionLane& lane() const {
     if (lane_ == nullptr)
       throw std::logic_error("PreparedGridBoundarySession is empty after move");
@@ -194,37 +276,39 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan)
       return;
     registry_.begin_binding();
+    if (required_states_.empty() && required_fields_.empty() && direction == nullptr &&
+        output == nullptr)
+      return;
     if (context_.boundary_field_registry) {
       context_.boundary_field_registry(point, state, direction, output, registry_);
       return;
     }
-    const auto states = context_.boundary_plan->required_state_identities();
-    if (states.size() != 1 || states.front() != context_.boundary_plan->state_identity())
-      throw std::runtime_error(
-          "multi-state boundary session requires an exact runtime storage binder");
-    registry_.bind_state_slot(0, state);
-    const auto fields = context_.boundary_plan->required_field_identities();
-    if (!fields.empty()) {
-      if (fields.size() != 1 || context_.aux == nullptr)
+    if (!required_states_.empty()) {
+      if (required_states_.size() != 1 ||
+          required_states_.front() != context_.boundary_plan->state_identity())
+        throw std::runtime_error(
+            "multi-state boundary session requires an exact runtime storage binder");
+      registry_.bind_state_slot(0, state);
+    }
+    if (!required_fields_.empty()) {
+      if (required_fields_.size() != 1 || context_.aux == nullptr)
         throw std::runtime_error(
             "multi-field boundary session requires an exact runtime storage binder");
       registry_.bind_field_slot(0, *context_.aux);
     }
     if (direction != nullptr) {
-      const auto directions = context_.boundary_plan->required_direction_identities();
-      if (directions.size() != 1)
+      if (required_directions_.size() != 1)
         throw std::runtime_error(
             "multi-direction boundary session requires an exact runtime storage binder");
       registry_.bind_direction_slot(0, *direction);
     }
     if (output != nullptr) {
-      const auto outputs = direction == nullptr
-                               ? context_.boundary_plan->residual_output_identities()
-                               : context_.boundary_plan->jvp_output_identities();
-      if (outputs.size() != 1)
+      const auto& outputs = direction == nullptr ? residual_outputs_ : jvp_outputs_;
+      const auto& output_slot = direction == nullptr ? residual_output_slot_ : jvp_output_slot_;
+      if (outputs.size() != 1 || !output_slot.has_value())
         throw std::runtime_error(
             "multi-output boundary session requires an exact runtime storage binder");
-      registry_.bind_output(outputs.front(), *output);
+      registry_.bind_output_slot(*output_slot, *output);
     }
   }
 
@@ -232,8 +316,18 @@ class PreparedGridBoundarySession final {
   const ExecutionLane* lane_ = nullptr;
   mutable detail::BoundaryFieldRegistry registry_;
   std::optional<PreparedBoundaryPlan::Session> plan_session_;
+  std::vector<std::string> required_states_;
+  std::vector<std::string> required_directions_;
+  std::vector<std::string> required_fields_;
+  std::vector<std::string> residual_outputs_;
+  std::vector<std::string> jvp_outputs_;
+  std::vector<std::string> all_outputs_;
+  std::optional<std::size_t> residual_output_slot_;
+  std::optional<std::size_t> jvp_output_slot_;
 };
 
+/// One-shot control/diagnostic adapter. Prepared numerical closures retain a
+/// PreparedGridBoundarySession and call bind_reads() instead.
 inline detail::BoundaryFieldRegistry bind_grid_boundary_fields(
     const GridContext& context, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab& state, const MultiFab* direction, MultiFab* output) {
