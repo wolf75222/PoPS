@@ -1145,6 +1145,66 @@ TEST(test_krylov_workspace_reentrancy,
 }
 
 TEST(test_krylov_workspace_reentrancy,
+     exclusive_source_lease_is_released_after_prepare_exception_across_problems) {
+  comm_init();
+  const Box2D domain{{0, 0}, {3, 3}};
+  const BoxArray boxes = BoxArray::from_domain(domain, 2);
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab prototype(boxes, mapping, 1, 0);
+  prototype.set_val(Real(0));
+  OperatorEvaluationSnapshot first_snapshot = test_snapshot(prototype);
+  OperatorEvaluationSnapshot second_snapshot = test_snapshot(prototype);
+  PreparedAffineOperatorProvider first_provider =
+      PreparedAffineOperatorProvider::trusted_extension(
+          {"pops.test.krylov.exception-safe-exclusive-operator", 1}, {},
+          [](const ExecutionLane&) {
+            return PreparedAffineOperatorSessionCallbacks{{},
+                                                          [](MultiFab& out, const MultiFab& in) {
+                                                            detail::PreparedFieldAlgebra::copy(out,
+                                                                                               in);
+                                                          },
+                                                          [] { return std::size_t{0}; }};
+          },
+          PreparedOperatorConcurrency::Exclusive);
+  PreparedAffineOperatorProvider second_provider = first_provider;
+  const KrylovFootprint footprint{1, 0, false};
+  PreparedAffineLinearProblem first_problem(
+      prototype, std::move(first_provider), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&first_snapshot] { return first_snapshot; },
+      [] {
+        if (my_rank() == 0)
+          throw std::runtime_error("rank-local frozen-resource failure");
+      });
+  PreparedAffineLinearProblem second_problem(
+      prototype, std::move(second_provider), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&second_snapshot] { return second_snapshot; });
+
+  std::string prepare_rejection;
+  try {
+    first_problem.prepare(first_snapshot);
+  } catch (const std::logic_error& error) {
+    prepare_rejection = error.what();
+  }
+  EXPECT_EQ(prepare_rejection,
+            "prepared resource freeze failed on at least one communicator rank");
+
+  const PreparedKrylovMethod method = cg_krylov_method();
+  KrylovWorkspace workspace(prototype, method, footprint);
+  EXPECT_NO_THROW(second_problem.prepare(second_snapshot));
+  EXPECT_NO_THROW(workspace.bind(second_problem));
+  MultiFab iterate(boxes, mapping, 1, 0);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(2));
+  const SolveReport report = solve_prepared_affine(
+      second_problem, workspace, iterate, rhs,
+      KrylovControls{method, Real(1e-12), Real(0), 4});
+  EXPECT_TRUE(report.solved()) << report.reason;
+}
+
+TEST(test_krylov_workspace_reentrancy,
      workspace_bind_rejects_affine_zero_response_drift_between_provider_sessions) {
   comm_init();
   const Box2D domain{{0, 0}, {3, 3}};

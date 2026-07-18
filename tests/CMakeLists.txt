@@ -894,6 +894,20 @@ if(POPS_HAS_MPI)
     "test_krylov_method_provider.*:"
     "test_vector_distribution_provider.*"
   )
+  string(CONCAT POPS_KRYLOV_WORKSPACE_REENTRANCY_MPI_FILTER
+    "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:"
+    "test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:"
+    "test_krylov_workspace_reentrancy.exclusive_operator_lease_is_shared_by_provider_copies_across_prepared_problems:"
+    "test_krylov_workspace_reentrancy.public_problem_sessions_reject_overlap_with_independent_workspace_invocation:"
+    "test_krylov_workspace_reentrancy.exclusive_source_lease_is_released_after_prepare_exception_across_problems:"
+    "test_krylov_workspace_reentrancy.workspace_bind_rejects_affine_zero_response_drift_between_provider_sessions:"
+    "test_krylov_workspace_reentrancy.workspace_bind_publishes_rank_local_zero_response_comparison_failure_uniformly:"
+    "test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:"
+    "test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly:"
+    "test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind:"
+    "test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:"
+    "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze"
+  )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
       if(_test STREQUAL "test_generic_krylov")
@@ -905,7 +919,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly:test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind:test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze")
+            "${POPS_KRYLOV_WORKSPACE_REENTRANCY_MPI_FILTER}")
       elseif(_test STREQUAL "test_geometric_mg")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

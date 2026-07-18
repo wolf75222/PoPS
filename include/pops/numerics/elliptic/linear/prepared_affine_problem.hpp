@@ -371,7 +371,10 @@ class PreparedAffineOperatorProvider {
 
   /// Explicit native/plugin trust boundary. Each callback pair must be freshly materialized. The
   /// concurrency argument states whether its mutable execution state is session-private or borrowed
-  /// from one exclusive external context.
+  /// from one exclusive external context. An Exclusive provider that borrows one context must be
+  /// constructed once and then copied into every prepared problem: each separate trusted_extension
+  /// call declares a distinct source/lease domain and therefore must not capture that same mutable
+  /// context.
   [[nodiscard]] static PreparedAffineOperatorProvider trusted_extension(
       PreparedProviderIdentity identity, std::string exact_parameters,
       PreparedAffineOperatorSessionFactory make_session,
