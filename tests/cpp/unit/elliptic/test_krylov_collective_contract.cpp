@@ -4,10 +4,13 @@
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -78,6 +81,21 @@ void fill_isometric_rank_permutation(MultiFab& field) {
     values(1, 0) = Real(1);
 }
 
+struct AlternatingDiagonalKernel {
+  Array4 output;
+  ConstArray4 input;
+
+  POPS_HD void operator()(int i, int j) const {
+    output(i, j) = (i % 2 == 0 ? Real(1) : Real(2)) * input(i, j);
+  }
+};
+
+void apply_alternating_diagonal(MultiFab& output, const MultiFab& input) {
+  for (int local = 0; local < output.local_size(); ++local)
+    for_each_cell(output.box(local), AlternatingDiagonalKernel{output.fab(local).array(),
+                                                               input.fab(local).const_array()});
+}
+
 /// A real non-default metric provider: a positive scalar multiple of the Euclidean product. The
 /// scale participates in the exact contract, and every global/local/robust route represents the
 /// same product. This exercises the provider protocol without teaching Krylov a metric name.
@@ -95,50 +113,79 @@ struct ScaledEuclideanMetricSource {
   }
 
   Real inner_product(const MultiFab& left, const MultiFab& right,
-                     const PreparedVectorDistribution& distribution,
-                     std::span<double> scratch) const {
-    return scale * detail::PreparedFieldAlgebra::dot(left, right, distribution, scratch);
+                     const PreparedVectorDistribution& distribution, std::span<double> scratch,
+                     const ExecutionLane& lane) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return scale * detail::PreparedFieldAlgebra::dot(left, right, distribution, scratch, lane);
+    });
   }
 
   Real norm(const MultiFab& value, const PreparedVectorDistribution& distribution,
-            std::span<double> scratch) const {
-    return std::sqrt(scale) * detail::PreparedFieldAlgebra::norm(value, distribution, scratch);
+            std::span<double> scratch, const ExecutionLane& lane) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return std::sqrt(scale) *
+             detail::PreparedFieldAlgebra::norm(value, distribution, scratch, lane);
+    });
   }
 
   Real absolute_inner_product(const MultiFab& left, const MultiFab& right,
                               const PreparedVectorDistribution& distribution,
-                              std::span<double> scratch) const {
-    return scale * detail::PreparedFieldAlgebra::absolute_dot(left, right, distribution, scratch);
+                              std::span<double> scratch, const ExecutionLane& lane) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return scale *
+             detail::PreparedFieldAlgebra::absolute_dot(left, right, distribution, scratch, lane);
+    });
   }
 
   Real nullspace_inner_product(const MultiFab& left, const MultiFab& right, Real cell_measure,
                                const PreparedVectorDistribution& distribution,
-                               std::span<double> scratch) const {
-    return scale * detail::PreparedFieldAlgebra::nullspace_pairing(left, right, cell_measure, false,
-                                                                   distribution, scratch);
+                               std::span<double> scratch,
+                               const ExecutionLane& lane) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return scale * detail::PreparedFieldAlgebra::nullspace_pairing(
+                         left, right, cell_measure, false, distribution, scratch, lane);
+    });
   }
 
   Real nullspace_absolute_inner_product(const MultiFab& left, const MultiFab& right,
                                         Real cell_measure,
                                         const PreparedVectorDistribution& distribution,
-                                        std::span<double> scratch) const {
-    return scale * detail::PreparedFieldAlgebra::nullspace_pairing(left, right, cell_measure, true,
-                                                                   distribution, scratch);
+                                        std::span<double> scratch,
+                                        const ExecutionLane& lane) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return scale * detail::PreparedFieldAlgebra::nullspace_pairing(
+                         left, right, cell_measure, true, distribution, scratch, lane);
+    });
   }
 
-  Real local_inner_product(const MultiFab& left, const MultiFab& right) const {
-    return scale * detail::PreparedFieldAlgebra::local_dot(left, right);
+  Real local_inner_product(const MultiFab& left, const MultiFab& right) const noexcept {
+    return detail::prepared_metric_value_noexcept(
+        [&] { return scale * detail::PreparedFieldAlgebra::local_dot(left, right); });
   }
 
   void local_robust_inner_product_payload(const MultiFab& left, const MultiFab& right,
-                                          std::span<double> payload) const {
-    detail::PreparedFieldAlgebra::local_robust_dot_payload(left, right, payload.data());
+                                          std::span<double> payload) const noexcept {
+    detail::prepared_metric_payload_noexcept(payload, [&] {
+      detail::PreparedFieldAlgebra::local_robust_dot_payload(left, right, payload.data());
+    });
   }
 
-  Real inner_product_from_global_robust_payload(std::span<const double> payload) const {
-    return scale * detail::PreparedFieldAlgebra::dot_from_global_robust_payload(payload.data());
+  Real inner_product_from_global_robust_payload(std::span<const double> payload) const noexcept {
+    return detail::prepared_metric_value_noexcept([&] {
+      return scale * detail::PreparedFieldAlgebra::dot_from_global_robust_payload(payload.data());
+    });
   }
 };
+
+struct RankLocalThrowingMetricSource : ScaledEuclideanMetricSource {
+  Real inner_product(const MultiFab&, const MultiFab&, const PreparedVectorDistribution&,
+                     std::span<double>, const ExecutionLane&) const {
+    throw std::runtime_error("rank-local metric exception");
+  }
+};
+
+static_assert(PreparedVectorMetricSource<ScaledEuclideanMetricSource>);
+static_assert(!PreparedVectorMetricSource<RankLocalThrowingMetricSource>);
 
 /// Adversarial external methods for the common post-provider boundary. Both complete the same
 /// provider-owned collective trace first. The common Krylov wrapper must then turn either a
@@ -150,9 +197,8 @@ class CollectiveBoundaryKrylovProvider final : public PreparedKrylovMethodProvid
   explicit CollectiveBoundaryKrylovProvider(Behavior behavior) : behavior_(behavior) {}
 
   std::string_view identity() const noexcept override {
-    return behavior_ == Behavior::kThrowOnRankZero
-               ? "pops.test.krylov.collective-throw"
-               : "pops.test.krylov.collective-divergent-report";
+    return behavior_ == Behavior::kThrowOnRankZero ? "pops.test.krylov.collective-throw"
+                                                   : "pops.test.krylov.collective-divergent-report";
   }
   std::uint64_t interface_version() const noexcept override { return 1; }
   std::string_view collective_contract() const noexcept override {
@@ -160,14 +206,12 @@ class CollectiveBoundaryKrylovProvider final : public PreparedKrylovMethodProvid
                ? "pops.test.krylov.collective-throw@1"
                : "pops.test.krylov.collective-divergent-report@1";
   }
-  KrylovMethodValidation validate_controls(
-      const KrylovMethodControls& controls,
-      const PreparedProviderOptions&) const noexcept override {
+  KrylovMethodValidation validate_controls(const KrylovMethodControls& controls,
+                                           const PreparedProviderOptions&) const noexcept override {
     return detail::validate_common_krylov_controls(controls);
   }
-  KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
-      const PreparedProviderOptions&) const noexcept override {
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
     if (const KrylovMethodValidation common = detail::validate_generic_problem_facts(facts);
         !common.accepted())
       return common;
@@ -176,25 +220,127 @@ class CollectiveBoundaryKrylovProvider final : public PreparedKrylovMethodProvid
                : KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
-      const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("collective probe is unpreconditioned");
     return {.field_count = 2, .initial_residual_field = 1};
   }
   SolveReport solve(PreparedKrylovSolveContext& context,
                     const PreparedProviderOptions&) const override {
-    (void)all_reduce_sum(1L);
-    if (behavior_ == Behavior::kThrowOnRankZero && my_rank() == 0)
+    const ExecutionLane& lane = context.execution_lane();
+    (void)all_reduce_sum(1L, lane);
+    if (behavior_ == Behavior::kThrowOnRankZero && lane.rank() == 0)
       throw std::runtime_error("rank-local provider failure after complete trace");
-    const int iterations =
-        behavior_ == Behavior::kDivergentReport && my_rank() != 0 ? 2 : 1;
+    const int iterations = behavior_ == Behavior::kDivergentReport && lane.rank() != 0 ? 2 : 1;
     return context.report(context.initial_physical_residual(), iterations,
                           SolveStatus::kIterationLimit);
   }
 
  private:
   Behavior behavior_;
+};
+
+/// MPI oracle for the exact, unbounded provider-report consensus boundary. The divergent case
+/// differs by one byte beyond the legacy 4096-byte limit, so a truncated comparison cannot pass.
+class LongReasonCollectiveKrylovProvider final : public PreparedKrylovMethodProvider {
+ public:
+  enum class Behavior { kIdentical, kDivergentAfterLegacyLimit };
+  static constexpr std::size_t kReasonBytes = 16 * 1024 + 37;
+  static constexpr std::size_t kDivergenceOffset = 4096 + 73;
+
+  explicit LongReasonCollectiveKrylovProvider(Behavior behavior) : behavior_(behavior) {}
+
+  std::string_view identity() const noexcept override {
+    return behavior_ == Behavior::kIdentical ? "pops.test.krylov.collective-long-reason-identical"
+                                             : "pops.test.krylov.collective-long-reason-divergent";
+  }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return behavior_ == Behavior::kIdentical
+               ? "pops.test.krylov.collective-long-reason-identical@1"
+               : "pops.test.krylov.collective-long-reason-divergent@1";
+  }
+  KrylovMethodValidation validate_controls(const KrylovMethodControls& controls,
+                                           const PreparedProviderOptions&) const noexcept override {
+    return detail::validate_common_krylov_controls(controls);
+  }
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
+    if (const KrylovMethodValidation common = detail::validate_generic_problem_facts(facts);
+        !common.accepted())
+      return common;
+    return facts.has_preconditioner
+               ? KrylovMethodValidation::reject(1, "long-reason probe is unpreconditioned")
+               : KrylovMethodValidation::accept();
+  }
+  KrylovWorkspaceRequirements workspace_requirements(
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+    if (request.footprint.preconditioned)
+      throw std::invalid_argument("long-reason probe is unpreconditioned");
+    return {.field_count = 2, .initial_residual_field = 1};
+  }
+  SolveReport solve(PreparedKrylovSolveContext& context,
+                    const PreparedProviderOptions&) const override {
+    const ExecutionLane& lane = context.execution_lane();
+    (void)all_reduce_sum(1L, lane);
+    SolveReport report =
+        context.report(context.initial_physical_residual(), 1, SolveStatus::kIterationLimit);
+    report.reason.assign(kReasonBytes, 'r');
+    if (behavior_ == Behavior::kDivergentAfterLegacyLimit && lane.rank() != 0)
+      report.reason[kDivergenceOffset] = 'x';
+    return report;
+  }
+
+ private:
+  Behavior behavior_;
+};
+
+/// External method oracle for sticky apply failures. It deliberately performs two operator applies
+/// before its first scientific reduction; the second callback may write finite data, but the common
+/// workspace latch must re-poison that output and publish one uniform InvalidEvaluation result.
+class TwoApplyBeforeReductionKrylovProvider final : public PreparedKrylovMethodProvider {
+ public:
+  std::string_view identity() const noexcept override {
+    return "pops.test.krylov.two-apply-before-reduction";
+  }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "pops.test.krylov.two-apply-before-reduction@1";
+  }
+  KrylovMethodValidation validate_controls(
+      const KrylovMethodControls& controls,
+      const PreparedProviderOptions& options) const noexcept override {
+    if (options.schema_identity != "pops.test.krylov.two-apply-before-reduction.options@1" ||
+        !options.values.empty())
+      return KrylovMethodValidation::reject(1, "two-apply options contract is invalid");
+    return detail::validate_common_krylov_controls(controls);
+  }
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
+    if (const KrylovMethodValidation common = detail::validate_generic_problem_facts(facts);
+        !common.accepted())
+      return common;
+    return facts.has_preconditioner
+               ? KrylovMethodValidation::reject(1, "two-apply probe is unpreconditioned")
+               : KrylovMethodValidation::accept();
+  }
+  KrylovWorkspaceRequirements workspace_requirements(
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+    if (request.footprint.preconditioned)
+      throw std::invalid_argument("two-apply probe is unpreconditioned");
+    return {.field_count = 3, .initial_residual_field = 1};
+  }
+  SolveReport solve(PreparedKrylovSolveContext& context,
+                    const PreparedProviderOptions&) const override {
+    MultiFab& scratch = context.field(2);
+    context.apply_linear(scratch, context.initial_residual());
+    context.apply_linear(scratch, context.initial_residual());
+    const Real residual = context.residual_norm(scratch);
+    return context.report(residual, 1,
+                          std::isfinite(static_cast<double>(residual))
+                              ? SolveStatus::kIterationLimit
+                              : SolveStatus::kInvalidEvaluation);
+  }
 };
 
 enum class ExceptionKind : long { kNone, kInvalidArgument, kLogicError, kOther };
@@ -230,14 +376,25 @@ bool uniformly_rejected(Operation&& operation, std::string_view expected_fragmen
 
 PreparedLinearPreconditioner authenticated_preconditioner(
     const MultiFab& prototype, std::string_view implementation, ApplyFn apply,
-    std::string exact_parameters = {}, PreparedResourceFn prepare = {},
+    std::string exact_parameters = {}, std::function<void(const ExecutionLane&)> prepare = {},
     PreparedVectorDistribution distribution = PreparedVectorDistribution::Distributed) {
   return PreparedLinearPreconditioner(
       prototype,
       PreparedLinearPreconditionerProvider::trusted_extension(
-          {implementation, 1}, std::move(exact_parameters), std::move(prepare),
-          std::move(apply)),
+          {implementation, 1}, std::move(exact_parameters),
+          [prepare = std::move(prepare), apply = std::move(apply)](const ExecutionLane& lane) {
+            PreparedResourceFn session_prepare;
+            if (prepare)
+              session_prepare = [prepare, &lane] { prepare(lane); };
+            return PreparedLinearPreconditionerSessionCallbacks{std::move(session_prepare), apply,
+                                                                [] { return std::size_t{0}; }};
+          }),
       distribution);
+}
+
+PreparedAffineOperatorProvider reentrant_operator(ApplyFn apply) {
+  return PreparedAffineOperatorProvider::trusted_reentrant(std::move(apply),
+                                                           [] { return std::size_t{0}; });
 }
 
 int run_krylov_collective_contract(int argc, char** argv) {
@@ -264,7 +421,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const KrylovFootprint footprint{1, 0, true};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(iterate, ownership);
     PreparedAffineLinearProblem problem(
-        iterate, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        iterate, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         authenticated_preconditioner(
             iterate, "pops.test.krylov-collective.replicated-copy",
             [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); }, {}, {},
@@ -277,9 +436,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     require(problem.vector_distribution() == ownership);
     require(std::abs(static_cast<double>(problem.inner_product(rhs, rhs)) - 32.0) < 1e-12);
     require(std::abs(static_cast<double>(problem.residual_norm(rhs)) - std::sqrt(32.0)) < 1e-12);
-    const SolveReport report = solve_prepared_affine(
-        problem, workspace, iterate, rhs,
-        KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
+    const SolveReport report =
+        solve_prepared_affine(problem, workspace, iterate, rhs,
+                              KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
     require(report.status == SolveStatus::kSolved);
     MultiFab error = make_replicated_field();
     PureFieldAlgebra::lincomb(error, Real(1), iterate, Real(-1), rhs);
@@ -320,26 +479,26 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const OperatorEvaluationSnapshot snapshot = snapshot_for(prototype);
     const auto require_provider_rejection = [&](std::string_view implementation,
                                                 std::string exact_parameters) {
-      long apply_calls = 0;
+      std::atomic<long> apply_calls{0};
       PreparedAffineLinearProblem problem(
-          prototype, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+          prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+            PureFieldAlgebra::copy(out, in);
+          }),
           authenticated_preconditioner(
               prototype, implementation,
               [&](MultiFab& out, const MultiFab& in) {
-                ++apply_calls;
+                apply_calls.fetch_add(1, std::memory_order_relaxed);
                 PureFieldAlgebra::copy(out, in);
               },
               std::move(exact_parameters)),
           LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
           [&] { return snapshot; });
-      require(uniformly_rejected([&] { problem.prepare(snapshot); },
-                                 "provider contract differs"));
-      require(apply_calls == 0);
+      require(uniformly_rejected([&] { problem.prepare(snapshot); }, "provider contract differs"));
+      require(apply_calls.load(std::memory_order_relaxed) == 0);
     };
-    require_provider_rejection(
-        rank == 0 ? "pops.test.krylov-collective.identity-a"
-                  : "pops.test.krylov-collective.identity-b",
-        exact_provider_parameters(std::int32_t{7}));
+    require_provider_rejection(rank == 0 ? "pops.test.krylov-collective.identity-a"
+                                         : "pops.test.krylov-collective.identity-b",
+                               exact_provider_parameters(std::int32_t{7}));
     require_provider_rejection("pops.test.krylov-collective.parameterized-copy",
                                exact_provider_parameters(std::int32_t{rank}));
   }
@@ -352,30 +511,28 @@ int run_krylov_collective_contract(int argc, char** argv) {
     MultiFab iterate = make_replicated_field();
     MultiFab rhs = make_replicated_field();
     rhs.set_val(Real(1));
-    bool diverge = false;
+    std::atomic<bool> diverge{false};
     const KrylovFootprint footprint{1, 0, false};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(iterate, distribution);
     PreparedAffineLinearProblem problem(
-        iterate,
-        [&](MultiFab& out, const MultiFab& in) {
+        iterate, reentrant_operator([&](MultiFab& out, const MultiFab& in) {
           PureFieldAlgebra::copy(out, in);
-          if (diverge)
+          if (diverge.load(std::memory_order_acquire))
             fill_isometric_rank_permutation(out);
-        },
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite(), footprint,
         PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; }, {}, distribution);
     KrylovWorkspace workspace(iterate, cg_krylov_method(), footprint, distribution);
     problem.prepare(snapshot);
     workspace.bind(problem);
-    diverge = true;
+    diverge.store(true, std::memory_order_release);
     require(uniformly_rejected(
         [&] {
-          (void)solve_prepared_affine(
-              problem, workspace, iterate, rhs,
-              KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 4});
+          (void)solve_prepared_affine(problem, workspace, iterate, rhs,
+                                      KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 4});
         },
-        kExactReplicaValidationFailure));
+        "prepared Krylov solve failed terminally on at least one communicator rank"));
   }
 
   // The same ownership contract supports a real singular prepared solve. A projection operator is
@@ -389,19 +546,33 @@ int run_krylov_collective_contract(int argc, char** argv) {
     fill_replicated_mean_zero_rhs(rhs);
     auto constant_mode = std::make_shared<MultiFab>(make_replicated_field());
     constant_mode->set_val(Real(1));
-    const ApplyFn project_mean = [constant_mode, ownership](MultiFab& out, const MultiFab& in) {
-      PureFieldAlgebra::copy(out, in);
-      const Real mean = PureFieldAlgebra::dot(in, *constant_mode, ownership) / Real(8);
-      PureFieldAlgebra::axpy(out, -mean, *constant_mode);
-    };
+    PreparedAffineOperatorProvider project_mean = PreparedAffineOperatorProvider::trusted_extension(
+        {"pops.test.krylov-collective.project-mean", 1},
+        std::string(ownership.collective_contract()),
+        [constant_mode, ownership](const ExecutionLane& lane) {
+          auto reduction_scratch =
+              std::make_shared<std::vector<double>>(ownership.reduction_scratch_value_count(
+                  detail::PreparedFieldAlgebra::kRobustDotPayloadWidth));
+          return PreparedAffineOperatorSessionCallbacks{
+              {},
+              [constant_mode, ownership, reduction_scratch, &lane](MultiFab& out,
+                                                                   const MultiFab& in) {
+                PureFieldAlgebra::copy(out, in);
+                const Real mean = detail::PreparedFieldAlgebra::dot(in, *constant_mode, ownership,
+                                                                    *reduction_scratch, lane) /
+                                  Real(8);
+                PureFieldAlgebra::axpy(out, -mean, *constant_mode);
+              },
+              [] { return std::size_t{0}; }};
+        });
     const KrylovFootprint footprint{1, 0, false};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(iterate, ownership);
     PreparedVectorMetric metric(iterate, ownership, ScaledEuclideanMetricSource{Real(3)});
-    FieldNullspacePlan nullspace = constant_mean_zero_nullspace(
-        "test://krylov/replicated-persistent-nullspace@1",
-        "replicated constant mode for prepared Krylov", Real(1));
+    FieldNullspacePlan nullspace =
+        constant_mean_zero_nullspace("test://krylov/replicated-persistent-nullspace@1",
+                                     "replicated constant mode for prepared Krylov", Real(1));
     PreparedAffineLinearProblem problem(
-        iterate, project_mean, PreparedLinearPreconditioner::identity(),
+        iterate, std::move(project_mean), PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(), footprint,
         PreparedNullspacePolicy::preserving(std::move(nullspace)), [&] { return snapshot; }, {},
         ownership, metric);
@@ -432,13 +603,14 @@ int run_krylov_collective_contract(int argc, char** argv) {
     require(uniformly_rejected(
         [&] {
           (void)PreparedAffineLinearProblem(
-              prototype,
-              [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+              prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+                PureFieldAlgebra::copy(out, in);
+              }),
               PreparedLinearPreconditioner::identity(),
               LinearOperatorProperties::symmetric_positive_definite(), footprint,
               PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; }, {}, ownership);
         },
-        "incoherent field layout"));
+        "received invalid construction arguments on at least one communicator rank"));
   }
 
   // A prepared single-vector problem consumes the explicitly selected absolute level. Extra
@@ -447,11 +619,13 @@ int run_krylov_collective_contract(int argc, char** argv) {
     MultiFab prototype = make_field();
     const KrylovFootprint footprint{1, 0, false};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(prototype);
-    FieldNullspacePlan hierarchy = constant_mean_zero_nullspace(
-        "test://krylov/selected-level@1", "provider-owned hierarchy mode");
+    FieldNullspacePlan hierarchy = constant_mean_zero_nullspace("test://krylov/selected-level@1",
+                                                                "provider-owned hierarchy mode");
     hierarchy.bases[0].cell_measure.push_back(Real(0.25));
     PreparedAffineLinearProblem problem(
-        prototype, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(), footprint,
         PreparedNullspacePolicy::preserving(std::move(hierarchy)), [&] { return snapshot; });
@@ -474,7 +648,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     PreparedVectorMetric metric(iterate, PreparedVectorDistribution::Distributed,
                                 ScaledEuclideanMetricSource{Real(3)});
     PreparedAffineLinearProblem problem(
-        iterate, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        iterate, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite(), footprint,
         PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; }, {},
@@ -485,9 +661,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     workspace.bind(problem);
     require(std::abs(static_cast<double>(problem.inner_product(rhs, rhs)) - 96.0) < 1e-12);
     require(std::abs(static_cast<double>(problem.residual_norm(rhs)) - std::sqrt(96.0)) < 1e-12);
-    const SolveReport report = solve_prepared_affine(
-        problem, workspace, iterate, rhs,
-              KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 2});
+    const SolveReport report =
+        solve_prepared_affine(problem, workspace, iterate, rhs,
+                              KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 2});
     require(report.solved());
 
     PreparedVectorMetric different_metric(iterate, PreparedVectorDistribution::Distributed,
@@ -506,7 +682,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
         prototype, PreparedVectorDistribution::Distributed,
         ScaledEuclideanMetricSource{rank == 0 ? Real(3) : Real(4)});
     PreparedAffineLinearProblem problem(
-        prototype, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite(), footprint,
         PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; }, {},
@@ -531,7 +709,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const KrylovFootprint footprint{1, 0, false};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(prototype);
     PreparedAffineLinearProblem problem(
-        prototype, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         rank == 0 ? LinearOperatorProperties::general()
                   : LinearOperatorProperties::symmetric_positive_definite(),
@@ -547,9 +727,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
         rank == 0 ? PreparedNullspacePolicy::nonsingular()
                   : PreparedNullspacePolicy::preserving(constant_mean_zero_nullspace(
                         "test://rank-divergent-policy@1", "rank-divergent direct policy"));
-    require(uniformly_rejected(
-        [&] { policy.prepare(layout, PreparedVectorDistribution::Distributed); },
-        "collective preflight rejected"));
+    require(
+        uniformly_rejected([&] { policy.prepare(layout, PreparedVectorDistribution::Distributed); },
+                           "collective preflight rejected"));
   }
 
   // A callback may throw on one rank only after completing the same callback-owned MPI trace.
@@ -558,7 +738,9 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const KrylovFootprint footprint{1, 0, false};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(prototype);
     PreparedAffineLinearProblem problem(
-        prototype, [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        prototype, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite(), footprint,
         PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; },
@@ -586,17 +768,18 @@ int run_krylov_collective_contract(int argc, char** argv) {
         std::make_shared<const CollectiveBoundaryKrylovProvider>(behavior),
         PreparedProviderOptions{"pops.test.krylov.collective-probe.options@1", {}});
     PreparedAffineLinearProblem method_problem(
-        method_iterate,
-        [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); },
+        method_iterate, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
         PreparedLinearPreconditioner::identity(),
         LinearOperatorProperties::symmetric_positive_definite(), method_footprint,
         PreparedNullspacePolicy::nonsingular(), [&] { return method_snapshot; });
     KrylovWorkspace method_workspace(method_iterate, method, method_footprint);
     method_problem.prepare(method_snapshot);
     method_workspace.bind(method_problem);
-    const SolveReport invalid = solve_prepared_affine(
-        method_problem, method_workspace, method_iterate, method_rhs,
-        KrylovControls{method, Real(1e-12), Real(0), 2});
+    const SolveReport invalid =
+        solve_prepared_affine(method_problem, method_workspace, method_iterate, method_rhs,
+                              KrylovControls{method, Real(1e-12), Real(0), 2});
     const std::string_view expected_reason =
         behavior == CollectiveBoundaryKrylovProvider::Behavior::kThrowOnRankZero
             ? "prepared Krylov provider failed after its collective solve trace"
@@ -605,8 +788,49 @@ int run_krylov_collective_contract(int argc, char** argv) {
     require(invalid.action == SolveAction::kFailRun);
     require(invalid.reason == expected_reason);
     require(all_ranks_agree_exact_ordered_byte_pairs(
-        {{std::string_view("external-krylov-invalid-report"),
-          std::string_view(invalid.reason)}}));
+        {{std::string_view("external-krylov-invalid-report"), std::string_view(invalid.reason)}}));
+  }
+
+  // Exercise the real np=2 publication boundary with a reason four times larger than the removed
+  // fixed limit. Identical reasons survive byte-for-byte; one rank-local byte after offset 4096 is
+  // rejected uniformly instead of being silently truncated.
+  for (const auto behavior : {
+           LongReasonCollectiveKrylovProvider::Behavior::kIdentical,
+           LongReasonCollectiveKrylovProvider::Behavior::kDivergentAfterLegacyLimit,
+       }) {
+    MultiFab method_iterate = make_field();
+    MultiFab method_rhs = make_field();
+    method_rhs.set_val(Real(1));
+    const KrylovFootprint method_footprint{1, 0, false};
+    const OperatorEvaluationSnapshot method_snapshot = snapshot_for(method_iterate);
+    const PreparedKrylovMethod method(
+        std::make_shared<const LongReasonCollectiveKrylovProvider>(behavior),
+        PreparedProviderOptions{"pops.test.krylov.collective-long-reason.options@1", {}});
+    PreparedAffineLinearProblem method_problem(
+        method_iterate, reentrant_operator([](MultiFab& out, const MultiFab& in) {
+          PureFieldAlgebra::copy(out, in);
+        }),
+        PreparedLinearPreconditioner::identity(), LinearOperatorProperties::general(),
+        method_footprint, PreparedNullspacePolicy::nonsingular(), [&] { return method_snapshot; });
+    KrylovWorkspace method_workspace(method_iterate, method, method_footprint);
+    method_problem.prepare(method_snapshot);
+    method_workspace.bind(method_problem);
+
+    const SolveReport report =
+        solve_prepared_affine(method_problem, method_workspace, method_iterate, method_rhs,
+                              KrylovControls{method, Real(1e-12), Real(0), 2});
+    if (behavior == LongReasonCollectiveKrylovProvider::Behavior::kIdentical) {
+      require(report.status == SolveStatus::kIterationLimit);
+      require(report.reason == std::string(LongReasonCollectiveKrylovProvider::kReasonBytes, 'r'));
+    } else {
+      require(report.status == SolveStatus::kInvalidEvaluation);
+      require(report.action == SolveAction::kFailRun);
+      require(report.reason ==
+              "prepared Krylov provider report differs between communicator ranks");
+    }
+    require(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("external-krylov-long-report-result"),
+          std::string_view(report.reason)}}));
   }
 
   // A successful nullspace certificate is reusable only after the fixed collective preflight.
@@ -622,45 +846,44 @@ int run_krylov_collective_contract(int argc, char** argv) {
     FieldNullspacePlan nullspace = constant_mean_zero_nullspace(
         "test://collective-contract/nullspace-certificate@1", "constant test mode");
     nullspace.bases[0].masks = {mutable_mask};
-    bool fail_preconditioner = true;
-    long freeze_calls = 0;
-    long preconditioner_prepare_calls = 0;
-    long operator_calls = 0;
+    std::atomic<bool> fail_preconditioner{true};
+    std::atomic<long> freeze_calls{0};
+    std::atomic<long> preconditioner_prepare_calls{0};
+    std::atomic<long> operator_calls{0};
     PreparedLinearPreconditioner preconditioner = authenticated_preconditioner(
         prototype, "pops.test.krylov-collective.retryable-copy",
         [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); }, {},
-        [&] {
-          ++preconditioner_prepare_calls;
-          (void)all_reduce_sum(1L);
-          if (fail_preconditioner && rank == 0)
+        [&](const ExecutionLane& lane) {
+          preconditioner_prepare_calls.fetch_add(1, std::memory_order_relaxed);
+          (void)all_reduce_sum(1L, lane);
+          if (fail_preconditioner.load(std::memory_order_acquire) && lane.rank() == 0)
             throw std::runtime_error("retryable prepared preconditioner failure");
         });
     PreparedAffineLinearProblem problem(
-        prototype,
-        [&](MultiFab& out, const MultiFab& in) {
-          ++operator_calls;
+        prototype, reentrant_operator([&](MultiFab& out, const MultiFab& in) {
+          operator_calls.fetch_add(1, std::memory_order_relaxed);
           PureFieldAlgebra::copy(out, in);
-        },
+        }),
         std::move(preconditioner),
         LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(), footprint,
         PreparedNullspacePolicy::preserving(std::move(nullspace)), [&] { return snapshot; },
         [&] {
-          ++freeze_calls;
+          freeze_calls.fetch_add(1, std::memory_order_relaxed);
           (void)all_reduce_sum(1L);
         });
 
     require(uniformly_rejected([&] { problem.prepare(snapshot); }, "preconditioner setup failed"));
-    fail_preconditioner = false;
+    fail_preconditioner.store(false, std::memory_order_release);
     problem.prepare(snapshot);
     require(problem.prepared());
-    require(freeze_calls == 2);
-    require(preconditioner_prepare_calls == 2);
-    require(operator_calls == 1);
+    require(freeze_calls.load(std::memory_order_relaxed) == 2);
+    require(preconditioner_prepare_calls.load(std::memory_order_relaxed) == 2);
+    require(operator_calls.load(std::memory_order_relaxed) == 1);
 
     mutable_mask->set_val(Real(0));
     snapshot.resources[0] += 1;
     require(uniformly_rejected([&] { problem.prepare(snapshot); }, "nullspace setup failed"));
-    require(operator_calls == 1);
+    require(operator_calls.load(std::memory_order_relaxed) == 1);
   }
 
   MultiFab iterate = make_field();
@@ -668,18 +891,25 @@ int run_krylov_collective_contract(int argc, char** argv) {
   rhs.set_val(Real(1));
   const KrylovFootprint footprint{1, 0, false};
   const OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
-  bool throw_after_collective = false;
-  long operator_calls = 0;
+  std::atomic<bool> throw_after_collective{false};
+  std::atomic<long> operator_calls{0};
+  PreparedAffineOperatorProvider collective_operator =
+      PreparedAffineOperatorProvider::trusted_extension(
+          {"pops.test.krylov-collective.collective-operator", 1}, {},
+          [&](const ExecutionLane& lane) {
+            return PreparedAffineOperatorSessionCallbacks{
+                {},
+                [&](MultiFab& out, const MultiFab& in) {
+                  operator_calls.fetch_add(1, std::memory_order_relaxed);
+                  (void)all_reduce_sum(1L, lane);
+                  if (throw_after_collective.load(std::memory_order_acquire) && lane.rank() == 0)
+                    throw std::runtime_error("rank-local apply failure after collective");
+                  PureFieldAlgebra::copy(out, in);
+                },
+                [] { return std::size_t{0}; }};
+          });
   PreparedAffineLinearProblem problem(
-      iterate,
-      [&](MultiFab& out, const MultiFab& in) {
-        ++operator_calls;
-        (void)all_reduce_sum(1L);
-        if (throw_after_collective && rank == 0)
-          throw std::runtime_error("rank-local apply failure after collective");
-        PureFieldAlgebra::copy(out, in);
-      },
-      PreparedLinearPreconditioner::identity(),
+      iterate, std::move(collective_operator), PreparedLinearPreconditioner::identity(),
       LinearOperatorProperties::symmetric_positive_definite(), footprint,
       PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; });
   KrylovWorkspace workspace(iterate, cg_krylov_method(), footprint);
@@ -696,10 +926,10 @@ int run_krylov_collective_contract(int argc, char** argv) {
   {
     MultiFab output = make_field();
     MultiFab& local_output = rank == 0 ? rhs : output;
-    const long calls_before = operator_calls;
+    const long calls_before = operator_calls.load(std::memory_order_relaxed);
     require(uniformly_rejected([&] { problem.apply_linear(local_output, rhs); },
                                "output aliases an input field"));
-    require(operator_calls == calls_before);
+    require(operator_calls.load(std::memory_order_relaxed) == calls_before);
   }
   {
     MultiFab incompatible = make_field(rank == 0 ? 2 : 1);
@@ -752,11 +982,191 @@ int run_krylov_collective_contract(int argc, char** argv) {
         },
         "workspace requirements differ"));
   }
+
+  const auto require_sticky_failure_report = [&](const SolveReport& report,
+                                                 std::string_view label) {
+    require(report.status == SolveStatus::kInvalidEvaluation);
+    require(report.action == SolveAction::kFailRun);
+    require(report.reason ==
+            "prepared operator or preconditioner application failed during Krylov recurrence");
+    require(all_ranks_agree_exact_ordered_byte_pairs({{label, std::string_view(report.reason)}}));
+  };
+
+  // GMRES applies A(v), then the prepared preconditioner, before Arnoldi's reduction. Rank zero's
+  // operator failure is followed by a preconditioner callback that deliberately writes finite data;
+  // the workspace-level sticky status must re-poison it and survive to the common report boundary.
   {
-    throw_after_collective = true;
-    require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, workspace, iterate, rhs, valid); },
-        "operator callback failed"));
+    MultiFab sticky_iterate = make_field();
+    MultiFab sticky_rhs = make_field();
+    sticky_rhs.set_val(Real(1));
+    const KrylovFootprint sticky_footprint{1, 0, true};
+    const OperatorEvaluationSnapshot sticky_snapshot = snapshot_for(sticky_iterate);
+    std::atomic<long> operator_target{std::numeric_limits<long>::max()};
+    std::atomic<long> sticky_operator_calls{0};
+    std::atomic<long> sticky_preconditioner_calls{0};
+    std::atomic<bool> operator_failed_locally{false};
+    PreparedAffineOperatorProvider sticky_operator =
+        PreparedAffineOperatorProvider::trusted_extension(
+            {"pops.test.krylov.sticky-gmres-operator", 1}, {},
+            [&](const ExecutionLane& callback_lane) {
+              return PreparedAffineOperatorSessionCallbacks{
+                  {},
+                  [&, lane = &callback_lane](MultiFab& out, const MultiFab& in) {
+                    const long call =
+                        sticky_operator_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+                    (void)all_reduce_sum(1L, *lane);
+                    if (call == operator_target.load(std::memory_order_acquire) &&
+                        lane->rank() == 0) {
+                      operator_failed_locally.store(true, std::memory_order_release);
+                      throw std::runtime_error("rank-local GMRES operator failure");
+                    }
+                    PureFieldAlgebra::copy(out, in);
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+    PreparedLinearPreconditioner sticky_preconditioner = authenticated_preconditioner(
+        sticky_iterate, "pops.test.krylov.sticky-gmres-preconditioner",
+        [&](MultiFab& out, const MultiFab& in) {
+          sticky_preconditioner_calls.fetch_add(1, std::memory_order_relaxed);
+          if (operator_failed_locally.load(std::memory_order_acquire))
+            PureFieldAlgebra::fill_valid(out, Real(0));
+          else
+            PureFieldAlgebra::copy(out, in);
+        });
+    PreparedAffineLinearProblem sticky_problem(
+        sticky_iterate, std::move(sticky_operator), std::move(sticky_preconditioner),
+        LinearOperatorProperties::general(), sticky_footprint,
+        PreparedNullspacePolicy::nonsingular(), [&] { return sticky_snapshot; });
+    const PreparedKrylovMethod sticky_method = gmres_krylov_method(3);
+    KrylovWorkspace sticky_workspace(sticky_iterate, sticky_method, sticky_footprint);
+    sticky_problem.prepare(sticky_snapshot);
+    sticky_workspace.bind(sticky_problem);
+    const long operator_calls_before = sticky_operator_calls.load(std::memory_order_relaxed);
+    const long preconditioner_calls_before =
+        sticky_preconditioner_calls.load(std::memory_order_relaxed);
+    operator_target.store(operator_calls_before + 2, std::memory_order_release);
+    const SolveReport sticky_report =
+        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+                              KrylovControls{sticky_method, Real(1e-12), Real(0), 6});
+    require_sticky_failure_report(sticky_report, "sticky-gmres-op-preconditioner");
+    require(sticky_preconditioner_calls.load(std::memory_order_relaxed) >=
+            preconditioner_calls_before + 2);
+    require(all_reduce_sum(operator_failed_locally.load(std::memory_order_acquire) ? 1L : 0L) == 1);
+  }
+
+  // On the second BiCGStab preconditioner application the solve scale is already fixed, so the
+  // following operator callback still runs. It rewrites finite output on the failing rank; only the
+  // cross-provider workspace latch can keep that earlier preconditioner failure authoritative.
+  {
+    MultiFab sticky_iterate = make_field();
+    MultiFab sticky_rhs = make_field();
+    sticky_rhs.set_val(Real(1));
+    const KrylovFootprint sticky_footprint{1, 0, true};
+    const OperatorEvaluationSnapshot sticky_snapshot = snapshot_for(sticky_iterate);
+    std::atomic<long> preconditioner_target{std::numeric_limits<long>::max()};
+    std::atomic<long> sticky_operator_calls{0};
+    std::atomic<long> sticky_preconditioner_calls{0};
+    std::atomic<bool> preconditioner_failed_locally{false};
+    PreparedAffineOperatorProvider sticky_operator =
+        PreparedAffineOperatorProvider::trusted_extension(
+            {"pops.test.krylov.sticky-bicgstab-operator", 1}, {},
+            [&](const ExecutionLane& callback_lane) {
+              return PreparedAffineOperatorSessionCallbacks{
+                  {},
+                  [&, lane = &callback_lane](MultiFab& out, const MultiFab& in) {
+                    sticky_operator_calls.fetch_add(1, std::memory_order_relaxed);
+                    (void)all_reduce_sum(1L, *lane);
+                    if (preconditioner_failed_locally.load(std::memory_order_acquire))
+                      PureFieldAlgebra::fill_valid(out, Real(0));
+                    else
+                      apply_alternating_diagonal(out, in);
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+    PreparedLinearPreconditioner sticky_preconditioner = authenticated_preconditioner(
+        sticky_iterate, "pops.test.krylov.sticky-bicgstab-preconditioner",
+        [&](MultiFab& out, const MultiFab& in) {
+          const long call = sticky_preconditioner_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+          if (call == preconditioner_target.load(std::memory_order_acquire) && my_rank() == 0) {
+            preconditioner_failed_locally.store(true, std::memory_order_release);
+            throw std::runtime_error("rank-local BiCGStab preconditioner failure");
+          }
+          PureFieldAlgebra::copy(out, in);
+        });
+    PreparedAffineLinearProblem sticky_problem(
+        sticky_iterate, std::move(sticky_operator), std::move(sticky_preconditioner),
+        LinearOperatorProperties::general(), sticky_footprint,
+        PreparedNullspacePolicy::nonsingular(), [&] { return sticky_snapshot; });
+    const PreparedKrylovMethod sticky_method = bicgstab_krylov_method();
+    KrylovWorkspace sticky_workspace(sticky_iterate, sticky_method, sticky_footprint);
+    sticky_problem.prepare(sticky_snapshot);
+    sticky_workspace.bind(sticky_problem);
+    const long operator_calls_before = sticky_operator_calls.load(std::memory_order_relaxed);
+    const long preconditioner_calls_before =
+        sticky_preconditioner_calls.load(std::memory_order_relaxed);
+    preconditioner_target.store(preconditioner_calls_before + 2, std::memory_order_release);
+    const SolveReport sticky_report =
+        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+                              KrylovControls{sticky_method, Real(1e-12), Real(0), 6});
+    require_sticky_failure_report(sticky_report, "sticky-bicgstab-preconditioner-op");
+    require(sticky_operator_calls.load(std::memory_order_relaxed) >= operator_calls_before + 3);
+    require(all_reduce_sum(
+                preconditioner_failed_locally.load(std::memory_order_acquire) ? 1L : 0L) == 1);
+  }
+
+  // A fifth-party method has no method-name branch in the wrapper. Its first failed apply must stay
+  // latched across a second successful, finite-writing apply until the provider's first reduction.
+  {
+    MultiFab sticky_iterate = make_field();
+    MultiFab sticky_rhs = make_field();
+    sticky_rhs.set_val(Real(1));
+    const KrylovFootprint sticky_footprint{1, 0, false};
+    const OperatorEvaluationSnapshot sticky_snapshot = snapshot_for(sticky_iterate);
+    std::atomic<long> operator_target{std::numeric_limits<long>::max()};
+    std::atomic<long> sticky_operator_calls{0};
+    std::atomic<bool> operator_failed_locally{false};
+    PreparedAffineOperatorProvider sticky_operator =
+        PreparedAffineOperatorProvider::trusted_reentrant(
+            [&](MultiFab& out, const MultiFab& in) {
+              const long call = sticky_operator_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+              if (call == operator_target.load(std::memory_order_acquire) && my_rank() == 0) {
+                operator_failed_locally.store(true, std::memory_order_release);
+                throw std::runtime_error("rank-local custom-method operator failure");
+              }
+              if (operator_failed_locally.load(std::memory_order_acquire))
+                PureFieldAlgebra::fill_valid(out, Real(0));
+              else
+                PureFieldAlgebra::copy(out, in);
+            },
+            [] { return std::size_t{0}; });
+    PreparedAffineLinearProblem sticky_problem(
+        sticky_iterate, std::move(sticky_operator), PreparedLinearPreconditioner::identity(),
+        LinearOperatorProperties::general(), sticky_footprint,
+        PreparedNullspacePolicy::nonsingular(), [&] { return sticky_snapshot; });
+    const PreparedKrylovMethod sticky_method(
+        std::make_shared<TwoApplyBeforeReductionKrylovProvider>(),
+        PreparedProviderOptions{"pops.test.krylov.two-apply-before-reduction.options@1", {}});
+    KrylovWorkspace sticky_workspace(sticky_iterate, sticky_method, sticky_footprint);
+    sticky_problem.prepare(sticky_snapshot);
+    sticky_workspace.bind(sticky_problem);
+    const long operator_calls_before = sticky_operator_calls.load(std::memory_order_relaxed);
+    operator_target.store(operator_calls_before + 2, std::memory_order_release);
+    const SolveReport sticky_report =
+        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+                              KrylovControls{sticky_method, Real(1e-12), Real(0), 4});
+    require_sticky_failure_report(sticky_report, "sticky-custom-two-apply");
+    require(sticky_operator_calls.load(std::memory_order_relaxed) >= operator_calls_before + 3);
+    require(all_reduce_sum(operator_failed_locally.load(std::memory_order_acquire) ? 1L : 0L) == 1);
+  }
+
+  {
+    throw_after_collective.store(true, std::memory_order_release);
+    const SolveReport invalid = solve_prepared_affine(problem, workspace, iterate, rhs, valid);
+    require(invalid.status == SolveStatus::kInvalidEvaluation);
+    require(invalid.action == SolveAction::kFailRun);
+    require(invalid.reason == "prepared operator application failed before Krylov recurrence");
+    require(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("rank-local-hot-apply-failure"), std::string_view(invalid.reason)}}));
   }
 
   failures = all_reduce_sum(failures);

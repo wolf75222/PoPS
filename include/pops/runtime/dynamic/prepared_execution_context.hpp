@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 
@@ -50,6 +51,54 @@ class PreparedExecutionContextV1 final {
   }
 
   [[nodiscard]] const std::string& identity() const noexcept { return execution_identity_; }
+
+  /// Derive the exact ABI execution authority for one materialized native lane.
+  ///
+  /// The RuntimeInstance identity, precision policy, device and stream remain unchanged. Only the
+  /// communicator authority is replaced, using the lane's real C/Fortran MPI handle pair rather
+  /// than a guessed process-global identity. In a serial build the canonical all-zero/"serial"
+  /// representation is retained.
+  [[nodiscard]] PreparedExecutionContextV1 for_lane(const ExecutionLane& lane) const {
+#ifdef POPS_HAS_MPI
+    if (!lane.active() || lane.identity().empty() || lane.identity() == "serial")
+      throw std::invalid_argument(
+          "component execution lane requires an active non-serial MPI authority");
+    return PreparedExecutionContextV1(
+        execution_identity_, context_version_, memory_space_, backend_identity_, device_identity_,
+        scalar_type_, storage_precision_, compute_precision_, accumulation_precision_,
+        reduction_precision_, stream_handle_, stream_identity_,
+        static_cast<std::int64_t>(MPI_Comm_c2f(lane.native_handle())),
+        static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)), std::string(lane.identity()),
+        "MPI_DOUBLE");
+#else
+    (void)lane;
+    return PreparedExecutionContextV1(
+        execution_identity_, context_version_, memory_space_, backend_identity_, device_identity_,
+        scalar_type_, storage_precision_, compute_precision_, accumulation_precision_,
+        reduction_precision_, stream_handle_, stream_identity_, 0, 0, "serial", "none");
+#endif
+  }
+
+  /// Authenticate that this owned context was derived from the exact lane, not merely from a
+  /// communicator with the same rank set or a colliding textual label.
+  [[nodiscard]] bool matches_lane(const ExecutionLane& lane) const {
+#ifdef POPS_HAS_MPI
+    if (!lane.active() || communicator_identity_ != lane.identity() ||
+        communicator_datatype_identity_ != "MPI_DOUBLE")
+      return false;
+    int relation = MPI_UNEQUAL;
+    ::pops::detail::require_mpi_success(
+        MPI_Comm_compare(MPI_Comm_f2c(static_cast<MPI_Fint>(communicator_f_handle_)),
+                         lane.native_handle(), &relation),
+        "MPI_Comm_compare(component execution lane)");
+    return relation == MPI_IDENT &&
+           MPI_Type_f2c(static_cast<MPI_Fint>(communicator_datatype_f_handle_)) == MPI_DOUBLE;
+#else
+    (void)lane;
+    return communicator_f_handle_ == 0 && communicator_datatype_f_handle_ == 0 &&
+           communicator_identity_ == "serial" && communicator_datatype_identity_ == "none";
+#endif
+  }
 
   [[nodiscard]] PopsExecutionContextV1 view() const noexcept {
     return {sizeof(PopsExecutionContextV1),

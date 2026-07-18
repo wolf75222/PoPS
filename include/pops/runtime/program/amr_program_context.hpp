@@ -20,20 +20,21 @@
 #include <vector>
 
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
-#include <pops/core/foundation/types.hpp>                         // Real, POPS_HD
-#include <pops/mesh/boundary/physical_bc.hpp>                     // fill_ghosts
-#include <pops/mesh/execution/for_each.hpp>                       // for_each_cell, device_fence
-#include <pops/mesh/geometry/geometry.hpp>                        // Geometry
-#include <pops/mesh/layout/field_distribution.hpp>                // FieldDistribution
-#include <pops/mesh/storage/mf_arith.hpp>                         // saxpy / lincomb
-#include <pops/mesh/storage/multifab.hpp>                         // MultiFab
+#include <pops/core/foundation/types.hpp>           // Real, POPS_HD
+#include <pops/mesh/boundary/physical_bc.hpp>       // fill_ghosts
+#include <pops/mesh/execution/for_each.hpp>         // for_each_cell, device_fence
+#include <pops/mesh/geometry/geometry.hpp>          // Geometry
+#include <pops/mesh/layout/field_distribution.hpp>  // FieldDistribution
+#include <pops/mesh/storage/mf_arith.hpp>           // saxpy / lincomb
+#include <pops/mesh/storage/multifab.hpp>           // MultiFab
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine the driver wraps)
+#include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (the engine the driver wraps)
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>  // AmrSystem (the facade: params / block map / engine)
@@ -469,17 +470,38 @@ class AmrProgramContext {
     eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
                                  flux_only);
   }
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
+                                 flux_only, boundary);
+  }
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                                  MultiFab& u, MultiFab& c) const {
     count_kernel();
     eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
                                           point, u, c);
   }
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c,
+                                 const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
+                                          point, u, c, boundary);
+  }
   void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                             MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
     eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
                                      v, j);
+  }
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j,
+                            const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
+                                     v, j, boundary);
   }
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
@@ -769,6 +791,19 @@ class AmrProgramContext {
     return gc;
   }
 
+  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
+      const MultiFab&, const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(grid_context(), lane);
+  }
+
+  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
+      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(
+        eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_), lane,
+        prototype, point);
+  }
+
   // --- scratch (per-level) --------------------------------------------------------------------------
   MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
     return eng_->level_scalar_field(level_, n_comp, n_ghost);
@@ -844,6 +879,23 @@ class AmrProgramContext {
     fill_ghosts(in, g.domain, eng_->transport_bc());
     apply_laplacian(in, g, out);
   }
+  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
+    apply_laplacian(in, g, out);
+  }
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
   void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
                         const MultiFab& a_xy, const MultiFab& a_yx) const {
     count_kernel();
@@ -851,10 +903,58 @@ class AmrProgramContext {
     fill_ghosts(in, g.domain, eng_->transport_bc());
     apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
   }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
+    apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+  }
   void gradient(MultiFab& out, MultiFab& phi) const {
     count_kernel();
     const Geometry g = eng_->level_geom(level_);
     fill_ghosts(phi, g.domain, eng_->transport_bc());
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(phi, g.domain, eng_->transport_bc(), lane);
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(phi);
+    const Geometry& g = boundary.context().geom;
+    const Real cx = Real(1) / (Real(2) * g.dx());
+    const Real cy = Real(1) / (Real(2) * g.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(phi, point);
+    const Geometry& g = boundary.context().geom;
     const Real cx = Real(1) / (Real(2) * g.dx());
     const Real cy = Real(1) / (Real(2) * g.dy());
     field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
@@ -866,6 +966,31 @@ class AmrProgramContext {
     if (&fy != &fx)
       fill_ghosts(fy, g.domain, eng_->transport_bc());
     apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
+  }
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(fx, g.domain, eng_->transport_bc(), lane);
+    if (&fy != &fx)
+      fill_ghosts(fy, g.domain, eng_->transport_bc(), lane);
+    apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
+  }
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(fx);
+    if (&fy != &fx)
+      boundary.fill(fy);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(fx, point);
+    if (&fy != &fx)
+      boundary.fill(fy, point);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
   // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
@@ -882,6 +1007,11 @@ class AmrProgramContext {
   void fill_boundary(MultiFab& x) const {
     const Geometry g = eng_->level_geom(level_);
     fill_ghosts(x, g.domain, eng_->transport_bc());
+  }
+
+  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(x, g.domain, eng_->transport_bc(), lane);
   }
 
   // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
@@ -1056,12 +1186,11 @@ class AmrProgramContext {
     if (!hierarchy_tensor_solver_)
       return field;
     PreparedHierarchyTensorSolver& solver = *hierarchy_tensor_solver_;
-    if (solver.execution_path() ==
-        HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
       return field;
     if (std::find(hierarchy_tensor_assembly_field_slots_.begin(),
-                  hierarchy_tensor_assembly_field_slots_.end(), field_slot_identity) ==
-        hierarchy_tensor_assembly_field_slots_.end())
+                  hierarchy_tensor_assembly_field_slots_.end(),
+                  field_slot_identity) == hierarchy_tensor_assembly_field_slots_.end())
       throw std::invalid_argument("hierarchy assembly used an undeclared provider field slot");
     return solver.assembly_target(field_slot_identity, level_);
   }
@@ -1074,8 +1203,7 @@ class AmrProgramContext {
     if (!hierarchy_tensor_solver_)
       return field;
     PreparedHierarchyTensorSolver& solver = *hierarchy_tensor_solver_;
-    if (solver.execution_path() ==
-        HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
       return field;
     if (field_slot_identity != hierarchy_tensor_solution_field_slot_)
       throw std::invalid_argument("hierarchy read used an undeclared provider solution slot");
@@ -1172,12 +1300,11 @@ class AmrProgramContext {
     request.level_distributions.reserve(static_cast<std::size_t>(request.levels));
     for (int level = 0; level < request.levels; ++level) {
       request.level_populated.push_back(
-          eng_->level_state(static_cast<std::size_t>(request.block), level)
-              .box_array()
-              .size() != 0);
-      request.level_distributions.push_back(
-          eng_->level_is_replicated(level) ? FieldDistribution::Replicated
-                                           : FieldDistribution::Distributed);
+          eng_->level_state(static_cast<std::size_t>(request.block), level).box_array().size() !=
+          0);
+      request.level_distributions.push_back(eng_->level_is_replicated(level)
+                                                ? FieldDistribution::Replicated
+                                                : FieldDistribution::Distributed);
     }
     request.plan_identity = plan_identity;
     request.operator_contract_identity = operator_contract_identity;
@@ -1447,6 +1574,7 @@ class AmrProgramContext {
     }
     MultiFab Fx(BoxArray(std::move(fxb)), ref.dmap(), nc, 0);
     MultiFab Fy(BoxArray(std::move(fyb)), ref.dmap(), nc, 0);
+    const auto boundary_point = boundary_point_(rate_id);
     if (active_parent_ && active_parent_->child_level == level_) {
       const amr::Rational target_phase = active_parent_->child_window.begin.phase +
                                          stage_time_ * (active_parent_->child_window.end.phase -
@@ -1467,15 +1595,15 @@ class AmrProgramContext {
       const MultiFab& old_parent = active_parent_->old_states.at(static_cast<std::size_t>(b));
       const MultiFab& new_parent = active_parent_->new_states.at(static_cast<std::size_t>(b));
       if (mode == ResidualCapture::FluxOnly)
-        eng_->level_neg_div_flux_capture_into_temporal(sb, level_, u, r, Fx, Fy, old_parent,
-                                                       new_parent, target);
+        eng_->level_neg_div_flux_capture_into_temporal(sb, level_, boundary_point, u, r, Fx, Fy,
+                                                       old_parent, new_parent, target);
       else
-        eng_->level_rhs_capture_into_temporal(sb, level_, u, r, Fx, Fy, old_parent, new_parent,
-                                              target);
+        eng_->level_rhs_capture_into_temporal(sb, level_, boundary_point, u, r, Fx, Fy, old_parent,
+                                              new_parent, target);
     } else if (mode == ResidualCapture::FluxOnly) {
-      eng_->level_neg_div_flux_capture_into(sb, level_, u, r, Fx, Fy);
+      eng_->level_neg_div_flux_capture_into(sb, level_, boundary_point, u, r, Fx, Fy);
     } else {
-      eng_->level_rhs_capture_into(sb, level_, u, r, Fx, Fy);
+      eng_->level_rhs_capture_into(sb, level_, boundary_point, u, r, Fx, Fy);
     }
     EdgeFlux ef;
     // COARSE role: the level-k coarse flux at the faces bordering each level-(k+1) patch (a child exists).
@@ -2444,14 +2572,12 @@ class AmrProgramContext {
   mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
-  std::shared_ptr<const HierarchyTensorSolverProviderRegistry>
-      hierarchy_tensor_solver_registry_;
+  std::shared_ptr<const HierarchyTensorSolverProviderRegistry> hierarchy_tensor_solver_registry_;
   mutable std::unique_ptr<PreparedHierarchyTensorSolver> hierarchy_tensor_solver_;
   mutable std::string hierarchy_tensor_selection_contract_;
   mutable int hierarchy_tensor_program_block_{-1};
   mutable int hierarchy_tensor_ncomp_{0};
-  mutable std::uint64_t hierarchy_tensor_topology_epoch_{
-      std::numeric_limits<std::uint64_t>::max()};
+  mutable std::uint64_t hierarchy_tensor_topology_epoch_{std::numeric_limits<std::uint64_t>::max()};
   mutable std::vector<std::string> hierarchy_tensor_assembly_field_slots_;
   mutable std::string hierarchy_tensor_solution_field_slot_;
 

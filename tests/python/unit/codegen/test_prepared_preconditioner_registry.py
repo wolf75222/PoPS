@@ -25,7 +25,7 @@ def test_plugin_provider_registers_resolves_and_emits_without_dispatcher_changes
     def emit(node, prelude, prototype, vector_distribution_expr, provider):
         calls.append((node.id, provider.scheme))
         return preconditioners.NativeEmission(
-            "example::make_preconditioner_apply(*%s, %s)" % (
+            "example::make_preconditioner_session(*%s, %s)" % (
                 prototype,
                 vector_distribution_expr,
             )
@@ -85,10 +85,10 @@ def test_plugin_provider_registers_resolves_and_emits_without_dispatcher_changes
     assert "pops::PreparedLinearPreconditionerProvider::trusted_extension(" in expression
     assert 'pops::PreparedProviderIdentity{"example.prepared-preconditioner@1", 1ull}' in expression
     assert (
-        "example::make_preconditioner_apply(*prototype_field, "
+        "example::make_preconditioner_session(*prototype_field, "
         "pops::VectorDistribution::distributed())" in expression
     )
-    assert ", {}, example::make_preconditioner_apply(" in expression
+    assert ", example::make_preconditioner_session(" in expression
     assert expression.endswith(
         "pops::VectorDistribution::distributed())), "
         "pops::VectorDistribution::distributed())"
@@ -289,6 +289,7 @@ def test_problem_compatibility_is_delegated_to_the_provider_use_policy():
         prepared_krylov_method_provider_by_id,
     )
     cg = prepared_krylov_method_provider_by_id("pops.krylov.cg").authority()
+    bicgstab = prepared_krylov_method_provider_by_id("pops.krylov.bicgstab").authority()
     gmres = prepared_krylov_method_provider_by_id("pops.krylov.gmres").authority()
     identity.validate_use(
         method_provider=cg, components=7, nullspace_contract=constant, where="test"
@@ -300,7 +301,10 @@ def test_problem_compatibility_is_delegated_to_the_provider_use_policy():
     geometric.validate_use(
         method_provider=gmres, components=1, nullspace_contract=none, where="test"
     )
-    with pytest.raises(ValueError, match="left-preconditioning"):
+    geometric.validate_use(
+        method_provider=bicgstab, components=1, nullspace_contract=none, where="test"
+    )
+    with pytest.raises(ValueError, match="preconditioning placement"):
         geometric.validate_use(
             method_provider=cg, components=1, nullspace_contract=none, where="test"
         )

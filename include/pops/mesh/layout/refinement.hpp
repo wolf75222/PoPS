@@ -23,6 +23,7 @@
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>  // detail::copy_shifted
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <memory>
 #include <utility>
@@ -39,8 +40,9 @@ namespace detail {
 // produced in the SAME deterministic order as the legacy inline loops (local: dst-local x sorted src
 // candidates; global: gd x sorted src candidates), so the packed buffers stay bit-identical and the
 // per-rank send/recv lists stay aligned. Bumps the build counter (cache-engagement test hook).
-inline void build_copy_schedule(const MultiFab& dst, const MultiFab& src, CopySchedule& sched) {
-  ++copy_schedule_build_counter();
+inline void build_copy_schedule(const MultiFab& dst, const MultiFab& src,
+                                const CommunicatorView& communicator, CopySchedule& sched) {
+  copy_schedule_build_counter().fetch_add(1, std::memory_order_relaxed);
   const BoxArray& sba = src.box_array();
   const BoxArray& dba = dst.box_array();
   const BoxHash shash(sba, suggest_bin(sba));
@@ -61,9 +63,9 @@ inline void build_copy_schedule(const MultiFab& dst, const MultiFab& src, CopySc
   }
 
 #ifdef POPS_HAS_MPI
-  const int np = n_ranks();
+  const int np = communicator.size();
   if (np > 1) {
-    const int me = my_rank();
+    const int me = communicator.rank();
     const DistributionMapping& sdm = src.dmap();
     const DistributionMapping& ddm = dst.dmap();
     sched.send.assign(np, {});
@@ -96,17 +98,18 @@ inline void build_copy_schedule(const MultiFab& dst, const MultiFab& src, CopySc
 // The cache lives on the DST MultiFab; each entry is keyed on the SRC-layout fingerprint (src
 // BoxArray + DistributionMapping), so a different src layout to the same dst builds a distinct entry.
 inline std::shared_ptr<const CopySchedule> get_copy_schedule(const MultiFab& dst,
-                                                             const MultiFab& src) {
+                                                             const MultiFab& src,
+                                                             const CommunicatorView& communicator) {
   CopyScheduleCache& cache = dst.copy_cache();
   if (std::shared_ptr<const CopySchedule> hit = cache.find(src.box_array(), src.dmap())) {
-    ++copy_schedule_hit_counter();
+    copy_schedule_hit_counter().fetch_add(1, std::memory_order_relaxed);
     return hit;
   }
-  ++copy_schedule_miss_counter();
+  copy_schedule_miss_counter().fetch_add(1, std::memory_order_relaxed);
   std::shared_ptr<CopySchedule> s = cache.add();
   s->key.boxes = src.box_array().boxes();
   s->key.ranks = src.dmap().ranks();
-  build_copy_schedule(dst, src, *s);
+  build_copy_schedule(dst, src, communicator, *s);
   return s;
 }
 
@@ -134,7 +137,10 @@ inline BoxArray coarsen(const BoxArray& ba, int r) {
 /// Copies the valid regions that OVERLAP from src to dst (same indices, no shift).
 /// General redistribution between two MultiFab over the same domain with different decompositions.
 /// Provider widths must be identical; a dst cell not covered by src is left intact.
-inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
+namespace detail {
+
+inline void parallel_copy_on(MultiFab& dst, const MultiFab& src,
+                             const CommunicatorView& communicator, int message_tag) {
   if (dst.ncomp() != src.ncomp())
     throw_validation_error(
         "pops/mesh/layout/refinement.hpp: parallel_copy",
@@ -143,7 +149,7 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
   const int nc = dst.ncomp();
   // memoized schedule (BoxHash + enumeration) for this (dst layout, src layout) pair. Replayed in the
   // SAME order as the legacy inline loops -> bit-identical to the per-call rebuild (ADC-607).
-  const std::shared_ptr<const CopySchedule> sched = detail::get_copy_schedule(dst, src);
+  const std::shared_ptr<const CopySchedule> sched = get_copy_schedule(dst, src, communicator);
 
   // --- local copies (dst local AND src local), replayed from the cached plan ---
   for (const CopyJob& j : sched->local) {
@@ -153,9 +159,9 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
   }
 
 #ifdef POPS_HAS_MPI
-  if (n_ranks() <= 1)
+  if (communicator.size() <= 1)
     return;
-  const int np = n_ranks();
+  const int np = communicator.size();
 
   auto bufsz = [&](const std::vector<CopyJob>& js) {
     std::int64_t n = 0;
@@ -178,16 +184,18 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
               sbuf[r][k++] = s(ii, jj, c);
       }
       reqs.emplace_back();
-      detail::require_mpi_success(MPI_Isend(sbuf[r].data(), static_cast<int>(sbuf[r].size()),
-                                            MPI_DOUBLE, r, 1, MPI_COMM_WORLD, &reqs.back()),
-                                  "MPI_Isend(parallel_copy)");
+      detail::require_mpi_success(
+          MPI_Isend(sbuf[r].data(), static_cast<int>(sbuf[r].size()), MPI_DOUBLE, r, message_tag,
+                    communicator.native_handle(), &reqs.back()),
+          "MPI_Isend(parallel_copy)");
     }
     if (!sched->recv[r].empty()) {
       rbuf[r].resize(bufsz(sched->recv[r]));
       reqs.emplace_back();
-      detail::require_mpi_success(MPI_Irecv(rbuf[r].data(), static_cast<int>(rbuf[r].size()),
-                                            MPI_DOUBLE, r, 1, MPI_COMM_WORLD, &reqs.back()),
-                                  "MPI_Irecv(parallel_copy)");
+      detail::require_mpi_success(
+          MPI_Irecv(rbuf[r].data(), static_cast<int>(rbuf[r].size()), MPI_DOUBLE, r, message_tag,
+                    communicator.native_handle(), &reqs.back()),
+          "MPI_Irecv(parallel_copy)");
     }
   }
   if (!reqs.empty())
@@ -207,6 +215,19 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
     }
   }
 #endif
+}
+
+}  // namespace detail
+
+/// Process-world compatibility path. Concurrent prepared execution must pass an ExecutionLane.
+inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
+  detail::parallel_copy_on(dst, src, world_communicator_view(),
+                           ExecutionLane::parallel_copy_message_tag);
+}
+
+/// Redistribution isolated from other concurrent execution sessions by the lane communicator.
+inline void parallel_copy(MultiFab& dst, const MultiFab& src, const ExecutionLane& lane) {
+  detail::parallel_copy_on(dst, src, lane.communicator(), ExecutionLane::parallel_copy_message_tag);
 }
 
 namespace detail {
@@ -265,7 +286,11 @@ struct AverageDownKernel {
 // dmap = fine.dmap(), exactly ncomp components, 0 ghost) ALLOCATED by the caller and reused on each
 // call (hot path of the MG V-cycle: avoids one MultiFab allocation per restriction). Computation
 // STRICTLY identical to the allocating variant below.
-inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
+namespace detail {
+
+template <class ParallelCopy>
+inline void average_down_on(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine,
+                            ParallelCopy&& parallel_copy_fn) {
   if (fine.ncomp() != coarse.ncomp())
     throw_validation_error("pops/mesh/layout/refinement.hpp: average_down",
                            "fine and coarse provider widths are identical",
@@ -282,11 +307,28 @@ inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab
     for (int c = 0; c < nc; ++c)
       for_each_cell(cb, detail::AverageDownKernel{F, C, inv, r, c});
   }
-  parallel_copy(coarse, cfine);
+  std::forward<ParallelCopy>(parallel_copy_fn)(coarse, cfine);
+}
+
+}  // namespace detail
+
+inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
+  detail::average_down_on(fine, coarse, r, cfine,
+                          [](MultiFab& dst, const MultiFab& src) { parallel_copy(dst, src); });
+}
+inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine,
+                         const ExecutionLane& lane) {
+  detail::average_down_on(fine, coarse, r, cfine, [&lane](MultiFab& dst, const MultiFab& src) {
+    parallel_copy(dst, src, lane);
+  });
 }
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r) {
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
   average_down(fine, coarse, r, cfine);
+}
+inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, const ExecutionLane& lane) {
+  MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
+  average_down(fine, coarse, r, cfine, lane);
 }
 
 namespace detail {
@@ -309,7 +351,11 @@ struct InterpolateKernel {
 // PROVIDED-BUFFER variant: @p cfine is the "fine coarsen" grid (same layout contract as
 // average_down above) allocated by the caller and reused (hot path of the MG V-cycle: avoids one
 // allocation per prolongation). Computation STRICTLY identical to the allocating variant.
-inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
+namespace detail {
+
+template <class ParallelCopy>
+inline void interpolate_on(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine,
+                           ParallelCopy&& parallel_copy_fn) {
   if (fine.ncomp() != coarse.ncomp())
     throw_validation_error("pops/mesh/layout/refinement.hpp: interpolate",
                            "fine and coarse provider widths are identical",
@@ -318,7 +364,7 @@ inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab&
   const int nc = fine.ncomp();
   detail::validate_transfer_scratch("pops/mesh/layout/refinement.hpp: interpolate(scratch)", fine,
                                     cfine, nc, r);
-  parallel_copy(cfine, coarse);  // bring the coarse values onto the fine-coarsen grid
+  std::forward<ParallelCopy>(parallel_copy_fn)(cfine, coarse);
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();
     const ConstArray4 C = cfine.fab(li).const_array();
@@ -327,9 +373,26 @@ inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab&
       for_each_cell(fb, detail::InterpolateKernel{F, C, r, c});
   }
 }
+
+}  // namespace detail
+
+inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
+  detail::interpolate_on(coarse, fine, r, cfine,
+                         [](MultiFab& dst, const MultiFab& src) { parallel_copy(dst, src); });
+}
+inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine,
+                        const ExecutionLane& lane) {
+  detail::interpolate_on(coarse, fine, r, cfine, [&lane](MultiFab& dst, const MultiFab& src) {
+    parallel_copy(dst, src, lane);
+  });
+}
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r) {
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
   interpolate(coarse, fine, r, cfine);
+}
+inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, const ExecutionLane& lane) {
+  MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
+  interpolate(coarse, fine, r, cfine, lane);
 }
 
 }  // namespace pops

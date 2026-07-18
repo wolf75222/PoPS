@@ -161,7 +161,8 @@ def test_matrix_free_apply_reads_live_step_dt_before_prepared_krylov():
     assert operator_match is not None
     operator_dt = operator_match.group(1)
 
-    lambda_start = source.index("pops::ApplyFn apply_A")
+    factory_start = source.index("pops::PreparedAffineOperatorSessionFactory make_apply_A")
+    lambda_start = source.index("pops::ApplyFn apply =", factory_start)
     install_start = source.index("ctx.install([=](double dt)")
     operator_refresh = source.index(
         f"*{operator_dt} = static_cast<pops::Real>(dt);", install_start)

@@ -144,6 +144,15 @@ class MultiFab {
     halo_cache_ = prototype.halo_cache_;
   }
 
+  /// Detach communication scratch after a value-preserving copy is promoted to an independent
+  /// concurrent execution session. MultiFab copy construction deliberately shares these caches for
+  /// sequential iso-layout use; a workspace-private clone must instead rebuild and warm its own
+  /// buffers before publication.
+  void detach_communication_caches() const noexcept {
+    halo_cache_.reset();
+    copy_cache_.reset();
+  }
+
   /// Internal (ADC-607): memoized redistribution schedule used by parallel_copy when THIS MultiFab
   /// is the DESTINATION. Lazily created on first use. Unlike halo_cache_ the schedule depends on the
   /// SRC layout too, so each entry is keyed on a src-layout fingerprint (src BoxArray +

@@ -2,6 +2,7 @@
 
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 
 #include "component_abi_test_helpers.hpp"
@@ -14,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -59,6 +61,25 @@ std::string component_source() {
     }
 
     int apply_transfer(void*, const PopsTransferRequestV1*, PopsComponentStatusV1* status) {
+      *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+      return 0;
+    }
+
+    int apply_ghost(void* state, const PopsGhostBoundaryRequestV1* request,
+                    PopsComponentStatusV1* status) {
+      if (state == nullptr || request == nullptr || request->ghosts.data == nullptr) {
+        *status = {sizeof(PopsComponentStatusV1), 41, POPS_COMPONENT_ABORT_RUN_V1,
+                   "ghost session state is missing"};
+        return 41;
+      }
+      auto* values = static_cast<double*>(request->ghosts.data);
+      const auto points = request->ghosts.extents[0] * request->ghosts.extents[1];
+      for (std::size_t point = 0; point < points; ++point)
+        for (std::size_t component = 0; component < request->ghosts.component_count; ++component) {
+          const auto index = point * static_cast<std::size_t>(request->ghosts.axis_strides[0]) +
+                             component * static_cast<std::size_t>(request->ghosts.component_stride);
+          values[index] = static_cast<double>(*static_cast<int*>(state));
+        }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
     }
@@ -223,6 +244,10 @@ std::string component_source() {
     const PopsTransferApiV1 transfer{{sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
                                       POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, &prepare, &destroy},
                                      &apply_transfer};
+    const PopsGhostBoundaryApiV1 ghost{
+        {sizeof(PopsGhostBoundaryApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+         POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, &prepare, &destroy},
+        &apply_ghost};
     const PopsTaggerApiV1 tagger{{sizeof(PopsTaggerApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
                                   POPS_NATIVE_INTERFACE_TAGGER_V1, 1, &prepare, &destroy},
                                  &tag_batch};
@@ -238,6 +263,7 @@ std::string component_source() {
          sizeof(flux), &flux},
 #endif
         {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer},
+        {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
         {POPS_NATIVE_INTERFACE_TAGGER_V1, 1, sizeof(PopsTaggerApiV1), &tagger},
         {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1), &clustering}};
     const PopsComponentApiV1 component{
@@ -252,7 +278,7 @@ std::string component_source() {
         "pops://test/final-flux@1.0.0",
         "semantic-final-flux",
         "manifest-final-flux",
-        4,
+        5,
         interfaces};
     }  // namespace
 
@@ -326,6 +352,7 @@ pops::component::ExpectedNativeComponent expected() {
           POPS_ABI_KEY_LITERAL,
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
+           {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
            {POPS_NATIVE_INTERFACE_TAGGER_V1, 1, sizeof(PopsTaggerApiV1)},
            {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1)}}};
 }
@@ -663,6 +690,122 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
     EXPECT_EQ(destroy_count(), 0);
   }
   EXPECT_EQ(destroy_count(), 2);
+  pops::dynlib::close(inspection);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners) {
+  static_assert(!std::is_copy_constructible_v<pops::component::LoadedComponent::PreparedState>);
+  static_assert(
+      std::is_nothrow_move_constructible_v<pops::component::LoadedComponent::PreparedState>);
+
+  const auto library = compile_component();
+  const auto inspection = pops::dynlib::open(library.string());
+  ASSERT_TRUE(pops::dynlib::valid(inspection));
+  using CounterFn = int (*)();
+  const auto prepare_count =
+      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
+  const auto destroy_count =
+      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
+  ASSERT_NE(prepare_count, nullptr);
+  ASSERT_NE(destroy_count, nullptr);
+  {
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    const auto execution = abi::host_execution_context();
+    {
+      auto first =
+          loaded.prepare_fresh_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                     R"({"scheme":"session"})", R"({"identity":"same-target"})");
+      auto second =
+          loaded.prepare_fresh_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                     R"({"scheme":"session"})", R"({"identity":"same-target"})");
+      EXPECT_NE(first.get(), second.get());
+      EXPECT_EQ(prepare_count(), 2);
+      EXPECT_EQ(destroy_count(), 0);
+
+      auto moved = std::move(first);
+      EXPECT_EQ(first.get(), nullptr);
+      EXPECT_NE(moved.get(), nullptr);
+    }
+    EXPECT_EQ(destroy_count(), 2);
+  }
+  pops::dynlib::close(inspection);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, BoundaryPlanSessionsOwnFreshLaneQualifiedComponentStates) {
+  const auto library = compile_component();
+  const auto inspection = pops::dynlib::open(library.string());
+  ASSERT_TRUE(pops::dynlib::valid(inspection));
+  using CounterFn = int (*)();
+  const auto prepare_count =
+      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
+  const auto destroy_count =
+      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
+  ASSERT_NE(prepare_count, nullptr);
+  ASSERT_NE(destroy_count, nullptr);
+  {
+    auto component = std::make_shared<pops::component::LoadedComponent>(
+        pops::component::LoadedComponent::load(library.string(), expected()));
+    pops::PreparedBoundaryComponentSpec spec;
+    spec.target_identity = "case::boundary::ghost-target";
+    spec.component_id = kComponentId;
+    spec.manifest_identity = kManifestIdentity;
+    spec.interface_version = 1;
+    spec.producer_identity = "case::boundary::ghost-producer";
+    spec.state_identity = "case::state::u";
+    spec.ghost_identity = "case::boundary::xlo";
+    spec.layout_identity = "case::layout::cells";
+    spec.region.kind = POPS_BOUNDARY_FACE_V1;
+    spec.region.dimension = 2;
+    spec.region.codimension = 1;
+    spec.region.axes = {0};
+    spec.region.sides = {-1};
+    spec.region.identity = "case::boundary::xlo";
+    spec.parameters_json = R"({"coefficient":1.0})";
+    spec.target_json = R"({"identity":"case::boundary::ghost-target"})";
+    spec.execution = prepared_execution();
+
+    pops::BCRec bc;
+    bc.xlo = pops::BCType::Foextrap;
+    bc.xhi = pops::BCType::Foextrap;
+    bc.ylo = pops::BCType::Foextrap;
+    bc.yhi = pops::BCType::Foextrap;
+    pops::PreparedBoundaryPlan plan("case::boundary::plan", 1, {bc}, {}, spec.state_identity);
+    plan.install_ghost_component(std::move(spec), component);
+
+    const auto lane =
+        pops::ExecutionLane::duplicate_world_collectively("case::boundary::component-session");
+    {
+      auto first = plan.make_session(lane);
+      auto second = plan.make_session(lane);
+      EXPECT_EQ(prepare_count(), 2);
+      EXPECT_EQ(destroy_count(), 0);
+
+      const pops::Box2D domain = pops::Box2D::from_extents(3, 3);
+      const pops::BoxArray boxes = pops::BoxArray::from_domain(domain, domain.nx());
+      pops::MultiFab state(boxes, pops::DistributionMapping(boxes.size(), pops::n_ranks()), 1, 1);
+      state.set_val(pops::Real(9));
+      const pops::Geometry geometry(domain, pops::Real(0), pops::Real(1), pops::Real(0),
+                                    pops::Real(1));
+      const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+          "clock.boundary-session", 0, 0, 0, 0, pops::amr::Rational(0, 1), 0.1, 0.0};
+      pops::detail::BoundaryFieldRegistry fields;
+      fields.configure_states(plan.required_state_identities());
+      fields.begin_binding();
+      fields.bind_state(plan.state_identity(), state);
+      first.prepare_ghost_executor(state, fields, geometry);
+      second.prepare_ghost_executor(state, fields, geometry);
+
+      first.fill_same_level_and_physical(state, fields, geometry, point);
+      if (state.local_size() != 0)
+        EXPECT_EQ(state.fab(0)(-1, 1, 0), pops::Real(1));
+      second.fill_same_level_and_physical(state, fields, geometry, point);
+      if (state.local_size() != 0)
+        EXPECT_EQ(state.fab(0)(-1, 1, 0), pops::Real(2));
+    }
+    EXPECT_EQ(destroy_count(), 2);
+  }
   pops::dynlib::close(inspection);
   std::filesystem::remove(library);
 }

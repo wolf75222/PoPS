@@ -155,6 +155,48 @@ TEST(GeometricMgCollectiveContract, ConvertsOneRankInvalidControlsToOneUniformFa
       [&] { (void)mg.solve(rel_tol, /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
 }
 
+TEST(GeometricMgCollectiveContract,
+     BoundaryNewtonConfigurationRollbackAndClearPreserveCollectiveLifecycle) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the prepared-cache lifecycle regression is registered at two MPI ranks";
+
+  GeometricMG mg = make_replicated_geometric_mg();
+  mg.rhs().set_val(Real(0));
+  mg.phi().set_val(Real(0));
+  CompiledFieldBoundaryKernel kernel{"mpi-noop-iteration-boundary",
+                                     "mpi-noop-iteration-boundary-residual",
+                                     "mpi-noop-iteration-boundary-jvp",
+                                     noop_boundary_prepare_residual,
+                                     noop_boundary_prepare_jvp,
+                                     noop_boundary_residual,
+                                     noop_boundary_jvp,
+                                     true};
+  mg.set_boundary_kernel(kernel, FieldBoundaryExecutionContext{});
+  FieldNewtonOptions options;
+  options.restart = 5;
+  options.max_iterations = 2;
+  options.linear_max_iterations = 20;
+  mg.set_field_newton_options(options);
+  const auto generation = mg.boundary_newton_cache_generation();
+  const auto allocation_count = mg.boundary_newton_cache_allocation_count();
+  ASSERT_GT(generation, 0u);
+  ASSERT_GT(allocation_count, 0u);
+
+  FieldBoundaryExecutionContext divergent_context;
+  if (my_rank() == 1)
+    divergent_context.state_count = 1;  // invalid without the required state pointer tables
+  expect_uniform_collective_rejection([&] { mg.set_boundary_kernel(kernel, divergent_context); });
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
+  const SolveReport after_rollback = mg.solve_boundary_newton(options);
+  EXPECT_TRUE(after_rollback.solved());
+
+  EXPECT_NO_THROW(mg.clear_boundary_kernel());
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), 0u);
+  const SolveReport cleared = mg.solve_boundary_newton(options);
+  EXPECT_EQ(cleared.status, SolveStatus::kCapabilityFailure);
+}
+
 TEST(GeometricMgCollectiveContract, RejectsDivergentReplicatedRhsBeforeIteration) {
   if (n_ranks() != 2)
     GTEST_SKIP() << "the replica contract regression is registered at exactly two MPI ranks";
@@ -533,16 +575,19 @@ TEST(GeometricMgTest, nonlinear_boundary_snapshot_reuses_cache_with_opaque_stage
   options.restart = 12;
   EXPECT_EQ(mg.boundary_newton_cache_generation(), 0u);
   EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), 0u);
+  EXPECT_NO_THROW(mg.prepare_boundary_newton(options));
+  const auto generation = mg.boundary_newton_cache_generation();
+  const auto allocation_count = mg.boundary_newton_cache_allocation_count();
+  EXPECT_GT(generation, 0u);
+  EXPECT_GT(allocation_count, 0u);
 
   SolveReport first_report;
   first_boundary_residual_iteration = -1;
   EXPECT_NO_THROW(first_report = mg.solve_boundary_newton(options));
   EXPECT_EQ(first_boundary_residual_iteration, 0);
   EXPECT_NE(first_report.status, SolveStatus::kInvalidEvaluation);
-  const auto generation = mg.boundary_newton_cache_generation();
-  const auto allocation_count = mg.boundary_newton_cache_allocation_count();
-  EXPECT_GT(generation, 0u);
-  EXPECT_GT(allocation_count, 0u);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
 
   // A new logical evaluation point and different per-call stopping controls do not change storage.
   // Only the field layout or GMRES restart may rebuild this cache.
@@ -574,16 +619,91 @@ TEST(GeometricMgTest, nonlinear_boundary_snapshot_reuses_cache_with_opaque_stage
   EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
   EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
 
+  // A staged replacement that fails its collective configuration contract must leave the last
+  // valid kernel, context, cache, and generation intact. In particular, solve may not silently
+  // continue with the invalid context that was temporarily inspected by the control gate.
+  FieldBoundaryExecutionContext invalid_context = context;
+  invalid_context.state_count = 1;
+  invalid_context.states = nullptr;
+  invalid_context.state_distributions = nullptr;
+  EXPECT_THROW(mg.set_boundary_kernel(kernel, invalid_context), std::invalid_argument);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(1));
+  SolveReport after_failed_reconfiguration;
+  EXPECT_NO_THROW(after_failed_reconfiguration = mg.solve_boundary_newton(options));
+  EXPECT_NE(after_failed_reconfiguration.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+
   // Restart changes the GMRES basis shape and is therefore the one per-call control that rebuilds
   // storage. The replacement remains a single persistent cache, not an accumulating cache family.
   mg.phi().set_val(Real(0));
   mg.rhs().set_val(Real(1));
   options.restart = 8;
+  EXPECT_THROW((void)mg.solve_boundary_newton(options), std::logic_error);
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_NO_THROW(mg.prepare_boundary_newton(options));
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation + 1);
   SolveReport resized_report;
   EXPECT_NO_THROW(resized_report = mg.solve_boundary_newton(options));
   EXPECT_NE(resized_report.status, SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(mg.boundary_newton_cache_generation(), generation + 1);
   EXPECT_NE(mg.boundary_newton_cache_allocation_count(), allocation_count);
+}
+
+TEST(GeometricMgTest, nonlinear_boundary_configuration_materializes_before_noarg_solve) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  GeometricMG mg(geometry, BoxArray(std::vector<Box2D>{domain}), bc);
+  mg.phi().set_val(Real(0));
+  mg.rhs().set_val(Real(0));
+
+  CompiledFieldBoundaryKernel kernel{"noop-iteration-boundary-control",
+                                     "noop-iteration-boundary-control-residual",
+                                     "noop-iteration-boundary-control-jvp",
+                                     noop_boundary_prepare_residual,
+                                     noop_boundary_prepare_jvp,
+                                     noop_boundary_residual,
+                                     noop_boundary_jvp,
+                                     true};
+  mg.set_boundary_kernel(kernel, FieldBoundaryExecutionContext{});
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), 0u);
+
+  FieldNewtonOptions options;
+  options.max_iterations = 2;
+  options.linear_max_iterations = 40;
+  options.restart = 7;
+  EXPECT_NO_THROW(mg.set_field_newton_options(options));
+  const auto generation = mg.boundary_newton_cache_generation();
+  const auto allocation_count = mg.boundary_newton_cache_allocation_count();
+  EXPECT_GT(generation, 0u);
+  EXPECT_GT(allocation_count, 0u);
+
+  EXPECT_NO_THROW(mg.solve());
+  EXPECT_EQ(mg.boundary_newton_cache_generation(), generation);
+  EXPECT_EQ(mg.boundary_newton_cache_allocation_count(), allocation_count);
+
+  // Configuration order is not semantic: installing the controls first leaves no hidden solve
+  // work. The later kernel installation observes that both halves are present and completes the
+  // same collective materialization immediately.
+  GeometricMG controls_first(geometry, BoxArray(std::vector<Box2D>{domain}), bc);
+  controls_first.phi().set_val(Real(0));
+  controls_first.rhs().set_val(Real(0));
+  EXPECT_NO_THROW(controls_first.set_field_newton_options(options));
+  EXPECT_EQ(controls_first.boundary_newton_cache_generation(), 0u);
+  EXPECT_NO_THROW(controls_first.set_boundary_kernel(kernel, FieldBoundaryExecutionContext{}));
+  const auto controls_first_generation = controls_first.boundary_newton_cache_generation();
+  EXPECT_GT(controls_first_generation, 0u);
+  EXPECT_GT(controls_first.boundary_newton_cache_allocation_count(), 0u);
+  EXPECT_NO_THROW(controls_first.solve());
+  EXPECT_EQ(controls_first.boundary_newton_cache_generation(), controls_first_generation);
+  EXPECT_NO_THROW(controls_first.clear_boundary_kernel());
+  EXPECT_EQ(controls_first.boundary_newton_cache_allocation_count(), 0u);
+  const SolveReport cleared = controls_first.solve_boundary_newton(options);
+  EXPECT_EQ(cleared.status, SolveStatus::kCapabilityFailure);
 }
 
 TEST(GeometricMgTest, nullspace_compatibility_rejects_nonfinite_moment) {

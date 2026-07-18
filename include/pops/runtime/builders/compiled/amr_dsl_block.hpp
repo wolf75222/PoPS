@@ -714,6 +714,64 @@ AmrRuntimeBlock build_amr_block(
       gc.boundary_field_registry = *boundary_field_registry;
       apply_grid_boundary_jvp(U, V, J, gc, point);
     };
+    b.level_rhs_core_at_point_prepared =
+        [model, rprim, tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& R,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::RhsCoreInto<Limiter, Flux, Model>{model, gc, rprim, Real(0), nullptr}(point, U, R,
+                                                                                        boundary);
+        };
+    b.level_neg_div_flux_core_at_point_prepared =
+        [model, rprim, tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& R,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::RhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+              SourceFreeModel<Model>{model}, gc, rprim, Real(0), nullptr}(point, U, R, boundary);
+        };
+    b.level_boundary_residual_at_point_prepared =
+        [tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& aux, const Geometry& geom, MultiFab& C,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::BoundaryResidualInto{gc}(point, U, C, boundary);
+        };
+    b.level_boundary_jvp_at_point_prepared =
+        [tbc, boundary_plan, boundary_field_registry](
+            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+            const MultiFab& V, const MultiFab& aux, const Geometry& geom, MultiFab& J,
+            const PreparedGridBoundarySession& boundary) {
+          GridContext gc;
+          gc.dom = geom.domain;
+          gc.bc = tbc;
+          gc.geom = geom;
+          gc.aux = const_cast<MultiFab*>(&aux);
+          gc.boundary_plan = boundary_plan;
+          gc.boundary_field_registry = *boundary_field_registry;
+          detail::BoundaryJvpInto{gc}(point, U, V, J, boundary);
+        };
     if (boundary_plan && boundary_plan->has_omitted_faces()) {
       b.level_rhs_without_prepared_interfaces = b.level_rhs_at_point;
       b.level_neg_div_flux_without_prepared_interfaces = b.level_neg_div_flux_at_point;
@@ -750,9 +808,9 @@ AmrRuntimeBlock build_amr_block(
                                                               const Geometry& geom, MultiFab& Fx,
                                                               MultiFab& Fy, MultiFab& R) {
       if (boundary_plan)
-        boundary_plan->fill_same_level_and_physical(U, geom.domain);
-      else
-        pops::fill_ghosts(U, geom.domain, tbc);
+        throw std::logic_error(
+            "resolved AMR reflux boundary plan requires its persistent prepared session");
+      pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
@@ -761,12 +819,30 @@ AmrRuntimeBlock build_amr_block(
                                        MultiFab& Fx, MultiFab& Fy, MultiFab& R) {
       const SourceFreeModel<Model> sm{model};
       if (boundary_plan)
-        boundary_plan->fill_same_level_and_physical(U, geom.domain);
-      else
-        pops::fill_ghosts(U, geom.domain, tbc);
+        throw std::logic_error(
+            "resolved AMR reflux boundary plan requires its persistent prepared session");
+      pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
+    b.level_flux_capture_prepared = [model, rprim](
+                                        const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                        MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                        MultiFab& Fx, MultiFab& Fy, MultiFab& R,
+                                        const PreparedGridBoundarySession& boundary) {
+      boundary.fill_same_level_and_physical(U, point);
+      pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+      pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+    };
+    b.level_flux_capture_neg_div_prepared =
+        [model, rprim](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                       const MultiFab& aux, const Geometry& geom, MultiFab& Fx, MultiFab& Fy,
+                       MultiFab& R, const PreparedGridBoundarySession& boundary) {
+          const SourceFreeModel<Model> sm{model};
+          boundary.fill_same_level_and_physical(U, point);
+          pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+          pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+        };
   }
   // CFL SPEED of the block: SAME policy as System (make_max_speed) -- stability lambda*
   // (HasStabilitySpeed trait) if the model declares it, otherwise max_wave_speed (historical fallback,
@@ -1234,9 +1310,8 @@ void add_compiled_model(
                                       /*newton_diagnostics=*/false, time_method, bpos_floor);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(runtime_builder), name,
-                         recon_prim, imex,
-                         static_cast<int>(time_method), stride, implicit_vars, implicit_roles,
-                         pos_floor);
+                         recon_prim, imex, static_cast<int>(time_method), stride, implicit_vars,
+                         implicit_roles, pos_floor);
 }
 
 }  // namespace pops

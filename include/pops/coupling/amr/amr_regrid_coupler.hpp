@@ -193,17 +193,17 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
             a(i, j, k) =
                 pp(coarsen_index(i, refinement_ratio), coarsen_index(j, refinement_ratio), k);
     }
-    for (int ol = 0; ol < old.local_size(); ++ol) {  // 2) carry-over of the fine data
-      const ConstArray4 o = old.fab(ol).const_array();
-      const Box2D inter = nb.intersect(old.box(ol));
-      if (inter.empty())
-        continue;
-      for (int j = inter.lo[1]; j <= inter.hi[1]; ++j)
-        for (int i = inter.lo[0]; i <= inter.hi[0]; ++i)
-          for (int k = 0; k < ncf; ++k)
-            a(i, j, k) = o(i, j, k);
-    }
   }
+  // 2) Carry over every old-fine value covered by the new layout.  Ownership may change when the
+  // layout is rebuilt (or merely when its DistributionMapping changes), so a rank-local scan of
+  // `old` is incomplete: a newly owned patch can overlap an old patch owned by another rank.  The
+  // general redistribution preserves all global overlaps and leaves the parent-interpolated cells
+  // outside the old fine coverage intact.
+  parallel_copy(nU, old);
+  // `parallel_copy` deliberately stays asynchronous for its local kernels.  Regrid publishes nU to
+  // field solves and history remaps immediately after return, so completion is part of this
+  // transfer's publication boundary on every backend, including the single-rank CUDA path.
+  device_fence();
   return nU;
 }
 

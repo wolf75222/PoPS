@@ -28,6 +28,7 @@
 #include <pops/mesh/storage/fab2d.hpp>              // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/storage/mf_arith.hpp>           // saxpy (linear combine over a MultiFab)
 #include <pops/mesh/storage/multifab.hpp>           // MultiFab
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
@@ -418,15 +419,33 @@ class ProgramContext {
     count_kernel();
     sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
   }
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only, boundary);
+  }
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                                  MultiFab& u, MultiFab& c) const {
     count_kernel();
     sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
   }
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c,
+                                 const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c, boundary);
+  }
   void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
                             MultiFab& u, const MultiFab& v, MultiFab& j) const {
     count_kernel();
     sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
+  }
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j,
+                            const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j, boundary);
   }
 
   struct RhsGroupRequest {
@@ -535,6 +554,23 @@ class ProgramContext {
   /// modules) that assemble coefficient / flux halos from the transport BC without reaching into
   /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
   GridContext grid_context() const { return sys_->grid_context(); }
+
+  /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
+  /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
+  /// unqualified mesh BC and cannot borrow a block's native boundary components.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
+      const MultiFab&, const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(), lane);
+  }
+
+  /// Materialize the exact boundary authority of one authenticated Program block.  The Program
+  /// index is resolved through the installed name map before any component state is prepared.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
+      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(sys_block(block)), lane,
+                                                         prototype, point);
+  }
 
   /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
   /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
@@ -718,6 +754,35 @@ class ProgramContext {
     }
   }
 
+  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "lane-isolated ProgramContext::laplacian requires a prepared polar operator session");
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(in, gc.geom.domain, gc.bc, lane);
+    apply_laplacian(in, gc.geom, out);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "prepared ProgramContext::laplacian requires a polar operator provider");
+    count_kernel();
+    boundary.fill(in);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (sys_->program_is_polar())
+      throw std::logic_error(
+          "prepared ProgramContext::laplacian requires a polar operator provider");
+    count_kernel();
+    boundary.fill(in, point);
+    apply_laplacian(in, boundary.context().geom, out);
+  }
+
   /// Metric-aware tensor div(A grad(in)). The authored ApplyFn remains the sole mathematical
   /// operator on Cartesian and polar meshes; solver dispatch never swaps it for a second loop with
   /// different tolerances, preconditioning or residual semantics.
@@ -733,6 +798,46 @@ class ProgramContext {
     }
   }
 
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_grid_ghosts(in, gc, lane);
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    const GridContext& gc = boundary.context();
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    const GridContext& gc = boundary.context();
+    if (sys_->program_is_polar()) {
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
+    } else {
+      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
+    }
+  }
+
   /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
   /// needs >= 2 components). Fills @p phi's ghosts then forwards to pops::field_postprocess with
   /// store_phi=false (the gradient lands in components 0/1) and the centered factors cx = 1/(2 dx),
@@ -741,6 +846,34 @@ class ProgramContext {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(phi, gc.geom.domain, gc.bc);
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(phi, gc.geom.domain, gc.bc, lane);
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(phi);
+    const GridContext& gc = boundary.context();
+    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
+    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(phi, point);
+    const GridContext& gc = boundary.context();
     const Real cx = Real(1) / (Real(2) * gc.geom.dx());
     const Real cy = Real(1) / (Real(2) * gc.geom.dy());
     field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
@@ -765,6 +898,34 @@ class ProgramContext {
     apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
   }
 
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
+    if (&fy != &fx)
+      fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
+    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(fx);
+    if (&fy != &fx)
+      boundary.fill(fy);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(fx, point);
+    if (&fy != &fx)
+      boundary.fill(fy, point);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
   /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
@@ -783,6 +944,23 @@ class ProgramContext {
                   0);  // 1-component divergence scratch (no ghosts needed)
     for (int c = 0; c < r.ncomp(); ++c) {
       apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);  // divc(.,0) = div(fx_c, fy_c)
+      for (int li = 0; li < r.local_size(); ++li) {
+        const ConstArray4 d = divc.fab(li).const_array();
+        Array4 rv = r.fab(li).array();
+        const int comp = c;
+        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
+      }
+    }
+  }
+
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
+    fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
+    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    for (int c = 0; c < r.ncomp(); ++c) {
+      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);
       for (int li = 0; li < r.local_size(); ++li) {
         const ConstArray4 d = divc.fab(li).const_array();
         Array4 rv = r.fab(li).array();
@@ -954,6 +1132,11 @@ class ProgramContext {
   void fill_boundary(MultiFab& x) const {
     const GridContext gc = sys_->grid_context();
     fill_ghosts(x, gc.geom.domain, gc.bc);
+  }
+
+  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(x, gc.geom.domain, gc.bc, lane);
   }
 
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the

@@ -109,6 +109,7 @@ set(POPS_CPP_TEST_SOURCE_test_flux_register "tests/cpp/integration/amr/test_flux
 set(POPS_CPP_TEST_SOURCE_test_flux_interfaces "tests/cpp/unit/numerics/test_flux_interfaces.cpp")
 set(POPS_CPP_TEST_SOURCE_test_full_tensor_operator "tests/cpp/unit/elliptic/test_full_tensor_operator.cpp")
 set(POPS_CPP_TEST_SOURCE_test_generic_krylov "tests/cpp/unit/elliptic/test_generic_krylov.cpp")
+set(POPS_CPP_TEST_SOURCE_test_krylov_workspace_reentrancy "tests/cpp/unit/elliptic/test_krylov_workspace_reentrancy.cpp")
 set(POPS_CPP_TEST_SOURCE_test_krylov_collective_contract "tests/cpp/unit/elliptic/test_krylov_collective_contract.cpp")
 set(POPS_CPP_TEST_SOURCE_test_scaled_scalar "tests/cpp/unit/elliptic/test_scaled_scalar.cpp")
 set(POPS_CPP_TEST_SOURCE_test_geometric_mg "tests/cpp/unit/elliptic/test_geometric_mg.cpp")

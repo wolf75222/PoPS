@@ -422,7 +422,13 @@ def _persistent_solver_buffers(program: Any) -> list:
     materialized runtime level and rematerialize only after an authenticated topology change.
     """
     persistent = []
-    for v in _persistent_program_values(program):
+    values = list(_persistent_program_values(program))
+    operator_bundles = {
+        value.id: _operator_bundle_footprint(value)
+        for value in values
+        if value.op == "matrix_free_operator"
+    }
+    for v in values:
         if v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)
             conditional = operator_bundle["jacvec_conditional_buffers"]
@@ -459,6 +465,11 @@ def _persistent_solver_buffers(program: Any) -> list:
             })
         elif v.op in _KRYLOV_OPS:
             footprint = validated_krylov_footprint(v.attrs, operator=v.inputs[0])
+            operator_bundle = operator_bundles.get(v.inputs[0].id)
+            if operator_bundle is None:
+                raise ValueError(
+                    "solve_linear references an operator with no persistent allocation plan"
+                )
             method = v.attrs["method_provider"]["provider_id"]
             preconditioner_allocation = (
                 prepared_preconditioner_allocation_plan_from_identity(
@@ -466,8 +477,17 @@ def _persistent_solver_buffers(program: Any) -> list:
                 )
             )
             preconditioner_buffers = preconditioner_allocation.prepared_buffers
-            workspace_min = 1
-            prepared_core_min = workspace_min + 2 + preconditioner_buffers
+            # One provider template is owned once by the operator record above. Every solve then
+            # owns two genuinely private clones of that template: the problem's prepared A(0)
+            # session and the bound workspace session used by the recurrence. A preconditioned
+            # workspace additionally owns its persistent M(0) field beside the method's at-least-one
+            # recurrence field.
+            workspace_min = 1 + int(bool(footprint["preconditioned"]))
+            operator_session_min = operator_bundle["operator_buffers_min"]
+            operator_sessions_min = 2 * operator_session_min
+            prepared_core_min = (
+                workspace_min + 2 + preconditioner_buffers + operator_sessions_min
+            )
             solve_buffers_min = 1 + prepared_core_min
             persistent.append({
                 "kind": "krylov",
@@ -479,6 +499,9 @@ def _persistent_solver_buffers(program: Any) -> list:
                 "workspace_buffers": None,
                 "workspace_buffers_min": workspace_min,
                 "prepared_problem_buffers": 2,
+                "prepared_problem_operator_session_buffers_min": operator_session_min,
+                "workspace_operator_session_buffers_min": operator_session_min,
+                "operator_session_buffers_min": operator_sessions_min,
                 "prepared_preconditioner_buffers": preconditioner_buffers,
                 "prepared_core_buffers": None,
                 "prepared_core_buffers_min": prepared_core_min,
@@ -492,11 +515,13 @@ def _persistent_solver_buffers(program: Any) -> list:
                 "exact": False,
                 "footprint": dict(footprint),
                 "note": (
-                    "%s solve owner: 1 solution + at least 1 native workspace field + "
-                    "2 A(0)/zero + %d M(0)/zero fields; exact method storage is computed "
+                    "%s solve owner: 1 solution + at least %d native workspace field(s) + "
+                    "2 A(0)/zero + %d M(0)/zero fields + two private operator sessions "
+                    "of at least %d fields each; exact method/session storage is computed "
                     "natively from the runtime vector distribution and metric before solve; "
-                    "matrix-free resources are owned once by operator id %d"
-                    % (method, preconditioner_buffers, v.inputs[0].id)
+                    "the separately reported provider template is owned once by operator id %d"
+                    % (method, workspace_min, preconditioner_buffers, operator_session_min,
+                       v.inputs[0].id)
                 ),
             })
             for resource in preconditioner_allocation.scratch_resources:

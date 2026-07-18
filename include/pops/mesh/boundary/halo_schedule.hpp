@@ -13,6 +13,7 @@
 
 #include <pops/mesh/index/box2d.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -97,10 +98,10 @@ class HaloScheduleCache {
 };
 
 namespace detail {
-/// Process-wide count of halo-schedule (re)builds. A single instance across translation units (an
-/// inline function with a function-local static). NOT thread-safe; instrumentation only.
-inline std::int64_t& halo_schedule_build_counter() {
-  static std::int64_t n = 0;
+/// Process-wide count of halo-schedule (re)builds. Independent execution lanes may warm their
+/// private caches concurrently, so even this instrumentation counter must not introduce a data race.
+inline std::atomic<std::int64_t>& halo_schedule_build_counter() {
+  static std::atomic<std::int64_t> n{0};
   return n;
 }
 }  // namespace detail
@@ -109,12 +110,12 @@ inline std::int64_t& halo_schedule_build_counter() {
 /// does NOT increment it, so a stable layout filled K times reports 1. Test hook for cache
 /// engagement; not part of the public numerical API.
 inline std::int64_t halo_schedule_build_count() {
-  return detail::halo_schedule_build_counter();
+  return detail::halo_schedule_build_counter().load(std::memory_order_relaxed);
 }
 
 /// Resets the build counter (tests).
 inline void reset_halo_schedule_build_count() {
-  detail::halo_schedule_build_counter() = 0;
+  detail::halo_schedule_build_counter().store(0, std::memory_order_relaxed);
 }
 
 }  // namespace pops

@@ -32,8 +32,8 @@ def test_external_method_uses_provider_owned_options_native_component_and_emitte
             options_schema="example.krylov.history-method.options@1",
             emitter_id="example.krylov.history-method@1",
             capabilities={
-                "contract_version": 1,
-                "left_preconditioning": True,
+                "contract_version": 2,
+                "preconditioning_placement": "right",
             },
             native_component=PreparedNativeComponent.header_only(
                 "example.krylov.history-method",
@@ -78,6 +78,30 @@ def test_external_method_uses_provider_owned_options_native_component_and_emitte
         "method_options": prepared.method_options,
     })
     assert provider.emit_cpp(node) == "example::history_method(5)"
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "placement"),
+    (
+        ("pops.krylov.cg", "none"),
+        ("pops.krylov.bicgstab", "right"),
+        ("pops.krylov.gmres", "left"),
+        ("pops.krylov.richardson", "none"),
+    ),
+)
+def test_builtin_method_authority_declares_native_preconditioning_placement(
+    provider_id,
+    placement,
+):
+    from pops.solvers.krylov._prepared_method_registry import (
+        prepared_krylov_method_provider_by_id,
+    )
+
+    capabilities = prepared_krylov_method_provider_by_id(provider_id).authority()["capabilities"]
+    assert capabilities == {
+        "contract_version": 2,
+        "preconditioning_placement": placement,
+    }
 
 
 def test_python_registry_has_no_legacy_workspace_authority():

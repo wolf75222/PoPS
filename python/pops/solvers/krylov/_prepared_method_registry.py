@@ -27,7 +27,9 @@ from pops.native_components import PreparedNativeComponent
 from ._native_contract import PREPARED_GMRES_MAX_RESTART
 
 
-_PROVIDER_SCHEMA_VERSION = 2
+_PROVIDER_SCHEMA_VERSION = 3
+_METHOD_CAPABILITY_CONTRACT_VERSION = 2
+_PRECONDITIONING_PLACEMENTS = frozenset(("none", "left", "right"))
 
 
 def _exact_nonempty(value: Any, *, where: str) -> str:
@@ -42,6 +44,27 @@ def _plain(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_plain(item) for item in value)
     return value
+
+
+def _method_capabilities(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("prepared Krylov capabilities must be a mapping")
+    capabilities = dict(value)
+    if capabilities.get("contract_version") != _METHOD_CAPABILITY_CONTRACT_VERSION:
+        raise ValueError("prepared Krylov capability contract version is unsupported")
+    if "left_preconditioning" in capabilities:
+        raise ValueError(
+            "prepared Krylov capabilities must declare preconditioning_placement, not the legacy "
+            "left_preconditioning flag"
+        )
+    placement = capabilities.get("preconditioning_placement")
+    if type(placement) is not str or placement not in _PRECONDITIONING_PLACEMENTS:
+        raise ValueError(
+            "prepared Krylov preconditioning_placement must be one of 'none', 'left', or 'right'"
+        )
+    frozen = freeze_data(capabilities, "prepared Krylov capabilities")
+    canonical_bytes(_plain(frozen))
+    return frozen
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,22 +111,23 @@ class PreparedKrylovMethodProvider:
     interface_version: int
     options_schema: str
     emitter_id: str
-    capabilities: Any
+    capabilities: Mapping[str, Any]
     native_component: PreparedNativeComponent
     option_preparer: PreparedKrylovOptionPreparer = field(repr=False, compare=False)
     validator: PreparedKrylovValidator = field(repr=False, compare=False)
     emitter: PreparedKrylovEmitter = field(repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "capabilities", _method_capabilities(self.capabilities))
+
     def authority(self) -> dict[str, Any]:
-        capabilities = freeze_data(self.capabilities, "prepared Krylov capabilities")
-        canonical_bytes(_plain(capabilities))
         return {
             "schema_version": _PROVIDER_SCHEMA_VERSION,
             "provider_id": self.provider_id,
             "interface_version": self.interface_version,
             "options_schema": self.options_schema,
             "emitter_id": self.emitter_id,
-            "capabilities": _plain(capabilities),
+            "capabilities": _plain(self.capabilities),
             "native_component": self.native_component.authority(),
         }
 
@@ -327,7 +351,7 @@ def _register_builtins() -> None:
             _empty_options,
             _validate_cg,
             _builtin("pops::cg_krylov_method()"),
-            False,
+            "none",
         ),
         (
             "pops.krylov.bicgstab",
@@ -335,7 +359,7 @@ def _register_builtins() -> None:
             _empty_options,
             _validate_generic,
             _builtin("pops::bicgstab_krylov_method()"),
-            True,
+            "right",
         ),
         (
             "pops.krylov.gmres",
@@ -343,7 +367,7 @@ def _register_builtins() -> None:
             _gmres_options,
             _validate_generic,
             _emit_gmres,
-            True,
+            "left",
         ),
         (
             "pops.krylov.richardson",
@@ -351,7 +375,7 @@ def _register_builtins() -> None:
             _richardson_options,
             _validate_richardson,
             _emit_richardson,
-            False,
+            "none",
         ),
     )
     for (
@@ -360,7 +384,7 @@ def _register_builtins() -> None:
         preparer,
         validator,
         emitter,
-        left_preconditioning,
+        preconditioning_placement,
     ) in records:
         register_prepared_krylov_method_provider(
             PreparedKrylovMethodProvider(
@@ -369,8 +393,8 @@ def _register_builtins() -> None:
                 options_schema=options_schema,
                 emitter_id=provider_id + "@1",
                 capabilities={
-                    "contract_version": 1,
-                    "left_preconditioning": left_preconditioning,
+                    "contract_version": _METHOD_CAPABILITY_CONTRACT_VERSION,
+                    "preconditioning_placement": preconditioning_placement,
                 },
                 native_component=_BUILTIN_COMPONENT,
                 option_preparer=preparer,

@@ -872,8 +872,7 @@ class CompositeFacPoisson {
     // (the cross flux, tangential and small for the Schur step, is carried by the volume stencil).
     apply_laplacian(operator_view, geom_c_, lap_c_, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
                     /*kappa=*/nullptr, has_eps_y_ ? &eps_y_c_ : nullptr,
-                    has_cross_ ? &axy_c_ : nullptr,
-                    has_cross_ ? &ayx_c_ : nullptr);
+                    has_cross_ ? &axy_c_ : nullptr, has_cross_ ? &ayx_c_ : nullptr);
     if (has_reaction_)
       apply_constant_reaction_(lap_c_, operator_view);
     device_fence();
@@ -960,9 +959,7 @@ class CompositeFacPoisson {
           for (int t = 0; t < r; ++t) {
             const int iff = r * I + t;
             const Real eff =
-                he ? eps_harmonic(EYF(iff, r * Jc1 + r - 1, 0),
-                                  EYF(iff, r * Jc1 + r, 0))
-                   : Real(1);
+                he ? eps_harmonic(EYF(iff, r * Jc1 + r - 1, 0), EYF(iff, r * Jc1 + r, 0)) : Real(1);
             fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
           }
           R(I, J, 0) += coarse_c - fine_sum * idy2;
@@ -986,10 +983,10 @@ class CompositeFacPoisson {
   void record_residual(int iteration, Real residual) {
     if (!verbose_)
       return;
-    diagnostics_.record("elliptic.fac.residual", "CompositeFacPoisson", "info",
-                        iteration < 0 ? "initial composite hierarchy residual"
-                                      : "FAC iteration composite hierarchy residual",
-                        iteration, static_cast<double>(residual));
+    (void)diagnostics_.try_record("elliptic.fac.residual", "CompositeFacPoisson", "info",
+                                  iteration < 0 ? "initial composite hierarchy residual"
+                                                : "FAC iteration composite hierarchy residual",
+                                  iteration, static_cast<double>(residual));
   }
 
   Geometry geom_c_, geom_f_;
@@ -1001,8 +998,8 @@ class CompositeFacPoisson {
   DistributionMapping dm_f_;
   GeometricMG mg_;  ///< coarse solver (initial + corrections), homogeneous Dirichlet
   MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, lap_c_, lap_f_, boundary_view_c_;
-  MultiFab eps_c_, eps_f_;  ///< x-normal diagonal coefficient per level
-  MultiFab eps_y_c_, eps_y_f_;  ///< optional y-normal diagonal coefficient per level
+  MultiFab eps_c_, eps_f_;                  ///< x-normal diagonal coefficient per level
+  MultiFab eps_y_c_, eps_y_f_;              ///< optional y-normal diagonal coefficient per level
   MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< cross terms per level (full tensor, Schur B_z!=0)
   std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
   CoverageMask cov_;

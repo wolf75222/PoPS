@@ -42,6 +42,52 @@ inline std::size_t native_interface_table_size(PopsNativeInterfaceIdV1 id) {
 
 class LoadedComponent final {
  public:
+  /// One independently prepared native interface state.
+  ///
+  /// This value never participates in LoadedComponent's compatibility cache: every call to
+  /// prepare_fresh_state() invokes the component's prepare callback and returns one move-only
+  /// owner.  Session-oriented consumers use it to guarantee that concurrently executing native
+  /// operators never share component-owned mutable state.
+  class PreparedState final {
+   public:
+    PreparedState() = default;
+    PreparedState(const PreparedState&) = delete;
+    PreparedState& operator=(const PreparedState&) = delete;
+
+    PreparedState(PreparedState&& other) noexcept
+        : state_(std::exchange(other.state_, nullptr)),
+          destroy_(std::exchange(other.destroy_, nullptr)) {}
+
+    PreparedState& operator=(PreparedState&& other) noexcept {
+      if (this != &other) {
+        reset();
+        state_ = std::exchange(other.state_, nullptr);
+        destroy_ = std::exchange(other.destroy_, nullptr);
+      }
+      return *this;
+    }
+
+    ~PreparedState() { reset(); }
+
+    [[nodiscard]] void* get() const noexcept { return state_; }
+
+   private:
+    friend class LoadedComponent;
+
+    PreparedState(void* state, PopsComponentDestroyFnV1 destroy) noexcept
+        : state_(state), destroy_(destroy) {}
+
+    void reset() noexcept {
+      if (destroy_ != nullptr)
+        destroy_(state_);
+      state_ = nullptr;
+      destroy_ = nullptr;
+    }
+
+    void* state_ = nullptr;
+    PopsComponentDestroyFnV1 destroy_ = nullptr;
+  };
+
   LoadedComponent() = default;
   LoadedComponent(const LoadedComponent&) = delete;
   LoadedComponent& operator=(const LoadedComponent&) = delete;
@@ -179,6 +225,41 @@ class LoadedComponent final {
       throw;
     }
     return state;
+  }
+
+  /// Prepare a fresh, uncached state for one execution session.
+  ///
+  /// The returned owner must be destroyed before this LoadedComponent (and therefore its dynamic
+  /// library) is released. Session objects satisfy that lifetime rule by retaining the shared
+  /// LoadedComponent immediately before their PreparedState member.
+  [[nodiscard]] PreparedState prepare_fresh_state(PopsNativeInterfaceIdV1 id, std::uint32_t version,
+                                                  const PopsExecutionContextV1& execution,
+                                                  std::string parameters_json = {},
+                                                  std::string target_json = {}) const {
+    validate_execution_context(execution);
+    if (parameters_json.empty())
+      parameters_json = prepare_parameters_json_;
+    if (target_json.empty())
+      target_json = prepare_target_json_;
+    const auto& row = interface(id, version);
+    const auto* header = static_cast<const PopsComponentTableHeaderV1*>(row.table);
+    if (header->prepare == nullptr)
+      return {};
+
+    void* state = nullptr;
+    PopsComponentStatusV1 status = unwritten_component_status();
+    const PopsComponentPrepareRequestV1 request{sizeof(PopsComponentPrepareRequestV1),
+                                                parameters_json.c_str(), target_json.c_str(),
+                                                execution};
+    const int code = header->prepare(&request, &state, &status);
+    if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
+        status.action != POPS_COMPONENT_CONTINUE_V1) {
+      if (state != nullptr && header->destroy != nullptr)
+        header->destroy(state);
+      throw std::runtime_error(status.reason == nullptr ? "native component preparation failed"
+                                                        : status.reason);
+    }
+    return PreparedState(state, header->destroy);
   }
 
  private:

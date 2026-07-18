@@ -49,6 +49,7 @@
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <bit>
 #include <chrono>  // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
@@ -59,8 +60,10 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -284,6 +287,13 @@ class GeometricMG {
   MultiFab& rhs() { return lev_[0].rhs; }
   const Geometry& geom() const { return lev_[0].geom; }
   int num_levels() const { return static_cast<int>(lev_.size()); }
+  /// Exact number of persistent hierarchy MultiFab slots owned by this prepared engine. This is a
+  /// storage-shape query, not an allocation-event counter; it remains stable until rematerializing
+  /// the hierarchy.
+  [[nodiscard]] std::size_t persistent_field_count() const noexcept {
+    constexpr std::size_t fields_per_level = 15u;
+    return lev_.size() * fields_per_level;
+  }
   FieldDistribution field_distribution() const noexcept { return distribution_; }
   static constexpr EllipticOperatorIdentity operator_identity() noexcept {
     return {"pops.elliptic.geometric-mg", 1};
@@ -488,6 +498,7 @@ class GeometricMG {
   }
 
   void vcycle() { vcycle_rec(0, bc_); }
+  void vcycle(const ExecutionLane& lane) { vcycle_rec(0, bc_, &lane); }
   // ROMEO-ONLY (deferred): a Kokkos::Profiling::pushRegion("mg:vcycle")/popRegion() pair (with a
   // Kokkos::fence() before popRegion) around this V-cycle would let Nsight attribute the GPU time on
   // ROMEO. It is intentionally NOT added here: it needs a Kokkos include in a header the profiling
@@ -507,27 +518,26 @@ class GeometricMG {
   // another rel_tol factor from an already-converged iterate.
   int solve(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
     require_collective_solve_contract_(rel_tol, max_cycles, abs_tol, "GeometricMG::solve");
-    last_solve_report_ = {};
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
     if (fallible_linear_boundary)
       boundary_failure_.reset();
-    auto finish = [&](int cycles) {
+    auto finish = [&](int cycles, Real relative_residual, SolveStatus status, SolveAction action) {
       if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
         throw std::runtime_error("field boundary evaluation failed at face " +
                                  std::to_string(boundary_failure_.face) + " cell (" +
                                  std::to_string(boundary_failure_.i) + "," +
                                  std::to_string(boundary_failure_.j) + ")");
       require_exact_published_phi_("GeometricMG::solve");
+      publish_last_solve_report_collectively_(cycles, relative_residual, status, action,
+                                              "GeometricMG::solve");
       return cycles;
     };
     auto invalid_evaluation = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      last_solve_report_.iters = cycles;
-      last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
-      last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-      return finish(cycles);
+      return finish(cycles, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+                    SolveAction::kRejectAttempt);
     };
     trace_mark("solve: before initial current_residual");
     last_bottom_seconds_ = 0.0;  // reset the per-solve bottom self-time (accumulated by vcycle_rec)
@@ -545,10 +555,7 @@ class GeometricMG {
     if (r0 <= stop) {
       last_cycles_ = 0;
       last_residual_ = r0;
-      last_solve_report_.iters = 0;
-      last_solve_report_.rel_residual = r0 / report_denom;
-      last_solve_report_.mark_solved();
-      return finish(0);
+      return finish(0, r0 / report_denom, SolveStatus::kSolved, SolveAction::kNone);
     }
     for (int c = 1; c <= max_cycles; ++c) {
       trace_mark("solve: before vcycle");
@@ -560,20 +567,15 @@ class GeometricMG {
       if (r <= stop) {
         last_cycles_ = c;
         last_residual_ = r;
-        last_solve_report_.iters = c;
-        last_solve_report_.rel_residual = r / report_denom;
-        last_solve_report_.mark_solved();
-        return finish(c);
+        return finish(c, r / report_denom, SolveStatus::kSolved, SolveAction::kNone);
       }
     }
     last_cycles_ = max_cycles;
     last_residual_ = current_residual();
     if (!std::isfinite(static_cast<double>(last_residual_)))
       return invalid_evaluation(max_cycles, last_residual_);
-    last_solve_report_.iters = max_cycles;
-    last_solve_report_.rel_residual = last_residual_ / report_denom;
-    last_solve_report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    return finish(max_cycles);
+    return finish(max_cycles, last_residual_ / report_denom, SolveStatus::kIterationLimit,
+                  SolveAction::kRejectAttempt);
   }
 
   // EllipticSolver concept interface: solve() with no argument (default
@@ -588,7 +590,8 @@ class GeometricMG {
       if (!has_field_newton_options_)
         throw std::runtime_error(
             "iterate-dependent field boundary requires an installed nonlinear outer solver");
-      last_solve_report_ = solve_boundary_newton(field_newton_options_);
+      SolveReport nonlinear_report = solve_boundary_newton(field_newton_options_);
+      last_solve_report_ = std::move(nonlinear_report);
       if (!last_solve_report_.solved())
         throw std::runtime_error(std::string("field Newton solve failed: ") +
                                  last_solve_report_.status_name());
@@ -633,28 +636,27 @@ class GeometricMG {
   //      recorded), so phase 2 never fires for them: bit-identical.
   int solve_robust(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
     require_collective_solve_contract_(rel_tol, max_cycles, abs_tol, "GeometricMG::solve_robust");
-    last_solve_report_ = {};
     last_bottom_seconds_ = 0.0;
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
     if (fallible_linear_boundary)
       boundary_failure_.reset();
-    auto finish = [&](int cycles) {
+    auto finish = [&](int cycles, Real relative_residual, SolveStatus status, SolveAction action) {
       if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
         throw std::runtime_error("field boundary evaluation failed at face " +
                                  std::to_string(boundary_failure_.face) + " cell (" +
                                  std::to_string(boundary_failure_.i) + "," +
                                  std::to_string(boundary_failure_.j) + ")");
       require_exact_published_phi_("GeometricMG::solve_robust");
+      publish_last_solve_report_collectively_(cycles, relative_residual, status, action,
+                                              "GeometricMG::solve_robust");
       return cycles;
     };
     auto invalid_evaluation = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      last_solve_report_.iters = cycles;
-      last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
-      last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-      return finish(cycles);
+      return finish(cycles, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+                    SolveAction::kRejectAttempt);
     };
     double initial_norms[2] = {static_cast<double>(forcing_residual_local()),
                                static_cast<double>(current_residual_local())};
@@ -669,18 +671,13 @@ class GeometricMG {
     auto solved = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      last_solve_report_.iters = cycles;
-      last_solve_report_.rel_residual = residual / report_denom;
-      last_solve_report_.mark_solved();
-      return finish(cycles);
+      return finish(cycles, residual / report_denom, SolveStatus::kSolved, SolveAction::kNone);
     };
     auto iteration_limit = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      last_solve_report_.iters = cycles;
-      last_solve_report_.rel_residual = residual / report_denom;
-      last_solve_report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-      return finish(cycles);
+      return finish(cycles, residual / report_denom, SolveStatus::kIterationLimit,
+                    SolveAction::kRejectAttempt);
     };
     if (r0 <= stop)
       return solved(0, r0);
@@ -766,34 +763,152 @@ class GeometricMG {
   /// registry lookup.  Omitting this call preserves the zero-overhead BCRec path.
   void set_boundary_kernel(const CompiledFieldBoundaryKernel& kernel,
                            const FieldBoundaryExecutionContext& context) {
-    kernel.validate();
-    boundary_kernel_ = kernel;
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
-    ensure_replica_validation_storage_(boundary_context_);
+    std::optional<CompiledFieldBoundaryKernel> staged_kernel;
+    FieldBoundaryExecutionContext staged_context{};
+    MultiFab staged_boundary_view;
+    MultiFab staged_direction_view;
+    std::vector<char, comm_allocator<char>> staged_replica_validation;
+    run_collective_materialization_stage_("generated boundary configuration", [&] {
+      kernel.validate();
+      staged_kernel.emplace(kernel);
+      staged_context = context;
+      staged_context.failure = &boundary_failure_;
+      staged_replica_validation = replica_validation_data_;
+      bool needs_replica_storage = is_replicated();
+      if (context.state_distributions != nullptr)
+        for (int index = 0; index < context.state_count; ++index)
+          needs_replica_storage = needs_replica_storage || context.state_distributions[index] ==
+                                                               FieldDistribution::Replicated;
+      if (context.field_distributions != nullptr)
+        for (int index = 0; index < context.field_count; ++index)
+          needs_replica_storage = needs_replica_storage || context.field_distributions[index] ==
+                                                               FieldDistribution::Replicated;
+      if (needs_replica_storage && staged_replica_validation.empty())
+        staged_replica_validation.assign(detail::field_replica_consensus_storage_size(), char{0});
+      staged_boundary_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
+      staged_direction_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
+    });
+    // Commit only for the exact-contract check. Every previous value is retained by move in a
+    // no-throw rollback record; a rank-divergent staged context therefore cannot destroy a valid
+    // prepared configuration on the ranks that happened to accept it locally.
+    CompiledFieldBoundaryKernel previous_kernel = std::move(boundary_kernel_);
+    const FieldBoundaryExecutionContext previous_context = boundary_context_;
+    auto previous_replica_validation = std::move(replica_validation_data_);
+    MultiFab previous_boundary_view = std::move(lev_[0].boundary_view);
+    MultiFab previous_direction_view = std::move(lev_[0].direction_view);
+    std::unique_ptr<BoundaryNewtonCache> previous_cache = std::move(boundary_newton_cache_.value);
+    const bool previous_has_boundary_kernel = has_boundary_kernel_;
+
+    boundary_kernel_ = std::move(*staged_kernel);
+    boundary_context_ = staged_context;
+    replica_validation_data_ = std::move(staged_replica_validation);
+    lev_[0].boundary_view = std::move(staged_boundary_view);
+    lev_[0].direction_view = std::move(staged_direction_view);
     has_boundary_kernel_ = true;
-    lev_[0].boundary_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
-    lev_[0].direction_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
+    try {
+      require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                        "GeometricMG::set_boundary_kernel");
+    } catch (...) {
+      boundary_kernel_ = std::move(previous_kernel);
+      boundary_context_ = previous_context;
+      replica_validation_data_ = std::move(previous_replica_validation);
+      lev_[0].boundary_view = std::move(previous_boundary_view);
+      lev_[0].direction_view = std::move(previous_direction_view);
+      boundary_newton_cache_.value = std::move(previous_cache);
+      has_boundary_kernel_ = previous_has_boundary_kernel;
+      throw;
+    }
+    if (has_field_newton_options_ && boundary_kernel_.observes_iteration &&
+        boundary_kernel_.jvp != nullptr) {
+      try {
+        prepare_boundary_newton_cache_(field_newton_options_);
+      } catch (...) {
+        // The new configuration passed exact consensus and remains retryable, but no stale cache
+        // from the previous kernel may authorize a solve after failed preparation.
+        boundary_newton_cache_.value.reset();
+        throw;
+      }
+    }
   }
 
   void clear_boundary_kernel() {
-    has_boundary_kernel_ = false;
-    boundary_kernel_ = {};
-    boundary_context_ = {};
+    // A prepared cache owns duplicated MPI communicators. Enter one exact world-level gate before
+    // destroying it so MPI_Comm_free is reached by every owner in the same lifecycle order.
+    require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                      "GeometricMG::clear_boundary_kernel");
+    clear_boundary_kernel_local_();
   }
 
   void set_boundary_context(const FieldBoundaryExecutionContext& context) {
     if (!has_boundary_kernel_)
       throw std::runtime_error("GeometricMG boundary context installed without a compiled kernel");
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
-    ensure_replica_validation_storage_(boundary_context_);
+    FieldBoundaryExecutionContext staged_context{};
+    std::vector<char, comm_allocator<char>> staged_replica_validation;
+    run_collective_materialization_stage_("generated boundary context refresh", [&] {
+      staged_context = context;
+      staged_context.failure = &boundary_failure_;
+      staged_replica_validation = replica_validation_data_;
+      bool needs_replica_storage = is_replicated();
+      if (context.state_distributions != nullptr)
+        for (int index = 0; index < context.state_count; ++index)
+          needs_replica_storage = needs_replica_storage || context.state_distributions[index] ==
+                                                               FieldDistribution::Replicated;
+      if (context.field_distributions != nullptr)
+        for (int index = 0; index < context.field_count; ++index)
+          needs_replica_storage = needs_replica_storage || context.field_distributions[index] ==
+                                                               FieldDistribution::Replicated;
+      if (needs_replica_storage && staged_replica_validation.empty())
+        staged_replica_validation.assign(detail::field_replica_consensus_storage_size(), char{0});
+    });
+    const FieldBoundaryExecutionContext previous_context = boundary_context_;
+    auto previous_replica_validation = std::move(replica_validation_data_);
+    boundary_context_ = staged_context;
+    replica_validation_data_ = std::move(staged_replica_validation);
+    try {
+      require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                        "GeometricMG::set_boundary_context");
+    } catch (...) {
+      boundary_context_ = previous_context;
+      replica_validation_data_ = std::move(previous_replica_validation);
+      throw;
+    }
+    if (has_field_newton_options_ && boundary_kernel_.observes_iteration &&
+        boundary_kernel_.jvp != nullptr) {
+      try {
+        prepare_boundary_newton_cache_(field_newton_options_);
+      } catch (...) {
+        boundary_newton_cache_.value.reset();
+        throw;
+      }
+    }
   }
 
   void set_field_newton_options(const FieldNewtonOptions& options) {
-    validate_field_newton_options(options);
+    prepare_boundary_newton(options);
+  }
+
+  /// Materialize every persistent Newton/Krylov resource while configuration is still in its
+  /// collective control phase.  A later solve may refresh values and snapshots, but it never
+  /// allocates the cache, resolves a Krylov provider, or duplicates an MPI communicator.
+  void prepare_boundary_newton(const FieldNewtonOptions& options) {
+    require_collective_newton_options_(options, "GeometricMG::prepare_boundary_newton");
+
     field_newton_options_ = options;
     has_field_newton_options_ = true;
+    require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                      "GeometricMG::prepare_boundary_newton");
+    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
+        boundary_kernel_.jvp == nullptr)
+      return;
+    try {
+      prepare_boundary_newton_cache_(options);
+    } catch (...) {
+      // A failed refresh may have invalidated an existing prepared problem snapshot. Remove its
+      // authorization collectively so solve cannot continue with a stale cache; a later explicit
+      // prepare retries the complete materialization protocol.
+      boundary_newton_cache_.value.reset();
+      throw;
+    }
   }
 
   const SolveReport& last_solve_report() const { return last_solve_report_; }
@@ -807,6 +922,15 @@ class GeometricMG {
   std::size_t boundary_newton_cache_allocation_count() const;
 
   SolveReport solve_boundary_newton(const FieldNewtonOptions& options) {
+    require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                      "GeometricMG::solve_boundary_newton");
+    require_collective_solve_inputs_("GeometricMG::solve_boundary_newton");
+    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
+        boundary_kernel_.jvp == nullptr)
+      return make_solve_report_collectively_(0, Real(0), SolveStatus::kCapabilityFailure,
+                                             SolveAction::kFailRun,
+                                             "GeometricMG::solve_boundary_newton");
+    require_prepared_boundary_newton_(options);
     return solve_boundary_newton_cached(options);
   }
 
@@ -818,6 +942,96 @@ class GeometricMG {
   }
 
  private:
+  void clear_boundary_kernel_local_() {
+    has_boundary_kernel_ = false;
+    boundary_kernel_ = {};
+    boundary_context_ = {};
+    boundary_newton_cache_.value.reset();
+  }
+
+  static void require_collective_newton_options_(const FieldNewtonOptions& options,
+                                                 const char* where) {
+    long validation_failure_local = 0;
+    try {
+      validate_field_newton_options(options);
+    } catch (...) {
+      validation_failure_local = 1;
+    }
+    if (all_reduce_max(validation_failure_local) != 0)
+      throw std::invalid_argument(std::string(where) +
+                                  ": invalid options on at least one communicator rank");
+
+    std::string contract;
+    long contract_failure_local = 0;
+    const auto append = [&](const auto& value) {
+      if (contract_failure_local != 0)
+        return;
+      try {
+        detail::append_exact_contract_value(contract, value);
+      } catch (...) {
+        contract_failure_local = 1;
+      }
+    };
+    append(options.tolerance);
+    append(options.max_iterations);
+    append(options.linear_tolerance);
+    append(options.linear_max_iterations);
+    append(options.restart);
+    append(options.armijo);
+    append(options.minimum_step);
+    if (all_reduce_max(contract_failure_local) != 0)
+      throw std::runtime_error(std::string(where) +
+                               ": option contract failed to materialize on at least one "
+                               "communicator rank");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("geometric-mg-newton-options"), std::string_view(contract)}}))
+      throw std::invalid_argument(std::string(where) +
+                                  ": options differ between communicator ranks");
+  }
+
+  template <class Action>
+  static void run_collective_materialization_stage_(const char* stage, Action&& action) {
+    long failure_local = 0;
+    try {
+      std::forward<Action>(action)();
+    } catch (...) {
+      failure_local = 1;
+    }
+    if (all_reduce_max(failure_local) != 0)
+      throw std::runtime_error(std::string("GeometricMG ") + stage +
+                               " failed on at least one communicator rank");
+  }
+
+  static SolveReport make_solve_report_collectively_(int iterations, Real relative_residual,
+                                                     SolveStatus status, SolveAction action,
+                                                     const char* where) {
+    std::optional<SolveReport> staged;
+    run_collective_materialization_stage_("solve-report materialization", [&] {
+      staged.emplace();
+      staged->iters = iterations;
+      staged->rel_residual = relative_residual;
+      if (status == SolveStatus::kSolved)
+        staged->mark_solved();
+      else
+        staged->mark_failed(status, action);
+    });
+    if (!staged)
+      throw std::logic_error(std::string(where) + ": missing collectively materialized report");
+    static_assert(std::is_nothrow_move_constructible_v<SolveReport>);
+    return std::move(*staged);
+  }
+
+  void publish_last_solve_report_collectively_(int iterations, Real relative_residual,
+                                               SolveStatus status, SolveAction action,
+                                               const char* where) {
+    SolveReport staged =
+        make_solve_report_collectively_(iterations, relative_residual, status, action, where);
+    // std::allocator-backed std::string move assignment is non-throwing. Publish only after the
+    // exact field contract and the report-allocation gate have completed on every rank.
+    static_assert(std::is_nothrow_move_assignable_v<SolveReport>);
+    last_solve_report_ = std::move(staged);
+  }
+
   void require_collective_configuration_(Real rel_tol, int max_cycles, Real abs_tol,
                                          const char* where) const {
     bool invalid = !(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) ||
@@ -850,12 +1064,25 @@ class GeometricMG {
                                   ": invalid controls or generated-boundary context");
 
     std::string contract;
+    long contract_failure_local = 0;
     const auto append = [&](const auto& value) {
-      detail::append_exact_contract_value(contract, value);
+      if (contract_failure_local != 0)
+        return;
+      try {
+        detail::append_exact_contract_value(contract, value);
+      } catch (...) {
+        contract_failure_local = 1;
+      }
     };
     const auto append_text = [&](std::string_view value) {
       append(static_cast<std::uint64_t>(value.size()));
-      contract.append(value.data(), value.size());
+      if (contract_failure_local != 0)
+        return;
+      try {
+        contract.append(value.data(), value.size());
+      } catch (...) {
+        contract_failure_local = 1;
+      }
     };
     append(rel_tol);
     append(max_cycles);
@@ -944,6 +1171,10 @@ class GeometricMG {
       append(field_newton_options_.minimum_step);
     }
 
+    if (all_reduce_max(contract_failure_local) != 0)
+      throw std::runtime_error(std::string(where) +
+                               ": collective contract materialization failed on at least one "
+                               "communicator rank");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("geometric-mg-collective-contract"), std::string_view(contract)}}))
       throw std::invalid_argument(std::string(where) +
@@ -951,19 +1182,66 @@ class GeometricMG {
   }
 
   void require_collective_solve_inputs_(const char* where) {
+    // Materialize every dynamic diagnostic label before the first field collective. A rank-local
+    // allocation failure must be published while all ranks are still at the same control gate;
+    // building `level N`/`state N` strings between field collectives can otherwise strand peers.
+    std::vector<std::string> locations;
+    long location_failure_local = 0;
+    try {
+      const auto add_location = [&](std::string role) {
+        locations.emplace_back(std::string(where) + ": " + std::move(role));
+      };
+      add_location("finest phi");
+      add_location("finest rhs");
+      for (std::size_t level_index = 0; level_index < lev_.size(); ++level_index) {
+        const std::string prefix = "level " + std::to_string(level_index) + " ";
+        if (active_)
+          add_location(prefix + "mask");
+        if (cut_cell_)
+          add_location(prefix + "cut-cell coefficients");
+        if (has_eps_)
+          add_location(prefix + "epsilon-x");
+        if (has_eps_y_)
+          add_location(prefix + "epsilon-y");
+        if (has_kappa_)
+          add_location(prefix + "reaction coefficient");
+        if (has_cross_) {
+          add_location(prefix + "a-xy");
+          add_location(prefix + "a-yx");
+        }
+      }
+      if (has_boundary_kernel_) {
+        for (int index = 0; index < boundary_context_.state_count; ++index)
+          add_location("state " + std::to_string(index));
+        for (int index = 0; index < boundary_context_.field_count; ++index)
+          add_location("field " + std::to_string(index));
+      }
+    } catch (...) {
+      location_failure_local = 1;
+    }
+    if (all_reduce_max(location_failure_local) != 0)
+      throw std::runtime_error(std::string(where) +
+                               ": solve-input labels failed to materialize on at least one "
+                               "communicator rank");
+    std::size_t location_index = 0;
+    bool label_plan_invalid = false;
+    const auto next_location = [&]() noexcept {
+      if (location_index >= locations.size()) {
+        label_plan_invalid = true;
+        return "GeometricMG invalid solve-input label plan";
+      }
+      return locations[location_index++].c_str();
+    };
     const auto require_field = [&](const MultiFab& field, FieldDistribution field_distribution,
-                                   std::string_view role) {
-      const std::string location = std::string(where) + ": " + std::string(role);
-      detail::require_collective_field_distribution_layout(field, field_distribution,
-                                                           location.c_str());
+                                   const char* location) {
+      detail::require_collective_field_distribution_layout(field, field_distribution, location);
       if (field_distribution == FieldDistribution::Replicated)
         detail::require_exact_replicated_field_values_prevalidated(
-            field, replica_validation_data_.data(), replica_validation_data_.size(),
-            location.c_str());
+            field, replica_validation_data_.data(), replica_validation_data_.size(), location);
     };
     const auto require_boundary_dependency =
-        [&](const MultiFab& field, FieldDistribution field_distribution, std::string_view role) {
-          require_field(field, field_distribution, role);
+        [&](const MultiFab& field, FieldDistribution field_distribution, const char* location) {
+          require_field(field, field_distribution, location);
           bool materializes_local_solver_patches =
               field.box_array().boxes() == lev_[0].phi.box_array().boxes();
           for (int local = 0; materializes_local_solver_patches && local < lev_[0].phi.local_size();
@@ -974,42 +1252,40 @@ class GeometricMG {
                 dependency_local >= 0 && field.box(dependency_local) == lev_[0].phi.box(local);
           }
           if (all_reduce_max(materializes_local_solver_patches ? 0L : 1L) != 0)
-            throw std::invalid_argument(
-                std::string(where) + ": GeometricMG generated-boundary dependency " +
-                std::string(role) +
-                " does not materialize every local patch required by the solved field");
+            throw std::invalid_argument(std::string(location) +
+                                        " does not materialize every local patch required by "
+                                        "the solved field");
         };
 
-    require_field(lev_[0].phi, distribution_, "finest phi");
-    require_field(lev_[0].rhs, distribution_, "finest rhs");
+    require_field(lev_[0].phi, distribution_, next_location());
+    require_field(lev_[0].rhs, distribution_, next_location());
     for (std::size_t level_index = 0; level_index < lev_.size(); ++level_index) {
       const MGLevel& level = lev_[level_index];
-      const std::string prefix = "level " + std::to_string(level_index) + " ";
       if (active_)
-        require_field(level.mask, distribution_, prefix + "mask");
+        require_field(level.mask, distribution_, next_location());
       if (cut_cell_)
-        require_field(level.coef, distribution_, prefix + "cut-cell coefficients");
+        require_field(level.coef, distribution_, next_location());
       if (has_eps_)
-        require_field(level.eps, distribution_, prefix + "epsilon-x");
+        require_field(level.eps, distribution_, next_location());
       if (has_eps_y_)
-        require_field(level.eps_y, distribution_, prefix + "epsilon-y");
+        require_field(level.eps_y, distribution_, next_location());
       if (has_kappa_)
-        require_field(level.kappa, distribution_, prefix + "reaction coefficient");
+        require_field(level.kappa, distribution_, next_location());
       if (has_cross_) {
-        require_field(level.a_xy, distribution_, prefix + "a-xy");
-        require_field(level.a_yx, distribution_, prefix + "a-yx");
+        require_field(level.a_xy, distribution_, next_location());
+        require_field(level.a_yx, distribution_, next_location());
       }
     }
     if (has_boundary_kernel_) {
       for (int index = 0; index < boundary_context_.state_count; ++index)
         require_boundary_dependency(*boundary_context_.states[index],
-                                    boundary_context_.state_distributions[index],
-                                    "state " + std::to_string(index));
+                                    boundary_context_.state_distributions[index], next_location());
       for (int index = 0; index < boundary_context_.field_count; ++index)
         require_boundary_dependency(*boundary_context_.fields[index],
-                                    boundary_context_.field_distributions[index],
-                                    "field " + std::to_string(index));
+                                    boundary_context_.field_distributions[index], next_location());
     }
+    if (label_plan_invalid || location_index != locations.size())
+      throw std::logic_error("GeometricMG solve-input label plan was not consumed exactly");
   }
 
   void require_collective_solve_contract_(Real rel_tol, int max_cycles, Real abs_tol,
@@ -1023,20 +1299,6 @@ class GeometricMG {
       return;
     detail::require_exact_replicated_field_values_prevalidated(
         lev_[0].phi, replica_validation_data_.data(), replica_validation_data_.size(), where);
-  }
-
-  void ensure_replica_validation_storage_(const FieldBoundaryExecutionContext& context) {
-    bool needs_storage = is_replicated();
-    if (context.state_distributions != nullptr)
-      for (int index = 0; index < context.state_count; ++index)
-        needs_storage =
-            needs_storage || context.state_distributions[index] == FieldDistribution::Replicated;
-    if (context.field_distributions != nullptr)
-      for (int index = 0; index < context.field_count; ++index)
-        needs_storage =
-            needs_storage || context.field_distributions[index] == FieldDistribution::Replicated;
-    if (needs_storage && replica_validation_data_.empty())
-      replica_validation_data_.assign(detail::field_replica_consensus_storage_size(), char{0});
   }
 
   Real evaluate_residual_local(MultiFab& iterate) {
@@ -1099,38 +1361,351 @@ class GeometricMG {
       return topology;
     }
 
+    static std::uint32_t operator_shape_bits(const GeometricMG& owner) noexcept {
+      return (owner.active_ ? UINT32_C(1) : UINT32_C(0)) |
+             (owner.cut_cell_ ? UINT32_C(1) << 1u : UINT32_C(0)) |
+             (owner.has_eps_ ? UINT32_C(1) << 2u : UINT32_C(0)) |
+             (owner.has_eps_y_ ? UINT32_C(1) << 3u : UINT32_C(0)) |
+             (owner.has_kappa_ ? UINT32_C(1) << 4u : UINT32_C(0)) |
+             (owner.has_cross_ ? UINT32_C(1) << 5u : UINT32_C(0));
+    }
+
+    static std::unique_ptr<GeometricMG> clone_workspace_engine(BoundaryNewtonCache& source) {
+      auto engine = std::make_unique<GeometricMG>(*source.owner_);
+      engine->boundary_newton_cache_.value.reset();
+      engine->boundary_newton_cache_.generation = 0;
+      return engine;
+    }
+
+    static void detach_workspace_communication_caches(GeometricMG& engine) {
+      // MultiFab value copies intentionally share communication caches. A prepared execution
+      // session owns its native scratch and may run concurrently with another session, so none of
+      // the reusable communication buffers may remain shared with the source solver.
+      for (MGLevel& level : engine.lev_) {
+        level.phi.detach_communication_caches();
+        level.rhs.detach_communication_caches();
+        level.res.detach_communication_caches();
+        level.mask.detach_communication_caches();
+        level.coef.detach_communication_caches();
+        level.eps.detach_communication_caches();
+        level.kappa.detach_communication_caches();
+        level.eps_y.detach_communication_caches();
+        level.a_xy.detach_communication_caches();
+        level.a_yx.detach_communication_caches();
+        level.corr.detach_communication_caches();
+        level.cfine.detach_communication_caches();
+        level.boundary_view.detach_communication_caches();
+        level.direction_view.detach_communication_caches();
+        level.zero_probe.detach_communication_caches();
+      }
+    }
+
+    struct WorkspacePreconditionerState {
+      WorkspacePreconditionerState(BoundaryNewtonCache& source, const ExecutionLane& lane)
+          : source_(&source), engine_(clone_workspace_engine(source)), lane_(&lane) {
+        // Construction is the materialization boundary: an allocation failure is reported before
+        // any rank can enter prepare/apply. The V-cycle is the homogeneous preconditioner and must
+        // never execute the nonlinear generated boundary closure.
+        // The copied engine deliberately has no derived cache. Session construction is already
+        // inside the owning prepared problem's collective factory gate, so use the non-public
+        // local reset rather than nesting the public WORLD lifecycle protocol.
+        engine_->clear_boundary_kernel_local_();
+        detach_workspace_communication_caches(*engine_);
+      }
+
+      void prepare() {
+        require_materialized();
+        // The session storage is persistent, but coefficient values are not assumed immutable
+        // across prepared logical points. Refresh them into the already allocated hierarchy before
+        // each bind; no provider, MultiFab, or communication cache is created here.
+        GeometricMG& source_engine = *source_->owner_;
+        if (engine_->lev_.size() != source_engine.lev_.size())
+          throw std::logic_error(
+              "boundary Newton preconditioner hierarchy changed after cache preparation");
+        for (std::size_t level = 0; level < engine_->lev_.size(); ++level) {
+          MGLevel& target = engine_->lev_[level];
+          const MGLevel& source = source_engine.lev_[level];
+          if (source_engine.active_)
+            lincomb(target.mask, Real(1), source.mask, Real(0), source.mask);
+          if (source_engine.cut_cell_)
+            lincomb(target.coef, Real(1), source.coef, Real(0), source.coef);
+          if (source_engine.has_eps_)
+            lincomb(target.eps, Real(1), source.eps, Real(0), source.eps);
+          if (source_engine.has_kappa_)
+            lincomb(target.kappa, Real(1), source.kappa, Real(0), source.kappa);
+          if (source_engine.has_eps_y_)
+            lincomb(target.eps_y, Real(1), source.eps_y, Real(0), source.eps_y);
+          if (source_engine.has_cross_) {
+            lincomb(target.a_xy, Real(1), source.a_xy, Real(0), source.a_xy);
+            lincomb(target.a_yx, Real(1), source.a_yx, Real(0), source.a_yx);
+          }
+        }
+      }
+
+      void apply(MultiFab& out, const MultiFab& in) {
+        require_materialized();
+        MGLevel& level = engine_->lev_[0];
+        PureFieldAlgebra::zero_valid(level.phi);
+        lincomb(level.rhs, Real(1), in, Real(0), in);
+        engine_->vcycle(*lane_);
+        lincomb(out, Real(1), level.phi, Real(0), level.phi);
+      }
+
+      [[nodiscard]] std::size_t allocation_count() const noexcept {
+        return engine_ ? engine_->persistent_field_count() : 0u;
+      }
+
+     private:
+      void require_materialized() const {
+        if (!engine_)
+          throw std::logic_error(
+              "boundary Newton preconditioner session has no materialized engine");
+      }
+
+      BoundaryNewtonCache* source_ = nullptr;
+      std::unique_ptr<GeometricMG> engine_{};
+      const ExecutionLane* lane_ = nullptr;
+    };
+
+    struct WorkspaceOperatorState {
+      WorkspaceOperatorState(BoundaryNewtonCache& source, const ExecutionLane& lane)
+          : source_(&source),
+            geometry_(source.owner_->lev_[0].geom),
+            boundary_(source.owner_->bc_),
+            boundary_kernel_(source.owner_->boundary_kernel_),
+            boundary_context_(source.owner_->boundary_context_),
+            accepted_(source.accepted_),
+            direction_view_(source.owner_->lev_[0].direction_view),
+            coef_(source.owner_->lev_[0].coef),
+            eps_(source.owner_->lev_[0].eps),
+            kappa_(source.owner_->lev_[0].kappa),
+            eps_y_(source.owner_->lev_[0].eps_y),
+            a_xy_(source.owner_->lev_[0].a_xy),
+            a_yx_(source.owner_->lev_[0].a_yx),
+            has_coef_(source.owner_->cut_cell_),
+            has_eps_(source.owner_->has_eps_),
+            has_kappa_(source.owner_->has_kappa_),
+            has_eps_y_(source.owner_->has_eps_y_),
+            has_cross_(source.owner_->has_cross_),
+            lane_(&lane) {
+        // Freeze only the level-0 data the JVP reads; cloning the full multigrid hierarchy here
+        // would multiply every Krylov workspace's memory for fields the operator never touches.
+        // The failure sink and direction view are session-private mutable state.
+        if (!source.owner_->has_boundary_kernel_ || boundary_kernel_.jvp == nullptr)
+          throw std::logic_error(
+              "boundary Newton operator session requires a prepared boundary JVP");
+        boundary_context_.failure = &boundary_failure_;
+        accepted_.detach_communication_caches();
+        direction_view_.detach_communication_caches();
+        coef_.detach_communication_caches();
+        eps_.detach_communication_caches();
+        kappa_.detach_communication_caches();
+        eps_y_.detach_communication_caches();
+        a_xy_.detach_communication_caches();
+        a_yx_.detach_communication_caches();
+      }
+
+      void prepare() {
+        // `accepted_` is the current Newton point, not a construction-time constant. The same
+        // prepared session is deliberately reused across Newton iterations and time stages, so
+        // refresh every mutable numerical input into its private, already allocated storage.
+        GeometricMG& owner = *source_->owner_;
+        geometry_ = owner.lev_[0].geom;
+        boundary_ = owner.bc_;
+        boundary_context_ = owner.boundary_context_;
+        boundary_context_.failure = &boundary_failure_;
+        lincomb(accepted_, Real(1), source_->accepted_, Real(0), source_->accepted_);
+        if (owner.cut_cell_)
+          lincomb(coef_, Real(1), owner.lev_[0].coef, Real(0), owner.lev_[0].coef);
+        if (owner.has_eps_)
+          lincomb(eps_, Real(1), owner.lev_[0].eps, Real(0), owner.lev_[0].eps);
+        if (owner.has_kappa_)
+          lincomb(kappa_, Real(1), owner.lev_[0].kappa, Real(0), owner.lev_[0].kappa);
+        if (owner.has_eps_y_)
+          lincomb(eps_y_, Real(1), owner.lev_[0].eps_y, Real(0), owner.lev_[0].eps_y);
+        if (owner.has_cross_) {
+          lincomb(a_xy_, Real(1), owner.lev_[0].a_xy, Real(0), owner.lev_[0].a_xy);
+          lincomb(a_yx_, Real(1), owner.lev_[0].a_yx, Real(0), owner.lev_[0].a_yx);
+        }
+      }
+
+      void apply(MultiFab& out, const MultiFab& in) {
+        boundary_failure_.reset();
+        copy_field_valid(in, direction_view_);
+        fill_ghosts(direction_view_, geometry_.domain, homogeneous_field_bc(boundary_), *lane_);
+        for (int face = 0; face < 4; ++face)
+          boundary_kernel_.prepare_jvp_view(face, accepted_, in, direction_view_, geometry_,
+                                            boundary_context_);
+        apply_laplacian(direction_view_, geometry_, out, has_coef_ ? &coef_ : nullptr,
+                        has_eps_ ? &eps_ : nullptr, has_kappa_ ? &kappa_ : nullptr,
+                        has_eps_y_ ? &eps_y_ : nullptr, has_cross_ ? &a_xy_ : nullptr,
+                        has_cross_ ? &a_yx_ : nullptr);
+        for (int face = 0; face < 4; ++face)
+          boundary_kernel_.apply_jvp(face, accepted_, in, out, geometry_, boundary_context_);
+        if (synchronize_failure())
+          PureFieldAlgebra::fill_valid(out, std::numeric_limits<Real>::quiet_NaN());
+      }
+
+      [[nodiscard]] std::size_t allocation_count() const noexcept { return 8u; }
+
+     private:
+      bool synchronize_failure() {
+        const bool local_failed = boundary_failure_.failed();
+        const long failure_count = all_reduce_sum(local_failed ? 1L : 0L, *lane_);
+        if (failure_count == 0) {
+          boundary_failure_.reset();
+          return false;
+        }
+
+        const int rank = lane_->rank();
+        const int owner = static_cast<int>(
+            all_reduce_min(static_cast<double>(local_failed ? rank : lane_->size()), *lane_));
+        const bool publish = local_failed && rank == owner;
+        boundary_failure_.code = static_cast<int>(
+            all_reduce_sum(publish ? static_cast<long>(boundary_failure_.code) : 0L, *lane_));
+        boundary_failure_.face = static_cast<int>(
+            all_reduce_sum(publish ? static_cast<long>(boundary_failure_.face) : 0L, *lane_));
+        boundary_failure_.i = static_cast<int>(
+            all_reduce_sum(publish ? static_cast<long>(boundary_failure_.i) : 0L, *lane_));
+        boundary_failure_.j = static_cast<int>(
+            all_reduce_sum(publish ? static_cast<long>(boundary_failure_.j) : 0L, *lane_));
+        boundary_failure_.value = static_cast<Real>(
+            all_reduce_sum(publish ? static_cast<double>(boundary_failure_.value) : 0.0, *lane_));
+        return true;
+      }
+
+      BoundaryNewtonCache* source_ = nullptr;
+      Geometry geometry_;
+      BCRec boundary_;
+      CompiledFieldBoundaryKernel boundary_kernel_{};
+      FieldBoundaryFailure boundary_failure_{};
+      FieldBoundaryExecutionContext boundary_context_{};
+      MultiFab accepted_;
+      MultiFab direction_view_;
+      MultiFab coef_;
+      MultiFab eps_;
+      MultiFab kappa_;
+      MultiFab eps_y_;
+      MultiFab a_xy_;
+      MultiFab a_yx_;
+      bool has_coef_ = false;
+      bool has_eps_ = false;
+      bool has_kappa_ = false;
+      bool has_eps_y_ = false;
+      bool has_cross_ = false;
+      const ExecutionLane* lane_ = nullptr;
+    };
+
     BoundaryNewtonCache(GeometricMG& owner, int restart)
         : owner_(&owner),
           vector_distribution_(PreparedVectorDistribution(owner.distribution_)),
-          phi_layout_(detail::layout_fingerprint(owner.lev_[0].phi, vector_distribution_)),
-          rhs_layout_(detail::layout_fingerprint(owner.lev_[0].rhs, vector_distribution_)),
-          restart_(restart),
-          published_snapshot_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
-          accepted_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
-          trial_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
-          residual_(allocate_like(owner.lev_[0].rhs, /*ghosts=*/0)),
-          trial_residual_(allocate_like(owner.lev_[0].rhs, /*ghosts=*/0)),
-          delta_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
-          rhs_snapshot_(allocate_like(owner.lev_[0].rhs, owner.lev_[0].rhs.n_grow())),
-          footprint_{delta_.ncomp(), delta_.n_grow(), true},
-          linear_topology_(make_linear_topology(owner, delta_, vector_distribution_)),
-          linear_problem_(
-              delta_, [this](MultiFab& out, const MultiFab& in) { apply_jacobian(out, in); },
-              PreparedLinearPreconditioner(
-                  delta_,
-                  PreparedLinearPreconditionerProvider::trusted_extension(
-                      {"pops.elliptic.geometric-mg.boundary-newton-preconditioner", 1},
-                      std::string(owner.prepared_operator_contract().exact_fingerprint()),
-                      [this]() { prepare_linear_preconditioner(); },
-                      [this](MultiFab& out, const MultiFab& in) {
-                        apply_preconditioner(out, in);
-                      }),
-                  vector_distribution_),
-              LinearOperatorProperties::general(), footprint_,
-              PreparedNullspacePolicy::nonsingular(), [this]() { return probe_linear_snapshot(); },
-              {}, vector_distribution_),
-          linear_workspace_(delta_, gmres_krylov_method(restart), footprint_,
-                            vector_distribution_) {}
+          operator_shape_bits_(operator_shape_bits(owner)),
+          restart_(restart) {}
+
+    /// Build in a canonical collective order. No constructor that duplicates a communicator is
+    /// entered until every rank has successfully materialized all of its rank-local arguments.
+    /// Conversely, once a duplicated lane exists, its owning constructor provides the next common
+    /// failure gate. This prevents a rank-local bad_alloc from stranding peers in MPI_Comm_dup.
+    static std::unique_ptr<BoundaryNewtonCache> materialize(GeometricMG& owner, int restart) {
+      std::unique_ptr<BoundaryNewtonCache> candidate;
+      GeometricMG::run_collective_materialization_stage_("boundary Newton cache shell", [&] {
+        candidate = std::make_unique<BoundaryNewtonCache>(owner, restart);
+      });
+      BoundaryNewtonCache& cache = *candidate;
+
+      GeometricMG::run_collective_materialization_stage_(
+          "boundary Newton layout fingerprints", [&] {
+            cache.phi_layout_ =
+                detail::layout_fingerprint(owner.lev_[0].phi, cache.vector_distribution_);
+            cache.rhs_layout_ =
+                detail::layout_fingerprint(owner.lev_[0].rhs, cache.vector_distribution_);
+          });
+      const auto allocate_field = [&](const char* stage, MultiFab& target,
+                                      const MultiFab& prototype, int ghosts) {
+        GeometricMG::run_collective_materialization_stage_(
+            stage, [&] { target = allocate_like(prototype, ghosts); });
+      };
+      allocate_field("boundary Newton published snapshot", cache.published_snapshot_,
+                     owner.lev_[0].phi, owner.lev_[0].phi.n_grow());
+      allocate_field("boundary Newton accepted iterate", cache.accepted_, owner.lev_[0].phi,
+                     owner.lev_[0].phi.n_grow());
+      allocate_field("boundary Newton trial iterate", cache.trial_, owner.lev_[0].phi,
+                     owner.lev_[0].phi.n_grow());
+      allocate_field("boundary Newton residual", cache.residual_, owner.lev_[0].rhs, 0);
+      allocate_field("boundary Newton trial residual", cache.trial_residual_, owner.lev_[0].rhs, 0);
+      allocate_field("boundary Newton correction", cache.delta_, owner.lev_[0].phi,
+                     owner.lev_[0].phi.n_grow());
+      allocate_field("boundary Newton rhs snapshot", cache.rhs_snapshot_, owner.lev_[0].rhs,
+                     owner.lev_[0].rhs.n_grow());
+
+      GeometricMG::run_collective_materialization_stage_("boundary Newton topology", [&] {
+        cache.footprint_ = {cache.delta_.ncomp(), cache.delta_.n_grow(), true};
+        cache.linear_topology_ =
+            make_linear_topology(owner, cache.delta_, cache.vector_distribution_);
+      });
+
+      std::string operator_contract;
+      std::string preconditioner_contract;
+      std::optional<PreparedAffineOperatorProvider> operator_provider;
+      std::optional<PreparedLinearPreconditioner> preconditioner;
+      std::optional<PreparedNullspacePolicy> nullspace_policy;
+      std::optional<OperatorSnapshotProbe> snapshot_probe;
+      std::optional<PreparedVectorDistribution> problem_distribution;
+      std::string problem_lane_identity;
+      GeometricMG::run_collective_materialization_stage_(
+          "boundary Newton prepared-problem arguments", [&] {
+            operator_contract = std::string(owner.prepared_operator_contract().exact_fingerprint());
+            preconditioner_contract = operator_contract;
+            BoundaryNewtonCache* stable_cache = &cache;
+            operator_provider.emplace(PreparedAffineOperatorProvider::trusted_extension(
+                {"pops.elliptic.geometric-mg.boundary-newton-operator", 1},
+                std::move(operator_contract), [stable_cache](const ExecutionLane& lane) {
+                  auto state = std::make_shared<WorkspaceOperatorState>(*stable_cache, lane);
+                  return PreparedAffineOperatorSessionCallbacks{
+                      [state]() { state->prepare(); },
+                      [state](MultiFab& out, const MultiFab& in) { state->apply(out, in); },
+                      [state] { return state->allocation_count(); }};
+                }));
+            auto preconditioner_provider = PreparedLinearPreconditionerProvider::trusted_extension(
+                {"pops.elliptic.geometric-mg.boundary-newton-preconditioner", 1},
+                std::move(preconditioner_contract), [stable_cache](const ExecutionLane& lane) {
+                  auto state = std::make_shared<WorkspacePreconditionerState>(*stable_cache, lane);
+                  return PreparedLinearPreconditionerSessionCallbacks{
+                      [state]() { state->prepare(); },
+                      [state](MultiFab& out, const MultiFab& in) { state->apply(out, in); },
+                      [state] { return state->allocation_count(); }};
+                });
+            preconditioner.emplace(cache.delta_, std::move(preconditioner_provider),
+                                   cache.vector_distribution_);
+            nullspace_policy.emplace(PreparedNullspacePolicy::nonsingular());
+            snapshot_probe.emplace(
+                [stable_cache]() { return stable_cache->probe_linear_snapshot(); });
+            problem_distribution.emplace(cache.vector_distribution_);
+            problem_lane_identity = "pops.geometric-mg.boundary-newton.problem";
+          });
+
+      // std::optional owns the object storage, so no rank-local outer allocation can occur before
+      // PreparedAffineLinearProblem enters its collective lane-duplication constructor.
+      cache.linear_problem_.emplace(
+          ExecutionCommunicator::world(), std::move(problem_lane_identity), cache.delta_,
+          std::move(*operator_provider), std::move(*preconditioner),
+          LinearOperatorProperties::general(), cache.footprint_, std::move(*nullspace_policy),
+          std::move(*snapshot_probe), PreparedResourceFn{}, std::move(*problem_distribution));
+
+      std::optional<PreparedKrylovMethod> workspace_method;
+      std::optional<PreparedVectorDistribution> workspace_distribution;
+      std::string workspace_lane_identity;
+      GeometricMG::run_collective_materialization_stage_("boundary Newton GMRES arguments", [&] {
+        cache.linear_method_ = gmres_krylov_method(restart);
+        workspace_method.emplace(cache.linear_method_);
+        workspace_distribution.emplace(cache.vector_distribution_);
+        workspace_lane_identity = "pops.geometric-mg.boundary-newton.workspace";
+      });
+      cache.linear_workspace_.emplace(
+          ExecutionCommunicator::world(), std::move(workspace_lane_identity), cache.delta_,
+          std::move(*workspace_method), cache.footprint_, std::move(*workspace_distribution));
+      return candidate;
+    }
 
     BoundaryNewtonCache(const BoundaryNewtonCache&) = delete;
     BoundaryNewtonCache& operator=(const BoundaryNewtonCache&) = delete;
@@ -1138,7 +1713,7 @@ class GeometricMG {
     BoundaryNewtonCache& operator=(BoundaryNewtonCache&&) = delete;
 
     bool compatible(const MultiFab& phi, const MultiFab& rhs, int restart) const {
-      return restart_ == restart &&
+      return restart_ == restart && operator_shape_bits_ == operator_shape_bits(*owner_) &&
              phi_layout_ == detail::layout_fingerprint(phi, vector_distribution_) &&
              rhs_layout_ == detail::layout_fingerprint(rhs, vector_distribution_);
     }
@@ -1147,7 +1722,27 @@ class GeometricMG {
       // Seven solve scratches plus the two fields owned by each prepared wrapper. The remaining
       // count is the method/restart-dependent persistent GMRES workspace.
       constexpr std::size_t fixed_fields = 7u + 2u + 2u;
-      return fixed_fields + linear_workspace_.allocation_count();
+      return fixed_fields + (linear_workspace_ ? linear_workspace_->allocation_count() : 0u);
+    }
+
+    [[nodiscard]] int restart() const noexcept { return restart_; }
+
+    PreparedAffineLinearProblem& linear_problem() {
+      if (!linear_problem_)
+        throw std::logic_error("boundary Newton cache has no prepared affine problem");
+      return *linear_problem_;
+    }
+
+    KrylovWorkspace& linear_workspace() {
+      if (!linear_workspace_)
+        throw std::logic_error("boundary Newton cache has no prepared Krylov workspace");
+      return *linear_workspace_;
+    }
+
+    const PreparedKrylovMethod& linear_method() const {
+      if (!linear_method_)
+        throw std::logic_error("boundary Newton cache has no prepared Krylov method");
+      return linear_method_;
     }
 
     void begin_solve() {
@@ -1180,47 +1775,6 @@ class GeometricMG {
       if (owner.boundary_failure_.synchronize_across_ranks())
         return std::numeric_limits<Real>::quiet_NaN();
       return all_reduce_max(norm_inf(output));
-    }
-
-    void apply_jacobian(MultiFab& out, const MultiFab& in) {
-      owner_->boundary_failure_.reset();
-      owner_->apply_jvp(accepted_, in, out);
-      if (owner_->boundary_failure_.synchronize_across_ranks())
-        PureFieldAlgebra::fill_valid(out, std::numeric_limits<Real>::quiet_NaN());
-    }
-
-    void apply_preconditioner(MultiFab& out, const MultiFab& in) {
-      auto& owner = *owner_;
-      auto& L = owner.lev_[0];
-      struct RestorePreconditionerState {
-        bool& boundary_enabled;
-        bool saved_boundary_enabled;
-        MultiFab& phi;
-        MultiFab& rhs;
-        const MultiFab& saved_phi;
-        const MultiFab& saved_rhs;
-        ~RestorePreconditionerState() {
-          lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
-          lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
-          boundary_enabled = saved_boundary_enabled;
-        }
-      } restore{owner.has_boundary_kernel_,
-                owner.has_boundary_kernel_,
-                L.phi,
-                L.rhs,
-                accepted_,
-                rhs_snapshot_};
-      owner.has_boundary_kernel_ = false;
-      PureFieldAlgebra::zero_valid(L.phi);
-      lincomb(L.rhs, Real(1), in, Real(0), in);
-      owner.vcycle();
-      lincomb(out, Real(1), L.phi, Real(0), L.phi);
-    }
-
-    void prepare_linear_preconditioner() {
-      PureFieldAlgebra::zero_valid(delta_);
-      apply_preconditioner(delta_, delta_);
-      PureFieldAlgebra::zero_valid(delta_);
     }
 
     OperatorEvaluationSnapshot probe_linear_snapshot() const {
@@ -1259,6 +1813,7 @@ class GeometricMG {
     PreparedVectorDistribution vector_distribution_;
     OperatorFingerprint phi_layout_{};
     OperatorFingerprint rhs_layout_{};
+    std::uint32_t operator_shape_bits_ = 0;
     int restart_ = 0;
     std::uint64_t linear_revision_ = 0;
     MultiFab published_snapshot_;
@@ -1270,12 +1825,16 @@ class GeometricMG {
     MultiFab rhs_snapshot_;
     KrylovFootprint footprint_{};
     OperatorFingerprint linear_topology_{};
-    PreparedAffineLinearProblem linear_problem_;
-    KrylovWorkspace linear_workspace_;
+    std::optional<PreparedAffineLinearProblem> linear_problem_;
+    std::optional<KrylovWorkspace> linear_workspace_;
+    PreparedKrylovMethod linear_method_{};
   };
 
   /// Prepared callbacks must never retain a previous object's address. Copying or moving this slot
-  /// therefore drops only the derived cache; the destination rebuilds it on first use.
+  /// therefore drops only the derived cache; the destination rebuilds it during explicit
+  /// preparation. Once value is non-null, destruction/reset owns MPI_Comm_free and is consequently
+  /// a collective lifecycle operation: all ranks that materialized the parent GeometricMG must
+  /// copy, move, assign, clear, or destroy it in the same canonical order.
   struct BoundaryNewtonCacheSlot {
     BoundaryNewtonCacheSlot() = default;
     BoundaryNewtonCacheSlot(const BoundaryNewtonCacheSlot&) noexcept {}
@@ -1302,74 +1861,145 @@ class GeometricMG {
     std::uint64_t generation = 0;
   };
 
-  BoundaryNewtonCache& ensure_boundary_newton_cache(int restart) {
+  void prime_boundary_newton_cache_(BoundaryNewtonCache& cache) {
+    OperatorEvaluationSnapshot snapshot{};
+    run_collective_materialization_stage_("boundary Newton value snapshot", [&] {
+      cache.begin_solve();
+      cache.advance_linear_revision();
+      snapshot = cache.probe_linear_snapshot();
+    });
+    cache.linear_problem().prepare(snapshot);
+    cache.linear_workspace().bind(cache.linear_problem());
+  }
+
+  void prepare_boundary_newton_cache_(const FieldNewtonOptions& options) {
+    require_collective_solve_inputs_("GeometricMG::prepare_boundary_newton");
     auto& slot = boundary_newton_cache_;
-    auto& L = lev_[0];
-    if (!slot.value || !slot.value->compatible(L.phi, L.rhs, restart)) {
-      auto replacement = std::make_unique<BoundaryNewtonCache>(*this, restart);
-      if (slot.generation == std::numeric_limits<std::uint64_t>::max())
-        throw std::overflow_error("GeometricMG boundary Newton cache generation overflow");
-      slot.value = std::move(replacement);
-      ++slot.generation;
+    auto& level = lev_[0];
+
+    bool has_cache = static_cast<bool>(slot.value);
+    if (all_reduce_min(has_cache ? 1L : 0L) != all_reduce_max(has_cache ? 1L : 0L))
+      throw std::logic_error(
+          "GeometricMG boundary Newton cache presence differs between communicator ranks");
+
+    bool compatible = false;
+    long compatibility_failure_local = 0;
+    if (has_cache) {
+      try {
+        compatible = slot.value->compatible(level.phi, level.rhs, options.restart);
+      } catch (...) {
+        compatibility_failure_local = 1;
+      }
     }
-    return *slot.value;
+    if (all_reduce_max(compatibility_failure_local) != 0)
+      throw std::runtime_error(
+          "GeometricMG boundary Newton cache compatibility failed on at least one communicator "
+          "rank");
+    if (all_reduce_min(compatible ? 1L : 0L) != all_reduce_max(compatible ? 1L : 0L))
+      throw std::logic_error(
+          "GeometricMG boundary Newton cache compatibility differs between communicator ranks");
+
+    if (compatible) {
+      prime_boundary_newton_cache_(*slot.value);
+      return;
+    }
+
+    const long generation_failure_local =
+        slot.generation == std::numeric_limits<std::uint64_t>::max() ? 1L : 0L;
+    if (all_reduce_max(generation_failure_local) != 0)
+      throw std::overflow_error("GeometricMG boundary Newton cache generation overflow");
+    auto replacement = BoundaryNewtonCache::materialize(*this, options.restart);
+    prime_boundary_newton_cache_(*replacement);
+    slot.value = std::move(replacement);
+    ++slot.generation;
+  }
+
+  void require_prepared_boundary_newton_(const FieldNewtonOptions& options) {
+    require_collective_newton_options_(options, "GeometricMG::solve_boundary_newton");
+    const bool restart_matches =
+        has_field_newton_options_ && options.restart == field_newton_options_.restart;
+    if (all_reduce_max(restart_matches ? 0L : 1L) != 0)
+      throw std::logic_error(
+          "GeometricMG boundary Newton restart changed after preparation; call "
+          "prepare_boundary_newton first");
+
+    bool compatible = false;
+    long compatibility_failure_local = 0;
+    if (boundary_newton_cache_.value) {
+      try {
+        compatible =
+            boundary_newton_cache_.value->compatible(lev_[0].phi, lev_[0].rhs, options.restart);
+      } catch (...) {
+        compatibility_failure_local = 1;
+      }
+    }
+    if (all_reduce_max(compatibility_failure_local) != 0)
+      throw std::runtime_error(
+          "GeometricMG prepared boundary Newton layout check failed on at least one communicator "
+          "rank");
+    if (all_reduce_max(compatible ? 0L : 1L) != 0)
+      throw std::logic_error(
+          "GeometricMG boundary Newton cache is absent or stale; call prepare_boundary_newton "
+          "after changing its layout or restart");
   }
 
   SolveReport solve_boundary_newton_cached(const FieldNewtonOptions& options) {
-    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
-        boundary_kernel_.jvp == nullptr)
-      return SolveReport::capability_failure();
-    set_field_newton_options(options);
     auto& L = lev_[0];
-    BoundaryNewtonCache& cache = ensure_boundary_newton_cache(options.restart);
-    cache.begin_solve();
+    BoundaryNewtonCache& cache = *boundary_newton_cache_.value;
+    std::optional<KrylovControls> linear_controls;
+    run_collective_materialization_stage_("boundary Newton per-call Krylov controls", [&] {
+      linear_controls.emplace(KrylovControls{cache.linear_method(), options.linear_tolerance,
+                                             Real(0), options.linear_max_iterations});
+    });
+    run_collective_materialization_stage_("boundary Newton solve snapshot",
+                                          [&] { cache.begin_solve(); });
 
-    SolveReport report;
     // A direct repeated solve must start from the same well-defined logical Newton point; retaining
     // the previous solve's last iteration would make the initial residual depend on call history.
     boundary_context_.point.iteration = 0;
     Real r0 = cache.evaluate(cache.accepted_, cache.residual_);
     if (!std::isfinite(static_cast<double>(r0))) {
-      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-      cache.restore_published();
-      return report;
+      run_collective_materialization_stage_("boundary Newton failed-state restore",
+                                            [&] { cache.restore_published(); });
+      return make_solve_report_collectively_(
+          0, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+          SolveAction::kRejectAttempt, "GeometricMG::solve_boundary_newton");
     }
     const Real base = r0 > Real(0) ? r0 : Real(1);
     if (r0 == Real(0)) {
-      report.rel_residual = r0 / base;
-      report.mark_solved();
-      lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
-      return report;
+      run_collective_materialization_stage_("boundary Newton solved-state publication", [&] {
+        lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
+      });
+      return make_solve_report_collectively_(0, r0 / base, SolveStatus::kSolved, SolveAction::kNone,
+                                             "GeometricMG::solve_boundary_newton");
     }
-
-    // Tolerances and iteration limits remain per-call controls. Only restart changes storage shape
-    // and therefore participates in cache compatibility.
-    const KrylovControls linear_controls{gmres_krylov_method(options.restart),
-                                         options.linear_tolerance, Real(0),
-                                         options.linear_max_iterations};
 
     for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
       boundary_context_.point.iteration = iteration;
       PureFieldAlgebra::zero_valid(cache.delta_);
       // The prepared problem outlives one solve. Give every linearisation a cache-lifetime-unique
       // identity even when two calls use the same external logical time/stage.
-      cache.advance_linear_revision();
-      const OperatorEvaluationSnapshot linear_snapshot = cache.probe_linear_snapshot();
-      SolveReport linear;
+      OperatorEvaluationSnapshot linear_snapshot{};
+      run_collective_materialization_stage_("boundary Newton linear snapshot", [&] {
+        cache.advance_linear_revision();
+        linear_snapshot = cache.probe_linear_snapshot();
+      });
+      std::optional<SolveReport> linear;
       try {
-        cache.linear_problem_.prepare(linear_snapshot);
-        cache.linear_workspace_.bind(cache.linear_problem_);
-        linear = solve_prepared_affine(cache.linear_problem_, cache.linear_workspace_, cache.delta_,
-                                       cache.residual_, linear_controls);
+        cache.linear_problem().prepare(linear_snapshot);
+        cache.linear_workspace().bind(cache.linear_problem());
+        linear.emplace(solve_prepared_affine(cache.linear_problem(), cache.linear_workspace(),
+                                             cache.delta_, cache.residual_, *linear_controls));
       } catch (...) {
-        cache.restore_published();
+        run_collective_materialization_stage_("boundary Newton exceptional-state restore",
+                                              [&] { cache.restore_published(); });
         throw;
       }
-      if (!linear.solved()) {
-        report = linear;
-        report.action = SolveAction::kRejectAttempt;
-        cache.restore_published();
-        return report;
+      if (!linear->solved()) {
+        run_collective_materialization_stage_("boundary Newton rejected-state restore",
+                                              [&] { cache.restore_published(); });
+        linear->action = SolveAction::kRejectAttempt;
+        return std::move(*linear);
       }
 
       Real step = Real(1);
@@ -1386,27 +2016,30 @@ class GeometricMG {
         step *= Real(0.5);
       }
       if (!accepted_step) {
-        report.iters = iteration + 1;
-        report.rel_residual = r0 / base;
-        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-        cache.restore_published();
-        return report;
+        run_collective_materialization_stage_("boundary Newton line-search restore",
+                                              [&] { cache.restore_published(); });
+        return make_solve_report_collectively_(
+            iteration + 1, r0 / base, SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt,
+            "GeometricMG::solve_boundary_newton");
       }
       lincomb(cache.accepted_, Real(1), cache.trial_, Real(0), cache.trial_);
       lincomb(cache.residual_, Real(1), cache.trial_residual_, Real(0), cache.trial_residual_);
       r0 = trial_norm;
-      report.iters = iteration + 1;
-      report.rel_residual = r0 / base;
       if (r0 <= options.tolerance * base) {
-        report.mark_solved();
-        lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
-        lincomb(L.rhs, Real(1), cache.rhs_snapshot_, Real(0), cache.rhs_snapshot_);
-        return report;
+        run_collective_materialization_stage_("boundary Newton converged-state publication", [&] {
+          lincomb(L.phi, Real(1), cache.accepted_, Real(0), cache.accepted_);
+          lincomb(L.rhs, Real(1), cache.rhs_snapshot_, Real(0), cache.rhs_snapshot_);
+        });
+        return make_solve_report_collectively_(iteration + 1, r0 / base, SolveStatus::kSolved,
+                                               SolveAction::kNone,
+                                               "GeometricMG::solve_boundary_newton");
       }
     }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    cache.restore_published();
-    return report;
+    run_collective_materialization_stage_("boundary Newton iteration-limit restore",
+                                          [&] { cache.restore_published(); });
+    return make_solve_report_collectively_(
+        options.max_iterations, r0 / base, SolveStatus::kIterationLimit,
+        SolveAction::kRejectAttempt, "GeometricMG::solve_boundary_newton");
   }
 
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
@@ -1427,10 +2060,10 @@ class GeometricMG {
     return has_boundary_kernel_ && l == 0 ? &boundary_context_ : nullptr;
   }
 
-  void trace_mark(const char* marker) {
+  void trace_mark(const char* marker) noexcept {
     if (std::getenv("POPS_TRACE_SOLVE_FIELDS") == nullptr)
       return;
-    diagnostics_.record("elliptic.mg.trace", "GeometricMG", "trace", marker);
+    (void)diagnostics_.try_record("elliptic.mg.trace", "GeometricMG", "trace", marker);
   }
 
   // BC used to fill the eps field ghosts: we keep the periodic but
@@ -1522,7 +2155,99 @@ class GeometricMG {
     }
   }
 
-  void vcycle_rec(int l, const BCRec& bc) {
+  static void gs_smooth_on_lane(MultiFab& phi, const MultiFab& rhs, const Geometry& geometry,
+                                const BCRec& boundary, int sweeps, const MultiFab* mask,
+                                const MultiFab* coef, const MultiFab* eps, const MultiFab* kappa,
+                                const MultiFab* eps_y,
+                                const CompiledFieldBoundaryKernel* boundary_kernel,
+                                const FieldBoundaryExecutionContext* boundary_context,
+                                MultiFab* boundary_view, const ExecutionLane& lane) {
+    const auto prepare_view = [&]() -> MultiFab& {
+      if (boundary_kernel == nullptr) {
+        fill_ghosts(phi, geometry.domain, boundary, lane);
+        return phi;
+      }
+      if (boundary_context == nullptr || boundary_view == nullptr)
+        throw std::runtime_error(
+            "compiled field boundary smoother is missing its context or persistent work view");
+      copy_field_boundary_band(phi, *boundary_view);
+      fill_ghosts(*boundary_view, geometry.domain, boundary, lane);
+      for (int face = 0; face < 4; ++face)
+        boundary_kernel->prepare_residual_view(face, phi, *boundary_view, geometry,
+                                               *boundary_context);
+      return *boundary_view;
+    };
+    for (int sweep = 0; sweep < sweeps; ++sweep) {
+      MultiFab& red_view = prepare_view();
+      detail::gs_color(phi, rhs, geometry, 0, mask, coef, eps, kappa, eps_y, &red_view);
+      MultiFab& black_view = prepare_view();
+      detail::gs_color(phi, rhs, geometry, 1, mask, coef, eps, kappa, eps_y, &black_view);
+    }
+  }
+
+  static void poisson_residual_on_lane(MultiFab& phi, const MultiFab& rhs, const Geometry& geometry,
+                                       const BCRec& boundary, MultiFab& residual,
+                                       const MultiFab* mask, const MultiFab* coef,
+                                       const MultiFab* eps, const MultiFab* kappa,
+                                       const MultiFab* eps_y, const MultiFab* a_xy,
+                                       const MultiFab* a_yx,
+                                       const CompiledFieldBoundaryKernel* boundary_kernel,
+                                       const FieldBoundaryExecutionContext* boundary_context,
+                                       MultiFab* boundary_view, const ExecutionLane& lane) {
+    MultiFab* operator_view = &phi;
+    if (boundary_kernel == nullptr) {
+      fill_ghosts(phi, geometry.domain, boundary, lane);
+    } else {
+      if (boundary_context == nullptr || boundary_view == nullptr)
+        throw std::runtime_error(
+            "compiled field boundary residual is missing its context or persistent operator view");
+      copy_field_valid(phi, *boundary_view);
+      fill_ghosts(*boundary_view, geometry.domain, boundary, lane);
+      for (int face = 0; face < 4; ++face)
+        boundary_kernel->prepare_residual_view(face, phi, *boundary_view, geometry,
+                                               *boundary_context);
+      operator_view = boundary_view;
+    }
+    const Real idx2 = Real(1) / (geometry.dx() * geometry.dx());
+    const Real idy2 = Real(1) / (geometry.dy() * geometry.dy());
+    const Real idx = Real(1) / geometry.dx();
+    const Real idy = Real(1) / geometry.dy();
+    for (int local = 0; local < operator_view->local_size(); ++local) {
+      const ConstArray4 p = operator_view->fab(local).const_array();
+      const ConstArray4 f = rhs.fab(local).const_array();
+      Array4 r = residual.fab(local).array();
+      const Box2D valid = residual.box(local);
+      const bool has_mask = mask != nullptr;
+      const ConstArray4 mask_values = has_mask ? mask->fab(local).const_array() : ConstArray4{};
+      const bool has_coef = coef != nullptr;
+      const ConstArray4 coef_values = has_coef ? coef->fab(local).const_array() : ConstArray4{};
+      const bool has_eps = eps != nullptr;
+      const ConstArray4 eps_values = has_eps ? eps->fab(local).const_array() : ConstArray4{};
+      const ConstArray4 eps_y_values =
+          has_eps && eps_y != nullptr ? eps_y->fab(local).const_array() : eps_values;
+      const bool has_kappa = kappa != nullptr;
+      const ConstArray4 kappa_values = has_kappa ? kappa->fab(local).const_array() : ConstArray4{};
+      const bool has_a_xy = a_xy != nullptr;
+      const bool has_a_yx = a_yx != nullptr;
+      const ConstArray4 a_xy_values = has_a_xy ? a_xy->fab(local).const_array() : ConstArray4{};
+      const ConstArray4 a_yx_values = has_a_yx ? a_yx->fab(local).const_array() : ConstArray4{};
+      for_each_cell(valid, detail::PoissonResidualKernel{p,           f,
+                                                         r,           idx2,
+                                                         idy2,        idx,
+                                                         idy,         has_mask,
+                                                         mask_values, has_coef,
+                                                         coef_values, has_eps,
+                                                         eps_values,  eps_y_values,
+                                                         has_kappa,   kappa_values,
+                                                         has_a_xy,    has_a_yx,
+                                                         a_xy_values, a_yx_values});
+    }
+    if (boundary_kernel != nullptr)
+      for (int face = 0; face < 4; ++face)
+        boundary_kernel->add_residual(face, phi, residual, geometry, *boundary_context);
+  }
+
+  void vcycle_rec(int l, const BCRec& bc, const ExecutionLane* lane = nullptr) {
     MGLevel& L = lev_[l];
     BCRec level_bc = bc;
     level_bc.dx = L.geom.dx();
@@ -1541,8 +2266,17 @@ class GeometricMG {
     // A, it may diverge (cf. set_cross_terms, reported observation).
     if (l == 0)
       trace_mark("vcycle_rec(0): before gs_smooth(nu1) [first GS kernel]");
-    gs_smooth(L.phi, L.rhs, L.geom, level_bc, nu1_, mk, ck, ep, kp, ey, boundary_kernel_ptr(l),
-              boundary_context_ptr(l), boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
+    const auto smooth = [&](int sweeps) {
+      if (lane != nullptr)
+        gs_smooth_on_lane(L.phi, L.rhs, L.geom, level_bc, sweeps, mk, ck, ep, kp, ey,
+                          boundary_kernel_ptr(l), boundary_context_ptr(l),
+                          boundary_kernel_ptr(l) ? &L.boundary_view : nullptr, *lane);
+      else
+        gs_smooth(L.phi, L.rhs, L.geom, level_bc, sweeps, mk, ck, ep, kp, ey,
+                  boundary_kernel_ptr(l), boundary_context_ptr(l),
+                  boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
+    };
+    smooth(nu1_);
     if (l == 0)
       trace_mark("vcycle_rec(0): after gs_smooth(nu1)");
 
@@ -1553,9 +2287,7 @@ class GeometricMG {
       // sec.13.11.1, ADC-479). Host serial / per-rank; the device-fence for an exact GPU bottom time is
       // deferred (counter stays an honest host-side measurement).
       const auto bottom_t0 = std::chrono::steady_clock::now();
-      gs_smooth(L.phi, L.rhs, L.geom, level_bc, nbottom_, mk, ck, ep, kp, ey,
-                boundary_kernel_ptr(l), boundary_context_ptr(l),
-                boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);  // bottom solve
+      smooth(nbottom_);  // bottom solve
       const auto bottom_t1 = std::chrono::steady_clock::now();
       last_bottom_seconds_ += std::chrono::duration<double>(bottom_t1 - bottom_t0).count();
       if (mk)
@@ -1563,21 +2295,33 @@ class GeometricMG {
       return;
     }
 
-    poisson_residual(L.phi, L.rhs, L.geom, level_bc, L.res, mk, ck, ep, kp, ey, axy, ayx,
-                     boundary_kernel_ptr(l), boundary_context_ptr(l),
-                     boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
+    if (lane != nullptr)
+      poisson_residual_on_lane(L.phi, L.rhs, L.geom, level_bc, L.res, mk, ck, ep, kp, ey, axy, ayx,
+                               boundary_kernel_ptr(l), boundary_context_ptr(l),
+                               boundary_kernel_ptr(l) ? &L.boundary_view : nullptr, *lane);
+    else
+      poisson_residual(L.phi, L.rhs, L.geom, level_bc, L.res, mk, ck, ep, kp, ey, axy, ayx,
+                       boundary_kernel_ptr(l), boundary_context_ptr(l),
+                       boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
     if (l == 0)
       trace_mark("vcycle_rec(0): after poisson_residual");
     MGLevel& C = lev_[l + 1];
-    average_down(L.res, C.rhs, 2, L.cfine);  // residual restriction (cfine buffer reused)
+    if (lane != nullptr)
+      average_down(L.res, C.rhs, 2, L.cfine, *lane);
+    else
+      average_down(L.res, C.rhs, 2, L.cfine);  // residual restriction (cfine buffer reused)
     if (l == 0)
       trace_mark("vcycle_rec(0): after average_down");
     C.phi.set_val(0.0);
-    vcycle_rec(l + 1, homogeneous(level_bc));
+    vcycle_rec(l + 1, homogeneous(level_bc), lane);
     if (l == 0)
       trace_mark("vcycle_rec(0): after coarse recursion");
 
-    interpolate(C.phi, L.corr, 2, L.cfine);  // correction prolongation (corr/cfine buffers reused)
+    if (lane != nullptr)
+      interpolate(C.phi, L.corr, 2, L.cfine, *lane);
+    else
+      interpolate(C.phi, L.corr, 2,
+                  L.cfine);  // correction prolongation (corr/cfine buffers reused)
     if (l == 0)
       trace_mark("vcycle_rec(0): after interpolate");
     saxpy(L.phi, Real(1), L.corr);
@@ -1585,8 +2329,7 @@ class GeometricMG {
       trace_mark("vcycle_rec(0): after saxpy");
     if (mk)
       zero_conductor(L.phi, L.mask);  // re-pin the conductor
-    gs_smooth(L.phi, L.rhs, L.geom, level_bc, nu2_, mk, ck, ep, kp, ey, boundary_kernel_ptr(l),
-              boundary_context_ptr(l), boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
+    smooth(nu2_);
     if (l == 0)
       trace_mark("vcycle_rec(0): after gs_smooth(nu2)");
   }

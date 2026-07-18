@@ -90,7 +90,6 @@ struct FieldNullspacePlan {
   std::vector<FieldGaugeConstraint> gauges;
 
   bool empty() const { return bases.empty(); }
-
 };
 
 /// Scientific incompatibility is distinct from a malformed nullspace contract and from a
@@ -240,24 +239,22 @@ class FieldNullspacePreflightPayload {
 
   void append_plan(const FieldNullspacePlan& plan, int first_level,
                    std::span<const PreparedVectorDistribution> distributions) {
-    append_plan_with_layout_(
-        plan, [this, first_level, distributions](const MultiFab* field, std::size_t level) {
-          if (field == nullptr) {
-            append_absent_layout();
-            return;
-          }
-          const bool resolved = first_level >= 0 && level >= static_cast<std::size_t>(first_level) &&
-                                level - static_cast<std::size_t>(first_level) <
-                                    distributions.size();
-          require(resolved);
-          if (!resolved) {
-            append_scalar(std::uint8_t{1});
-            append_text({});
-            return;
-          }
-          append_layout(field,
-                        distributions[level - static_cast<std::size_t>(first_level)]);
-        });
+    append_plan_with_layout_(plan, [this, first_level, distributions](const MultiFab* field,
+                                                                      std::size_t level) {
+      if (field == nullptr) {
+        append_absent_layout();
+        return;
+      }
+      const bool resolved = first_level >= 0 && level >= static_cast<std::size_t>(first_level) &&
+                            level - static_cast<std::size_t>(first_level) < distributions.size();
+      require(resolved);
+      if (!resolved) {
+        append_scalar(std::uint8_t{1});
+        append_text({});
+        return;
+      }
+      append_layout(field, distributions[level - static_cast<std::size_t>(first_level)]);
+    });
   }
 
   void require(bool condition) noexcept { valid_ = valid_ && condition; }
@@ -350,25 +347,41 @@ inline void validate_field_nullspace_plan_locally(FieldNullspacePreflightPayload
 }
 
 inline void finish_field_nullspace_preflight(FieldNullspacePreflightPayload& payload,
-                                             FieldNullspaceCollectiveBoundary boundary) {
+                                             FieldNullspaceCollectiveBoundary boundary,
+                                             const ExecutionLane& lane) {
   const std::uint8_t valid = payload.valid() ? 1u : 0u;
-  payload.append_scalar(valid);
+  long payload_seal_failure_local = 0;
+  try {
+    // Appending the terminal validity byte can grow the payload. Complete that last fallible local
+    // operation on every rank before any rank enters the exact contract consensus below.
+    payload.append_scalar(valid);
+  } catch (...) {
+    payload_seal_failure_local = 1;
+  }
+  if (all_reduce_max(payload_seal_failure_local, lane) != 0)
+    throw std::runtime_error(
+        "field nullspace collective preflight payload finalization failed on at least one "
+        "communicator rank");
   const std::string_view boundary_name = field_nullspace_boundary_name(boundary);
-  const std::vector<std::pair<std::string_view, std::string_view>> collective_identity{
-      {boundary_name, payload.bytes()}};
-  const bool agreed = all_ranks_agree_exact_ordered_byte_pairs(collective_identity);
+  const bool agreed =
+      all_ranks_agree_exact_ordered_byte_pairs({{boundary_name, payload.bytes()}}, lane);
   if (!agreed || !payload.valid())
     throw std::runtime_error(std::string("field nullspace ") + std::string(boundary_name) +
                              " collective preflight rejected malformed local structure or "
                              "rank-divergent metadata");
 }
 
-template <class FieldVector>
-inline void preflight_field_nullspace_fields(const FieldVector& fields,
-                                             const FieldNullspacePlan& plan,
-                                             std::span<const PreparedVectorDistribution> distributions,
-                                             int first_level,
+inline void finish_field_nullspace_preflight(FieldNullspacePreflightPayload& payload,
                                              FieldNullspaceCollectiveBoundary boundary) {
+  const ExecutionLane lane = ExecutionLane::world();
+  finish_field_nullspace_preflight(payload, boundary, lane);
+}
+
+template <class FieldVector>
+inline void preflight_field_nullspace_fields(
+    const FieldVector& fields, const FieldNullspacePlan& plan,
+    std::span<const PreparedVectorDistribution> distributions, int first_level,
+    FieldNullspaceCollectiveBoundary boundary) {
   FieldNullspacePreflightPayload payload;
   payload.append_scalar(first_level);
   payload.append_plan(plan, first_level, distributions);
@@ -463,10 +476,8 @@ inline void preflight_field_nullspace_fields(const FieldVector& fields,
                                         "field nullspace solved field");
     for (const FieldNullspaceBasis& basis : plan.bases) {
       if (const MultiFab* mask = basis.mask(resolved_level); mask != nullptr)
-        distribution.require_exact_values(*mask, validation_storage,
-                                          "field nullspace basis mask");
-      if (const MultiFab* coverage = basis.coverage_mask(resolved_level);
-          coverage != nullptr)
+        distribution.require_exact_values(*mask, validation_storage, "field nullspace basis mask");
+      if (const MultiFab* coverage = basis.coverage_mask(resolved_level); coverage != nullptr)
         distribution.require_exact_values(*coverage, validation_storage,
                                           "field nullspace coverage mask");
     }
@@ -616,8 +627,7 @@ struct ShiftFieldBasisKernel {
   Real coefficient;
   POPS_HD void operator()(int i, int j) const {
     const Real basis = masked ? mask(i, j, 0) : Real(1);
-    value(i, j, component) -=
-        coefficient * basis * (covered ? coverage(i, j, 0) : Real(1));
+    value(i, j, component) -= coefficient * basis * (covered ? coverage(i, j, 0) : Real(1));
   }
 };
 
@@ -649,12 +659,11 @@ inline std::size_t gauge_index(const FieldNullspacePlan& plan, const std::string
   return plan.gauges.size();
 }
 
-inline void reduce_field_nullspace_values_inplace(
-    std::vector<double>& values, const PreparedVectorDistribution& distribution,
-    const char* quantity) {
-  std::vector<double> scratch(distribution.reduction_scratch_value_count(
-                                  std::max(values.size(), std::size_t{1})),
-                              0.0);
+inline void reduce_field_nullspace_values_inplace(std::vector<double>& values,
+                                                  const PreparedVectorDistribution& distribution,
+                                                  const char* quantity) {
+  std::vector<double> scratch(
+      distribution.reduction_scratch_value_count(std::max(values.size(), std::size_t{1})), 0.0);
   distribution.reduce_sum_values(values, scratch, quantity);
 }
 
@@ -686,13 +695,11 @@ inline void factor_field_nullspace_gram(std::span<double> gram, std::size_t coun
   for (std::size_t index = 0; index < count; ++index) {
     const double diagonal = gram[index * count + index];
     if (!std::isfinite(diagonal) || !(diagonal > 0.0))
-      throw std::runtime_error(std::string(where) +
-                               " has a non-positive or non-finite basis norm");
+      throw std::runtime_error(std::string(where) + " has a non-positive or non-finite basis norm");
     diagonal_scale = std::max(diagonal_scale, diagonal);
   }
-  const double pivot_tolerance =
-      128.0 * std::numeric_limits<Real>::epsilon() * diagonal_scale *
-      static_cast<double>(std::max(count, std::size_t{1}));
+  const double pivot_tolerance = 128.0 * std::numeric_limits<Real>::epsilon() * diagonal_scale *
+                                 static_cast<double>(std::max(count, std::size_t{1}));
   for (std::size_t row = 0; row < count; ++row) {
     for (std::size_t column = 0; column <= row; ++column) {
       double value = gram[row * count + column];
@@ -738,10 +745,9 @@ inline void solve_field_nullspace_gram(std::span<const double> factor, std::size
 /// Validate the resolved topology basis once, outside every solve. The dense Gram matrix is
 /// assembled with one batched reduction per level distribution and factorized exactly once.
 /// Overlapping provider bases are valid; only a singular or numerically dependent basis is rejected.
-inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& level_layouts,
-                                           const FieldNullspacePlan& plan,
-                                           std::span<const PreparedVectorDistribution> distributions,
-                                           int first_level = 0) {
+inline void validate_field_nullspace_basis(
+    const std::vector<const MultiFab*>& level_layouts, const FieldNullspacePlan& plan,
+    std::span<const PreparedVectorDistribution> distributions, int first_level = 0) {
   detail::preflight_field_nullspace_fields(
       level_layouts, plan, distributions, first_level,
       detail::FieldNullspaceCollectiveBoundary::BasisValidation);
@@ -754,8 +760,8 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
   const std::size_t count = plan.bases.size();
   const std::size_t gram_size = detail::checked_field_nullspace_collective_product(
       count, count, "field nullspace Gram matrix");
-  std::vector<std::vector<double>> level_grams(
-      level_layouts.size(), std::vector<double>(gram_size, 0.0));
+  std::vector<std::vector<double>> level_grams(level_layouts.size(),
+                                               std::vector<double>(gram_size, 0.0));
   for (std::size_t a = 0; a < count; ++a) {
     for (std::size_t b = a; b < count; ++b) {
       if (plan.bases[a].field_component != plan.bases[b].field_component)
@@ -786,9 +792,8 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
           contribution[a * count + b] += static_cast<double>(reduce_sum_cell(
               layout.box(li),
               detail::FieldBasisGramKernel{left_array, right_array, left_coverage_array,
-                                           right_coverage_array, left != nullptr,
-                                           right != nullptr, left_coverage != nullptr,
-                                           right_coverage != nullptr,
+                                           right_coverage_array, left != nullptr, right != nullptr,
+                                           left_coverage != nullptr, right_coverage != nullptr,
                                            plan.bases[a].measure(resolved_level)}));
         }
       }
@@ -815,8 +820,7 @@ inline void validate_field_nullspace_basis(const std::vector<const MultiFab*>& l
 /// deterministic.  No RHS projection is performed.
 inline std::vector<double> require_field_nullspace_compatible(
     const std::vector<const MultiFab*>& rhs_levels, const FieldNullspacePlan& plan,
-    std::span<const PreparedVectorDistribution> distributions,
-    int first_level = 0) {
+    std::span<const PreparedVectorDistribution> distributions, int first_level = 0) {
   detail::preflight_field_nullspace_fields(rhs_levels, plan, distributions, first_level,
                                            detail::FieldNullspaceCollectiveBoundary::Compatibility);
   if (plan.empty())
@@ -829,8 +833,8 @@ inline std::vector<double> require_field_nullspace_compatible(
                                                   "field nullspace compatibility");
   const std::size_t moment_count = detail::checked_field_nullspace_collective_product(
       plan.bases.size(), std::size_t{2}, "field nullspace compatibility moments");
-  std::vector<std::vector<double>> level_moments(
-      rhs_levels.size(), std::vector<double>(moment_count, 0.0));
+  std::vector<std::vector<double>> level_moments(rhs_levels.size(),
+                                                 std::vector<double>(moment_count, 0.0));
   for (std::size_t b = 0; b < plan.bases.size(); ++b) {
     const auto& basis = plan.bases[b];
     for (std::size_t level = 0; level < rhs_levels.size(); ++level) {
@@ -884,14 +888,12 @@ inline std::vector<double> require_field_nullspace_compatible(
   return moments;
 }
 
-inline std::vector<double> require_field_nullspace_compatible(const MultiFab& rhs,
-                                                              const FieldNullspacePlan& plan,
-                                                              const PreparedVectorDistribution&
-                                                                  distribution =
-                                                                      PreparedVectorDistribution::Distributed) {
+inline std::vector<double> require_field_nullspace_compatible(
+    const MultiFab& rhs, const FieldNullspacePlan& plan,
+    const PreparedVectorDistribution& distribution = PreparedVectorDistribution::Distributed) {
   const std::array<PreparedVectorDistribution, 1> distributions{distribution};
-  return require_field_nullspace_compatible(std::vector<const MultiFab*>{&rhs}, plan,
-                                            distributions, 0);
+  return require_field_nullspace_compatible(std::vector<const MultiFab*>{&rhs}, plan, distributions,
+                                            0);
 }
 
 /// Apply every declared gauge with one batched reduction per level distribution. The same dense
@@ -916,8 +918,8 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
       basis_count, basis_count, "field gauge Gram matrix");
   const std::size_t reduction_count = detail::checked_field_nullspace_collective_sum(
       basis_count, gram_count, "field gauge reduction");
-  std::vector<std::vector<double>> level_values(
-      phi_levels.size(), std::vector<double>(reduction_count, 0.0));
+  std::vector<std::vector<double>> level_values(phi_levels.size(),
+                                                std::vector<double>(reduction_count, 0.0));
   for (std::size_t b = 0; b < plan.bases.size(); ++b) {
     const auto& basis = plan.bases[b];
     if (detail::gauge_index(plan, basis.identity) == plan.gauges.size())
@@ -957,28 +959,24 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
         const MultiFab* right_mask = plan.bases[right].mask(resolved_level);
         const MultiFab* left_coverage = plan.bases[left].coverage_mask(resolved_level);
         const MultiFab* right_coverage = plan.bases[right].coverage_mask(resolved_level);
-        if (plan.bases[left].measure(resolved_level) !=
-            plan.bases[right].measure(resolved_level))
+        if (plan.bases[left].measure(resolved_level) != plan.bases[right].measure(resolved_level))
           throw std::runtime_error("field nullspace modes disagree on hierarchy cell measure");
         for (int local = 0; local < phi.local_size(); ++local) {
           const ConstArray4 left_values =
               left_mask == nullptr ? ConstArray4{} : left_mask->fab(local).const_array();
           const ConstArray4 right_values =
               right_mask == nullptr ? ConstArray4{} : right_mask->fab(local).const_array();
-          const ConstArray4 left_coverage_values = left_coverage == nullptr
-                                                       ? ConstArray4{}
-                                                       : left_coverage->fab(local).const_array();
-          const ConstArray4 right_coverage_values = right_coverage == nullptr
-                                                        ? ConstArray4{}
-                                                        : right_coverage->fab(local).const_array();
+          const ConstArray4 left_coverage_values =
+              left_coverage == nullptr ? ConstArray4{} : left_coverage->fab(local).const_array();
+          const ConstArray4 right_coverage_values =
+              right_coverage == nullptr ? ConstArray4{} : right_coverage->fab(local).const_array();
           level_values[level][basis_count + left * basis_count + right] +=
               static_cast<double>(reduce_sum_cell(
                   phi.box(local),
                   detail::FieldBasisGramKernel{
                       left_values, right_values, left_coverage_values, right_coverage_values,
                       left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
-                      right_coverage != nullptr,
-                      plan.bases[left].measure(resolved_level)}));
+                      right_coverage != nullptr, plan.bases[left].measure(resolved_level)}));
         }
       }
       for (std::vector<double>& values : level_values)
@@ -996,8 +994,7 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
     const auto& basis = plan.bases[b];
     const std::size_t g = detail::gauge_index(plan, basis.identity);
     if (!std::isfinite(coefficients[b]))
-      throw FieldNullspaceInvalidEvaluation(
-          "field gauge produced a non-finite dense coefficient");
+      throw FieldNullspaceInvalidEvaluation("field gauge produced a non-finite dense coefficient");
     const Real coefficient = static_cast<Real>(coefficients[b]) - plan.gauges[g].value;
     for (std::size_t level = 0; level < phi_levels.size(); ++level) {
       MultiFab& phi = *phi_levels[level];
@@ -1009,10 +1006,9 @@ inline void apply_field_gauge(const std::vector<MultiFab*>& phi_levels,
             mask == nullptr ? ConstArray4{} : mask->fab(li).const_array();
         const ConstArray4 coverage_array =
             coverage == nullptr ? ConstArray4{} : coverage->fab(li).const_array();
-        for_each_cell(phi.box(li),
-                      detail::ShiftFieldBasisKernel{
-                          value, mask_array, coverage_array, basis.field_component,
-                          mask != nullptr, coverage != nullptr, coefficient});
+        for_each_cell(phi.box(li), detail::ShiftFieldBasisKernel{
+                                       value, mask_array, coverage_array, basis.field_component,
+                                       mask != nullptr, coverage != nullptr, coefficient});
       }
     }
   }
@@ -1026,8 +1022,8 @@ inline void apply_field_gauge(
   apply_field_gauge(levels, plan, distributions);
 }
 
-inline FieldNullspacePlan constant_mean_zero_nullspace(
-    std::string identity, std::string provenance, Real cell_measure = Real(1)) {
+inline FieldNullspacePlan constant_mean_zero_nullspace(std::string identity, std::string provenance,
+                                                       Real cell_measure = Real(1)) {
   FieldNullspacePlan result;
   result.identity = std::move(identity);
   result.layout_identity = result.identity + ":layout";
@@ -1055,16 +1051,15 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
     const std::vector<std::shared_ptr<const MultiFab>>& labels,
     std::vector<FieldConnectedComponent> components,
     std::vector<std::shared_ptr<const MultiFab>> coverage, std::vector<Real> cell_measure,
-    int field_component,
-    std::span<const PreparedVectorDistribution> distributions,
+    int field_component, std::span<const PreparedVectorDistribution> distributions,
     int first_level = 0) {
   std::sort(components.begin(), components.end(),
             [](const FieldConnectedComponent& left, const FieldConnectedComponent& right) {
               return left.label < right.label;
             });
   detail::preflight_labelled_field_nullspace(identity, layout_identity, labels, components,
-                                             coverage, cell_measure, distributions,
-                                             field_component, first_level);
+                                             coverage, cell_measure, distributions, field_component,
+                                             first_level);
   if (identity.empty() || layout_identity.empty())
     throw std::invalid_argument(
         "labelled field nullspace requires non-empty plan and layout identities");
@@ -1102,8 +1097,8 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
   std::vector<std::vector<std::shared_ptr<MultiFab>>> masks(
       components.size(),
       std::vector<std::shared_ptr<MultiFab>>(static_cast<std::size_t>(first_level)));
-  std::vector<std::vector<double>> counts_by_level(
-      labels.size(), std::vector<double>(count_size, 0.0));
+  std::vector<std::vector<double>> counts_by_level(labels.size(),
+                                                   std::vector<double>(count_size, 0.0));
   for (std::size_t level = 0; level < labels.size(); ++level) {
     const std::size_t resolved_level = static_cast<std::size_t>(first_level) + level;
     std::vector<double>& level_counts = counts_by_level[level];
@@ -1117,7 +1112,7 @@ inline FieldNullspacePlan labelled_mean_zero_nullspace(
           coverage[level]->box_array().boxes() != labels[level]->box_array().boxes() ||
           coverage[level]->dmap().ranks() != labels[level]->dmap().ranks())
         throw std::invalid_argument(
-          "field nullspace coverage must be co-distributed with component labels");
+            "field nullspace coverage must be co-distributed with component labels");
     }
     for (auto& per_component : masks)
       per_component.push_back(

@@ -123,17 +123,41 @@ def _write_component(root: Path) -> None:
 #include <pops/runtime/export.hpp>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace vendor {
 inline std::atomic<std::uint64_t> factory_calls{0};
+inline std::atomic<std::uint64_t> session_state_constructions{0};
+inline std::atomic<std::uint64_t> prepare_calls{0};
 inline std::atomic<std::uint64_t> apply_calls{0};
+inline std::atomic<std::uint64_t> apply_before_prepare_calls{0};
 
-inline pops::ApplyFn prepared_identity_apply() {
-  factory_calls.fetch_add(1, std::memory_order_relaxed);
-  return [](pops::MultiFab& out, const pops::MultiFab& in) {
-    apply_calls.fetch_add(1, std::memory_order_relaxed);
-    pops::PureFieldAlgebra::copy(out, in);
+struct PreparedIdentitySessionState {
+  PreparedIdentitySessionState() {
+    session_state_constructions.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  std::atomic<bool> prepared{false};
+};
+
+inline pops::PreparedLinearPreconditionerSessionFactory prepared_identity_session_factory() {
+  return [](const pops::ExecutionLane&) {
+    factory_calls.fetch_add(1, std::memory_order_relaxed);
+    auto state = std::make_shared<PreparedIdentitySessionState>();
+    return pops::PreparedLinearPreconditionerSessionCallbacks{
+        [state] {
+          prepare_calls.fetch_add(1, std::memory_order_relaxed);
+          state->prepared.store(true, std::memory_order_release);
+        },
+        [state](pops::MultiFab& out, const pops::MultiFab& in) {
+          if (!state->prepared.load(std::memory_order_acquire))
+            apply_before_prepare_calls.fetch_add(1, std::memory_order_relaxed);
+          apply_calls.fetch_add(1, std::memory_order_relaxed);
+          pops::PureFieldAlgebra::copy(out, in);
+        },
+        [] { return std::size_t{0}; }};
   };
 }
 }  // namespace vendor
@@ -142,22 +166,49 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_factory_calls() no
   return vendor::factory_calls.load(std::memory_order_relaxed);
 }
 
+extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_session_state_constructions() noexcept {
+  return vendor::session_state_constructions.load(std::memory_order_relaxed);
+}
+
+extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_prepare_calls() noexcept {
+  return vendor::prepare_calls.load(std::memory_order_relaxed);
+}
+
 extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_apply_calls() noexcept {
   return vendor::apply_calls.load(std::memory_order_relaxed);
+}
+
+extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_apply_before_prepare_calls() noexcept {
+  return vendor::apply_before_prepare_calls.load(std::memory_order_relaxed);
 }
 """,
         encoding="utf-8",
     )
 
 
-def _native_counters(so_path: str) -> tuple[int, int]:
+def _native_counters(so_path: str) -> tuple[int, int, int, int, int]:
     library = ctypes.CDLL(so_path)
     library.pops_test_preconditioner_factory_calls.restype = ctypes.c_uint64
+    library.pops_test_preconditioner_session_state_constructions.restype = ctypes.c_uint64
+    library.pops_test_preconditioner_prepare_calls.restype = ctypes.c_uint64
     library.pops_test_preconditioner_apply_calls.restype = ctypes.c_uint64
+    library.pops_test_preconditioner_apply_before_prepare_calls.restype = ctypes.c_uint64
     return (
         int(library.pops_test_preconditioner_factory_calls()),
+        int(library.pops_test_preconditioner_session_state_constructions()),
+        int(library.pops_test_preconditioner_prepare_calls()),
         int(library.pops_test_preconditioner_apply_calls()),
+        int(library.pops_test_preconditioner_apply_before_prepare_calls()),
     )
+
+
+def _assert_native_session_lifecycle(counters: tuple[int, int, int, int, int]) -> None:
+    factory_calls, state_constructions, prepare_calls, apply_calls, unprepared_applies = counters
+    assert factory_calls == 2, "the prepared problem and bound workspace own exactly two sessions"
+    assert state_constructions == 2, "each lifecycle session must own one fresh state"
+    assert prepare_calls == 2, "each lifecycle session is prepared exactly once"
+    assert apply_calls >= 2, "both prepared sessions must execute their native callback"
+    assert unprepared_applies == 0, "the runtime must never apply an unprepared session"
 
 
 def test_external_header_only_provider_compiles_links_installs_and_runs(
@@ -175,7 +226,7 @@ def test_external_header_only_provider_compiles_links_installs_and_runs(
     _write_component(include_root)
 
     def emit(_node, _prelude, _prototype, _vector_distribution, _provider):
-        return preconditioners.NativeEmission("vendor::prepared_identity_apply()")
+        return preconditioners.NativeEmission("vendor::prepared_identity_session_factory()")
 
     provider = preconditioners.register(preconditioners.Provider(
         provider_id="pops.test.prepared-header-identity",
@@ -218,6 +269,7 @@ def test_external_header_only_provider_compiles_links_installs_and_runs(
     generated_path = compiled.dump_cpp(tmp_path / "generated.cpp")
     generated = Path(generated_path).read_text(encoding="utf-8")
     assert "#include <vendor/prepared_identity.hpp>" in generated
+    assert "vendor::prepared_identity_session_factory()" in generated
     compiled_solve = next(
         value for value in compiled.program._values if value.op == "solve_linear"
     )
@@ -246,9 +298,8 @@ def test_external_header_only_provider_compiles_links_installs_and_runs(
     result = np.asarray(simulation.get_state("blk"))[0]
     assert np.isfinite(result).all()
     assert float(np.max(np.abs(result - initial))) > 1.0e-8
-    low_factory_calls, low_apply_calls = _native_counters(compiled.so_path)
-    assert low_factory_calls >= 1
-    assert low_apply_calls >= 1
+    low_counters = _native_counters(compiled.so_path)
+    _assert_native_session_lifecycle(low_counters)
 
     import pops
     from tests.python.integration._final_field_program import (
@@ -277,8 +328,5 @@ def test_external_header_only_provider_compiles_links_installs_and_runs(
     assert public_report.accepted_steps == 1
     assert np.isfinite(public_result).all()
     assert float(np.max(np.abs(public_result - initial))) > 1.0e-8
-    public_factory_calls, public_apply_calls = _native_counters(public_compiled.so_path)
-    assert public_factory_calls >= 1
-    assert public_apply_calls >= 1
-    assert low_factory_calls + public_factory_calls >= 2
-    assert low_apply_calls + public_apply_calls >= 2
+    public_counters = _native_counters(public_compiled.so_path)
+    _assert_native_session_lifecycle(public_counters)

@@ -8,7 +8,10 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <string>
+#include <thread>
+#include <vector>
 
 using pops::runtime::program::Profiler;
 using pops::runtime::program::ProfileScope;
@@ -146,6 +149,86 @@ TEST(Profiler, ReportIsFirstSeenOrderAndContainsScopesAndCounters) {
   EXPECT_TRUE(r.find("transport") != std::string::npos) << "report_has_transport";
   EXPECT_TRUE(r.find("nodes_skipped=2") != std::string::npos) << "report_has_counter";
   EXPECT_TRUE(r.find("fields") < r.find("transport")) << "report_first_seen_order";
+}
+
+TEST(Profiler, ConcurrentWritersAggregateExactlyAndPreserveEstablishedOrder) {
+  constexpr int kThreads = 8;
+  constexpr int kSamplesPerThread = 1500;
+  constexpr std::uint64_t kConcurrentSamples = kThreads * kSamplesPerThread;
+
+  Profiler p;
+  p.enable();
+
+  // Establish a deterministic first-seen order before the concurrent update phase. Concurrent
+  // writers may arrive in any order, but they must not reorder existing names or lose updates.
+  p.record("scope:first", 0.25);
+  p.record("scope:second", 0.5);
+  p.count("events", 0);
+  p.count_max("peak", 0);
+
+  std::vector<std::thread> workers;
+  workers.reserve(kThreads);
+  for (int worker = 0; worker < kThreads; ++worker) {
+    workers.emplace_back([&p, worker] {
+      for (int sample = 0; sample < kSamplesPerThread; ++sample) {
+        // Exercise both lock arrival orders rather than serializing all scope calls identically.
+        if (((worker + sample) & 1) == 0) {
+          p.record("scope:first", 0.25);
+          p.record("scope:second", 0.5);
+        } else {
+          p.record("scope:second", 0.5);
+          p.record("scope:first", 0.25);
+        }
+        p.count("events");
+        p.count_max("peak", worker * kSamplesPerThread + sample);
+      }
+    });
+  }
+  for (auto& worker : workers) {
+    worker.join();
+  }
+
+  const Profiler::Snapshot snapshot = p.snapshot();
+  ASSERT_EQ(snapshot.scopes.size(), 2U);
+  EXPECT_EQ(snapshot.scopes[0].name, "scope:first");
+  EXPECT_EQ(snapshot.scopes[1].name, "scope:second");
+  EXPECT_EQ(snapshot.scopes[0].count, kConcurrentSamples + 1);
+  EXPECT_EQ(snapshot.scopes[1].count, kConcurrentSamples + 1);
+  EXPECT_DOUBLE_EQ(snapshot.scopes[0].total_s, static_cast<double>(kConcurrentSamples + 1) * 0.25);
+  EXPECT_DOUBLE_EQ(snapshot.scopes[1].total_s, static_cast<double>(kConcurrentSamples + 1) * 0.5);
+
+  ASSERT_EQ(snapshot.counters.size(), 2U);
+  EXPECT_EQ(snapshot.counters[0].name, "events");
+  EXPECT_EQ(snapshot.counters[0].value, static_cast<std::int64_t>(kConcurrentSamples));
+  EXPECT_EQ(snapshot.counters[1].name, "peak");
+  EXPECT_EQ(snapshot.counters[1].value, static_cast<std::int64_t>(kConcurrentSamples - 1));
+
+  const std::string report = p.report();
+  EXPECT_LT(report.find("scope:first"), report.find("scope:second"));
+  EXPECT_LT(report.find("events="), report.find("peak="));
+}
+
+TEST(Profiler, RuntimeSnapshotCopyAndRestorePreserveAccumulatedState) {
+  Profiler source;
+  source.enable();
+  source.record("step", 0.25);
+  source.count("kernels", 3);
+
+  const Profiler snapshot(source);
+  source.record("step", 0.75);
+  source.count("kernels", 4);
+
+  Profiler restored;
+  restored = snapshot;
+  const Profiler::Snapshot state = restored.snapshot();
+  ASSERT_EQ(state.scopes.size(), 1U);
+  EXPECT_EQ(state.scopes[0].name, "step");
+  EXPECT_EQ(state.scopes[0].count, 1U);
+  EXPECT_DOUBLE_EQ(state.scopes[0].total_s, 0.25);
+  ASSERT_EQ(state.counters.size(), 1U);
+  EXPECT_EQ(state.counters[0].name, "kernels");
+  EXPECT_EQ(state.counters[0].value, 3);
+  EXPECT_TRUE(state.enabled);
 }
 
 TEST(Profiler, ResetClearsEverything) {

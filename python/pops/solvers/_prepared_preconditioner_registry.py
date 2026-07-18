@@ -103,25 +103,26 @@ class PreparedPreconditionerOption(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PreparedPreconditionerNativeEmission:
-    """Native callbacks emitted by a provider before the common authenticated wrapper.
+    """Native workspace-session factory emitted before the authenticated wrapper.
 
-    Providers may declare arbitrary native state in the prelude, but they cannot construct an
-    unauthenticated ``PreparedLinearPreconditioner`` themselves.  The registry wraps these exact
-    callbacks with the provider identity, ABI version, component manifest and resolved options.
+    Providers may declare immutable authority in the prelude, but mutable execution state must be
+    constructed afresh by ``make_session``. The registry wraps that factory with the provider
+    identity, ABI version, component manifest and resolved options.
     """
 
-    apply: str | None
-    prepare: str = "{}"
+    make_session: str | None
 
     @classmethod
     def identity(cls) -> PreparedPreconditionerNativeEmission:
         return cls(None)
 
     def __post_init__(self) -> None:
-        if self.apply is not None and (type(self.apply) is not str or not self.apply):
-            raise TypeError("prepared preconditioner native apply must be a non-empty expression")
-        if type(self.prepare) is not str or not self.prepare:
-            raise TypeError("prepared preconditioner native prepare must be a non-empty expression")
+        if self.make_session is not None and (
+            type(self.make_session) is not str or not self.make_session
+        ):
+            raise TypeError(
+                "prepared preconditioner native session factory must be a non-empty expression"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,12 +492,12 @@ class PreparedPreconditionerProvider:
                 "prepared preconditioner provider %r must emit a typed native emission"
                 % self.scheme
             )
-        if (emission.apply is not None) != self.preconditioned:
+        if (emission.make_session is not None) != self.preconditioned:
             raise ValueError(
                 "prepared preconditioner provider %r emission disagrees with its preconditioned "
                 "capability" % self.scheme
             )
-        if emission.apply is None:
+        if emission.make_session is None:
             return "pops::PreparedLinearPreconditioner::identity()"
 
         options = node.attrs.get("preconditioner_options")
@@ -527,14 +528,13 @@ class PreparedPreconditionerProvider:
         provider_expression = (
             "pops::PreparedLinearPreconditionerProvider::trusted_extension("
             "pops::PreparedProviderIdentity{%s, %dull}, "
-            "std::string(\"%s\", std::size_t{%d}), %s, %s)"
+            "std::string(\"%s\", std::size_t{%d}), %s)"
             % (
                 implementation,
                 self.native_component.abi_version,
                 byte_literal,
                 len(exact_parameters),
-                emission.prepare,
-                emission.apply,
+                emission.make_session,
             )
         )
         return "pops::PreparedLinearPreconditioner(*%s, %s, %s)" % (
@@ -651,8 +651,7 @@ def _emit_geometric_mg(
     vector_distribution_expr: str,
     provider: PreparedPreconditionerProvider,
 ) -> PreparedPreconditionerNativeEmission:
-    name = "precond_mg%d" % node.id
-    state = "precond_mg_state%d" % node.id
+    name = "make_precond_mg_session%d" % node.id
     options = provider.prepare_options(
         node.attrs.get("preconditioner_options"),
         where="GeometricMG preconditioner options",
@@ -663,44 +662,78 @@ def _emit_geometric_mg(
         option.emit_cpp_literal(options[option.name]) for option in provider.options
     )
     prelude.append(
-        "auto %s = std::make_shared<pops::runtime::program::GeometricMgPreconditioner>(%s);"
-        % (state, constructor_arguments)
+        "pops::PreparedLinearPreconditionerSessionFactory %s = "
+        "[ctx_owner, %s, vector_distribution = %s]("
+        "const pops::ExecutionLane& lane) {"
+        % (name, prototype, vector_distribution_expr)
     )
     prelude.append(
-        "pops::ApplyFn %s = [ctx_owner, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
-        % (name, state)
+        "  auto state = std::make_shared<"
+        "pops::runtime::program::GeometricMgPreconditioner>(%s);"
+        % constructor_arguments
     )
-    prelude.append("  auto& ctx = *ctx_owner;")
-    prelude.append("  %s->apply(ctx, out, in);" % state)
-    prelude.append("};")
-    prepare = "prepare_precond_mg%d" % node.id
-    prelude.append(
-        "pops::PreparedResourceFn %s = [ctx_owner, %s, %s]() {"
-        % (prepare, state, prototype)
-    )
-    prelude.append("  auto& ctx = *ctx_owner;")
     distribution_argument = (
-        ", " + vector_distribution_expr
+        ", vector_distribution"
         + ", ctx.program_resource_field_storage_distribution()"
     )
+    prelude.append("  return pops::PreparedLinearPreconditionerSessionCallbacks{")
     prelude.append(
-        "  %s->prepare(ctx, *%s%s);" % (state, prototype, distribution_argument)
+        "      [ctx_owner, state, %s, vector_distribution, execution_lane = &lane]() {"
+        % prototype
     )
+    prelude.append("  auto& ctx = *ctx_owner;")
+    prelude.append(
+        "  state->prepare(ctx, *%s, *execution_lane%s);"
+        % (prototype, distribution_argument)
+    )
+    prelude.append("      },")
+    prelude.append(
+        "      [ctx_owner, state, execution_lane = &lane]("
+        "pops::MultiFab& out, const pops::MultiFab& in) {"
+    )
+    prelude.append("  auto& ctx = *ctx_owner;")
+    prelude.append("  state->apply(ctx, out, in, *execution_lane);")
+    prelude.append("      },")
+    prelude.append("      [state]() { return state->persistent_field_count(); }};")
     prelude.append("};")
-    return PreparedPreconditionerNativeEmission(name, prepare)
+    return PreparedPreconditionerNativeEmission(name)
 
 
 def _validate_identity_use(_use: PreparedPreconditionerUse, _where: str) -> None:
     return None
 
 
-def _validate_geometric_mg_use(use: PreparedPreconditionerUse, where: str) -> None:
+_GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS = ("left", "right")
+
+
+def _require_supported_method_preconditioning_placement(
+    use: PreparedPreconditionerUse,
+    where: str,
+    *,
+    preconditioner: str,
+    supported: tuple[str, ...],
+) -> None:
     capabilities = use.method_provider.get("capabilities")
-    if not isinstance(capabilities, Mapping) or capabilities.get("left_preconditioning") is not True:
+    placement = (
+        capabilities.get("preconditioning_placement")
+        if isinstance(capabilities, Mapping)
+        else None
+    )
+    if type(placement) is not str or placement not in supported:
+        choices = " or ".join(repr(item) for item in supported)
         raise ValueError(
-            "%s: geometric multigrid requires an authenticated left-preconditioning method"
-            % where
+            "%s: %s requires an authenticated method preconditioning placement in (%s); got %r"
+            % (where, preconditioner, choices, placement)
         )
+
+
+def _validate_geometric_mg_use(use: PreparedPreconditionerUse, where: str) -> None:
+    _require_supported_method_preconditioning_placement(
+        use,
+        where,
+        preconditioner="geometric multigrid",
+        supported=_GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS,
+    )
     if use.components != 1:
         raise ValueError(
             "%s: geometric multigrid preconditioning is scalar-only; got %d components"
@@ -730,9 +763,11 @@ _IDENTITY_USE_POLICY = PreparedPreconditionerUsePolicy(
 )
 _GEOMETRIC_MG_USE_POLICY = PreparedPreconditionerUsePolicy(
     "pops.prepared-preconditioner.geometric-mg-use",
-    1,
+    2,
     {
-        "method_capability": "left_preconditioning",
+        "supported_method_preconditioning_placements": (
+            _GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS
+        ),
         "components": {"minimum": 1, "maximum": 1},
         "nullspace_contracts": "registered nonsingular providers",
     },

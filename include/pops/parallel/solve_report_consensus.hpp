@@ -5,6 +5,7 @@
 
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <array>
@@ -23,7 +24,7 @@ namespace pops {
 /// allocates in the solve hot path, and it remains independent of solver family and provider type.
 class ExactSolveReportConsensusScratch {
  public:
-  [[nodiscard]] bool agrees(const SolveReport& report) {
+  [[nodiscard]] bool agrees(const SolveReport& report, const ExecutionLane& lane) {
     fixed_minimum_.fill(char{0});
     std::size_t offset = 0;
     append(std::int64_t{report.iters}, offset);
@@ -35,8 +36,8 @@ class ExactSolveReportConsensusScratch {
     append(static_cast<std::uint64_t>(report.reason.size()), offset);
 
     fixed_maximum_ = fixed_minimum_;
-    all_reduce_min_inplace(fixed_minimum_.data(), offset);
-    all_reduce_max_inplace(fixed_maximum_.data(), offset);
+    all_reduce_min_inplace(fixed_minimum_.data(), offset, lane);
+    all_reduce_max_inplace(fixed_maximum_.data(), offset, lane);
     if (!std::equal(fixed_minimum_.begin(), fixed_minimum_.begin() + offset,
                     fixed_maximum_.begin()))
       return false;
@@ -45,13 +46,18 @@ class ExactSolveReportConsensusScratch {
       const std::size_t count = std::min(kReasonChunkBytes, report.reason.size() - begin);
       std::memcpy(reason_minimum_.data(), report.reason.data() + begin, count);
       std::memcpy(reason_maximum_.data(), report.reason.data() + begin, count);
-      all_reduce_min_inplace(reason_minimum_.data(), count);
-      all_reduce_max_inplace(reason_maximum_.data(), count);
+      all_reduce_min_inplace(reason_minimum_.data(), count, lane);
+      all_reduce_max_inplace(reason_maximum_.data(), count, lane);
       if (!std::equal(reason_minimum_.begin(), reason_minimum_.begin() + count,
                       reason_maximum_.begin()))
         return false;
     }
     return true;
+  }
+
+  [[nodiscard]] bool agrees(const SolveReport& report) {
+    const ExecutionLane lane = ExecutionLane::world();
+    return agrees(report, lane);
   }
 
  private:
@@ -64,8 +70,7 @@ class ExactSolveReportConsensusScratch {
   }
 
   static constexpr std::size_t kFixedPayloadBytes =
-      sizeof(std::int64_t) + 3 * sizeof(Real) + 2 * sizeof(std::int32_t) +
-      sizeof(std::uint64_t);
+      sizeof(std::int64_t) + 3 * sizeof(Real) + 2 * sizeof(std::int32_t) + sizeof(std::uint64_t);
   static constexpr std::size_t kReasonChunkBytes = 1024;
   std::array<char, kFixedPayloadBytes> fixed_minimum_{};
   std::array<char, kFixedPayloadBytes> fixed_maximum_{};

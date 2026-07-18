@@ -237,12 +237,12 @@ def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                                lines: Any = None, *, field_plans: Any = None) -> None:
-    """Lower a matrix_free_operator to an INSTALL-TIME C++ apply lambda ``apply_A{id}`` (appended to
-    @p prelude). The lambda has the pops::ApplyFn signature ``(pops::MultiFab& out, const pops::MultiFab&
-    in)``; its body re-emits the apply sub-block:
+    """Lower a matrix_free_operator to an authenticated factory of C++ execution sessions. Each
+    session owns a fresh ``ApplyFn`` and deep-copied scratch snapshot; its body re-emits the apply
+    sub-block:
 
-      - each ``scalar_field`` scratch -> a PERSISTENT shared_ptr field (declared in the prelude
-        BEFORE the lambda, captured by value), reused across every Krylov iteration (alloc-once);
+      - each ``scalar_field`` scratch -> a template field refreshed before preparation, then a
+        workspace-private deep copy reused across every Krylov iteration (alloc-once per session);
       - ``laplacian(o, i)`` -> ``ctx.laplacian(*o, i)`` (i const_cast when it is the lambda's ``in``,
         which is logically read-only -- the fill only writes ghosts, as in test_generic_krylov);
       - ``rhs_jacvec(out, in, iterate, r0, ...)`` (ADC-431) -> a finite-difference Jacobian-vector
@@ -253,9 +253,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
       - the apply RESULT (the affine the body returned, e.g. ``in - alpha*Lap(in)``) is written into
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
-    The lambda captures ``[ctx_owner, <scratch shared_ptrs>]`` and resolves the one context object
-    shared with the installed step closure.  This is load-bearing for AMR level selection and exact
-    evaluation clocks: copying a context at install time would freeze level 0 / stage 0 forever. @p
+    The factory captures ``[ctx_owner, <snapshot templates>]``; each returned apply callback owns
+    private mutable fields/scalars while retaining the installed context authority. @p
     lines is the mandatory step-body scope used to resolve the live fields captured by an optional
     rhs_jacvec.  The resulting refresh statements and both live-dt pointees are attached to the
     operator token and emitted at each solve site, immediately before native preparation.  A
@@ -271,10 +270,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # Sub-scope token map: the lambda params + persistent scratch. `in` is the const lambda param;
     # `out` is the (non-const) lambda param the result is written into.
     sub = {in_sf.id: "in", out_sf.id: "out"}
-    # 1) Persistent scratch (the scalar_field ops): one shared_ptr per scratch, declared before the
-    #    lambda so it is in scope to capture. Collected first so the capture list is known.
+    # 1) Evaluation templates. The step body refreshes these before problem.prepare(); each problem
+    #    or workspace session factory invocation deep-copies them into private mutable state.
     scratch = [w for w in block if w.op == "scalar_field"]
     captures = ["ctx_owner"]
+    session_fields = []
+    session_optional_fields = []
+    session_scalars = []
+    session_points = []
+    session_direct = ["ctx_owner"]
+    session_dynamic = []
     if lines is None:
         raise NotImplementedError(
             "matrix-free operators require a top-level prepared evaluation scope")
@@ -284,6 +289,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
         % operator_dt)
     captures.append(operator_dt)
+    session_scalars.append(operator_dt)
     for w in scratch:
         sp = "sf%d_%d" % (apply_id, w.id)
         sub[w.id] = sp
@@ -292,6 +298,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
             % (sp, ncomp))
         captures.append(sp)
+        session_fields.append(sp)
     # The affine result-write accumulator: one PERSISTENT shared_ptr (alloc-once, like the scratch),
     # zeroed and reused every matvec instead of allocated per call -- so the apply lambda allocates
     # NOTHING per Krylov iteration (the runtime r/p/Ap scratch in generic_krylov.hpp is likewise
@@ -303,6 +310,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (acc_sp, op_ncomp))
     captures.append(acc_sp)
+    session_fields.append(acc_sp)
     # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
     # while affine apply bodies evaluate exact dt-polynomial coefficients and pass the current dt
     # to the conservative axpy/lincomb ledger.  Carry the live step value through one persistent
@@ -312,6 +320,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % apply_dt)
     captures.append(apply_dt)
+    session_scalars.append(apply_dt)
     var[("operator_dt_captures", apply_id)] = (operator_dt, apply_dt)
     # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
@@ -331,6 +340,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
+                session_fields.append(frozen)
     freeze_name = "freeze_A%d" % apply_id
     if freeze_pairs:
         freeze_captures = []
@@ -378,16 +388,19 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %s));"
                 % (sp, op_ncomp, ng_state))
             captures.append(sp)
+            session_fields.append(sp)
         point = "jac_point%d_%d" % (apply_id, w.id)
         prelude.append(
             "auto %s = std::make_shared<"
             "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % point)
         captures.append(point)
+        session_points.append(point)
         has_boundary = "jac_has_boundary%d_%d" % (apply_id, w.id)
         prelude.append(
             "const bool %s = ctx.has_boundary_linearization(%d);"
             % (has_boundary, block_idx))
         captures.append(has_boundary)
+        session_direct.append(has_boundary)
         # Krylov invokes this ApplyFn sequentially.  Reuse one boundary buffer first for C(U^k) in
         # the step-body refresh, then for C'(U^k)v in each matvec.  Both conditional allocations are
         # skipped entirely for the ordinary no-boundary-linearization path.
@@ -399,6 +412,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "ctx.alloc_scalar_field(%d, %s)) : std::shared_ptr<pops::MultiFab>{};"
                 % (sp, has_boundary, op_ncomp, ng_state))
             captures.append(sp)
+            session_optional_fields.append(sp)
         field_slot = None
         if w.attrs["field_coupled"]:
             field_slot = "jac_field_slot%d_%d" % (apply_id, w.id)
@@ -406,15 +420,24 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             prelude.append(
                 "const std::string %s = %s;" % (field_slot, json.dumps(resolved_slot)))
             captures.append(field_slot)
+            session_direct.append(field_slot)
         # The BDF coefficient c*dt depends on the step's dt (the step-closure parameter), which the
         # install-time lambda cannot see; carry it through a captured shared_ptr<Real> the step body
         # sets to its dt value before the solve (the same persistent-scratch idiom as jac_uk).
         cdt = "jac_cdt%d_%d" % (apply_id, w.id)
         prelude.append("auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % cdt)
         captures.append(cdt)
+        session_scalars.append(cdt)
+        metric_scratch = "jac_metric_scratch%d_%d" % (apply_id, w.id)
+        session_dynamic.append(
+            (metric_scratch,
+             "std::make_shared<std::vector<double>>("
+             "ctx_owner->program_resource_vector_distribution()."
+             "reduction_scratch_value_count("
+             "pops::detail::PreparedFieldAlgebra::kRobustDotPayloadWidth), 0.0)"))
         jac_scratch[w.id] = (
             uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
-            field_slot, cdt, block_idx)
+            field_slot, cdt, block_idx, metric_scratch)
         # Step body: first restore the exact StagePoint of r0 and snapshot it into the shared point;
         # then refresh the frozen U^k / rhs(U^k) / dt captures.  Prepared boundary residuals are
         # removed from the frozen base so the finite difference covers only the core residual; their
@@ -428,17 +451,34 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
-        prepare_refresh.append("if (%s) {" % has_boundary)
-        prepare_refresh.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
-        prepare_refresh.append("  pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-        prepare_refresh.append(
-            "  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
-            % (point, block_idx, uk, boundary_work))
-        prepare_refresh.append(
-            "  pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
-            % (r0_core, boundary_work))
-        prepare_refresh.append("}")
         prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    boundary_sessions = {}
+    for block_idx in sorted({entry[-2] for entry in jac_scratch.values()}):
+        prototype_entry = next(
+            entry for entry in jac_scratch.values() if entry[-2] == block_idx)
+        prototype = prototype_entry[2]
+        preparation_point = prototype_entry[6]
+        name = "operator_boundary_session%d_%d" % (apply_id, block_idx)
+        session_dynamic.append(
+            (name,
+             "ctx_owner->prepare_block_boundary_session(%d, *session_%s, "
+             "*session_%s, lane)" % (block_idx, prototype, preparation_point)))
+        boundary_sessions[block_idx] = name
+    stencil_ops = {
+        "laplacian", "gradient", "divergence", "apply_laplacian_coeff",
+    }
+    has_stencil = any(w.op in stencil_ops for w in block)
+    stencil_boundary = None
+    stencil_point = None
+    if has_stencil and len(jac_ops) == 1:
+        jac_entry = jac_scratch[jac_ops[0].id]
+        stencil_boundary = boundary_sessions[jac_entry[-2]]
+        stencil_point = jac_entry[6]
+    elif has_stencil:
+        stencil_boundary = "operator_mesh_boundary_session%d" % apply_id
+        session_dynamic.append(
+            (stencil_boundary,
+             "ctx_owner->prepare_mesh_boundary_session(*session_%s, lane)" % acc_sp))
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -448,16 +488,22 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         if w.op == "laplacian":
             o, i = w.inputs
             sub[w.id] = sub[o.id]
-            body.append("ctx.laplacian(*%s, %s);" % (sub[o.id], _apply_in_arg(sub, i)))
+            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            body.append("ctx.laplacian(*%s, %s, *%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary, point_arg))
         elif w.op == "gradient":
             o, p = w.inputs
             sub[w.id] = sub[o.id]
-            body.append("ctx.gradient(*%s, %s);" % (sub[o.id], _apply_in_arg(sub, p)))
+            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            body.append("ctx.gradient(*%s, %s, *%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary, point_arg))
         elif w.op == "divergence":
             o, fx, fy = w.inputs
             sub[w.id] = sub[o.id]
-            body.append("ctx.divergence(*%s, %s, %s);"
-                        % (sub[o.id], _apply_in_arg(sub, fx), _apply_in_arg(sub, fy)))
+            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            body.append("ctx.divergence(*%s, %s, %s, *%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, fx), _apply_in_arg(sub, fy),
+                           stencil_boundary, point_arg))
         elif w.op == "apply_laplacian_coeff":
             # out = div(A grad in), A the coefficient tensor of a condensed_coeffs bundle (ADC-637): the
             # SAME two steps the retired brick wrapper did, emitted INLINE through Schur-free seams --
@@ -468,8 +514,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             ex, ey, axy, ayx = (
                 frozen_coefficients[name] for name in var[coeffs.id])
             sub[w.id] = sub[o.id]
-            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s, *%s, *%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
+            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s, *%s, *%s, "
+                        "*%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx,
+                           stencil_boundary, point_arg))
         elif w.op == "rhs_jacvec":
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
             # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
@@ -478,7 +527,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             # jac_rp are per-matvec scratch; jac_cdt holds c*dt. The op writes directly into `out`.
             o, i = w.inputs[0], w.inputs[1]
             (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
-             field_slot, cdt, block_idx) = jac_scratch[w.id]
+             field_slot, cdt, block_idx, metric_scratch) = jac_scratch[w.id]
+            boundary_session = boundary_sessions[block_idx]
             in_arg = _apply_in_arg(sub, i)        # the Krylov vector v (the lambda's const `in`)
             out_tok = sub[o.id]                   # the apply out buffer (== "out")
             eps = scalar_cpp(w.attrs["eps"])
@@ -489,10 +539,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("{")
             # FD step norms use PureFieldAlgebra::dot over the complete prepared vector
             # distribution: the same reduction contract as the Krylov residual norm.
-            body.append("  const pops::Real jvn = std::sqrt(pops::PureFieldAlgebra::dot(%s, %s));"
-                        % (in_arg, in_arg))
-            body.append("  const pops::Real jukn = std::sqrt(pops::PureFieldAlgebra::dot(*%s, *%s));"
-                        % (uk, uk))
+            body.append("  const pops::Real jvn = std::sqrt("
+                        "pops::detail::PreparedFieldAlgebra::dot("
+                        "%s, %s, ctx.program_resource_vector_distribution(), "
+                        "*%s, *execution_lane));" % (in_arg, in_arg, metric_scratch))
+            body.append("  const pops::Real jukn = std::sqrt("
+                        "pops::detail::PreparedFieldAlgebra::dot("
+                        "*%s, *%s, ctx.program_resource_vector_distribution(), "
+                        "*%s, *execution_lane));" % (uk, uk, metric_scratch))
             body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
                         "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
                         ": static_cast<pops::Real>(%s);" % (eps, eps))
@@ -504,12 +558,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 body.append("  ctx.evaluate_with_field_state_at("
                             "*%s, %s, %d, *%s, *%s, [&]() {"
                             % (point, field_slot, block_idx, up, uk))
-                body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
-                            % (point, block_idx, up, rp, flux_only))
+                body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
+                            % (point, block_idx, up, rp, flux_only, boundary_session))
                 body.append("  });")
             else:
-                body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
-                            % (point, block_idx, up, rp, flux_only))
+                body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
+                            % (point, block_idx, up, rp, flux_only, boundary_session))
             # out = v - (c*dt/h)(Rcore(U^k + h*v) - Rcore(U^k)).  The boundary contribution uses its
             # exact JVP contract below, avoiding an invalid finite difference of ghost/action effects.
             body.append("  const pops::Real jc = *%s / jh;" % cdt)
@@ -518,8 +572,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("  if (%s) {" % has_boundary)
             body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0_core))
             body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-            body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s);"
-                        % (point, block_idx, uk, in_arg, boundary_work))
+            body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s, *%s);"
+                        % (point, block_idx, uk, in_arg, boundary_work, boundary_session))
             body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
                         % (out_tok, cdt, boundary_work))
             body.append("  } else {")
@@ -533,11 +587,110 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "rhs_jacvec)" % w.op)
     body += _emit_field_combine(
         result, "out", sub, acc_sp, dt_symbol="(*%s)" % operator_dt)
-    prelude.append("pops::ApplyFn %s = [%s](pops::MultiFab& out, const pops::MultiFab& in) {"
-                   % (lam, ", ".join(captures)))
-    prelude.append("  auto& ctx = *ctx_owner;")
-    prelude += ["  " + ln for ln in body]
+    factory = "make_apply_A%d_session" % apply_id
+    prelude.append(
+        "pops::PreparedAffineOperatorSessionFactory %s = "
+        "[%s](const pops::ExecutionLane& lane) {"
+        % (factory, ", ".join(captures)))
+    session_capture_initializers = []
+    template_capture_initializers = []
+    session_refresh = []
+    for name in session_fields:
+        local = "session_%s" % name
+        template = "template_%s" % name
+        prelude.append("  auto %s = std::make_shared<pops::MultiFab>(*%s);" % (local, name))
+        prelude.append("  %s->detach_communication_caches();" % local)
+        template_capture_initializers.append("%s = %s" % (template, name))
+        session_capture_initializers.append("%s = %s" % (name, local))
+        session_refresh.append(
+            "pops::PureFieldAlgebra::copy_allocated(*%s, *%s);" % (name, template))
+    for name in session_optional_fields:
+        local = "session_%s" % name
+        template = "template_%s" % name
+        prelude.append(
+            "  auto %s = %s ? std::make_shared<pops::MultiFab>(*%s) "
+            ": std::shared_ptr<pops::MultiFab>{};" % (local, name, name))
+        prelude.append("  if (%s) %s->detach_communication_caches();" % (local, local))
+        template_capture_initializers.append("%s = %s" % (template, name))
+        session_capture_initializers.append("%s = %s" % (name, local))
+        session_refresh.append(
+            "if (%s && %s) pops::PureFieldAlgebra::copy_allocated(*%s, *%s);"
+            % (name, template, name, template))
+    for name in session_scalars:
+        local = "session_%s" % name
+        template = "template_%s" % name
+        prelude.append("  auto %s = std::make_shared<pops::Real>(*%s);" % (local, name))
+        template_capture_initializers.append("%s = %s" % (template, name))
+        session_capture_initializers.append("%s = %s" % (name, local))
+        session_refresh.append("*%s = *%s;" % (name, template))
+    for name in session_points:
+        local = "session_%s" % name
+        template = "template_%s" % name
+        prelude.append(
+            "  auto %s = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>(*%s);" % (local, name))
+        template_capture_initializers.append("%s = %s" % (template, name))
+        session_capture_initializers.append("%s = %s" % (name, local))
+        session_refresh.append("*%s = *%s;" % (name, template))
+    for name, expression in session_dynamic:
+        local = "session_%s" % name
+        prelude.append("  auto %s = %s;" % (local, expression))
+        session_capture_initializers.append("%s = %s" % (name, local))
+    allocation_terms = ["std::size_t{%d}" % len(session_fields)]
+    allocation_terms.extend(
+        "(%s ? std::size_t{1} : std::size_t{0})" % name
+        for name in session_optional_fields
+    )
+    prelude.append(
+        "  const std::size_t session_field_count = %s;"
+        % " + ".join(allocation_terms)
+    )
+    prepare_captures = (
+        session_direct + template_capture_initializers + session_capture_initializers)
+    prelude.append("  pops::PreparedResourceFn prepare = [%s]() {"
+                   % ", ".join(prepare_captures))
+    prelude.append("    auto& ctx = *ctx_owner;")
+    prelude += ["    " + statement for statement in session_refresh]
+    for w in jac_ops:
+        (uk, r0, _up, _rp, r0_core, boundary_work, point, has_boundary,
+         _field_slot, _cdt, block_idx, _metric_scratch) = jac_scratch[w.id]
+        boundary_session = boundary_sessions[block_idx]
+        prelude.append("    if (%s) {" % has_boundary)
+        prelude.append("      pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
+        prelude.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+        prelude.append(
+            "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
+            % (point, block_idx, uk, boundary_work, boundary_session))
+        prelude.append(
+            "      pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+            % (r0_core, boundary_work))
+        prelude.append("    }")
+    prelude.append("  };")
+    # Apply sees only its private session state.  The outer template snapshots are refresh inputs
+    # for prepare() and must not bloat every hot matvec closure.
+    apply_captures = session_direct + session_capture_initializers + ["execution_lane = &lane"]
+    prelude.append("  pops::ApplyFn apply = [%s](pops::MultiFab& out, const pops::MultiFab& in) {"
+                   % ", ".join(apply_captures))
+    prelude.append("    auto& ctx = *ctx_owner;")
+    prelude += ["    " + ln for ln in body]
+    prelude.append("  };")
+    prelude.append(
+        "  return pops::PreparedAffineOperatorSessionCallbacks{"
+        "std::move(prepare), std::move(apply), "
+        "[session_field_count]() { return session_field_count; }};")
     prelude.append("};")
+    exact_parameters = "%s:%d" % (program._ir_hash(), apply_id)
+    exclusive_context = any(
+        w.op == "rhs_jacvec" and bool(w.attrs["field_coupled"]) for w in block)
+    concurrency = (
+        "pops::PreparedOperatorConcurrency::Exclusive"
+        if exclusive_context
+        else "pops::PreparedOperatorConcurrency::Independent"
+    )
+    prelude.append(
+        "auto %s = pops::PreparedAffineOperatorProvider::trusted_extension("
+        "{\"pops.codegen.matrix-free-operator\", 1}, %s, %s, %s);"
+        % (lam, json.dumps(exact_parameters), factory, concurrency))
 
 
 def _prepared_preconditioner(

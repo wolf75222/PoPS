@@ -226,13 +226,70 @@ function(pops_add_mpi_rank_test name nproc)
     TIMEOUT 600)
 endfunction()
 
+function(pops_add_mpi_rank_parity_test name)
+  set(options)
+  set(oneValueArgs SIGNATURE_PREFIX)
+  set(multiValueArgs RANKS)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(NOT TARGET ${name})
+    message(FATAL_ERROR "MPI rank-parity CTest entry needs target ${name}")
+  endif()
+  if(NOT ARG_SIGNATURE_PREFIX MATCHES "^[A-Za-z0-9_.:-]+$")
+    message(FATAL_ERROR
+      "MPI rank-parity suite ${name} needs an alphanumeric SIGNATURE_PREFIX")
+  endif()
+  list(LENGTH ARG_RANKS _rank_count)
+  if(_rank_count LESS 2)
+    message(FATAL_ERROR "MPI rank-parity suite ${name} needs at least two RANKS")
+  endif()
+
+  set(_seen_ranks)
+  set(_max_rank 0)
+  set(_previous_rank 0)
+  foreach(_rank IN LISTS ARG_RANKS)
+    if(NOT _rank MATCHES "^[1-9][0-9]*$")
+      message(FATAL_ERROR "MPI rank-parity suite ${name} has invalid rank ${_rank}")
+    endif()
+    if(_rank IN_LIST _seen_ranks)
+      message(FATAL_ERROR "MPI rank-parity suite ${name} repeats rank ${_rank}")
+    endif()
+    if(_rank LESS_EQUAL _previous_rank)
+      message(FATAL_ERROR "MPI rank-parity suite ${name} RANKS must be sorted")
+    endif()
+    list(APPEND _seen_ranks ${_rank})
+    set(_previous_rank ${_rank})
+    set(_max_rank ${_rank})
+  endforeach()
+
+  set(_test_name ${name}_rank_parity)
+  add_test(NAME ${_test_name}
+    COMMAND ${CMAKE_COMMAND}
+      "-DPOPS_MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+      "-DPOPS_MPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+      "-DPOPS_MPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+      "-DPOPS_MPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+      "-DPOPS_MPI_TEST_EXECUTABLE=$<TARGET_FILE:${name}>"
+      "-DPOPS_MPI_RANKS=${ARG_RANKS}"
+      "-DPOPS_MPI_SIGNATURE_PREFIX=${ARG_SIGNATURE_PREFIX}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_mpi_rank_parity.cmake")
+  set_tests_properties(${_test_name} PROPERTIES
+    LABELS "backend;mpi;medium"
+    PROCESSORS ${_max_rank}
+    TIMEOUT 600)
+endfunction()
+
 function(pops_add_mpi_gtest_suite name)
   set(options)
   set(oneValueArgs)
-  set(multiValueArgs EXTRA_LIBS RANKS COMPILE_DEFINITIONS)
+  set(multiValueArgs EXTRA_LIBS RANKS RANK_PARITY COMPILE_DEFINITIONS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(ARG_RANKS AND ARG_RANK_PARITY)
+    message(FATAL_ERROR "MPI suite ${name} cannot mix RANKS and RANK_PARITY")
+  endif()
   if(NOT ARG_RANKS)
-    set(ARG_RANKS 1 2 4)
+    if(NOT ARG_RANK_PARITY)
+      set(ARG_RANKS 1 2 4)
+    endif()
   endif()
   pops_test_source(_src ${name})
   pops_add_gtest_suite(NAME ${name}
@@ -241,9 +298,15 @@ function(pops_add_mpi_gtest_suite name)
     COMPILE_DEFINITIONS ${ARG_COMPILE_DEFINITIONS}
     LABELS backend mpi medium
     NO_DISCOVER)
-  foreach(_np IN LISTS ARG_RANKS)
-    pops_add_mpi_rank_test(${name} ${_np})
-  endforeach()
+  if(ARG_RANK_PARITY)
+    pops_add_mpi_rank_parity_test(${name}
+      RANKS ${ARG_RANK_PARITY}
+      SIGNATURE_PREFIX "POPS_MPI_PARITY_SIGNATURE_${name}")
+  else()
+    foreach(_np IN LISTS ARG_RANKS)
+      pops_add_mpi_rank_test(${name} ${_np})
+    endforeach()
+  endif()
 endfunction()
 
 # A lifecycle test needs complete control over main(): its first executable statement must be the
@@ -400,6 +463,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_program_context_schur_free
   test_platform_manifest
   test_generic_krylov
+  test_krylov_workspace_reentrancy
   test_solver_codegen_generated
   test_dispatch_tags
   test_scheme_dispatch
@@ -674,9 +738,9 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_hybrid_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_cutcell_multibox 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_amr_compiled_parity 1 2 4)
+  set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_amr_distributed_coarse 1 2 4)
+  set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
@@ -697,6 +761,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
   set(POPS_MPI_RANKS_test_generic_krylov 1 2 4)
+  set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
@@ -757,7 +822,18 @@ if(POPS_HAS_MPI)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
-    pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
+    if(DEFINED POPS_MPI_RANK_PARITY_${_test})
+      if(DEFINED POPS_MPI_RANKS_${_test})
+        message(FATAL_ERROR "MPI suite ${_test} declares both rank and rank-parity launches")
+      endif()
+      pops_add_mpi_gtest_suite(${_test}
+        EXTRA_LIBS ${_extra_libs}
+        RANK_PARITY ${POPS_MPI_RANK_PARITY_${_test}})
+    else()
+      pops_add_mpi_gtest_suite(${_test}
+        EXTRA_LIBS ${_extra_libs}
+        RANKS ${POPS_MPI_RANKS_${_test}})
+    endif()
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
   set_tests_properties(test_mpi_field_nullspace_preflight_np2 PROPERTIES
@@ -781,6 +857,7 @@ if(POPS_HAS_MPI)
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
     test_generic_krylov
+    test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_fill_boundary_cache
@@ -824,6 +901,11 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "${POPS_GENERIC_KRYLOV_MPI_FILTER}")
+      elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly")
       elseif(_test STREQUAL "test_geometric_mg")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

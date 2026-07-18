@@ -193,6 +193,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     item.second.nullspace_ready = false;
   }
   record_topology_replacement_();
+  materialize_boundary_sessions_();
 }
 
 // --- regrid / clustering config setters (declared in amr_runtime.hpp) -----------------------------

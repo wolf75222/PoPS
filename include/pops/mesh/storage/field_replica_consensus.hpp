@@ -97,7 +97,18 @@ inline void require_collective_field_distribution_layout(const MultiFab& field,
 
   const FieldDistribution canonical_distribution =
       valid_distribution ? distribution : FieldDistribution::Distributed;
-  const std::string contract = field_distribution_layout_contract(field, canonical_distribution);
+  std::string contract;
+  long contract_failure_local = 0;
+  try {
+    contract = field_distribution_layout_contract(field, canonical_distribution);
+  } catch (...) {
+    contract_failure_local = 1;
+  }
+  const long contract_failure = all_reduce_max(contract_failure_local);
+  if (contract_failure != 0)
+    throw std::runtime_error(
+        std::string(where) +
+        ": field layout contract materialization failed on at least one communicator rank");
   const bool contract_agrees = all_ranks_agree_exact_ordered_byte_pairs(
       {{std::string_view("field-distribution-layout"), std::string_view(contract)}});
 
@@ -119,24 +130,24 @@ inline void require_collective_field_distribution_layout(const MultiFab& field,
 /// broadcasts the canonical bytes and every rank performs an exact device comparison. This avoids
 /// a host scan and remains collision-free. The caller supplies two fixed-size chunks, so memory is
 /// bounded independently of field size.
-inline void require_exact_replicated_field_values_prevalidated(const MultiFab& field, char* storage,
-                                                               std::size_t storage_size,
-                                                               const char* where) {
-  if (n_ranks() == 1)
+inline void require_exact_replicated_field_values_prevalidated(
+    const MultiFab& field, char* storage, std::size_t storage_size, const char* where,
+    const CommunicatorView& communicator) {
+  if (communicator.size() == 1)
     return;
   const long invalid_storage = all_reduce_max(
-      storage == nullptr || storage_size < field_replica_consensus_storage_size() ? 1L : 0L);
+      storage == nullptr || storage_size < field_replica_consensus_storage_size() ? 1L : 0L,
+      communicator);
   if (invalid_storage != 0)
     throw std::logic_error(std::string(where) + ": replica consensus storage is incoherent");
   long missing_box = 0;
   for (int global = 0; global < field.box_array().size(); ++global)
     missing_box = std::max(missing_box, field.local_index_of(global) < 0 ? 1L : 0L);
-  if (all_reduce_max(missing_box) != 0)
+  if (all_reduce_max(missing_box, communicator) != 0)
     throw std::logic_error(std::string(where) + ": prevalidated replica is missing a global box");
 
   static_assert(kFieldReplicaConsensusChunkBytes % sizeof(Real) == 0);
-  constexpr std::size_t chunk_value_capacity =
-      kFieldReplicaConsensusChunkBytes / sizeof(Real);
+  constexpr std::size_t chunk_value_capacity = kFieldReplicaConsensusChunkBytes / sizeof(Real);
   char* local_bytes = storage;
   char* canonical_bytes = storage + kFieldReplicaConsensusChunkBytes;
 
@@ -147,8 +158,8 @@ inline void require_exact_replicated_field_values_prevalidated(const MultiFab& f
     if (ny != 0 && nx > std::numeric_limits<std::size_t>::max() / ny)
       throw std::overflow_error(std::string(where) + ": replica size overflows size_t");
     const std::size_t cells = nx * ny;
-    if (cells != 0 && static_cast<std::size_t>(field.ncomp()) >
-                          std::numeric_limits<std::size_t>::max() / cells)
+    if (cells != 0 &&
+        static_cast<std::size_t>(field.ncomp()) > std::numeric_limits<std::size_t>::max() / cells)
       throw std::overflow_error(std::string(where) + ": replica component size overflows size_t");
     const std::size_t box_values = cells * static_cast<std::size_t>(field.ncomp());
     if (box_values > std::numeric_limits<std::size_t>::max() - total_values)
@@ -159,8 +170,7 @@ inline void require_exact_replicated_field_values_prevalidated(const MultiFab& f
   field.sync_device();
   for (std::size_t chunk_begin = 0; chunk_begin < total_values;
        chunk_begin += std::min(chunk_value_capacity, total_values - chunk_begin)) {
-    const std::size_t chunk_values =
-        std::min(chunk_value_capacity, total_values - chunk_begin);
+    const std::size_t chunk_values = std::min(chunk_value_capacity, total_values - chunk_begin);
     const std::size_t chunk_end = chunk_begin + chunk_values;
     std::size_t box_begin = 0;
     for (int global = 0; global < field.box_array().size(); ++global) {
@@ -187,10 +197,8 @@ inline void require_exact_replicated_field_values_prevalidated(const MultiFab& f
               const std::size_t cell = source - static_cast<std::size_t>(component) * plane;
               const int j = box.lo[1] + static_cast<int>(cell / nx);
               const int i = box.lo[0] + static_cast<int>(cell % nx);
-              const std::uint64_t bits = Kokkos::bit_cast<std::uint64_t>(
-                  values(i, j, component));
-              const std::size_t destination =
-                  (destination_begin + offset) * sizeof(Real);
+              const std::uint64_t bits = Kokkos::bit_cast<std::uint64_t>(values(i, j, component));
+              const std::size_t destination = (destination_begin + offset) * sizeof(Real);
               for (std::size_t byte = 0; byte < sizeof(Real); ++byte)
                 local_bytes[destination + byte] =
                     static_cast<char>((bits >> (byte * 8u)) & std::uint64_t{0xff});
@@ -201,14 +209,14 @@ inline void require_exact_replicated_field_values_prevalidated(const MultiFab& f
     device_fence();
 
     const std::size_t chunk_bytes = chunk_values * sizeof(Real);
-    if (my_rank() == 0) {
+    if (communicator.rank() == 0) {
       Kokkos::parallel_for(
           "pops_copy_canonical_field_replica",
           Kokkos::RangePolicy<Kokkos::IndexType<std::size_t>>(0, chunk_bytes),
           KOKKOS_LAMBDA(const std::size_t index) { canonical_bytes[index] = local_bytes[index]; });
       device_fence();
     }
-    broadcast_bytes_inplace(canonical_bytes, chunk_bytes, 0);
+    broadcast_bytes_inplace(canonical_bytes, chunk_bytes, 0, communicator);
     // MPI writes the pinned host buffer outside the Kokkos execution space. Establish the
     // host-to-execution-space visibility boundary before the exact device comparison.
     device_fence();
@@ -222,10 +230,17 @@ inline void require_exact_replicated_field_values_prevalidated(const MultiFab& f
           mismatch = mismatch < differs ? differs : mismatch;
         },
         Kokkos::Max<long>(local_mismatch));
-    if (all_reduce_max(local_mismatch) != 0)
+    if (all_reduce_max(local_mismatch, communicator) != 0)
       throw std::runtime_error(std::string(where) +
                                ": replicated field values differ between communicator ranks");
   }
+}
+
+inline void require_exact_replicated_field_values_prevalidated(const MultiFab& field, char* storage,
+                                                               std::size_t storage_size,
+                                                               const char* where) {
+  require_exact_replicated_field_values_prevalidated(field, storage, storage_size, where,
+                                                     world_communicator_view());
 }
 
 inline void require_exact_field_replica(const MultiFab& field, FieldDistribution distribution,

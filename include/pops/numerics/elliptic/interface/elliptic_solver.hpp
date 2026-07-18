@@ -27,6 +27,7 @@
 #include <pops/mesh/storage/field_replica_consensus.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -367,14 +368,15 @@ concept EllipticFactory =
 
 template <EllipticSolver Solver, class Factory>
   requires EllipticFactory<std::remove_cvref_t<Factory>, Solver>
-Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
-  const int rank = my_rank();
-  const int ranks = n_ranks();
+Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory,
+                            const ExecutionLane& lane) {
+  const int rank = lane.rank();
+  const int ranks = lane.size();
   const long raw_distribution = static_cast<long>(request.distribution);
-  const long minimum_distribution = all_reduce_min(raw_distribution);
-  const long maximum_distribution = all_reduce_max(raw_distribution);
+  const long minimum_distribution = all_reduce_min(raw_distribution, lane);
+  const long maximum_distribution = all_reduce_max(raw_distribution, lane);
   const long invalid_request =
-      all_reduce_max(detail::elliptic_build_request_is_valid(request, rank, ranks) ? 0L : 1L);
+      all_reduce_max(detail::elliptic_build_request_is_valid(request, rank, ranks) ? 0L : 1L, lane);
   if (minimum_distribution != maximum_distribution)
     throw std::invalid_argument(
         "elliptic solver field distribution differs between communicator ranks");
@@ -385,18 +387,40 @@ Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
   // spacing, so semantically identical requests cannot disagree because one caller left defaults.
   request.boundary.dx = request.geometry.dx();
   request.boundary.dy = request.geometry.dy();
-  const std::string request_contract = detail::elliptic_build_request_contract(request);
+  std::string request_contract;
+  long request_contract_failure_local = 0;
+  try {
+    request_contract = detail::elliptic_build_request_contract(request);
+  } catch (...) {
+    request_contract_failure_local = 1;
+  }
+  if (all_reduce_max(request_contract_failure_local, lane) != 0)
+    throw std::runtime_error(
+        "elliptic construction-request contract failed on at least one communicator rank");
   const bool request_agrees = all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("elliptic-build-request"), std::string_view(request_contract)}});
+      {{std::string_view("elliptic-build-request"), std::string_view(request_contract)}}, lane);
   if (!request_agrees)
     throw std::invalid_argument(
         "elliptic solver construction request differs between communicator ranks");
   const FieldDistribution requested_distribution = request.distribution;
-  const std::vector<Box2D> requested_boxes = request.boxes.boxes();
-  const std::vector<int> requested_owners = request.mapping.ranks();
-  const Geometry requested_geometry = request.geometry;
-  const int requested_rhs_ghosts = request.rhs_ghosts;
-  const int requested_phi_ghosts = request.phi_ghosts;
+  std::vector<Box2D> requested_boxes;
+  std::vector<int> requested_owners;
+  Geometry requested_geometry{};
+  int requested_rhs_ghosts = 0;
+  int requested_phi_ghosts = 0;
+  long request_capture_failure_local = 0;
+  try {
+    requested_boxes = request.boxes.boxes();
+    requested_owners = request.mapping.ranks();
+    requested_geometry = request.geometry;
+    requested_rhs_ghosts = request.rhs_ghosts;
+    requested_phi_ghosts = request.phi_ghosts;
+  } catch (...) {
+    request_capture_failure_local = 1;
+  }
+  if (all_reduce_max(request_capture_failure_local, lane) != 0)
+    throw std::runtime_error(
+        "elliptic construction-request capture failed on at least one communicator rank");
   bool local_declaration_failed = false;
   std::string factory_contract;
   EllipticOperatorContract expected_operator_contract;
@@ -410,18 +434,19 @@ Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
   } catch (...) {
     local_declaration_failed = true;
   }
-  if (all_reduce_max(local_declaration_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(local_declaration_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic factory declaration failed on at least one rank");
   const bool factory_contract_valid =
       !factory_contract.empty() && expected_operator_contract.valid();
   const bool factory_agrees = all_ranks_agree_exact_ordered_byte_pairs(
       {{std::string_view("elliptic-factory"), std::string_view(factory_contract)},
        {std::string_view("elliptic-expected-operator"),
-        expected_operator_contract.exact_fingerprint()}});
+        expected_operator_contract.exact_fingerprint()}},
+      lane);
   const bool semantic_mismatch = !factory_supported || !factory_contract_valid ||
                                  !field_distribution_is_valid(materialized_distribution) ||
                                  materialized_distribution != requested_distribution;
-  if (all_reduce_max(semantic_mismatch ? 1L : 0L) != 0)
+  if (all_reduce_max(semantic_mismatch ? 1L : 0L, lane) != 0)
     throw std::invalid_argument(
         "elliptic factory cannot materialize the exact construction request");
   if (!factory_agrees)
@@ -429,7 +454,7 @@ Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
         "elliptic factory implementation or options differ between communicator ranks");
   EllipticFactoryBuildResult<Solver> build = factory.build(std::move(request));
   const bool local_build_failed = build.error != nullptr || !build.solver.has_value();
-  if (all_reduce_max(local_build_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(local_build_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic factory construction failed on at least one rank");
   Solver& solver = *build.solver;
 
@@ -448,10 +473,14 @@ Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
     actual_operator_contract =
         std::as_const(solver).prepared_operator_contract().exact_fingerprint();
     const auto field_mismatch = [&](const MultiFab& field, int expected_ghosts) {
+      const bool distribution_layout_matches =
+          requested_distribution == FieldDistribution::Distributed ||
+          (requested_distribution == FieldDistribution::Replicated &&
+           std::all_of(field.dmap().ranks().begin(), field.dmap().ranks().end(),
+                       [rank](int owner) { return owner == rank; }));
       return field.box_array().boxes() != requested_boxes ||
              field.dmap().ranks() != requested_owners || field.ncomp() != 1 ||
-             field.n_grow() != expected_ghosts ||
-             !detail::field_distribution_layout_matches(field, requested_distribution);
+             field.n_grow() != expected_ghosts || !distribution_layout_matches;
     };
     local_materialization_mismatch =
         actual_distribution != requested_distribution || actual_operator_contract.empty() ||
@@ -464,19 +493,29 @@ Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
   } catch (...) {
     local_inspection_failed = true;
   }
-  if (all_reduce_max(local_inspection_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(local_inspection_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic backend inspection failed on at least one rank");
   const bool backend_agrees = all_ranks_agree_exact_ordered_byte_pairs(
       {{std::string_view("elliptic-actual-operator"), std::string_view(actual_operator_contract)},
        {std::string_view("elliptic-rhs-layout"), std::string_view(rhs_layout_contract)},
-       {std::string_view("elliptic-phi-layout"), std::string_view(phi_layout_contract)}});
-  if (all_reduce_max(local_materialization_mismatch ? 1L : 0L) != 0)
+       {std::string_view("elliptic-phi-layout"), std::string_view(phi_layout_contract)}},
+      lane);
+  if (all_reduce_max(local_materialization_mismatch ? 1L : 0L, lane) != 0)
     throw std::invalid_argument(
         "elliptic backend did not materialize the requested operator and field contract");
   if (!backend_agrees)
     throw std::invalid_argument(
         "elliptic backend operator or field contract differs between communicator ranks");
   return std::move(solver);
+}
+
+/// Sequential/control-path compatibility wrapper. Prepared runtime sessions pass their private
+/// ExecutionLane explicitly so independently ordered solver construction never shares WORLD.
+template <EllipticSolver Solver, class Factory>
+  requires EllipticFactory<std::remove_cvref_t<Factory>, Solver>
+Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
+  const ExecutionLane lane = ExecutionLane::world();
+  return make_elliptic_solver<Solver>(std::move(request), std::forward<Factory>(factory), lane);
 }
 
 }  // namespace pops

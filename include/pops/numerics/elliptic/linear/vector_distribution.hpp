@@ -6,6 +6,7 @@
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/field_replica_consensus.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/field_distribution_reduction.hpp>
 
 #include <algorithm>
@@ -43,33 +44,32 @@ struct PreparedVectorDistributionStatus {
 
 /// Extension protocol for one physical vector-distribution strategy.  A provider owns layout
 /// authentication, canonical layout identity, exact-value preflight, scientific reduction and all
-/// scratch requirements.  Krylov therefore never switches on a closed distribution enum.
+/// scratch requirements. Krylov therefore never switches on a closed distribution enum. Source
+/// objects are immutable and shared by concurrent workspace lanes; callbacks must be reentrant and
+/// keep mutable state exclusively in the caller-provided scratch spans. Collective callbacks are
+/// noexcept and must complete one identical trace and status on every lane rank.
 template <class Source>
 concept PreparedVectorDistributionSource =
     std::copy_constructible<std::remove_cvref_t<Source>> &&
     requires(const std::remove_cvref_t<Source>& source, ExactContractBuilder& contract,
-             const MultiFab& field, int owner, std::span<double> values,
-             std::span<double> reduction_scratch, std::span<char> validation_scratch,
-             const char* where) {
+             const MultiFab& field, std::span<double> values, std::span<double> reduction_scratch,
+             std::span<char> validation_scratch, const char* where, const ExecutionLane& lane) {
       {
         std::remove_cvref_t<Source>::provider_identity()
       } noexcept -> std::same_as<PreparedProviderIdentity>;
       { source.serialize_exact_parameters(contract) } -> std::same_as<void>;
       { source.layout_matches(field) } -> std::same_as<bool>;
       { source.layout_contract(field) } -> std::same_as<std::string>;
-      { source.canonical_owner(owner) } noexcept -> std::same_as<int>;
-      {
-        source.reduction_scratch_value_count(values.size())
-      } noexcept -> std::same_as<std::size_t>;
+      { source.reduction_scratch_value_count(values.size()) } noexcept -> std::same_as<std::size_t>;
       { source.validation_scratch_byte_count() } noexcept -> std::same_as<std::size_t>;
       {
-        source.reduce_sum_values(values, reduction_scratch, where)
+        source.reduce_sum_values(values, reduction_scratch, where, lane)
       } noexcept -> std::same_as<PreparedVectorDistributionStatus>;
       {
-        source.reduce_max_values(values, reduction_scratch, where)
+        source.reduce_max_values(values, reduction_scratch, where, lane)
       } noexcept -> std::same_as<PreparedVectorDistributionStatus>;
       {
-        source.require_exact_values(field, validation_scratch, where)
+        source.require_exact_values(field, validation_scratch, where, lane)
       } noexcept -> std::same_as<PreparedVectorDistributionStatus>;
     };
 
@@ -94,35 +94,30 @@ struct NativeFieldDistributionSource {
     return field_distribution_layout_contract(field, distribution);
   }
 
-  [[nodiscard]] int canonical_owner(int owner) const noexcept {
-    return distribution == FieldDistribution::Replicated ? 0 : owner;
-  }
-
-  [[nodiscard]] std::size_t reduction_scratch_value_count(
-      std::size_t value_count) const noexcept {
+  [[nodiscard]] std::size_t reduction_scratch_value_count(std::size_t value_count) const noexcept {
     return distribution == FieldDistribution::Replicated
                ? field_distribution_consensus_storage_size(value_count)
                : 0u;
   }
 
   [[nodiscard]] std::size_t validation_scratch_byte_count() const noexcept {
-    return distribution == FieldDistribution::Replicated
-               ? field_replica_consensus_storage_size()
-               : 0u;
+    return distribution == FieldDistribution::Replicated ? field_replica_consensus_storage_size()
+                                                         : 0u;
   }
 
-  PreparedVectorDistributionStatus reduce_sum_values(
-      std::span<double> values, std::span<double> scratch, const char*) const noexcept {
+  PreparedVectorDistributionStatus reduce_sum_values(std::span<double> values,
+                                                     std::span<double> scratch, const char*,
+                                                     const ExecutionLane& lane) const noexcept {
     try {
       if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         return PreparedVectorDistributionStatus::failure(
             1, "native distribution reduction exceeds MPI count capacity");
       if (distribution == FieldDistribution::Distributed) {
-        all_reduce_sum_inplace(values.data(), static_cast<int>(values.size()));
+        all_reduce_sum_inplace(values.data(), static_cast<int>(values.size()), lane);
         return PreparedVectorDistributionStatus::success();
       }
       const FieldDistributionReductionStatus status = reduce_replicated_field_values_inplace(
-          values.data(), values.size(), scratch.data(), scratch.size());
+          values.data(), values.size(), scratch.data(), scratch.size(), lane.communicator());
       if (status == FieldDistributionReductionStatus::NonfiniteReplica) {
         std::fill(values.begin(), values.end(), std::numeric_limits<double>::quiet_NaN());
         return PreparedVectorDistributionStatus::success();
@@ -137,15 +132,16 @@ struct NativeFieldDistributionSource {
     }
   }
 
-  PreparedVectorDistributionStatus reduce_max_values(
-      std::span<double> values, std::span<double> scratch, const char* where) const noexcept {
+  PreparedVectorDistributionStatus reduce_max_values(std::span<double> values,
+                                                     std::span<double> scratch, const char* where,
+                                                     const ExecutionLane& lane) const noexcept {
     if (distribution != FieldDistribution::Distributed)
-      return reduce_sum_values(values, scratch, where);
+      return reduce_sum_values(values, scratch, where, lane);
     try {
       if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         return PreparedVectorDistributionStatus::failure(
             1, "native distribution reduction exceeds MPI count capacity");
-      all_reduce_max_inplace(values.data(), static_cast<int>(values.size()));
+      all_reduce_max_inplace(values.data(), static_cast<int>(values.size()), lane);
       return PreparedVectorDistributionStatus::success();
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(
@@ -153,13 +149,14 @@ struct NativeFieldDistributionSource {
     }
   }
 
-  PreparedVectorDistributionStatus require_exact_values(
-      const MultiFab& field, std::span<char> scratch, const char* where) const noexcept {
+  PreparedVectorDistributionStatus require_exact_values(const MultiFab& field,
+                                                        std::span<char> scratch, const char* where,
+                                                        const ExecutionLane& lane) const noexcept {
     if (distribution != FieldDistribution::Replicated)
       return PreparedVectorDistributionStatus::success();
     try {
       require_exact_replicated_field_values_prevalidated(field, scratch.data(), scratch.size(),
-                                                         where);
+                                                         where, lane.communicator());
       return PreparedVectorDistributionStatus::success();
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(
@@ -223,12 +220,7 @@ class PreparedVectorDistribution {
     return implementation_->layout_contract(field);
   }
 
-  [[nodiscard]] int canonical_owner(int owner) const noexcept {
-    return implementation_->canonical_owner(owner);
-  }
-
-  [[nodiscard]] std::size_t reduction_scratch_value_count(
-      std::size_t value_count) const noexcept {
+  [[nodiscard]] std::size_t reduction_scratch_value_count(std::size_t value_count) const noexcept {
     return implementation_->reduction_scratch_value_count(value_count);
   }
 
@@ -236,21 +228,32 @@ class PreparedVectorDistribution {
     return implementation_->validation_scratch_byte_count();
   }
 
+  void reduce_sum_values(std::span<double> values, std::span<double> scratch, const char* where,
+                         const ExecutionLane& lane) const {
+    const PreparedVectorDistributionStatus status =
+        implementation_->reduce_sum_values(values, scratch, where, lane);
+    require_callback_success_(status, where);
+  }
   void reduce_sum_values(std::span<double> values, std::span<double> scratch,
                          const char* where) const {
-    const PreparedVectorDistributionStatus status =
-        implementation_->reduce_sum_values(values, scratch, where);
-    require_callback_success_(status, where);
+    const ExecutionLane lane = ExecutionLane::world();
+    reduce_sum_values(values, scratch, where, lane);
   }
 
+  void reduce_max_values(std::span<double> values, std::span<double> scratch, const char* where,
+                         const ExecutionLane& lane) const {
+    const PreparedVectorDistributionStatus status =
+        implementation_->reduce_max_values(values, scratch, where, lane);
+    require_callback_success_(status, where);
+  }
   void reduce_max_values(std::span<double> values, std::span<double> scratch,
                          const char* where) const {
-    const PreparedVectorDistributionStatus status =
-        implementation_->reduce_max_values(values, scratch, where);
-    require_callback_success_(status, where);
+    const ExecutionLane lane = ExecutionLane::world();
+    reduce_max_values(values, scratch, where, lane);
   }
 
-  void require_collective_layout(const MultiFab& field, const char* where) const {
+  void require_collective_layout(const MultiFab& field, const char* where,
+                                 const ExecutionLane& lane) const {
     const PreparedProviderIdentity identity = provider_identity();
     bool matches = false;
     long callback_failure_local = 0;
@@ -259,13 +262,13 @@ class PreparedVectorDistribution {
     } catch (...) {
       callback_failure_local = 1;
     }
-    const long callback_failure = all_reduce_max(callback_failure_local);
+    const long callback_failure = all_reduce_max(callback_failure_local, lane);
     if (callback_failure != 0)
       throw std::invalid_argument(std::string(where) +
                                   ": vector-distribution layout predicate failed on at least "
                                   "one communicator rank for provider '" +
                                   std::string(identity.name) + "'");
-    const long invalid = all_reduce_max(matches ? 0L : 1L);
+    const long invalid = all_reduce_max(matches ? 0L : 1L, lane);
     if (invalid != 0)
       throw std::invalid_argument(std::string(where) + ": vector layout rejected by provider '" +
                                   std::string(identity.name) + "'");
@@ -277,7 +280,7 @@ class PreparedVectorDistribution {
     } catch (...) {
       callback_failure_local = 1;
     }
-    const long contract_failure = all_reduce_max(callback_failure_local);
+    const long contract_failure = all_reduce_max(callback_failure_local, lane);
     if (contract_failure != 0)
       throw std::invalid_argument(std::string(where) +
                                   ": vector-distribution layout contract failed on at least "
@@ -285,17 +288,28 @@ class PreparedVectorDistribution {
                                   std::string(identity.name) + "'");
     const bool agrees = all_ranks_agree_exact_ordered_byte_pairs(
         {{std::string_view("prepared-vector-distribution"), collective_contract()},
-         {std::string_view("prepared-vector-layout"), local_layout_contract}});
+         {std::string_view("prepared-vector-layout"), local_layout_contract}},
+        lane);
     if (!agrees)
       throw std::invalid_argument(std::string(where) +
                                   ": vector distribution contract differs between ranks");
   }
 
+  void require_collective_layout(const MultiFab& field, const char* where) const {
+    const ExecutionLane lane = ExecutionLane::world();
+    require_collective_layout(field, where, lane);
+  }
+
+  void require_exact_values(const MultiFab& field, std::span<char> scratch, const char* where,
+                            const ExecutionLane& lane) const {
+    const PreparedVectorDistributionStatus status =
+        implementation_->require_exact_values(field, scratch, where, lane);
+    require_callback_success_(status, where);
+  }
   void require_exact_values(const MultiFab& field, std::span<char> scratch,
                             const char* where) const {
-    const PreparedVectorDistributionStatus status =
-        implementation_->require_exact_values(field, scratch, where);
-    require_callback_success_(status, where);
+    const ExecutionLane lane = ExecutionLane::world();
+    require_exact_values(field, scratch, where, lane);
   }
 
   friend bool operator==(const PreparedVectorDistribution& left,
@@ -318,16 +332,14 @@ class PreparedVectorDistribution {
     [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
     [[nodiscard]] virtual bool layout_matches(const MultiFab&) const = 0;
     [[nodiscard]] virtual std::string layout_contract(const MultiFab&) const = 0;
-    [[nodiscard]] virtual int canonical_owner(int) const noexcept = 0;
-    [[nodiscard]] virtual std::size_t reduction_scratch_value_count(
-        std::size_t) const noexcept = 0;
+    [[nodiscard]] virtual std::size_t reduction_scratch_value_count(std::size_t) const noexcept = 0;
     [[nodiscard]] virtual std::size_t validation_scratch_byte_count() const noexcept = 0;
     virtual PreparedVectorDistributionStatus reduce_sum_values(
-        std::span<double>, std::span<double>, const char*) const noexcept = 0;
+        std::span<double>, std::span<double>, const char*, const ExecutionLane&) const noexcept = 0;
     virtual PreparedVectorDistributionStatus reduce_max_values(
-        std::span<double>, std::span<double>, const char*) const noexcept = 0;
+        std::span<double>, std::span<double>, const char*, const ExecutionLane&) const noexcept = 0;
     virtual PreparedVectorDistributionStatus require_exact_values(
-        const MultiFab&, std::span<char>, const char*) const noexcept = 0;
+        const MultiFab&, std::span<char>, const char*, const ExecutionLane&) const noexcept = 0;
   };
 
   template <PreparedVectorDistributionSource Source>
@@ -341,7 +353,7 @@ class PreparedVectorDistribution {
       source_.serialize_exact_parameters(parameters);
       ExactContractBuilder contract;
       contract.text("pops.prepared-vector-distribution")
-          .scalar(std::uint32_t{1})
+          .scalar(std::uint32_t{2})
           .text(identity.name)
           .scalar(identity.version)
           .bytes(parameters.view());
@@ -351,17 +363,12 @@ class PreparedVectorDistribution {
     PreparedProviderIdentity provider_identity() const noexcept override {
       return Source::provider_identity();
     }
-    std::string_view collective_contract() const noexcept override {
-      return collective_contract_;
-    }
+    std::string_view collective_contract() const noexcept override { return collective_contract_; }
     bool layout_matches(const MultiFab& field) const override {
       return source_.layout_matches(field);
     }
     std::string layout_contract(const MultiFab& field) const override {
       return source_.layout_contract(field);
-    }
-    int canonical_owner(int owner) const noexcept override {
-      return source_.canonical_owner(owner);
     }
     std::size_t reduction_scratch_value_count(std::size_t count) const noexcept override {
       return source_.reduction_scratch_value_count(count);
@@ -370,19 +377,19 @@ class PreparedVectorDistribution {
       return source_.validation_scratch_byte_count();
     }
     PreparedVectorDistributionStatus reduce_sum_values(
-        std::span<double> values, std::span<double> scratch,
-        const char* where) const noexcept override {
-      return source_.reduce_sum_values(values, scratch, where);
+        std::span<double> values, std::span<double> scratch, const char* where,
+        const ExecutionLane& lane) const noexcept override {
+      return source_.reduce_sum_values(values, scratch, where, lane);
     }
     PreparedVectorDistributionStatus reduce_max_values(
-        std::span<double> values, std::span<double> scratch,
-        const char* where) const noexcept override {
-      return source_.reduce_max_values(values, scratch, where);
+        std::span<double> values, std::span<double> scratch, const char* where,
+        const ExecutionLane& lane) const noexcept override {
+      return source_.reduce_max_values(values, scratch, where, lane);
     }
     PreparedVectorDistributionStatus require_exact_values(
-        const MultiFab& field, std::span<char> scratch,
-        const char* where) const noexcept override {
-      return source_.require_exact_values(field, scratch, where);
+        const MultiFab& field, std::span<char> scratch, const char* where,
+        const ExecutionLane& lane) const noexcept override {
+      return source_.require_exact_values(field, scratch, where, lane);
     }
 
    private:
@@ -412,7 +419,9 @@ inline const PreparedVectorDistribution PreparedVectorDistribution::Distributed 
 inline const PreparedVectorDistribution PreparedVectorDistribution::Replicated =
     PreparedVectorDistribution::replicated();
 
-inline bool field_distribution_is_valid(const PreparedVectorDistribution&) noexcept { return true; }
+inline bool field_distribution_is_valid(const PreparedVectorDistribution&) noexcept {
+  return true;
+}
 
 namespace detail {
 
@@ -421,8 +430,8 @@ inline std::string field_distribution_layout_contract(
   return distribution.layout_contract(field);
 }
 
-inline bool field_distribution_layout_matches(
-    const MultiFab& field, const PreparedVectorDistribution& distribution) {
+inline bool field_distribution_layout_matches(const MultiFab& field,
+                                              const PreparedVectorDistribution& distribution) {
   return distribution.layout_matches(field);
 }
 
@@ -431,14 +440,20 @@ inline void require_collective_field_distribution_layout(
   distribution.require_collective_layout(field, where);
 }
 
-inline void reduce_prepared_vector_values_inplace(
-    const PreparedVectorDistribution& distribution, double* values, int count, double* scratch,
-    std::size_t scratch_count, const char* quantity) {
+inline void require_collective_field_distribution_layout(
+    const MultiFab& field, const PreparedVectorDistribution& distribution, const char* where,
+    const ExecutionLane& lane) {
+  distribution.require_collective_layout(field, where, lane);
+}
+
+inline void reduce_prepared_vector_values_inplace(const PreparedVectorDistribution& distribution,
+                                                  double* values, int count, double* scratch,
+                                                  std::size_t scratch_count, const char* quantity,
+                                                  const ExecutionLane& lane) {
   if (count < 0)
     throw std::invalid_argument(std::string(quantity) + " has a negative reduction count");
-  distribution.reduce_sum_values(
-      std::span<double>(values, static_cast<std::size_t>(count)),
-      std::span<double>(scratch, scratch_count), quantity);
+  distribution.reduce_sum_values(std::span<double>(values, static_cast<std::size_t>(count)),
+                                 std::span<double>(scratch, scratch_count), quantity, lane);
 }
 
 }  // namespace detail

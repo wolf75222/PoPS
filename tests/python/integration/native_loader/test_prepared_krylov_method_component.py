@@ -190,8 +190,8 @@ def _provider(include_root: Path):
             options_schema="vendor.one-step-krylov.options@1",
             emitter_id="vendor.one-step-krylov@1",
             capabilities={
-                "contract_version": 1,
-                "left_preconditioning": False,
+                "contract_version": 2,
+                "preconditioning_placement": "none",
             },
             native_component=PreparedNativeComponent.header_only(
                 "vendor.one-step-krylov",
@@ -328,8 +328,8 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     result = np.asarray(simulation.get_state("blk"))[0]
     np.testing.assert_allclose(result, 0.5 * initial, rtol=0.0, atol=1.0e-13)
     low_workspace_calls, low_solve_calls = _native_counters(compiled.so_path)
-    assert low_workspace_calls >= 1
-    assert low_solve_calls >= 1
+    assert low_workspace_calls == 1
+    assert low_solve_calls == 1
 
     # The exact same provider must survive the final public lifecycle rather than only the private
     # compile/install seam used above.  Keep both proofs: the first exposes generated C++, while this
@@ -362,7 +362,5 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     np.testing.assert_allclose(public_result, 0.5 * initial, rtol=0.0, atol=1.0e-13)
 
     public_workspace_calls, public_solve_calls = _native_counters(public_compiled.so_path)
-    assert public_workspace_calls >= 1
-    assert public_solve_calls >= 1
-    assert low_workspace_calls + public_workspace_calls >= 2
-    assert low_solve_calls + public_solve_calls >= 2
+    assert public_workspace_calls == 1
+    assert public_solve_calls == 1

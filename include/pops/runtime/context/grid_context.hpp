@@ -7,9 +7,12 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
+#include <pops/parallel/execution_lane.hpp>
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <utility>
 
 /// @file
 /// @brief Block grid context plus closures, shared between System (which installs them) and
@@ -62,10 +65,189 @@ struct GridContext {
   /// their exact qualified identities here; the boundary executor remains independent of System,
   /// AMR, field registries and storage classes.  Empty selects the ordinary one-state/one-aux
   /// convenience adapter and never fabricates aliases for an N-ary request.
-  using BoundaryFieldRegistryFactory = std::function<detail::BoundaryFieldRegistry(
-      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab*, MultiFab*)>;
+  using BoundaryFieldRegistryFactory =
+      std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                         const MultiFab*, MultiFab*, detail::BoundaryFieldRegistry&)>;
   BoundaryFieldRegistryFactory boundary_field_registry{};
+  /// Optional hierarchy producer that runs before same-level/physical filling. Uniform contexts
+  /// leave it empty; an AMR block/level context binds its exact prepared coarse/fine authority.
+  std::function<void(MultiFab&)> coarse_fine_fill{};
 };
+
+/// Move-only execution state for one exact GridContext on one ExecutionLane.
+///
+/// A resolved boundary plan may own native component state.  That state is materialized here once,
+/// before a prepared operator enters its numerical loop, and is then reused by every ghost,
+/// residual and JVP call.  A context without a resolved plan remains an explicit mesh-only
+/// authority (BCRec + geometry); it does not probe or borrow a plan from another block.
+class PreparedGridBoundarySession final {
+ public:
+  PreparedGridBoundarySession(GridContext context, const ExecutionLane& lane)
+      : context_(std::move(context)), lane_(&lane) {
+    if (context_.boundary_plan && context_.boundary_plan->has_component_boundaries())
+      throw std::invalid_argument(
+          "component boundary session requires its exact prototype and preparation point");
+    if (context_.boundary_plan)
+      plan_session_.emplace(context_.boundary_plan->make_session(lane));
+  }
+
+  PreparedGridBoundarySession(GridContext context, const ExecutionLane& lane, MultiFab& prototype,
+                              const runtime::multiblock::BoundaryEvaluationPoint& preparation_point)
+      : context_(std::move(context)), lane_(&lane) {
+    if (!context_.boundary_plan)
+      return;
+    plan_session_.emplace(context_.boundary_plan->make_session(lane));
+    // Built-in BCs have no component registry or executor workspace to materialize.  Keep their
+    // prepared plan session (and therefore their exact lane), but do not invent a state identity
+    // merely to pass through the component-only binder below.
+    if (!context_.boundary_plan->has_component_boundaries())
+      return;
+    registry_.configure_states(context_.boundary_plan->required_state_identities());
+    registry_.configure_directions(context_.boundary_plan->required_direction_identities());
+    registry_.configure_fields(context_.boundary_plan->required_field_identities());
+    registry_.configure_outputs(context_.boundary_plan->all_output_identities());
+    bind_registry_(preparation_point, prototype, nullptr, nullptr);
+    plan_session_->prepare_ghost_executor(prototype, registry_, context_.geom);
+    if (!context_.boundary_plan->residual_output_identities().empty()) {
+      bind_registry_(preparation_point, prototype, nullptr, &prototype);
+      plan_session_->prepare_residual_executor(registry_, context_.geom);
+    }
+    if (!context_.boundary_plan->jvp_output_identities().empty()) {
+      bind_registry_(preparation_point, prototype, &prototype, &prototype);
+      plan_session_->prepare_jvp_executor(registry_, context_.geom);
+    }
+  }
+
+  PreparedGridBoundarySession(const PreparedGridBoundarySession&) = delete;
+  PreparedGridBoundarySession& operator=(const PreparedGridBoundarySession&) = delete;
+  PreparedGridBoundarySession(PreparedGridBoundarySession&&) noexcept = default;
+  PreparedGridBoundarySession& operator=(PreparedGridBoundarySession&&) noexcept = default;
+  ~PreparedGridBoundarySession() = default;
+
+  const GridContext& context() const noexcept { return context_; }
+  bool has_resolved_plan() const noexcept { return plan_session_.has_value(); }
+  const PreparedBoundaryPlan* resolved_plan() const noexcept {
+    return context_.boundary_plan.get();
+  }
+
+  /// Mesh-only/operator fill.  A component-backed plan deliberately refuses this route because an
+  /// exact BoundaryEvaluationPoint is part of its authored contract.
+  void fill(MultiFab& state) const {
+    if (context_.coarse_fine_fill)
+      context_.coarse_fine_fill(state);
+    if (plan_session_) {
+      plan_session_->fill_same_level_and_physical(state, context_.dom);
+      return;
+    }
+    fill_ghosts(state, context_.dom, context_.bc, lane());
+  }
+
+  void fill(MultiFab& state, const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (context_.coarse_fine_fill)
+      context_.coarse_fine_fill(state);
+    fill_same_level_and_physical(state, point);
+  }
+
+  /// Apply only same-level and physical boundary production.  AMR reflux first installs an exact
+  /// temporal coarse/fine snapshot and must not have that snapshot overwritten by the ordinary
+  /// hierarchy callback.  The component registry and executor workspaces remain the same prepared
+  /// objects used by fill().
+  void fill_same_level_and_physical(
+      MultiFab& state, const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!plan_session_) {
+      fill_ghosts(state, context_.dom, context_.bc, lane());
+      return;
+    }
+    if (!context_.boundary_plan->has_component_boundaries()) {
+      plan_session_->fill_same_level_and_physical(state, context_.dom);
+      return;
+    }
+    bind_registry_(point, state, nullptr, nullptr);
+    plan_session_->fill_same_level_and_physical(state, registry_, context_.geom, point);
+  }
+
+  void add_residual(MultiFab& state, MultiFab& residual,
+                    const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!plan_session_ || !context_.boundary_plan->has_component_boundaries())
+      return;
+    bind_registry_(point, state, nullptr, &residual);
+    plan_session_->add_residual(point, registry_, context_.geom);
+  }
+
+  void apply_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!plan_session_ || !context_.boundary_plan->has_component_boundaries())
+      return;
+    bind_registry_(point, state, &direction, &output);
+    plan_session_->apply_jvp(point, registry_, context_.geom);
+  }
+
+ private:
+  const ExecutionLane& lane() const {
+    if (lane_ == nullptr)
+      throw std::logic_error("PreparedGridBoundarySession is empty after move");
+    return *lane_;
+  }
+
+  void bind_registry_(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+                      const MultiFab* direction, MultiFab* output) const {
+    if (!context_.boundary_plan)
+      return;
+    registry_.begin_binding();
+    if (context_.boundary_field_registry) {
+      context_.boundary_field_registry(point, state, direction, output, registry_);
+      return;
+    }
+    const auto states = context_.boundary_plan->required_state_identities();
+    if (states.size() != 1 || states.front() != context_.boundary_plan->state_identity())
+      throw std::runtime_error(
+          "multi-state boundary session requires an exact runtime storage binder");
+    registry_.bind_state_slot(0, state);
+    const auto fields = context_.boundary_plan->required_field_identities();
+    if (!fields.empty()) {
+      if (fields.size() != 1 || context_.aux == nullptr)
+        throw std::runtime_error(
+            "multi-field boundary session requires an exact runtime storage binder");
+      registry_.bind_field_slot(0, *context_.aux);
+    }
+    if (direction != nullptr) {
+      const auto directions = context_.boundary_plan->required_direction_identities();
+      if (directions.size() != 1)
+        throw std::runtime_error(
+            "multi-direction boundary session requires an exact runtime storage binder");
+      registry_.bind_direction_slot(0, *direction);
+    }
+    if (output != nullptr) {
+      const auto outputs = direction == nullptr
+                               ? context_.boundary_plan->residual_output_identities()
+                               : context_.boundary_plan->jvp_output_identities();
+      if (outputs.size() != 1)
+        throw std::runtime_error(
+            "multi-output boundary session requires an exact runtime storage binder");
+      registry_.bind_output(outputs.front(), *output);
+    }
+  }
+
+  GridContext context_;
+  const ExecutionLane* lane_ = nullptr;
+  mutable detail::BoundaryFieldRegistry registry_;
+  std::optional<PreparedBoundaryPlan::Session> plan_session_;
+};
+
+inline detail::BoundaryFieldRegistry bind_grid_boundary_fields(
+    const GridContext& context, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab& state, const MultiFab* direction, MultiFab* output) {
+  detail::BoundaryFieldRegistry fields;
+  if (!context.boundary_plan || !context.boundary_field_registry)
+    return fields;
+  fields.configure_states(context.boundary_plan->required_state_identities());
+  fields.configure_directions(context.boundary_plan->required_direction_identities());
+  fields.configure_fields(context.boundary_plan->required_field_identities());
+  fields.configure_outputs(context.boundary_plan->all_output_identities());
+  fields.begin_binding();
+  context.boundary_field_registry(point, state, direction, output, fields);
+  return fields;
+}
 
 /// The single transport ghost-fill entry used by compiled block closures.  The historical BCRec
 /// path remains for low-level native construction with no resolved boundary authority; a resolved
@@ -79,17 +261,54 @@ inline void fill_grid_ghosts(MultiFab& state, const GridContext& context) {
 }
 
 inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
+                             const ExecutionLane& lane) {
+  if (context.boundary_plan) {
+    context.boundary_plan->fill_same_level_and_physical(state, context.dom, lane);
+    return;
+  }
+  fill_ghosts(state, context.dom, context.bc, lane);
+}
+
+inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
                              const runtime::multiblock::BoundaryEvaluationPoint& point) {
   if (context.boundary_plan) {
     if (context.boundary_field_registry) {
-      auto fields = context.boundary_field_registry(point, state, nullptr, nullptr);
-      context.boundary_plan->fill_same_level_and_physical(state, fields, context.geom, point);
+      auto fields = bind_grid_boundary_fields(context, point, state, nullptr, nullptr);
+      context.boundary_plan->fill_same_level_and_physical_control(state, fields, context.geom,
+                                                                  point);
     } else {
-      context.boundary_plan->fill_same_level_and_physical(state, context.aux, context.geom, point);
+      context.boundary_plan->fill_same_level_and_physical_control(state, context.aux, context.geom,
+                                                                  point);
     }
     return;
   }
   fill_ghosts(state, context.dom, context.bc);
+}
+
+inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
+                             const runtime::multiblock::BoundaryEvaluationPoint& point,
+                             const ExecutionLane& lane) {
+  if (context.boundary_plan) {
+    if (context.boundary_field_registry) {
+      auto fields = bind_grid_boundary_fields(context, point, state, nullptr, nullptr);
+      context.boundary_plan->fill_same_level_and_physical_control(state, fields, context.geom,
+                                                                  point, lane);
+    } else {
+      context.boundary_plan->fill_same_level_and_physical_control(state, context.aux, context.geom,
+                                                                  point, lane);
+    }
+    return;
+  }
+  fill_ghosts(state, context.dom, context.bc, lane);
+}
+
+inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession& session) {
+  session.fill(state);
+}
+
+inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession& session,
+                             const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  session.fill(state, point);
 }
 
 inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
@@ -98,11 +317,17 @@ inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
   if (!context.boundary_plan)
     return;
   if (context.boundary_field_registry) {
-    auto fields = context.boundary_field_registry(point, state, nullptr, &residual);
-    context.boundary_plan->add_residual(point, fields, context.geom);
+    auto fields = bind_grid_boundary_fields(context, point, state, nullptr, &residual);
+    context.boundary_plan->add_residual_control(point, fields, context.geom);
   } else {
-    context.boundary_plan->add_residual(point, state, context.aux, context.geom, residual);
+    context.boundary_plan->add_residual_control(point, state, context.aux, context.geom, residual);
   }
+}
+
+inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
+                                       const PreparedGridBoundarySession& session,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  session.add_residual(state, residual, point);
 }
 
 inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
@@ -111,11 +336,18 @@ inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, 
   if (!context.boundary_plan)
     return;
   if (context.boundary_field_registry) {
-    auto fields = context.boundary_field_registry(point, state, &direction, &output);
-    context.boundary_plan->apply_jvp(point, fields, context.geom);
+    auto fields = bind_grid_boundary_fields(context, point, state, &direction, &output);
+    context.boundary_plan->apply_jvp_control(point, fields, context.geom);
   } else {
-    context.boundary_plan->apply_jvp(point, state, direction, context.aux, context.geom, output);
+    context.boundary_plan->apply_jvp_control(point, state, direction, context.aux, context.geom,
+                                             output);
   }
+}
+
+inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
+                                    const PreparedGridBoundarySession& session,
+                                    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  session.apply_jvp(state, direction, output, point);
 }
 
 /// Compiled block closures, frozen at add time.
@@ -173,6 +405,21 @@ struct BlockClosures {
   std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
                      const MultiFab&, MultiFab&)>
       boundary_jvp_at_point;
+  /// Prepared-operator twins. The lane-bound boundary session is materialized by the operator
+  /// factory and retained by its workspace; these closures therefore never construct component
+  /// state or select a boundary authority during a Krylov apply.
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      rhs_core_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      rhs_flux_only_core_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      boundary_residual_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, MultiFab&, const PreparedGridBoundarySession&)>
+      boundary_jvp_at_point_prepared;
   /// dt_hotspot diagnostic (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport
   /// CFL and its speed. OPTIONAL (empty = block without diagnostic, e.g. historical
   /// unrewired paths); never called by step/step_cfl (off the hot path).

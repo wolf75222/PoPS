@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
-"""ADC-515 (Spec 6 sec.20): introspection + runtime CFL/profile on the AMR route, end-to-end.
+"""AMR metadata introspection contract plus a real private-engine runtime integration.
 
-The inspection column of the sec.20 matrix, joining the two ADC-515 introspection seams
-(``arguments`` / ``estimate_memory`` on the AMR-route ``CompiledModel``) to the live AMR runtime
-surface (``profile`` / ``step_cfl`` / ``amr.patch_table``):
+The historical filename says ``endtoend``, but the two scopes are intentionally separate:
 
-  * INERT metadata on the AMR-route handle: ``arguments()`` reports ``layout='amr'`` with the block
-    instance / named aux / typed params, ``estimate_memory(mesh)`` is a conservative patch-budget
-    FORMULA, and ``pops.inspect(artifact.layout)`` surfaces the carried refine / regrid tags. These
-    run on a stub
-    exact ``CompiledSimulationArtifact`` carrying the resolved AMR layout -- no ``.so`` dlopen, so
-    the inert surface is
-    validated locally without the Kokkos AOT compile the real per-block AMR loader needs.
+  * STATIC metadata contract on an explicitly non-executable detached artifact: ``arguments()``
+    reports ``layout='amr'`` with the block instance / named aux / typed params,
+    ``estimate_memory(mesh)`` is a conservative patch-budget formula, and
+    ``pops.inspect(artifact.layout)`` surfaces the carried refine / regrid tags. This phase-record
+    fixture is not a native package or a production execution test.
   * LIVE runtime on a real ``AmrSystem``: a typed ``profile(Profile.Basic())`` context wraps two
     ``step_cfl`` runtime-CFL steps (the engine picks a CFL-bounded dt and advances the clock), the
     closing ``PerformanceSummary.by_amr_mpi()`` answers, and ``amr.patch_table()`` reads the built
     hierarchy. ``profile`` is exercised on the internal AMR engine seam.
 
-Runtime: ``importorskip('pops')`` skips on a bare box; the live cells step a real Kokkos-Serial
-engine on the CI runner. ``__main__`` runs pytest.
+The live cells step a real Kokkos-Serial engine on the CI runner. ``__main__`` runs pytest.
 """
 import sys
 
 import numpy as np
 import pytest
 
-pops = pytest.importorskip("pops", exc_type=ImportError)
+import pops
 import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
@@ -49,17 +44,15 @@ from tests.python.support.layout_plan import (  # noqa: E402
 )
 
 
-def _amr_route_handle():
-    """A stub exact AMR artifact (target='amr_system', no ``.so``) carrying the AMR layout.
+def _amr_metadata_fixture():
+    """Build exact phase records for static reporting, without a loadable native component.
 
-This mirrors ``pops.compile(problem, layout=<structured AMR descriptor>)``: an exact artifact owns
-the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlopened -- the arguments /
-    estimate_memory / generic layout-inspection surface is
-    pure metadata + formula, so it is validated here without the Kokkos AOT per-block loader compile.
+    ``backend='production'`` is the compiled-package phase tag required by the record schema; the
+    sentinel path makes explicit that this fixture is never installed or executed.
     """
     alpha = RuntimeParam("alpha", default=1.0)
     handle = CompiledModel(
-        so_path="<stub-amr>", backend="production",
+        so_path="<metadata-only-amr-component>", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1,
         params={"alpha": alpha},
@@ -67,7 +60,7 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
     layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
-    snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
+    snapshot = AuthoringSnapshot({"kind": "amr-introspection-metadata-fixture"})
     module = Module("amr-introspection-model")
     module.param(alpha)
     case = Case("amr-introspection-case")
@@ -103,19 +96,20 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
             "ne", handle, {"ghost_depth": 1}, ("U",)),),
     )
     inputs = BindInputs()
-    InstallPlan(
+    install = InstallPlan(
         artifact=artifact,
         bind_inputs=inputs,
         instances={"ne": {"model": handle, "spatial": {"ghost_depth": 1}}},
         params=schema.resolve_bind({}, compile_values=resolved.compile_values),
         aux={},
     )
+    install.verify()
     return artifact
 
 
 # --- inert introspection on the AMR-route handle ---------------------------------
-def test_arguments_on_the_amr_route_handle():
-    args = _amr_route_handle().arguments()
+def test_static_metadata_arguments_report_the_amr_route():
+    args = _amr_metadata_fixture().arguments()
     assert args.layout_runtime["layout"] == "amr"
     assert args.layout_runtime["supports_mpi"] is True
     inst = next(iter(args.instances.values()))
@@ -127,8 +121,8 @@ def test_arguments_on_the_amr_route_handle():
     assert args.params[alpha_qid]["required"] is False  # declaration carries a bind default
 
 
-def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
-    handle = _amr_route_handle()
+def test_static_metadata_estimate_adds_an_amr_patch_budget():
+    handle = _amr_metadata_fixture()
     mesh = cartesian_grid(n=64, L=1.0, periodic=True)
     amr_est = handle.estimate_memory(mesh)                       # auto AMR from InstallPlan
     uni_est = handle.estimate_memory(mesh, layout=Uniform(mesh))
@@ -140,8 +134,8 @@ def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
     assert amr_est.assumptions and any("CONSERVATIVE" in a for a in amr_est.assumptions)
 
 
-def test_generic_inspection_surfaces_the_carried_refine_regrid_tags():
-    artifact = _amr_route_handle()
+def test_static_metadata_inspection_surfaces_the_carried_refine_regrid_tags():
+    artifact = _amr_metadata_fixture()
     assert not hasattr(artifact, "inspect_amr")
     inspected = pops.inspect(artifact.layout)
     rep = inspected["amr_report"]

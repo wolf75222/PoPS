@@ -5,21 +5,24 @@
 // phase -- plus a few integer counters (kernels, cache hits/misses, scheduled nodes due/skipped),
 // and renders the report `sim.profile_report()` returns.
 //
-// Cost when disabled: record()/count() are a single predictable branch (zero work). A ProfileScope
-// is cheap but NOT free even when off -- it still constructs its name string and reads the clock
-// twice -- so wrap a per-node / per-brick scope (the intended granularity), not the tightest inner
-// loops. Single-threaded: a Profiler / ProfileScope is not thread-safe and must not be shared inside
-// a parallel region. Host/serial today; on a device backend a Kokkos::fence() must precede the scope
-// close so the timing reflects the kernel (the fence lives at the call site, not here -- this header
-// has no Kokkos dependency). MPI: each rank profiles itself; the report is per-rank (any reduction
-// belongs to the System integration).
+// Cost when disabled: record()/count()/count_max() are one atomic load and a predictable branch;
+// they do not acquire the mutex. A disabled ProfileScope additionally constructs its name and reads
+// that flag once, but does not read the clock. One Profiler may be shared by concurrent host sessions:
+// enabled writes and all snapshots are serialized, and first-seen order is the order in which new
+// names acquire that serialization point. Host only; on a device backend a Kokkos::fence() must
+// precede the scope close so the timing reflects the kernel (the fence lives at the call site, not
+// here -- this header has no Kokkos dependency). MPI: each rank profiles itself; the report is
+// per-rank (any reduction belongs to the System integration).
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pops::runtime::program {
@@ -56,12 +59,55 @@ class Profiler {
     std::vector<CounterSnapshot> counters;
   };
 
-  void enable() { enabled_ = true; }
-  void disable() { enabled_ = false; }
-  bool enabled() const { return enabled_; }
+  Profiler() = default;
+
+  // Runtime step transactions snapshot and restore the profiler together with the numerical state.
+  // Keep that value contract while making copies consistent with concurrent writers.
+  Profiler(const Profiler& other) {
+    std::lock_guard<std::mutex> lock(other.mutex_);
+    copy_from_unlocked_(other);
+  }
+
+  Profiler& operator=(const Profiler& other) {
+    if (this == &other) {
+      return *this;
+    }
+    std::scoped_lock lock(mutex_, other.mutex_);
+    copy_from_unlocked_(other);
+    return *this;
+  }
+
+  Profiler(Profiler&& other) {
+    std::lock_guard<std::mutex> lock(other.mutex_);
+    move_from_unlocked_(std::move(other));
+  }
+
+  Profiler& operator=(Profiler&& other) {
+    if (this == &other) {
+      return *this;
+    }
+    std::scoped_lock lock(mutex_, other.mutex_);
+    move_from_unlocked_(std::move(other));
+    return *this;
+  }
+
+  void enable() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    enabled_.store(true, std::memory_order_release);
+  }
+
+  void disable() {
+    // Serialize the transition with an in-flight enabled writer. Once disable() returns, no writer
+    // from the preceding enabled interval can still publish a sample.
+    std::lock_guard<std::mutex> lock(mutex_);
+    enabled_.store(false, std::memory_order_release);
+  }
+
+  bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
 
   // Drop all accumulated timings and counters (kept across enable/disable; cleared explicitly).
   void reset() {
+    std::lock_guard<std::mutex> lock(mutex_);
     order_.clear();
     entries_.clear();
     counters_.clear();
@@ -70,91 +116,93 @@ class Profiler {
 
   // Record one timed sample of `name`, in seconds. No-op when disabled.
   void record(const std::string& name, double seconds) {
-    if (!enabled_) {
+    if (!enabled()) {
       return;
     }
-    auto it = entries_.find(name);
-    if (it == entries_.end()) {
-      order_.push_back(name);
-      entries_.emplace(name,
-                       Entry{.count = 1, .total_s = seconds, .min_s = seconds, .max_s = seconds});
-    } else {
-      Entry& e = it->second;
-      e.count += 1;
-      e.total_s += seconds;
-      e.min_s = std::min(e.min_s, seconds);
-      e.max_s = std::max(e.max_s, seconds);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_.load(std::memory_order_relaxed)) {
+      return;
     }
+    record_unlocked_(name, seconds);
   }
 
   // Bump a named integer counter (e.g. "kernels", "cache_hits", "nodes_skipped"). No-op when off.
   void count(const std::string& name, std::int64_t by = 1) {
-    if (!enabled_) {
+    if (!enabled()) {
       return;
     }
-    auto it = counters_.find(name);
-    if (it == counters_.end()) {
-      counter_order_.push_back(name);
-      counters_.emplace(name, by);
-    } else {
-      it->second += by;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_.load(std::memory_order_relaxed)) {
+      return;
     }
+    count_unlocked_(name, by);
   }
 
   // Track a named PEAK counter: set it to max(current, value) instead of accumulating. Used for the
   // scratch peak memory (the largest single scratch allocation seen, in bytes), where the running sum
   // is meaningless. First-seen creates the counter at @p value. No-op when disabled.
   void count_max(const std::string& name, std::int64_t value) {
-    if (!enabled_) {
+    if (!enabled()) {
       return;
     }
-    auto it = counters_.find(name);
-    if (it == counters_.end()) {
-      counter_order_.push_back(name);
-      counters_.emplace(name, value);
-    } else {
-      it->second = std::max(it->second, value);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_.load(std::memory_order_relaxed)) {
+      return;
     }
+    count_max_unlocked_(name, value);
   }
 
   // Record one authenticated scheduler decision and return it unchanged so generated code can
   // wrap every due primitive exactly once. All scheduled nodes contribute due/skipped counts;
   // cache hits/misses move only for policies that really own a STORE+RESTORE cache path.
   bool schedule_decision(bool due, bool cache_backed) {
-    count(due ? "nodes_due" : "nodes_skipped");
+    if (!enabled()) {
+      return due;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_.load(std::memory_order_relaxed)) {
+      return due;
+    }
+    count_unlocked_(due ? "nodes_due" : "nodes_skipped", 1);
     if (cache_backed) {
-      count(due ? "cache_misses" : "cache_hits");
+      count_unlocked_(due ? "cache_misses" : "cache_hits", 1);
     }
     return due;
   }
 
+  // Legacy pointer view. The lookup itself is synchronized, but the returned Entry is owned by this
+  // Profiler: callers must not retain or dereference it while another thread can record() or reset().
+  // Use snapshot() for a value-owned read that is safe while writers remain active.
   const Entry* entry(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = entries_.find(name);
     return it == entries_.end() ? nullptr : &it->second;
   }
 
   std::int64_t counter(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = counters_.find(name);
     return it == counters_.end() ? 0 : it->second;
   }
 
   // Sum of every scope's total time (the "total" line of the report).
   double total_s() const {
-    double t = 0.0;
-    for (const auto& name : order_) {
-      t += entries_.at(name).total_s;
-    }
-    return t;
+    std::lock_guard<std::mutex> lock(mutex_);
+    return total_s_unlocked_();
   }
 
-  std::size_t scope_count() const { return order_.size(); }
+  std::size_t scope_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return order_.size();
+  }
 
   // Structured source of truth for inspection. profile_report() below is only a pretty view of this
   // accumulated data; Python does not need to parse the text path when this snapshot is exposed.
   Snapshot snapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     Snapshot out{};
-    out.enabled = enabled_;
-    out.total_s = total_s();
+    out.enabled = enabled_.load(std::memory_order_relaxed);
+    out.total_s = total_s_unlocked_();
     out.scopes.reserve(order_.size());
     for (const auto& name : order_) {
       const Entry& e = entries_.at(name);
@@ -175,10 +223,12 @@ class Profiler {
   // A human-readable report in first-seen order: one line per scope (count / total / mean / min /
   // max), then the counters. The exact text the Python `sim.profile_report()` returns.
   std::string report() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     std::ostringstream os;
     os.setf(std::ios::fixed);
     os.precision(6);
-    os << "Profiler report (total " << total_s() << " s, " << order_.size() << " scopes)\n";
+    os << "Profiler report (total " << total_s_unlocked_() << " s, " << order_.size()
+       << " scopes)\n";
     for (const auto& name : order_) {
       const Entry& e = entries_.at(name);
       os << "  " << name << "  count=" << e.count << "  total=" << e.total_s
@@ -195,7 +245,80 @@ class Profiler {
   }
 
  private:
-  bool enabled_ = false;
+  void copy_from_unlocked_(const Profiler& other) {
+    enabled_.store(other.enabled_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    order_ = other.order_;
+    entries_ = other.entries_;
+    counter_order_ = other.counter_order_;
+    counters_ = other.counters_;
+  }
+
+  void move_from_unlocked_(Profiler&& other) {
+    enabled_.store(other.enabled_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    order_ = std::move(other.order_);
+    entries_ = std::move(other.entries_);
+    counter_order_ = std::move(other.counter_order_);
+    counters_ = std::move(other.counters_);
+  }
+
+  void record_unlocked_(const std::string& name, double seconds) {
+    auto [it, inserted] = entries_.try_emplace(
+        name, Entry{.count = 1, .total_s = seconds, .min_s = seconds, .max_s = seconds});
+    if (inserted) {
+      try {
+        order_.push_back(name);
+      } catch (...) {
+        entries_.erase(it);
+        throw;
+      }
+      return;
+    }
+
+    Entry& entry = it->second;
+    entry.count += 1;
+    entry.total_s += seconds;
+    entry.min_s = std::min(entry.min_s, seconds);
+    entry.max_s = std::max(entry.max_s, seconds);
+  }
+
+  void count_unlocked_(const std::string& name, std::int64_t by) {
+    auto [it, inserted] = counters_.try_emplace(name, by);
+    if (inserted) {
+      try {
+        counter_order_.push_back(name);
+      } catch (...) {
+        counters_.erase(it);
+        throw;
+      }
+      return;
+    }
+    it->second += by;
+  }
+
+  void count_max_unlocked_(const std::string& name, std::int64_t value) {
+    auto [it, inserted] = counters_.try_emplace(name, value);
+    if (inserted) {
+      try {
+        counter_order_.push_back(name);
+      } catch (...) {
+        counters_.erase(it);
+        throw;
+      }
+      return;
+    }
+    it->second = std::max(it->second, value);
+  }
+
+  double total_s_unlocked_() const {
+    double total = 0.0;
+    for (const auto& name : order_) {
+      total += entries_.at(name).total_s;
+    }
+    return total;
+  }
+
+  mutable std::mutex mutex_;
+  std::atomic<bool> enabled_{false};
   std::vector<std::string> order_;  // scope names, first-seen order (stable report)
   std::map<std::string, Entry> entries_;
   std::vector<std::string> counter_order_;  // counter names, first-seen order
@@ -207,9 +330,16 @@ class Profiler {
 class ProfileScope {
  public:
   ProfileScope(Profiler& prof, std::string name)
-      : prof_(prof), name_(std::move(name)), t0_(std::chrono::steady_clock::now()) {}
+      : prof_(prof), name_(std::move(name)), active_(prof_.enabled()) {
+    if (active_) {
+      t0_ = std::chrono::steady_clock::now();
+    }
+  }
 
   ~ProfileScope() {
+    if (!active_) {
+      return;
+    }
     const auto t1 = std::chrono::steady_clock::now();
     // A timing alloc failure must never abort the program nor escape this destructor: swallow any
     // exception from record() (the worst case is one lost sample).
@@ -227,6 +357,7 @@ class ProfileScope {
  private:
   Profiler& prof_;
   std::string name_;
+  bool active_ = false;
   std::chrono::steady_clock::time_point t0_;
 };
 

@@ -265,7 +265,7 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     build step would hit ``ninja: unknown target`` (seen live on
     test_amr_regrid_mpi_parity, whose ``mpi`` segment is an INFIX the old ``test_mpi_``
     prefix filter missed -- #435). Convention: every MPI-only suite carries an ``mpi``
-    name segment (and an ``mpi`` label / ``mpi_nproc``); the manifest-driven selector
+    name segment (and an ``mpi`` label / exact MPI launch contract); the manifest-driven selector
     must drop it. This asserts the same intent against the manifest API that replaced
     the CMake target scraper.
     """
@@ -300,6 +300,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_fill_boundary_cache": (1, 2, 4),
         "test_geometric_mg": (2,),
         "test_generic_krylov": (1, 2, 4),
+        "test_krylov_workspace_reentrancy": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),
     }
@@ -311,15 +312,44 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         suite["name"] for suite in all_suites if "mpi" in suite["labels"]
     }
     expected_count = sum(
-        len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
+        len(suite["mpi_nproc"])
+        + bool(suite["mpi_rank_parity"])
+        + len(suite["mpi_variants"])
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 74
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 71
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
+    assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
+    assert ctest_plan["test_mpi_amr_distributed_coarse_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
     assert ctest_plan["test_world_communicator_np2"] == 2
+
+
+def test_manifest_rejects_ambiguous_mpi_only_launch_contracts():
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "test_ambiguous_mpi",
+        "sources": ["tests/cpp/test_ambiguous_mpi.cpp"],
+        "labels": ["backend", "mpi"],
+        "mpi_nproc": [1],
+        "mpi_rank_parity": [1, 2],
+    }
+    with pytest.raises(SystemExit, match="exactly one of mpi_nproc or mpi_rank_parity"):
+        sel.manifest_cpp_suites({"cpp": {"suite": [suite]}}, include_mpi=True)
+
+
+def test_manifest_rejects_rank_parity_without_an_mpi_label():
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "test_unlabelled_parity",
+        "sources": ["tests/cpp/test_unlabelled_parity.cpp"],
+        "labels": ["backend"],
+        "mpi_rank_parity": [1, 2],
+    }
+    with pytest.raises(SystemExit, match="exactly one of mpi_nproc or mpi_rank_parity"):
+        sel.manifest_cpp_suites({"cpp": {"suite": [suite]}}, include_mpi=True)
 
 
 def _write_mpi_ctest_inventory(path, plan):

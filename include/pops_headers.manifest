@@ -129,6 +129,7 @@ test-only pops/numerics/time/schemes/imex.hpp
 api pops/numerics/time/schemes/scheduler.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
 api pops/parallel/comm.hpp
+api pops/parallel/execution_lane.hpp
 sdk-support pops/parallel/field_distribution_reduction.hpp
 api pops/parallel/prepared_provider_consensus.hpp
 sdk-support pops/parallel/solve_report_consensus.hpp

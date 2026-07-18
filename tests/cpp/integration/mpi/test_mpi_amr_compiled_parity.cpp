@@ -17,9 +17,9 @@
 //   (1) CONSISTANCE CROSS-RANG dans le run : tous les rangs voient la MEME densite grossiere et la
 //       MEME masse (diff max reduite sur les rangs == 0). Sans cela, un bug de halo/reflux distant
 //       casserait silencieusement la replication.
-//   (2) PARITE AU NB DE RANGS : on imprime un checksum de la densite + la masse ; le script de build
-//       relance le MEME binaire en np=1/2/4 et DIFF les sorties. np=1 est l'oracle MONO-GPU ; np=2/4
-//       doivent etre BIT-IDENTIQUES (dmax=0).
+//   (2) PARITE AU NB DE RANGS : une ligne de signature canonique contient le checksum de la densite
+//       et la masse. Le CTest rank-parity relance ce MEME binaire en np=1/2/4 et compare exactement
+//       les signatures. np=1 est l'oracle mono-rang ; np=2/4 doivent etre BIT-IDENTIQUES (dmax=0).
 //
 // Independant du backend : vert sous Kokkos Serial (CI, CPU) ET sous Kokkos Cuda (ROMEO GH200,
 // multi-GPU). Sous Cuda, for_each_cell ne fence pas (async) : density()/mass() de l'AmrSystem font
@@ -166,7 +166,13 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 
   int fails = 0;
   if (me == 0) {
-    // Sortie machine-parsable (le script DIFF ces lignes entre np=1/2/4 ; np=1 = oracle mono-GPU).
+    // Signature sans np : l'orchestrateur CTest generique exige exactement la meme ligne pour
+    // chaque nombre de rangs declare dans tests/test_manifest.toml.
+    std::printf(
+        "POPS_MPI_PARITY_SIGNATURE_test_mpi_amr_compiled_parity "
+        "patches0=%d patchesF=%d mass=%.17e csum=%.17e csumsq=%.17e cmax=%.17e "
+        "state0_vs_density=%.17e phi_vs_global=%.17e\n",
+        np0, npf, mass, csum, csumsq, cmax, state_density_dmax, phi_dmax);
     std::printf(
         "AMRMPI np=%d patches0=%d patchesF=%d | mass=%.17e | csum=%.17e csumsq=%.17e "
         "cmax=%.17e | crossrank_spread=%.3e | state0_vs_density=%.3e phi_vs_global=%.3e\n",
@@ -213,10 +219,6 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
           "OK test_mpi_amr_compiled_parity np=%d (AmrSystem+MPI+compile : grossier "
           "bit-identique cross-rang)\n",
           np);
-  } else {
-    // Les rangs non-0 valident aussi la consistance (spread doit etre 0 partout) mais ne FAILent que
-    // via le rang 0 (sortie unique). On garde le code symetrique : aucune assertion divergente.
-    (void)spread;
   }
   comm_finalize();
   return fails ? 1 : 0;

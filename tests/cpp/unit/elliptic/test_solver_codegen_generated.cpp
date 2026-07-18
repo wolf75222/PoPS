@@ -43,6 +43,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 using namespace pops;
@@ -66,15 +67,20 @@ struct HelmholtzCombineKernel {
 };
 
 // The matrix-free SPD Helmholtz operator as a VALUE-TYPED functor: A(out, in) = in - alpha*Lap(in).
-// The generated kernel takes it as a template parameter (inlined; no std::function in the loop); the
-// the prepared native problem wraps the same object in an ApplyFn. The lap scratch is captured once.
+// The generated kernel takes it as a template parameter (inlined; no std::function in the loop).
+// Prepared native workspaces use the same recipe through fresh operator sessions, each with private
+// Laplacian scratch; sharing the generated solver's scratch would falsely claim reentrancy.
 struct HelmholtzOp {
   Geometry geom;
   BCRec bc;
   MultiFab* lap_tmp;
+  const ExecutionLane* lane = nullptr;
   void operator()(MultiFab& out, const MultiFab& in) const {
     MultiFab& in_mut = const_cast<MultiFab&>(in);  // only the ghosts are written (solver contract)
-    fill_ghosts(in_mut, geom.domain, bc);
+    if (lane != nullptr)
+      fill_ghosts(in_mut, geom.domain, bc, *lane);
+    else
+      fill_ghosts(in_mut, geom.domain, bc);
     apply_laplacian(in_mut, geom, *lap_tmp);
     for (int li = 0; li < out.local_size(); ++li) {
       Array4 ov = out.fab(li).array();
@@ -110,6 +116,23 @@ Real max_abs_diff(const MultiFab& a, const MultiFab& b) {
         d = std::fmax(d, std::fabs(pa(i, j) - pb(i, j)));
   }
   return static_cast<Real>(all_reduce_max(static_cast<double>(d)));
+}
+
+PreparedAffineOperatorProvider prepared_helmholtz_provider(const BoxArray& boxes,
+                                                           const DistributionMapping& mapping,
+                                                           const Geometry& geometry,
+                                                           const BCRec& boundary) {
+  return PreparedAffineOperatorProvider::trusted_extension(
+      {"pops.test.generated-solver.helmholtz", 1}, {},
+      [boxes, mapping, geometry, boundary](const ExecutionLane& lane) {
+        auto laplacian = std::make_shared<MultiFab>(boxes, mapping, 1, 0);
+        return PreparedAffineOperatorSessionCallbacks{
+            {},
+            [laplacian, geometry, boundary, &lane](MultiFab& out, const MultiFab& in) {
+              HelmholtzOp{geometry, boundary, laplacian.get(), &lane}(out, in);
+            },
+            [] { return std::size_t{1}; }};
+      });
 }
 
 }  // namespace
@@ -148,7 +171,6 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
   // The prepared native loop receives the same absolute floor as the generated kernel.
   MultiFab x_ref(ba, dm, 1, 1);
   x_ref.set_val(0.0);
-  ApplyFn A = [&](MultiFab& out, const MultiFab& in) { op(out, in); };
   const KrylovFootprint footprint{1, 1, false};
   OperatorEvaluationSnapshot snapshot{{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)},
                                       1,
@@ -161,9 +183,9 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
                                       detail::layout_fingerprint(x_ref),
                                       {UINT64_C(5), UINT64_C(6), UINT64_C(7), UINT64_C(8)}};
   PreparedAffineLinearProblem problem(
-      x_ref, A, PreparedLinearPreconditioner::identity(),
-      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
-      [&snapshot]() { return snapshot; });
+      x_ref, prepared_helmholtz_provider(ba, dm, geom, bc),
+      PreparedLinearPreconditioner::identity(), LinearOperatorProperties::general(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&snapshot]() { return snapshot; });
   KrylovWorkspace workspace(x_ref, richardson_krylov_method(kOmega), footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);

@@ -18,11 +18,10 @@ Couvre les deux chantiers du solde (docs/GENERICITY_2026-06.md, points NON gener
       sans options (engine.IMEX()). On compare deux runs de memes graines : dmax == 0 (vrai test de
       non-regression : le chemin a options par defaut == chemin historique a iters figes).
 
-  (d) LOADER .so + OPTIONS/DIAGNOSTICS : le chemin production AMR (CompiledModel
-      backend='production', target='amr_system' -> add_native_block, ABI plate) REJETTE explicitement
-      les options ET newton_diagnostics (ils seraient pris a leurs defauts en silence). Test PUR
-      PYTHON : la garde de facade leve AVANT tout dlopen, un CompiledModel FACTICE suffit (pas de
-      compilateur requis).
+  (d) GARDE PRE-LOADER : les metadonnees detachees d'un package AMR declenchent le rejet explicite
+      des options et diagnostics Newton que l'ABI plate ne transporte pas. Ce sous-test ne pretend
+      pas executer un package natif ; la vraie route compilee est couverte par
+      ``integration/native_loader/test_dsl_production_amr.py``.
 
 Invariants par assert ; imprime "OK test_amr_newton_full" en cas de succes.
 """
@@ -33,6 +32,7 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
+from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
@@ -75,15 +75,15 @@ def mono_imex(time):
     return np.asarray(s.density("e")).reshape(16, 16)
 
 
-def fake_production_amr():
-    """CompiledModel FACTICE du chemin production AMR : la garde options/diagnostics de add_equation
-    leve AVANT le dlopen du .so, donc le .so inexistant n'est jamais charge (deterministe, no compiler).
-    Meme recette que test_amr_production_stride_reject.py."""
+def compiled_amr_metadata():
+    """Metadonnees detachees exactes pour tester uniquement la garde Python pre-loader."""
     return CompiledModel(
         so_path="/inexistant_amr.so", backend="production",
         cons_names=["rho", "rho_u", "rho_v"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "u", "v"], n_vars=3, gamma=1.4, n_aux=3, params={}, caps={},
-        abi_key="k", model_hash="h", cxx="c++", std="c++20", target="amr_system")
+        abi_key=f"{module_header_signature()}|c++|c++23",
+        model_hash="amr-newton-preloader-guard",
+        cxx="c++", std="c++23", target="amr_system")
 
 
 # ---- (a) OPTIONS NEWTON MONO-BLOC : tourne fini, ne leve plus -----------------------------------
@@ -137,26 +137,26 @@ d_def = mono_imex(engine.IMEX(newton_max_iters=2, newton_rel_tol=0.0, newton_abs
 dmax = float(np.max(np.abs(d_def - d_base)))
 chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identique ; recu {dmax:.3e})")
 
-# ---- (d) LOADER .so + OPTIONS/DIAGNOSTICS : rejet explicite -------------------------------------
-print("== (d) production AMR (.so) : options/diagnostics Newton rejetes explicitement ==")
+# ---- (d) GARDE PRE-LOADER SUR METADONNEES DETACHEES : rejet explicite ---------------------------
+print("== (d) garde pre-loader AMR : options/diagnostics Newton rejetes explicitement ==")
 sim_opt = AmrSystem(n=16, periodic=True)
 sim_opt.set_temporal_relations([2], [1], ["integral_only"])
 try:
-    sim_opt.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+    sim_opt.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),
                          time=engine.IMEX(newton_max_iters=5))
-    chk(False, "add_equation(.so, IMEX(newton_max_iters=5)) doit lever ValueError")
+    chk(False, "la garde metadonnees IMEX(newton_max_iters=5) doit lever ValueError")
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
-        "options Newton sur .so production AMR : ValueError claire (Newton/production)")
+        "options Newton sur metadonnees AMR : ValueError claire (Newton/production)")
 sim_diag = AmrSystem(n=16, periodic=True)
 sim_diag.set_temporal_relations([2], [1], ["integral_only"])
 try:
-    sim_diag.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+    sim_diag.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),
                           time=engine.IMEX(newton_diagnostics=True))
-    chk(False, "add_equation(.so, IMEX(newton_diagnostics=True)) doit lever ValueError")
+    chk(False, "la garde metadonnees IMEX(newton_diagnostics=True) doit lever ValueError")
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
-        "newton_diagnostics sur .so production AMR : ValueError claire (Newton/production)")
+        "newton_diagnostics sur metadonnees AMR : ValueError claire (Newton/production)")
 
 print("FAIL test_amr_newton_full" if fails else "OK test_amr_newton_full")
 sys.exit(1 if fails else 0)

@@ -50,6 +50,7 @@
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
 #include <array>
+#include <charconv>
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
 #include <cmath>   // std::isfinite (reject a degenerate dt)
 #include <cstddef>
@@ -58,10 +59,13 @@
 #include <limits>  // std::numeric_limits (initial dt = +inf, min over the blocks)
 #include <map>     // static_aux_: externally supplied aux fields, re-applied each solve
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -690,6 +694,10 @@ struct AmrRuntimeBlock {
   /// per-level closures of this block.
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
   std::shared_ptr<GridContext::BoundaryFieldRegistryFactory> boundary_field_registry;
+  /// One sequential session per level, materialized after all qualified routes are installed.
+  /// Prepared Krylov workspaces create separate lane-private sessions.
+  std::vector<std::shared_ptr<ExecutionLane>> boundary_lanes;
+  std::vector<std::shared_ptr<PreparedGridBoundarySession>> boundary_sessions;
 
   /// Advances the block by ONE substep of size dt: AMR transport (Berger-Oliger + conservative reflux
   /// + average_down) over the block level stack, with ITS spatial scheme (Limiter, Flux). Captures
@@ -800,6 +808,22 @@ struct AmrRuntimeBlock {
   std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
                      const MultiFab&, const MultiFab&, const Geometry&, MultiFab&)>
       level_boundary_jvp_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_rhs_core_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_neg_div_flux_core_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_boundary_residual_at_point_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const MultiFab&, const Geometry&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_boundary_jvp_at_point_prepared;
 
   /// FLUX-MATERIALISING per-level residual for conservative reflux (ADC-639): computes R <- -div F + S
   /// EXACTLY as @ref level_rhs, but FIRST writes the face fluxes Fx/Fy (compute_face_fluxes) then derives
@@ -813,6 +837,14 @@ struct AmrRuntimeBlock {
   /// FLUX-ONLY (SourceFreeModel) counterpart of @ref level_flux_capture (the neg_div_flux capture path).
   std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&, MultiFab&, MultiFab&)>
       level_flux_capture_neg_div;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&, MultiFab&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_flux_capture_prepared;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&, MultiFab&, MultiFab&,
+                     const PreparedGridBoundarySession&)>
+      level_flux_capture_neg_div_prepared;
 
   /// Speed driving the block CFL on the coarse. By default max_wave_speed (historical); when the
   /// model declares the HasStabilitySpeed trait, it is lambda* (stability_speed) that the closure
@@ -1727,6 +1759,9 @@ class AmrRuntime {
     if (saved.block_levels.size() != blocks_.size())
       throw std::runtime_error(
           "AmrRuntime::restore_step_snapshot: snapshot/runtime composition mismatch");
+    const bool rematerialize_boundary_sessions =
+        std::any_of(blocks_.begin(), blocks_.end(),
+                    [](const AmrRuntimeBlock& block) { return !block.boundary_sessions.empty(); });
     for (std::size_t b = 0; b < blocks_.size(); ++b) {
       *blocks_[b].levels = saved.block_levels[b];
       const bool had_report = b < saved.has_newton_report.size() && saved.has_newton_report[b];
@@ -1795,6 +1830,8 @@ class AmrRuntime {
     for (const auto& block : blocks_)
       layouts.push_back(*block.levels);
     detail::same_layout_or_throw(layouts);
+    if (rematerialize_boundary_sessions)
+      materialize_boundary_sessions_();
   }
 
   /// @name Compiled time-Program AMR driver seam (epic ADC-508): per-level primitives exposing the
@@ -1835,6 +1872,25 @@ class AmrRuntime {
     if (!base_per_.y)
       b.ylo = b.yhi = BCType::Foextrap;
     return b;
+  }
+  /// Exact block/level grid authority used to materialize a prepared operator boundary session.
+  /// The plan and N-ary registry are block-qualified; geometry, aux and ownership are level-qualified.
+  GridContext level_grid_context(std::size_t block, int level) {
+    if (block >= blocks_.size() || level < 0 || level >= nlev_)
+      throw std::out_of_range("AmrRuntime::level_grid_context owner is out of range");
+    const Geometry geometry = level_geom(level);
+    GridContext context;
+    context.dom = geometry.domain;
+    context.bc = transport_bc();
+    context.geom = geometry;
+    context.aux = &const_cast<MultiFab&>(aux_[static_cast<std::size_t>(level)]);
+    context.boundary_plan = blocks_[block].boundary_plan;
+    if (blocks_[block].boundary_field_registry)
+      context.boundary_field_registry = *blocks_[block].boundary_field_registry;
+    context.coarse_fine_fill = [this, block, level](MultiFab& state) {
+      fill_level_state_cf_ghosts(block, level, state);
+    };
+    return context;
   }
   /// BC of the coarse Poisson (for a matrix-free Krylov preconditioner's GeometricMG).
   const BCRec& poisson_bc() const { return bcPhi_; }
@@ -1905,6 +1961,19 @@ class AmrRuntime {
   void level_rhs_into_at(std::size_t b, int k,
                          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                          MultiFab& R) {
+    if (b < blocks_.size() && k >= 0 &&
+        static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+        blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+      auto& core = blocks_[b].level_rhs_core_at_point_prepared;
+      auto& boundary = blocks_[b].level_boundary_residual_at_point_prepared;
+      if (!core || !boundary)
+        throw std::runtime_error(
+            "AmrRuntime block lacks its persistent prepared boundary closures");
+      const auto& session = *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)];
+      core(point, U, aux_[k], level_geom(k), R, session);
+      boundary(point, U, aux_[k], level_geom(k), R, session);
+      return;
+    }
     if (!blocks_[b].level_rhs_at_point)
       throw std::runtime_error("AmrRuntime block has no point-qualified residual closure");
     fill_level_state_cf_ghosts(b, k, U);
@@ -1943,8 +2012,41 @@ class AmrRuntime {
           BoundaryStageStateView{point, nullptr, static_cast<int>(b), &U});
       stage_reset.slot = &boundary_stage_states_;
     }
+    if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+        blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+      auto& prepared = flux_only ? blocks_[b].level_neg_div_flux_core_at_point_prepared
+                                 : blocks_[b].level_rhs_core_at_point_prepared;
+      if (!prepared)
+        throw std::runtime_error(
+            "AmrRuntime block lacks its persistent prepared core residual closure");
+      prepared(point, U, aux_[k], level_geom(k), R,
+               *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+      return;
+    }
     fill_level_state_cf_ghosts(b, k, U);
     closure(point, U, aux_[k], level_geom(k), R);
+  }
+
+  void level_rhs_core_into_at(std::size_t b, int k,
+                              const runtime::multiblock::BoundaryEvaluationPoint& point,
+                              MultiFab& U, MultiFab& R, bool flux_only,
+                              const PreparedGridBoundarySession& boundary) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime prepared core RHS level/block is out of range");
+    if (boundary.resolved_plan() != blocks_[b].boundary_plan.get())
+      throw std::invalid_argument(
+          "AmrRuntime prepared core RHS boundary authority differs from block");
+    if (interface_scheduler_.participates(b, k))
+      throw std::runtime_error(
+          "AmrRuntime implicit core RHS requires a coupled shared-interface solve");
+    auto& closure = flux_only ? blocks_[b].level_neg_div_flux_core_at_point_prepared
+                              : blocks_[b].level_rhs_core_at_point_prepared;
+    if (!closure)
+      throw std::runtime_error("AmrRuntime block lacks a prepared core residual closure");
+    // The independent prepared route is single-block (shared-interface participants were refused
+    // above). Its registry binds U directly for this owner and accepted live storage for other
+    // dependencies, so no mutable hierarchy-wide staging slot is shared across execution lanes.
+    closure(point, U, aux_[k], level_geom(k), R, boundary);
   }
 
   void level_boundary_residual_into_at(std::size_t b, int k,
@@ -1954,10 +2056,36 @@ class AmrRuntime {
       throw std::out_of_range("AmrRuntime boundary residual level/block is out of range");
     if (!has_boundary_linearization(b))
       throw std::runtime_error("AmrRuntime block has no executable boundary residual/JVP pair");
+    if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+        blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+      auto& prepared = blocks_[b].level_boundary_residual_at_point_prepared;
+      if (!prepared)
+        throw std::runtime_error("AmrRuntime block lacks its prepared boundary residual closure");
+      prepared(point, U, aux_[k], level_geom(k), C,
+               *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+      return;
+    }
     auto& closure = blocks_[b].level_boundary_residual_at_point;
     if (!closure)
       throw std::runtime_error("AmrRuntime block lacks its boundary residual closure");
     closure(point, U, aux_[k], level_geom(k), C);
+  }
+
+  void level_boundary_residual_into_at(std::size_t b, int k,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       MultiFab& U, MultiFab& C,
+                                       const PreparedGridBoundarySession& boundary) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime prepared boundary residual owner is out of range");
+    if (!has_boundary_linearization(b))
+      throw std::runtime_error("AmrRuntime block has no executable boundary residual/JVP pair");
+    if (boundary.resolved_plan() != blocks_[b].boundary_plan.get())
+      throw std::invalid_argument(
+          "AmrRuntime prepared boundary residual authority differs from block");
+    auto& closure = blocks_[b].level_boundary_residual_at_point_prepared;
+    if (!closure)
+      throw std::runtime_error("AmrRuntime block lacks a prepared boundary residual closure");
+    closure(point, U, aux_[k], level_geom(k), C, boundary);
   }
 
   void level_boundary_jvp_into_at(std::size_t b, int k,
@@ -1967,10 +2095,35 @@ class AmrRuntime {
       throw std::out_of_range("AmrRuntime boundary JVP level/block is out of range");
     if (!has_boundary_linearization(b))
       throw std::runtime_error("AmrRuntime block has no executable boundary residual/JVP pair");
+    if (static_cast<std::size_t>(k) < blocks_[b].boundary_sessions.size() &&
+        blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]) {
+      auto& prepared = blocks_[b].level_boundary_jvp_at_point_prepared;
+      if (!prepared)
+        throw std::runtime_error("AmrRuntime block lacks its prepared boundary JVP closure");
+      prepared(point, U, V, aux_[k], level_geom(k), J,
+               *blocks_[b].boundary_sessions[static_cast<std::size_t>(k)]);
+      return;
+    }
     auto& closure = blocks_[b].level_boundary_jvp_at_point;
     if (!closure)
       throw std::runtime_error("AmrRuntime block lacks its boundary JVP closure");
     closure(point, U, V, aux_[k], level_geom(k), J);
+  }
+
+  void level_boundary_jvp_into_at(std::size_t b, int k,
+                                  const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  MultiFab& U, const MultiFab& V, MultiFab& J,
+                                  const PreparedGridBoundarySession& boundary) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime prepared boundary JVP owner is out of range");
+    if (!has_boundary_linearization(b))
+      throw std::runtime_error("AmrRuntime block has no executable boundary residual/JVP pair");
+    if (boundary.resolved_plan() != blocks_[b].boundary_plan.get())
+      throw std::invalid_argument("AmrRuntime prepared boundary JVP authority differs from block");
+    auto& closure = blocks_[b].level_boundary_jvp_at_point_prepared;
+    if (!closure)
+      throw std::runtime_error("AmrRuntime block lacks a prepared boundary JVP closure");
+    closure(point, U, V, aux_[k], level_geom(k), J, boundary);
   }
 
   /// Install one prepared interface route on an AMR level.  The current AMR engine owns one shared
@@ -2026,17 +2179,70 @@ class AmrRuntime {
         throw std::invalid_argument(
             "AmrRuntime block boundary plan differs from its qualified state route");
       const auto plan = block.boundary_plan;
+      struct BoundaryRegistryRoutes {
+        std::mutex mutex;
+        std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+        std::vector<std::size_t> state_owners;
+        std::vector<std::vector<MultiFab*>> fields_by_level;
+      };
+      auto routes = std::make_shared<BoundaryRegistryRoutes>();
+      const auto required_states = plan->required_state_identities();
+      const auto required_fields = plan->required_field_identities();
+      const auto required_directions = plan->required_direction_identities();
+      const auto residual_outputs = plan->residual_output_identities();
+      const auto jvp_outputs = plan->jvp_output_identities();
+      const auto all_outputs = plan->all_output_identities();
+      const auto output_slot = [&all_outputs](const std::vector<std::string>& identities) {
+        if (identities.empty())
+          return std::size_t{0};
+        const auto found = std::find(all_outputs.begin(), all_outputs.end(), identities.front());
+        if (found == all_outputs.end())
+          throw std::logic_error("AmrRuntime boundary output route was not prepared");
+        return static_cast<std::size_t>(std::distance(all_outputs.begin(), found));
+      };
+      const std::size_t residual_output_slot = output_slot(residual_outputs);
+      const std::size_t jvp_output_slot = output_slot(jvp_outputs);
       *block.boundary_field_registry =
-          [this, current, plan, states, fields](
-              const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
-              const MultiFab* direction, MultiFab* output) {
+          [this, current, plan, states, fields, routes, required_states, required_fields,
+           required_directions, residual_outputs, jvp_outputs, residual_output_slot,
+           jvp_output_slot](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            MultiFab& state, const MultiFab* direction, MultiFab* output,
+                            detail::BoundaryFieldRegistry& registry) {
             if (point.level < 0 || point.level >= nlev_)
               throw std::out_of_range("AmrRuntime boundary storage registry level is out of range");
-            detail::BoundaryFieldRegistry registry;
             if (boundary_stage_states_ && boundary_stage_states_->point != point)
               throw std::runtime_error(
                   "AmrRuntime boundary stage-state registry was used at a different point");
-            for (const auto& [identity, owner] : *states) {
+            if (routes->materialization_generation != topology_materialization_generation_) {
+              std::scoped_lock lock(routes->mutex);
+              if (routes->materialization_generation != topology_materialization_generation_) {
+                routes->state_owners.clear();
+                routes->fields_by_level.clear();
+                routes->state_owners.reserve(required_states.size());
+                for (const auto& identity : required_states) {
+                  const auto owner = states->find(identity);
+                  if (owner == states->end())
+                    throw std::runtime_error(
+                        "AmrRuntime boundary state dependency has no exact provider route");
+                  routes->state_owners.push_back(owner->second);
+                }
+                routes->fields_by_level.resize(static_cast<std::size_t>(nlev_));
+                for (int level = 0; level < nlev_; ++level) {
+                  auto& level_fields = routes->fields_by_level[static_cast<std::size_t>(level)];
+                  level_fields.reserve(required_fields.size());
+                  for (const auto& identity : required_fields) {
+                    const auto route = fields->find(identity);
+                    if (route == fields->end())
+                      throw std::runtime_error(
+                          "AmrRuntime boundary field dependency has no exact provider route");
+                    level_fields.push_back(&provider_potential_level(route->second, level));
+                  }
+                }
+                routes->materialization_generation = topology_materialization_generation_;
+              }
+            }
+            for (std::size_t slot = 0; slot < routes->state_owners.size(); ++slot) {
+              const std::size_t owner = routes->state_owners[slot];
               MultiFab* storage = nullptr;
               if (boundary_stage_states_)
                 storage = boundary_stage_states_->state(owner);
@@ -2044,34 +2250,69 @@ class AmrRuntime {
                 storage = owner == current
                               ? &state
                               : &(*blocks_[owner].levels)[static_cast<std::size_t>(point.level)].U;
-              registry.bind_state(identity, *storage);
+              registry.bind_state_slot(slot, *storage);
             }
-            for (const auto& identity : plan->required_field_identities()) {
-              const auto route = fields->find(identity);
-              if (route == fields->end())
-                throw std::runtime_error(
-                    "AmrRuntime boundary field dependency has no exact provider route");
-              registry.bind_field(identity, provider_potential_level(route->second, point.level));
-            }
+            const auto& level_fields =
+                routes->fields_by_level[static_cast<std::size_t>(point.level)];
+            for (std::size_t slot = 0; slot < level_fields.size(); ++slot)
+              registry.bind_field_slot(slot, *level_fields[slot]);
             if (direction != nullptr) {
-              for (const auto& identity : plan->required_direction_identities()) {
+              for (std::size_t slot = 0; slot < required_directions.size(); ++slot) {
+                const auto& identity = required_directions[slot];
                 if (identity != plan->state_identity())
                   throw std::runtime_error(
                       "AmrRuntime boundary JVP direction has no exact block storage route");
-                registry.bind_direction(identity, *direction);
+                registry.bind_direction_slot(slot, *direction);
               }
             }
             if (output != nullptr) {
-              const auto identities = direction == nullptr ? plan->residual_output_identities()
-                                                           : plan->jvp_output_identities();
+              const auto& identities = direction == nullptr ? residual_outputs : jvp_outputs;
               if (identities.size() > 1)
                 throw std::runtime_error(
                     "AmrRuntime boundary operation requires multiple mutable output storages");
               if (!identities.empty())
-                registry.bind_output(identities.front(), *output);
+                registry.bind_output_slot(
+                    direction == nullptr ? residual_output_slot : jvp_output_slot, *output);
             }
-            return registry;
           };
+    }
+    materialize_boundary_sessions_();
+  }
+
+  void materialize_boundary_sessions_() {
+    // Every registry callback is installed before this helper first runs, so cross-block and
+    // named-field routes are complete. Regrid/restart call it again after replacing level layouts.
+    for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
+      auto& block = blocks_[block_index];
+      block.boundary_sessions.clear();
+      block.boundary_lanes.clear();
+      if (!block.boundary_plan)
+        continue;
+      block.boundary_lanes.reserve(static_cast<std::size_t>(nlev_));
+      block.boundary_sessions.reserve(static_cast<std::size_t>(nlev_));
+      for (int level = 0; level < nlev_; ++level) {
+        runtime::multiblock::BoundaryEvaluationPoint preparation_point;
+        preparation_point.clock = block.boundary_plan->identity() + "::bound-runtime";
+        preparation_point.level = level;
+        preparation_point.dt = 0.0;
+        preparation_point.physical_time = 0.0;
+        std::array<char, std::numeric_limits<int>::digits10 + 3> level_identity{};
+        const auto [level_identity_end, level_identity_error] = std::to_chars(
+            level_identity.data(), level_identity.data() + level_identity.size(), level);
+        if (level_identity_error != std::errc{})
+          throw std::logic_error("AMR boundary lane level identity exceeded fixed integer storage");
+        const std::array<std::string_view, 3> lane_identity_parts{
+            block.boundary_plan->identity(), "::runtime-level-",
+            std::string_view(level_identity.data(),
+                             static_cast<std::size_t>(level_identity_end - level_identity.data()))};
+        auto lane = std::make_shared<ExecutionLane>(
+            ExecutionLane::world(std::span<const std::string_view>(lane_identity_parts)));
+        MultiFab& prototype = (*block.levels)[static_cast<std::size_t>(level)].U;
+        auto session = std::make_shared<PreparedGridBoundarySession>(
+            level_grid_context(block_index, level), *lane, prototype, preparation_point);
+        block.boundary_lanes.push_back(std::move(lane));
+        block.boundary_sessions.push_back(std::move(session));
+      }
     }
   }
 
@@ -2122,6 +2363,19 @@ class AmrRuntime {
       if (states[block] == nullptr)
         continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
+      if (static_cast<std::size_t>(k) < blocks_[block].boundary_sessions.size() &&
+          blocks_[block].boundary_sessions[static_cast<std::size_t>(k)]) {
+        auto& core = flux ? blocks_[block].level_neg_div_flux_core_at_point_prepared
+                          : blocks_[block].level_rhs_core_at_point_prepared;
+        auto& boundary = blocks_[block].level_boundary_residual_at_point_prepared;
+        if (!core || !boundary)
+          throw std::runtime_error(
+              "AmrRuntime block lacks its persistent prepared boundary closures");
+        const auto& session = *blocks_[block].boundary_sessions[static_cast<std::size_t>(k)];
+        core(point, *states[block], aux_[k], level_geom(k), *rhs[block], session);
+        boundary(point, *states[block], aux_[k], level_geom(k), *rhs[block], session);
+        continue;
+      }
       if (interface_scheduler_.participates(block, k)) {
         fill_level_state_cf_ghosts(block, k, *states[block]);
         auto& closure = flux ? blocks_[block].level_neg_div_flux_without_prepared_interfaces
@@ -2207,19 +2461,22 @@ class AmrRuntime {
   /// The fine-level C/F ghost refresh matches level_rhs_into. Bodies in amr_program_reflux.hpp (the tail
   /// header keeps amr_runtime.hpp at its line budget). Used ONLY by the reflux path (AmrProgramContext,
   /// nlev>1); the native step and the coarse-only / flat Program never call it.
-  void level_rhs_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
-                              MultiFab& Fy);
-  void level_rhs_capture_into_temporal(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
-                                       MultiFab& Fy, const MultiFab& parent_old,
-                                       const MultiFab& parent_new,
+  void level_rhs_capture_into(std::size_t b, int k,
+                              const runtime::multiblock::BoundaryEvaluationPoint& point,
+                              MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy);
+  void level_rhs_capture_into_temporal(std::size_t b, int k,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
+                                       const MultiFab& parent_old, const MultiFab& parent_new,
                                        const runtime::amr::TemporalTransferContext& target_time);
   /// FLUX-ONLY (SourceFreeModel) counterpart of level_rhs_capture_into (the neg_div_flux capture path).
-  void level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
-                                       MultiFab& Fy);
+  void level_neg_div_flux_capture_into(std::size_t b, int k,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy);
   void level_neg_div_flux_capture_into_temporal(
-      std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
-      const MultiFab& parent_old, const MultiFab& parent_new,
-      const runtime::amr::TemporalTransferContext& target_time);
+      std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+      MultiFab& R, MultiFab& Fx, MultiFab& Fy, const MultiFab& parent_old,
+      const MultiFab& parent_new, const runtime::amr::TemporalTransferContext& target_time);
   /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
   /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
   Real level_max_speed(std::size_t b, int k, const MultiFab& U) const {
@@ -3176,24 +3433,20 @@ class AmrRuntime {
       ~StageStateReset() { slot->reset(); }
     } reset{&boundary_stage_states_};
 
-    const Geometry geometry = geom_.refine(level_refinement(level));
     for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
       if (!gradient_state[block_index])
         continue;
       auto& block = blocks_[block_index];
       MultiFab& state = (*block.levels)[static_cast<std::size_t>(level)].U;
-      fill_level_state_cf_ghosts(block_index, level, state);
-      if (!block.boundary_plan) {
-        fill_ghosts(state, domain, transport_bc());
+      if (static_cast<std::size_t>(level) < block.boundary_sessions.size() &&
+          block.boundary_sessions[static_cast<std::size_t>(level)]) {
+        block.boundary_sessions[static_cast<std::size_t>(level)]->fill(state, point);
         continue;
       }
-      if (block.boundary_field_registry && *block.boundary_field_registry) {
-        auto fields = (*block.boundary_field_registry)(point, state, nullptr, nullptr);
-        block.boundary_plan->fill_same_level_and_physical(state, fields, geometry, point);
-      } else {
-        block.boundary_plan->fill_same_level_and_physical(
-            state, &aux_[static_cast<std::size_t>(level)], geometry, point);
-      }
+      if (block.boundary_plan)
+        throw std::runtime_error("AMR Tagger boundary plan has no persistent prepared session");
+      fill_level_state_cf_ghosts(block_index, level, state);
+      fill_ghosts(state, domain, transport_bc());
     }
   }
 
@@ -3617,6 +3870,7 @@ class AmrRuntime {
     // restores the covered coarse cells (otherwise a mass diagnostic, sum of the coarse only, would
     // count a phantom coarse value under the new patch, X5).
     require_solved_field_report(solve_fields(), "AmrRuntime::regrid publication");
+    materialize_boundary_sessions_();
     ++regrid_count_;
     // AMR PROFILING (Spec 5 criterion 43): a regrid COMPLETED -> bump the per-run "regrid" counter
     // (parity with regrid_count_). The "regrid" TIMING scope (_rg above) already covered the whole

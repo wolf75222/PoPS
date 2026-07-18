@@ -39,6 +39,9 @@ _MPI_VARIANT_BLOCK = re.compile(
     r"set\(\s*POPS_CPP_MPI_VARIANT_TESTS\b(.*?)\)", re.DOTALL
 )
 _MPI_RANKS = re.compile(r"set\(\s*POPS_MPI_RANKS_(test_[A-Za-z0-9_]+)\s+([0-9 ]+)\)")
+_MPI_RANK_PARITY = re.compile(
+    r"set\(\s*POPS_MPI_RANK_PARITY_(test_[A-Za-z0-9_]+)\s+([0-9 ]+)\)"
+)
 _TEST_WORD = re.compile(r"\btest_[A-Za-z0-9_]+\b")
 _ADD_GTEST = re.compile(r"pops_add_gtest_suite\(\s*NAME\s+(test_[A-Za-z0-9_]+)")
 _ADD_MPI_GTEST = re.compile(r"pops_add_mpi_gtest_suite\(\s*(test_[A-Za-z0-9_]+)")
@@ -90,6 +93,15 @@ def _manifest_mpi_nproc():
     }
 
 
+def _manifest_mpi_rank_parity():
+    rows = tomllib.loads(MANIFEST.read_text()).get("cpp", {}).get("suite", [])
+    return {
+        row["name"]: tuple(row["mpi_rank_parity"])
+        for row in rows
+        if row.get("mpi_rank_parity")
+    }
+
+
 def _cmake_rank_rows(text):
     return {
         name: tuple(int(rank) for rank in ranks.split())
@@ -123,6 +135,13 @@ def _cmake_mpi_nproc():
     missing = sorted(name for name, ranks in configured.items() if ranks is None)
     assert not missing, "MPI-only suites lack exact CMake rank registrations: %r" % missing
     return configured
+
+
+def _cmake_mpi_rank_parity():
+    return {
+        name: tuple(int(rank) for rank in ranks.split())
+        for name, ranks in _MPI_RANK_PARITY.findall(CMAKELISTS.read_text())
+    }
 
 
 def _source_of(name):
@@ -183,6 +202,13 @@ def test_manifest_mpi_nproc_matches_cmake_registrations_exactly():
     assert _cmake_mpi_nproc() == _manifest_mpi_nproc(), (
         "tests/test_manifest.toml mpi_nproc is the CI launch authority and must exactly match "
         "every CMake MPI-only and standalone rank registration"
+    )
+
+
+def test_manifest_mpi_rank_parity_matches_cmake_registrations_exactly():
+    assert _cmake_mpi_rank_parity() == _manifest_mpi_rank_parity(), (
+        "tests/test_manifest.toml mpi_rank_parity is the CI launch authority and must exactly "
+        "match every CMake cross-rank parity registration"
     )
 
 

@@ -16,6 +16,7 @@
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 namespace pops {
@@ -262,6 +263,15 @@ inline BCRec aux_halo_override(const BCRec& shared, const AuxHaloPolicy& p) {
 inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
   Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
   fill_boundary(mf, domain, per);
+  fill_physical_bc(mf, domain, bc);
+}
+
+/// Execution-lane twin: physical faces remain rank-local while same-level/periodic exchange uses
+/// the lane's isolated communicator. It never falls back to MPI_COMM_WORLD.
+inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc,
+                        const ExecutionLane& lane) {
+  Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
+  fill_boundary(mf, domain, lane, per);
   fill_physical_bc(mf, domain, bc);
 }
 

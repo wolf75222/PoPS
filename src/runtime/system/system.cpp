@@ -58,8 +58,7 @@ void System::commit_step_transaction() {
 }
 void System::finalize_step_transaction() {
   if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
-    throw std::runtime_error(
-        "System::finalize_step_transaction: no committed transaction");
+    throw std::runtime_error("System::finalize_step_transaction: no committed transaction");
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
@@ -99,8 +98,7 @@ void System::mark_bound() {
   // materialized yet. Agree the complete registry before rank-local validation so a
   // divergent rank cannot throw locally while its peers enter the collective.
   p_->fields_.require_field_plan_consensus();
-  if (!p_->block_state_identities_.empty() &&
-      p_->block_state_identities_.size() != p_->sp.size())
+  if (!p_->block_state_identities_.empty() && p_->block_state_identities_.size() != p_->sp.size())
     throw std::runtime_error(
         "System::mark_bound: block state routes do not exactly cover materialized blocks");
   for (const auto& block : p_->sp)
@@ -110,9 +108,8 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: materialized block lacks its exact state route");
   for (const auto& [name, plan] : p_->boundary_plans_) {
-    const auto found = std::find_if(
-        p_->sp.begin(), p_->sp.end(),
-        [&name](const Impl::Species& block) { return block.name == name; });
+    auto found = std::find_if(p_->sp.begin(), p_->sp.end(),
+                              [&name](const Impl::Species& block) { return block.name == name; });
     if (found == p_->sp.end())
       throw std::runtime_error(
           "System::mark_bound: prepared boundary plan references unknown block '" + name + "'");
@@ -121,6 +118,15 @@ void System::mark_bound() {
           "System::mark_bound: prepared boundary component count differs from block '" + name +
           "'");
     (void)plan->has_boundary_linearization();
+    runtime::multiblock::BoundaryEvaluationPoint preparation_point;
+    preparation_point.clock = plan->identity() + "::bound-runtime";
+    preparation_point.level = 0;
+    preparation_point.dt = 0.0;
+    preparation_point.physical_time = p_->t;
+    found->boundary_lane =
+        std::make_shared<ExecutionLane>(ExecutionLane::world(plan->identity(), "::runtime"));
+    found->boundary_session = std::make_shared<PreparedGridBoundarySession>(
+        p_->grid_ctx(name), *found->boundary_lane, found->U, preparation_point);
   }
   p_->lifecycle_.to_bound();  // Assembling -> Bound; throws the same message on a second bind
 }
@@ -133,7 +139,9 @@ std::string System::lifecycle_state() const {
 // SCHEDULER VALUE CACHE (ADC-458): the System-owned CacheManager every ProgramContext forwards to. The
 // .so resolves this across the dlopen boundary (POPS_EXPORT), so the step closure's cache_store_aux /
 // cache_should_update reach the SAME manager the checkpoint serializes.
-POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() { return p_->program_.cache_; }
+POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() {
+  return p_->program_.cache_;
+}
 int System::nx() const {
   return p_->cfg.n;
 }
@@ -167,15 +175,14 @@ EffectiveOptionsReport System::effective_options_report() const {
   report.poisson.epsilon = static_cast<double>(p_->fields_.p_eps_);
   p_->fields_.write_effective_poisson_options(report.poisson);
   report.poisson.has_epsilon_field = p_->fields_.has_scalar_diffusion_coefficient();
-  report.poisson.has_anisotropic_epsilon =
-      p_->fields_.has_anisotropic_diffusion_coefficient();
+  report.poisson.has_anisotropic_epsilon = p_->fields_.has_anisotropic_diffusion_coefficient();
   report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;
   // ADC-615: effective cut-cell / EB thresholds (default kEb* unless overridden by set_disc_domain).
   report.eb.enabled = p_->eb_set_ && p_->geometry_mode_ == GeometryMode::CutCell;
-  report.eb.geometry_mode = (p_->geometry_mode_ == GeometryMode::CutCell)
-                                ? "cutcell"
-                                : (p_->geometry_mode_ == GeometryMode::Staircase ? "staircase"
-                                                                                 : "none");
+  report.eb.geometry_mode =
+      (p_->geometry_mode_ == GeometryMode::CutCell)
+          ? "cutcell"
+          : (p_->geometry_mode_ == GeometryMode::Staircase ? "staircase" : "none");
   report.eb.kappa_min = static_cast<double>(p_->eb_thresholds_.kappa_min);
   report.eb.face_open_eps = static_cast<double>(p_->eb_thresholds_.face_open_eps);
   report.eb.cut_theta_min = static_cast<double>(p_->eb_thresholds_.cut_theta_min);

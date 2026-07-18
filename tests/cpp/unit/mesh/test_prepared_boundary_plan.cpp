@@ -6,6 +6,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 
+#include <type_traits>
 #include <vector>
 
 using namespace pops;
@@ -81,6 +82,28 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
   EXPECT_EQ(field(4, 2, 1), Real(16));  // 2*9 - interior(2)
 }
 
+TEST(test_prepared_boundary_plan, materializes_move_only_lane_session_before_execution) {
+  static_assert(!std::is_copy_constructible_v<PreparedBoundaryPlan::Session>);
+  static_assert(!std::is_copy_assignable_v<PreparedBoundaryPlan::Session>);
+  static_assert(std::is_nothrow_move_constructible_v<PreparedBoundaryPlan::Session>);
+
+  const Box2D domain = Box2D::from_extents(4, 4);
+  MultiFab state = scalar_field(domain, 1, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(3); });
+  }
+  PreparedBoundaryPlan plan("case::block::session-plan", 1, {physical_bc()});
+  const auto lane = ExecutionLane::world("case::block::session-lane");
+  auto original = plan.make_session(lane);
+  auto session = std::move(original);
+
+  EXPECT_THROW(original.fill_same_level_and_physical(state, domain), std::logic_error);
+  EXPECT_NO_THROW(session.fill_same_level_and_physical(state, domain));
+  EXPECT_EQ(state.fab(0)(-1, 2, 0), Real(3));
+  EXPECT_EQ(state.fab(0)(4, 2, 0), Real(5));
+}
+
 TEST(test_prepared_boundary_plan, rejects_incomplete_periodic_pairs_and_insufficient_ghosts) {
   BCRec mixed = physical_bc();
   mixed.xlo = BCType::Periodic;
@@ -107,12 +130,12 @@ TEST(test_prepared_boundary_plan, grid_context_routes_exact_nary_storage_registr
   context.boundary_plan = plan;
   int registry_calls = 0;
   context.boundary_field_registry = [&](const auto&, MultiFab& state, const MultiFab* direction,
-                                        MultiFab* destination) {
+                                        MultiFab* destination,
+                                        detail::BoundaryFieldRegistry& fields) {
     ++registry_calls;
     EXPECT_EQ(&state, &primary);
     EXPECT_EQ(direction, nullptr);
     EXPECT_EQ(destination, nullptr);
-    detail::BoundaryFieldRegistry fields;
     fields.bind_state("case::state::primary", primary);
     fields.bind_state("case::state::coupled", coupled);
     fields.bind_field("case::field::auxiliary", auxiliary);
@@ -120,7 +143,6 @@ TEST(test_prepared_boundary_plan, grid_context_routes_exact_nary_storage_registr
     EXPECT_EQ(&fields.state("case::state::coupled"), &coupled);
     EXPECT_EQ(&fields.field("case::field::auxiliary"), &auxiliary);
     EXPECT_EQ(&fields.output("case::output::residual"), &output);
-    return fields;
   };
   const runtime::multiblock::BoundaryEvaluationPoint point{"clock.nary",        0,   0,  0, 0,
                                                            amr::Rational(0, 1), 0.1, 0.0};

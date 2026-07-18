@@ -65,22 +65,93 @@ enum class PreparedBoundaryOperation { GhostRegion, FieldResidual, FieldJvp };
 template <PreparedBoundaryOperation Operation>
 class PreparedBoundaryComponent final {
  public:
+  /// One lane-bound invocation session with an independently prepared component state.
+  class Session final {
+   public:
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+    Session(Session&&) noexcept = default;
+    Session& operator=(Session&&) noexcept = default;
+    ~Session() = default;
+
+    [[nodiscard]] const PreparedBoundaryComponentSpec& spec() const noexcept { return spec_; }
+    [[nodiscard]] void* state() const noexcept { return state_.get(); }
+    [[nodiscard]] const component::PreparedExecutionContextV1& execution() const noexcept {
+      return *execution_;
+    }
+
+    [[nodiscard]] const PopsGhostBoundaryApiV1& ghost_api() const {
+      static_assert(Operation == PreparedBoundaryOperation::GhostRegion);
+      return component_->table<PopsGhostBoundaryApiV1>(POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1,
+                                                       spec_.interface_version);
+    }
+
+    [[nodiscard]] const PopsFieldBoundaryClosureApiV1& field_api() const {
+      static_assert(Operation != PreparedBoundaryOperation::GhostRegion);
+      return component_->table<PopsFieldBoundaryClosureApiV1>(
+          POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1, spec_.interface_version);
+    }
+
+   private:
+    friend class PreparedBoundaryComponent;
+
+    Session(PreparedBoundaryComponentSpec spec,
+            std::shared_ptr<component::LoadedComponent> component,
+            std::shared_ptr<const component::PreparedExecutionContextV1> execution,
+            component::LoadedComponent::PreparedState state)
+        : spec_(std::move(spec)),
+          component_(std::move(component)),
+          execution_(std::move(execution)),
+          state_(std::move(state)) {
+      spec_.execution = execution_;
+    }
+
+    PreparedBoundaryComponentSpec spec_;
+    // Declaration order is intentional: state_ is destroyed before the execution strings and the
+    // LoadedComponent that keeps its destroy callback's dynamic library resident.
+    std::shared_ptr<component::LoadedComponent> component_;
+    std::shared_ptr<const component::PreparedExecutionContextV1> execution_;
+    component::LoadedComponent::PreparedState state_;
+  };
+
   PreparedBoundaryComponent(PreparedBoundaryComponentSpec spec,
                             std::shared_ptr<component::LoadedComponent> component)
       : spec_(std::move(spec)), component_(std::move(component)) {
     validate();
-    const PopsExecutionContextV1 execution = spec_.execution->view();
-    state_ = component_->prepared_state(native_interface_id_(), spec_.interface_version, execution,
-                                        spec_.parameters_json, spec_.target_json);
   }
 
   PreparedBoundaryComponent(const PreparedBoundaryComponent&) = delete;
   PreparedBoundaryComponent& operator=(const PreparedBoundaryComponent&) = delete;
 
-  ~PreparedBoundaryComponent() = default;  // LoadedComponent owns prepared-state destruction.
+  ~PreparedBoundaryComponent() = default;
 
   const PreparedBoundaryComponentSpec& spec() const { return spec_; }
-  void* state() const { return state_; }
+
+  /// Materialize one fresh state before entering the numerical hot path. The returned move-only
+  /// session retains the component library, the lane-qualified execution POD and its own native
+  /// state for the complete invocation lifetime.
+  [[nodiscard]] Session make_session(const ExecutionLane& lane) const {
+    auto execution = std::make_shared<const component::PreparedExecutionContextV1>(
+        spec_.execution->for_lane(lane));
+    if (!execution->matches_lane(lane))
+      throw std::invalid_argument(
+          "prepared boundary component execution authority differs from its lane");
+    if (execution->view().memory_space != POPS_MEMORY_SPACE_HOST_V1)
+      throw std::invalid_argument(
+          "prepared boundary component uses the host-batch ABI but its exact ExecutionContext "
+          "requires a non-host memory space; install a device-native boundary provider instead");
+    auto state = component_->prepare_fresh_state(native_interface_id_(), spec_.interface_version,
+                                                 execution->view(), spec_.parameters_json,
+                                                 spec_.target_json);
+    return Session(spec_, component_, std::move(execution), std::move(state));
+  }
+
+  /// Sequential control-path adapter. Production kernels retain the result of make_session(lane)
+  /// instead of preparing during an invocation.
+  [[nodiscard]] Session make_world_session() const {
+    const auto lane = ExecutionLane::world();
+    return make_session(lane);
+  }
 
   const PopsGhostBoundaryApiV1& ghost_api() const {
     static_assert(Operation == PreparedBoundaryOperation::GhostRegion);
@@ -151,7 +222,6 @@ class PreparedBoundaryComponent final {
 
   PreparedBoundaryComponentSpec spec_;
   std::shared_ptr<component::LoadedComponent> component_;
-  void* state_ = nullptr;
 };
 
 using PreparedGhostBoundaryComponent =

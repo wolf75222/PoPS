@@ -304,6 +304,12 @@ POPS_EXPORT GridContext System::grid_context(const std::string& name) {
   return p_->grid_ctx(name);
 }
 
+POPS_EXPORT GridContext System::grid_context(int block) {
+  if (block < 0 || block >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System::grid_context block index is out of range");
+  return p_->grid_ctx(p_->sp[static_cast<std::size_t>(block)].name);
+}
+
 namespace {
 BCType prepared_bc_type(const std::string& token) {
   if (token == "periodic")
@@ -543,6 +549,12 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().rhs_flux_only_core_at_point = std::move(closures.rhs_flux_only_core_at_point);
   P->sp.back().boundary_residual_at_point = std::move(closures.boundary_residual_at_point);
   P->sp.back().boundary_jvp_at_point = std::move(closures.boundary_jvp_at_point);
+  P->sp.back().rhs_core_at_point_prepared = std::move(closures.rhs_core_at_point_prepared);
+  P->sp.back().rhs_flux_only_core_at_point_prepared =
+      std::move(closures.rhs_flux_only_core_at_point_prepared);
+  P->sp.back().boundary_residual_at_point_prepared =
+      std::move(closures.boundary_residual_at_point_prepared);
+  P->sp.back().boundary_jvp_at_point_prepared = std::move(closures.boundary_jvp_at_point_prepared);
   EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
   opt.name = name;
   if (opt.route.empty())
@@ -717,8 +729,7 @@ void System::set_field_solver_plan(
     const std::string& output_block, const std::string& output_key,
     const std::vector<std::string>& provider_identities,
     const std::vector<std::string>& provider_blocks, const std::vector<std::string>& provider_keys,
-    const std::vector<double>& provider_coefficients,
-    const std::string& backend_provider_route) {
+    const std::vector<double>& provider_coefficients, const std::string& backend_provider_route) {
   require_assembling(p_->lifecycle_, "set_field_solver_plan");
   if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
       output_owner_identity.empty() || output_block.empty() || output_key.empty())
@@ -780,8 +791,8 @@ POPS_EXPORT std::string System::register_field_solver_provider(
     std::shared_ptr<component::LoadedComponent> topology,
     std::shared_ptr<component::LoadedComponent> solver) {
   require_assembling(p_->lifecycle_, "register_field_solver_provider");
-  return p_->fields_.register_external_solver_provider(
-      provider_slot, std::move(spec), std::move(topology), std::move(solver));
+  return p_->fields_.register_external_solver_provider(provider_slot, std::move(spec),
+                                                       std::move(topology), std::move(solver));
 }
 
 POPS_EXPORT void System::register_field_nullspace_provider(

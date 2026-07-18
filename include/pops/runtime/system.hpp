@@ -242,6 +242,8 @@ class System {
   /// Block-qualified context used by generated packages.  It captures the exact prepared boundary
   /// authority installed before block construction, so two blocks may use different physical data.
   POPS_EXPORT GridContext grid_context(const std::string& name);
+  /// Index-qualified twin for an already authenticated Program block map.
+  POPS_EXPORT GridContext grid_context(int block);
   /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
   /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
@@ -819,11 +821,20 @@ class System {
   POPS_EXPORT bool block_has_boundary_linearization(int b) const;
   POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           int b, MultiFab& U, MultiFab& R, bool flux_only);
+  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          int b, MultiFab& U, MultiFab& R, bool flux_only,
+                                          const PreparedGridBoundarySession& boundary);
   POPS_EXPORT void block_boundary_residual_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C);
+  POPS_EXPORT void block_boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
+      const PreparedGridBoundarySession& boundary);
   POPS_EXPORT void block_boundary_jvp_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
       const MultiFab& V, MultiFab& J);
+  POPS_EXPORT void block_boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
+      const MultiFab& V, MultiFab& J, const PreparedGridBoundarySession& boundary);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The

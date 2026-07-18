@@ -3,9 +3,9 @@
 ///
 /// Fills the ghosts of each Fab from the VALID regions of neighboring boxes in the same
 /// MultiFab, with optional periodic wrapping. Single-rank: direct memory copies. Multi-rank
-/// (POPS_HAS_MPI + n_ranks()>1): metadata is REPLICATED -> each rank enumerates DETERMINISTICALLY
+/// (POPS_HAS_MPI + communicator size > 1): metadata is REPLICATED -> each rank enumerates DETERMINISTICALLY
 /// the same job list, so buffers line up without negotiating sizes (MPI_Isend/Irecv,
-/// tag 0). Two-phase API (classic compute/comm overlap): fill_boundary_begin posts the
+/// halo tag). Two-phase API (classic compute/comm overlap): fill_boundary_begin posts the
 /// exchanges, fill_boundary_end waits and unpacks; fill_boundary chains both (blocking). Ghosts
 /// OUTSIDE the domain without periodicity are NOT touched here (those are the physical BCs,
 /// physical_bc.hpp). The pack/unpack kernels are device-clean NAMED FUNCTORS (nvcc limitation).
@@ -23,7 +23,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/boundary/halo_schedule.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -95,8 +95,8 @@ struct UnpackKernel {
 // shifts x sorted gB), so the packed buffers stay bit-identical and the per-rank send/recv lists
 // stay aligned. Bumps the build counter (cache-engagement test hook).
 inline void build_halo_schedule(const MultiFab& mf, const Box2D& domain, Periodicity per,
-                                HaloSchedule& sched) {
-  ++halo_schedule_build_counter();
+                                const CommunicatorView& communicator, HaloSchedule& sched) {
+  halo_schedule_build_counter().fetch_add(1, std::memory_order_relaxed);
   const int ng = mf.n_grow();
   const int Lx = domain.nx();
   const int Ly = domain.ny();
@@ -141,9 +141,9 @@ inline void build_halo_schedule(const MultiFab& mf, const Box2D& domain, Periodi
   }
 
 #ifdef POPS_HAS_MPI
-  const int np = n_ranks();
+  const int np = communicator.size();
   if (np > 1) {
-    const int me = my_rank();
+    const int me = communicator.rank();
     const DistributionMapping& dm = mf.dmap();
     sched.send.assign(np, {});
     sched.recv.assign(np, {});
@@ -178,7 +178,8 @@ inline void build_halo_schedule(const MultiFab& mf, const Box2D& domain, Periodi
 
 // Returns the cached schedule for (mf layout, per, domain), building and memoizing it on first use.
 inline std::shared_ptr<const HaloSchedule> get_halo_schedule(const MultiFab& mf,
-                                                             const Box2D& domain, Periodicity per) {
+                                                             const Box2D& domain, Periodicity per,
+                                                             const CommunicatorView& communicator) {
   HaloScheduleCache& cache = mf.halo_cache();
   if (std::shared_ptr<const HaloSchedule> hit = cache.find(per.x, per.y, domain))
     return hit;
@@ -186,7 +187,7 @@ inline std::shared_ptr<const HaloSchedule> get_halo_schedule(const MultiFab& mf,
   s->per_x = per.x;
   s->per_y = per.y;
   s->domain = domain;
-  build_halo_schedule(mf, domain, per, *s);
+  build_halo_schedule(mf, domain, per, communicator, *s);
   return s;
 }
 
@@ -260,14 +261,18 @@ struct HaloExchange {
 /// Phase 1 (non-blocking): does the LOCAL halo copies and posts the Isend/Irecv of the distant halos.
 /// Returns the handle to pass to fill_boundary_end. Between begin and end the caller can advance the
 /// interior. No-op if mf has no ghost. @p domain is used for periodic wrapping @p per.
-inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Periodicity per = {}) {
+namespace detail {
+
+inline HaloExchange fill_boundary_begin_on(MultiFab& mf, const Box2D& domain, Periodicity per,
+                                           const CommunicatorView& communicator, int message_tag) {
   HaloExchange h;
   const int ng = mf.n_grow();
   if (ng == 0)
     return h;
   const int nc = mf.ncomp();
   // memoized schedule (BoxHash + enumeration) for this (layout, Periodicity, domain).
-  const std::shared_ptr<const HaloSchedule> sched = detail::get_halo_schedule(mf, domain, per);
+  const std::shared_ptr<const HaloSchedule> sched =
+      get_halo_schedule(mf, domain, per, communicator);
   h.storage = mf.halo_cache().acquire_exchange(sched, nc);
   HaloExchangeStorage& storage = *h.storage;
 
@@ -279,9 +284,9 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
   }
 
 #ifdef POPS_HAS_MPI
-  if (n_ranks() <= 1)
+  if (communicator.size() <= 1)
     return h;
-  const int np = n_ranks();
+  const int np = communicator.size();
   auto buf_size = [&](const std::vector<HaloJob>& js) {
     std::int64_t n = 0;
     for (const auto& j : js)
@@ -329,7 +334,7 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
       detail::require_mpi_success(
           MPI_Isend(storage.sbuf[static_cast<std::size_t>(r)].data(),
                     static_cast<int>(storage.sbuf[static_cast<std::size_t>(r)].size()), MPI_DOUBLE,
-                    r, 0, MPI_COMM_WORLD, &storage.reqs.back()),
+                    r, message_tag, communicator.native_handle(), &storage.reqs.back()),
           "MPI_Isend(fill_boundary)");
     }
     if (!storage.rbuf[static_cast<std::size_t>(r)].empty()) {
@@ -337,12 +342,28 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
       detail::require_mpi_success(
           MPI_Irecv(storage.rbuf[static_cast<std::size_t>(r)].data(),
                     static_cast<int>(storage.rbuf[static_cast<std::size_t>(r)].size()), MPI_DOUBLE,
-                    r, 0, MPI_COMM_WORLD, &storage.reqs.back()),
+                    r, message_tag, communicator.native_handle(), &storage.reqs.back()),
           "MPI_Irecv(fill_boundary)");
     }
   }
 #endif
   return h;
+}
+
+}  // namespace detail
+
+/// Process-world compatibility path. Concurrent prepared execution must use the ExecutionLane
+/// overload below so independent MPI traces receive distinct communicator context ids.
+inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Periodicity per = {}) {
+  return detail::fill_boundary_begin_on(mf, domain, per, world_communicator_view(),
+                                        ExecutionLane::halo_message_tag);
+}
+
+/// Begin one halo exchange on an explicitly prepared execution lane.
+inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
+                                        const ExecutionLane& lane, Periodicity per = {}) {
+  return detail::fill_boundary_begin_on(mf, domain, per, lane.communicator(),
+                                        ExecutionLane::halo_message_tag);
 }
 
 /// Phase 2 (blocking): MPI_Waitall on the transfers posted by begin, then unpacks the received
@@ -388,6 +409,13 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 /// periodic ghosts of @p mf; @p per sets the wrapping, @p domain the periodic fold.
 inline void fill_boundary(MultiFab& mf, const Box2D& domain, Periodicity per = {}) {
   HaloExchange h = fill_boundary_begin(mf, domain, per);
+  fill_boundary_end(mf, h);
+}
+
+/// BLOCKING halo exchange isolated from other concurrent lanes by the duplicated communicator.
+inline void fill_boundary(MultiFab& mf, const Box2D& domain, const ExecutionLane& lane,
+                          Periodicity per = {}) {
+  HaloExchange h = fill_boundary_begin(mf, domain, lane, per);
   fill_boundary_end(mf, h);
 }
 

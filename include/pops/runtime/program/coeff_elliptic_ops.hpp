@@ -16,8 +16,9 @@
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
-#include <pops/runtime/context/grid_context.hpp>                // GridContext (System aux seam)
-#include <pops/runtime/numerical_defaults.hpp>  // kMGDefault* (V-cycle shape defaults)
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/context/grid_context.hpp>  // GridContext (System aux seam)
+#include <pops/runtime/numerical_defaults.hpp>    // kMGDefault* (V-cycle shape defaults)
 
 /// @file
 /// @brief Schur-free tensor-coefficient elliptic infrastructure a compiled time Program lowers to.
@@ -37,6 +38,51 @@ namespace pops {
 namespace runtime {
 namespace program {
 
+namespace detail {
+
+inline void require_collective_vector_layout(const PreparedVectorDistribution& distribution,
+                                             const MultiFab& field, const char* where,
+                                             const ExecutionLane& lane) {
+  const PreparedProviderIdentity identity = distribution.provider_identity();
+  bool matches = false;
+  long callback_failure_local = 0;
+  try {
+    matches = distribution.layout_matches(field);
+  } catch (...) {
+    callback_failure_local = 1;
+  }
+  if (all_reduce_max(callback_failure_local, lane) != 0)
+    throw std::invalid_argument(std::string(where) +
+                                ": vector-distribution layout predicate failed on at least one "
+                                "execution-lane rank for provider '" +
+                                std::string(identity.name) + "'");
+  if (all_reduce_max(matches ? 0L : 1L, lane) != 0)
+    throw std::invalid_argument(std::string(where) + ": vector layout rejected by provider '" +
+                                std::string(identity.name) + "'");
+
+  std::string local_layout_contract;
+  callback_failure_local = 0;
+  try {
+    local_layout_contract = distribution.layout_contract(field);
+  } catch (...) {
+    callback_failure_local = 1;
+  }
+  if (all_reduce_max(callback_failure_local, lane) != 0)
+    throw std::invalid_argument(std::string(where) +
+                                ": vector-distribution layout contract failed on at least one "
+                                "execution-lane rank for provider '" +
+                                std::string(identity.name) + "'");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-vector-distribution"), distribution.collective_contract()},
+           {std::string_view("prepared-vector-layout"), local_layout_contract}},
+          lane))
+    throw std::invalid_argument(std::string(where) +
+                                ": vector distribution contract differs between execution-lane "
+                                "ranks");
+}
+
+}  // namespace detail
+
 // Prepared hierarchy providers receive stable field-slot identities from the emitted assembly.  The
 // facade treats those identities opaquely; only the selected provider maps them to concrete storage.
 
@@ -49,12 +95,38 @@ namespace program {
 template <class Ctx>
 inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
                                   const MultiFab& eps_x, const MultiFab& eps_y,
-                                  const MultiFab& a_xy, const MultiFab& a_yx) {
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const ExecutionLane& lane) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  fill_ghosts(in, gc.geom.domain, gc.bc);
+  fill_ghosts(in, gc.geom.domain, gc.bc, lane);
   apply_laplacian(in, gc.geom, out, /*coef=*/nullptr, /*eps=*/&eps_x, /*kappa=*/nullptr,
                   /*eps_y=*/&eps_y, /*a_xy=*/&a_xy, /*a_yx=*/&a_yx);
+}
+
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx) {
+  const ExecutionLane lane = ExecutionLane::world();
+  apply_laplacian_coeff(ctx, out, in, eps_x, eps_y, a_xy, a_yx, lane);
+}
+
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const PreparedGridBoundarySession& boundary) {
+  ctx.tensor_laplacian(out, in, eps_x, eps_y, a_xy, a_yx, boundary);
+}
+
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
+                                  const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx,
+                                  const PreparedGridBoundarySession& boundary,
+                                  const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  ctx.tensor_laplacian(out, in, eps_x, eps_y, a_xy, a_yx, boundary, point);
 }
 
 /// A geometric-multigrid V-cycle reused as a Krylov preconditioner (ADC-516). Owns the CACHED
@@ -79,12 +151,15 @@ struct GeometricMgPreconditioner {
   }
 
   std::uint64_t preparation_generation() const { return preparation_generation_; }
+  [[nodiscard]] std::size_t persistent_field_count() const noexcept {
+    return mg ? mg->persistent_field_count() : 0u;
+  }
 
   /// Build all hierarchy/storage state before the first Krylov iteration. Re-preparing the same
   /// authenticated topology is a no-op; a geometry, boundary-plan, box, distribution, component, or
   /// ghost-layout change rebuilds the cache at this explicit preparation boundary.
   template <class Ctx>
-  void prepare(const Ctx& ctx, const MultiFab& prototype,
+  void prepare(const Ctx& ctx, const MultiFab& prototype, const ExecutionLane& lane,
                const PreparedVectorDistribution& vector_distribution =
                    PreparedVectorDistribution::Distributed,
                FieldDistribution storage_distribution = FieldDistribution::Distributed) {
@@ -100,8 +175,8 @@ struct GeometricMgPreconditioner {
     BCRec prepared_bc = gc.bc;
     prepared_bc.dx = gc.geom.dx();
     prepared_bc.dy = gc.geom.dy();
-    vector_distribution.require_collective_layout(
-        prototype, "GeometricMgPreconditioner::prepare");
+    detail::require_collective_vector_layout(vector_distribution, prototype,
+                                             "GeometricMgPreconditioner::prepare", lane);
     if (!field_distribution_is_valid(storage_distribution))
       throw std::invalid_argument("GeometricMgPreconditioner received invalid field ownership");
     OperatorFingerprint topology =
@@ -112,10 +187,12 @@ struct GeometricMgPreconditioner {
       ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
     else
       ::pops::detail::fingerprint_mix(topology, "legacy-bc-only");
+    ::pops::detail::fingerprint_mix(topology, lane.identity());
     if (mg && prepared_topology_ && *prepared_topology_ == topology)
       return;
     mg.reset();
     prepared_topology_.reset();
+    prepared_lane_identity_.clear();
     struct PreparedMgFactory {
       int min_coarse;
       int nu1;
@@ -147,7 +224,7 @@ struct GeometricMgPreconditioner {
         exact_provider_parameters(min_coarse_, nu1_, nu2_, nbottom_, n_vcycles_));
     GeometricMG prepared = make_elliptic_solver<GeometricMG>(
         {gc.geom, prototype.box_array(), prototype.dmap(), prepared_bc, {}, storage_distribution},
-        PreparedMgFactory{min_coarse_, nu1_, nu2_, nbottom_, std::move(factory_contract)});
+        PreparedMgFactory{min_coarse_, nu1_, nu2_, nbottom_, std::move(factory_contract)}, lane);
     mg.emplace(std::move(prepared));
     if (!PureFieldAlgebra::same_vector_space(mg->phi(), prototype))
       throw std::logic_error(
@@ -156,15 +233,28 @@ struct GeometricMgPreconditioner {
     // zero probe is mathematically neutral and happens once, before a Krylov iteration can begin.
     PureFieldAlgebra::zero_valid(mg->rhs());
     PureFieldAlgebra::zero_valid(mg->phi());
-    mg->vcycle();
+    mg->vcycle(lane);
     PureFieldAlgebra::zero_valid(mg->rhs());
     PureFieldAlgebra::zero_valid(mg->phi());
     if (preparation_generation_ == std::numeric_limits<std::uint64_t>::max()) {
       mg.reset();
+      prepared_lane_identity_.clear();
       throw std::overflow_error("GeometricMgPreconditioner preparation generation overflow");
     }
+    prepared_lane_identity_ = lane.identity();
     prepared_topology_ = topology;
     ++preparation_generation_;
+  }
+
+  /// Sequential/control-path compatibility wrapper. Generated prepared sessions always use the
+  /// overload above and retain their private execution lane for every subsequent application.
+  template <class Ctx>
+  void prepare(const Ctx& ctx, const MultiFab& prototype,
+               const PreparedVectorDistribution& vector_distribution =
+                   PreparedVectorDistribution::Distributed,
+               FieldDistribution storage_distribution = FieldDistribution::Distributed) {
+    const ExecutionLane lane = ExecutionLane::world();
+    prepare(ctx, prototype, lane, vector_distribution, storage_distribution);
   }
 
   /// out <- M^{-1}(in): a fixed configured number of geometric-multigrid V-cycles of the bare
@@ -186,9 +276,12 @@ struct GeometricMgPreconditioner {
   /// vector (logically read-only); @p out is fully overwritten. The matvec budget is decided C++-side
   /// inside the Krylov loop, so this apply is invisible to the IR.
   template <class Ctx>
-  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
+  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in, const ExecutionLane& lane) {
     if (!mg || !prepared_topology_)
       throw std::logic_error("GeometricMgPreconditioner::apply called before prepare");
+    if (prepared_lane_identity_ != lane.identity())
+      throw std::logic_error(
+          "GeometricMgPreconditioner::apply execution lane differs from prepare");
     GeometricMG& m = *mg;
     if (!PureFieldAlgebra::same_vector_space(m.phi(), in) ||
         !PureFieldAlgebra::same_vector_space(m.phi(), out))
@@ -201,8 +294,14 @@ struct GeometricMgPreconditioner {
     // n_vcycles_ composed V-cycles (default 1): still a FIXED linear map M^{-1}. phi carries forward
     // across the loop so N cycles compose the same stationary iteration.
     for (int i = 0; i < n_vcycles_; ++i)
-      m.vcycle();
+      m.vcycle(lane);
     PureFieldAlgebra::copy(out, m.phi());
+  }
+
+  template <class Ctx>
+  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
+    const ExecutionLane lane = ExecutionLane::world();
+    apply(ctx, out, in, lane);
   }
 
  private:
@@ -213,6 +312,7 @@ struct GeometricMgPreconditioner {
   int n_vcycles_ = 1;                     ///< ADC-644: composed fixed V-cycles forming the map.
   std::optional<GeometricMG> mg;          ///< the cached V-cycle (built explicitly by prepare)
   std::optional<OperatorFingerprint> prepared_topology_{};
+  std::string prepared_lane_identity_{};
   std::uint64_t preparation_generation_ = 0;
 };
 

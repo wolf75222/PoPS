@@ -29,9 +29,7 @@ inline int max_krylov_batched_basis_extent(std::size_t robust_payload_width) noe
   if (robust_payload_width == 0 ||
       robust_payload_width > static_cast<std::size_t>(std::numeric_limits<int>::max() / 2))
     return 0;
-  return (std::numeric_limits<int>::max() - 1) /
-             (2 * static_cast<int>(robust_payload_width)) -
-         1;
+  return (std::numeric_limits<int>::max() - 1) / (2 * static_cast<int>(robust_payload_width)) - 1;
 }
 
 /// Universal stopping controls offered to every prepared iterative method. Method-specific
@@ -64,7 +62,9 @@ struct KrylovWorkspaceRequirements {
   std::size_t initial_residual_field = 0;
 
   [[nodiscard]] bool valid() const noexcept {
-    return field_count > 0 && initial_residual_field < field_count;
+    // Every recurrence needs one immutable/probe slot in addition to its residual slot.  Keeping
+    // those roles distinct is a core workspace invariant, not a provider convention.
+    return field_count >= 2 && initial_residual_field < field_count;
   }
 
   friend bool operator==(const KrylovWorkspaceRequirements&,
@@ -98,6 +98,9 @@ struct KrylovMethodValidation {
 /// Native extension protocol for one prepared iterative method.  Builtins and external providers
 /// implement this same interface.  The virtual solve call occurs exactly once per solve; iteration
 /// remains inside the provider and never pays a name lookup or virtual dispatch in its hot loop.
+/// One immutable provider object is shared by concurrent workspace lanes: implementations must be
+/// reentrant and keep every invocation-specific value in PreparedKrylovSolveContext and its prepared
+/// workspace, never in mutable provider members.
 class PreparedKrylovMethodProvider {
  public:
   virtual ~PreparedKrylovMethodProvider() = default;
@@ -113,14 +116,12 @@ class PreparedKrylovMethodProvider {
       const KrylovMethodProblemFacts& facts,
       const PreparedProviderOptions& options) const noexcept = 0;
   [[nodiscard]] virtual KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
-      const PreparedProviderOptions& options) const = 0;
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions& options) const = 0;
   /// Execute one complete recurrence. If the provider enters MPI it must execute the same complete
   /// collective trace on every rank before returning or throwing; the common boundary can make a
   /// post-trace failure uniform, but cannot repair an abandoned collective.
-  [[nodiscard]] virtual SolveReport solve(
-      PreparedKrylovSolveContext& context,
-      const PreparedProviderOptions& options) const = 0;
+  [[nodiscard]] virtual SolveReport solve(PreparedKrylovSolveContext& context,
+                                          const PreparedProviderOptions& options) const = 0;
 };
 
 /// Immutable prepared handle. Equality is semantic and exact, never pointer- or name-based.
@@ -243,8 +244,7 @@ inline KrylovMethodValidation validate_common_krylov_controls(
 inline constexpr std::string_view kCgOptionsSchema = "pops.krylov.cg.options@1";
 inline constexpr std::string_view kBicgstabOptionsSchema = "pops.krylov.bicgstab.options@1";
 inline constexpr std::string_view kGmresOptionsSchema = "pops.krylov.gmres.options@1";
-inline constexpr std::string_view kRichardsonOptionsSchema =
-    "pops.krylov.richardson.options@1";
+inline constexpr std::string_view kRichardsonOptionsSchema = "pops.krylov.richardson.options@1";
 
 inline bool empty_options(const PreparedProviderOptions& options,
                           std::string_view schema) noexcept {
@@ -261,8 +261,7 @@ inline const std::int64_t* exact_int_option(const PreparedProviderOptions& optio
 }
 
 inline const double* exact_real_option(const PreparedProviderOptions& options,
-                                       std::string_view schema,
-                                       std::string_view key) noexcept {
+                                       std::string_view schema, std::string_view key) noexcept {
   if (options.schema_identity != schema || options.values.size() != 1)
     return nullptr;
   const auto& entry = *options.values.begin();
@@ -309,9 +308,8 @@ class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider {
       return KrylovMethodValidation::reject(14, "CG options contract is invalid");
     return validate_common_krylov_controls(controls);
   }
-  KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
-      const PreparedProviderOptions&) const noexcept override {
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
     if (const KrylovMethodValidation common = validate_generic_problem_facts(facts);
         !common.accepted())
       return common;
@@ -323,8 +321,7 @@ class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider {
     return KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
-      const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("CG workspace requires no preconditioner");
     return {.field_count = 4, .initial_residual_field = 1};
@@ -347,16 +344,13 @@ class BicgstabKrylovMethodProvider final : public PreparedKrylovMethodProvider {
       return KrylovMethodValidation::reject(14, "BiCGStab options contract is invalid");
     return validate_common_krylov_controls(controls);
   }
-  KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
-      const PreparedProviderOptions&) const noexcept override {
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
     return validate_generic_problem_facts(facts);
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
-      const PreparedProviderOptions&) const override {
-    return {.field_count = request.footprint.preconditioned ? 9u : 7u,
-            .initial_residual_field = 1};
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+    return {.field_count = request.footprint.preconditioned ? 9u : 7u, .initial_residual_field = 1};
   }
   SolveReport solve(PreparedKrylovSolveContext& context,
                     const PreparedProviderOptions& options) const override;
@@ -376,8 +370,7 @@ class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider {
     const std::int64_t* restart = exact_int_option(options, kGmresOptionsSchema, "restart");
     if (restart == nullptr || *restart < 1)
       return KrylovMethodValidation::reject(14, "restart must be positive");
-    if (*restart >
-        max_krylov_batched_basis_extent(PreparedFieldAlgebra::kRobustDotPayloadWidth))
+    if (*restart > max_krylov_batched_basis_extent(PreparedFieldAlgebra::kRobustDotPayloadWidth))
       return KrylovMethodValidation::reject(
           26, "restart exceeds the native batched collective capacity");
     return KrylovMethodValidation::accept();
@@ -437,26 +430,22 @@ class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider
     if (const KrylovMethodValidation common = validate_common_krylov_controls(controls);
         !common.accepted())
       return common;
-    const double* relaxation =
-        exact_real_option(options, kRichardsonOptionsSchema, "relaxation");
+    const double* relaxation = exact_real_option(options, kRichardsonOptionsSchema, "relaxation");
     if (relaxation == nullptr || !std::isfinite(*relaxation) || *relaxation <= 0.0)
       return KrylovMethodValidation::reject(15, "relaxation must be finite and positive");
     return KrylovMethodValidation::accept();
   }
-  KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
-      const PreparedProviderOptions&) const noexcept override {
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+                                          const PreparedProviderOptions&) const noexcept override {
     if (const KrylovMethodValidation common = validate_generic_problem_facts(facts);
         !common.accepted())
       return common;
     if (facts.has_preconditioner)
-      return KrylovMethodValidation::reject(
-          24, "Richardson has no prepared preconditioner slot");
+      return KrylovMethodValidation::reject(24, "Richardson has no prepared preconditioner slot");
     return KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
-      const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("Richardson workspace requires no preconditioner");
     return {.field_count = 2, .initial_residual_field = 1};
