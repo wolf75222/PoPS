@@ -666,7 +666,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 60" in cpp_shards_block
     assert "timeout-minutes: 50" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 38m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
