@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -420,18 +421,30 @@ int run_krylov_collective_contract(int argc, char** argv) {
     rhs.set_val(Real(2));
     const KrylovFootprint footprint{1, 0, true};
     const OperatorEvaluationSnapshot snapshot = snapshot_for(iterate, ownership);
+    PreparedAffineOperatorProvider operator_provider = reentrant_operator(
+        [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); });
+    PreparedLinearPreconditioner preconditioner = authenticated_preconditioner(
+        iterate, "pops.test.krylov-collective.replicated-copy",
+        [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); }, {}, {},
+        ownership);
+    const AllocationEventStats before_problem_construction = allocation_event_stats();
     PreparedAffineLinearProblem problem(
-        iterate, reentrant_operator([](MultiFab& out, const MultiFab& in) {
-          PureFieldAlgebra::copy(out, in);
-        }),
-        authenticated_preconditioner(
-            iterate, "pops.test.krylov-collective.replicated-copy",
-            [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); }, {}, {},
-            ownership),
+        iterate, std::move(operator_provider), std::move(preconditioner),
         LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
         [&] { return snapshot; }, {}, ownership);
+    const AllocationEventStats after_problem_construction = allocation_event_stats();
+    require(after_problem_construction.communication_calls ==
+            before_problem_construction.communication_calls + 1);
+    require(after_problem_construction.communication_bytes ==
+            before_problem_construction.communication_bytes +
+                ownership.validation_scratch_byte_count());
     KrylovWorkspace workspace(iterate, gmres_krylov_method(3), footprint, ownership);
     problem.prepare(snapshot);
+    const AllocationEventStats before_reprepare = allocation_event_stats();
+    problem.prepare(snapshot);
+    const AllocationEventStats after_reprepare = allocation_event_stats();
+    require(after_reprepare.communication_calls == before_reprepare.communication_calls);
+    require(after_reprepare.communication_bytes == before_reprepare.communication_bytes);
     workspace.bind(problem);
     require(problem.vector_distribution() == ownership);
     require(std::abs(static_cast<double>(problem.inner_product(rhs, rhs)) - 32.0) < 1e-12);
@@ -468,6 +481,26 @@ int run_krylov_collective_contract(int argc, char** argv) {
               KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
         },
         kExactReplicaValidationFailure));
+  }
+
+  // A distributed problem has no replica-validation footprint at all. Its construction must not
+  // enter comm_allocator merely to materialize an empty persistent span.
+  {
+    MultiFab prototype = make_field();
+    const KrylovFootprint footprint{1, 0, false};
+    const OperatorEvaluationSnapshot snapshot = snapshot_for(prototype);
+    PreparedAffineOperatorProvider operator_provider = reentrant_operator(
+        [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); });
+    const AllocationEventStats before_problem_construction = allocation_event_stats();
+    PreparedAffineLinearProblem problem(
+        prototype, std::move(operator_provider), PreparedLinearPreconditioner::identity(),
+        LinearOperatorProperties::symmetric_positive_definite(), footprint,
+        PreparedNullspacePolicy::nonsingular(), [&] { return snapshot; });
+    const AllocationEventStats after_problem_construction = allocation_event_stats();
+    require(after_problem_construction.communication_calls ==
+            before_problem_construction.communication_calls);
+    require(after_problem_construction.communication_bytes ==
+            before_problem_construction.communication_bytes);
   }
 
   // Keep layout, snapshot and callable type fixed while varying first the implementation identity,
@@ -577,7 +610,13 @@ int run_krylov_collective_contract(int argc, char** argv) {
         PreparedNullspacePolicy::preserving(std::move(nullspace)), [&] { return snapshot; }, {},
         ownership, metric);
     KrylovWorkspace workspace(iterate, cg_krylov_method(), footprint, ownership, metric);
+    const AllocationEventStats before_cold_nullspace_prepare = allocation_event_stats();
     problem.prepare(snapshot);
+    const AllocationEventStats after_cold_nullspace_prepare = allocation_event_stats();
+    require(after_cold_nullspace_prepare.communication_calls ==
+            before_cold_nullspace_prepare.communication_calls);
+    require(after_cold_nullspace_prepare.communication_bytes ==
+            before_cold_nullspace_prepare.communication_bytes);
     workspace.bind(problem);
     const KrylovControls controls{cg_krylov_method(), Real(1e-12), Real(0), 4};
     for (const Real offset : {Real(3), Real(-7)}) {

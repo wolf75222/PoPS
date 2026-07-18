@@ -106,7 +106,7 @@ struct MaterializePreparedNullspaceBasisKernel {
 };
 
 template <class Distribution>
-void preflight_prepared_nullspace_provider(const MultiFab& layout, bool singular,
+void preflight_prepared_nullspace_metadata(const MultiFab& layout, bool singular,
                                            const FieldNullspacePlan& plan, int first_level,
                                            const Distribution& distribution,
                                            const ExecutionLane& lane) {
@@ -132,7 +132,37 @@ void preflight_prepared_nullspace_provider(const MultiFab& layout, bool singular
     throw std::runtime_error(
         "prepared nullspace metadata construction failed on at least one communicator rank");
   finish_field_nullspace_preflight(payload, FieldNullspaceCollectiveBoundary::Preparation, lane);
+}
 
+template <class Distribution>
+void validate_prepared_nullspace_fields(const MultiFab& layout, const FieldNullspacePlan& plan,
+                                        const Distribution& distribution,
+                                        std::span<char> validation, const ExecutionLane& lane) {
+  distribution.require_collective_layout(layout, "prepared nullspace solved vector", lane);
+  distribution.require_exact_values(layout, validation, "prepared nullspace solved vector", lane);
+  for (const FieldNullspaceBasis& basis : plan.bases) {
+    for (const auto& mask : basis.masks) {
+      if (!mask)
+        continue;
+      distribution.require_collective_layout(*mask, "prepared nullspace basis mask", lane);
+      distribution.require_exact_values(*mask, validation, "prepared nullspace basis mask", lane);
+    }
+    for (const auto& coverage : basis.coverage) {
+      if (!coverage)
+        continue;
+      distribution.require_collective_layout(*coverage, "prepared nullspace coverage mask", lane);
+      distribution.require_exact_values(*coverage, validation, "prepared nullspace coverage mask",
+                                        lane);
+    }
+  }
+}
+
+template <class Distribution>
+void preflight_prepared_nullspace_provider(const MultiFab& layout, bool singular,
+                                           const FieldNullspacePlan& plan, int first_level,
+                                           const Distribution& distribution,
+                                           const ExecutionLane& lane) {
+  preflight_prepared_nullspace_metadata(layout, singular, plan, first_level, distribution, lane);
   // The common preflight above must establish one uniform singular/nonsingular branch before any
   // branch-specific layout or exact-value collective. Otherwise one rank could enter a nullspace
   // validation reduction while another rank returns through the nonsingular path.
@@ -148,25 +178,25 @@ void preflight_prepared_nullspace_provider(const MultiFab& layout, bool singular
       throw std::runtime_error(
           "prepared nullspace validation scratch allocation failed on at least one "
           "communicator rank");
-
-    distribution.require_collective_layout(layout, "prepared nullspace solved vector", lane);
-    distribution.require_exact_values(layout, validation, "prepared nullspace solved vector", lane);
-    for (const FieldNullspaceBasis& basis : plan.bases) {
-      for (const auto& mask : basis.masks) {
-        if (!mask)
-          continue;
-        distribution.require_collective_layout(*mask, "prepared nullspace basis mask", lane);
-        distribution.require_exact_values(*mask, validation, "prepared nullspace basis mask", lane);
-      }
-      for (const auto& coverage : basis.coverage) {
-        if (!coverage)
-          continue;
-        distribution.require_collective_layout(*coverage, "prepared nullspace coverage mask", lane);
-        distribution.require_exact_values(*coverage, validation, "prepared nullspace coverage mask",
-                                          lane);
-      }
-    }
+    validate_prepared_nullspace_fields(layout, plan, distribution, validation, lane);
   }
+}
+
+template <class Distribution>
+void preflight_prepared_nullspace_provider(const MultiFab& layout, bool singular,
+                                           const FieldNullspacePlan& plan, int first_level,
+                                           const Distribution& distribution,
+                                           std::span<char> prepared_validation,
+                                           const ExecutionLane& lane) {
+  preflight_prepared_nullspace_metadata(layout, singular, plan, first_level, distribution, lane);
+  if (!singular)
+    return;
+  const long invalid_scratch = all_reduce_max(
+      prepared_validation.size() == distribution.validation_scratch_byte_count() ? 0L : 1L, lane);
+  if (invalid_scratch != 0)
+    throw std::logic_error(
+        "materialized prepared nullspace validation scratch has an invalid size");
+  validate_prepared_nullspace_fields(layout, plan, distribution, prepared_validation, lane);
 }
 }  // namespace detail
 
@@ -843,9 +873,21 @@ class PreparedNullspacePolicy {
 
   void prepare(const MultiFab& layout, const PreparedVectorMetric& metric,
                const ExecutionLane& lane) {
+    prepare_impl_(layout, metric, nullptr, lane);
+  }
+
+ private:
+  void prepare_impl_(const MultiFab& layout, const PreparedVectorMetric& metric,
+                     std::span<char>* prepared_validation, const ExecutionLane& lane) {
     prepared_ = false;
-    detail::preflight_prepared_nullspace_provider(layout, singular_, plan_, first_level_,
-                                                  metric.distribution(), lane);
+    if (prepared_validation == nullptr) {
+      detail::preflight_prepared_nullspace_provider(layout, singular_, plan_, first_level_,
+                                                    metric.distribution(), lane);
+    } else {
+      detail::preflight_prepared_nullspace_provider(layout, singular_, plan_, first_level_,
+                                                    metric.distribution(), *prepared_validation,
+                                                    lane);
+    }
     if (!singular_) {
       basis_vectors_.clear();
       basis_metric_gram_factor_.clear();
@@ -953,6 +995,7 @@ class PreparedNullspacePolicy {
     prepared_ = true;
   }
 
+ public:
   void require_compatible(const MultiFab& normalized_rhs, const PreparedVectorMetric& metric,
                           std::span<double> metric_scratch, const ExecutionLane& lane) const {
     require_prepared();
@@ -1019,9 +1062,10 @@ class PreparedNullspacePolicy {
   /// certificate; public prepare() above remains deliberately uncached.
   void prepare_after_collective_preflight_(const MultiFab& layout,
                                            const PreparedVectorMetric& metric,
+                                           std::span<char> prepared_validation,
                                            const ExecutionLane& lane) {
     if (!prepared_)
-      prepare(layout, metric, lane);
+      prepare_impl_(layout, metric, &prepared_validation, lane);
   }
 
   /// A failed collective preparation stage may have completed the local certificate on only a
@@ -1550,6 +1594,13 @@ class PreparedAffineLinearProblem {
     detail::PreparedProblemConstructionFailure local_construction_failure =
         detail::PreparedProblemConstructionFailure::None;
     try {
+      // Replica validation is part of the prepared problem's persistent communication footprint.
+      // Materialize it under the constructor's common failure gate; prepare() owns the exclusive
+      // mutation reservation while reusing it and therefore never allocates or frees pinned storage.
+      const std::size_t distribution_validation_bytes =
+          vector_distribution_.validation_scratch_byte_count();
+      if (distribution_validation_bytes != 0)
+        preparation_distribution_validation_scratch_.assign(distribution_validation_bytes, char{0});
       if (!metric_)
         metric_ = PreparedVectorMetric::euclidean(prototype, vector_distribution_);
       zero_ = MultiFab(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
@@ -1666,9 +1717,9 @@ class PreparedAffineLinearProblem {
     require_collective_prepare_contract_();
     snapshot_.reset();
     try {
-      // This helper performs its own rank-local allocation catch and preparation-lane failure
-      // reduction. It therefore completes before the snapshot probe enters its first collective.
-      auto distribution_validation = make_distribution_validation_scratch_();
+      // This span is backed by construction-time storage and is safe only because the mutation
+      // reservation above excludes solve materialization and every other prepare()/bind mutation.
+      std::span<char> distribution_validation = preparation_distribution_validation_scratch_;
       std::size_t operator_persistent_field_count = 0;
       require_collective_prepare_snapshot_(snapshot);
       const long authenticated_authority_failure =
@@ -1718,7 +1769,7 @@ class PreparedAffineLinearProblem {
       require_collective_session_field_count_(operator_persistent_field_count,
                                               "prepared affine operator session");
       require_collective_snapshot_match_(snapshot, PrepareStage::kOperatorSession);
-      prepare_nullspace_collectively_(snapshot);
+      prepare_nullspace_collectively_(snapshot, distribution_validation);
       run_collective_prepare_stage_(PrepareStage::kPreconditioner,
                                     [&] { preconditioner_.prepare(snapshot, preparation_lane_); });
       require_collective_snapshot_match_(snapshot, PrepareStage::kPreconditioner);
@@ -2148,7 +2199,8 @@ class PreparedAffineLinearProblem {
     throw std::logic_error("unknown prepared affine setup stage");
   }
 
-  void prepare_nullspace_collectively_(const OperatorEvaluationSnapshot& snapshot) {
+  void prepare_nullspace_collectively_(const OperatorEvaluationSnapshot& snapshot,
+                                       std::span<char> distribution_validation) {
     // The prepared bit, plan fingerprint and cache identity have already passed the fixed
     // collective contract. A change in the authenticated topology/resource identity invalidates
     // the Gram certificate even when the provider keeps the same field allocation; time/stage-only
@@ -2160,7 +2212,8 @@ class PreparedAffineLinearProblem {
     nullspace_certificate_identity_cache_.reset();
     try {
       run_collective_prepare_stage_(PrepareStage::kNullspace, [&] {
-        nullspace_policy_.prepare_after_collective_preflight_(zero_, metric_, preparation_lane_);
+        nullspace_policy_.prepare_after_collective_preflight_(
+            zero_, metric_, distribution_validation, preparation_lane_);
       });
       nullspace_certificate_identity_cache_ = identity;
     } catch (...) {
@@ -2435,6 +2488,7 @@ class PreparedAffineLinearProblem {
   std::optional<OperatorFingerprint> authenticated_program_authority_;
   PreparedVectorDistribution vector_distribution_ = PreparedVectorDistribution::Distributed;
   PreparedVectorMetric metric_;
+  std::vector<char, comm_allocator<char>> preparation_distribution_validation_scratch_;
   MultiFab zero_;
   MultiFab constant_;
   OperatorFingerprint layout_{};
