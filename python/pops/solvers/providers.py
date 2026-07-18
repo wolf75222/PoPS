@@ -330,6 +330,7 @@ class PreparedHierarchyFlatExecution:
                 "method_options",
                 "preconditioner",
                 "preconditioner_provider",
+                "preconditioner_options",
                 "krylov_footprint",
                 "krylov_workspace",
             )
@@ -679,6 +680,8 @@ def prepared_hierarchy_solver_provider_from_attrs(
     options = provider.validate_options(
         attrs.get("hierarchy_solver_options"), where="hierarchy solve options"
     )
+    if options != attrs.get("hierarchy_solver_options"):
+        raise ValueError("hierarchy solve options are not canonical")
     data = {
         "schema_version": _HIERARCHY_INSTANCE_SCHEMA_VERSION,
         "provider": provider.authority(),

@@ -26,7 +26,10 @@ from pops.solvers import (
     register_prepared_hierarchy_solver_provider,
     solvers,
 )
-from pops.solvers.providers import PreparedHierarchySolverNativeEmission
+from pops.solvers.providers import (
+    PreparedHierarchySolverNativeEmission,
+    prepared_hierarchy_solver_provider_from_attrs,
+)
 from pops.time import Program
 
 
@@ -125,7 +128,21 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert prepared.identity.token == configured.identity.token
 
 
-def test_flat_direct_execution_contract_has_no_implicit_krylov_authority():
+@pytest.mark.parametrize(
+    "forbidden_attribute",
+    (
+        "method_provider",
+        "method_options",
+        "preconditioner",
+        "preconditioner_provider",
+        "preconditioner_options",
+        "krylov_footprint",
+        "krylov_workspace",
+    ),
+)
+def test_flat_direct_execution_contract_has_no_implicit_krylov_authority(
+    forbidden_attribute: str,
+):
     execution = PreparedHierarchyFlatExecution.direct_provider()
     assert execution.authority() == {
         "interface": "pops.prepared-hierarchy-flat-execution@1",
@@ -135,9 +152,7 @@ def test_flat_direct_execution_contract_has_no_implicit_krylov_authority():
     assert execution.ir_attributes(unused=True) == {}
     execution.validate_ir({}, where="flat direct test")
     with pytest.raises(ValueError, match="unexpected Krylov attributes"):
-        execution.validate_ir(
-            {"krylov_footprint": {"components": 1}}, where="flat direct test"
-        )
+        execution.validate_ir({forbidden_attribute: {}}, where="flat direct test")
 
 
 def test_external_use_policy_accepts_any_ncomp_and_future_fact_without_core_branch():
@@ -204,6 +219,18 @@ def test_codegen_rejects_forged_composite_fac_integer_overflow(name):
 
     with pytest.raises(ValueError, match=name):
         provider.validate_node(node, target="amr_system")
+
+
+def test_codegen_rejects_noncanonical_composite_fac_options_with_valid_identity():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _ = _build(CompositeTensorFAC())
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = {}
+
+    with pytest.raises(ValueError, match="hierarchy solve options are not canonical"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
 
 
 def test_codegen_rejects_flat_absolute_tolerance_that_disagrees_with_provider_identity():
