@@ -45,6 +45,9 @@ enum class PreparedProblemControlOperation : long {
   Prepare = 1,
   BindWorkspace = 2,
   MaterializeSolve = 3,
+  ApplyLinear = 4,
+  TrueResidual = 5,
+  ApplyPreconditioner = 6,
 };
 
 struct PreparedProblemControlConsensus {
@@ -214,7 +217,8 @@ using PreparedAllocationCountFn = std::function<std::size_t()>;
 /// Concurrency guaranteed by an affine-operator provider across independently prepared sessions.
 /// Independent providers own all mutable state per session. Exclusive providers remain fully
 /// prepared and allocation-stable but borrow an external mutable context that permits only one
-/// active solve invocation per PreparedAffineLinearProblem.
+/// active prepare, bind/probe, public direct apply, or solve across every copy of that provider
+/// source.
 enum class PreparedOperatorConcurrency : std::uint8_t { Independent = 0, Exclusive = 1 };
 
 /// Allocation-free outcome of one hot operator/preconditioner application. A failed status is
@@ -350,7 +354,7 @@ concept PreparedAffineOperatorSource =
 /// Authenticated factory for fresh affine-operator sessions. The provider is immutable and may be
 /// shared. An Independent provider owns all mutable apply state in each returned session; an
 /// Exclusive trusted extension may instead borrow one external mutable execution context and is
-/// protected by the prepared problem's invocation reservation.
+/// protected by one source-owned lease shared by every provider copy and prepared problem.
 class PreparedAffineOperatorProvider {
  public:
   PreparedAffineOperatorProvider() = default;
@@ -367,7 +371,10 @@ class PreparedAffineOperatorProvider {
 
   /// Explicit native/plugin trust boundary. Each callback pair must be freshly materialized. The
   /// concurrency argument states whether its mutable execution state is session-private or borrowed
-  /// from one exclusive external context.
+  /// from one exclusive external context. An Exclusive provider that borrows one context must be
+  /// constructed once and then copied into every prepared problem: each separate trusted_extension
+  /// call declares a distinct source/lease domain and therefore must not capture that same mutable
+  /// context.
   [[nodiscard]] static PreparedAffineOperatorProvider trusted_extension(
       PreparedProviderIdentity identity, std::string exact_parameters,
       PreparedAffineOperatorSessionFactory make_session,
@@ -414,7 +421,21 @@ class PreparedAffineOperatorProvider {
   }
 
  private:
+  friend class PreparedAffineLinearProblem;
   friend struct detail::PreparedProblemAccess;
+
+  [[nodiscard]] bool try_reserve_source_() const noexcept {
+    if (!implementation_ ||
+        implementation_->concurrency() != PreparedOperatorConcurrency::Exclusive)
+      return true;
+    return implementation_->try_reserve_exclusive();
+  }
+
+  void release_source_() const noexcept {
+    if (implementation_ &&
+        implementation_->concurrency() == PreparedOperatorConcurrency::Exclusive)
+      implementation_->release_exclusive();
+  }
 
   [[nodiscard]] detail::PreparedProviderSourceIdentity source_identity_() const noexcept {
     return detail::PreparedProviderSourceIdentity(std::shared_ptr<const void>(implementation_));
@@ -426,6 +447,19 @@ class PreparedAffineOperatorProvider {
     [[nodiscard]] virtual PreparedOperatorConcurrency concurrency() const noexcept = 0;
     [[nodiscard]] virtual PreparedAffineOperatorSession make_session(
         const ExecutionLane&) const = 0;
+
+    [[nodiscard]] bool try_reserve_exclusive() const noexcept {
+      bool expected = false;
+      return exclusive_reserved_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    void release_exclusive() const noexcept {
+      exclusive_reserved_.store(false, std::memory_order_release);
+    }
+
+   private:
+    mutable std::atomic<bool> exclusive_reserved_{false};
   };
 
   static std::string make_contract_(PreparedProviderIdentity identity,
@@ -1850,6 +1884,19 @@ class PreparedAffineLinearProblem {
 
   /// A_lin(v) = A(v) - A(0), valid for search directions even when boundaries/sources make A affine.
   void apply_linear(MultiFab& out, const MultiFab& direction) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::ApplyLinear, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::apply_linear cannot use its public operator session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(operator_field_failure_(direction), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, direction));
@@ -1861,6 +1908,19 @@ class PreparedAffineLinearProblem {
 
   /// Scientific residual R(u) = b - A(u), never a preconditioned or Arnoldi estimate.
   void true_residual(MultiFab& out, const MultiFab& rhs, const MultiFab& iterate) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::TrueResidual, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::true_residual cannot use its public operator session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(vector_field_failure_(rhs), operator_field_failure_(iterate));
     failure = std::max(failure, operator_field_failure_(out));
@@ -1874,6 +1934,19 @@ class PreparedAffineLinearProblem {
   }
 
   void apply_preconditioner(MultiFab& out, const MultiFab& in) const {
+    const bool use_reserved = try_reserve_mutation_();
+    MutationReservation use_reservation(use_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::ApplyPreconditioner, true, use_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
+      throw std::logic_error(
+          "prepared affine public operations differ across communicator ranks");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem::apply_preconditioner cannot use its public session while "
+          "another prepared operation is active");
     require_current();
     long failure = std::max(operator_field_failure_(in), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, in));
@@ -1916,7 +1989,7 @@ class PreparedAffineLinearProblem {
 
   class MutationReservation final {
    public:
-    explicit MutationReservation(PreparedAffineLinearProblem* problem) noexcept
+    explicit MutationReservation(const PreparedAffineLinearProblem* problem) noexcept
         : problem_(problem) {}
     MutationReservation(const MutationReservation&) = delete;
     MutationReservation& operator=(const MutationReservation&) = delete;
@@ -1926,16 +1999,23 @@ class PreparedAffineLinearProblem {
     }
 
    private:
-    PreparedAffineLinearProblem* problem_ = nullptr;
+    const PreparedAffineLinearProblem* problem_ = nullptr;
   };
 
-  [[nodiscard]] bool try_reserve_mutation_() noexcept {
+  [[nodiscard]] bool try_reserve_mutation_() const noexcept {
     std::size_t expected = 0;
-    return active_use_reservations_.compare_exchange_strong(
-        expected, kMutationReservation, std::memory_order_acq_rel, std::memory_order_acquire);
+    if (!active_use_reservations_.compare_exchange_strong(
+            expected, kMutationReservation, std::memory_order_acq_rel,
+            std::memory_order_acquire))
+      return false;
+    if (operator_provider_.try_reserve_source_())
+      return true;
+    active_use_reservations_.store(0, std::memory_order_release);
+    return false;
   }
 
-  void release_mutation_() noexcept {
+  void release_mutation_() const noexcept {
+    operator_provider_.release_source_();
     active_use_reservations_.store(0, std::memory_order_release);
   }
 
@@ -2515,8 +2595,13 @@ struct PreparedProblemAccess {
   static bool try_reserve_use(const PreparedAffineLinearProblem& problem) noexcept {
     if (problem.operator_provider_.concurrency() == PreparedOperatorConcurrency::Exclusive) {
       std::size_t expected = 0;
-      return problem.active_use_reservations_.compare_exchange_strong(
-          expected, 1, std::memory_order_acq_rel, std::memory_order_acquire);
+      if (!problem.active_use_reservations_.compare_exchange_strong(
+              expected, 1, std::memory_order_acq_rel, std::memory_order_acquire))
+        return false;
+      if (problem.operator_provider_.try_reserve_source_())
+        return true;
+      problem.active_use_reservations_.store(0, std::memory_order_release);
+      return false;
     }
     std::size_t current = problem.active_use_reservations_.load(std::memory_order_acquire);
     while (current < PreparedAffineLinearProblem::kMutationReservation - 1) {
@@ -2528,6 +2613,7 @@ struct PreparedProblemAccess {
   }
 
   static void release_use(const PreparedAffineLinearProblem& problem) noexcept {
+    problem.operator_provider_.release_source_();
     problem.active_use_reservations_.fetch_sub(1, std::memory_order_acq_rel);
   }
 

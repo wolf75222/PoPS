@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <limits>
 #include <span>
@@ -58,6 +59,20 @@ struct NormalizedDifferenceKernel {
         difference <= finite_max && difference >= -finite_max
             ? difference / scale
             : left(i, j, component) / scale - right(i, j, component) / scale;
+  }
+};
+
+struct ExactValueMismatchKernel {
+  ConstArray4 left, right;
+  int component;
+  POPS_HD void operator()(int i, int j, Real& mismatch) const {
+    const std::uint64_t left_bits =
+        Kokkos::bit_cast<std::uint64_t>(left(i, j, component));
+    const std::uint64_t right_bits =
+        Kokkos::bit_cast<std::uint64_t>(right(i, j, component));
+    const Real differs = left_bits == right_bits ? Real(0) : Real(1);
+    if (differs > mismatch)
+      mismatch = differs;
   }
 };
 
@@ -105,6 +120,28 @@ inline Real local_max_abs(const MultiFab& field) {
   for (int component = 0; component < field.ncomp(); ++component)
     result = std::max(result, norm_inf(field, component));
   return result;
+}
+
+inline bool local_exact_values_equal(const MultiFab& left, const MultiFab& right) {
+  static_assert(sizeof(Real) == sizeof(std::uint64_t));
+  if (left.box_array().boxes() != right.box_array().boxes() ||
+      left.dmap().ranks() != right.dmap().ranks() || left.ncomp() != right.ncomp() ||
+      left.local_size() != right.local_size())
+    throw std::invalid_argument("exact field comparison requires one vector space");
+  left.sync_device();
+  right.sync_device();
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < left.ncomp(); ++component) {
+      if (reduce_max_cell(valid,
+                          ExactValueMismatchKernel{left_values, right_values, component}) !=
+          Real(0))
+        return false;
+    }
+  }
+  return true;
 }
 
 inline Real rescale_product(Real normalized, Real left_scale, Real right_scale) {
@@ -627,6 +664,10 @@ struct PreparedFieldAlgebra {
   static void lincomb(MultiFab& destination, Real left_coefficient, const MultiFab& left,
                       Real right_coefficient, const MultiFab& right) {
     pops::lincomb(destination, left_coefficient, left, right_coefficient, right);
+  }
+
+  static bool local_exact_values_equal(const MultiFab& left, const MultiFab& right) {
+    return detail::local_exact_values_equal(left, right);
   }
 
   /// Divide valid cells directly instead of materializing 1/divisor. This remains defined when a

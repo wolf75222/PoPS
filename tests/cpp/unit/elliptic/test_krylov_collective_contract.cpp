@@ -970,6 +970,17 @@ int run_krylov_collective_contract(int argc, char** argv) {
                                "output aliases an input field"));
     require(operator_calls.load(std::memory_order_relaxed) == calls_before);
   }
+  if (n_ranks() > 1) {
+    MultiFab output = make_field();
+    require(uniformly_rejected(
+        [&] {
+          if (rank == 0)
+            problem.apply_linear(output, rhs);
+          else
+            problem.true_residual(output, rhs, iterate);
+        },
+        "prepared affine public operations differ across communicator ranks"));
+  }
   {
     MultiFab incompatible = make_field(rank == 0 ? 2 : 1);
     const MultiFab& local = rank == 0 ? incompatible : rhs;
