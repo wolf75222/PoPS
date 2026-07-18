@@ -52,13 +52,14 @@ def iso_model(charge=1.0):
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
                      source=engine.PotentialForce(charge=charge),
-                     elliptic=engine.ChargeDensity(charge=charge))
+                     elliptic=engine.BackgroundDensity(alpha=charge, n0=1.0))
 
 
 def gaussian(n):
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="xy")
-    return 1.0 + 0.4 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+    rho = 1.0 + 0.4 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+    return rho + (1.0 - rho.mean())
 
 
 def mono_imex(time):

@@ -25,8 +25,13 @@ from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runt
 
 
 def _scalar_charge(q, B0=1.0):
-    """A single-scalar E x B transport block with a charge-density Poisson coupling (charge q)."""
-    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
+    """A scalar E x B block with the explicit periodic background ``q * (rho - 1)``."""
+    return engine.Model(
+        engine.Scalar(),
+        engine.ExB(B0=B0),
+        engine.NoSource(),
+        engine.BackgroundDensity(alpha=q, n0=1.0),
+    )
 
 
 def _bump(n, amp):

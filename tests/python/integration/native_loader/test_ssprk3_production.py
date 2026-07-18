@@ -41,12 +41,12 @@ def err_msg(fn):
         return str(ex)
 
 
-def _native_spec():
+def _native_spec(rho0):
     """Equivalent native Euler bricks used as the numerical parity oracle."""
     return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
                      transport=engine.CompressibleFlux(),
                      source=engine.NoSource(),
-                     elliptic=engine.ChargeDensity(charge=1.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=rho0))
 
 
 def _initial_state(n):
@@ -84,7 +84,7 @@ if missing:
 n, L = 48, 1.0
 U = _initial_state(n)
 Uflat = U.reshape(-1).tolist()
-spec = _native_spec()
+spec = _native_spec(float(U[0].mean()))
 model = build_euler("ssprk3-production")
 
 

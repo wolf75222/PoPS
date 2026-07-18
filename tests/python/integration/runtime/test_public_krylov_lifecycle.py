@@ -22,7 +22,7 @@ from pops.time import FailRun, FixedDt
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def _public_identity_krylov_case():
+def _public_diagonal_krylov_case():
     frame = Rectangle(
         "public_krylov_square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -59,12 +59,12 @@ def _public_identity_krylov_case():
     block = case.block("tracer", model=model)
     case.numerics(numerics, block=block)
 
-    program = pops.Program("public_identity_gmres")
+    program = pops.Program("public_diagonal_gmres")
     temporal = program.state(block[state])
     operator = program.matrix_free_operator(
-        "identity", domain="state", range_="state", ncomp=1
+        "double_identity", domain="state", range_="state", ncomp=1
     )
-    program.set_apply(operator, lambda _program, _out, value: value)
+    program.set_apply(operator, lambda _program, _out, value: 2.0 * value)
     solution = program.solve(
         LinearProblem(
             operator,
@@ -73,7 +73,7 @@ def _public_identity_krylov_case():
             nullspace=None,
         ),
         solver=GMRES(max_iter=4, restart=2, rel_tol=1.0e-13),
-        name="identity_solution",
+        name="diagonal_solution",
     ).consume(action=FailRun())
     accepted = program.value("accepted", solution, at=temporal.next.point)
     program.commit(temporal.next, accepted)
@@ -94,7 +94,7 @@ def test_public_case_resolve_bind_run_executes_prepared_gmres(
     isolated_native_cache, native_cxx, kokkos_root,
 ):
     del isolated_native_cache, native_cxx, kokkos_root
-    case, layout = _public_identity_krylov_case()
+    case, layout = _public_diagonal_krylov_case()
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     initial = np.arange(16, dtype=np.float64).reshape(1, 4, 4) / 16.0
     runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()})
@@ -102,6 +102,6 @@ def test_public_case_resolve_bind_run_executes_prepared_gmres(
 
     assert report.accepted_steps == 1
     actual = np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(1, 4, 4)
-    # GMRES exercises real floating-point reductions even for the identity operator.  Preserve the
-    # physical identity to one ULP rather than requiring a fictitious bitwise no-op.
-    np.testing.assert_array_max_ulp(actual, initial, maxulp=1)
+    # A copy of the RHS is not a solution of 2 I x = b.  This independently proves that the
+    # built-in prepared GMRES provider executed rather than merely forwarding its input.
+    np.testing.assert_allclose(actual, 0.5 * initial, rtol=0.0, atol=2.0e-15)

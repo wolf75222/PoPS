@@ -63,8 +63,8 @@ static double native_composite_field_error() {
   const std::vector<const MultiFab*> values{&coarse, &fine};
   const std::vector<std::pair<Real, Real>> metrics{{Real(0.25), Real(0.25)},
                                                    {Real(0.125), Real(0.125)}};
-  const double integral = runtime::amr::composite_reduce_fields(
-      values, metrics, false, "sum", 0, {0, 1});
+  const double integral =
+      runtime::amr::composite_reduce_fields(values, metrics, false, "sum", 0, {0, 1});
   return std::fabs(integral - 1.25);
 }
 
@@ -117,6 +117,15 @@ static std::vector<double> four_bubbles(int n) {
       }
       rho[static_cast<std::size_t>(j) * n + i] = r;
     }
+  // Periodic self-gravity requires an RHS orthogonal to the constant nullspace. Preserve the four
+  // non-trivial peaks but encode their neutralizing background in the fixture; no solver-side
+  // projection is permitted.
+  double mean = 0.0;
+  for (double value : rho)
+    mean += value;
+  mean /= static_cast<double>(rho.size());
+  for (double& value : rho)
+    value += 1.0 - mean;
   return rho;
 }
 
@@ -210,6 +219,7 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2, le moins agressif pour le MG geometrique).
 
   AmrSystem sys(cfg);
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
@@ -315,8 +325,7 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
       ++fails;
     }
     if (!(composite_field_error < 1e-14)) {
-      std::printf("FAIL reduction composite native du champ (error=%.3e)\n",
-                  composite_field_error);
+      std::printf("FAIL reduction composite native du champ (error=%.3e)\n", composite_field_error);
       ++fails;
     }
     std::printf(

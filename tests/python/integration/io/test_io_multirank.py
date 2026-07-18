@@ -33,17 +33,19 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _build(n=16):
+    x = (np.arange(n) + 0.5) / n
+    X, Y = np.meshgrid(x, x, indexing="xy")
+    density = 1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.add_equation("ions",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
                             source=engine.PotentialForce(charge=1.0),
-                            elliptic=engine.ChargeDensity(charge=1.0)),
+                            elliptic=engine.BackgroundDensity(
+                                alpha=1.0, n0=float(density.mean()))),
                   spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="xy")
-    sim.set_density("ions", (1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))).ravel())
+    sim.set_density("ions", density.ravel())
     return sim
 
 

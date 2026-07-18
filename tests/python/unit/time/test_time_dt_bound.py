@@ -224,12 +224,12 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cade
 
 
 def transport_model():
-    # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
-    # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
+    # Pure transport (isothermal, NoSource); the discrete mean-one background keeps the periodic
+    # field solve compatible and inert, so the compiled cadence is bit-exact vs native.
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
                      source=engine.NoSource(),
-                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0))
 
 
 N = 24

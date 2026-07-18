@@ -57,7 +57,7 @@ def _solve_program(solver):
 def test_solve_typed_solver_retains_exact_native_method_identity():
     """Each typed Krylov descriptor lowers to its exact native method token."""
     from pops.solvers import krylov
-    # The internal scheme tokens the runtime keyed on; the typed objects must reproduce them.
+    # The final IR carries authenticated provider authority, not the legacy flattened method token.
     cases = [
         (krylov.CG(max_iter=200, rel_tol=1e-10), "cg"),
         (krylov.BiCGStab(max_iter=200, rel_tol=1e-10), "bicgstab"),
@@ -67,7 +67,10 @@ def test_solve_typed_solver_retains_exact_native_method_identity():
     for descriptor, token in cases:
         P = _solve_program(descriptor)
         node = next(value for value in P._values if value.op == "solve_linear")
-        assert node.attrs["method"] == token, (descriptor, node.attrs["method"])
+        authority = node.attrs["method_provider"]
+        assert authority["provider_id"] == f"pops.krylov.{token}", (descriptor, authority)
+        assert authority["emitter_id"] == f"pops.krylov.{token}@1", (descriptor, authority)
+        assert "method" not in node.attrs
         # The IR hash is stable + the typed object never leaks a Python object into the node.
         assert P._ir_hash()
 

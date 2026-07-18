@@ -80,7 +80,12 @@ def main():
         s.set_temporal_relations([2], [1], ["integral_only"])
         s.add_equation(
             "ne",
-            _scalar_charge(+1.0),
+            engine.Model(
+                engine.Scalar(),
+                engine.ExB(B0=1.0),
+                engine.NoSource(),
+                engine.BackgroundDensity(alpha=1.0, n0=1.0),
+            ),
             spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
         )
         s.set_poisson(bc=Periodic())

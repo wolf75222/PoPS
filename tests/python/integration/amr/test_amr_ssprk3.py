@@ -39,7 +39,12 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
+    return engine.Model(
+        engine.Scalar(),
+        engine.ExB(B0=B0),
+        engine.NoSource(),
+        engine.BackgroundDensity(alpha=q, n0=1.0),
+    )
 
 
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---

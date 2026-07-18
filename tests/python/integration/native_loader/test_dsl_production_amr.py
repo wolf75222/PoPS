@@ -112,9 +112,12 @@ def _amr(n, L, branch, refine=1.2):
     cfg.periodic = True
     cfg.regrid_every = 4
     s = AmrSystem(cfg)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     branch(s)
     s.set_refinement(refine)
-    s.set_density("gas", _bubble(n))
+    rho = np.asarray(_bubble(n), dtype=float)
+    rho += 1.0 - float(rho.mean())
+    s.set_density("gas", rho)
     return s
 
 
@@ -314,6 +317,7 @@ def main():
         # WENO5 via la facade add_equation (pas seulement le binding bas niveau) : meme chemin nominal.
         # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
         Gw = AmrSystem(n=n, L=L, periodic=True)
+        Gw.set_temporal_relations([2], [1], ["integral_only"])
         Gw.add_equation("gas", cm_t,
                         spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
         Gw.set_refinement(1.2)
@@ -326,6 +330,7 @@ def main():
 
         # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
         E = AmrSystem(n=n, L=L, periodic=True)
+        E.set_temporal_relations([2], [1], ["integral_only"])
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))

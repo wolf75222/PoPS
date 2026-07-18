@@ -38,8 +38,9 @@
 // DISCIPLINE COLLECTIVE MPI : density_global / state_global / potential_global et mass() font un
 // all_reduce_sum -> TOUS les rangs DOIVENT les appeler (sinon interblocage). set_state ecrit la box
 // du proprietaire : appele UNIQUEMENT sur le rang proprietaire (convention des tests MPI System ;
-// write_state est en fait no-op sur un rang vide, mais on garde la garde owns). set_potential et
-// set_clock sont MPI-safe (no-op sur les rangs vides). step() / step_cfl() sont collectifs.
+// write_state est en fait no-op sur un rang vide, mais on garde la garde owns). set_potential est
+// COLLECTIF car il materialise le solveur prepare avant le no-op des rangs sans box ; set_clock est
+// MPI-safe et local. step() / step_cfl() sont collectifs.
 
 #include <gtest/gtest.h>
 
@@ -66,12 +67,14 @@
 
 using namespace pops;
 
-// Brique elliptique de CHARGE : alimente le second membre du Poisson (charge q n = rho = comp 0),
-// pour que potential_global() renvoie un potentiel non trivial. Identique a test_mpi_system_solve_fields.
+// Brique elliptique de CHARGE neutralisee : le Poisson periodique porte la perturbation de densite
+// rho-rho0. rho0 est la moyenne discrete exacte de l'etat de reference, donc le RHS satisfait le
+// nullspace constant sans projection implicite et potential_global() reste non trivial.
 struct ChargeEll {
+  Real rho0 = 0;
   template <class State>
   POPS_HD Real rhs(const State& u) const {
-    return u[0];
+    return u[0] - rho0;
   }
 };
 
@@ -120,6 +123,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   double mass_ref = 0.0;
   for (double r : rho_ref)
     mass_ref += r;
+  const double rho0 = mass_ref / static_cast<double>(nn);
 
   SystemConfig cfg;
   cfg.n = n;
@@ -128,7 +132,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
 
   // Construction COLLECTIVE (repliquee sur tous les rangs).
   System sys(cfg);
-  add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{}}, "minmod",
+  add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
                      "rusanov", "conservative", "explicit", gamma);
   sys.set_poisson("composite", "geometric_mg");  // f = somme des briques elliptiques (la charge)
 
@@ -204,16 +208,16 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
 
   // System FRAIS, construit a l'identique sur tous les rangs.
   System rs(cfg);
-  add_compiled_model(rs, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{}}, "minmod",
+  add_compiled_model(rs, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
                      "rusanov", "conservative", "explicit", gamma);
   rs.set_poisson("composite", "geometric_mg");
-  // Restauration : scatter box-proprietaire (set_state/set_potential ecrivent la box du rang 0) +
-  // horloge (set_clock est MPI-safe, scalaires). state_global et get_state partagent le MEME layout
-  // mono-box, donc set_state(ckpt_state) sur le proprietaire reproduit exactement l'etat.
-  if (owns) {
+  // Restauration : scatter box-proprietaire pour l'etat, puis set_potential COLLECTIF (sa
+  // materialisation du solveur prepare est collective, avant le no-op des rangs sans box) + horloge.
+  // state_global et get_state partagent le MEME layout mono-box, donc set_state(ckpt_state) sur le
+  // proprietaire reproduit exactement l'etat.
+  if (owns)
     rs.set_state("gas", ckpt_state);
-    rs.set_potential(ckpt_phi);
-  }
+  rs.set_potential(ckpt_phi);
   rs.set_clock(ckpt_t, ckpt_ms);
 
   // K pas identiques sur les DEUX systemes (collectifs). L'etat (pur Euler, sans retro-action de phi)

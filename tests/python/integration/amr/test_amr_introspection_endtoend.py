@@ -155,8 +155,9 @@ def test_generic_inspection_surfaces_the_carried_refine_regrid_tags():
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
+    sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
-                                   engine.ChargeDensity(charge=1.0)),
+                                   engine.BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(threshold=1.05)

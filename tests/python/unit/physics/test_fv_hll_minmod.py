@@ -37,11 +37,11 @@ def chk(cond, label):
         fails += 1
 
 
-def iso_model(charge=1.0, cs2=0.5):
+def iso_model(charge=1.0, cs2=0.5, n0=1.0):
     return engine.Model(state=engine.FluidState("isothermal", cs2=cs2),
                      transport=engine.IsothermalFlux(),
                      source=engine.PotentialForce(charge=charge),
-                     elliptic=engine.ChargeDensity(charge=charge))
+                     elliptic=engine.BackgroundDensity(alpha=charge, n0=n0))
 
 
 def gaussian(n):
@@ -53,12 +53,12 @@ def gaussian(n):
 # --- 1. System : hll + minmod + primitive sur isotherme 3 var (non Euler) -------
 print("== System : FiniteVolume(minmod, hll, primitive) sur isotherme 3 var ==")
 n = 32
+rho0 = gaussian(n)
 sim = System(n=n, L=1.0, periodic=True)
-sim.add_equation("ions", iso_model(),
+sim.add_equation("ions", iso_model(n0=float(rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-rho0 = gaussian(n)
 sim.set_density("ions", rho0.ravel())
 m0 = sim.mass("ions")
 for _ in range(5):
@@ -93,10 +93,11 @@ print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
-amr.add_equation("ions", iso_model(),
+amr_rho0 = gaussian(32)
+amr.add_equation("ions", iso_model(n0=float(amr_rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
-amr.set_density("ions", gaussian(32).ravel())
+amr.set_density("ions", amr_rho0.ravel())
 m0 = amr.mass("ions")
 for _ in range(3):
     dt = amr.step_cfl(0.4)

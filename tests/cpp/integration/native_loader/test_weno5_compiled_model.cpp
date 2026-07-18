@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <numeric>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -43,7 +44,7 @@ std::vector<double> smooth_rho(int n) {
 }
 
 // Residu + potentiel du bloc COMPILE NATIF (add_compiled_model) pour le schema (limiter, rusanov).
-void run_compiled(int n, double L, const std::vector<double>& rho, const char* limiter,
+void run_compiled(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter,
                   std::vector<double>& R, std::vector<double>& phi) {
   SystemConfig cfg;
   cfg.n = n;
@@ -51,8 +52,9 @@ void run_compiled(int n, double L, const std::vector<double>& rho, const char* l
   cfg.periodic = true;
   System sys(cfg);
   using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
-  add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     limiter, "rusanov", "conservative", "explicit", /*gamma=*/1.4);
+  add_compiled_model(sys, "gas",
+                     Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, rho0}}, limiter,
+                     "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_density("gas", rho);
   sys.solve_fields();
@@ -61,7 +63,7 @@ void run_compiled(int n, double L, const std::vector<double>& rho, const char* l
 }
 
 // Reference NATIVE (add_block, dispatch d'une ModelSpec euler_poisson) pour le MEME schema.
-void run_native(int n, double L, const std::vector<double>& rho, const char* limiter,
+void run_native(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter,
                 std::vector<double>& R, std::vector<double>& phi) {
   SystemConfig cfg;
   cfg.n = n;
@@ -75,7 +77,7 @@ void run_native(int n, double L, const std::vector<double>& rho, const char* lim
   spec.gamma = 1.4;
   spec.sign = -1.0;
   spec.four_pi_G = 1.0;
-  spec.rho0 = 1.0;
+  spec.rho0 = rho0;
   sys.add_block("gas", spec, limiter, "rusanov", "conservative", "explicit", 1, true);
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_density("gas", rho);
@@ -85,10 +87,10 @@ void run_native(int n, double L, const std::vector<double>& rho, const char* lim
 }
 
 // Compare compile-natif vs natif pour @p limiter : residu non trivial + ecarts max BIT-IDENTIQUES.
-int compare(int n, double L, const std::vector<double>& rho, const char* limiter) {
+int compare(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter) {
   std::vector<double> Rc, pc, Rn, pn;
-  run_compiled(n, L, rho, limiter, Rc, pc);
-  run_native(n, L, rho, limiter, Rn, pn);
+  run_compiled(n, L, rho, rho0, limiter, Rc, pc);
+  run_native(n, L, rho, rho0, limiter, Rn, pn);
 
   double dres = 0, dphi = 0, nrm = 0;
   for (std::size_t k = 0; k < Rc.size(); ++k) {
@@ -130,15 +132,20 @@ static int pops_run_test_weno5_compiled_model(int argc, char** argv) {
   const int n = 48;
   const double L = 1.0;
   const std::vector<double> rho = smooth_rho(n);
+  // The periodic Poisson operator has the constant nullspace.  Author its physical neutralizing
+  // background from the exact discrete state used by both routes; the prepared solver must never
+  // project the positive Gaussian mean silently.
+  const double rho0 =
+      std::accumulate(rho.begin(), rho.end(), 0.0) / static_cast<double>(rho.size());
 
   int fails = 0;
   // (1) WENO5 (3 ghosts) : le verrou de ce chantier. add_compiled_model reallue a 3 ghosts apres
   //     install_block -> parite STRICTE avec add_block (qui fait de meme via set_block_ghosts).
-  fails += compare(n, L, rho, "weno5");
+  fails += compare(n, L, rho, rho0, "weno5");
   // (2) NO-DEFAULT-CHANGE : none (1 ghost) et minmod (2 ghosts) <= 2 ghosts alloues par install_block
   //     -> set_block_ghosts est un no-op, allocation et resultat INCHANGES (bit-identiques) vs avant.
-  fails += compare(n, L, rho, "none");
-  fails += compare(n, L, rho, "minmod");
+  fails += compare(n, L, rho, rho0, "none");
+  fails += compare(n, L, rho, rho0, "minmod");
 
   if (fails == 0)
     std::printf("OK test_weno5_compiled_model (weno5 + no-default-change none/minmod)\n");

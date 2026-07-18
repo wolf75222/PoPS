@@ -34,6 +34,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 
 #include "test_harness.hpp"
 
@@ -276,16 +277,15 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   const int n = 32;
   System system(SystemConfig{n, 1.0, true});
   const std::string slot = "signed-gradient-provider";
-  const PreparedProviderOptions backend_options{
-      "pops.system.geometric-mg-options@1",
-      {{"abs_tol", 0.0},
-       {"bottom_sweeps", std::int64_t{50}},
-       {"coarse_threshold", std::int64_t{0}},
-       {"max_cycles", std::int64_t{50}},
-       {"min_coarse", std::int64_t{2}},
-       {"post_smooth", std::int64_t{2}},
-       {"pre_smooth", std::int64_t{2}},
-       {"rel_tol", 1.0e-8}}};
+  const PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
+                                                {{"abs_tol", 0.0},
+                                                 {"bottom_sweeps", std::int64_t{50}},
+                                                 {"coarse_threshold", std::int64_t{0}},
+                                                 {"max_cycles", std::int64_t{50}},
+                                                 {"min_coarse", std::int64_t{2}},
+                                                 {"post_smooth", std::int64_t{2}},
+                                                 {"pre_smooth", std::int64_t{2}},
+                                                 {"rel_tol", 1.0e-8}}};
   system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
   system.set_field_solver_plan(slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
                                "test:plasma", "plasma", "potential", {"test:plasma/potential/rhs"},

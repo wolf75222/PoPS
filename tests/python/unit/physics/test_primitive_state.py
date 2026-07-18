@@ -155,7 +155,7 @@ def test_compressible_primitive_roundtrip_and_step():
             state=engine.FluidState("compressible", gamma=1.4),
             transport=engine.CompressibleFlux(),
             source=engine.NoSource(),
-            elliptic=engine.ChargeDensity(charge=1.0),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=float(rho.mean())),
         ),
     )
     assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
@@ -182,7 +182,7 @@ def test_isothermal_primitive_roundtrip_and_step():
             state=engine.FluidState("isothermal", cs2=0.5),
             transport=engine.IsothermalFlux(),
             source=engine.NoSource(),
-            elliptic=engine.ChargeDensity(charge=1.0),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=float(rho.mean())),
         ),
     )
     assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v"]

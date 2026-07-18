@@ -64,6 +64,15 @@ static std::vector<double> four_bubbles(int n) {
       }
       rho[static_cast<std::size_t>(j) * n + i] = r;
     }
+  // Periodic self-gravity requires an RHS orthogonal to the constant nullspace. Preserve the four
+  // non-trivial peaks but encode their neutralizing background in the fixture; no solver-side
+  // projection is permitted.
+  double mean = 0.0;
+  for (double value : rho)
+    mean += value;
+  mean /= static_cast<double>(rho.size());
+  for (double& value : rho)
+    value += 1.0 - mean;
   return rho;
 }
 
@@ -96,6 +105,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 
   // Modele euler_poisson COMPILE branche sur la hierarchie AMR (chemin de production add_compiled_model).
   AmrSystem sys(cfg);
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");

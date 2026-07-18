@@ -68,7 +68,7 @@ def make_sim(cache, riemann=None, limiter=None, time=None):
     sim.add_block("ions",
                   Model(state=FluidState("isothermal", cs2=CS2),
                         transport=IsothermalFlux(), source=NoSource(),
-                        elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                        elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=Spatial(limiter=limiter, flux=riemann, wave_speed_cache=cache),
                   time=time if time is not None else Explicit())
     return sim
@@ -98,7 +98,7 @@ s_def = System(n=N, L=1.0, periodic=True)
 s_def.add_block("ions",
                 Model(state=FluidState("isothermal", cs2=CS2),
                       transport=IsothermalFlux(), source=NoSource(),
-                      elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                      elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
                 spatial=Spatial(limiter=FirstOrder(), flux=HLL()),
                 time=Explicit())
 s_def.set_state("ions", U0)
@@ -135,7 +135,7 @@ def make_mode_then_cache():
     sim.add_block("ions",
                   Model(state=FluidState("isothermal", cs2=CS2),
                         transport=IsothermalFlux(), source=NoSource(),
-                        elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                        elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
                                   wave_speed_cache=True),  # doit lever (mode disque actif)
                   time=Explicit())

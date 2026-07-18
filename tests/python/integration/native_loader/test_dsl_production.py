@@ -25,12 +25,12 @@ from tests.python.support.requirements import (
 POPS_PROCESS_TIMEOUT = 900
 
 
-def _native_spec():
+def _native_spec(rho0):
     """Equivalent native Euler bricks used as the numerical parity oracle."""
     return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
                      transport=engine.CompressibleFlux(),
                      source=engine.NoSource(),
-                     elliptic=engine.ChargeDensity(charge=1.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=rho0))
 
 
 def _initial_state(n):
@@ -60,7 +60,7 @@ def main():
     n, L = 48, 1.0
     U = _initial_state(n)
     Uflat = U.reshape(-1).tolist()
-    spec = _native_spec()
+    spec = _native_spec(float(U[0].mean()))
     tmp = tempfile.mkdtemp()
     try:
         # The component package is produced only by the final public lifecycle.

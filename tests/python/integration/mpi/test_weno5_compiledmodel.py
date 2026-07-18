@@ -21,12 +21,12 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 POPS_PROCESS_TIMEOUT = 900
 
 
-def _native_spec():
+def _native_spec(rho0):
     """Equivalent native Euler bricks used only as the numerical parity oracle."""
     return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
                      transport=engine.CompressibleFlux(),
                      source=engine.NoSource(),
-                     elliptic=engine.ChargeDensity(charge=1.0))
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=rho0))
 
 
 def _initial_state(n):
@@ -56,7 +56,7 @@ def main():
     n, L = 48, 1.0
     U = _initial_state(n)
     Uflat = U.reshape(-1).tolist()
-    spec = _native_spec()
+    spec = _native_spec(float(U[0].mean()))
 
     def run_compiled_checks():
         compiled_prod = compile_euler_component(model, cells=16, cxx=cxx)
