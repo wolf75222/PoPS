@@ -257,6 +257,65 @@ struct SessionLifecycleState {
   std::shared_ptr<SessionLifecycleProbe> probe;
 };
 
+class BlockingPrepareGate {
+ public:
+  void arm() {
+    std::lock_guard lock(mutex_);
+    armed_ = true;
+    entered_ = false;
+    released_ = false;
+    timed_out_ = false;
+  }
+
+  void block_if_armed() {
+    std::unique_lock lock(mutex_);
+    if (!armed_)
+      return;
+    armed_ = false;
+    entered_ = true;
+    changed_.notify_all();
+    if (!changed_.wait_for(lock, std::chrono::seconds(10), [&] { return released_; }))
+      timed_out_ = true;
+  }
+
+  [[nodiscard]] bool wait_until_entered() {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, std::chrono::seconds(10), [&] { return entered_; });
+  }
+
+  void release() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    changed_.notify_all();
+  }
+
+  [[nodiscard]] bool timed_out() const {
+    std::lock_guard lock(mutex_);
+    return timed_out_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  bool armed_ = false;
+  bool entered_ = false;
+  bool released_ = false;
+  bool timed_out_ = false;
+};
+
+PreparedAffineOperatorProvider blocking_prepare_operator_provider(
+    const std::shared_ptr<BlockingPrepareGate>& gate) {
+  return PreparedAffineOperatorProvider::trusted_extension(
+      {"pops.test.krylov.blocking-prepare-operator", 1}, {}, [gate](const ExecutionLane&) {
+        return PreparedAffineOperatorSessionCallbacks{
+            [gate] { gate->block_if_armed(); },
+            [](MultiFab& out, const MultiFab& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+            [] { return std::size_t{0}; }};
+      });
+}
+
 struct PotentiallyThrowingSessionContract {
   void prepare() {}
   PreparedApplyStatus apply(MultiFab&, const MultiFab&) { return PreparedApplyStatus::Success; }
@@ -434,6 +493,155 @@ TEST(test_krylov_workspace_reentrancy,
 }
 
 TEST(test_krylov_workspace_reentrancy,
+     workspace_rebind_reserves_mutation_during_blocking_operator_prepare) {
+  comm_init();
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{0, 0}, {3, 3}}});
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab prototype(boxes, mapping, 1, 0);
+  prototype.set_val(Real(0));
+  OperatorEvaluationSnapshot snapshot = test_snapshot(prototype);
+  const auto gate = std::make_shared<BlockingPrepareGate>();
+  const KrylovFootprint footprint{1, 0, false};
+  PreparedAffineLinearProblem problem(
+      prototype, blocking_prepare_operator_provider(gate), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  const PreparedKrylovMethod method = cg_krylov_method();
+  KrylovWorkspace workspace(prototype, method, footprint);
+  MultiFab iterate(boxes, mapping, 1, 0);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const KrylovControls controls{method, Real(1e-12), Real(0), 4};
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  gate->arm();
+  bool rebind_completed = false;
+  std::exception_ptr rebind_failure;
+  std::thread rebind([&] {
+    try {
+      workspace.bind(problem);
+      rebind_completed = true;
+    } catch (...) {
+      rebind_failure = std::current_exception();
+    }
+  });
+
+  const bool entered_locally = gate->wait_until_entered();
+  const bool entered_on_every_rank = all_reduce_min(entered_locally ? 1L : 0L) != 0;
+  bool rejected_as_logic_error = false;
+  std::string rejection;
+  if (entered_on_every_rank) {
+    try {
+      (void)prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+    } catch (const std::logic_error& error) {
+      rejected_as_logic_error = true;
+      rejection = error.what();
+    } catch (const std::exception& error) {
+      rejection = error.what();
+    } catch (...) {
+      rejection = "non-standard exception";
+    }
+  }
+
+  gate->release();
+  rebind.join();
+
+  EXPECT_TRUE(entered_on_every_rank);
+  EXPECT_FALSE(gate->timed_out());
+  EXPECT_EQ(rebind_failure, nullptr);
+  EXPECT_TRUE(rebind_completed);
+  if (entered_on_every_rank) {
+    EXPECT_EQ(rejection,
+              "KrylovWorkspace is already reserved by another prepared bind or solve invocation");
+    EXPECT_EQ(all_reduce_min(rejected_as_logic_error ? 1L : 0L), 1L);
+    EXPECT_TRUE(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("workspace-rebind-reservation"), std::string_view(rejection)}}));
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     problem_prepare_reserves_mutation_during_blocking_resource_freeze) {
+  comm_init();
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{0, 0}, {3, 3}}});
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab prototype(boxes, mapping, 1, 0);
+  prototype.set_val(Real(0));
+  OperatorEvaluationSnapshot snapshot = test_snapshot(prototype);
+  const auto gate = std::make_shared<BlockingPrepareGate>();
+  const KrylovFootprint footprint{1, 0, false};
+  PreparedAffineLinearProblem problem(
+      prototype,
+      PreparedAffineOperatorProvider::trusted_reentrant(
+          [](MultiFab& out, const MultiFab& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; },
+      [gate] { gate->block_if_armed(); });
+  const PreparedKrylovMethod method = cg_krylov_method();
+  KrylovWorkspace workspace(prototype, method, footprint);
+  MultiFab iterate(boxes, mapping, 1, 0);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const KrylovControls controls{method, Real(1e-12), Real(0), 4};
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  ++snapshot.revision;
+  ++snapshot.macro_step;
+  gate->arm();
+  bool prepare_completed = false;
+  std::exception_ptr prepare_failure;
+  std::thread prepare([&] {
+    try {
+      problem.prepare(snapshot);
+      prepare_completed = true;
+    } catch (...) {
+      prepare_failure = std::current_exception();
+    }
+  });
+
+  const bool entered_locally = gate->wait_until_entered();
+  const bool entered_on_every_rank = all_reduce_min(entered_locally ? 1L : 0L) != 0;
+  bool rejected_as_logic_error = false;
+  std::string rejection;
+  if (entered_on_every_rank) {
+    try {
+      (void)prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+    } catch (const std::logic_error& error) {
+      rejected_as_logic_error = true;
+      rejection = error.what();
+    } catch (const std::exception& error) {
+      rejection = error.what();
+    } catch (...) {
+      rejection = "non-standard exception";
+    }
+  }
+
+  gate->release();
+  prepare.join();
+
+  EXPECT_TRUE(entered_on_every_rank);
+  EXPECT_FALSE(gate->timed_out());
+  EXPECT_EQ(prepare_failure, nullptr);
+  EXPECT_TRUE(prepare_completed);
+  EXPECT_TRUE(problem.prepared());
+  if (problem.prepared())
+    EXPECT_EQ(problem.snapshot(), snapshot);
+  if (entered_on_every_rank) {
+    EXPECT_EQ(rejection,
+              "prepared affine problem is being mutated or its operator requires exclusive "
+              "access to its external execution context");
+    EXPECT_EQ(all_reduce_min(rejected_as_logic_error ? 1L : 0L), 1L);
+    EXPECT_TRUE(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("problem-prepare-reservation"), std::string_view(rejection)}}));
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
      rank_local_problem_construction_failure_is_published_before_lane_unwind) {
 #ifndef POPS_HAS_MPI
   GTEST_SKIP() << "rank-local constructor divergence requires MPI";
@@ -453,6 +661,7 @@ TEST(test_krylov_workspace_reentrancy,
                                                   : LinearOperatorProperties::general();
 
   std::string rejection;
+  bool invalid_argument = false;
   try {
     (void)PreparedAffineLinearProblem(
         prototype,
@@ -461,13 +670,19 @@ TEST(test_krylov_workspace_reentrancy,
             [] { return std::size_t{0}; }),
         PreparedLinearPreconditioner::identity(), properties, KrylovFootprint{1, 0, false},
         PreparedNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  } catch (const std::invalid_argument& error) {
+    invalid_argument = true;
+    rejection = error.what();
   } catch (const std::exception& error) {
     rejection = error.what();
   }
 
+  EXPECT_TRUE(invalid_argument);
   EXPECT_FALSE(rejection.empty());
   EXPECT_EQ(rejection,
-            "PreparedAffineLinearProblem construction failed on at least one communicator rank");
+            "PreparedAffineLinearProblem received invalid construction arguments on at least one "
+            "communicator rank");
+  EXPECT_EQ(all_reduce_min(invalid_argument ? 1L : 0L), 1L);
   EXPECT_EQ(all_reduce_min(rejection.empty() ? 0L : 1L), 1L);
   EXPECT_TRUE(all_ranks_agree_exact_ordered_byte_pairs(
       {{std::string_view("prepared-problem-constructor-failure"), std::string_view(rejection)}}));
@@ -739,8 +954,8 @@ TEST(test_krylov_workspace_reentrancy,
       rejection = error.what();
     }
     EXPECT_EQ(rejection,
-              "prepared affine operator requires exclusive access to its external execution "
-              "context");
+              "prepared affine problem is being mutated or its operator requires exclusive "
+              "access to its external execution context");
     const SolveReport first_report = first.execute();
     EXPECT_TRUE(first_report.solved()) << first_report.reason;
   }

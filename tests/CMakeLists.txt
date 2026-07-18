@@ -905,7 +905,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly")
+            "test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently:test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly:test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator:test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly:test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind:test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze")
       elseif(_test STREQUAL "test_geometric_mg")
         pops_add_mpi_rank_test(
           ${_test} ${_np}

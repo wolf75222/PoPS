@@ -170,6 +170,37 @@ struct KrylovWorkspaceAccess {
   }
 };
 
+/// Own the gap between local atomic reservation and a fully materialized invocation.  In
+/// particular, MPI failures in the control-plane consensus must not leave either the workspace or
+/// the prepared problem permanently reserved.
+class PendingPreparedKrylovReservations final {
+ public:
+  PendingPreparedKrylovReservations(const PreparedAffineLinearProblem& problem,
+                                    KrylovWorkspace& workspace, bool problem_reserved,
+                                    bool workspace_reserved) noexcept
+      : problem_(problem_reserved ? &problem : nullptr),
+        workspace_(workspace_reserved ? &workspace : nullptr) {}
+  PendingPreparedKrylovReservations(const PendingPreparedKrylovReservations&) = delete;
+  PendingPreparedKrylovReservations& operator=(const PendingPreparedKrylovReservations&) = delete;
+  ~PendingPreparedKrylovReservations() { reset(); }
+
+  void transfer_to_invocation() noexcept {
+    problem_ = nullptr;
+    workspace_ = nullptr;
+  }
+
+ private:
+  void reset() noexcept {
+    if (workspace_ != nullptr)
+      KrylovWorkspaceAccess::release_solve(*workspace_);
+    if (problem_ != nullptr)
+      PreparedProblemAccess::release_use(*problem_);
+  }
+
+  const PreparedAffineLinearProblem* problem_ = nullptr;
+  KrylovWorkspace* workspace_ = nullptr;
+};
+
 inline bool finite(Real value) {
   return std::isfinite(static_cast<double>(value));
 }
@@ -1782,7 +1813,7 @@ class PreparedKrylovInvocation final {
     if (!owns_reservation_)
       return;
     detail::KrylovWorkspaceAccess::release_solve(*workspace_);
-    detail::PreparedProblemAccess::release_solve(*problem_);
+    detail::PreparedProblemAccess::release_use(*problem_);
     owns_reservation_ = false;
   }
 
@@ -1808,32 +1839,34 @@ inline PreparedKrylovInvocation prepare_krylov_solve(const PreparedAffineLinearP
                                                      const MultiFab& rhs,
                                                      const KrylovControls& controls) {
   const bool workspace_reserved = detail::KrylovWorkspaceAccess::try_reserve_solve(workspace);
-  const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_solve(problem);
+  const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_use(problem);
+  detail::PendingPreparedKrylovReservations pending_reservations(
+      problem, workspace, problem_reserved, workspace_reserved);
   const ExecutionLane& control_lane = detail::PreparedProblemAccess::preparation_lane(problem);
-  const long workspace_reservation_failed =
-      all_reduce_max(workspace_reserved ? 0L : 1L, control_lane);
-  const long problem_reservation_failed = all_reduce_max(problem_reserved ? 0L : 1L, control_lane);
-  if (workspace_reservation_failed != 0 || problem_reservation_failed != 0) {
-    if (workspace_reserved)
-      detail::KrylovWorkspaceAccess::release_solve(workspace);
-    if (problem_reserved)
-      detail::PreparedProblemAccess::release_solve(problem);
-    if (workspace_reservation_failed != 0)
+  const detail::PreparedProblemControlConsensus reservation_consensus =
+      detail::coordinate_prepared_problem_control(
+          detail::PreparedProblemControlOperation::MaterializeSolve, workspace_reserved,
+          problem_reserved, control_lane);
+  if (!reservation_consensus.operation_agrees ||
+      reservation_consensus.workspace_reservation_failed != 0 ||
+      reservation_consensus.problem_reservation_failed != 0) {
+    if (!reservation_consensus.operation_agrees)
       throw std::logic_error(
-          "KrylovWorkspace is already reserved by another prepared solve invocation");
+          "prepared Krylov control operations differ across communicator ranks; prepare, bind, "
+          "and solve materialization must use one canonical collective order");
+    if (reservation_consensus.workspace_reservation_failed != 0)
+      throw std::logic_error(
+          "KrylovWorkspace is already reserved by another prepared bind or solve invocation");
     throw std::logic_error(
-        "prepared affine operator requires exclusive access to its external execution context");
+        "prepared affine problem is being mutated or its operator requires exclusive access to "
+        "its external execution context");
   }
 
-  try {
-    detail::collective_solve_preflight(problem, workspace, iterate, rhs, controls, control_lane);
-    return PreparedKrylovInvocation(problem, workspace, iterate, rhs, controls,
-                                    PreparedKrylovInvocation::MaterializedToken{});
-  } catch (...) {
-    detail::KrylovWorkspaceAccess::release_solve(workspace);
-    detail::PreparedProblemAccess::release_solve(problem);
-    throw;
-  }
+  detail::collective_solve_preflight(problem, workspace, iterate, rhs, controls, control_lane);
+  PreparedKrylovInvocation invocation(problem, workspace, iterate, rhs, controls,
+                                      PreparedKrylovInvocation::MaterializedToken{});
+  pending_reservations.transfer_to_invocation();
+  return invocation;
 }
 
 /// Ordered convenience path for one solve. Concurrent MPI callers first materialize one

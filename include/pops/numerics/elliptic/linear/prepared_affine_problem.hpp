@@ -41,6 +41,32 @@ class AmrProgramContext;
 namespace detail {
 struct PreparedProblemAccess;
 
+enum class PreparedProblemControlOperation : long {
+  Prepare = 1,
+  BindWorkspace = 2,
+  MaterializeSolve = 3,
+};
+
+struct PreparedProblemControlConsensus {
+  bool operation_agrees = false;
+  long workspace_reservation_failed = 0;
+  long problem_reservation_failed = 0;
+};
+
+/// Every operation that can mutate or consume prepared Krylov state enters the same fixed-width
+/// control-plane gate before touching provider sessions.  Besides publishing rank-local
+/// reservation failures, the operation tag prevents different caller threads from matching a
+/// `prepare`, `bind`, and solve-materialization collective in a different order across ranks.
+inline PreparedProblemControlConsensus coordinate_prepared_problem_control(
+    PreparedProblemControlOperation operation, bool workspace_reserved, bool problem_reserved,
+    const ExecutionLane& lane) {
+  const long operation_value = static_cast<long>(operation);
+  const long operation_min = all_reduce_min(operation_value, lane);
+  const long operation_max = all_reduce_max(operation_value, lane);
+  return {operation_min == operation_max, all_reduce_max(workspace_reserved ? 0L : 1L, lane),
+          all_reduce_max(problem_reserved ? 0L : 1L, lane)};
+}
+
 /// Process-local identity of one concrete provider source.  Exact contracts authenticate semantic
 /// agreement across ranks; this opaque shared-owner identity answers the separate lifecycle
 /// question "can this already materialized session be refreshed in place?" without exposing or
@@ -1623,11 +1649,21 @@ class PreparedAffineLinearProblem {
   }
 
   void prepare(const OperatorEvaluationSnapshot& snapshot) {
-    require_collective_prepare_contract_();
-    if (all_reduce_max(active_solve_reservations_.load(std::memory_order_acquire) != 0 ? 1L : 0L,
-                       preparation_lane_) != 0)
+    const bool mutation_reserved = try_reserve_mutation_();
+    MutationReservation mutation_reservation(mutation_reserved ? this : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::Prepare, true, mutation_reserved,
+            preparation_lane_);
+    if (!reservation_consensus.operation_agrees)
       throw std::logic_error(
-          "PreparedAffineLinearProblem cannot be prepared while a solve invocation is active");
+          "prepared Krylov control operations differ across communicator ranks; prepare, bind, "
+          "and solve materialization must use one canonical collective order");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "PreparedAffineLinearProblem cannot be prepared while another prepared operation is "
+          "active");
+    require_collective_prepare_contract_();
     snapshot_.reset();
     try {
       // This helper performs its own rank-local allocation catch and preparation-lane failure
@@ -1825,6 +1861,32 @@ class PreparedAffineLinearProblem {
   static constexpr long kAliasFailure = 1;
   static constexpr long kGhostFailure = 2;
   static constexpr long kVectorSpaceFailure = 3;
+  static constexpr std::size_t kMutationReservation = std::numeric_limits<std::size_t>::max();
+
+  class MutationReservation final {
+   public:
+    explicit MutationReservation(PreparedAffineLinearProblem* problem) noexcept
+        : problem_(problem) {}
+    MutationReservation(const MutationReservation&) = delete;
+    MutationReservation& operator=(const MutationReservation&) = delete;
+    ~MutationReservation() {
+      if (problem_ != nullptr)
+        problem_->release_mutation_();
+    }
+
+   private:
+    PreparedAffineLinearProblem* problem_ = nullptr;
+  };
+
+  [[nodiscard]] bool try_reserve_mutation_() noexcept {
+    std::size_t expected = 0;
+    return active_use_reservations_.compare_exchange_strong(
+        expected, kMutationReservation, std::memory_order_acq_rel, std::memory_order_acquire);
+  }
+
+  void release_mutation_() noexcept {
+    active_use_reservations_.store(0, std::memory_order_release);
+  }
 
   long vector_field_failure_(const MultiFab& value) const noexcept {
     return PureFieldAlgebra::same_vector_space(value, zero_) ? 0 : kVectorSpaceFailure;
@@ -2381,7 +2443,7 @@ class PreparedAffineLinearProblem {
   bool vector_distribution_layout_valid_ = true;
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
   std::optional<NullspaceCertificateIdentity> nullspace_certificate_identity_cache_{};
-  mutable std::atomic<std::size_t> active_solve_reservations_{0};
+  mutable std::atomic<std::size_t> active_use_reservations_{0};
 };
 
 namespace detail {
@@ -2396,23 +2458,23 @@ struct PreparedProblemAccess {
     return problem.preparation_lane_;
   }
 
-  static bool try_reserve_solve(const PreparedAffineLinearProblem& problem) noexcept {
+  static bool try_reserve_use(const PreparedAffineLinearProblem& problem) noexcept {
     if (problem.operator_provider_.concurrency() == PreparedOperatorConcurrency::Exclusive) {
       std::size_t expected = 0;
-      return problem.active_solve_reservations_.compare_exchange_strong(
+      return problem.active_use_reservations_.compare_exchange_strong(
           expected, 1, std::memory_order_acq_rel, std::memory_order_acquire);
     }
-    std::size_t current = problem.active_solve_reservations_.load(std::memory_order_acquire);
-    while (current != std::numeric_limits<std::size_t>::max()) {
-      if (problem.active_solve_reservations_.compare_exchange_weak(
+    std::size_t current = problem.active_use_reservations_.load(std::memory_order_acquire);
+    while (current < PreparedAffineLinearProblem::kMutationReservation - 1) {
+      if (problem.active_use_reservations_.compare_exchange_weak(
               current, current + 1, std::memory_order_acq_rel, std::memory_order_acquire))
         return true;
     }
     return false;
   }
 
-  static void release_solve(const PreparedAffineLinearProblem& problem) noexcept {
-    problem.active_solve_reservations_.fetch_sub(1, std::memory_order_acq_rel);
+  static void release_use(const PreparedAffineLinearProblem& problem) noexcept {
+    problem.active_use_reservations_.fetch_sub(1, std::memory_order_acq_rel);
   }
 
   static long append_collective_state(const PreparedAffineLinearProblem& problem,

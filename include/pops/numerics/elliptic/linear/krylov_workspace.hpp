@@ -176,9 +176,25 @@ class KrylovWorkspace {
   }
 
   void bind(const PreparedAffineLinearProblem& problem) {
-    if (all_reduce_max(solve_reserved_.load(std::memory_order_acquire) ? 1L : 0L, lane_) != 0)
+    const bool workspace_reserved = try_reserve_mutation_();
+    WorkspaceMutationReservation workspace_reservation(workspace_reserved ? this : nullptr);
+    const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_use(problem);
+    ProblemUseReservation problem_reservation(problem_reserved ? &problem : nullptr);
+    const detail::PreparedProblemControlConsensus reservation_consensus =
+        detail::coordinate_prepared_problem_control(
+            detail::PreparedProblemControlOperation::BindWorkspace, workspace_reserved,
+            problem_reserved, detail::PreparedProblemAccess::preparation_lane(problem));
+    if (!reservation_consensus.operation_agrees)
       throw std::logic_error(
-          "KrylovWorkspace cannot be rebound while a solve invocation is active");
+          "prepared Krylov control operations differ across communicator ranks; prepare, bind, "
+          "and solve materialization must use one canonical collective order");
+    if (reservation_consensus.workspace_reservation_failed != 0)
+      throw std::logic_error(
+          "KrylovWorkspace cannot be rebound while another bind or solve invocation is active");
+    if (reservation_consensus.problem_reservation_failed != 0)
+      throw std::logic_error(
+          "KrylovWorkspace cannot be rebound while its prepared problem is mutating or in "
+          "exclusive use");
     detail::KrylovCollectivePayload payload;
     long local_failure = detail::PreparedProblemAccess::append_collective_state(problem, payload);
     append_collective_state_(payload);
@@ -444,6 +460,42 @@ class KrylovWorkspace {
   friend struct detail::KrylovWorkspaceAccess;
   friend class PreparedKrylovSolveContext;
 
+  enum class ReservationState : std::uint8_t {
+    Idle,
+    Mutation,
+    Solve,
+  };
+
+  class WorkspaceMutationReservation final {
+   public:
+    explicit WorkspaceMutationReservation(KrylovWorkspace* workspace) noexcept
+        : workspace_(workspace) {}
+    WorkspaceMutationReservation(const WorkspaceMutationReservation&) = delete;
+    WorkspaceMutationReservation& operator=(const WorkspaceMutationReservation&) = delete;
+    ~WorkspaceMutationReservation() {
+      if (workspace_ != nullptr)
+        workspace_->release_mutation_();
+    }
+
+   private:
+    KrylovWorkspace* workspace_ = nullptr;
+  };
+
+  class ProblemUseReservation final {
+   public:
+    explicit ProblemUseReservation(const PreparedAffineLinearProblem* problem) noexcept
+        : problem_(problem) {}
+    ProblemUseReservation(const ProblemUseReservation&) = delete;
+    ProblemUseReservation& operator=(const ProblemUseReservation&) = delete;
+    ~ProblemUseReservation() {
+      if (problem_ != nullptr)
+        detail::PreparedProblemAccess::release_use(*problem_);
+    }
+
+   private:
+    const PreparedAffineLinearProblem* problem_ = nullptr;
+  };
+
   static void append_footprint_(detail::KrylovCollectivePayload& payload,
                                 const KrylovFootprint& footprint) noexcept {
     payload.append(footprint.components);
@@ -567,11 +619,21 @@ class KrylovWorkspace {
   }
 
   bool try_reserve_solve_() noexcept {
-    bool expected = false;
-    return solve_reserved_.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
-                                                   std::memory_order_acquire);
+    ReservationState expected = ReservationState::Idle;
+    return reservation_state_.compare_exchange_strong(
+        expected, ReservationState::Solve, std::memory_order_acq_rel, std::memory_order_acquire);
   }
-  void release_solve_() noexcept { solve_reserved_.store(false, std::memory_order_release); }
+  void release_solve_() noexcept {
+    reservation_state_.store(ReservationState::Idle, std::memory_order_release);
+  }
+  bool try_reserve_mutation_() noexcept {
+    ReservationState expected = ReservationState::Idle;
+    return reservation_state_.compare_exchange_strong(
+        expected, ReservationState::Mutation, std::memory_order_acq_rel, std::memory_order_acquire);
+  }
+  void release_mutation_() noexcept {
+    reservation_state_.store(ReservationState::Idle, std::memory_order_release);
+  }
 
   void reset_provider_apply_status_() noexcept {
     provider_apply_status_ = PreparedApplyStatus::Success;
@@ -631,7 +693,7 @@ class KrylovWorkspace {
   PreparedApplyStatus provider_apply_status_ = PreparedApplyStatus::Success;
   std::optional<MultiFab> preconditioner_constant_{};
   ExactSolveReportConsensusScratch provider_report_consensus_{};
-  std::atomic<bool> solve_reserved_{false};
+  std::atomic<ReservationState> reservation_state_{ReservationState::Idle};
 };
 
 }  // namespace pops
