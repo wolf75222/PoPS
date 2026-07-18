@@ -158,7 +158,7 @@ class AmrSystemBzPopTest : public ::testing::Test {
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
     auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
                                      Periodicity{true, true}, /*replicated_coarse=*/true,
-                                     PoissonCadence::OncePerStep, {},
+                                     PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
                                      use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);

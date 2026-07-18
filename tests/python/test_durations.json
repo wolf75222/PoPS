@@ -150,7 +150,9 @@
   "tests/python/unit/codegen/test_param_core_contract.py": 2.0,
   "tests/python/unit/codegen/test_phase_pipeline.py": 2.0,
   "tests/python/unit/codegen/test_precond_options_ir_hash.py": 2.0,
+  "tests/python/unit/codegen/test_prepared_krylov_method_registry.py": 2.0,
   "tests/python/unit/codegen/test_prepared_native_dependencies.py": 2.0,
+  "tests/python/unit/codegen/test_prepared_preconditioner_registry.py": 2.0,
   "tests/python/unit/codegen/test_program_codegen_multimodel.py": 2.0,
   "tests/python/unit/codegen/test_program_emit_params_multimodel.py": 2.0,
   "tests/python/unit/codegen/test_program_graph_lowering.py": 2.0,
@@ -177,6 +179,9 @@
   "tests/python/unit/fields/test_field_discretization_contract.py": 1.0,
   "tests/python/unit/fields/test_field_operator_contract.py": 1.0,
   "tests/python/unit/fields/test_field_residual_solve_contract.py": 1.0,
+  "tests/python/unit/fields/test_prepared_field_lowering_provider.py": 1.0,
+  "tests/python/unit/fields/test_prepared_field_nullspace_registry.py": 1.0,
+  "tests/python/unit/fields/test_prepared_field_solver_registry.py": 1.0,
   "tests/python/unit/identity/test_artifact_identity.py": 1.0,
   "tests/python/unit/identity/test_canonical_encoding.py": 1.0,
   "tests/python/unit/identity/test_digest.py": 1.0,
@@ -367,7 +372,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so, local pytest per file (non-compiler tests)",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 199,
+    "estimated_count": 204,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -460,7 +465,9 @@
       "tests/python/unit/codegen/test_param_core_contract.py",
       "tests/python/unit/codegen/test_phase_pipeline.py",
       "tests/python/unit/codegen/test_precond_options_ir_hash.py",
+      "tests/python/unit/codegen/test_prepared_krylov_method_registry.py",
       "tests/python/unit/codegen/test_prepared_native_dependencies.py",
+      "tests/python/unit/codegen/test_prepared_preconditioner_registry.py",
       "tests/python/unit/codegen/test_program_codegen_multimodel.py",
       "tests/python/unit/codegen/test_program_emit_params_multimodel.py",
       "tests/python/unit/codegen/test_program_graph_lowering.py",
@@ -478,6 +485,9 @@
       "tests/python/unit/fields/test_field_discretization_contract.py",
       "tests/python/unit/fields/test_field_operator_contract.py",
       "tests/python/unit/fields/test_field_residual_solve_contract.py",
+      "tests/python/unit/fields/test_prepared_field_lowering_provider.py",
+      "tests/python/unit/fields/test_prepared_field_nullspace_registry.py",
+      "tests/python/unit/fields/test_prepared_field_solver_registry.py",
       "tests/python/unit/identity/test_artifact_identity.py",
       "tests/python/unit/identity/test_canonical_encoding.py",
       "tests/python/unit/identity/test_digest.py",
@@ -569,6 +579,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 363
+    "total_files": 368
   }
 }

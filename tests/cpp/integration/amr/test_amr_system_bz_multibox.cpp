@@ -150,7 +150,8 @@ TEST(test_amr_system_bz_multibox, Runs) {
     auto sim = std::make_unique<Sim>(
         system, geom, ba_coarse, BCRec{}, charge, std::move(bl), Periodicity{true, true},
         /*replicated_coarse=*/false,  // grossier multi-box reparti
-        PoissonCadence::OncePerStep, {}, use_setter ? ScalarFieldProvider2D{} : bz_user);
+        PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
+        use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
     return sim;
