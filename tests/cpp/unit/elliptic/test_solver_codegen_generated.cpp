@@ -149,7 +149,7 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
   MultiFab x_ref(ba, dm, 1, 1);
   x_ref.set_val(0.0);
   ApplyFn A = [&](MultiFab& out, const MultiFab& in) { op(out, in); };
-  const KrylovFootprint footprint{1, 1, 0, false};
+  const KrylovFootprint footprint{1, 1, false};
   OperatorEvaluationSnapshot snapshot{{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)},
                                       1,
                                       0,
@@ -164,12 +164,12 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
       x_ref, A, PreparedLinearPreconditioner::identity(),
       LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
       [&snapshot]() { return snapshot; });
-  KrylovWorkspace workspace(x_ref, KrylovMethod::kRichardson, footprint);
+  KrylovWorkspace workspace(x_ref, richardson_krylov_method(kOmega), footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);
   const SolveReport r_ref = solve_prepared_affine(
       problem, workspace, x_ref, rhs,
-      KrylovControls{KrylovMethod::kRichardson, Real(0), kAbsTol, 1000000, 0, kOmega});
+      KrylovControls{richardson_krylov_method(kOmega), Real(0), kAbsTol, 1000000});
   const Real err_ref = max_abs_diff(x_ref, phi_exact_mf);
   std::printf("native    : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r_ref.solved() ? "CONVERGED" : "FAILED", r_ref.iters, r_ref.rel_residual, err_ref);

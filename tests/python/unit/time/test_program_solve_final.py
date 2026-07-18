@@ -23,6 +23,39 @@ def _matrix_free():
     return program, operator, program.scalar_field("rhs")
 
 
+def test_preconditioner_provider_is_exact_and_authenticated():
+    from pops.codegen.scratch_plan import build_scratch_plan
+
+    model = pops.Model("route-model")
+    state = model.state("U", components=("u",))
+    block = pops.Case("route-case").block("fluid", model)
+    program = Program("route-codegen")
+    temporal = program.state(block[state])
+    operator = program.matrix_free_operator("identity", ncomp=1)
+    program.set_apply(operator, lambda _program, _out, value: value)
+    solved = program.solve(
+        LinearProblem(operator, temporal.n, at=temporal.next.point, nullspace=None),
+        solver=GMRES(max_iter=4, restart=2),
+    ).consume(action=FailRun())
+    program.commit(temporal.next, solved)
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    from pops.solvers._prepared_preconditioner_registry import (
+        prepared_preconditioner_provider_by_id,
+    )
+    assert solve.attrs["preconditioner_provider"] == (
+        prepared_preconditioner_provider_by_id("pops.preconditioner.identity").authority()
+    )
+
+    attrs = dict(solve.attrs)
+    attrs["preconditioner_provider"] = dict(solve.attrs["preconditioner_provider"])
+    attrs["preconditioner_provider"]["emitter_id"] = "vendor.unregistered-preconditioner@1"
+    object.__setattr__(solve, "attrs", attrs)
+    with pytest.raises(NotImplementedError, match="not registered"):
+        build_scratch_plan(program)
+    with pytest.raises(NotImplementedError, match="not registered"):
+        emit_cpp_program(program)
+
+
 def test_one_public_solve_verb_and_no_parallel_solve_verbs():
     assert tuple(inspect.signature(Program.solve).parameters) == (
         "self", "problem", "solver", "name")
@@ -41,15 +74,18 @@ def test_krylov_descriptor_owns_every_algorithm_control_and_outcome_is_consumed(
     ).consume(action=FailRun())
 
     token = next(value for value in program._values if value.op == "solve_linear")
-    assert token.attrs["method"] == "gmres"
+    assert token.attrs["method_provider"]["provider_id"] == "pops.krylov.gmres"
+    assert token.attrs["method_options"] == {"restart": 9}
     assert scalar_data(token.attrs["tol"]) == scalar_data(1.0e-7)
     assert token.attrs["max_iter"] == 17
-    assert token.attrs["restart"] == 9
-    assert token.attrs["preconditioner"] == "identity"
-    assert token.attrs["nullspace_contract"] == {
-        "schema_version": 1, "kind": "none"}
-    assert token.attrs["gauge_contract"] == {
-        "schema_version": 1, "kind": "none"}
+    assert token.attrs["preconditioner_provider"]["provider_id"] == (
+        "pops.preconditioner.identity"
+    )
+    assert token.attrs["preconditioner_options"] == {}
+    assert token.attrs["nullspace_provider"]["singular"] is False
+    assert token.attrs["nullspace_contract"]["contract"] == {
+        "declaration": "nonsingular"}
+    assert token.attrs["gauge_contract"] == {"constraint": "none"}
     assert token.attrs["problem_kind"] == "matrix_free_linear"
     assert "problem_identity" not in token.attrs
     assert solved.op == "solve_outcome_component"
@@ -60,8 +96,8 @@ def test_krylov_descriptor_owns_every_algorithm_control_and_outcome_is_consumed(
     [
         ({"max_iterations": 1 << 31}, r"signed C\+\+ int"),
         (
-            {"restart": PREPARED_GMRES_MAX_RESTART + 1},
-            "native batched robust-dot collective capacity",
+            {"method_options": {"restart": PREPARED_GMRES_MAX_RESTART + 1}},
+            "restart",
         ),
     ],
 )
@@ -96,10 +132,9 @@ def test_codegen_rejects_forged_krylov_integers_before_emission_or_allocation():
         validated_krylov_footprint(max_iter_attrs, operator=authenticated_operator)
 
     restart_attrs = dict(solve.attrs)
-    restart_attrs["restart"] = PREPARED_GMRES_MAX_RESTART + 1
-    restart_footprint = dict(restart_attrs["krylov_footprint"])
-    restart_footprint["restart"] = PREPARED_GMRES_MAX_RESTART + 1
-    restart_attrs["krylov_footprint"] = restart_footprint
+    restart_attrs["method_options"] = {
+        "restart": PREPARED_GMRES_MAX_RESTART + 1
+    }
     with pytest.raises(ValueError, match="restart"):
         validated_krylov_footprint(restart_attrs, operator=authenticated_operator)
 
@@ -181,9 +216,10 @@ def test_constant_nullspace_cg_requires_spd_on_the_complement_and_is_scalar_only
     )
     assert outcome.consume(action=FailRun()).op == "solve_outcome_component"
     token = next(value for value in program._values if value.op == "solve_linear")
-    assert token.attrs["nullspace_contract"] == {
-        "schema_version": 1, "kind": "constant"}
-    assert token.attrs["gauge_contract"]["kind"] == "mean_value"
+    assert token.attrs["nullspace_provider"]["singular"] is True
+    assert token.attrs["nullspace_contract"]["contract"] == {
+        "basis": "constant-function", "basis_count": 1}
+    assert token.attrs["gauge_contract"]["constraint"] == "mean-value"
 
     vector_program = Program("vector-nullspace-rejected")
     vector_operator = vector_program.matrix_free_operator(

@@ -48,13 +48,10 @@ TEST(PublicValidationErrors, ProgramWireIdsNeverFallback) {
                                 {"LinearSolveMethod", "99"}));
   EXPECT_TRUE(ThrowsWithMessage([] { validate_linear_solve_method(kLinearSolveReserved4, "test"); },
                                 {"LinearSolveMethod", "4"}));
-  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_write_role(kPhi, "test"); },
-                                {"AssemblyFieldRole", "6"}));
-  EXPECT_TRUE(ThrowsWithMessage([] { validate_assembly_read_role(kFlux, "test"); },
-                                {"AssemblyFieldRole", "5"}));
+  EXPECT_TRUE(ThrowsWithMessage([] { validate_prepared_field_slot("", "test"); },
+                                {"prepared field-slot identity", "non-empty"}));
   EXPECT_NO_THROW(validate_linear_solve_method(kLinearSolveBicgstab, "test"));
-  EXPECT_NO_THROW(validate_assembly_write_role(kFlux, "test"));
-  EXPECT_NO_THROW(validate_assembly_read_role(kPhi, "test"));
+  EXPECT_NO_THROW(validate_prepared_field_slot("pops.test.operator.extra-slot", "test"));
 }
 
 TEST(PublicValidationErrors, Fab2DRejectsZeroComponents) {

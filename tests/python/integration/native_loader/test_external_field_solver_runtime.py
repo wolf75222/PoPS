@@ -304,7 +304,8 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     before = simulation.inspect().to_dict()["instance"]["field_providers"]
     assert len(before) == 1
     assert before[0]["provider_slot"] == slot
-    assert before[0]["provider_kind"] == "external_component_v1"
+    assert before[0]["provider"]["provider_id"] == "pops.fields.external-field-solver"
+    assert "provider_kind" not in before[0]
     assert before[0]["materialized"] is False
     assert before[0]["topology_digest"] is None
     assert before[0]["patches"] == []

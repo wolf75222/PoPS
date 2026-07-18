@@ -191,6 +191,13 @@ jobs:
             mpi:
               - 'include/pops/parallel/**'
               - 'include/pops/runtime/**'
+              # Prepared linear algebra and storage-distribution providers own collective traces
+              # even when their paths do not contain the word "mpi".  Keep these complete native
+              # protocol boundaries on the real multi-rank gate.
+              - 'include/pops/core/identity/**'
+              - 'include/pops/numerics/elliptic/**'
+              - 'include/pops/mesh/storage/**'
+              - 'include/pops/mesh/layout/**'
               - 'include/**/*mpi*'
               - 'src/runtime/**'
               - 'src/**/*mpi*'

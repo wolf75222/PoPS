@@ -19,11 +19,13 @@ Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest
 """
 from pops.codegen.program_codegen import emit_cpp_program
 import sys
+from pathlib import Path
 
 import pytest
 from pops.numerics.terms import DefaultSource, Flux
 
 from typed_program_support import typed_state
+from tests.python.support.requirements import repo_include
 
 pytest.importorskip("pops")
 from pops import model as model_pkg  # noqa: E402
@@ -205,8 +207,19 @@ def _stub_toolchain(monkeypatch, tmp_path):
     import pops.codegen._compile_drivers as cd
 
     def fake_run_compile(cmd, what):
-        with open(cmd[cmd.index("-o") + 1], "wb") as handle:
-            handle.write(b"FAKE-SO")
+        del what
+        output = Path(cmd[cmd.index("-o") + 1])
+        dependency_file = Path(cmd[cmd.index("-MF") + 1])
+        generated = Path(next(item for item in cmd if item.endswith("problem.cpp")))
+
+        def dep_escape(path):
+            return str(path).replace("\\", "\\\\").replace(" ", "\\ ").replace("$", "$$")
+
+        output.write_bytes(b"FAKE-SO")
+        dependency_file.write_text(
+            "%s: %s\n" % (dep_escape(output), dep_escape(generated)),
+            encoding="utf-8",
+        )
 
     monkeypatch.setattr(cd, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
     monkeypatch.setattr(cd, "_probe_cxx_std", lambda cc, std: "c++23")
@@ -287,7 +300,7 @@ def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_p
     cd = _stub_toolchain(monkeypatch, tmp_path)
     model = _facade_model("ep")
     compiled = cd.compile_problem(time=_fe_program(model), model=model,
-                                  include=str(tmp_path))
+                                  include=repo_include())
     assert compiled.module_manifest is not None, \
         "the REAL compile chain attaches the operator-first Module manifest"
     assert compiled.module_hash(), "the REAL compile chain attaches the module_hash"
@@ -335,7 +348,7 @@ def test_compile_problem_chain_refuses_a_moduleless_model_duck(monkeypatch, tmp_
         match="OperatorRegistry|Module authority|supported model|semantic model identity",
     ):
         cd.compile_problem(time=_fe_program_default(model), model=model,
-                           include=str(tmp_path))
+                           include=repo_include())
 
 
 if __name__ == "__main__":

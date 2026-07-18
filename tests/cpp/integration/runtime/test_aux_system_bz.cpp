@@ -72,8 +72,7 @@ TEST(AuxSystemBz, SharedAuxChannelWidensToMaxAndBzGrowReadsWhileScalarIgnores) {
   // charges nulles -> f = 0 -> phi = 0 (B_z est independant de l'elliptique).
   ChargeDensityRhs charge{{{Real(0), 0}, {Real(0), 0}}};
 
-  SystemAssembler assembler(system, geom, ba, bc, charge, std::function<bool(Real, Real)>{},
-                            [c](Real, Real) { return c; });
+  SystemAssembler assembler(system, geom, ba, bc, charge, {}, constant_scalar_field_provider(c));
 
   // --- (A) canal partage : largeur = max(4, 3) = 4 ; B_z peuple a c ---
   ASSERT_TRUE(assembler.aux().fab(0).ncomp() == 4) << "shared_aux_width_is_max";

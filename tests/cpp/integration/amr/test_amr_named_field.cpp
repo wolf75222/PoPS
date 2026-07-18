@@ -36,14 +36,18 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/state/state.hpp>       // kAuxNamedBase
+#include <pops/mesh/layout/refinement.hpp>  // parallel_copy
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -51,6 +55,140 @@
 #endif
 
 using namespace pops;
+
+static AmrFieldHierarchyPolicyAuthority level_local_hierarchy_policy() {
+  return {
+      "pops.field-hierarchy.level-local",
+      1,
+      {"pops.field-hierarchy.options.empty@1", {}},
+  };
+}
+
+static AmrFieldHierarchyPolicyAuthority composite_hierarchy_policy() {
+  return {
+      "pops.field-hierarchy.composite",
+      1,
+      {"pops.field-hierarchy.options.empty@1", {}},
+  };
+}
+
+static AmrFieldHierarchyPolicyAuthority external_graph_hierarchy_policy() {
+  return {
+      "tests.field-hierarchy.coupled-graph",
+      3,
+      {"tests.field-hierarchy.coupled-graph.options@3",
+       {{"coupling_radius", std::uint64_t{2}}}},
+  };
+}
+
+class ExternalGraphIdentityPrepared final : public AmrPreparedFieldSolver {
+ public:
+  ExternalGraphIdentityPrepared(const AmrFieldSolverBuildRequest& request, std::string contract)
+      : contract_(std::move(contract)),
+        distribution_(request.replicated_coarse ? FieldDistribution::Replicated
+                                                : FieldDistribution::Distributed),
+        rhs_(request.hierarchy.ba.front(), request.hierarchy.dm.front(), 1, 0),
+        phi_(request.hierarchy.ba.front(), request.hierarchy.dm.front(), 1, 1) {
+    rhs_.set_val(Real(0));
+    phi_.set_val(Real(0));
+  }
+
+  std::string_view provider_identity() const noexcept override {
+    return "tests.amr.field-solver.graph-identity";
+  }
+  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
+  bool couples_hierarchy_levels() const noexcept override { return false; }
+  int level_count() const noexcept override { return 1; }
+  FieldDistribution level_distribution(int level) const override {
+    if (level != 0)
+      throw std::out_of_range("graph-identity provider has exactly one level");
+    return distribution_;
+  }
+  MultiFab& rhs_level(int level) override {
+    if (level != 0)
+      throw std::out_of_range("graph-identity provider has exactly one level");
+    return rhs_;
+  }
+  MultiFab& phi_level(int level) override {
+    if (level != 0)
+      throw std::out_of_range("graph-identity provider has exactly one level");
+    return phi_;
+  }
+  void set_boundary_context(const FieldBoundaryExecutionContext&) override {}
+  SolveReport solve() override {
+    phi_.set_val(Real(0));
+    parallel_copy(phi_, rhs_);
+    report_.iters = 0;
+    report_.reference_residual_norm = norm_inf(rhs_);
+    report_.residual_norm = Real(0);
+    report_.rel_residual = Real(0);
+    report_.mark_solved("external graph identity exact inverse");
+    return report_;
+  }
+  const SolveReport& last_solve_report() const noexcept override { return report_; }
+
+ private:
+  std::string contract_;
+  FieldDistribution distribution_;
+  MultiFab rhs_;
+  MultiFab phi_;
+  SolveReport report_{};
+};
+
+class ExternalGraphIdentityProvider final : public AmrFieldSolverProvider {
+ public:
+  std::string_view identity() const noexcept override {
+    return "tests.amr.field-solver.graph-identity";
+  }
+  std::uint64_t interface_version() const noexcept override { return 4; }
+  std::string_view collective_contract() const noexcept override {
+    return "tests.amr.field-solver.graph-identity@4";
+  }
+  std::vector<std::string> capability_contracts() const override { return {}; }
+  AmrFieldSolverOptions default_field_options() const override {
+    return {"tests.amr.field-solver.graph-identity.options@4", {}};
+  }
+  std::optional<AmrFieldHierarchyPolicyAuthority> default_hierarchy_policy(
+      std::string_view) const override {
+    return std::nullopt;
+  }
+  PreparedProviderSupport accepts_options(
+      const AmrFieldSolverOptions& options) const noexcept override {
+    return options.schema_identity == "tests.amr.field-solver.graph-identity.options@4" &&
+                   options.values.empty()
+               ? PreparedProviderSupport::accept()
+               : PreparedProviderSupport::reject(1, "graph identity options are invalid");
+  }
+  PreparedProviderSupport supports(
+      const AmrFieldSolverBuildRequest& request) const noexcept override {
+    const auto& policy = request.plan.hierarchy_policy;
+    const auto radius = policy.options.values.find("coupling_radius");
+    const bool accepted =
+        request.use_contract_identity == "pops.amr.field-solver-use.named@1" &&
+        request.hierarchy.nlev() == 1 && request.plan.has_reaction &&
+        request.plan.reaction == Real(1) &&
+        accepts_options(request.plan.solver_options).accepted() &&
+        policy.policy_id == "tests.field-hierarchy.coupled-graph" &&
+        policy.interface_version == 3 &&
+        policy.options.schema_identity == "tests.field-hierarchy.coupled-graph.options@3" &&
+        radius != policy.options.values.end() &&
+        std::holds_alternative<std::uint64_t>(radius->second) &&
+        std::get<std::uint64_t>(radius->second) == 2;
+    return accepted ? PreparedProviderSupport::accept()
+                    : PreparedProviderSupport::reject(2, "graph identity request is invalid");
+  }
+  std::string expected_prepared_contract(
+      const AmrFieldSolverBuildRequest& request) const override {
+    if (!supports(request).accepted())
+      throw std::invalid_argument("external graph-identity provider rejected the request");
+    return make_amr_field_solver_contract(identity(), request);
+  }
+  std::unique_ptr<AmrPreparedFieldSolver> build(
+      const AmrFieldSolverBuildRequest& request) const override {
+    return std::make_unique<ExternalGraphIdentityPrepared>(
+        request, expected_prepared_contract(request));
+  }
+};
 
 #if defined(POPS_HAS_KOKKOS)
 class KokkosEnvironment : public ::testing::Environment {
@@ -114,6 +252,23 @@ static Real max_abs_diff(const MultiFab& lhs, const MultiFab& rhs) {
       for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
         for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
           result = std::max(result, std::fabs(left(i, j, component) - right(i, j, component)));
+  }
+  return result;
+}
+
+static Real max_valid_scalar_diff(const MultiFab& lhs, const MultiFab& rhs) {
+  device_fence();
+  Real result = Real(0);
+  for (int li = 0; li < lhs.local_size(); ++li) {
+    const ConstArray4 left = lhs.fab(li).const_array();
+    const int rhs_local = rhs.local_index_of(lhs.global_index(li));
+    if (rhs_local < 0)
+      throw std::logic_error("scalar comparison layouts have different local ownership");
+    const ConstArray4 right = rhs.fab(rhs_local).const_array();
+    const Box2D valid = lhs.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        result = std::max(result, std::fabs(left(i, j, 0) - right(i, j, 0)));
   }
   return result;
 }
@@ -249,6 +404,74 @@ static void add_valid_constant(MultiFab& field, Real value) {
   }
 }
 
+TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCoreBranch) {
+  constexpr int n = 16;
+  constexpr Real charge = Real(-1);
+  AmrBuildParams params;
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
+    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
+                                                blob(n, 0.25),
+                                                /*has_density=*/true, 1.4, 1, false, false));
+  });
+  blocks[0].aux_ncomp = kAuxNamedBase + 1;
+
+  auto registry = make_default_amr_field_solver_registry();
+  registry->add(std::make_shared<ExternalGraphIdentityProvider>());
+  const auto external = registry->resolve("tests.amr.field-solver.graph-identity");
+  EXPECT_TRUE(external->capability_contracts().empty());
+  EXPECT_NO_THROW((void)exact_amr_field_solver_provider_declaration(*external));
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall,
+                     registry);
+  AmrFieldSolveConfig plan;
+  plan.plan_identity = "tests.amr.field-solver.graph-identity.plan@4";
+  plan.provider_identity = "tests:plasma/graph-identity";
+  plan.topology_provider_kind = "tests.graph-topology";
+  plan.topology_provenance = "tests:external-coupled-graph";
+  plan.topology_digest = "tests:external-coupled-graph:layout@3";
+  plan.output_owner_identity = "tests:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = "graph_identity";
+  plan.solver = "tests.amr.field-solver.graph-identity";
+  plan.hierarchy_policy = external_graph_hierarchy_policy();
+  plan.solver_options = external->default_field_options();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = Real(1);
+  plan.providers.push_back(FieldProviderBinding{
+      "tests:plasma/graph-identity/rhs", "plasma", "graph_identity", Real(1)});
+  runtime.install_field_plan("graph_identity", plan);
+  runtime.register_named_field("plasma", "graph_identity", kAuxNamedBase, -1, -1,
+                               /*gradient_sign=*/Real(1));
+  runtime.set_block_named_elliptic_rhs(
+      0, "graph_identity", [charge](const MultiFab& state, MultiFab& rhs) {
+        add_scaled_component(state, charge, 0, rhs);
+      });
+
+  const std::string selected = "graph_identity";
+  const SolveReport report = runtime.solve_named_fields(&selected);
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_EQ(report.iters, 0);
+  EXPECT_GT(report.reference_residual_norm, Real(0));
+
+  const MultiFab& state = runtime.level_state(0, 0);
+  MultiFab expected(state.box_array(), state.dmap(), 1, 1);
+  expected.set_val(Real(0));
+  // Named fields expose -div(A grad(phi)) + kappa phi = rhs.  The AMR runtime converts that
+  // public RHS once to the native div(A grad(phi)) - kappa phi convention before invoking a
+  // provider, so an identity provider must observe the negated public closure output.
+  add_scaled_component(state, -charge, 0, expected);
+  EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(selected), expected), Real(0));
+}
+
 TEST(test_amr_named_field, Runs) {
   const int N = 64;
   const double L = 1.0, B0 = 1.0, q = -1.0;
@@ -303,6 +526,8 @@ TEST(test_amr_named_field, Runs) {
   // (1) PARITY: named field "psi" with RHS = q*rho (the SAME as the default Poisson). gradient comps
   // declared. The closure mirrors make_poisson_rhs of a charge brick: rhs += q * U[0].
   AmrFieldSolveConfig psi_plan;
+  psi_plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
   psi_plan.plan_identity = "test:plasma/psi:plan:v1";
   psi_plan.provider_identity = "test:plasma/psi";
   psi_plan.topology_provider_kind = "structured";
@@ -311,8 +536,8 @@ TEST(test_amr_named_field, Runs) {
   psi_plan.output_owner_identity = "test:plasma";
   psi_plan.output_block = "plasma";
   psi_plan.output_key = "psi";
-  psi_plan.nullspace_assertion = "constant";
-  psi_plan.gauge = "mean_zero";
+  psi_plan.hierarchy_policy = composite_hierarchy_policy();
+  psi_plan.nullspace = operator_topology_zero_mean_nullspace();
   psi_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/psi/rhs", "plasma", "psi", Real(1)});
   rt.install_field_plan("psi", psi_plan);
@@ -356,6 +581,8 @@ TEST(test_amr_named_field, Runs) {
   // (2) DISTINCT RHS (linearity): named field "chi" with RHS = 2*q*rho -> chi = 2*psi (Poisson linear).
   // A genuinely different, correctly scaled second field (not an alias of the default phi).
   AmrFieldSolveConfig chi_plan;
+  chi_plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
   chi_plan.plan_identity = "test:plasma/chi:plan:v1";
   chi_plan.provider_identity = "test:plasma/chi";
   chi_plan.topology_provider_kind = "structured";
@@ -364,8 +591,8 @@ TEST(test_amr_named_field, Runs) {
   chi_plan.output_owner_identity = "test:plasma";
   chi_plan.output_block = "plasma";
   chi_plan.output_key = "chi";
-  chi_plan.nullspace_assertion = "constant";
-  chi_plan.gauge = "mean_zero";
+  chi_plan.hierarchy_policy = composite_hierarchy_policy();
+  chi_plan.nullspace = operator_topology_zero_mean_nullspace();
   chi_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/chi/rhs", "plasma", "chi", Real(1)});
   rt.install_field_plan("chi", chi_plan);
@@ -430,10 +657,11 @@ TEST(test_amr_named_field, Runs) {
   try {
     (void)context.solve_fields();
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
-  } catch (const std::runtime_error& error) {
+  } catch (const FieldNullspaceIncompatibleRhs& error) {
     context_diagnostic = error.what();
   }
-  EXPECT_NE(context_diagnostic.find("incompatible with nullspace"), std::string::npos)
+  EXPECT_NE(context_diagnostic.find("incompatible with prepared nullspace basis"),
+            std::string::npos)
       << context_diagnostic;
   EXPECT_NE(context_diagnostic.find("silent projection is forbidden"), std::string::npos)
       << context_diagnostic;
@@ -461,6 +689,8 @@ TEST(test_amr_named_field, Runs) {
     aux_before.push_back(rt.aux(level));
 
   AmrFieldSolveConfig fail_plan;
+  fail_plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
   fail_plan.plan_identity = "test:plasma/zeta:plan:v1";
   fail_plan.provider_identity = "test:plasma/zeta";
   fail_plan.topology_provider_kind = "structured";
@@ -469,11 +699,15 @@ TEST(test_amr_named_field, Runs) {
   fail_plan.output_owner_identity = "test:plasma";
   fail_plan.output_block = "plasma";
   fail_plan.output_key = "zeta";
-  fail_plan.hierarchy = "level_local";
-  fail_plan.nullspace_assertion = "constant";
-  fail_plan.gauge = "mean_zero";
-  fail_plan.mg_opts.rel_tol = Real(1e-30);
-  fail_plan.mg_opts.max_cycles = 1;
+  fail_plan.hierarchy_policy = level_local_hierarchy_policy();
+  fail_plan.nullspace = operator_topology_zero_mean_nullspace();
+  // This rollback oracle is about a late iteration-limit failure. A level-local periodic Poisson
+  // over a refined subdomain has one compatibility condition per level, so make the operator
+  // genuinely invertible instead of relying on the old silent RHS projection.
+  fail_plan.has_reaction = true;
+  fail_plan.reaction = Real(1);
+  fail_plan.solver_options.values["mg.rel_tol"] = 1e-30;
+  fail_plan.solver_options.values["mg.max_cycles"] = std::int64_t{1};
   fail_plan.providers.push_back(
       FieldProviderBinding{"test:plasma/zeta/rhs", "plasma", "zeta", Real(1)});
   rt.install_field_plan("zeta", fail_plan);
@@ -527,6 +761,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
   plan.plan_identity = "test:plasma/screened:plan:v1";
   plan.provider_identity = "test:plasma/screened";
   plan.topology_provider_kind = "structured";
@@ -535,6 +771,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   plan.output_owner_identity = "test:plasma";
   plan.output_block = "plasma";
   plan.output_key = "screened";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
   plan.has_reaction = true;
   plan.reaction = reaction;
   plan.providers.push_back(
@@ -566,4 +804,120 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   ASSERT_GT(ghosts.reference, Real(1e-8)) << "the ghost oracle is nontrivial";
   EXPECT_EQ(ghosts.error, Real(0))
       << "coarse/fine ghosts must come from the freshly published coarse solution";
+}
+
+TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresentedTopologies) {
+  auto make_plan = [](const std::string& name,
+                      const AmrFieldHierarchyPolicyAuthority& hierarchy_policy) {
+    AmrFieldSolveConfig plan;
+    plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    plan.plan_identity = "test:" + name + ":plan:v1";
+    plan.provider_identity = "test:" + name;
+    plan.topology_provider_kind = "builtin_rectangular_cell_graph_v1";
+    plan.topology_provenance = "test:rectangular-cell-graph";
+    plan.topology_digest = "test:rectangular-cell-graph:v1";
+    plan.output_owner_identity = "test:plasma";
+    plan.output_block = "plasma";
+    plan.output_key = name;
+    plan.hierarchy_policy = hierarchy_policy;
+    plan.nullspace = operator_topology_zero_mean_nullspace();
+    plan.providers.push_back(
+        FieldProviderBinding{"test:" + name + ":rhs", "plasma", name, Real(1)});
+    return plan;
+  };
+
+  {
+    AmrBuildParams params;
+    params.mesh.n = 16;
+    params.mesh.regrid_every = 0;
+    params.mesh.distribute_coarse = true;
+    params.mesh.coarse_max_grid = 8;
+    const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+    std::vector<AmrRuntimeBlock> blocks;
+    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
+      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
+                                                  blob(params.mesh.n, 0.25),
+                                                  /*has_density=*/true, 1.4, 1, false, false));
+    });
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    std::string diagnostic;
+    try {
+      runtime.install_field_plan("distributed-composite",
+                                 make_plan("distributed-composite",
+                                           composite_hierarchy_policy()));
+      ADD_FAILURE()
+          << "FAC's replicated coarse storage must not be paired with distributed runtime coverage";
+    } catch (const std::invalid_argument& error) {
+      diagnostic = error.what();
+    }
+    EXPECT_NE(diagnostic.find("provider rejected request (code 14)"), std::string::npos)
+        << diagnostic;
+    EXPECT_NE(diagnostic.find("coarse distribution or active region"), std::string::npos)
+        << diagnostic;
+  }
+
+  {
+    AmrBuildParams params;
+    params.mesh.n = 16;
+    params.mesh.regrid_every = 0;
+    params.poisson.wall = ActiveRegionProvider2D::trusted_extension(
+        {"pops.test.amr-named-field.quarter-wall", 1}, exact_provider_parameters(Real(0.25)),
+        [](Real x, Real y) { return x < Real(0.25) && y < Real(0.25); });
+    const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+    std::vector<AmrRuntimeBlock> blocks;
+    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
+      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
+                                                  blob(params.mesh.n, 0.25),
+                                                  /*has_density=*/true, 1.4, 1, false, false));
+    });
+    blocks[0].aux_ncomp = kAuxNamedBase + 1;
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    runtime.install_field_plan("wall-field",
+                               make_plan("wall-field", level_local_hierarchy_policy()));
+    runtime.register_named_field("plasma", "wall-field", kAuxNamedBase, -1, -1,
+                                 /*gradient_sign=*/Real(1));
+    runtime.set_block_named_elliptic_rhs(0, "wall-field",
+                                         [](const MultiFab& state, MultiFab& rhs) {
+                                           add_scaled_component(state, Real(-1), 0, rhs);
+                                         });
+    const std::string wall_field = "wall-field";
+    EXPECT_GT(norm_inf(runtime.level_state(0, 0)), Real(0))
+        << "the embedded-Dirichlet solve must receive a non-trivial source field";
+    const SolveReport wall_report = runtime.solve_named_fields(&wall_field);
+    ASSERT_TRUE(wall_report.solved()) << wall_report.reason;
+    const MultiFab first_wall_solution = runtime.provider_potential(wall_field);
+    EXPECT_GT(norm_inf(first_wall_solution), Real(0))
+        << "the level-local active-region provider must execute a non-trivial embedded-Dirichlet solve";
+    runtime.provider_potential(wall_field).set_val(Real(0));
+    const SolveReport repeated_wall_report = runtime.solve_named_fields(&wall_field);
+    ASSERT_TRUE(repeated_wall_report.solved()) << repeated_wall_report.reason;
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(wall_field), first_wall_solution),
+              Real(0))
+        << "the represented wall topology must reproduce the same solution from the same zero start";
+    AmrFieldSolveConfig screened =
+        make_plan("wall-screened", level_local_hierarchy_policy());
+    screened.has_reaction = true;
+    screened.reaction = Real(1);
+    EXPECT_NO_THROW(runtime.install_field_plan("wall-screened", screened))
+        << "an invertible level-local Helmholtz field needs no nullspace component provider";
+    AmrFieldSolveConfig composite_screened =
+        make_plan("wall-composite", composite_hierarchy_policy());
+    composite_screened.has_reaction = true;
+    composite_screened.reaction = Real(1);
+    std::string diagnostic;
+    try {
+      runtime.install_field_plan("wall-composite", composite_screened);
+      ADD_FAILURE()
+          << "CompositeFacPoisson has no wall-mask carrier even when the operator is invertible";
+    } catch (const std::invalid_argument& error) {
+      diagnostic = error.what();
+    }
+    EXPECT_NE(diagnostic.find("provider rejected request (code 14)"), std::string::npos)
+        << diagnostic;
+    EXPECT_NE(diagnostic.find("coarse distribution or active region"), std::string::npos)
+        << diagnostic;
+  }
 }

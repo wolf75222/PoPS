@@ -18,6 +18,9 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 using namespace pops;
 
@@ -39,7 +42,158 @@ void noop_boundary_residual(int, const MultiFab&, MultiFab&, const Geometry&,
 void noop_boundary_jvp(int, const MultiFab&, const MultiFab&, MultiFab&, const Geometry&,
                        const FieldBoundaryExecutionContext&) {}
 
+GeometricMG make_replicated_geometric_mg(int n = 8) {
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  return GeometricMG(geometry, BoxArray::from_domain(domain, n), boundary, {},
+                     FieldDistribution::Replicated);
+}
+
+void set_isometric_rank_permutation(MultiFab& field) {
+  field.set_val(Real(0));
+  field.sync_host();
+  const int local = field.local_index_of(0);
+  ASSERT_GE(local, 0);
+  Array4 values = field.fab(local).array();
+  const Box2D box = field.box(local);
+  const int i = my_rank() == 0 ? box.lo[0] : box.lo[0] + 1;
+  values(i, box.lo[1], 0) = Real(1);
+}
+
+template <class Operation>
+void expect_uniform_collective_rejection(Operation&& operation) {
+  bool rejected = false;
+  std::string message;
+  try {
+    std::forward<Operation>(operation)();
+  } catch (const std::exception& error) {
+    rejected = true;
+    message = error.what();
+  }
+
+  const long rejected_ranks = all_reduce_sum(rejected ? 1L : 0L);
+  const bool same_message = all_ranks_agree_exact_ordered_byte_pairs(
+      {{std::string_view("geometric-mg-collective-rejection"), std::string_view(message)}});
+  EXPECT_EQ(rejected_ranks, n_ranks());
+  EXPECT_TRUE(same_message);
+  EXPECT_FALSE(message.empty());
+}
+
+std::string canonical_valid_bytes(const MultiFab& field) {
+  field.sync_host();
+  std::string bytes;
+  for (int global = 0; global < field.box_array().size(); ++global) {
+    const int local = field.local_index_of(global);
+    if (local < 0)
+      return {};
+    const ConstArray4 values = field.fab(local).const_array();
+    const Box2D box = field.box(local);
+    for (int component = 0; component < field.ncomp(); ++component) {
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+          const Real value = values(i, j, component);
+          bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
+        }
+      }
+    }
+  }
+  return bytes;
+}
+
+bool published_replicas_agree_exactly(const MultiFab& field) {
+  const std::string bytes = canonical_valid_bytes(field);
+  return !bytes.empty() &&
+         all_ranks_agree_exact_ordered_byte_pairs(
+             {{std::string_view("geometric-mg-published-phi"), std::string_view(bytes)}});
+}
+
 }  // namespace
+
+TEST(GeometricMgCollectiveContract, RejectsRankDivergentValidControls) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the collective contract regression is registered at exactly two MPI ranks";
+
+  GeometricMG mg = make_replicated_geometric_mg();
+  mg.rhs().set_val(Real(0));
+  mg.phi().set_val(Real(0));
+  const Real rel_tol = my_rank() == 0 ? Real(1e-8) : Real(1e-6);
+  expect_uniform_collective_rejection(
+      [&] { (void)mg.solve(rel_tol, /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+}
+
+TEST(GeometricMgCollectiveContract, ConvertsOneRankInvalidControlsToOneUniformFailure) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the collective contract regression is registered at exactly two MPI ranks";
+
+  GeometricMG mg = make_replicated_geometric_mg();
+  mg.rhs().set_val(Real(0));
+  mg.phi().set_val(Real(0));
+  const Real rel_tol = my_rank() == 0 ? Real(1e-8) : Real(0);
+  expect_uniform_collective_rejection(
+      [&] { (void)mg.solve(rel_tol, /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+}
+
+TEST(GeometricMgCollectiveContract, RejectsDivergentReplicatedRhsBeforeIteration) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the replica contract regression is registered at exactly two MPI ranks";
+
+  {
+    GeometricMG mg = make_replicated_geometric_mg();
+    mg.rhs().set_val(my_rank() == 0 ? Real(1) : Real(2));
+    mg.phi().set_val(Real(0));
+    expect_uniform_collective_rejection(
+        [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+  }
+
+  // Equal max norms and equal sums are not replica equality certificates.
+  {
+    GeometricMG mg = make_replicated_geometric_mg();
+    set_isometric_rank_permutation(mg.rhs());
+    mg.phi().set_val(Real(0));
+    expect_uniform_collective_rejection(
+        [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+  }
+}
+
+TEST(GeometricMgCollectiveContract, RejectsDivergentReplicatedWarmStartBeforeIteration) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the replica contract regression is registered at exactly two MPI ranks";
+
+  GeometricMG mg = make_replicated_geometric_mg();
+  mg.rhs().set_val(Real(0));
+  set_isometric_rank_permutation(mg.phi());
+  expect_uniform_collective_rejection(
+      [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+}
+
+TEST(GeometricMgCollectiveContract, PublishesOneExactReplicatedPhi) {
+  if (n_ranks() != 2)
+    GTEST_SKIP() << "the replica publication regression is registered at exactly two MPI ranks";
+
+  constexpr int n = 8;
+  GeometricMG mg = make_replicated_geometric_mg(n);
+  const Geometry& geometry = mg.geom();
+  for (int li = 0; li < mg.rhs().local_size(); ++li) {
+    Array4 rhs = mg.rhs().fab(li).array();
+    const Box2D box = mg.rhs().box(li);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+        const Real exact = std::sin(kPi * geometry.x_cell(i)) * std::sin(kPi * geometry.y_cell(j));
+        rhs(i, j, 0) = Real(-2) * Real(kPi * kPi) * exact;
+      }
+    }
+  }
+  mg.phi().set_val(Real(0));
+
+  const int cycles = mg.solve(Real(1e-8), /*max_cycles=*/100, /*abs_tol=*/Real(0));
+  ASSERT_TRUE(mg.last_solve_report().solved()) << mg.last_solve_report().status_name();
+  EXPECT_GT(cycles, 0);
+  EXPECT_EQ(all_reduce_min(static_cast<long>(cycles)), all_reduce_max(static_cast<long>(cycles)));
+  EXPECT_GT(norm_inf(mg.phi()), Real(0));
+  EXPECT_TRUE(published_replicas_agree_exactly(mg.phi()));
+}
 
 static void expect_zero_probe_forcing_scale(const BCRec& bc) {
   constexpr int n = 16;
@@ -114,6 +268,15 @@ static void solve_case(int n, const BCRec& bc, bool periodic, PhiEx phi_ex, RhsF
   for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
     for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
       err = std::max(err, std::fabs(p(i, j, 0) - phi_ex(geom.x_cell(i), geom.y_cell(j))));
+}
+
+TEST(GeometricMgTest, rejects_invalid_field_distribution) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, 8);
+
+  EXPECT_THROW(GeometricMG(geometry, boxes, BCRec{}, {}, static_cast<FieldDistribution>(0xff)),
+               std::invalid_argument);
 }
 
 // --- Dirichlet : phi = sin(pi x) sin(pi y), lap phi = -2 pi^2 phi ---

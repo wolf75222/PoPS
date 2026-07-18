@@ -28,7 +28,9 @@ void RunDisc(int n, int& cycles, double& err) {
   BoxArray ba = BoxArray::from_domain(dom, n);
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  auto active = [=](Real x, Real y) { return std::hypot(x - kCx, y - kCy) < kR; };
+  ActiveRegionProvider2D active = ActiveRegionProvider2D::trusted_extension(
+      {"pops.test.active-region.circle", 1}, exact_provider_parameters(kCx, kCy, kR),
+      [](Real x, Real y) { return std::hypot(x - kCx, y - kCy) < kR; });
   GeometricMG mg(geom, ba, bc, active);
   mg.rhs().set_val(-4.0);
   mg.phi().set_val(0.0);

@@ -71,11 +71,17 @@ static double solve_mms(Op op, int n, int& cycles, std::vector<double>* phi_out)
 
   GeometricMG mg(geom, ba, bc);
   if (op == Op::Screened) {
-    mg.set_epsilon([](Real x, Real y) { return Real(eps_x_field(x, y)); });
-    mg.set_reaction([](Real, Real) { return Real(KAPPA); });
+    mg.set_epsilon(ScalarFieldProvider2D::trusted_extension(
+        {"pops.test.gpu.epsilon-x", 1}, exact_provider_parameters(),
+        [](Real x, Real y) { return Real(eps_x_field(x, y)); }));
+    mg.set_reaction(constant_scalar_field_provider(Real(KAPPA)));
   } else {
-    mg.set_epsilon_anisotropic([](Real x, Real y) { return Real(eps_x_field(x, y)); },
-                               [](Real x, Real y) { return Real(eps_y_field(x, y)); });
+    mg.set_epsilon_anisotropic(ScalarFieldProvider2D::trusted_extension(
+                                   {"pops.test.gpu.epsilon-x", 1}, exact_provider_parameters(),
+                                   [](Real x, Real y) { return Real(eps_x_field(x, y)); }),
+                               ScalarFieldProvider2D::trusted_extension(
+                                   {"pops.test.gpu.epsilon-y", 1}, exact_provider_parameters(),
+                                   [](Real x, Real y) { return Real(eps_y_field(x, y)); }));
   }
 
   // Remplissage du second membre f : ecriture HOTE en memoire unifiee (comme phase3_poisson.cpp).

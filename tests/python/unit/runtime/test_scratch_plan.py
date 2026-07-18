@@ -97,7 +97,7 @@ def _krylov(name="krylov_demo", *, preconditioner=None):
     return P
 
 
-def _nested_subcycled_krylov(name="nested_subcycled_krylov"):
+def _nested_subcycled_krylov(name="nested_subcycled_krylov", *, preconditioner=None):
     """One solve two logical-clock body blocks below the Program's top-level value list."""
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     U = temporal.n
@@ -125,7 +125,7 @@ def _nested_subcycled_krylov(name="nested_subcycled_krylov"):
         def micro_tick(inner, micro_value):
             return inner.solve(
                 LinearProblem(A, micro_value, nullspace=None),
-                solver=GMRES(max_iter=10, restart=3),
+                solver=GMRES(max_iter=10, restart=3, preconditioner=preconditioner),
             ).consume(action=FailRun())
 
         advanced = builder.subcycle(
@@ -334,7 +334,7 @@ def test_persistent_multigrid_buffers():
     chk(len(mg) == 3, "3 field solves -> 3 multigrid persistent buffers")
     chk(plan.conservative is True,
         "the plan is conservative while topology-dependent multigrid buffers remain")
-    chk(any("multigrid" in n.lower() and "topology-dependent" in n.lower()
+    chk(any("geometric multigrid" in n.lower() and "conservative" in n.lower()
             for n in plan.notes),
         "a note scopes the remaining uncertainty to the multigrid hierarchy")
 
@@ -348,53 +348,68 @@ def test_persistent_krylov_buffers():
     operators = [p for p in plan.persistent if p["kind"] == "matrix_free_operator"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
     chk(len(operators) == 1, "one reusable matrix-free operator -> one persistent entry")
-    chk(krylov[0]["workspace_buffers"] == 6,
-        "unpreconditioned GMRES(3) owns restart+3 persistent workspace fields")
+    chk(krylov[0]["workspace_buffers"] is None
+        and krylov[0]["workspace_buffers_min"] == 1,
+        "Python exposes only the universal native-workspace lower bound")
     chk(krylov[0]["prepared_problem_buffers"] == 2,
         "the prepared affine problem owns zero and A(0)")
     chk(krylov[0]["prepared_preconditioner_buffers"] == 0,
         "the identity preconditioner owns no affine-linearization fields")
-    chk(krylov[0]["workspace_scalar_values"] == 25,
-        "GMRES(3) reports its Hessenberg/rotation/solution scalar storage exactly")
-    chk(krylov[0]["collective_values"] == 4,
-        "GMRES(3) reports its persistent batched-reduction payload exactly")
+    chk(krylov[0]["workspace_scalar_values"] is None
+        and krylov[0]["collective_values"] is None,
+        "provider-owned scalar and collective storage is not guessed in Python")
     chk(krylov[0]["solution_buffers"] == 1,
         "the published persistent solution is counted separately")
     chk(operators[0]["apply_scratch_buffers"] == 1
         and operators[0]["apply_accumulator_buffers"] == 1,
         "the authored Laplacian scratch and generated apply accumulator are counted")
-    chk(krylov[0]["prepared_core_buffers"] == 8,
-        "workspace plus prepared A(0)/zero is an exact native sub-footprint")
-    chk(krylov[0]["buffers"] == krylov[0]["buffers_max"] == 9
+    chk(krylov[0]["prepared_core_buffers"] is None
+        and krylov[0]["prepared_core_buffers_min"] == 3,
+        "the prepared core reports its structural lower bound")
+    chk(krylov[0]["buffers"] == 4 and krylov[0]["buffers_max"] is None
         and operators[0]["buffers"] == operators[0]["buffers_max"] == 2
-        and krylov[0]["buffers"] + operators[0]["buffers"] == 11,
-        "the ordinary GMRES solve and operator owners total eleven exact fields")
+        and krylov[0]["buffers"] + operators[0]["buffers"] == 6,
+        "the solve and operator owners expose a six-field structural lower bound")
+    chk(krylov[0]["exact"] is False,
+        "the native method provider remains the sole exact workspace authority")
     chk(krylov[0]["per_materialized_level"] is True,
         "AMR multiplicity is explicit: one complete bundle per materialized level")
     chk(plan.conservative is True,
-        "the exact Krylov entry does not hide this Program's separate conservative MG hierarchy")
+        "the plan exposes both provider-owned Krylov and topology-dependent MG uncertainty")
 
     from pops.solvers import preconditioners
     prepared = build_scratch_plan(
         _krylov("preconditioned_krylov", preconditioner=preconditioners.GeometricMG()))
     prepared_krylov = [p for p in prepared.persistent if p["kind"] == "krylov"][0]
+    prepared_resources = [
+        p for p in prepared.persistent if p["kind"] == "multigrid_preconditioner"
+    ]
     prepared_operator = [
         p for p in prepared.persistent if p["kind"] == "matrix_free_operator"][0]
-    chk(prepared_krylov["workspace_buffers"] == 7,
-        "preconditioned GMRES(3) owns its restart+4 transformed-vector workspace")
+    chk(prepared_krylov["workspace_buffers"] is None
+        and prepared_krylov["workspace_buffers_min"] == 1,
+        "preconditioning does not make Python a workspace authority")
     chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
         "an affine prepared preconditioner owns zero and M_raw(0)")
-    chk(prepared_krylov["workspace_scalar_values"] == 25
-        and prepared_krylov["collective_values"] == 4,
-        "preconditioning does not duplicate GMRES scalar/collective storage")
-    chk(prepared_krylov["prepared_core_buffers"] == 11,
-        "the prepared preconditioned native core sub-footprint is exact")
-    chk(prepared_krylov["buffers"] == prepared_krylov["buffers_max"] == 12
+    chk(prepared_krylov["workspace_scalar_values"] is None
+        and prepared_krylov["collective_values"] is None,
+        "native scalar and collective storage remains provider-owned")
+    chk(prepared_krylov["prepared_core_buffers"] is None
+        and prepared_krylov["prepared_core_buffers_min"] == 5,
+        "the preconditioned core exposes its five-field structural lower bound")
+    chk(prepared_krylov["buffers"] == 6
+        and prepared_krylov["buffers_max"] is None
         and prepared_operator["buffers"] == prepared_operator["buffers_max"] == 2
-        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 14,
-        "solve and shared operator owners total fourteen generated fields")
-    chk(prepared_krylov["exact"] is True,
-        "the per-bundle fields are exact; the separate MG hierarchy entry remains conservative")
+        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 8,
+        "solve and shared operator owners expose an eight-field lower bound")
+    chk(prepared_krylov["exact"] is False,
+        "the exact workspace is computed by the native provider at materialization")
+    chk(
+        len(prepared_resources) == 1
+        and prepared_resources[0]["buffers"] == 1
+        and prepared_resources[0]["exact"] is False,
+        "the provider contract contributes its one topology-dependent MG resource",
+    )
 
 
 def test_persistent_krylov_buffers_descend_nested_subcycles_once():
@@ -410,10 +425,29 @@ def test_persistent_krylov_buffers_descend_nested_subcycles_once():
         "recursive subcycle traversal reports the nested solve exactly once")
     chk(len(operators) == 1,
         "the top-level matrix-free operator remains one shared allocation owner")
-    chk(krylov[0]["workspace_buffers"] == 6 and krylov[0]["buffers"] == 9,
-        "the nested GMRES(3) keeps its exact solution/problem/workspace footprint")
+    chk(krylov[0]["workspace_buffers"] is None
+        and krylov[0]["workspace_buffers_min"] == 1
+        and krylov[0]["buffers"] == 4,
+        "the nested solve keeps the same provider-owned workspace lower bound")
     chk(krylov[0]["operator_id"] == operators[0]["operator_id"],
         "the nested solve references the separately counted shared operator owner")
+
+
+def test_nested_preconditioner_provider_contributes_its_native_header_once():
+    """Provider headers are planned from recursive IR, not a top-level scheme-name branch."""
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.solvers import preconditioners
+
+    source = emit_cpp_program(
+        _nested_subcycled_krylov(
+            "nested_preconditioned_krylov",
+            preconditioner=preconditioners.GeometricMG(),
+        )
+    )
+    chk(
+        source.count("#include <pops/runtime/program/coeff_elliptic_ops.hpp>") == 1,
+        "the nested provider's contract contributes one deduplicated native include",
+    )
 
 
 def test_persistent_krylov_buffers_descend_every_structured_region_once():

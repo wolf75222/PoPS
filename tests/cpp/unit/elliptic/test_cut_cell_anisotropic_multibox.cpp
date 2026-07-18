@@ -37,7 +37,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace pops;
@@ -50,16 +49,15 @@ static constexpr double kEx = 1.5, kEy = 0.7;  // permittivite anisotrope consta
 static GeometricMG make_mg(const Geometry& geom, const BoxArray& ba) {
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  std::function<Real(Real, Real)> ls = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) - kR;
-  };
-  std::function<bool(Real, Real)> active = [](Real x, Real y) {
-    return std::hypot(x - kCx, y - kCy) < kR;
-  };
+  LevelSetProvider2D level_set = LevelSetProvider2D::trusted_extension(
+      {"pops.test.level-set.circle", 1}, exact_provider_parameters(kCx, kCy, kR),
+      [](Real x, Real y) { return std::hypot(x - kCx, y - kCy) - kR; });
+  ActiveRegionProvider2D active = active_region_from_level_set(level_set);
   // (geom, ba, bc, active, replicated, min_coarse, nu1, nu2, nbottom, cut_cell, levelset)
-  GeometricMG mg(geom, ba, bc, active, false, 2, 2, 2, 50, /*cut_cell=*/true, ls);
-  mg.set_epsilon_anisotropic([](Real, Real) { return Real(kEx); },
-                             [](Real, Real) { return Real(kEy); });
+  GeometricMG mg(geom, ba, bc, active, FieldDistribution::Distributed, 2, 2, 2, 50,
+                 /*cut_cell=*/true, level_set);
+  mg.set_epsilon_anisotropic(constant_scalar_field_provider(Real(kEx)),
+                             constant_scalar_field_provider(Real(kEy)));
   return mg;
 }
 

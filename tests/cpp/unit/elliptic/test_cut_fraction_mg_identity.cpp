@@ -24,15 +24,14 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace pops;
 static constexpr double kCx = 0.5, kCy = 0.5, kR = 0.4;
 
 // Oracle : ancienne formule inline (lambda 'cut' + 2/(axm*(axm+axp)) ...) reproduite a l'identique.
-static void ref_coef(Real lc_x, Real lc_y, Real dx, Real dy,
-                     const std::function<Real(Real, Real)>& ls, Real out[5]) {
+static void ref_coef(Real lc_x, Real lc_y, Real dx, Real dy, const LevelSetProvider2D& level_set,
+                     Real out[5]) {
   auto cut = [](Real lc, Real ln, Real h) -> Real {
     if (ln < Real(0))
       return h;
@@ -43,11 +42,11 @@ static void ref_coef(Real lc_x, Real lc_y, Real dx, Real dy,
       th = Real(1);
     return th * h;
   };
-  const Real lc = ls(lc_x, lc_y);
-  const Real axm = cut(lc, ls(lc_x - dx, lc_y), dx);
-  const Real axp = cut(lc, ls(lc_x + dx, lc_y), dx);
-  const Real aym = cut(lc, ls(lc_x, lc_y - dy), dy);
-  const Real ayp = cut(lc, ls(lc_x, lc_y + dy), dy);
+  const Real lc = level_set(lc_x, lc_y);
+  const Real axm = cut(lc, level_set(lc_x - dx, lc_y), dx);
+  const Real axp = cut(lc, level_set(lc_x + dx, lc_y), dx);
+  const Real aym = cut(lc, level_set(lc_x, lc_y - dy), dy);
+  const Real ayp = cut(lc, level_set(lc_x, lc_y + dy), dy);
   out[0] = Real(2) / (axm * (axm + axp));
   out[1] = Real(2) / (axp * (axm + axp));
   out[2] = Real(2) / (aym * (aym + ayp));
@@ -68,16 +67,15 @@ class CutFractionMgIdentity : public ::testing::Test {
     BoxArray ba(std::vector<Box2D>{dom});
     BCRec bc;
     bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-    std::function<Real(Real, Real)> ls = [](Real x, Real y) {
-      return std::hypot(x - kCx, y - kCy) - kR;
-    };
-    std::function<bool(Real, Real)> active = [](Real x, Real y) {
-      return std::hypot(x - kCx, y - kCy) < kR;
-    };
+    LevelSetProvider2D level_set = LevelSetProvider2D::trusted_extension(
+        {"pops.test.level-set.circle", 1}, exact_provider_parameters(kCx, kCy, kR),
+        [](Real x, Real y) { return std::hypot(x - kCx, y - kCy) - kR; });
+    ActiveRegionProvider2D active = active_region_from_level_set(level_set);
     geom_ = new Geometry(geom);
     // (geom, ba, bc, active, replicated, min_coarse, nu1, nu2, nbottom, cut_cell=true, levelset)
-    mg_ = new GeometricMG(geom, ba, bc, active, false, 2, 2, 2, 50, true, ls);
-    ls_ = new std::function<Real(Real, Real)>(ls);
+    mg_ = new GeometricMG(geom, ba, bc, active, FieldDistribution::Distributed, 2, 2, 2, 50, true,
+                          level_set);
+    level_set_ = new LevelSetProvider2D(level_set);
   }
 
   static void TearDownTestSuite() {
@@ -85,19 +83,19 @@ class CutFractionMgIdentity : public ::testing::Test {
     mg_ = nullptr;
     delete geom_;
     geom_ = nullptr;
-    delete ls_;
-    ls_ = nullptr;
+    delete level_set_;
+    level_set_ = nullptr;
   }
 
   static constexpr int kNc = 64;
   static GeometricMG* mg_;
   static Geometry* geom_;
-  static std::function<Real(Real, Real)>* ls_;
+  static LevelSetProvider2D* level_set_;
 };
 
 GeometricMG* CutFractionMgIdentity::mg_ = nullptr;
 Geometry* CutFractionMgIdentity::geom_ = nullptr;
-std::function<Real(Real, Real)>* CutFractionMgIdentity::ls_ = nullptr;
+LevelSetProvider2D* CutFractionMgIdentity::level_set_ = nullptr;
 
 }  // namespace
 
@@ -105,7 +103,7 @@ std::function<Real(Real, Real)>* CutFractionMgIdentity::ls_ = nullptr;
 TEST_F(CutFractionMgIdentity, coef_is_byte_identical_to_inline_reference) {
   GeometricMG& mg = *mg_;
   const Geometry& geom = *geom_;
-  const std::function<Real(Real, Real)>& ls = *ls_;
+  const LevelSetProvider2D& level_set = *level_set_;
 
   const MultiFab* coef = mg.op_coef();
   ASSERT_TRUE(coef != nullptr) << "op_coef_disponible";
@@ -129,7 +127,7 @@ TEST_F(CutFractionMgIdentity, coef_is_byte_identical_to_inline_reference) {
       }
       ++active_cnt;
       Real ref[5];
-      ref_coef(geom.x_cell(i), geom.y_cell(j), dx, dy, ls, ref);
+      ref_coef(geom.x_cell(i), geom.y_cell(j), dx, dy, level_set, ref);
       for (int k = 0; k < 5; ++k) {
         if (c(i, j, k) != ref[k]) {  // EXACT : operator!=, aucune tolerance
           ++mismatches;

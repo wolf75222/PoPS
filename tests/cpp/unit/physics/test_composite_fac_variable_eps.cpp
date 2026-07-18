@@ -84,7 +84,7 @@ static int pops_run_test_composite_fac_variable_eps(int argc, char** argv) {
   fill(eps_c, geom_c, eps_xy);
   device_fence();
   fill_ghosts(eps_c, dom, BCRec{});  // ghosts eps (Foextrap/periodic ; bord physique gradient-nul)
-  GeometricMG mg0(geom_c, ba_c, bc, {}, /*replicated=*/true);
+  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
   mg0.set_epsilon(eps_c);
   fill(mg0.rhs(), geom_c, f_rhs);
   mg0.phi().set_val(0.0);

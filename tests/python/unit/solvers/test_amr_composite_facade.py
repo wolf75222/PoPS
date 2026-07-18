@@ -5,10 +5,7 @@ import pytest
 
 import pops.lib.time as libtime
 from pops.codegen._compiled_artifact import CompiledPlanRecord
-from pops.codegen.field_install import (
-    ResolvedFieldInstallPlan,
-    _NativeFieldSolveCapabilities,
-)
+from pops.codegen.field_install import ResolvedFieldInstallPlan
 from pops.codegen.lowering_coverage import LoweringRejection
 from pops.fields.discretization import (
     CompositeHierarchySolve,
@@ -16,6 +13,7 @@ from pops.fields.discretization import (
     InferHierarchyFromLayout,
     LevelByLevelSolve,
 )
+from pops.fields.solve import ResolvedHierarchyPolicy
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._system_unified_install import _SystemUnifiedInstall
 from pops.solvers.elliptic import GeometricMG
@@ -42,15 +40,36 @@ _FAC_OVERRIDES = {
 
 
 class _UnsupportedBuiltin(GeometricMG):
-    def lower_field_solver(self, *, target, layout):
-        lowered = super().lower_field_solver(target=target, layout=layout)
-        lowered["native_solver"] = "uninstalled_future_solver"
-        return lowered
+    def _prepared_field_solver(self):
+        return object(), {}
 
 
-class _UnknownHierarchyPolicy(FieldHierarchyPolicy):
+class _ExternalHierarchyPolicy(FieldHierarchyPolicy):
     def options(self):
-        return {"policy": "future_hierarchy"}
+        return self.resolved_authority().authority()
+
+    def resolved_authority(self):
+        return ResolvedHierarchyPolicy(
+            "tests.field-hierarchy.overlapping-schwarz",
+            7,
+            "tests.field-hierarchy.overlapping-schwarz.options@2",
+            {"overlap": 3},
+        )
+
+
+class _HierarchyCapabilities:
+    """Test-owned open policy-binding context, independent of field lowering."""
+
+    def __init__(self, inferred):
+        self.inferred = inferred
+
+    def inferred_hierarchy_policy(self):
+        return self.inferred
+
+    def bind_hierarchy_policy(self, policy):
+        if not isinstance(policy, ResolvedHierarchyPolicy):
+            raise TypeError("foreign hierarchy authority")
+        return policy
 
 
 class _NativeFieldPlanProbe:
@@ -59,6 +78,9 @@ class _NativeFieldPlanProbe:
 
     def set_field_solver_plan(self, *args):
         self.field_solver_args = args
+
+    def register_configured_field_solver_provider(self, *_args):
+        return "pops.test.exact-provider-identity"
 
     def __getattr__(self, _name):
         return lambda *_args, **_kwargs: None
@@ -99,11 +121,9 @@ def _only_field_plan(container):
 
 
 def test_geometric_mg_lowering_carries_only_typed_fac_backend_overrides() -> None:
-    default = GeometricMG().lower_field_solver(target="amr_system", layout=None)
-    assert default["fac_options"] is None
-    assert default["mg_options"] == {
-        "schema_version": 1,
-        "kind": "geometric_mg_options",
+    _provider, default = GeometricMG()._prepared_field_solver()
+    assert default["fac"] is None
+    assert default["mg"] == {
         "rel_tol": 1.0e-8,
         "abs_tol": 0,
         "max_cycles": 50,
@@ -124,12 +144,19 @@ def test_geometric_mg_lowering_carries_only_typed_fac_backend_overrides() -> Non
         coarse_cycles=19,
         verbose=True,
     ))
-    lowered = solver.lower_field_solver(target="amr_system", layout=None)
-    assert lowered["fac_options"] == _FAC_OVERRIDES
-    assert lowered["mg_options"] == default["mg_options"]
+    _provider, lowered = solver._prepared_field_solver()
+    assert lowered["fac"] == {
+        key: value for key, value in _FAC_OVERRIDES.items()
+        if key not in {"schema_version", "kind"}
+    }
+    assert lowered["mg"] == default["mg"]
     assert "hierarchy" not in lowered
     assert solver.lower().extra["fac_options"] == _FAC_OVERRIDES
-    assert solver.lower().extra["mg_options"] == default["mg_options"]
+    assert solver.lower().extra["mg_options"] == {
+        "schema_version": 1,
+        "kind": "geometric_mg_options",
+        **default["mg"],
+    }
 
 
 def test_public_amr_resolve_and_compile_record_preserve_fac_options_and_identity() -> None:
@@ -148,71 +175,92 @@ def test_public_amr_resolve_and_compile_record_preserve_fac_options_and_identity
     default_field = _only_field_plan(default)
     configured_field = _only_field_plan(configured)
     assert default.target == configured.target == "amr_system"
-    assert default_field.native_options["hierarchy"] == "composite"
-    assert configured_field.native_options["hierarchy"] == "composite"
-    assert default_field.native_options["fac_options"] is None
-    assert configured_field.native_options["fac_options"] == _FAC_OVERRIDES
-    assert configured_field.native_options["mg_options"]["kind"] == "geometric_mg_options"
-    assert "mg_options" not in configured_field.native_options["solver_capabilities"]
-    assert "fac_options" not in configured_field.native_options["solver_capabilities"]
+    assert default_field.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    assert configured_field.native_options["hierarchy_policy"] == (
+        default_field.native_options["hierarchy_policy"]
+    )
+    from pops.fields._prepared_field_solver_registry import (
+        prepared_field_solver_binding_from_data,
+    )
+
+    default_binding = prepared_field_solver_binding_from_data(
+        default_field.native_options["solver_provider"]
+    )
+    configured_binding = prepared_field_solver_binding_from_data(
+        configured_field.native_options["solver_provider"]
+    )
+    assert default_binding.options["fac"] is None
+    assert configured_binding.options["fac"] is not None
+    configured_native = configured_binding.resolution.native_contract["options"]
+    assert configured_native["fac.max_iters"] == 11
+    assert configured_native["fac.fine_sweeps"] == 17
+    assert configured_native["fac.rel_tol"] == 2.0e-7
+    assert configured_native["mg.rel_tol"] == 1.0e-8
     assert default_field.identity != configured_field.identity
 
     # Exercise the detached-record constructor used inside pops.compile. This unit assertion covers
     # identity-preserving detachment only; the integration test crosses the real native install seam.
     default_compiled = CompiledPlanRecord.from_resolved(default)
     configured_compiled = CompiledPlanRecord.from_resolved(configured)
-    assert _only_field_plan(default_compiled).native_options["fac_options"] is None
-    assert _only_field_plan(
-        configured_compiled).native_options["fac_options"] == _FAC_OVERRIDES
+    default_compiled_binding = prepared_field_solver_binding_from_data(
+        _only_field_plan(default_compiled).native_options["solver_provider"]
+    )
+    configured_compiled_binding = prepared_field_solver_binding_from_data(
+        _only_field_plan(configured_compiled).native_options["solver_provider"]
+    )
+    assert default_compiled_binding.options["fac"] is None
+    assert configured_compiled_binding.options["fac"] is not None
     assert default_compiled.contract_identity != configured_compiled.contract_identity
 
 
-def test_resolve_refuses_a_builtin_route_the_amr_target_cannot_install() -> None:
-    with pytest.raises(LoweringRejection, match="can install only"):
+def test_resolve_refuses_an_unauthenticated_provider_binding() -> None:
+    with pytest.raises(LoweringRejection, match="invalid prepared field solver"):
         _resolve(_UnsupportedBuiltin())
 
 
-def test_hierarchy_policy_uses_capability_protocol_and_refuses_unknown_modes() -> None:
-    amr = _NativeFieldSolveCapabilities("composite", ("composite",))
-    uniform = _NativeFieldSolveCapabilities("level_local", ("level_local",))
+def test_hierarchy_policy_uses_an_open_versioned_authority_protocol() -> None:
+    composite = CompositeHierarchySolve().resolved_authority()
+    level_local = LevelByLevelSolve().resolved_authority()
+    amr = _HierarchyCapabilities(composite)
+    uniform = _HierarchyCapabilities(level_local)
 
-    assert InferHierarchyFromLayout().resolve(amr).mode == "composite"
-    assert CompositeHierarchySolve().resolve(amr).mode == "composite"
-    assert InferHierarchyFromLayout().resolve(uniform).mode == "level_local"
-    with pytest.raises(ValueError, match="unsupported"):
-        LevelByLevelSolve().resolve(amr)
-    with pytest.raises(ValueError, match="unknown"):
-        _UnknownHierarchyPolicy().resolve(amr)
+    assert InferHierarchyFromLayout().resolve(amr).authority() == composite.authority()
+    assert CompositeHierarchySolve().resolve(amr).authority() == composite.authority()
+    assert InferHierarchyFromLayout().resolve(uniform).authority() == level_local.authority()
+    external = _ExternalHierarchyPolicy().resolve(amr)
+    assert external.authority() == {
+        "policy_id": "tests.field-hierarchy.overlapping-schwarz",
+        "interface_version": 7,
+        "option_schema": "tests.field-hierarchy.overlapping-schwarz.options@2",
+        "options": {"overlap": 3},
+    }
 
 
-def test_resolved_plan_reasserts_closed_mg_schema_and_fac_backend() -> None:
+def test_resolved_plan_reasserts_closed_provider_schema_and_hierarchy() -> None:
     plan = _only_field_plan(_resolve(GeometricMG(fac=CompositeFAC(max_iters=11))))
 
     with pytest.raises(TypeError):
-        plan.native_options["mg_options"]["max_cycles"] = 99
-    with pytest.raises(TypeError):
-        plan.native_options["fac_options"]["max_iters"] = 99
+        plan.native_options["solver_provider"]["options"]["mg"]["max_cycles"] = 99
     assert isinstance(plan.native_options["provider_pack"], tuple)
     detached = plan.to_data()["native_options"]
     assert isinstance(detached, dict)
-    assert isinstance(detached["mg_options"], dict)
-    assert isinstance(detached["fac_options"], dict)
+    assert isinstance(detached["solver_provider"], dict)
     assert isinstance(detached["provider_pack"], list)
 
-    bad_options = dict(plan.native_options)
-    bad_mg = dict(bad_options["mg_options"])
-    bad_mg["schema_version"] = True
-    bad_options["mg_options"] = bad_mg
-    with pytest.raises(TypeError, match="closed schema-v1"):
+    bad_options = plan.native_install_data()
+    bad_options["solver_provider"]["provider"]["resolver_id"] = "pops.test.unregistered"
+    with pytest.raises(NotImplementedError, match="not registered"):
         ResolvedFieldInstallPlan(
             plan.name, plan.operator, plan.discretization, plan.target,
             plan.rhs_providers, bad_options, plan.coverage, plan.nonlinear_provider,
             plan.identity,
         )
 
-    bad_options = dict(plan.native_options)
-    bad_options["hierarchy"] = "level_local"
-    with pytest.raises(ValueError, match="composite AMR hierarchy"):
+    bad_options = plan.native_install_data()
+    bad_options["hierarchy_policy"] = LevelByLevelSolve().resolved_authority().authority()
+    with pytest.raises(ValueError, match="lowering native contract"):
         ResolvedFieldInstallPlan(
             plan.name, plan.operator, plan.discretization, plan.target,
             plan.rhs_providers, bad_options, plan.coverage, plan.nonlinear_provider,
@@ -235,6 +283,14 @@ def test_native_install_receives_exact_resolved_plan_identity(probe_type, target
         plan.identity.token,
         plan.native_options["provider_identity_text"],
     )
+    if target == "amr_system":
+        hierarchy = plan.native_options["hierarchy_policy"]
+        assert probe._s.field_solver_args[11:15] == (
+            hierarchy["policy_id"],
+            hierarchy["interface_version"],
+            hierarchy["option_schema"],
+            hierarchy["options"],
+        )
 
 
 @pytest.mark.parametrize("install_type", (_AmrSystemInstall, _SystemUnifiedInstall))

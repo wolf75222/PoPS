@@ -471,6 +471,9 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+# The generic hierarchy tensor-provider contract is owned by AmrSystem at runtime.  Keep the test in
+# the standard inventory, but link the AMR facade implementation that supplies its provider registry.
+target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
@@ -694,6 +697,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
   set(POPS_MPI_RANKS_test_generic_krylov 1 2 4)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
+  set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
@@ -777,6 +781,7 @@ if(POPS_HAS_MPI)
   set(POPS_CPP_MPI_VARIANT_TESTS
     test_generic_krylov
     test_pure_field_algebra_extreme_dot
+    test_geometric_mg
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
@@ -803,7 +808,9 @@ if(POPS_HAS_MPI)
     "GenericKrylov.prepared_physical_boundary_offsets_use_the_effective_rhs_and_a_linear_preconditioner:"
     "GenericKrylov.prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms:"
     "GenericKrylov.snapshot_mutation_is_refused_and_workspace_is_reused:"
-    "GenericKrylov.rank_local_snapshot_drift_is_refused_collectively_at_all_safe_boundaries"
+    "GenericKrylov.rank_local_snapshot_drift_is_refused_collectively_at_all_safe_boundaries:"
+    "test_krylov_method_provider.*:"
+    "test_vector_distribution_provider.*"
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
@@ -812,6 +819,10 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "${POPS_GENERIC_KRYLOV_MPI_FILTER}")
+      elseif(_test STREQUAL "test_geometric_mg")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER "GeometricMgCollectiveContract.*")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

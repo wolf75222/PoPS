@@ -20,7 +20,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace pops;
@@ -43,9 +42,9 @@ static GeometricMG make_mg(int nc) {
   Box2D dom = Box2D::from_extents(nc, nc);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba(std::vector<Box2D>{dom});
-  std::function<bool(Real, Real)> active = [=](Real x, Real y) {
-    return std::hypot(x - cx, y - cy) < Rwall;
-  };
+  ActiveRegionProvider2D active = ActiveRegionProvider2D::trusted_extension(
+      {"pops.test.active-region.circle", 1}, exact_provider_parameters(cx, cy, Rwall),
+      [=](Real x, Real y) { return std::hypot(x - cx, y - cy) < Rwall; });
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
   return GeometricMG(geom, ba, bc, active);

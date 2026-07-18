@@ -217,6 +217,21 @@ PYTHON_SMOKE_TESTS = (
     "tests/python/unit/runtime/test_capabilities.py",
 )
 
+# Native prepared-provider protocol headers are consumed through generated extension modules, not
+# Python imports.  Their three external-provider E2Es are therefore an explicit protocol closure:
+# import-graph selection alone cannot discover this cross-language dependency.
+PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS = (
+    "tests/python/integration/native_loader/test_prepared_krylov_method_component.py",
+    "tests/python/integration/native_loader/test_prepared_nullspace_component.py",
+    "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
+)
+PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES = (
+    "include/pops/numerics/elliptic/",
+    "include/pops/core/identity/prepared_provider",
+    "include/pops/mesh/layout/field_distribution.hpp",
+    "include/pops/mesh/storage/field_replica_consensus.hpp",
+)
+
 
 def normalize(path: str) -> str:
     cleaned = path.strip().replace("\\", "/")
@@ -1346,6 +1361,20 @@ def compute_python_selection(changed_files: str, force_all: bool) -> PythonSelec
             if label_hits:
                 selected.update(label_hits)
                 why.add("manifest-labels")
+
+        if not full and any(
+            startswith_any(path, PYTHON_ELLIPTIC_NATIVE_PROVIDER_PREFIXES)
+            for path in changed
+        ):
+            protocol_hits = {
+                test for test in PYTHON_ELLIPTIC_NATIVE_PROVIDER_TESTS
+                if test in all_test_set
+            }
+            selected.update(protocol_hits)
+            if protocol_hits:
+                why.add("elliptic-native-provider-contract")
+            for test in protocol_hits:
+                add_reason(reasons, test, "elliptic-native-provider-contract")
 
         if not full and selected:
             _apply_cross_test_closure(selected, reasons)

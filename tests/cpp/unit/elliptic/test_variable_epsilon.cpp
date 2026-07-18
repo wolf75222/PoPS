@@ -35,6 +35,11 @@ static double phi_exact(double x, double y) {
 static double eps_field(double x, double /*y*/) {
   return 1.0 + 0.5 * x;
 }
+static ScalarFieldProvider2D epsilon_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.variable-epsilon", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_field(x, y)); });
+}
 static double rhs_exact(double x, double y) {
   const double s = std::sin(kPi * x) * std::sin(kPi * y);
   return -(1.0 + 0.5 * x) * 2.0 * kPi * kPi * s + 0.5 * kPi * std::cos(kPi * x) * std::sin(kPi * y);
@@ -50,7 +55,7 @@ static double solve_mms(int n) {
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;  // phi=0 au bord (exact)
 
   GeometricMG mg(geom, ba, bc);
-  mg.set_epsilon([](Real x, Real y) { return Real(eps_field(x, y)); });
+  mg.set_epsilon(epsilon_provider());
 
   Array4 af = mg.rhs().fab(0).array();
   for_each_cell(
@@ -98,7 +103,7 @@ static double uniform_eps_residual_gap(int n) {
   const Real r_const = mg_const.current_residual();
 
   GeometricMG mg_eps(geom, ba, bc);
-  mg_eps.set_epsilon([](Real, Real) { return Real(1); });  // eps uniforme=1
+  mg_eps.set_epsilon(constant_scalar_field_provider(Real(1)));  // eps uniforme=1
   fill_phi_rhs(mg_eps);
   const Real r_eps = mg_eps.current_residual();
 

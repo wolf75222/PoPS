@@ -99,7 +99,7 @@ TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
   fill_f(fac.rhs_fine(), geom_f);
 
   // coarse-only reference.
-  GeometricMG mg0(geom_c, ba_c, bc, {}, /*replicated=*/true);
+  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
   fill_f(mg0.rhs(), geom_c);
   mg0.phi().set_val(0.0);
   mg0.solve(1e-12, 100);

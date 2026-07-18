@@ -144,19 +144,19 @@ def test_gmres_codegen(t):
     for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_prepared_linear",
                  "pops::PreparedAffineLinearProblem",
                  "pops::PreparedLinearPreconditioner::identity()",
-                 "pops::OperatorApplyPurity::kAuthenticatedProgram"):
+                 "ctx.authenticated_program_apply_token"):
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
 def test_gmres_restart_default_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=30))
-    assert "kGmres" in src and ", 30," in src and "ctx.solve_prepared_linear" in src, \
+    assert "pops::gmres_krylov_method(30)" in src and "ctx.solve_prepared_linear" in src, \
         "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=12))
-    assert "kGmres" in src and ", 12," in src and "ctx.solve_prepared_linear" in src, \
+    assert "pops::gmres_krylov_method(12)" in src and "ctx.solve_prepared_linear" in src, \
         "an overridden restart must lower\n%s" % src
 
 
@@ -178,7 +178,6 @@ def test_codegen_rejects_tampered_krylov_footprints(t):
     mutations = (
         ("components", True, "components"),
         ("input_ghosts", True, "input_ghosts"),
-        ("restart", 12, "restart"),
         ("preconditioned", True, "preconditioner"),
     )
     for key, bad_value, message_fragment in mutations:
@@ -219,7 +218,7 @@ def test_arbitrary_stencil_depth_is_authenticated_and_lowered(t):
     assert solve.attrs["krylov_footprint"]["input_ghosts"] == 3
     source = emit_cpp_program(program)
     assert "ctx.alloc_scalar_field(1, 3)" in source
-    assert "const pops::KrylovFootprint" in source and "{1, 3, 0, false}" in source
+    assert "const pops::KrylovFootprint" in source and "{1, 3, false}" in source
 
 
 def test_stencil_depth_validation_and_inferred_minimum(t):
@@ -318,7 +317,8 @@ def test_gmres_restart_validation(t):
         solver=_krylov("gmres", max_iter=10, restart=51),
     ).consume(action=FailRun())
     token = next(value for value in P._values if value.op == "solve_linear")
-    assert token.attrs["restart"] == 51, "the exact restart is stored on the IR node"
+    assert token.attrs["method_options"] == {"restart": 51}, \
+        "the exact provider-owned restart is stored in the IR"
 
 
 def test_restart_rejected_for_non_gmres(t):

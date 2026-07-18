@@ -143,7 +143,7 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
   fill_f(fac.rhs_level(2), geom_2);
 
   // coarse-only reference (a single coarse solve).
-  GeometricMG mg0(geom_c, ba_c, bc, {}, /*replicated=*/true);
+  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
   fill_f(mg0.rhs(), geom_c);
   mg0.phi().set_val(0.0);
   mg0.solve(1e-12, 100);

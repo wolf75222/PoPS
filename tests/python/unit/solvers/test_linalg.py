@@ -111,8 +111,9 @@ def test_linear_problem_delegates_to_program_with_prepared_solver():
         "at": point,
         "scope": scope,
         "properties": LinearOperatorProperties.general(),
-        "nullspace_contract": {"schema_version": 1, "kind": "none"},
-        "gauge_contract": {"schema_version": 1, "kind": "none"},
+        "nullspace_provider": problem.canonical_nullspace_provider(),
+        "nullspace_contract": problem.canonical_nullspace_contract(),
+        "gauge_contract": problem.canonical_gauge_contract(),
     }
 
 
@@ -122,7 +123,7 @@ def test_linear_problem_requires_one_explicit_nullspace_decision():
     with pytest.raises(ValueError, match="gauge must be None"):
         LinearProblem(
             object(), object(), nullspace=None, gauge=MeanValueGauge(0))
-    with pytest.raises(TypeError, match="ConstantNullspace"):
+    with pytest.raises(TypeError, match="prepared nullspace descriptor"):
         LinearProblem(object(), object(), nullspace=object())
     with pytest.raises(TypeError, match="MeanValueGauge"):
         LinearProblem(
@@ -138,8 +139,9 @@ def test_constant_nullspace_captures_one_immutable_mean_value_gauge_snapshot():
     before = problem.canonical_gauge_contract()
     gauge.value = 5
 
-    assert problem.canonical_nullspace_contract() == {
-        "schema_version": 1, "kind": "constant"}
+    assert problem.canonical_nullspace_contract()["contract"] == {
+        "basis": "constant-function", "basis_count": 1}
+    assert problem.canonical_nullspace_provider()["singular"] is True
     assert problem.canonical_gauge_contract() == before
     assert problem.canonical_gauge_contract() is not before
 

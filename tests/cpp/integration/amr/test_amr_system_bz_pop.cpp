@@ -3,7 +3,7 @@
 // PR #37 a rendu le canal aux extensible width-aware sur les chemins AMR : un bloc declarant
 // n_aux=4 dispose de la PLACE pour B_z a chaque niveau, mais B_z restait a 0 (sauf propagation
 // coarse->fine par coupler_inject_aux_mb). Ce test verifie le nouveau mecanisme : un B_z fourni
-// par l'utilisateur (std::function<Real(Real,Real)>, comme le bz_ du SystemAssembler mono-niveau)
+// par l'utilisateur (ScalarFieldProvider2D prepare, comme le bz_ du SystemAssembler mono-niveau)
 // est POSE sur la composante B_z (indice kAuxBaseComps) du canal aux partage de CHAQUE niveau,
 // echantillonne aux centres de cellule DU NIVEAU (chaque niveau a sa geometrie / dx).
 //
@@ -39,7 +39,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -87,6 +86,12 @@ Real bz_field(Real x, Real /*y*/) {
   return Real(1) + x;
 }
 
+ScalarFieldProvider2D bz_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.scalar-field.affine-2d", 1}, exact_provider_parameters(Real(1), Real(1), Real(0)),
+      bz_field);
+}
+
 // Lit la composante B_z (comp kAuxBaseComps) d'un MultiFab a la cellule (i,j) du fab 0.
 Real read_bz(const MultiFab& A, int i, int j) {
   return A.fab(0).const_array()(i, j, kAuxBaseComps);
@@ -121,7 +126,7 @@ class AmrSystemBzPopTest : public ::testing::Test {
   }
 
   // Fabrique : construit un coupleur frais (etats remis). bz_user vide => garde (E).
-  auto build(std::function<Real(Real, Real)> bz_user, bool use_setter, Real u0g) {
+  auto build(ScalarFieldProvider2D bz_user, bool use_setter, Real u0g) {
     const Geometry& geom = *geom_;
     const BoxArray& ba_coarse = *ba_coarse_;
     const DistributionMapping& dm = *dm_;
@@ -153,8 +158,8 @@ class AmrSystemBzPopTest : public ::testing::Test {
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
     auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
                                      Periodicity{true, true}, /*replicated_coarse=*/true,
-                                     PoissonCadence::OncePerStep, std::function<bool(Real, Real)>{},
-                                     use_setter ? std::function<Real(Real, Real)>{} : bz_user);
+                                     PoissonCadence::OncePerStep, {},
+                                     use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
     return sim;
@@ -179,7 +184,7 @@ BoxArray* AmrSystemBzPopTest::ba_fine_ = nullptr;
 TEST_F(AmrSystemBzPopTest, LevelwisePopulationAndSource) {
   const Geometry& geom = *geom_;
   const Box2D& fbox = *fbox_;
-  auto sim = build(bz_field, /*use_setter=*/false, /*u0g=*/Real(2));
+  auto sim = build(bz_provider(), /*use_setter=*/false, /*u0g=*/Real(2));
   EXPECT_EQ(sim->aux_ncomp(), 4) << "shared_aux_width_max_4";
 
   // grossier : B_z(i) = bz(x_cell_grossier(i)). Geometrie grossiere = geom.
@@ -240,7 +245,7 @@ TEST_F(AmrSystemBzPopTest, LevelwisePopulationAndSource) {
 TEST_F(AmrSystemBzPopTest, SetterMatchesConstructor) {
   const Geometry& geom = *geom_;
   const Box2D& fbox = *fbox_;
-  auto sim = build(bz_field, /*use_setter=*/true, /*u0g=*/Real(2));
+  auto sim = build(bz_provider(), /*use_setter=*/true, /*u0g=*/Real(2));
   const Geometry gf = geom.refine(2);
   EXPECT_LT(std::fabs(read_bz(sim->aux(0), 3, 3) - bz_field(geom.x_cell(3), 0)), Real(1e-12))
       << "set_bz_populates_coarse";

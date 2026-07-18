@@ -127,6 +127,14 @@ def _assert_options(actual, expected) -> None:
             assert observed == pytest.approx(value)
 
 
+def _option_family(configuration, prefix: str):
+    return {
+        name.removeprefix(prefix): value
+        for name, value in configuration["options"].items()
+        if name.startswith(prefix)
+    }
+
+
 @pytest.mark.parametrize(
     "solver",
     (GeometricMG(), GeometricMG(fac=CompositeFAC())),
@@ -137,10 +145,16 @@ def test_absent_or_empty_composite_fac_installs_native_fac_defaults(
 ) -> None:
     field_plan, configuration = _install_resolved_plan_on_native_carrier(solver)
 
-    assert field_plan.native_options["hierarchy"] == "composite"
+    assert field_plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
     assert configuration["solver"] == "geometric_mg"
-    assert configuration["hierarchy"] == "composite"
-    _assert_options(configuration["fac"], _FAC_DEFAULTS)
+    assert configuration["hierarchy_policy"] == field_plan.native_options["hierarchy_policy"]
+    assert (
+        configuration["option_schema_identity"]
+        == "pops.amr.field-solver-options.geometric-mg@1"
+    )
+    _assert_options(_option_family(configuration, "fac."), _FAC_DEFAULTS)
 
 
 def test_partial_fac_overrides_do_not_inherit_or_replace_geometric_mg_options() -> None:
@@ -155,7 +169,7 @@ def test_partial_fac_overrides_do_not_inherit_or_replace_geometric_mg_options() 
     )
     _field_plan, configuration = _install_resolved_plan_on_native_carrier(solver)
 
-    _assert_options(configuration["mg"], {
+    _assert_options(_option_family(configuration, "mg."), {
         "rel_tol": 6.0e-6,
         "abs_tol": 0.0,
         "max_cycles": 7,
@@ -165,7 +179,7 @@ def test_partial_fac_overrides_do_not_inherit_or_replace_geometric_mg_options() 
         "bottom_sweeps": 6,
         "coarse_threshold": 0,
     })
-    _assert_options(configuration["fac"], {
+    _assert_options(_option_family(configuration, "fac."), {
         **_FAC_DEFAULTS,
         "max_iters": 11,
         "abs_tol": 3.0e-12,
@@ -197,5 +211,9 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     provider, = simulation.inspect().to_dict()["instance"]["field_providers"]
     assert provider["provider_slot"] == slot
     assert provider["materialized"] is True
-    assert provider["solver_configuration"]["hierarchy"] == "composite"
-    _assert_options(provider["solver_configuration"]["fac"], _FAC_CONFIGURED)
+    assert provider["solver_configuration"]["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    _assert_options(
+        _option_family(provider["solver_configuration"], "fac."), _FAC_CONFIGURED
+    )

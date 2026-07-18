@@ -233,7 +233,7 @@ def test_multicomp_geometric_mg_preconditioner_is_rejected_before_codegen(t):
                 preconditioner=preconditioners.GeometricMG()),
         )
     except ValueError as exc:
-        assert "GeometricMG" in str(exc) and "scalar-only" in str(exc), str(exc)
+        assert "preconditioner 'geometric_mg'" in str(exc) and "scalar-only" in str(exc), str(exc)
     else:
         raise AssertionError(
             "scalar GeometricMG must not masquerade as a block preconditioner")

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 using namespace pops;
@@ -75,6 +76,26 @@ DotFields make_fields(int cell_count, int components = 1) {
   return fields;
 }
 
+DotFields make_replicated_fields(int cell_count, int components = 1) {
+  BoxArray boxes = dot_boxes(cell_count);
+  DistributionMapping mapping(std::vector<int>(static_cast<std::size_t>(boxes.size()), my_rank()));
+  DotFields fields{MultiFab(boxes, mapping, components, 0),
+                   MultiFab(boxes, mapping, components, 0)};
+  fields.left.set_val(Real(0));
+  fields.right.set_val(Real(0));
+  return fields;
+}
+
+DotFields make_rank_zero_owned_fields(int cell_count, int components = 1) {
+  BoxArray boxes = dot_boxes(cell_count);
+  DistributionMapping mapping(std::vector<int>(static_cast<std::size_t>(boxes.size()), 0));
+  DotFields fields{MultiFab(boxes, mapping, components, 0),
+                   MultiFab(boxes, mapping, components, 0)};
+  fields.left.set_val(Real(0));
+  fields.right.set_val(Real(0));
+  return fields;
+}
+
 void set_global_cell(MultiFab& field, int global, Real value, int component = 0) {
   const int local = field.local_index_of(global);
   if (local < 0)
@@ -114,6 +135,83 @@ TEST(test_pure_field_algebra_extreme_dot, CancelsProductsThatWouldOverflowBefore
 
   expect_close_to_one(PureFieldAlgebra::dot(fields.left, fields.right));
   expect_close_to_one(detail::PreparedFieldAlgebra::dot(fields.left, fields.right));
+}
+
+TEST(test_pure_field_algebra_extreme_dot,
+     ReplicatedRobustDotCountsOverflowingCancellationExactlyOnce) {
+  DotFields fields = make_replicated_fields(3);
+  set_global_cell(fields.left, 0, Real(1e200));
+  set_global_cell(fields.right, 0, Real(1e200));
+  set_global_cell(fields.left, 1, Real(1e200));
+  set_global_cell(fields.right, 1, Real(-1e200));
+  set_global_cell(fields.left, 2, Real(1e-200));
+  set_global_cell(fields.right, 2, Real(1e200));
+
+  expect_close_to_one(
+      PureFieldAlgebra::dot(fields.left, fields.right, PreparedVectorDistribution::Replicated));
+  expect_close_to_one(detail::PreparedFieldAlgebra::dot(fields.left, fields.right,
+                                                        PreparedVectorDistribution::Replicated));
+}
+
+TEST(test_pure_field_algebra_extreme_dot, ProviderHandleRejectsInvalidNativeDescriptor) {
+  EXPECT_THROW((void)PreparedVectorDistribution(static_cast<FieldDistribution>(255)),
+               std::invalid_argument);
+}
+
+TEST(test_pure_field_algebra_extreme_dot, PublicReplicaOverloadsRejectPartialRankLayouts) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "a serial mapping is necessarily a complete local replica";
+  DotFields fields = make_fields(2);
+  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right,
+                                           PreparedVectorDistribution::Replicated),
+               std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+               std::invalid_argument);
+}
+
+TEST(test_pure_field_algebra_extreme_dot,
+     PublicReplicaValidationFailsUniformlyForRankZeroOwnedLayout) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "rank-zero ownership is a complete local replica in serial";
+  // Rank zero's local descriptor alone looks like a complete replica while every other rank owns
+  // no boxes. All ranks must nevertheless complete the validation collectives and reject it
+  // uniformly rather than letting rank zero enter the following physical reduction alone.
+  DotFields fields = make_rank_zero_owned_fields(2);
+  EXPECT_THROW((void)PureFieldAlgebra::max_abs(fields.left, PreparedVectorDistribution::Replicated),
+               std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right,
+                                           PreparedVectorDistribution::Replicated),
+               std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+               std::invalid_argument);
+}
+
+TEST(test_pure_field_algebra_extreme_dot, PublicOwnershipMustAgreeAcrossRanks) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "ownership descriptors cannot disagree in serial";
+  DotFields fields = make_replicated_fields(2);
+  const PreparedVectorDistribution ownership = my_rank() == 0
+                                                   ? PreparedVectorDistribution::Distributed
+                                                   : PreparedVectorDistribution::Replicated;
+  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right, ownership),
+               std::invalid_argument);
+}
+
+TEST(test_pure_field_algebra_extreme_dot, PublicDistributedModeRejectsPhysicalReplicas) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "distribution modes are structurally identical in serial";
+  DotFields fields = make_replicated_fields(2);
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left), std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right), std::invalid_argument);
+}
+
+TEST(test_pure_field_algebra_extreme_dot, PublicReplicaRejectsIsometricValuePermutations) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "replica values cannot disagree in serial";
+  DotFields fields = make_replicated_fields(2);
+  set_global_cell(fields.left, my_rank() == 0 ? 0 : 1, Real(1));
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+               std::runtime_error);
 }
 
 TEST(test_pure_field_algebra_extreme_dot, RepairsOverflowAfterBatchedGlobalReduction) {

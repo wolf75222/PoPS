@@ -428,12 +428,29 @@ OperatorEvaluationSnapshot snapshot_for(const MultiFab& prototype, std::uint64_t
           {revision, UINT64_C(5), UINT64_C(6), UINT64_C(7)}};
 }
 
+enum class TestKrylovFamily { kCg, kBicgstab, kGmres, kRichardson };
+
+PreparedKrylovMethod test_krylov_method(TestKrylovFamily family, int restart = 30,
+                                        Real relaxation = Real(1)) {
+  switch (family) {
+    case TestKrylovFamily::kCg:
+      return cg_krylov_method();
+    case TestKrylovFamily::kBicgstab:
+      return bicgstab_krylov_method();
+    case TestKrylovFamily::kGmres:
+      return gmres_krylov_method(restart);
+    case TestKrylovFamily::kRichardson:
+      return richardson_krylov_method(relaxation);
+  }
+  throw std::logic_error("unknown test Krylov family");
+}
+
 SolveReport run_prepared_with_preconditioner(
-    const ApplyFn& apply, MultiFab& iterate, const MultiFab& rhs, KrylovMethod method,
+    const ApplyFn& apply, MultiFab& iterate, const MultiFab& rhs, PreparedKrylovMethod method,
     LinearOperatorProperties properties, PreparedLinearPreconditioner preconditioner, Real rel_tol,
-    Real abs_tol, int max_iterations, int restart, Real relaxation,
+    Real abs_tol, int max_iterations,
     PreparedNullspacePolicy nullspace_policy = PreparedNullspacePolicy::nonsingular()) {
-  KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(), restart,
+  KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(),
                             !preconditioner.is_identity()};
   OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
   PreparedAffineLinearProblem problem(iterate, apply, std::move(preconditioner), properties,
@@ -444,16 +461,15 @@ SolveReport run_prepared_with_preconditioner(
   workspace.bind(problem);
   return solve_prepared_affine(
       problem, workspace, iterate, rhs,
-      KrylovControls{method, rel_tol, abs_tol, max_iterations, restart, relaxation});
+      KrylovControls{method, rel_tol, abs_tol, max_iterations});
 }
 
 SolveReport run_prepared(const ApplyFn& apply, MultiFab& iterate, const MultiFab& rhs,
-                         KrylovMethod method, LinearOperatorProperties properties,
-                         Real rel_tol = kRelTol, Real abs_tol = Real(0), int max_iterations = 500,
-                         int restart = 0, Real relaxation = Real(1)) {
+                         PreparedKrylovMethod method, LinearOperatorProperties properties,
+                         Real rel_tol = kRelTol, Real abs_tol = Real(0), int max_iterations = 500) {
   return run_prepared_with_preconditioner(apply, iterate, rhs, method, properties,
                                           PreparedLinearPreconditioner::identity(), rel_tol,
-                                          abs_tol, max_iterations, restart, relaxation);
+                                          abs_tol, max_iterations);
 }
 
 // Build a component-complete Helmholtz callback with scratch storage fixed before preparation.
@@ -478,16 +494,30 @@ ApplyFn componentwise_helmholtz_apply(const MultiFab& prototype, const Geometry&
   };
 }
 
+PreparedLinearPreconditioner authenticated_test_preconditioner(
+    const MultiFab& prototype, std::string_view implementation, ApplyFn apply,
+    std::string exact_parameters = {}, PreparedResourceFn prepare = {},
+    PreparedVectorDistribution distribution = PreparedVectorDistribution::Distributed) {
+  return PreparedLinearPreconditioner(
+      prototype,
+      PreparedLinearPreconditionerProvider::trusted_extension(
+          {implementation, 1}, std::move(exact_parameters), std::move(prepare),
+          std::move(apply)),
+      distribution);
+}
+
 PreparedLinearPreconditioner affine_scaled_identity_preconditioner(const MultiFab& prototype,
                                                                    Real scale, Real offset) {
   auto constant = std::make_shared<MultiFab>(prototype.box_array(), prototype.dmap(),
                                              prototype.ncomp(), prototype.n_grow());
   constant->set_val(offset);
-  return PreparedLinearPreconditioner(prototype,
-                                      [scale, constant](MultiFab& out, const MultiFab& in) {
-                                        PureFieldAlgebra::lincomb(out, scale, in, Real(0), in);
-                                        PureFieldAlgebra::axpy(out, Real(1), *constant);
-                                      });
+  return authenticated_test_preconditioner(
+      prototype, "pops.test.generic-krylov.affine-scaled-identity",
+      [scale, constant](MultiFab& out, const MultiFab& in) {
+        PureFieldAlgebra::lincomb(out, scale, in, Real(0), in);
+        PureFieldAlgebra::axpy(out, Real(1), *constant);
+      },
+      exact_provider_parameters(scale, offset));
 }
 
 PreparedLinearPreconditioner boundary_affine_preconditioner(const MultiFab& prototype,
@@ -508,13 +538,18 @@ PreparedLinearPreconditioner boundary_affine_preconditioner(const MultiFab& prot
     boundary.xlo_beta = boundary.xhi_beta = boundary.ylo_beta = boundary.yhi_beta = Real(0.25);
   }
   const Real strength = Real(0.05) * geometry.dx() * geometry.dx();
-  return PreparedLinearPreconditioner(
-      prototype, [laplacian, geometry, boundary, strength](MultiFab& out, const MultiFab& in) {
+  return authenticated_test_preconditioner(
+      prototype, "pops.test.generic-krylov.boundary-affine",
+      [laplacian, geometry, boundary, strength](MultiFab& out, const MultiFab& in) {
         MultiFab& mutable_input = const_cast<MultiFab&>(in);
         fill_ghosts(mutable_input, geometry.domain, boundary);
         apply_laplacian(mutable_input, geometry, *laplacian);
         PureFieldAlgebra::lincomb(out, Real(1), in, -strength, *laplacian);
-      });
+      },
+      exact_provider_parameters(
+          boundary_type, geometry.xlo, geometry.xhi, geometry.ylo, geometry.yhi, boundary.xlo_val,
+          boundary.xhi_val, boundary.ylo_val, boundary.yhi_val, boundary.xlo_alpha,
+          boundary.xlo_beta, boundary.dx, boundary.dy, strength));
 }
 
 ApplyFn negative_periodic_laplacian(const MultiFab& prototype, const Geometry& geometry,
@@ -529,8 +564,8 @@ ApplyFn negative_periodic_laplacian(const MultiFab& prototype, const Geometry& g
   };
 }
 
-LinearOperatorProperties periodic_nullspace_properties(KrylovMethod method) {
-  return method == KrylovMethod::kCg
+LinearOperatorProperties periodic_nullspace_properties(TestKrylovFamily family) {
+  return family == TestKrylovFamily::kCg
              ? LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement()
              : LinearOperatorProperties::general();
 }
@@ -600,11 +635,15 @@ PreparedLinearPreconditioner prepared_geometric_mg_preconditioner(const MultiFab
   context->grid.bc = boundary;
   auto implementation = std::make_shared<GeometricMgPreconditioner>();
   const MultiFab* prepared_layout = &prototype;
-  return PreparedLinearPreconditioner(
-      prototype,
+  return authenticated_test_preconditioner(
+      prototype, "pops.test.generic-krylov.geometric-mg",
       [context, implementation](MultiFab& out, const MultiFab& in) {
         implementation->apply(*context, out, in);
       },
+      exact_provider_parameters(
+          geometry.xlo, geometry.xhi, geometry.ylo, geometry.yhi, boundary.xlo, boundary.xhi,
+          boundary.ylo, boundary.yhi, boundary.xlo_val, boundary.xhi_val, boundary.ylo_val,
+          boundary.yhi_val, boundary.dx, boundary.dy),
       [context, implementation, prepared_layout]() {
         implementation->prepare(*context, *prepared_layout);
       });
@@ -624,11 +663,21 @@ void configure_tensor_cross_terms(GeometricMG& op, Real strength, bool nonsymmet
     // elliptic part equal to the identity while producing the genuine first-order term
     // strength*d_y(phi).  The resulting discrete operator is non-self-adjoint without sacrificing
     // ellipticity.
-    op.set_cross_terms([strength](Real x, Real) { return strength * x; },
-                       [strength](Real x, Real) { return -strength * x; });
+    op.set_cross_terms(
+        ScalarFieldProvider2D::trusted_extension({"pops.test.generic-krylov.variable-skew-xy", 1},
+                                                 exact_provider_parameters(strength),
+                                                 [strength](Real x, Real) { return strength * x; }),
+        ScalarFieldProvider2D::trusted_extension(
+            {"pops.test.generic-krylov.variable-skew-yx", 1}, exact_provider_parameters(strength),
+            [strength](Real x, Real) { return -strength * x; }));
   } else {
-    op.set_cross_terms([strength](Real, Real) { return strength; },
-                       [strength](Real, Real) { return strength; });
+    op.set_cross_terms(
+        ScalarFieldProvider2D::trusted_extension({"pops.test.generic-krylov.symmetric-cross-xy", 1},
+                                                 exact_provider_parameters(strength),
+                                                 [strength](Real, Real) { return strength; }),
+        ScalarFieldProvider2D::trusted_extension({"pops.test.generic-krylov.symmetric-cross-yx", 1},
+                                                 exact_provider_parameters(strength),
+                                                 [strength](Real, Real) { return strength; }));
   }
 }
 
@@ -641,8 +690,8 @@ PreparedTensorCaseReport solve_prepared_tensor_case(int cells, Real cross, bool 
   boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
 
   auto op = std::make_shared<GeometricMG>(geometry, boxes, distribution, boundary);
-  op->set_epsilon_anisotropic([](Real, Real) { return Real(1); },
-                              [](Real, Real) { return Real(1); });
+  op->set_epsilon_anisotropic(constant_scalar_field_provider(Real(1)),
+                              constant_scalar_field_provider(Real(1)));
   configure_tensor_cross_terms(*op, cross, nonsymmetric);
   const ApplyFn apply = tensor_operator_apply(op);
 
@@ -658,13 +707,12 @@ PreparedTensorCaseReport solve_prepared_tensor_case(int cells, Real cross, bool 
   apply(rhs, exact);
   PureFieldAlgebra::zero_valid(iterate);
   const SolveReport krylov = run_prepared_with_preconditioner(
-      apply, iterate, rhs, KrylovMethod::kBicgstab, LinearOperatorProperties::general(),
-      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-10), Real(0), 300,
-      0, Real(1));
+      apply, iterate, rhs, bicgstab_krylov_method(), LinearOperatorProperties::general(),
+      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-10), Real(0), 300);
 
   GeometricMG mg(geometry, boxes, distribution, boundary);
-  mg.set_epsilon_anisotropic([](Real, Real) { return Real(1); },
-                             [](Real, Real) { return Real(1); });
+  mg.set_epsilon_anisotropic(constant_scalar_field_provider(Real(1)),
+                             constant_scalar_field_provider(Real(1)));
   configure_tensor_cross_terms(mg, cross, nonsymmetric);
   PureFieldAlgebra::copy(mg.rhs(), rhs);
   PureFieldAlgebra::zero_valid(mg.phi());
@@ -718,7 +766,8 @@ AffineBoundaryCaseReport solve_affine_boundary_case(BCType type) {
     }
 
     auto op = std::make_shared<GeometricMG>(geometry, boxes, distribution, boundary);
-    op->set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+    op->set_cross_terms(constant_scalar_field_provider(Real(0)),
+                        constant_scalar_field_provider(Real(0)));
     const ApplyFn apply = tensor_operator_apply(op);
     MultiFab zero(boxes, distribution, 1, 1);
     MultiFab offset(boxes, distribution, 1, 0);
@@ -733,9 +782,9 @@ AffineBoundaryCaseReport solve_affine_boundary_case(BCType type) {
 
     const auto solve = [&](Real rel_tol, int max_iterations) {
       return run_prepared_with_preconditioner(
-          apply, iterate, rhs, KrylovMethod::kBicgstab, LinearOperatorProperties::general(),
+          apply, iterate, rhs, bicgstab_krylov_method(), LinearOperatorProperties::general(),
           prepared_geometric_mg_preconditioner(iterate, geometry, boundary), rel_tol, Real(0),
-          max_iterations, 0, Real(1));
+          max_iterations);
     };
     PureFieldAlgebra::zero_valid(iterate);
     const SolveReport probe = solve(Real(0.5), 1);
@@ -751,6 +800,168 @@ AffineBoundaryCaseReport solve_affine_boundary_case(BCType type) {
   const AffineBoundarySolveReport offset = run(boundary_value, offset_iterate);
   return {homogeneous, offset, max_abs_diff(homogeneous_iterate, offset_iterate)};
 }
+
+class OneStepExternalKrylovProvider final : public PreparedKrylovMethodProvider {
+ public:
+  std::string_view identity() const noexcept override { return "pops.test.krylov.one-step"; }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "pops.test.krylov.one-step@1";
+  }
+  KrylovMethodValidation validate_controls(
+      const KrylovMethodControls& controls,
+      const PreparedProviderOptions& options) const noexcept override {
+    if (const KrylovMethodValidation common = detail::validate_common_krylov_controls(controls);
+        !common.accepted())
+      return common;
+    const double* step = detail::exact_real_option(
+        options, "pops.test.krylov.one-step.options@1", "physical_step");
+    if (step == nullptr || !std::isfinite(*step) || *step <= 0.0)
+      return KrylovMethodValidation::reject(1, "one-step physical_step is invalid");
+    return KrylovMethodValidation::accept();
+  }
+  KrylovMethodValidation validate_problem(
+      const KrylovMethodProblemFacts& facts,
+      const PreparedProviderOptions&) const noexcept override {
+    if (const KrylovMethodValidation common = detail::validate_generic_problem_facts(facts);
+        !common.accepted())
+      return common;
+    if (facts.has_preconditioner)
+      return KrylovMethodValidation::reject(2, "one-step provider has no preconditioner slot");
+    return KrylovMethodValidation::accept();
+  }
+  KrylovWorkspaceRequirements workspace_requirements(
+      const KrylovWorkspaceRequest& request,
+      const PreparedProviderOptions&) const override {
+    if (request.footprint.preconditioned)
+      throw std::invalid_argument("one-step workspace requires an unpreconditioned flat solve");
+    return {.field_count = 2,
+            .real_count = 1,
+            .state_word_count = 1,
+            .initial_residual_field = 1};
+  }
+  SolveReport solve(PreparedKrylovSolveContext& context,
+                    const PreparedProviderOptions& options) const override {
+    Real& physical_step = context.real_value(0);
+    physical_step = static_cast<Real>(*detail::exact_real_option(
+        options, "pops.test.krylov.one-step.options@1", "physical_step"));
+    ++context.state_word(0);
+    context.add_physical_direction(context.iterate(), physical_step, context.initial_residual());
+    const Real residual = context.true_residual_norm(context.initial_residual());
+    return context.report(residual, 1,
+                          residual <= context.physical_threshold()
+                              ? SolveStatus::kSolved
+                              : SolveStatus::kIterationLimit);
+  }
+};
+
+/// Third distribution strategy proving that Krylov routes provider callables rather than matching
+/// either builtin preset. It realizes a disjoint storage topology, but constructs its layout
+/// contract and reductions independently and deliberately requires non-zero persistent scratch.
+struct CustomOwnedVectorDistributionProbe {
+  std::size_t layout_matches_calls = 0;
+  std::size_t layout_contract_calls = 0;
+  std::size_t canonical_owner_calls = 0;
+  std::size_t sum_calls = 0;
+  std::size_t max_calls = 0;
+  std::size_t exact_value_preflight_calls = 0;
+};
+
+struct CustomOwnedVectorDistributionSource {
+  std::shared_ptr<CustomOwnedVectorDistributionProbe> probe;
+
+  static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.vector-distribution.custom-owned", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::uint32_t{17});
+  }
+  bool layout_matches(const MultiFab& field) const {
+    ++probe->layout_matches_calls;
+    const auto& boxes = field.box_array().boxes();
+    const auto& owners = field.dmap().ranks();
+    if (field.ncomp() <= 0 || field.n_grow() < 0 || boxes.empty() ||
+        boxes.size() != owners.size())
+      return false;
+    return std::all_of(owners.begin(), owners.end(), [](int owner) {
+      return owner >= 0 && owner < n_ranks();
+    });
+  }
+  std::string layout_contract(const MultiFab& field) const {
+    ++probe->layout_contract_calls;
+    ExactContractBuilder contract;
+    contract.text("pops.test.custom-owned-layout")
+        .scalar(static_cast<std::int32_t>(field.ncomp()))
+        .scalar(static_cast<std::int32_t>(field.n_grow()))
+        .scalar(static_cast<std::uint64_t>(field.box_array().boxes().size()));
+    const auto& owners = field.dmap().ranks();
+    for (std::size_t index = 0; index < field.box_array().boxes().size(); ++index) {
+      const Box2D& box = field.box_array().boxes()[index];
+      contract.scalar(static_cast<std::int32_t>(box.lo[0]))
+          .scalar(static_cast<std::int32_t>(box.lo[1]))
+          .scalar(static_cast<std::int32_t>(box.hi[0]))
+          .scalar(static_cast<std::int32_t>(box.hi[1]))
+          .scalar(static_cast<std::int32_t>(canonical_owner(owners[index])));
+    }
+    return std::move(contract).release();
+  }
+  int canonical_owner(int owner) const noexcept {
+    ++probe->canonical_owner_calls;
+    return owner;
+  }
+  std::size_t reduction_scratch_value_count(std::size_t value_count) const noexcept {
+    return value_count + 3u;
+  }
+  std::size_t validation_scratch_byte_count() const noexcept { return 32u; }
+  PreparedVectorDistributionStatus reduce_sum_values(
+      std::span<double> values, std::span<double> scratch, const char*) const noexcept {
+    ++probe->sum_calls;
+    if (scratch.size() < reduction_scratch_value_count(values.size()))
+      return PreparedVectorDistributionStatus::failure(
+          1, "custom distribution sum scratch was not prepared");
+    std::copy(values.begin(), values.end(), scratch.begin());
+    try {
+      all_reduce_sum_inplace(scratch.data(), static_cast<int>(values.size()));
+    } catch (...) {
+      return PreparedVectorDistributionStatus::failure(
+          2, "custom distribution sum collective failed");
+    }
+    std::copy_n(scratch.begin(), values.size(), values.begin());
+    return PreparedVectorDistributionStatus::success();
+  }
+  PreparedVectorDistributionStatus reduce_max_values(
+      std::span<double> values, std::span<double> scratch, const char*) const noexcept {
+    ++probe->max_calls;
+    if (scratch.size() < reduction_scratch_value_count(values.size()))
+      return PreparedVectorDistributionStatus::failure(
+          3, "custom distribution max scratch was not prepared");
+    std::copy(values.begin(), values.end(), scratch.begin());
+    try {
+      all_reduce_max_inplace(scratch.data(), static_cast<int>(values.size()));
+    } catch (...) {
+      return PreparedVectorDistributionStatus::failure(
+          4, "custom distribution max collective failed");
+    }
+    std::copy_n(scratch.begin(), values.size(), values.begin());
+    return PreparedVectorDistributionStatus::success();
+  }
+  PreparedVectorDistributionStatus require_exact_values(
+      const MultiFab& field, std::span<char> scratch, const char*) const noexcept {
+    ++probe->exact_value_preflight_calls;
+    bool matches = false;
+    try {
+      matches = layout_matches(field);
+    } catch (...) {
+      return PreparedVectorDistributionStatus::failure(
+          5, "custom distribution exact-value layout callback failed");
+    }
+    if (scratch.size() != validation_scratch_byte_count() || !matches)
+      return PreparedVectorDistributionStatus::failure(
+          6, "custom distribution exact-value scratch/layout was not prepared");
+    scratch.front() = static_cast<char>(0x5a);
+    return PreparedVectorDistributionStatus::success();
+  }
+};
 
 }  // namespace
 
@@ -768,18 +979,105 @@ TEST(test_solve_report, rejects_incoherent_status_action_pairs) {
 
 TEST(test_krylov_controls, signed_int_limits_are_explicit_and_overflow_free) {
   const int int_max = std::numeric_limits<int>::max();
-  const int gmres_restart_max = KrylovWorkspace::max_gmres_restart();
+  const int gmres_restart_max = KrylovWorkspace::max_batched_basis_extent();
   EXPECT_NO_THROW(detail::validate_controls(
-      KrylovControls{KrylovMethod::kCg, Real(1e-8), Real(0), int_max, 0, Real(1)}));
-  EXPECT_NO_THROW(detail::validate_controls(
-      KrylovControls{KrylovMethod::kGmres, Real(1e-8), Real(0), int_max,
-                     gmres_restart_max, Real(1)}));
-  EXPECT_THROW(detail::validate_controls(
-                   KrylovControls{KrylovMethod::kGmres, Real(1e-8), Real(0), int_max,
-                                  gmres_restart_max + 1, Real(1)}),
+      KrylovControls{cg_krylov_method(), Real(1e-8), Real(0), int_max}));
+  EXPECT_NO_THROW(detail::validate_controls(KrylovControls{
+      gmres_krylov_method(gmres_restart_max), Real(1e-8), Real(0), int_max}));
+  EXPECT_THROW(detail::validate_controls(KrylovControls{
+                   gmres_krylov_method(gmres_restart_max + 1), Real(1e-8), Real(0), int_max}),
                std::invalid_argument);
   EXPECT_THROW(
-      detail::validate_controls(KrylovControls{KrylovMethod::kCg, Real(1), Real(0), 1, 0, Real(1)}),
+      detail::validate_controls(KrylovControls{cg_krylov_method(), Real(1), Real(0), 1}),
+      std::invalid_argument);
+}
+
+TEST(test_krylov_method_provider, external_method_uses_registry_and_generic_workspace_pools) {
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{0, 0}, {3, 3}}});
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab iterate(boxes, mapping, 1, 0);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(3.25));
+  const ApplyFn identity = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+
+  PreparedKrylovMethodRegistry registry;
+  registry.add(std::make_shared<OneStepExternalKrylovProvider>());
+  const PreparedKrylovMethod method = registry.resolve(
+      "pops.test.krylov.one-step",
+      PreparedProviderOptions{"pops.test.krylov.one-step.options@1",
+                              {{"physical_step", 1.0}}});
+  const KrylovFootprint footprint{1, 0, false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, identity, PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
+      [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  const SolveReport report = solve_prepared_affine(
+      problem, workspace, iterate, rhs,
+      KrylovControls{method, Real(1e-12), Real(0), 1});
+  EXPECT_TRUE(report.solved());
+  EXPECT_EQ(report.iters, 1);
+  EXPECT_EQ(workspace.allocation_count(), 2u);
+  EXPECT_EQ(workspace.scalar_value_count(), 1u);
+  EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
+}
+
+TEST(test_vector_distribution_provider,
+     third_strategy_routes_layout_reduction_preflight_and_workspace_without_core_branch) {
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{0, 0}, {3, 3}}});
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab iterate(boxes, mapping, 1, 0);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(2.5));
+  const auto probe = std::make_shared<CustomOwnedVectorDistributionProbe>();
+  const PreparedVectorDistribution distribution(CustomOwnedVectorDistributionSource{probe});
+  EXPECT_EQ(distribution.provider_identity().name,
+            std::string_view("pops.test.vector-distribution.custom-owned"));
+  EXPECT_NE(distribution, PreparedVectorDistribution::Distributed);
+
+  const ApplyFn identity = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+  const PreparedKrylovMethod method = bicgstab_krylov_method();
+  const KrylovFootprint footprint{1, 0, false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, identity, PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
+      [&snapshot]() { return snapshot; }, {}, distribution);
+  KrylovWorkspace workspace(iterate, method, footprint, distribution);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const SolveReport report = solve_prepared_affine(
+      problem, workspace, iterate, rhs,
+      KrylovControls{method, Real(1e-12), Real(0), 4});
+  EXPECT_TRUE(report.solved());
+  EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
+  EXPECT_GE(workspace.collective_value_count(), 4u);
+  EXPECT_EQ(workspace.distribution_validation_byte_count(), 32u);
+  EXPECT_GT(probe->layout_matches_calls, 0u);
+  EXPECT_GT(probe->layout_contract_calls, 0u);
+  EXPECT_GT(probe->canonical_owner_calls, 0u);
+  EXPECT_GT(probe->sum_calls, 0u);
+  EXPECT_GT(probe->max_calls, 0u);
+  EXPECT_GT(probe->exact_value_preflight_calls, 0u);
+}
+
+TEST(test_prepared_layout_fingerprint, OwnershipIsDomainSeparatedEvenOnOneRank) {
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{0, 0}, {1, 1}}});
+  MultiFab field(boxes, DistributionMapping(std::vector<int>{my_rank()}), 1, 0);
+  EXPECT_NE(detail::layout_fingerprint(field, PreparedVectorDistribution::Distributed),
+            detail::layout_fingerprint(field, PreparedVectorDistribution::Replicated));
+  EXPECT_THROW(
+      (void)PreparedVectorDistribution(static_cast<FieldDistribution>(255)),
       std::invalid_argument);
 }
 
@@ -793,8 +1091,8 @@ TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence
   };
   OperatorEvaluationSnapshot snapshot = snapshot_for(one_ghost);
   OperatorSnapshotProbe probe = [&snapshot]() { return snapshot; };
-  const KrylovFootprint claims_preconditioner{1, 1, 0, true};
-  const KrylovFootprint hides_preconditioner{1, 1, 0, false};
+  const KrylovFootprint claims_preconditioner{1, 1, true};
+  const KrylovFootprint hides_preconditioner{1, 1, false};
 
   EXPECT_THROW((void)PreparedAffineLinearProblem(
                    one_ghost, identity_apply, PreparedLinearPreconditioner::identity(),
@@ -803,32 +1101,44 @@ TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence
                std::invalid_argument);
   EXPECT_THROW(
       (void)PreparedAffineLinearProblem(one_ghost, identity_apply,
-                                        PreparedLinearPreconditioner(one_ghost, identity_apply),
+                                        authenticated_test_preconditioner(
+                                            one_ghost, "pops.test.generic-krylov.identity",
+                                            identity_apply),
                                         LinearOperatorProperties::general(), hides_preconditioner,
                                         PreparedNullspacePolicy::nonsingular(), probe),
       std::invalid_argument);
-  EXPECT_THROW((void)KrylovWorkspace(one_ghost, KrylovMethod::kCg, claims_preconditioner),
+  EXPECT_THROW((void)KrylovWorkspace(one_ghost, cg_krylov_method(), claims_preconditioner),
                std::invalid_argument);
-  EXPECT_THROW((void)KrylovWorkspace(one_ghost, KrylovMethod::kRichardson, claims_preconditioner),
+  EXPECT_THROW((void)KrylovWorkspace(one_ghost, richardson_krylov_method(), claims_preconditioner),
                std::invalid_argument);
-  const KrylovFootprint overflowing_gmres_restart{1, 1, std::numeric_limits<int>::max(), false};
-  EXPECT_THROW((void)KrylovWorkspace(one_ghost, KrylovMethod::kGmres, overflowing_gmres_restart),
+  const KrylovFootprint gmres_footprint{1, 1, false};
+  EXPECT_THROW((void)KrylovWorkspace(one_ghost,
+                                     gmres_krylov_method(std::numeric_limits<int>::max()),
+                                     gmres_footprint),
                std::invalid_argument);
   EXPECT_THROW(
-      (void)KrylovWorkspace::required_fields(KrylovMethod::kGmres, overflowing_gmres_restart),
+      (void)KrylovWorkspace::required_fields(
+          gmres_krylov_method(std::numeric_limits<int>::max()),
+          KrylovWorkspaceRequest{
+              gmres_footprint, PreparedVectorDistribution::Distributed,
+              detail::PreparedFieldAlgebra::kRobustDotPayloadWidth}),
       std::invalid_argument);
 
   MultiFab two_components(*ba_, *dm_, 2, 1);
   EXPECT_THROW(
       (void)PreparedAffineLinearProblem(
-          one_ghost, identity_apply, PreparedLinearPreconditioner(two_components, identity_apply),
+          one_ghost, identity_apply,
+          authenticated_test_preconditioner(
+              two_components, "pops.test.generic-krylov.identity", identity_apply),
           LinearOperatorProperties::general(), claims_preconditioner,
           PreparedNullspacePolicy::nonsingular(), probe),
       std::invalid_argument);
 
   EXPECT_THROW(
       (void)PreparedAffineLinearProblem(one_ghost, identity_apply,
-                                        PreparedLinearPreconditioner(no_ghosts, identity_apply),
+                                        authenticated_test_preconditioner(
+                                            no_ghosts, "pops.test.generic-krylov.identity",
+                                            identity_apply),
                                         LinearOperatorProperties::general(), claims_preconditioner,
                                         PreparedNullspacePolicy::nonsingular(), probe),
       std::invalid_argument);
@@ -839,7 +1149,9 @@ TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence
   MultiFab other_layout(other_boxes, other_mapping, 1, 1);
   EXPECT_THROW(
       (void)PreparedAffineLinearProblem(one_ghost, identity_apply,
-                                        PreparedLinearPreconditioner(other_layout, identity_apply),
+                                        authenticated_test_preconditioner(
+                                            other_layout, "pops.test.generic-krylov.identity",
+                                            identity_apply),
                                         LinearOperatorProperties::general(), claims_preconditioner,
                                         PreparedNullspacePolicy::nonsingular(), probe),
       std::invalid_argument);
@@ -850,7 +1162,9 @@ TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence
     MultiFab empty_on_remote_rank(*ba_, rank_zero_only, 1, 1);
     EXPECT_THROW((void)PreparedAffineLinearProblem(
                      one_ghost, identity_apply,
-                     PreparedLinearPreconditioner(empty_on_remote_rank, identity_apply),
+                     authenticated_test_preconditioner(
+                         empty_on_remote_rank, "pops.test.generic-krylov.identity",
+                         identity_apply),
                      LinearOperatorProperties::general(), claims_preconditioner,
                      PreparedNullspacePolicy::nonsingular(), probe),
                  std::invalid_argument);
@@ -893,7 +1207,9 @@ TEST_F(GenericKrylov, geometric_preconditioner_validates_controls_and_rebuilds_o
   EXPECT_NO_THROW(preconditioner.prepare(context, prototype));
   EXPECT_EQ(preconditioner.preparation_generation(), generation + 1);
 
-  context.grid.bc.xlo = BCType::Dirichlet;
+  // Periodicity is a paired-axis contract. Change both x faces so the mutated boundary remains a
+  // physically valid construction request while still proving that boundary identity rebuilds.
+  context.grid.bc.xlo = context.grid.bc.xhi = BCType::Dirichlet;
   EXPECT_NO_THROW(preconditioner.prepare(context, prototype));
   EXPECT_EQ(preconditioner.preparation_generation(), generation + 2);
 }
@@ -918,7 +1234,7 @@ TEST_F(GenericKrylov, arbitrary_halo_depth_is_a_first_class_prepared_footprint) 
   };
   radius_three(rhs, exact);
 
-  const SolveReport report = run_prepared(radius_three, x, rhs, KrylovMethod::kCg,
+  const SolveReport report = run_prepared(radius_three, x, rhs, cg_krylov_method(),
                                           LinearOperatorProperties::symmetric_positive_definite());
   EXPECT_TRUE(report.solved());
   EXPECT_EQ(x.n_grow(), 3);
@@ -949,19 +1265,19 @@ TEST_F(GenericKrylov, every_method_solves_two_components_and_preconditioned_rout
   MultiFab rhs(*ba_, *dm_, 2, 0);
   apply(rhs, exact);
 
+  const Real h = geom_->dx();
+  const Real richardson_omega = Real(1) / (Real(1) + kAlpha * Real(8) / (h * h));
   struct MethodCase {
-    KrylovMethod method;
-    int restart;
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
     bool preconditioned;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0, false},
-      {KrylovMethod::kBicgstab, 0, true},
-      {KrylovMethod::kGmres, 8, true},
-      {KrylovMethod::kRichardson, 0, false},
+      {TestKrylovFamily::kCg, cg_krylov_method(), false},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method(), true},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(8), true},
+      {TestKrylovFamily::kRichardson, richardson_krylov_method(richardson_omega), false},
   }};
-  const Real h = geom_->dx();
-  const Real richardson_omega = Real(1) / (Real(1) + kAlpha * Real(8) / (h * h));
 
   for (const MethodCase& method : methods) {
     MultiFab iterate(*ba_, *dm_, 2, 1);
@@ -971,20 +1287,20 @@ TEST_F(GenericKrylov, every_method_solves_two_components_and_preconditioned_rout
             ? affine_scaled_identity_preconditioner(iterate, Real(0.75), Real(2.5))
             : PreparedLinearPreconditioner::identity();
     const LinearOperatorProperties properties =
-        method.method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                           : LinearOperatorProperties::general();
-    const Real relaxation = method.method == KrylovMethod::kRichardson ? richardson_omega : Real(1);
+        method.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
     const SolveReport report = run_prepared_with_preconditioner(
         apply, iterate, rhs, method.method, properties, std::move(preconditioner), kRelTol, Real(0),
-        200000, method.restart, relaxation);
+        200000);
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+    EXPECT_TRUE(report.solved()) << "method=" << method.method.identity()
                                  << " reason=" << report.reason;
-    EXPECT_GT(report.iters, 1) << "method=" << static_cast<int>(method.method);
+    EXPECT_GT(report.iters, 1) << "method=" << method.method.identity();
     EXPECT_LT(max_abs_diff_component(iterate, exact, 0), kRecoverTol)
-        << "component=0 method=" << static_cast<int>(method.method);
+        << "component=0 method=" << method.method.identity();
     EXPECT_LT(max_abs_diff_component(iterate, exact, 1), kRecoverTol)
-        << "component=1 method=" << static_cast<int>(method.method);
+        << "component=1 method=" << method.method.identity();
   }
 }
 
@@ -1008,12 +1324,13 @@ TEST_F(GenericKrylov, mpi_empty_rank_runs_restarted_gmres_and_preconditioned_bic
   ASSERT_EQ(static_cast<int>(all_reduce_sum(static_cast<double>(exact.local_size()))), 1);
 
   struct MethodCase {
-    KrylovMethod method;
-    int restart;
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
   };
+  constexpr int gmres_restart = 2;
   const std::array<MethodCase, 2> methods{{
-      {KrylovMethod::kGmres, 2},
-      {KrylovMethod::kBicgstab, 0},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(gmres_restart)},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method()},
   }};
   for (const MethodCase& method : methods) {
     MultiFab iterate(boxes, owner_zero, 1, 1);
@@ -1021,15 +1338,15 @@ TEST_F(GenericKrylov, mpi_empty_rank_runs_restarted_gmres_and_preconditioned_bic
     const SolveReport report = run_prepared_with_preconditioner(
         apply, iterate, rhs, method.method, LinearOperatorProperties::general(),
         affine_scaled_identity_preconditioner(iterate, Real(0.75), Real(2.5)), kRelTol, Real(0),
-        500, method.restart, Real(1));
+        500);
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+    EXPECT_TRUE(report.solved()) << "method=" << method.method.identity()
                                  << " reason=" << report.reason;
-    if (method.method == KrylovMethod::kGmres)
-      EXPECT_GT(report.iters, method.restart)
+    if (method.family == TestKrylovFamily::kGmres)
+      EXPECT_GT(report.iters, gmres_restart)
           << "restart=2 must cross a restart boundary and reuse the batched Arnoldi payload";
     EXPECT_LT(max_abs_diff(iterate, exact), kRecoverTol)
-        << "method=" << static_cast<int>(method.method);
+        << "method=" << method.method.identity();
   }
 }
 
@@ -1059,7 +1376,7 @@ TEST_F(GenericKrylov, geometric_preconditioner_preserves_a_custom_distribution) 
 TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport r = run_prepared(*A_, x, *rhs_, KrylovMethod::kCg,
+  const SolveReport r = run_prepared(*A_, x, *rhs_, cg_krylov_method(),
                                      LinearOperatorProperties::symmetric_positive_definite());
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("CG        : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
@@ -1075,7 +1392,7 @@ TEST_F(GenericKrylov, bicgstab_converges_with_identity_preconditioner) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
   const SolveReport r =
-      run_prepared(*A_, x, *rhs_, KrylovMethod::kBicgstab, LinearOperatorProperties::general());
+      run_prepared(*A_, x, *rhs_, bicgstab_krylov_method(), LinearOperatorProperties::general());
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("BiCGStab  : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -1096,7 +1413,7 @@ TEST_F(GenericKrylov, bicgstab_avoids_a_true_residual_matvec_on_regular_iteratio
   };
 
   const SolveReport report =
-      run_prepared(counted, x, *rhs_ns_, KrylovMethod::kBicgstab,
+      run_prepared(counted, x, *rhs_ns_, bicgstab_krylov_method(),
                    LinearOperatorProperties::general(), Real(0), Real(1e-30), 2);
 
   EXPECT_EQ(report.status, SolveStatus::kIterationLimit);
@@ -1116,8 +1433,8 @@ TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
   const Real lambda_max = Real(1) + kAlpha * Real(8) / (h * h);
   const Real omega = Real(1) / lambda_max;
   const SolveReport r =
-      run_prepared(*A_, x, *rhs_, KrylovMethod::kRichardson, LinearOperatorProperties::general(),
-                   kRelTol, Real(0), 200000, 0, omega);
+      run_prepared(*A_, x, *rhs_, richardson_krylov_method(omega),
+                   LinearOperatorProperties::general(), kRelTol, Real(0), 200000);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("Richardson: %s in %d iters (rel=%.2e, omega=%.4f) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
@@ -1132,8 +1449,8 @@ TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
   const SolveReport r =
-      run_prepared(*A_, x, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
-                   kRelTol, Real(0), 500, 30);
+      run_prepared(*A_, x, *rhs_, gmres_krylov_method(30), LinearOperatorProperties::general(),
+                   kRelTol, Real(0), 500);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(SPD): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -1146,14 +1463,14 @@ TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
 
 TEST_F(GenericKrylov, every_method_is_invariant_to_extreme_finite_equation_scaling) {
   struct MethodCase {
-    KrylovMethod method;
+    TestKrylovFamily family;
     int restart;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 4},
-      {KrylovMethod::kRichardson, 0},
+      {TestKrylovFamily::kCg, 0},
+      {TestKrylovFamily::kBicgstab, 0},
+      {TestKrylovFamily::kGmres, 4},
+      {TestKrylovFamily::kRichardson, 0},
   }};
   const std::array<Real, 2> equation_scales{Real(1e-200), Real(1e200)};
   const Real unscaled_reference = PureFieldAlgebra::norm(*phi_exact_mf_);
@@ -1170,42 +1487,44 @@ TEST_F(GenericKrylov, every_method_is_invariant_to_extreme_finite_equation_scali
       MultiFab x(*ba_, *dm_, 1, 1);
       x.set_val(Real(0));
       const LinearOperatorProperties properties =
-          method.method == KrylovMethod::kCg
+          method.family == TestKrylovFamily::kCg
               ? LinearOperatorProperties::symmetric_positive_definite()
               : LinearOperatorProperties::general();
       // Richardson's public omega belongs to the physical A, so it transforms as 1/lambda while
       // the prepared recurrence itself remains normalized and overflow-safe.
       const Real relaxation =
-          method.method == KrylovMethod::kRichardson ? Real(1) / equation_scale : Real(1);
+          method.family == TestKrylovFamily::kRichardson ? Real(1) / equation_scale : Real(1);
+      const PreparedKrylovMethod configured_method =
+          test_krylov_method(method.family, method.restart, relaxation);
       const SolveReport report =
-          run_prepared(scaled_identity, x, scaled_rhs, method.method, properties, kRelTol, Real(0),
-                       10, method.restart, relaxation);
+          run_prepared(scaled_identity, x, scaled_rhs, configured_method, properties, kRelTol,
+                       Real(0), 10);
       if (!expected_status)
         expected_status = report.status;
       EXPECT_EQ(report.status, *expected_status)
-          << "method=" << static_cast<int>(method.method) << " lambda=" << equation_scale;
+          << "method=" << configured_method.identity() << " lambda=" << equation_scale;
       EXPECT_TRUE(report.solved())
-          << "method=" << static_cast<int>(method.method) << " lambda=" << equation_scale;
+          << "method=" << configured_method.identity() << " lambda=" << equation_scale;
       EXPECT_TRUE(std::isfinite(report.reference_residual_norm));
       EXPECT_TRUE(std::isfinite(report.residual_norm));
       EXPECT_NEAR(report.reference_residual_norm / equation_scale, unscaled_reference,
                   unscaled_reference * Real(1e-12));
       EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol)
-          << "method=" << static_cast<int>(method.method) << " lambda=" << equation_scale;
+          << "method=" << configured_method.identity() << " lambda=" << equation_scale;
     }
   }
 }
 
 TEST_F(GenericKrylov, every_method_applies_a_binary_scaled_extreme_coefficient_in_one_iteration) {
   struct MethodCase {
-    KrylovMethod method;
+    TestKrylovFamily family;
     int restart;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kRichardson, 0},
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 1},
+      {TestKrylovFamily::kRichardson, 0},
+      {TestKrylovFamily::kCg, 0},
+      {TestKrylovFamily::kBicgstab, 0},
+      {TestKrylovFamily::kGmres, 1},
   }};
   constexpr Real kOperatorScale = Real(1e-109);
   constexpr Real kRhsValue = Real(1e198);
@@ -1224,33 +1543,35 @@ TEST_F(GenericKrylov, every_method_applies_a_binary_scaled_extreme_coefficient_i
     iterate.set_val(Real(0));
 
     const LinearOperatorProperties properties =
-        method.method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                           : LinearOperatorProperties::general();
-    const Real relaxation = method.method == KrylovMethod::kRichardson ? Real(1e109) : Real(1);
+        method.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
+    const PreparedKrylovMethod configured_method =
+        test_krylov_method(method.family, method.restart, Real(1e109));
     const SolveReport report =
-        run_prepared(scaled_identity, iterate, rhs, method.method, properties, Real(0), Real(1e190),
-                     1, method.restart, relaxation);
+        run_prepared(scaled_identity, iterate, rhs, configured_method, properties, Real(0),
+                     Real(1e190), 1);
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+    EXPECT_TRUE(report.solved()) << "method=" << configured_method.identity()
                                  << " status=" << static_cast<int>(report.status)
                                  << " reason=" << report.reason;
-    EXPECT_EQ(report.iters, 1) << "method=" << static_cast<int>(method.method);
+    EXPECT_EQ(report.iters, 1) << "method=" << configured_method.identity();
     EXPECT_TRUE(std::isfinite(report.residual_norm));
     EXPECT_LT(max_abs_diff(iterate, exact) / kExactValue, Real(1e-12))
-        << "method=" << static_cast<int>(method.method);
+        << "method=" << configured_method.identity();
   }
 }
 
 TEST_F(GenericKrylov, every_method_preserves_a_tiny_warm_residual_beside_a_huge_reference) {
   struct MethodCase {
-    KrylovMethod method;
-    int restart;
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 4},
-      {KrylovMethod::kRichardson, 0},
+      {TestKrylovFamily::kCg, cg_krylov_method()},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method()},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(4)},
+      {TestKrylovFamily::kRichardson, richardson_krylov_method()},
   }};
   ApplyFn identity = [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); };
 
@@ -1262,14 +1583,15 @@ TEST_F(GenericKrylov, every_method_preserves_a_tiny_warm_residual_beside_a_huge_
       for_each_cell(warm.box(local), SparseHugeWarmStartKernel{warm.fab(local).array()});
     }
     const LinearOperatorProperties properties =
-        method.method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                           : LinearOperatorProperties::general();
+        method.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
     const SolveReport report = run_prepared(identity, warm, rhs, method.method, properties, Real(0),
-                                            Real(1e-310), 4, method.restart);
+                                            Real(1e-310), 4);
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+    EXPECT_TRUE(report.solved()) << "method=" << method.method.identity()
                                  << " reason=" << report.reason;
-    EXPECT_EQ(report.iters, 1) << "method=" << static_cast<int>(method.method);
+    EXPECT_EQ(report.iters, 1) << "method=" << method.method.identity();
     EXPECT_GT(report.reference_residual_norm, Real(1e299));
     EXPECT_EQ(report.residual_norm, Real(0));
   }
@@ -1288,8 +1610,8 @@ TEST_F(GenericKrylov, gmres_normalizes_a_representable_subnormal_arnoldi_column)
   solution.set_val(Real(0));
 
   const SolveReport report =
-      run_prepared(almost_identity, solution, rhs, KrylovMethod::kGmres,
-                   LinearOperatorProperties::general(), Real(0), Real(1e-320), 4, 4);
+      run_prepared(almost_identity, solution, rhs, gmres_krylov_method(4),
+                   LinearOperatorProperties::general(), Real(0), Real(1e-320), 4);
 
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 2);
@@ -1308,9 +1630,10 @@ TEST_F(GenericKrylov, gmres_restart_normalizes_a_representable_subnormal_residua
     for_each_cell(rhs.box(local), UnitAndSubnormalForcingKernel{rhs.fab(local).array()});
   solution.set_val(Real(0));
 
-  const SolveReport report = run_prepared(two_scale_diagonal, solution, rhs, KrylovMethod::kGmres,
+  const SolveReport report = run_prepared(two_scale_diagonal, solution, rhs,
+                                          gmres_krylov_method(1),
                                           LinearOperatorProperties::general(), Real(0),
-                                          std::numeric_limits<Real>::denorm_min(), 4, 1);
+                                          std::numeric_limits<Real>::denorm_min(), 4);
 
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 2);
@@ -1333,21 +1656,29 @@ TEST_F(GenericKrylov, cg_and_bicgstab_rebase_an_extreme_residual_before_restarti
     for_each_cell(exact.box(local), UnitPairSolutionKernel{exact.fab(local).array()});
   }
 
-  for (const KrylovMethod method : {KrylovMethod::kCg, KrylovMethod::kBicgstab}) {
+  struct MethodCase {
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
+  };
+  for (const MethodCase& test_case :
+       {MethodCase{TestKrylovFamily::kCg, cg_krylov_method()},
+        MethodCase{TestKrylovFamily::kBicgstab, bicgstab_krylov_method()}}) {
     MultiFab solution(*ba_, *dm_, 1, 1);
     solution.set_val(Real(0));
     const LinearOperatorProperties properties =
-        method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                    : LinearOperatorProperties::general();
-    const SolveReport report = run_prepared(two_scale_diagonal, solution, rhs, method, properties,
-                                            Real(0), Real(1e-210), 4);
+        test_case.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
+    const SolveReport report = run_prepared(two_scale_diagonal, solution, rhs, test_case.method,
+                                            properties, Real(0), Real(1e-210), 4);
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method)
+    EXPECT_TRUE(report.solved()) << "method=" << test_case.method.identity()
                                  << " reason=" << report.reason;
-    EXPECT_EQ(report.iters, 2) << "method=" << static_cast<int>(method);
+    EXPECT_EQ(report.iters, 2) << "method=" << test_case.method.identity();
     EXPECT_EQ(report.reference_residual_norm, Real(1));
     EXPECT_EQ(report.residual_norm, Real(0));
-    EXPECT_LT(max_abs_diff(solution, exact), Real(1e-14)) << "method=" << static_cast<int>(method);
+    EXPECT_LT(max_abs_diff(solution, exact), Real(1e-14))
+        << "method=" << test_case.method.identity();
   }
 }
 
@@ -1359,8 +1690,8 @@ TEST_F(GenericKrylov, gmres_does_not_count_an_unusable_arnoldi_column_as_an_iter
   solution.set_val(Real(0));
 
   const SolveReport report =
-      run_prepared(zero_operator, solution, rhs, KrylovMethod::kGmres,
-                   LinearOperatorProperties::general(), kRelTol, Real(0), 4, 1);
+      run_prepared(zero_operator, solution, rhs, gmres_krylov_method(1),
+                   LinearOperatorProperties::general(), kRelTol, Real(0), 4);
 
   EXPECT_EQ(report.status, SolveStatus::kBreakdown);
   EXPECT_EQ(report.iters, 0);
@@ -1387,7 +1718,7 @@ TEST_F(GenericKrylov, reference_preserves_tiny_forcing_beside_a_cancelling_huge_
   x.set_val(Real(0));
 
   const SolveReport report =
-      run_prepared(affine_identity, x, rhs, KrylovMethod::kCg,
+      run_prepared(affine_identity, x, rhs, cg_krylov_method(),
                    LinearOperatorProperties::symmetric_positive_definite(), kRelTol, Real(0), 4);
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_NEAR(report.reference_residual_norm / Real(1e-200), Real(1), Real(1e-14));
@@ -1397,14 +1728,14 @@ TEST_F(GenericKrylov, reference_preserves_tiny_forcing_beside_a_cancelling_huge_
 
 TEST_F(GenericKrylov, every_method_solves_a_compatible_periodic_nullspace_problem) {
   struct MethodCase {
-    KrylovMethod method;
+    TestKrylovFamily family;
     int restart;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 4},
-      {KrylovMethod::kRichardson, 0},
+      {TestKrylovFamily::kCg, 0},
+      {TestKrylovFamily::kBicgstab, 0},
+      {TestKrylovFamily::kGmres, 4},
+      {TestKrylovFamily::kRichardson, 0},
   }};
 
   MultiFab exact(*ba_, *dm_, 1, 1);
@@ -1423,15 +1754,17 @@ TEST_F(GenericKrylov, every_method_solves_a_compatible_periodic_nullspace_proble
     MultiFab x(*ba_, *dm_, 1, 1);
     x.set_val(Real(3));  // The declared gauge must be applied before the initial residual.
     const Real relaxation =
-        method.method == KrylovMethod::kRichardson ? Real(1) / single_mode_eigenvalue : Real(1);
+        method.family == TestKrylovFamily::kRichardson ? Real(1) / single_mode_eigenvalue : Real(1);
+    const PreparedKrylovMethod configured_method =
+        test_krylov_method(method.family, method.restart, relaxation);
     const SolveReport report = run_prepared_with_preconditioner(
-        negative_laplacian, x, compatible_rhs, method.method,
-        periodic_nullspace_properties(method.method), PreparedLinearPreconditioner::identity(),
-        kRelTol, Real(0), 20, method.restart, relaxation, periodic_mean_zero_policy(*geom_));
+        negative_laplacian, x, compatible_rhs, configured_method,
+        periodic_nullspace_properties(method.family), PreparedLinearPreconditioner::identity(),
+        kRelTol, Real(0), 20, periodic_mean_zero_policy(*geom_));
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+    EXPECT_TRUE(report.solved()) << "method=" << configured_method.identity()
                                  << " reason=" << report.reason;
-    EXPECT_LT(max_abs_diff(x, exact), kRecoverTol) << "method=" << static_cast<int>(method.method);
+    EXPECT_LT(max_abs_diff(x, exact), kRecoverTol) << "method=" << configured_method.identity();
     EXPECT_NEAR(reduce_sum(x) / static_cast<Real>(kN * kN), Real(0), Real(1e-13))
         << "the final published value must satisfy the declared mean-zero gauge";
   }
@@ -1448,7 +1781,7 @@ TEST_F(GenericKrylov, final_residual_confirmation_has_no_redundant_nonsingular_a
   PureFieldAlgebra::copy(warm, *phi_exact_mf_);
   PureFieldAlgebra::copy(identity_rhs, *phi_exact_mf_);
   const SolveReport warm_report =
-      run_prepared(counted_identity, warm, identity_rhs, KrylovMethod::kCg,
+      run_prepared(counted_identity, warm, identity_rhs, cg_krylov_method(),
                    LinearOperatorProperties::symmetric_positive_definite(), kRelTol, Real(0), 4);
   EXPECT_TRUE(warm_report.solved());
   EXPECT_EQ(warm_report.iters, 0);
@@ -1462,11 +1795,39 @@ TEST_F(GenericKrylov, final_residual_confirmation_has_no_redundant_nonsingular_a
   MultiFab limited(*ba_, *dm_, 1, 1);
   limited.set_val(Real(0));
   const SolveReport limited_report =
-      run_prepared(limited_identity, limited, identity_rhs, KrylovMethod::kRichardson,
-                   LinearOperatorProperties::general(), Real(1e-14), Real(0), 1, 0, Real(0.25));
+      run_prepared(limited_identity, limited, identity_rhs, richardson_krylov_method(Real(0.25)),
+                   LinearOperatorProperties::general(), Real(1e-14), Real(0), 1);
   EXPECT_EQ(limited_report.status, SolveStatus::kIterationLimit);
   EXPECT_EQ(limited_apply_count, 3)
       << "A(0), the initial residual, and the one authored Richardson step only";
+
+  struct OneStepRoute {
+    PreparedKrylovMethod method;
+    LinearOperatorProperties properties;
+  };
+  const std::array<OneStepRoute, 3> routes{{
+      {cg_krylov_method(), LinearOperatorProperties::symmetric_positive_definite()},
+      {bicgstab_krylov_method(), LinearOperatorProperties::general()},
+      {gmres_krylov_method(1), LinearOperatorProperties::general()},
+  }};
+  for (const OneStepRoute& route : routes) {
+    int apply_count = 0;
+    ApplyFn counted = [&apply_count](MultiFab& out, const MultiFab& in) {
+      ++apply_count;
+      PureFieldAlgebra::copy(out, in);
+    };
+    MultiFab iterate(*ba_, *dm_, 1, 1);
+    PureFieldAlgebra::zero_valid(iterate);
+    const SolveReport report =
+        run_prepared(counted, iterate, identity_rhs, route.method, route.properties, Real(1e-14),
+                     Real(0), 1);
+
+    EXPECT_TRUE(report.solved()) << "method=" << route.method.identity();
+    EXPECT_EQ(report.iters, 1) << "method=" << route.method.identity();
+    EXPECT_EQ(apply_count, 4)
+        << "A(0), initial residual, one method matvec, and one common final confirmation; method="
+        << route.method.identity();
+  }
 }
 
 TEST_F(GenericKrylov, singular_solved_value_pays_exactly_one_post_gauge_confirmation) {
@@ -1487,9 +1848,10 @@ TEST_F(GenericKrylov, singular_solved_value_pays_exactly_one_post_gauge_confirma
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(Real(3));
   const SolveReport report = run_prepared_with_preconditioner(
-      counted, x, compatible_rhs, KrylovMethod::kCg,
-      periodic_nullspace_properties(KrylovMethod::kCg), PreparedLinearPreconditioner::identity(),
-      kRelTol, Real(0), 4, 0, Real(1), periodic_mean_zero_policy(*geom_));
+      counted, x, compatible_rhs, cg_krylov_method(),
+      periodic_nullspace_properties(TestKrylovFamily::kCg),
+      PreparedLinearPreconditioner::identity(),
+      kRelTol, Real(0), 4, periodic_mean_zero_policy(*geom_));
 
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 1);
@@ -1499,14 +1861,14 @@ TEST_F(GenericKrylov, singular_solved_value_pays_exactly_one_post_gauge_confirma
 
 TEST_F(GenericKrylov, every_method_reports_an_incompatible_rhs_before_gauge_or_iteration) {
   struct MethodCase {
-    KrylovMethod method;
+    TestKrylovFamily family;
     int restart;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 4},
-      {KrylovMethod::kRichardson, 0},
+      {TestKrylovFamily::kCg, 0},
+      {TestKrylovFamily::kBicgstab, 0},
+      {TestKrylovFamily::kGmres, 4},
+      {TestKrylovFamily::kRichardson, 0},
   }};
 
   MultiFab exact(*ba_, *dm_, 1, 1);
@@ -1530,13 +1892,15 @@ TEST_F(GenericKrylov, every_method_reports_an_incompatible_rhs_before_gauge_or_i
     };
     MultiFab x(*ba_, *dm_, 1, 1);
     PureFieldAlgebra::copy(x, exact);
+    const PreparedKrylovMethod configured_method =
+        test_krylov_method(method.family, method.restart);
     const SolveReport report = run_prepared_with_preconditioner(
-        counted, x, incompatible_rhs, method.method, periodic_nullspace_properties(method.method),
-        PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 20, method.restart, Real(1),
-        periodic_mean_zero_policy(*geom_));
+        counted, x, incompatible_rhs, configured_method,
+        periodic_nullspace_properties(method.family), PreparedLinearPreconditioner::identity(),
+        kRelTol, Real(0), 20, periodic_mean_zero_policy(*geom_));
 
     EXPECT_EQ(report.status, SolveStatus::kIncompatibleRhs)
-        << "method=" << static_cast<int>(method.method);
+        << "method=" << configured_method.identity();
     EXPECT_EQ(report.action, SolveAction::kFailRun);
     EXPECT_EQ(report.iters, 0);
     EXPECT_NE(report.reason.find("incompatible"), std::string::npos);
@@ -1556,9 +1920,9 @@ TEST_F(GenericKrylov, nonfinite_nullspace_rhs_is_invalid_not_incompatible) {
   x.set_val(Real(0));
 
   const SolveReport report = run_prepared_with_preconditioner(
-      negative_laplacian, x, nonfinite_rhs, KrylovMethod::kCg,
+      negative_laplacian, x, nonfinite_rhs, cg_krylov_method(),
       LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(),
-      PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4, 0, Real(1),
+      PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4,
       periodic_mean_zero_policy(*geom_));
   EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
   EXPECT_NE(report.status, SolveStatus::kIncompatibleRhs);
@@ -1570,19 +1934,19 @@ TEST_F(GenericKrylov, nullspace_and_positive_definiteness_certificates_must_be_c
   x.set_val(Real(0));
 
   EXPECT_THROW((void)run_prepared_with_preconditioner(
-                   identity, x, *rhs_, KrylovMethod::kCg,
+                   identity, x, *rhs_, cg_krylov_method(),
                    LinearOperatorProperties::symmetric_positive_definite(),
-                   PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4, 0, Real(1),
+                   PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4,
                    periodic_mean_zero_policy(*geom_)),
                std::invalid_argument);
   EXPECT_THROW((void)run_prepared(
-                   identity, x, *rhs_, KrylovMethod::kCg,
+                   identity, x, *rhs_, cg_krylov_method(),
                    LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(),
                    kRelTol, Real(0), 4),
                std::invalid_argument);
   EXPECT_THROW((void)run_prepared_with_preconditioner(
-                   identity, x, *rhs_, KrylovMethod::kCg, LinearOperatorProperties::symmetric(),
-                   PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4, 0, Real(1),
+                   identity, x, *rhs_, cg_krylov_method(), LinearOperatorProperties::symmetric(),
+                   PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 4,
                    periodic_mean_zero_policy(*geom_)),
                std::invalid_argument);
 }
@@ -1610,9 +1974,9 @@ TEST_F(GenericKrylov, periodic_nullspace_solve_is_collective_safe_with_an_empty_
   EXPECT_EQ(x.local_size(), my_rank() == 0 ? 1 : 0);
   ASSERT_EQ(static_cast<int>(all_reduce_sum(static_cast<double>(x.local_size()))), 1);
   const SolveReport report = run_prepared_with_preconditioner(
-      negative_laplacian, x, rhs, KrylovMethod::kCg,
+      negative_laplacian, x, rhs, cg_krylov_method(),
       LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(),
-      PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 20, 0, Real(1),
+      PreparedLinearPreconditioner::identity(), kRelTol, Real(0), 20,
       periodic_mean_zero_policy(geometry));
 
   EXPECT_TRUE(report.solved()) << report.reason;
@@ -1627,17 +1991,16 @@ TEST_F(GenericKrylov, gmres_restart_decision_is_invariant_to_preconditioner_scal
   x_scaled.set_val(0.0);
 
   const SolveReport unit = run_prepared_with_preconditioner(
-      *A_, x_unit, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
-      affine_scaled_identity_preconditioner(x_unit, Real(1), Real(3.25)), kRelTol, Real(0), 500, 30,
-      Real(1));
+      *A_, x_unit, *rhs_, gmres_krylov_method(30), LinearOperatorProperties::general(),
+      affine_scaled_identity_preconditioner(x_unit, Real(1), Real(3.25)), kRelTol, Real(0), 500);
   // Scale the affine response with the linear map as a physical rescaling of one preconditioner
   // would do. Keeping a fixed O(1) offset while shrinking only the direction response to 1e-8
   // makes M_raw(v)-M_raw(0) an intentionally ill-conditioned floating-point subtraction and no
   // longer tests restart invariance of equivalent preconditioners.
   const SolveReport scaled = run_prepared_with_preconditioner(
-      *A_, x_scaled, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      *A_, x_scaled, *rhs_, gmres_krylov_method(30), LinearOperatorProperties::general(),
       affine_scaled_identity_preconditioner(x_scaled, Real(1e-8), Real(3.25e-8)), kRelTol, Real(0),
-      500, 30, Real(1));
+      500);
 
   EXPECT_TRUE(unit.solved()) << "unit-scaled preconditioner failed after " << unit.iters;
   EXPECT_TRUE(scaled.solved()) << "small-scaled preconditioner failed after " << scaled.iters;
@@ -1649,12 +2012,11 @@ TEST_F(GenericKrylov, gmres_restart_decision_is_invariant_to_preconditioner_scal
 
 TEST_F(GenericKrylov, prepared_methods_remove_extreme_finite_preconditioner_scaling) {
   struct MethodCase {
-    KrylovMethod method;
-    int restart;
+    PreparedKrylovMethod method;
   };
   const std::array<MethodCase, 2> methods{{
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 30},
+      {bicgstab_krylov_method()},
+      {gmres_krylov_method(30)},
   }};
   const std::array<Real, 2> scales{{Real(1e-200), Real(1e200)}};
 
@@ -1665,12 +2027,12 @@ TEST_F(GenericKrylov, prepared_methods_remove_extreme_finite_preconditioner_scal
       const SolveReport report = run_prepared_with_preconditioner(
           *A_, x, *rhs_, method.method, LinearOperatorProperties::general(),
           affine_scaled_identity_preconditioner(x, scale, Real(3.25) * scale), kRelTol, Real(0),
-          500, method.restart, Real(1));
+          500);
 
-      EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method)
+      EXPECT_TRUE(report.solved()) << "method=" << method.method.identity()
                                    << " scale=" << scale << " reason=" << report.reason;
       EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol)
-          << "method=" << static_cast<int>(method.method) << " scale=" << scale;
+          << "method=" << method.method.identity() << " scale=" << scale;
     }
   }
 }
@@ -1679,37 +2041,34 @@ TEST_F(GenericKrylov, bicgstab_linearizes_an_affine_preconditioner) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(Real(0));
   const SolveReport report = run_prepared_with_preconditioner(
-      *A_, x, *rhs_, KrylovMethod::kBicgstab, LinearOperatorProperties::general(),
-      affine_scaled_identity_preconditioner(x, Real(0.75), Real(8.0)), kRelTol, Real(0), 500, 0,
-      Real(1));
+      *A_, x, *rhs_, bicgstab_krylov_method(), LinearOperatorProperties::general(),
+      affine_scaled_identity_preconditioner(x, Real(0.75), Real(8.0)), kRelTol, Real(0), 500);
   EXPECT_TRUE(report.solved());
   EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol);
 }
 
 TEST_F(GenericKrylov, generic_methods_linearize_real_dirichlet_and_robin_preconditioners) {
   struct Case {
-    KrylovMethod method;
+    PreparedKrylovMethod method;
     BCType boundary;
   };
   const std::array<Case, 4> cases{{
-      {KrylovMethod::kGmres, BCType::Dirichlet},
-      {KrylovMethod::kGmres, BCType::Robin},
-      {KrylovMethod::kBicgstab, BCType::Dirichlet},
-      {KrylovMethod::kBicgstab, BCType::Robin},
+      {gmres_krylov_method(30), BCType::Dirichlet},
+      {gmres_krylov_method(30), BCType::Robin},
+      {bicgstab_krylov_method(), BCType::Dirichlet},
+      {bicgstab_krylov_method(), BCType::Robin},
   }};
   for (const Case& test_case : cases) {
     MultiFab x(*ba_, *dm_, 1, 1);
     x.set_val(Real(0));
-    const int restart = test_case.method == KrylovMethod::kGmres ? 30 : 0;
     const SolveReport report = run_prepared_with_preconditioner(
         *A_, x, *rhs_, test_case.method, LinearOperatorProperties::general(),
-        boundary_affine_preconditioner(x, *geom_, test_case.boundary), kRelTol, Real(0), 500,
-        restart, Real(1));
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(test_case.method)
+        boundary_affine_preconditioner(x, *geom_, test_case.boundary), kRelTol, Real(0), 500);
+    EXPECT_TRUE(report.solved()) << "method=" << test_case.method.identity()
                                  << " boundary=" << static_cast<int>(test_case.boundary)
                                  << " iters=" << report.iters;
     EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol)
-        << "method=" << static_cast<int>(test_case.method)
+        << "method=" << test_case.method.identity()
         << " boundary=" << static_cast<int>(test_case.boundary);
   }
 }
@@ -1777,14 +2136,14 @@ TEST_F(GenericKrylov, prepared_tensor_identity_matches_the_geometric_mg_referenc
   ASSERT_TRUE(reference.last_solve_report().solved());
 
   auto op = std::make_shared<GeometricMG>(geometry, boxes, distribution, boundary);
-  op->set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  op->set_cross_terms(constant_scalar_field_provider(Real(0)),
+                      constant_scalar_field_provider(Real(0)));
   MultiFab iterate(boxes, distribution, 1, 1);
   PureFieldAlgebra::zero_valid(iterate);
   const SolveReport report = run_prepared_with_preconditioner(
-      tensor_operator_apply(op), iterate, rhs, KrylovMethod::kBicgstab,
+      tensor_operator_apply(op), iterate, rhs, bicgstab_krylov_method(),
       LinearOperatorProperties::general(),
-      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-12), Real(0), 300,
-      0, Real(1));
+      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-12), Real(0), 300);
 
   EXPECT_TRUE(report.solved()) << report.status_name();
   EXPECT_LT(max_abs_diff(iterate, reference.phi()), Real(1e-8));
@@ -1839,7 +2198,8 @@ TEST_F(GenericKrylov, prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms)
   ASSERT_TRUE(reference.last_solve_report().solved());
 
   auto op = std::make_shared<GeometricMG>(geometry, boxes, distribution, boundary);
-  op->set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  op->set_cross_terms(constant_scalar_field_provider(Real(0)),
+                      constant_scalar_field_provider(Real(0)));
   MultiFab iterate(boxes, distribution, 1, 1);
   MultiFab exact(boxes, distribution, 1, 1);
   for (int local = 0; local < exact.local_size(); ++local) {
@@ -1848,10 +2208,9 @@ TEST_F(GenericKrylov, prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms)
   }
   PureFieldAlgebra::zero_valid(iterate);
   const SolveReport report = run_prepared_with_preconditioner(
-      tensor_operator_apply(op), iterate, rhs, KrylovMethod::kBicgstab,
+      tensor_operator_apply(op), iterate, rhs, bicgstab_krylov_method(),
       LinearOperatorProperties::general(),
-      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-10), Real(0), 300,
-      0, Real(1));
+      prepared_geometric_mg_preconditioner(iterate, geometry, boundary), Real(1e-10), Real(0), 300);
 
   EXPECT_TRUE(report.solved()) << report.status_name();
   EXPECT_LT(report.rel_residual, Real(1e-10));
@@ -1862,15 +2221,15 @@ TEST_F(GenericKrylov, prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms)
 TEST_F(GenericKrylov, cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator) {
   MultiFab x_cg(*ba_, *dm_, 1, 1);
   x_cg.set_val(0.0);
-  EXPECT_THROW((void)run_prepared(*A_ns_, x_cg, *rhs_ns_, KrylovMethod::kCg,
+  EXPECT_THROW((void)run_prepared(*A_ns_, x_cg, *rhs_ns_, cg_krylov_method(),
                                   LinearOperatorProperties::general()),
                std::invalid_argument);
 
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
   const SolveReport r =
-      run_prepared(*A_ns_, x, *rhs_ns_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
-                   kRelTol, Real(0), 500, 30);
+      run_prepared(*A_ns_, x, *rhs_ns_, gmres_krylov_method(30),
+                   LinearOperatorProperties::general(), kRelTol, Real(0), 500);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(nsy): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -1884,26 +2243,29 @@ TEST_F(GenericKrylov, cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric
 TEST_F(GenericKrylov, zero_max_iters_throws_invalid_argument) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  EXPECT_THROW((void)run_prepared(*A_, x, *rhs_, KrylovMethod::kCg,
+  EXPECT_THROW((void)run_prepared(*A_, x, *rhs_, cg_krylov_method(),
                                   LinearOperatorProperties::symmetric_positive_definite(), kRelTol,
                                   Real(0), 0),
                std::invalid_argument);
+}
 
-  EXPECT_THROW((void)run_prepared(*A_, x, *rhs_, KrylovMethod::kCg,
-                                  LinearOperatorProperties::symmetric_positive_definite(), kRelTol,
-                                  Real(0), 10, 0, Real(0.5)),
+TEST_F(GenericKrylov, richardson_relaxation_is_validated_by_the_prepared_method) {
+  EXPECT_THROW((void)richardson_krylov_method(Real(0)),
                std::invalid_argument);
+  EXPECT_THROW(
+      (void)richardson_krylov_method(std::numeric_limits<Real>::quiet_NaN()),
+      std::invalid_argument);
 }
 
 TEST_F(GenericKrylov, gmres_restart_is_exact_and_dynamically_sized) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  EXPECT_THROW((void)run_prepared(*A_, x, *rhs_, KrylovMethod::kGmres,
-                                  LinearOperatorProperties::general(), kRelTol, Real(0), 500, 0),
+  EXPECT_THROW((void)run_prepared(*A_, x, *rhs_, gmres_krylov_method(0),
+                                  LinearOperatorProperties::general(), kRelTol, Real(0), 500),
                std::invalid_argument);
   const SolveReport dynamic =
-      run_prepared(*A_, x, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
-                   kRelTol, Real(0), 500, 51);
+      run_prepared(*A_, x, *rhs_, gmres_krylov_method(51), LinearOperatorProperties::general(),
+                   kRelTol, Real(0), 500);
   EXPECT_TRUE(dynamic.solved());
 }
 
@@ -1911,8 +2273,8 @@ TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   MultiFab x_limit(*ba_, *dm_, 1, 1);
   x_limit.set_val(0.0);
   const SolveReport limited =
-      run_prepared(*A_, x_limit, *rhs_, KrylovMethod::kRichardson,
-                   LinearOperatorProperties::general(), kRelTol, Real(0), 1, 0, Real(1e-12));
+      run_prepared(*A_, x_limit, *rhs_, richardson_krylov_method(Real(1e-12)),
+                   LinearOperatorProperties::general(), kRelTol, Real(0), 1);
   EXPECT_FALSE(limited.solved_value_available());
   EXPECT_EQ(limited.status, SolveStatus::kIterationLimit);
   EXPECT_EQ(limited.action, SolveAction::kFailRun);
@@ -1921,7 +2283,7 @@ TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   MultiFab x_break(*ba_, *dm_, 1, 1);
   x_break.set_val(0.0);
   const SolveReport breakdown =
-      run_prepared(zero_op, x_break, *rhs_, KrylovMethod::kCg,
+      run_prepared(zero_op, x_break, *rhs_, cg_krylov_method(),
                    LinearOperatorProperties::symmetric_positive_definite(), kRelTol, Real(0), 10);
   EXPECT_FALSE(breakdown.solved_value_available());
   EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
@@ -1940,7 +2302,7 @@ TEST_F(GenericKrylov, affine_constant_is_removed_exactly) {
   affine(affine_rhs, *phi_exact_mf_);
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport report = run_prepared(affine, x, affine_rhs, KrylovMethod::kCg,
+  const SolveReport report = run_prepared(affine, x, affine_rhs, cg_krylov_method(),
                                           LinearOperatorProperties::symmetric_positive_definite());
   EXPECT_TRUE(report.solved());
   EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol);
@@ -1957,27 +2319,27 @@ TEST_F(GenericKrylov, every_method_removes_the_affine_operator_constant) {
   affine_identity(affine_rhs, *phi_exact_mf_);
 
   struct MethodCase {
-    KrylovMethod method;
-    int restart;
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
   };
   const std::array<MethodCase, 4> methods{{
-      {KrylovMethod::kCg, 0},
-      {KrylovMethod::kBicgstab, 0},
-      {KrylovMethod::kGmres, 4},
-      {KrylovMethod::kRichardson, 0},
+      {TestKrylovFamily::kCg, cg_krylov_method()},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method()},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(4)},
+      {TestKrylovFamily::kRichardson, richardson_krylov_method()},
   }};
   for (const MethodCase& method : methods) {
     MultiFab x(*ba_, *dm_, 1, 1);
     x.set_val(Real(0));
     const LinearOperatorProperties properties =
-        method.method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                           : LinearOperatorProperties::general();
+        method.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
     const SolveReport report =
-        run_prepared(affine_identity, x, affine_rhs, method.method, properties, kRelTol, Real(0), 8,
-                     method.restart, Real(1));
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(method.method);
+        run_prepared(affine_identity, x, affine_rhs, method.method, properties, kRelTol, Real(0), 8);
+    EXPECT_TRUE(report.solved()) << "method=" << method.method.identity();
     EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol)
-        << "method=" << static_cast<int>(method.method);
+        << "method=" << method.method.identity();
   }
 }
 
@@ -1986,8 +2348,8 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   MultiFab exact(*ba_, *dm_, 1, 1);
   PureFieldAlgebra::copy(exact, *phi_exact_mf_);
   const SolveReport warm =
-      run_prepared(*A_, exact, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
-                   kRelTol, Real(0), 50, 10);
+      run_prepared(*A_, exact, *rhs_, gmres_krylov_method(10),
+                   LinearOperatorProperties::general(), kRelTol, Real(0), 50);
   EXPECT_TRUE(warm.solved());
   EXPECT_EQ(warm.iters, 0);
   EXPECT_NEAR(warm.reference_residual_norm, forcing_reference, forcing_reference * Real(1e-14))
@@ -1996,7 +2358,7 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   MultiFab zero(*ba_, *dm_, 1, 1);
   zero.set_val(0.0);
   const SolveReport absolute =
-      run_prepared(*A_, zero, *rhs_, KrylovMethod::kBicgstab, LinearOperatorProperties::general(),
+      run_prepared(*A_, zero, *rhs_, bicgstab_krylov_method(), LinearOperatorProperties::general(),
                    Real(0), forcing_reference, 50);
   EXPECT_TRUE(absolute.solved());
   EXPECT_EQ(absolute.iters, 0);
@@ -2007,7 +2369,7 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   zero_rhs.set_val(Real(0));
   zero_solution.set_val(Real(0));
   const SolveReport zero_forcing = run_prepared(
-      identity, zero_solution, zero_rhs, KrylovMethod::kCg,
+      identity, zero_solution, zero_rhs, cg_krylov_method(),
       LinearOperatorProperties::symmetric_positive_definite(), Real(0), Real(1e-14), 4);
   EXPECT_TRUE(zero_forcing.solved());
   EXPECT_EQ(zero_forcing.iters, 0);
@@ -2016,7 +2378,7 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   MultiFab nonzero_guess(*ba_, *dm_, 1, 1);
   nonzero_guess.set_val(Real(1));
   const SolveReport zero_reference_does_not_turn_relative_tolerance_absolute = run_prepared(
-      identity, nonzero_guess, zero_rhs, KrylovMethod::kCg,
+      identity, nonzero_guess, zero_rhs, cg_krylov_method(),
       LinearOperatorProperties::symmetric_positive_definite(), Real(0.5), Real(1e-14), 4);
   EXPECT_TRUE(zero_reference_does_not_turn_relative_tolerance_absolute.solved());
   EXPECT_GT(zero_reference_does_not_turn_relative_tolerance_absolute.iters, 0);
@@ -2029,7 +2391,7 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   tiny_rhs.set_val(Real(1e-16));
   tiny_solution.set_val(Real(0));
   const SolveReport tiny_forcing = run_prepared(
-      identity, tiny_solution, tiny_rhs, KrylovMethod::kCg,
+      identity, tiny_solution, tiny_rhs, cg_krylov_method(),
       LinearOperatorProperties::symmetric_positive_definite(), Real(0), Real(1e-14), 4);
   EXPECT_TRUE(tiny_forcing.solved());
   EXPECT_EQ(tiny_forcing.iters, 0);
@@ -2042,7 +2404,7 @@ TEST_F(GenericKrylov, true_residual_report_is_scale_safe_for_an_extreme_warm_sta
   rhs.set_val(Real(1e-200));
   warm.set_val(Real(1e200));
 
-  const SolveReport report = run_prepared(identity, warm, rhs, KrylovMethod::kCg,
+  const SolveReport report = run_prepared(identity, warm, rhs, cg_krylov_method(),
                                           LinearOperatorProperties::symmetric_positive_definite(),
                                           Real(0), Real(4e201), 4);
 
@@ -2057,27 +2419,21 @@ TEST_F(GenericKrylov, true_residual_report_is_scale_safe_for_an_extreme_warm_sta
 TEST_F(GenericKrylov, final_true_residual_promotes_an_exhausted_iteration_budget) {
   ApplyFn identity = [](MultiFab& out, const MultiFab& in) { PureFieldAlgebra::copy(out, in); };
   MultiFab rhs(*ba_, *dm_, 1, 0);
-  MultiFab exact(*ba_, *dm_, 1, 1);
-  MultiFab scratch(*ba_, *dm_, 1, 1);
-  PureFieldAlgebra::copy(rhs, *phi_exact_mf_);
-  PureFieldAlgebra::copy(exact, *phi_exact_mf_);
-  const KrylovFootprint footprint{1, 1, 0, false};
-  OperatorEvaluationSnapshot snapshot = snapshot_for(exact);
-  PreparedAffineLinearProblem problem(exact, identity, PreparedLinearPreconditioner::identity(),
-                                      LinearOperatorProperties::symmetric_positive_definite(),
-                                      footprint, PreparedNullspacePolicy::nonsingular(),
-                                      [&snapshot]() { return snapshot; });
-  problem.prepare(snapshot);
-  const Real reference = PureFieldAlgebra::norm(rhs);
+  MultiFab iterate(*ba_, *dm_, 1, 1);
+  rhs.set_val(Real(1));
+  PureFieldAlgebra::zero_valid(iterate);
 
-  const SolveReport report = detail::checked_report(
-      problem, scratch, rhs, exact,
-      detail::SolveNormalization{reference, reference, Real(1e-14), reference * Real(1e-14)}, 1,
-      SolveStatus::kIterationLimit);
+  // Richardson reaches the exact identity solution on its last permitted step. The builtin
+  // deliberately publishes only a terminal candidate there; the common provider-independent
+  // wrapper owns the single true-residual matvec and must promote that candidate to Solved.
+  const SolveReport report = run_prepared(
+      identity, iterate, rhs, richardson_krylov_method(Real(1)),
+      LinearOperatorProperties::general(), Real(1e-14), Real(0), 1);
 
   EXPECT_TRUE(report.solved());
   EXPECT_EQ(report.iters, 1);
   EXPECT_EQ(report.residual_norm, Real(0));
+  EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
 }
 
 TEST_F(GenericKrylov, snapshot_rejects_nonfinite_or_incoherent_time_identity) {
@@ -2097,16 +2453,17 @@ TEST_F(GenericKrylov, snapshot_rejects_nonfinite_or_incoherent_time_identity) {
 TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  KrylovFootprint footprint{1, 1, 10, false};
+  KrylovFootprint footprint{1, 1, false};
   OperatorEvaluationSnapshot snapshot = snapshot_for(x);
   PreparedAffineLinearProblem problem(
       x, *A_, PreparedLinearPreconditioner::identity(), LinearOperatorProperties::general(),
       footprint, PreparedNullspacePolicy::nonsingular(), [&snapshot]() { return snapshot; });
-  KrylovWorkspace workspace(x, KrylovMethod::kGmres, footprint);
+  const PreparedKrylovMethod method = gmres_krylov_method(10);
+  KrylovWorkspace workspace(x, method, footprint);
   const std::size_t allocations = workspace.allocation_count();
   EXPECT_EQ(workspace.scalar_value_count(), 282u);
   EXPECT_EQ(workspace.collective_value_count(), 748u);
-  const KrylovControls controls{KrylovMethod::kGmres, kRelTol, Real(0), 500, 10, Real(1)};
+  const KrylovControls controls{method, kRelTol, Real(0), 500};
 
   problem.prepare(snapshot);
   workspace.bind(problem);
@@ -2138,23 +2495,23 @@ TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
 }
 
 TEST_F(GenericKrylov, prepared_hot_solves_allocate_no_fab_or_communication_storage) {
+  const Real h = geom_->dx();
+  const Real richardson_omega = Real(1) / (Real(1) + kAlpha * Real(8) / (h * h));
   struct Route {
-    KrylovMethod method;
-    int restart;
+    TestKrylovFamily family;
+    PreparedKrylovMethod method;
     bool preconditioned;
   };
   // The first four routes cover every solver loop.  The final two additionally cover the only
   // preconditionable loops; CG and Richardson intentionally reject a preconditioner footprint.
   const std::array<Route, 6> routes{{
-      {KrylovMethod::kCg, 0, false},
-      {KrylovMethod::kBicgstab, 0, false},
-      {KrylovMethod::kGmres, 8, false},
-      {KrylovMethod::kRichardson, 0, false},
-      {KrylovMethod::kBicgstab, 0, true},
-      {KrylovMethod::kGmres, 8, true},
+      {TestKrylovFamily::kCg, cg_krylov_method(), false},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method(), false},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(8), false},
+      {TestKrylovFamily::kRichardson, richardson_krylov_method(richardson_omega), false},
+      {TestKrylovFamily::kBicgstab, bicgstab_krylov_method(), true},
+      {TestKrylovFamily::kGmres, gmres_krylov_method(8), true},
   }};
-  const Real h = geom_->dx();
-  const Real richardson_omega = Real(1) / (Real(1) + kAlpha * Real(8) / (h * h));
 
   for (const Route& route : routes) {
     MultiFab iterate(*ba_, *dm_, 1, 1);
@@ -2162,61 +2519,79 @@ TEST_F(GenericKrylov, prepared_hot_solves_allocate_no_fab_or_communication_stora
     PreparedLinearPreconditioner preconditioner =
         route.preconditioned ? affine_scaled_identity_preconditioner(iterate, Real(0.75), Real(2.5))
                              : PreparedLinearPreconditioner::identity();
-    const KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(), route.restart,
-                                    route.preconditioned};
+    const KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(), route.preconditioned};
     OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
     const LinearOperatorProperties properties =
-        route.method == KrylovMethod::kCg ? LinearOperatorProperties::symmetric_positive_definite()
-                                          : LinearOperatorProperties::general();
+        route.family == TestKrylovFamily::kCg
+            ? LinearOperatorProperties::symmetric_positive_definite()
+            : LinearOperatorProperties::general();
     PreparedAffineLinearProblem problem(iterate, *A_, std::move(preconditioner), properties,
                                         footprint, PreparedNullspacePolicy::nonsingular(),
                                         [&snapshot]() { return snapshot; });
     KrylovWorkspace workspace(iterate, route.method, footprint);
-    const KrylovControls controls{
-        route.method,  Real(1e-6),
-        Real(0),       5000,
-        route.restart, route.method == KrylovMethod::kRichardson ? richardson_omega : Real(1)};
+    const KrylovControls controls{route.method, Real(1e-6), Real(0), 5000};
 
     problem.prepare(snapshot);
     workspace.bind(problem);
-    const AllocationEventStats before_hot_solve = allocation_event_stats();
-    const SolveReport report = solve_prepared_affine(problem, workspace, iterate, *rhs_, controls);
-    const AllocationEventStats after_hot_solve = allocation_event_stats();
+    for (int repetition = 0; repetition < 2; ++repetition) {
+      const AllocationEventStats before_hot_solve = allocation_event_stats();
+      const std::uint64_t consensus_calls_before =
+          exact_consensus_dynamic_storage_calls();
+      const SolveReport report =
+          solve_prepared_affine(problem, workspace, iterate, *rhs_, controls);
+      const std::uint64_t consensus_calls_after =
+          exact_consensus_dynamic_storage_calls();
+      const AllocationEventStats after_hot_solve = allocation_event_stats();
 
-    EXPECT_TRUE(report.solved()) << "method=" << static_cast<int>(route.method)
-                                 << " preconditioned=" << route.preconditioned
-                                 << " reason=" << report.reason;
-    EXPECT_EQ(after_hot_solve, before_hot_solve)
-        << "after prepare+bind, the hot solve must not allocate PoPS Fab or communication storage"
-        << " (this intentionally does not claim to measure general malloc)"
-        << " method=" << static_cast<int>(route.method)
-        << " preconditioned=" << route.preconditioned;
+      EXPECT_TRUE(report.solved()) << "method=" << route.method.identity()
+                                   << " preconditioned=" << route.preconditioned
+                                   << " repetition=" << repetition
+                                   << " reason=" << report.reason;
+      EXPECT_EQ(after_hot_solve, before_hot_solve)
+          << "after prepare+bind, the hot solve must not allocate PoPS Fab or communication storage"
+          << " method=" << route.method.identity()
+          << " preconditioned=" << route.preconditioned
+          << " repetition=" << repetition;
+      EXPECT_EQ(consensus_calls_after, consensus_calls_before)
+          << "after prepare+bind, solve must not call the exact-consensus helper that owns "
+             "dynamic host vectors"
+          << " method=" << route.method.identity()
+          << " preconditioned=" << route.preconditioned
+          << " repetition=" << repetition;
+
+      if (repetition == 0) {
+        PureFieldAlgebra::zero_valid(iterate);
+        ++snapshot.revision;
+        problem.prepare(snapshot);
+        workspace.bind(problem);
+      }
+    }
   }
 }
 
 TEST_F(GenericKrylov, iterate_and_rhs_must_not_alias) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  KrylovFootprint footprint{1, 1, 0, false};
+  KrylovFootprint footprint{1, 1, false};
   OperatorEvaluationSnapshot snapshot = snapshot_for(x);
   PreparedAffineLinearProblem problem(x, *A_, PreparedLinearPreconditioner::identity(),
                                       LinearOperatorProperties::symmetric_positive_definite(),
                                       footprint, PreparedNullspacePolicy::nonsingular(),
                                       [&snapshot]() { return snapshot; });
-  KrylovWorkspace workspace(x, KrylovMethod::kCg, footprint);
+  KrylovWorkspace workspace(x, cg_krylov_method(), footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);
 
   EXPECT_THROW((void)solve_prepared_affine(
                    problem, workspace, x, x,
-                   KrylovControls{KrylovMethod::kCg, kRelTol, Real(0), 10, 0, Real(1)}),
+                   KrylovControls{cg_krylov_method(), kRelTol, Real(0), 10}),
                std::invalid_argument);
 }
 
 TEST_F(GenericKrylov, extension_apply_mutation_is_refused_before_result_consumption) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  KrylovFootprint footprint{1, 1, 0, false};
+  KrylovFootprint footprint{1, 1, false};
   OperatorEvaluationSnapshot snapshot = snapshot_for(x);
   bool mutate_during_apply = false;
   ApplyFn extension_apply = [&snapshot, &mutate_during_apply](MultiFab& out, const MultiFab& in) {
@@ -2228,14 +2603,14 @@ TEST_F(GenericKrylov, extension_apply_mutation_is_refused_before_result_consumpt
       x, std::move(extension_apply), PreparedLinearPreconditioner::identity(),
       LinearOperatorProperties::symmetric_positive_definite(), footprint,
       PreparedNullspacePolicy::nonsingular(), [&snapshot]() { return snapshot; });
-  KrylovWorkspace workspace(x, KrylovMethod::kCg, footprint);
+  KrylovWorkspace workspace(x, cg_krylov_method(), footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);
   mutate_during_apply = true;
 
   EXPECT_THROW((void)solve_prepared_affine(
                    problem, workspace, x, *rhs_,
-                   KrylovControls{KrylovMethod::kCg, kRelTol, Real(0), 10, 0, Real(1)}),
+                   KrylovControls{cg_krylov_method(), kRelTol, Real(0), 10}),
                std::logic_error);
 }
 
@@ -2245,7 +2620,7 @@ TEST_F(GenericKrylov, rank_local_snapshot_drift_is_refused_collectively_at_all_s
 
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(Real(0));
-  const KrylovFootprint footprint{1, 1, 0, false};
+  const KrylovFootprint footprint{1, 1, false};
   const OperatorEvaluationSnapshot expected = snapshot_for(x);
   OperatorEvaluationSnapshot observed = expected;
   bool mutate_during_resource_freeze = false;
@@ -2264,8 +2639,8 @@ TEST_F(GenericKrylov, rank_local_snapshot_drift_is_refused_collectively_at_all_s
         if (mutate_during_resource_freeze && my_rank() == 0)
           ++observed.revision;
       });
-  KrylovWorkspace workspace(x, KrylovMethod::kCg, footprint);
-  const KrylovControls controls{KrylovMethod::kCg, kRelTol, Real(0), 4, 0, Real(1)};
+  KrylovWorkspace workspace(x, cg_krylov_method(), footprint);
+  const KrylovControls controls{cg_krylov_method(), kRelTol, Real(0), 4};
 
   const auto expect_collective_logic_error = [](const auto& operation,
                                                 const char* expected_message) {

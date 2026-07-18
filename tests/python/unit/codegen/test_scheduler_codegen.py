@@ -28,10 +28,11 @@ from pops.codegen.program_codegen import emit_cpp_program
 import sys
 from types import SimpleNamespace
 
+from tests.python.support.requirements import require_native_or_skip
+
 
 def _skip(msg):
-    print("skip test_scheduler_codegen (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip("test_scheduler_codegen: %s" % msg)
 
 
 try:

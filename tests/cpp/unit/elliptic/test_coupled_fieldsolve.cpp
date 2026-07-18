@@ -28,6 +28,8 @@
 
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
+
+#include <memory>
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -37,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <vector>
@@ -46,6 +49,55 @@
 #endif
 
 using namespace pops;
+
+namespace {
+
+class DecoratedNullspaceProvider final : public FieldNullspaceProvider {
+ public:
+  DecoratedNullspaceProvider()
+      : inner_(make_default_field_nullspace_provider_registry()->resolve(
+            "pops.field-nullspace.operator-topology-derived")) {}
+
+  [[nodiscard]] std::string_view identity() const noexcept override {
+    return "test.field-nullspace.decorated";
+  }
+  [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
+  [[nodiscard]] std::string_view collective_contract() const noexcept override {
+    return "test.field-nullspace.decorated@1";
+  }
+  [[nodiscard]] PreparedProviderOptions default_options() const override {
+    return inner_->default_options();
+  }
+  [[nodiscard]] bool accepts_options(
+      const PreparedProviderOptions& options) const noexcept override {
+    return inner_->accepts_options(options);
+  }
+  [[nodiscard]] PreparedProviderSupport supports(
+      const FieldNullspaceProviderRequest& request) const noexcept override {
+    return inner_->supports(request);
+  }
+  [[nodiscard]] std::string expected_prepared_contract(
+      const FieldNullspaceProviderRequest& request) const override {
+    ExactContractBuilder contract;
+    contract.text("test.prepared-field-nullspace.decorator")
+        .scalar(std::uint32_t{1})
+        .bytes(inner_->expected_prepared_contract(request));
+    return std::move(contract).release();
+  }
+  [[nodiscard]] PreparedFieldNullspace prepare(
+      const FieldNullspaceProviderRequest& request) const override {
+    PreparedFieldNullspace prepared = inner_->prepare(request);
+    prepared.provider_identity = std::string(identity());
+    prepared.provider_version = interface_version();
+    prepared.exact_prepared_contract = expected_prepared_contract(request);
+    return prepared;
+  }
+
+ private:
+  std::shared_ptr<const FieldNullspaceProvider> inner_;
+};
+
+}  // namespace
 
 namespace {
 
@@ -224,15 +276,29 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   const int n = 32;
   System system(SystemConfig{n, 1.0, true});
   const std::string slot = "signed-gradient-provider";
+  const PreparedProviderOptions backend_options{
+      "pops.system.geometric-mg-options@1",
+      {{"abs_tol", 0.0},
+       {"bottom_sweeps", std::int64_t{50}},
+       {"coarse_threshold", std::int64_t{0}},
+       {"max_cycles", std::int64_t{50}},
+       {"min_coarse", std::int64_t{2}},
+       {"post_smooth", std::int64_t{2}},
+       {"pre_smooth", std::int64_t{2}},
+       {"rel_tol", 1.0e-8}}};
+  system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
   system.set_field_solver_plan(slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
                                "test:plasma", "plasma", "potential", {"test:plasma/potential/rhs"},
-                               {"plasma"}, {"potential"}, {1.0}, "geometric_mg", 0.0, 1.0e-8, 50, 2,
-                               2, 2, 50, 0);
+                               {"plasma"}, {"potential"}, {1.0}, slot);
   system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                       "test:periodic-cartesian", "test:periodic-cartesian:v1");
   system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
                                  {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0});
-  system.set_field_nullspace(slot, true, true);
+  system.register_field_nullspace_provider(std::make_shared<DecoratedNullspaceProvider>());
+  system.set_field_nullspace(
+      slot, "test.field-nullspace.decorated",
+      PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
+                              {{"gauge.value", 0.0}}});
 
   ModelSpec spec;
   spec.transport = "exb";

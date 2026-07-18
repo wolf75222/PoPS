@@ -38,6 +38,12 @@ static double eps_field(double x, double /*y*/) {
   return 1.0 + 0.5 * x;
 }
 
+static ScalarFieldProvider2D epsilon_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.screened-poisson.epsilon", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(eps_field(x, y)); });
+}
+
 // f = div(eps grad phi) - kappa phi (analytique). eps_on -> eps=1+0.5x sinon eps=1.
 static double rhs_exact(double x, double y, bool eps_on) {
   const double s = std::sin(kPi * x) * std::sin(kPi * y);
@@ -60,8 +66,8 @@ static double solve_mms(int n, bool eps_on) {
 
   GeometricMG mg(geom, ba, bc);
   if (eps_on)
-    mg.set_epsilon([](Real x, Real y) { return Real(eps_field(x, y)); });
-  mg.set_reaction([](Real, Real) { return Real(KAPPA); });  // kappa constant
+    mg.set_epsilon(epsilon_provider());
+  mg.set_reaction(constant_scalar_field_provider(Real(KAPPA)));  // kappa constant
 
   Array4 af = mg.rhs().fab(0).array();
   for_each_cell(dom, [af, geom, eps_on](int i, int j) {
@@ -107,7 +113,7 @@ static double zero_kappa_residual_gap(int n) {
   const Real r_pois = mg_pois.current_residual();
 
   GeometricMG mg_k0(geom, ba, bc);
-  mg_k0.set_reaction([](Real, Real) { return Real(0); });  // kappa=0
+  mg_k0.set_reaction(constant_scalar_field_provider(Real(0)));  // kappa=0
   fill(mg_k0);
   const Real r_k0 = mg_k0.current_residual();
 
@@ -118,6 +124,11 @@ static double zero_kappa_residual_gap(int n) {
 // kappa constant ne distingue pas une lecture (i,j) correcte d'une lecture decalee / sur ghost.
 static double kappa_var(double x, double y) {
   return 30.0 * (1.0 + 0.5 * x + 0.3 * y);
+}
+static ScalarFieldProvider2D varying_reaction_provider() {
+  return ScalarFieldProvider2D::trusted_extension(
+      {"pops.test.screened-poisson.varying-reaction", 1}, exact_provider_parameters(),
+      [](Real x, Real y) { return Real(kappa_var(x, y)); });
 }
 // f = lap(phi) - kappa(x,y) phi, eps = 1, phi = sin(pi x) sin(pi y).
 static double rhs_varkappa(double x, double y) {
@@ -146,7 +157,7 @@ static double solve_mms_varkappa(int n, bool use_field, double* rel_resid = null
     });
     mg.set_reaction(kf);
   } else {
-    mg.set_reaction([](Real x, Real y) { return Real(kappa_var(x, y)); });
+    mg.set_reaction(varying_reaction_provider());
   }
 
   Array4 af = mg.rhs().fab(0).array();

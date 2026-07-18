@@ -5,6 +5,11 @@ import inspect
 
 import pytest
 
+from pops.amr import (
+    PreparedHierarchyNativeLowering,
+    PreparedHierarchyNativeProvider,
+    register_prepared_hierarchy_native_provider,
+)
 from pops.mesh._amr import (
     CanonicalOptions,
     ClusteringPolicy,
@@ -20,6 +25,7 @@ from pops.mesh._amr import (
     PatchGenerationPolicy,
     RegridSchedule,
     ResolvedHierarchy,
+    lower_native_hierarchy,
     resolve_hierarchy,
 )
 from pops.model import Handle, OwnerPath
@@ -136,6 +142,41 @@ def test_three_level_hierarchy_is_explicit_and_level_count_is_strictly_derived()
     assert "nesting" in parameters
     for forbidden in ("level_count", "nlevels", "max_levels", "order", "ghost"):
         assert forbidden not in parameters
+
+
+def test_native_hierarchy_lowering_dispatches_to_an_opaque_provider_route() -> None:
+    clock = _clock("external-native")
+    route = "tests.hierarchy-native.external-graph@3"
+    observed: list[ResolvedHierarchy] = []
+    def lower_external(
+        hierarchy: ResolvedHierarchy, authority: dict[str, object]
+    ) -> PreparedHierarchyNativeLowering:
+        observed.append(hierarchy)
+        return PreparedHierarchyNativeLowering(
+            authority,
+            hierarchy.plan.level_count,
+            nesting_buffer=2,
+            nesting_lookahead=2,
+        )
+
+    provider = register_prepared_hierarchy_native_provider(
+        PreparedHierarchyNativeProvider(route, 3, lower_external)
+    )
+    capabilities = replace(
+        _provider(),
+        options=CanonicalOptions({
+            "native_route": route,
+            "native_provider": provider.authority(),
+            "radius": 2,
+        }),
+    )
+    resolved = resolve_hierarchy(_plan(clock=clock), capabilities, _context(clock))
+
+    lowered = lower_native_hierarchy(resolved)
+
+    assert observed == [resolved, resolved]
+    assert lowered.provider == provider.authority()
+    assert lowered.level_count == resolved.plan.level_count
 
 
 def test_transition_fields_change_identity_or_are_rejected() -> None:

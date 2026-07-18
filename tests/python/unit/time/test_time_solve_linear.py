@@ -175,14 +175,16 @@ def test_identity_precond_byte_identical(t):
 
 
 def test_cg_gmg_precond_rejected(t):
-    # CG / Richardson have no preconditioner slot in the matrix-free path: a non-identity precond is an
-    # honest capability limit (ValueError naming GMRES/BiCGStab), not a transitional reject.
+    # The provider contract rejects methods that do not authenticate left preconditioning.  Keep the
+    # assertion capability-based: the registry core must not recover a hard-coded method-name list.
     for method in ("cg", "richardson"):
         try:
             _solve_program(t, method=method, preconditioner=_precond("geometric_mg"))
         except ValueError as exc:
-            assert (method in str(exc) and "native preconditioner slot" in str(exc)
-                    and "GMRES or BiCGStab" in str(exc)), str(exc)
+            assert (
+                "preconditioner 'geometric_mg'" in str(exc)
+                and "authenticated left-preconditioning method" in str(exc)
+            ), str(exc)
         else:
             raise AssertionError("%s + GeometricMG must raise ValueError" % method)
 
