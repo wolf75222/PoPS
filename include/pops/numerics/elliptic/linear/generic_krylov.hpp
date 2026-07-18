@@ -19,6 +19,9 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace pops {
 namespace detail {
@@ -41,8 +44,7 @@ struct KrylovWorkspaceAccess {
   }
   static Real& sine(KrylovWorkspace& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
-    return workspace.real_value((extent + 1u) * extent + extent +
-                                static_cast<std::size_t>(index));
+    return workspace.real_value((extent + 1u) * extent + extent + static_cast<std::size_t>(index));
   }
   static Real& rotated_rhs(KrylovWorkspace& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
@@ -54,14 +56,12 @@ struct KrylovWorkspaceAccess {
     return workspace.real_value((extent + 1u) * extent + 3u * extent + 1u +
                                 static_cast<std::size_t>(index));
   }
-  static ScaledScalar& scaled_h(KrylovWorkspace& workspace, int row, int column,
-                                int basis_extent) {
+  static ScaledScalar& scaled_h(KrylovWorkspace& workspace, int row, int column, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.scaled_value(static_cast<std::size_t>(row) * extent +
                                   static_cast<std::size_t>(column));
   }
-  static ScaledScalar& scaled_rotated_rhs(KrylovWorkspace& workspace, int index,
-                                          int basis_extent) {
+  static ScaledScalar& scaled_rotated_rhs(KrylovWorkspace& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.scaled_value((extent + 1u) * extent + static_cast<std::size_t>(index));
   }
@@ -98,8 +98,7 @@ struct KrylovWorkspaceAccess {
   static std::size_t initial_residual_field(const KrylovWorkspace& workspace) {
     return workspace.requirements_.initial_residual_field;
   }
-  static bool provider_report_reason_agrees(KrylovWorkspace& workspace,
-                                             std::string_view reason) {
+  static bool provider_report_reason_agrees(KrylovWorkspace& workspace, std::string_view reason) {
     return workspace.provider_report_reason_agrees_(reason);
   }
   static void append_collective_state(const KrylovWorkspace& workspace,
@@ -131,10 +130,10 @@ inline bool finite(Real value) {
 inline void reduce_batched_inner_products(const PreparedAffineLinearProblem& problem,
                                           KrylovWorkspace& workspace, double* values, int count,
                                           const char* quantity) {
-  reduce_prepared_vector_values_inplace(problem.vector_distribution(), values, count,
-                                        KrylovWorkspaceAccess::distribution_reduction_data(workspace),
-                                        KrylovWorkspaceAccess::distribution_reduction_size(workspace),
-                                        quantity);
+  reduce_prepared_vector_values_inplace(
+      problem.vector_distribution(), values, count,
+      KrylovWorkspaceAccess::distribution_reduction_data(workspace),
+      KrylovWorkspaceAccess::distribution_reduction_size(workspace), quantity);
 }
 
 template <class RightAt>
@@ -150,8 +149,7 @@ inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearPr
     return true;
 
   const std::size_t width = KrylovWorkspaceAccess::metric_robust_payload_width(workspace);
-  double* payload =
-      KrylovWorkspaceAccess::gmres_robust_reduction_data(workspace, basis_extent);
+  double* payload = KrylovWorkspaceAccess::gmres_robust_reduction_data(workspace, basis_extent);
   const std::size_t payload_count = static_cast<std::size_t>(count) * width;
   std::fill_n(payload, payload_count, 0.0);
   for (int index = 0; index < count; ++index) {
@@ -182,14 +180,14 @@ inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearPr
 /// added without perturbing mature Krylov trajectories at ordinary scales.
 inline ScaledScalar scaled_product(Real left, Real right) {
   const Real product = left * right;
-  if (finite(product))
+  if (finite(product) && (product != Real(0) || left == Real(0) || right == Real(0)))
     return ScaledScalar::from(product);
   return ScaledScalar::product(ScaledScalar::from(left), ScaledScalar::from(right));
 }
 
 inline ScaledScalar scaled_quotient(Real numerator, Real denominator) {
   const Real quotient = numerator / denominator;
-  if (finite(quotient))
+  if (finite(quotient) && (quotient != Real(0) || numerator == Real(0)))
     return ScaledScalar::from(quotient);
   return ScaledScalar::quotient(ScaledScalar::from(numerator), ScaledScalar::from(denominator));
 }
@@ -237,7 +235,8 @@ inline void validate_controls(const KrylovControls& controls) {
   const KrylovMethodValidation validation = controls.method.validate_controls(
       KrylovMethodControls{controls.rel_tol, controls.abs_tol, controls.max_iterations});
   if (!validation.accepted())
-    throw std::invalid_argument("prepared Krylov provider '" + std::string(controls.method.identity()) +
+    throw std::invalid_argument("prepared Krylov provider '" +
+                                std::string(controls.method.identity()) +
                                 "' rejected controls: " + std::string(validation.reason));
 }
 
@@ -245,8 +244,8 @@ inline long controls_failure(const KrylovControls& controls) noexcept {
   if (!controls.method)
     return 19;
   return controls.method
-                 .validate_controls(KrylovMethodControls{
-                     controls.rel_tol, controls.abs_tol, controls.max_iterations})
+                 .validate_controls(KrylovMethodControls{controls.rel_tol, controls.abs_tol,
+                                                         controls.max_iterations})
                  .accepted()
              ? 0
              : 28;
@@ -293,8 +292,7 @@ inline void append_controls(KrylovCollectivePayload& payload,
   payload.append(controls.max_iterations);
 }
 
-inline void append_field_shape(KrylovCollectivePayload& payload,
-                               const MultiFab& field) noexcept {
+inline void append_field_shape(KrylovCollectivePayload& payload, const MultiFab& field) noexcept {
   payload.append(field.ncomp());
   payload.append(field.n_grow());
 }
@@ -322,9 +320,9 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem& proble
   if (local_failure == 0)
     local_failure = KrylovWorkspaceAccess::local_binding_failure(workspace, problem, controls);
   const KrylovMethodProblemFacts method_facts{
-      problem.properties(), problem.footprint(), problem.vector_distribution(),
-      problem.metric().robust_payload_width(), problem.has_nullspace(),
-      problem.has_preconditioner()};
+      problem.properties(),          problem.footprint(),
+      problem.vector_distribution(), problem.metric().robust_payload_width(),
+      problem.has_nullspace(),       problem.has_preconditioner()};
   const KrylovMethodValidation problem_validation = controls.method.validate_problem(method_facts);
   payload.append(problem_validation.code);
   if (local_failure == 0 && !problem_validation.accepted())
@@ -347,10 +345,9 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem& proble
     const KrylovMethodValidation local_validation =
         control_validation.accepted() ? problem_validation : control_validation;
     if (!local_validation.accepted())
-      throw std::invalid_argument("prepared Krylov provider '" +
-                                  std::string(controls.method.identity()) +
-                                  "' rejected the solve request: " +
-                                  std::string(local_validation.reason));
+      throw std::invalid_argument(
+          "prepared Krylov provider '" + std::string(controls.method.identity()) +
+          "' rejected the solve request: " + std::string(local_validation.reason));
     throw std::invalid_argument(
         "prepared Krylov method provider rejected the solve request on another MPI rank");
   }
@@ -364,8 +361,7 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem& proble
   // cached contract.  Only value consensus remains dynamic for a provider (for example replicas).
   const PreparedVectorDistribution& distribution = problem.vector_distribution();
   char* storage = KrylovWorkspaceAccess::distribution_validation_data(workspace);
-  const std::size_t storage_size =
-      KrylovWorkspaceAccess::distribution_validation_size(workspace);
+  const std::size_t storage_size = KrylovWorkspaceAccess::distribution_validation_size(workspace);
   distribution.require_exact_values(iterate, std::span<char>(storage, storage_size),
                                     "solve_prepared_affine(iterate)");
   distribution.require_exact_values(rhs, std::span<char>(storage, storage_size),
@@ -376,8 +372,7 @@ inline Real reference_denominator(Real reference) {
   return reference > Real(0) ? reference : Real(1);
 }
 
-inline bool provider_solve_report_agrees(const SolveReport& report,
-                                         KrylovWorkspace& workspace) {
+inline bool provider_solve_report_agrees(const SolveReport& report, KrylovWorkspace& workspace) {
   KrylovCollectivePayload payload;
   payload.append(report.iters);
   payload.append(std::bit_cast<std::uint64_t>(report.rel_residual));
@@ -417,6 +412,20 @@ inline Real physical_stopping_threshold(Real reference, const KrylovControls& co
   const Real relative =
       reference > Real(0) ? rescale_product(controls.rel_tol, reference, Real(1)) : Real(0);
   return std::max(relative, controls.abs_tol);
+}
+
+/// Apply the public stopping contract in its authored dimensionless form.  The scaled physical
+/// threshold remains the recurrence fast path, but one final division avoids a false failure when
+/// the rounded product ``rel_tol * reference`` lands one ULP below the equivalently rounded
+/// ``residual / reference`` comparison reported to users.
+inline bool satisfies_stopping_controls(Real residual, Real reference,
+                                        const KrylovControls& controls) {
+  if (!finite(residual) || residual < Real(0))
+    return false;
+  if (residual <= controls.abs_tol)
+    return true;
+  return controls.rel_tol > Real(0) && reference > Real(0) &&
+         residual / reference <= controls.rel_tol;
 }
 
 template <class Report>
@@ -489,14 +498,27 @@ inline bool needs_extreme_recurrence_rebase(Real normalized_norm) {
   return normalized_norm > Real(0) && normalized_norm < std::sqrt(std::numeric_limits<Real>::min());
 }
 
+/// Recursive BiCGStab residuals lose roughly one unit of relative accuracy per recurrence update.
+/// Once a cycle has reduced its residual by sqrt(epsilon), replace it with an authoritative
+/// b-A(x) measurement before round-off can dominate the remaining convergence.  The trigger is
+/// dimensionless, independent of the equation scaling and authored tolerance, and costs at most
+/// one extra matvec per roughly eight decimal digits of reduction in a restarted cycle.
+inline bool needs_reliable_residual_replacement(Real normalized_norm, Real cycle_peak) {
+  return normalized_norm > Real(0) && cycle_peak > Real(0) &&
+         normalized_norm / cycle_peak <= std::sqrt(std::numeric_limits<Real>::epsilon());
+}
+
 /// Publish a terminal recurrence outcome without repeating the public wrapper's mandatory
 /// provider-independent true-residual evaluation. `measurement` is the last authoritative
 /// physical residual observed inside the method and keeps the candidate structurally valid; the
 /// wrapper overwrites all residual fields and promotes/rejects convergence after its own matvec.
 inline SolveReport terminal_candidate_report(const SolveNormalization& normalization,
-                                             const ResidualMeasurement& measurement,
-                                             int iterations, SolveStatus status) {
-  return report_physical(normalization, measurement.physical, iterations, status);
+                                             const ResidualMeasurement& measurement, int iterations,
+                                             SolveStatus status, std::string_view reason = {}) {
+  SolveReport report = report_physical(normalization, measurement.physical, iterations, status);
+  if (!reason.empty())
+    report.reason.assign(reason);
+  return report;
 }
 
 /// Remove one arbitrary scalar normalization from a prepared linear preconditioner.  Krylov
@@ -519,8 +541,7 @@ inline Real apply_scaled_preconditioner(const PreparedAffineLinearProblem& probl
   return solve_scale;
 }
 
-inline MultiFab& initial_residual_field(KrylovWorkspace& workspace,
-                                        const KrylovControls&) {
+inline MultiFab& initial_residual_field(KrylovWorkspace& workspace, const KrylovControls&) {
   return KrylovWorkspaceAccess::field(workspace,
                                       KrylovWorkspaceAccess::initial_residual_field(workspace));
 }
@@ -528,8 +549,7 @@ inline MultiFab& initial_residual_field(KrylovWorkspace& workspace,
 inline SolveReport solve_richardson(const PreparedAffineLinearProblem& problem,
                                     KrylovWorkspace& workspace, MultiFab& iterate,
                                     const MultiFab& rhs, const KrylovControls& controls,
-                                    Real relaxation,
-                                    const SolveNormalization& normalization,
+                                    Real relaxation, const SolveNormalization& normalization,
                                     ResidualMeasurement measurement) {
   MultiFab& residual = KrylovWorkspaceAccess::field(workspace, 1);
   SolveNormalization cycle_normalization = normalization;
@@ -662,6 +682,51 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
   ScaledScalar omega = ScaledScalar::from(Real(1));
   Real preconditioner_scale = Real(0);
   bool restart_recurrence = false;
+  bool breakdown_restarted_without_progress = false;
+  Real recurrence_peak = Real(1);
+  SolveReport breakdown_result;
+
+  // A frozen BiCGStab shadow can become exactly orthogonal to a still-useful residual, and the
+  // corresponding alpha denominator can vanish for the same reason.  One allocation-free
+  // residual replacement is the standard recovery: authenticate b-A(x), choose it as the new
+  // shadow, and restart the recurrence.  A repeated algebraic breakdown before an iterate update
+  // remains an honest failure rather than an unbounded retry loop.
+  const auto restart_after_breakdown = [&](int completed_iterations, std::string_view reason,
+                                           bool retry_available) -> bool {
+    ResidualMeasurement confirmed =
+        physical_true_residual_measurement(problem, second_applied, rhs, iterate);
+    if (!finite(confirmed.physical)) {
+      breakdown_result = report_physical(normalization, confirmed.physical, completed_iterations,
+                                         SolveStatus::kInvalidEvaluation);
+      breakdown_result.reason.assign(reason);
+      breakdown_result.reason += " with a non-finite true residual";
+      return false;
+    }
+    if (confirmed.physical <= normalization.physical_threshold ||
+        satisfies_stopping_controls(confirmed.physical, normalization.reference, controls)) {
+      breakdown_result = report_physical(normalization, confirmed.physical, completed_iterations,
+                                         SolveStatus::kSolved);
+      return false;
+    }
+    if (!retry_available || breakdown_restarted_without_progress) {
+      breakdown_result = terminal_candidate_report(normalization, confirmed, completed_iterations,
+                                                   SolveStatus::kBreakdown, reason);
+      return false;
+    }
+
+    rebase_cycle_residual(second_applied, confirmed, normalization, cycle_normalization);
+    PreparedFieldAlgebra::copy(residual, second_applied);
+    PreparedFieldAlgebra::copy(shadow, residual);
+    measurement = confirmed;
+    rho_previous = Real(1);
+    alpha = ScaledScalar::from(Real(1));
+    omega = ScaledScalar::from(Real(1));
+    preconditioner_scale = Real(0);
+    restart_recurrence = true;
+    recurrence_peak = Real(1);
+    breakdown_restarted_without_progress = true;
+    return true;
+  };
 
   for (int completed = 0; completed < controls.max_iterations; ++completed) {
     const int iteration = completed + 1;
@@ -669,17 +734,23 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     if (!finite(rho))
       return terminal_candidate_report(normalization, measurement, iteration - 1,
                                        SolveStatus::kInvalidEvaluation);
-    if (rho == Real(0))
-      return terminal_candidate_report(normalization, measurement, iteration - 1,
-                                       SolveStatus::kBreakdown);
+    if (rho == Real(0)) {
+      if (restart_after_breakdown(iteration - 1, "BiCGStab rho breakdown",
+                                  iteration < controls.max_iterations))
+        continue;
+      return breakdown_result;
+    }
 
     if (iteration == 1 || restart_recurrence) {
       PreparedFieldAlgebra::copy(direction, residual);
       restart_recurrence = false;
     } else {
-      if (omega.is_zero())
-        return terminal_candidate_report(normalization, measurement, iteration - 1,
-                                         SolveStatus::kBreakdown);
+      if (omega.is_zero()) {
+        if (restart_after_breakdown(iteration - 1, "BiCGStab recurrence omega breakdown",
+                                    iteration < controls.max_iterations))
+          continue;
+        return breakdown_result;
+      }
       const ScaledScalar beta =
           scaled_product(scaled_quotient(rho, rho_previous), scaled_quotient(alpha, omega));
       if (!beta.is_finite())
@@ -691,21 +762,27 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     }
 
     if (problem.has_preconditioner()) {
-      const Real scale =
-          apply_scaled_preconditioner(problem, prepared_direction, direction, workspace,
-                                      preconditioner_scale);
+      const Real scale = apply_scaled_preconditioner(problem, prepared_direction, direction,
+                                                     workspace, preconditioner_scale);
       if (!finite(scale) || !(scale > Real(0)))
         return terminal_candidate_report(
             normalization, measurement, iteration - 1,
-            finite(scale) ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation);
+            finite(scale) ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation,
+            finite(scale) ? std::string_view("BiCGStab direction preconditioner breakdown")
+                          : std::string_view{});
     }
     PreparedProblemAccess::apply_linear(problem, applied, prepared_direction,
                                         cycle_normalization.scale);
     const Real denominator = PreparedProblemAccess::inner_product(problem, shadow, applied);
-    if (!finite(denominator) || denominator == Real(0))
-      return terminal_candidate_report(
-          normalization, measurement, iteration - 1,
-          finite(denominator) ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation);
+    if (!finite(denominator))
+      return terminal_candidate_report(normalization, measurement, iteration - 1,
+                                       SolveStatus::kInvalidEvaluation);
+    if (denominator == Real(0)) {
+      if (restart_after_breakdown(iteration - 1, "BiCGStab alpha denominator breakdown",
+                                  iteration < controls.max_iterations))
+        continue;
+      return breakdown_result;
+    }
     alpha = scaled_quotient(rho, denominator);
     if (!alpha.is_finite())
       return terminal_candidate_report(normalization, measurement, iteration - 1,
@@ -717,9 +794,12 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     if (!finite(intermediate_norm))
       return terminal_candidate_report(normalization, measurement, iteration - 1,
                                        SolveStatus::kInvalidEvaluation);
+    recurrence_peak = std::max(recurrence_peak, intermediate_norm);
     if (intermediate_norm <= cycle_normalization.normalized_threshold ||
+        needs_reliable_residual_replacement(intermediate_norm, recurrence_peak) ||
         needs_extreme_recurrence_rebase(intermediate_norm)) {
       ScaledFieldAlgebra::axpy(iterate, alpha, prepared_direction);
+      breakdown_restarted_without_progress = false;
       if (iteration == controls.max_iterations)
         return terminal_candidate_report(normalization, measurement, iteration,
                                          SolveStatus::kIterationLimit);
@@ -728,7 +808,8 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
       if (!finite(confirmed.physical))
         return report_physical(normalization, confirmed.physical, iteration,
                                SolveStatus::kInvalidEvaluation);
-      if (confirmed.physical <= normalization.physical_threshold)
+      if (confirmed.physical <= normalization.physical_threshold ||
+          satisfies_stopping_controls(confirmed.physical, normalization.reference, controls))
         return report_physical(normalization, confirmed.physical, iteration, SolveStatus::kSolved);
       rebase_cycle_residual(second_applied, confirmed, normalization, cycle_normalization);
       PreparedFieldAlgebra::copy(residual, second_applied);
@@ -736,6 +817,7 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
       measurement = confirmed;
       restart_recurrence = true;
       preconditioner_scale = Real(0);
+      recurrence_peak = Real(1);
       rho_previous = rho;
       continue;
     }
@@ -746,7 +828,9 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
       if (!finite(scale) || !(scale > Real(0)))
         return terminal_candidate_report(
             normalization, measurement, iteration - 1,
-            finite(scale) ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation);
+            finite(scale) ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation,
+            finite(scale) ? std::string_view("BiCGStab intermediate preconditioner breakdown")
+                          : std::string_view{});
     }
     PreparedProblemAccess::apply_linear(problem, second_applied, prepared_intermediate,
                                         cycle_normalization.scale);
@@ -757,17 +841,30 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     if (!finite(second_norm_squared) || !finite(projection))
       return terminal_candidate_report(normalization, measurement, iteration - 1,
                                        SolveStatus::kInvalidEvaluation);
-    if (second_norm_squared <= Real(0))
-      return terminal_candidate_report(normalization, measurement, iteration - 1,
-                                       SolveStatus::kBreakdown);
+    if (second_norm_squared <= Real(0)) {
+      ScaledFieldAlgebra::axpy(iterate, alpha, prepared_direction);
+      breakdown_restarted_without_progress = false;
+      if (restart_after_breakdown(iteration, "BiCGStab omega denominator breakdown",
+                                  iteration < controls.max_iterations))
+        continue;
+      return breakdown_result;
+    }
     omega = scaled_quotient(projection, second_norm_squared);
-    if (!omega.is_finite() || omega.is_zero())
-      return terminal_candidate_report(
-          normalization, measurement, iteration - 1,
-          omega.is_finite() ? SolveStatus::kBreakdown : SolveStatus::kInvalidEvaluation);
+    if (!omega.is_finite())
+      return terminal_candidate_report(normalization, measurement, iteration - 1,
+                                       SolveStatus::kInvalidEvaluation);
+    if (omega.is_zero()) {
+      ScaledFieldAlgebra::axpy(iterate, alpha, prepared_direction);
+      breakdown_restarted_without_progress = false;
+      if (restart_after_breakdown(iteration, "BiCGStab omega breakdown",
+                                  iteration < controls.max_iterations))
+        continue;
+      return breakdown_result;
+    }
 
     ScaledFieldAlgebra::trilincomb(iterate, ScaledScalar::from(Real(1)), iterate, alpha,
                                    prepared_direction, omega, prepared_intermediate);
+    breakdown_restarted_without_progress = false;
     // The BiCGStab recurrence already supplies the next residual. Recomputing b-A(x) here would
     // add a third operator application to every full iteration. Its norm may request an
     // authoritative true-residual confirmation, but can never publish success by itself.
@@ -780,14 +877,17 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     if (iteration == controls.max_iterations)
       return terminal_candidate_report(normalization, measurement, iteration,
                                        SolveStatus::kIterationLimit);
+    recurrence_peak = std::max(recurrence_peak, measurement.normalized);
     if (measurement.normalized <= cycle_normalization.normalized_threshold ||
+        needs_reliable_residual_replacement(measurement.normalized, recurrence_peak) ||
         needs_extreme_recurrence_rebase(measurement.normalized)) {
       ResidualMeasurement confirmed =
           physical_true_residual_measurement(problem, second_applied, rhs, iterate);
       if (!finite(confirmed.physical))
         return report_physical(normalization, confirmed.physical, iteration,
                                SolveStatus::kInvalidEvaluation);
-      if (confirmed.physical <= normalization.physical_threshold)
+      if (confirmed.physical <= normalization.physical_threshold ||
+          satisfies_stopping_controls(confirmed.physical, normalization.reference, controls))
         return report_physical(normalization, confirmed.physical, iteration, SolveStatus::kSolved);
       rebase_cycle_residual(second_applied, confirmed, normalization, cycle_normalization);
       // Recursive drift or a subnormal recurrence requested an authoritative replacement. Rebase
@@ -797,6 +897,7 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
       PreparedFieldAlgebra::copy(shadow, residual);
       restart_recurrence = true;
       preconditioner_scale = Real(0);
+      recurrence_peak = Real(1);
     }
     rho_previous = rho;
   }
@@ -804,8 +905,8 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
                                    SolveStatus::kIterationLimit);
 }
 
-inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column,
-                         const ScaledScalar& value, int basis_extent) {
+inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column, const ScaledScalar& value,
+                         int basis_extent) {
   Real materialized = Real(0);
   if (!value.is_finite() || !value.try_materialize(materialized))
     return false;
@@ -819,8 +920,8 @@ inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column, Real v
   return set_scaled_h(workspace, row, column, ScaledScalar::from(value), basis_extent);
 }
 
-inline void set_scaled_rotated_rhs(KrylovWorkspace& workspace, int index,
-                                   const ScaledScalar& value, int basis_extent) {
+inline void set_scaled_rotated_rhs(KrylovWorkspace& workspace, int index, const ScaledScalar& value,
+                                   int basis_extent) {
   KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, index, basis_extent) = value;
   Real materialized = Real(0);
   KrylovWorkspaceAccess::rotated_rhs(workspace, index, basis_extent) =
@@ -850,14 +951,13 @@ inline void reset_gmres_scalars(KrylovWorkspace& workspace, int restart) {
 
 inline bool solve_gmres_upper(KrylovWorkspace& workspace, int dimension, int basis_extent) {
   for (int row = dimension - 1; row >= 0; --row) {
-    ScaledScalar value =
-        KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, row, basis_extent);
+    ScaledScalar value = KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, row, basis_extent);
     for (int column = row + 1; column < dimension; ++column)
       value = scaled_difference(
           value,
-          scaled_product(KrylovWorkspaceAccess::scaled_h(workspace, row, column, basis_extent),
-                         KrylovWorkspaceAccess::scaled_solution_coefficient(
-                             workspace, column, basis_extent)));
+          scaled_product(
+              KrylovWorkspaceAccess::scaled_h(workspace, row, column, basis_extent),
+              KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, basis_extent)));
     const ScaledScalar diagonal =
         KrylovWorkspaceAccess::scaled_h(workspace, row, row, basis_extent);
     if (!value.is_finite() || !diagonal.is_finite() || diagonal.is_zero())
@@ -934,9 +1034,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
                                           cycle_normalization.scale);
       MultiFab* arnoldi_vector = &applied_or_residual;
       if (prepared_vector != nullptr) {
-        const Real scale = apply_scaled_preconditioner(problem, *prepared_vector,
-                                                       applied_or_residual, workspace,
-                                                       preconditioner_scale);
+        const Real scale = apply_scaled_preconditioner(
+            problem, *prepared_vector, applied_or_residual, workspace, preconditioner_scale);
         if (!finite(scale) || !(scale > Real(0))) {
           invalid = true;
           break;
@@ -991,11 +1090,10 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
               PreparedProblemAccess::local_inner_product(problem, *arnoldi_vector, basis(row)));
         reduce_batched_inner_products(problem, workspace, reductions, column + 1,
                                       "prepared GMRES DGKS projections");
-        finite_column =
-            finite_column && repair_nonfinite_batched_inner_products(
-                                 problem, workspace, *arnoldi_vector, reductions, column + 1,
-                                 restart,
-                                 [&basis](int row) -> const MultiFab& { return basis(row); });
+        finite_column = finite_column &&
+                        repair_nonfinite_batched_inner_products(
+                            problem, workspace, *arnoldi_vector, reductions, column + 1, restart,
+                            [&basis](int row) -> const MultiFab& { return basis(row); });
         for (int row = 0; row <= column; ++row) {
           const Real correction = static_cast<Real>(reductions[row]);
           finite_column = finite_column && finite(correction);
@@ -1029,15 +1127,12 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
       for (int row = 0; row < column; ++row) {
         const Real first = KrylovWorkspaceAccess::h(workspace, row, column, restart);
         const Real second = KrylovWorkspaceAccess::h(workspace, row + 1, column, restart);
-        const ScaledScalar rotated_first =
-            scaled_sum(scaled_product(KrylovWorkspaceAccess::cosine(workspace, row, restart),
-                                      first),
-                       scaled_product(KrylovWorkspaceAccess::sine(workspace, row, restart),
-                                      second));
+        const ScaledScalar rotated_first = scaled_sum(
+            scaled_product(KrylovWorkspaceAccess::cosine(workspace, row, restart), first),
+            scaled_product(KrylovWorkspaceAccess::sine(workspace, row, restart), second));
         const ScaledScalar rotated_second = scaled_sum(
-            scaled_product(ScaledScalar::negated(
-                               ScaledScalar::from(
-                                   KrylovWorkspaceAccess::sine(workspace, row, restart))),
+            scaled_product(ScaledScalar::negated(ScaledScalar::from(
+                               KrylovWorkspaceAccess::sine(workspace, row, restart))),
                            ScaledScalar::from(first)),
             scaled_product(KrylovWorkspaceAccess::cosine(workspace, row, restart), second));
         if (!set_scaled_h(workspace, row, column, rotated_first, restart) ||
@@ -1049,8 +1144,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
       if (invalid)
         break;
       const Real diagonal = KrylovWorkspaceAccess::h(workspace, column, column, restart);
-      const Real subdiagonal =
-          KrylovWorkspaceAccess::h(workspace, column + 1, column, restart);
+      const Real subdiagonal = KrylovWorkspaceAccess::h(workspace, column + 1, column, restart);
       const Real magnitude = std::hypot(diagonal, subdiagonal);
       if (!finite(magnitude) || magnitude == Real(0))
         return terminal_candidate_report(
@@ -1065,18 +1159,17 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
       }
       const ScaledScalar prior_rhs =
           KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, column, restart);
-      set_scaled_rotated_rhs(workspace, column + 1,
-                             scaled_product(ScaledScalar::negated(ScaledScalar::from(
-                                                KrylovWorkspaceAccess::sine(
-                                                    workspace, column, restart))),
-                                            prior_rhs),
-                             restart);
       set_scaled_rotated_rhs(
-          workspace, column,
-          scaled_product(ScaledScalar::from(
-                             KrylovWorkspaceAccess::cosine(workspace, column, restart)),
+          workspace, column + 1,
+          scaled_product(ScaledScalar::negated(ScaledScalar::from(
+                             KrylovWorkspaceAccess::sine(workspace, column, restart))),
                          prior_rhs),
           restart);
+      set_scaled_rotated_rhs(workspace, column,
+                             scaled_product(ScaledScalar::from(KrylovWorkspaceAccess::cosine(
+                                                workspace, column, restart)),
+                                            prior_rhs),
+                             restart);
       dimension = column + 1;
       ++iterations;
       estimate_reached = ScaledScalar::abs_less_equal(
@@ -1094,8 +1187,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
                                        SolveStatus::kBreakdown);
     for (int column = 0; column < dimension; ++column)
       ScaledFieldAlgebra::axpy(
-          iterate,
-          KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
+          iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
           basis(column));
 
     if (iterations == controls.max_iterations)
@@ -1153,9 +1245,7 @@ class PreparedKrylovSolveContext {
   [[nodiscard]] MultiFab& initial_residual() {
     return field(detail::KrylovWorkspaceAccess::initial_residual_field(workspace_));
   }
-  [[nodiscard]] Real& real_value(std::size_t index) {
-    return workspace_.real_value(index);
-  }
+  [[nodiscard]] Real& real_value(std::size_t index) { return workspace_.real_value(index); }
   [[nodiscard]] detail::ScaledScalar& scaled_value(std::size_t index) {
     return workspace_.scaled_value(index);
   }
@@ -1181,11 +1271,10 @@ class PreparedKrylovSolveContext {
   }
   void add_physical_direction(MultiFab& out, Real coefficient,
                               const MultiFab& normalized_direction) const {
-    detail::ScaledFieldAlgebra::axpy(
-        out, detail::scaled_product(coefficient, normalization_.scale), normalized_direction);
+    detail::ScaledFieldAlgebra::axpy(out, detail::scaled_product(coefficient, normalization_.scale),
+                                     normalized_direction);
   }
-  void apply_linear(MultiFab& out, const MultiFab& direction,
-                    Real equation_scale) const {
+  void apply_linear(MultiFab& out, const MultiFab& direction, Real equation_scale) const {
     detail::PreparedProblemAccess::apply_linear(problem_, out, direction, equation_scale);
   }
   void apply_linear(MultiFab& out, const MultiFab& direction) const {
@@ -1208,7 +1297,7 @@ class PreparedKrylovSolveContext {
   [[nodiscard]] Real inner_product_from_global_robust_payload(
       std::span<const double> payload) const {
     return detail::PreparedProblemAccess::inner_product_from_global_robust_payload(problem_,
-                                                                                    payload);
+                                                                                   payload);
   }
   void reduce_inner_products(double* values, int count, const char* quantity) {
     detail::reduce_batched_inner_products(problem_, workspace_, values, count, quantity);
@@ -1222,9 +1311,8 @@ class PreparedKrylovSolveContext {
   }
 
  private:
-  PreparedKrylovSolveContext(const PreparedAffineLinearProblem& problem,
-                             KrylovWorkspace& workspace, MultiFab& iterate, const MultiFab& rhs,
-                             const KrylovControls& controls,
+  PreparedKrylovSolveContext(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
+                             MultiFab& iterate, const MultiFab& rhs, const KrylovControls& controls,
                              detail::SolveNormalization normalization,
                              detail::ResidualMeasurement initial_measurement)
       : problem_(problem),
@@ -1240,8 +1328,7 @@ class PreparedKrylovSolveContext {
   friend class detail::GmresKrylovMethodProvider;
   friend class detail::RichardsonKrylovMethodProvider;
   friend SolveReport solve_prepared_affine(const PreparedAffineLinearProblem&, KrylovWorkspace&,
-                                            MultiFab&, const MultiFab&,
-                                            const KrylovControls&);
+                                           MultiFab&, const MultiFab&, const KrylovControls&);
 
   const PreparedAffineLinearProblem& problem_;
   KrylovWorkspace& workspace_;
@@ -1252,11 +1339,10 @@ class PreparedKrylovSolveContext {
   detail::ResidualMeasurement initial_measurement_;
 };
 
-inline SolveReport detail::CgKrylovMethodProvider::solve(
-    PreparedKrylovSolveContext& context, const PreparedProviderOptions&) const {
+inline SolveReport detail::CgKrylovMethodProvider::solve(PreparedKrylovSolveContext& context,
+                                                         const PreparedProviderOptions&) const {
   return detail::solve_cg(context.problem_, context.workspace_, context.iterate_, context.rhs_,
-                          context.controls_, context.normalization_,
-                          context.initial_measurement_);
+                          context.controls_, context.normalization_, context.initial_measurement_);
 }
 
 inline SolveReport detail::BicgstabKrylovMethodProvider::solve(
@@ -1285,8 +1371,7 @@ inline SolveReport detail::RichardsonKrylovMethodProvider::solve(
     throw std::logic_error("prepared Richardson options were not authenticated");
   return detail::solve_richardson(context.problem_, context.workspace_, context.iterate_,
                                   context.rhs_, context.controls_, static_cast<Real>(*relaxation),
-                                  context.normalization_,
-                                  context.initial_measurement_);
+                                  context.normalization_, context.initial_measurement_);
 }
 
 inline std::shared_ptr<PreparedKrylovMethodRegistry>
@@ -1321,18 +1406,16 @@ inline PreparedKrylovMethod gmres_krylov_method(int restart) {
     throw std::invalid_argument("prepared GMRES restart must be positive");
   return detail::default_krylov_method_registry().resolve(
       "pops.krylov.gmres",
-      PreparedProviderOptions{
-          std::string(detail::kGmresOptionsSchema),
-          {{"restart", static_cast<std::int64_t>(restart)}}});
+      PreparedProviderOptions{std::string(detail::kGmresOptionsSchema),
+                              {{"restart", static_cast<std::int64_t>(restart)}}});
 }
 inline PreparedKrylovMethod richardson_krylov_method(Real relaxation) {
   if (!detail::finite(relaxation) || !(relaxation > Real(0)))
     throw std::invalid_argument("prepared Richardson relaxation must be finite and positive");
   return detail::default_krylov_method_registry().resolve(
       "pops.krylov.richardson",
-      PreparedProviderOptions{
-          std::string(detail::kRichardsonOptionsSchema),
-          {{"relaxation", static_cast<double>(relaxation)}}});
+      PreparedProviderOptions{std::string(detail::kRichardsonOptionsSchema),
+                              {{"relaxation", static_cast<double>(relaxation)}}});
 }
 
 /// Solve one explicitly prepared affine problem with persistent workspace.  There are no legacy raw
@@ -1388,7 +1471,7 @@ inline SolveReport solve_prepared_affine(const PreparedAffineLinearProblem& prob
   if (!detail::finite(initial_physical))
     return detail::report_physical(report_normalization, initial_physical, 0,
                                    SolveStatus::kInvalidEvaluation);
-  if (initial_physical <= physical_threshold)
+  if (detail::satisfies_stopping_controls(initial_physical, equation.reference_norm, controls))
     return detail::report_physical(report_normalization, initial_physical, 0, SolveStatus::kSolved);
 
   // The authored reference controls tolerance and nullspace compatibility, but it must never scale
@@ -1404,7 +1487,7 @@ inline SolveReport solve_prepared_affine(const PreparedAffineLinearProblem& prob
                                                         initial_physical / solve_scale};
 
   PreparedKrylovSolveContext method_context(problem, workspace, iterate, rhs, controls,
-                                             normalization, initial_measurement);
+                                            normalization, initial_measurement);
   SolveReport result;
   long provider_exception_local = 0;
   try {
@@ -1417,18 +1500,14 @@ inline SolveReport solve_prepared_affine(const PreparedAffineLinearProblem& prob
   }
   if (all_reduce_max(provider_exception_local) != 0) {
     SolveReport invalid = detail::report_physical(
-        normalization, std::numeric_limits<Real>::quiet_NaN(), 0,
-        SolveStatus::kInvalidEvaluation);
-    invalid.reason =
-        "prepared Krylov provider failed after its collective solve trace";
+        normalization, std::numeric_limits<Real>::quiet_NaN(), 0, SolveStatus::kInvalidEvaluation);
+    invalid.reason = "prepared Krylov provider failed after its collective solve trace";
     return invalid;
   }
   if (!detail::provider_solve_report_agrees(result, workspace)) {
     SolveReport invalid = detail::report_physical(
-        normalization, std::numeric_limits<Real>::quiet_NaN(), 0,
-        SolveStatus::kInvalidEvaluation);
-    invalid.reason =
-        "prepared Krylov provider report differs between communicator ranks";
+        normalization, std::numeric_limits<Real>::quiet_NaN(), 0, SolveStatus::kInvalidEvaluation);
+    invalid.reason = "prepared Krylov provider report differs between communicator ranks";
     return invalid;
   }
 
@@ -1448,7 +1527,8 @@ inline SolveReport solve_prepared_affine(const PreparedAffineLinearProblem& prob
   } else if (result.iters < 0 || result.iters > controls.max_iterations) {
     result.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                        "prepared Krylov provider returned an invalid iteration count");
-  } else if (final_residual <= normalization.physical_threshold) {
+  } else if (detail::satisfies_stopping_controls(final_residual, equation.reference_norm,
+                                                 controls)) {
     result.mark_solved();
   } else if (result.solved() || !result.valid()) {
     result.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,

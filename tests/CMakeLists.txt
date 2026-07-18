@@ -474,6 +474,7 @@ endforeach()
 # The generic hierarchy tensor-provider contract is owned by AmrSystem at runtime.  Keep the test in
 # the standard inventory, but link the AMR facade implementation that supplies its provider registry.
 target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
+target_link_libraries(test_multiblock_interface_scheduler PRIVATE pops_runtime_amr)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
@@ -796,6 +797,7 @@ if(POPS_HAS_MPI)
     "GenericKrylov.arbitrary_halo_depth_is_a_first_class_prepared_footprint:"
     "GenericKrylov.mpi_variant_distributes_real_work_to_every_rank:"
     "GenericKrylov.geometric_preconditioner_preserves_a_custom_distribution:"
+    "GenericKrylov.every_method_solves_two_components_and_preconditioned_routes:"
     "GenericKrylov.every_method_is_invariant_to_extreme_finite_equation_scaling:"
     "GenericKrylov.every_method_solves_a_compatible_periodic_nullspace_problem:"
     "GenericKrylov.every_method_reports_an_incompatible_rhs_before_gauge_or_iteration:"
@@ -807,7 +809,10 @@ if(POPS_HAS_MPI)
     "GenericKrylov.prepared_tensor_identity_matches_the_geometric_mg_reference:"
     "GenericKrylov.prepared_physical_boundary_offsets_use_the_effective_rhs_and_a_linear_preconditioner:"
     "GenericKrylov.prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms:"
+    "GenericKrylov.failed_solves_report_no_solved_value:"
+    "GenericKrylov.bicgstab_omega_breakdown_commits_alpha_then_fails_honestly:"
     "GenericKrylov.snapshot_mutation_is_refused_and_workspace_is_reused:"
+    "GenericKrylov.prepared_hot_solves_allocate_no_fab_or_communication_storage:"
     "GenericKrylov.rank_local_snapshot_drift_is_refused_collectively_at_all_safe_boundaries:"
     "test_krylov_method_provider.*:"
     "test_vector_distribution_provider.*"

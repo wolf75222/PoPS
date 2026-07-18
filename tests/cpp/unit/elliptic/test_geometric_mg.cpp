@@ -12,8 +12,10 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/parallel/comm.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
@@ -27,6 +29,15 @@ using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
 
 namespace {
+
+class CommEnvironment final : public ::testing::Environment {
+ public:
+  void SetUp() override { comm_init(); }
+  void TearDown() override { comm_finalize(); }
+};
+
+[[maybe_unused]] const ::testing::Environment* const kCommEnvironment =
+    ::testing::AddGlobalTestEnvironment(new CommEnvironment);
 
 int first_boundary_residual_iteration = -1;
 
@@ -110,6 +121,15 @@ bool published_replicas_agree_exactly(const MultiFab& field) {
 }
 
 }  // namespace
+
+TEST(GeometricMgCollectiveContract, MpiRouteInitializesRequestedCommunicator) {
+  const char* expected_ranks = std::getenv("POPS_TEST_EXPECT_RANKS");
+  if (expected_ranks != nullptr)
+    ASSERT_EQ(n_ranks(), std::atoi(expected_ranks))
+        << "the MPI CTest route must initialize the requested communicator";
+  else if (n_ranks() == 1)
+    GTEST_SKIP() << "the serial registration has no remote rank";
+}
 
 TEST(GeometricMgCollectiveContract, RejectsRankDivergentValidControls) {
   if (n_ranks() != 2)

@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -84,6 +85,15 @@ DotFields make_replicated_fields(int cell_count, int components = 1) {
   fields.left.set_val(Real(0));
   fields.right.set_val(Real(0));
   return fields;
+}
+
+TEST(test_pure_field_algebra_extreme_dot, MpiRouteInitializesRequestedCommunicator) {
+  const char* expected_ranks = std::getenv("POPS_TEST_EXPECT_RANKS");
+  if (expected_ranks != nullptr)
+    ASSERT_EQ(n_ranks(), std::atoi(expected_ranks))
+        << "the MPI CTest route must initialize the requested communicator";
+  else if (n_ranks() == 1)
+    GTEST_SKIP() << "the serial registration has no remote rank";
 }
 
 DotFields make_rank_zero_owned_fields(int cell_count, int components = 1) {
