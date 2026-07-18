@@ -432,8 +432,12 @@ def prepared_nullspace_contracts_from_attrs(
 
 
 def _none_author(
-    options: Mapping[str, Any], gauge: Any, _properties: Mapping[str, bool], where: str
+    options: Mapping[str, Any],
+    gauge: Any,
+    operator_properties: Mapping[str, bool],
+    where: str,
 ) -> PreparedNullspaceContracts:
+    del operator_properties
     if options:
         raise TypeError("%s nonsingular provider takes no options" % where)
     if gauge is not None:
@@ -444,8 +448,12 @@ def _none_author(
 
 
 def _constant_author(
-    options: Mapping[str, Any], gauge: Any, _properties: Mapping[str, bool], where: str
+    options: Mapping[str, Any],
+    gauge: Any,
+    operator_properties: Mapping[str, bool],
+    where: str,
 ) -> PreparedNullspaceContracts:
+    del operator_properties
     if options:
         raise TypeError("%s constant provider takes no options" % where)
     from pops.fields.gauges import MeanValueGauge
@@ -497,22 +505,24 @@ def _validate_constant(use: PreparedNullspaceUse, where: str) -> None:
 
 
 def _emit_none(
-    _node: Any,
-    _prelude: list[str],
-    _contracts: PreparedNullspaceContracts,
-    _plan_identity: str,
-    _provider: PreparedNullspaceProvider,
+    node: Any,
+    prelude: list[str],
+    contracts: PreparedNullspaceContracts,
+    plan_identity: str,
+    provider: PreparedNullspaceProvider,
 ) -> PreparedNullspaceNativeEmission:
+    del node, prelude, contracts, plan_identity, provider
     return PreparedNullspaceNativeEmission.nonsingular()
 
 
 def _emit_constant(
-    _node: Any,
-    _prelude: list[str],
+    node: Any,
+    prelude: list[str],
     contracts: PreparedNullspaceContracts,
     plan_identity: str,
-    _provider: PreparedNullspaceProvider,
+    provider: PreparedNullspaceProvider,
 ) -> PreparedNullspaceNativeEmission:
+    del node, prelude, provider
     from pops.identity.scalar import scalar_cpp
 
     gauge = contracts.gauge

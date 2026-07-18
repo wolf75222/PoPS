@@ -182,6 +182,12 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
         abs_tol = scalar_literal(attrs.get("abs_tol")).to_python()
     except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError("solve_linear has invalid prepared method scalar controls") from exc
+    method_options = attrs.get("method_options")
+    if not isinstance(method_options, Mapping):
+        # The provider lookup above already authenticates this value.  Keep the local guard as an
+        # explicit narrowing boundary so this validator remains correct if provider lookup and use
+        # validation are ever separated.
+        raise TypeError("prepared Krylov method options must be a mapping")
     use = PreparedKrylovMethodUse(
         rel_tol=rel_tol,
         abs_tol=abs_tol,
@@ -191,7 +197,7 @@ def validated_krylov_footprint(attrs: Mapping[str, Any], *, operator: Any) -> di
         preconditioned=preconditioned,
         operator_properties=problem_contract["operator_properties"],
         declared_nullspace=prepared_nullspace_contracts_from_attrs(attrs)[0].singular,
-        method_options=attrs.get("method_options"),
+        method_options=method_options,
     )
     method_provider.validate_use(use, where="solve_linear prepared method")
 

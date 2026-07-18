@@ -101,7 +101,10 @@ class FieldHierarchyPolicy(Descriptor):
         binder = getattr(capabilities, "bind_hierarchy_policy", None)
         if not callable(binder):
             raise TypeError("field hierarchy policy requires typed solve capabilities")
-        return binder(self.resolved_authority())
+        resolved = binder(self.resolved_authority())
+        if not isinstance(resolved, ResolvedHierarchyPolicy):
+            raise TypeError("field hierarchy policy binder did not return a resolved authority")
+        return resolved
 
 
 class InferHierarchyFromLayout(FieldHierarchyPolicy):

@@ -531,19 +531,32 @@ class PreparedHierarchySolverProvider:
             attrs.get("hierarchy_solver_options"), where="hierarchy solve options"
         )
         operator = inputs[0]
-        operator_attrs = getattr(operator, "attrs", {})
+        operator_attrs = getattr(operator, "attrs", None)
+        if not isinstance(operator_attrs, Mapping):
+            raise TypeError("hierarchy solve operator attributes must be a mapping")
         from pops.fields._prepared_nullspace_registry import (
             prepared_nullspace_provider_from_attrs,
         )
+        from pops.identity.scalar import exact_cpp_int, scalar_data
 
         nullspace = prepared_nullspace_provider_from_attrs(attrs)
         use_facts = PreparedHierarchySolverUseFacts(
             target=target,
-            scope=attrs.get("scope"),
-            problem_kind=attrs.get("problem_kind"),
-            domain=operator_attrs.get("domain"),
-            range=operator_attrs.get("range"),
-            components=attrs.get("ncomp"),
+            scope=_exact_nonempty_string(
+                attrs.get("scope"), where="hierarchy use scope"
+            ),
+            problem_kind=_exact_nonempty_string(
+                attrs.get("problem_kind"), where="hierarchy use problem_kind"
+            ),
+            domain=_exact_nonempty_string(
+                operator_attrs.get("domain"), where="hierarchy use domain"
+            ),
+            range=_exact_nonempty_string(
+                operator_attrs.get("range"), where="hierarchy use range"
+            ),
+            components=exact_cpp_int(
+                attrs.get("ncomp"), where="hierarchy use components", minimum=1
+            ),
             singular_nullspace=nullspace.singular,
             extensions=attrs.get("hierarchy_use_facts", {}),
         )
@@ -553,7 +566,6 @@ class PreparedHierarchySolverProvider:
             where="hierarchy provider %r" % self.provider_id,
         )
         self.flat_execution.validate_ir(attrs, where="hierarchy solve")
-        from pops.identity.scalar import exact_cpp_int, scalar_data
 
         relative, absolute, maximum = self.convergence.values(
             options, where="hierarchy solve"

@@ -687,6 +687,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         _append_report_guard()
         return
 
+    if footprint is None or problem_contract is None:
+        raise RuntimeError("prepared Krylov emission has no authenticated contract")
+
     method_expr = prepared_krylov_method_provider_from_attrs(v.attrs).emit_cpp(v)
 
     properties = problem_contract["operator_properties"]
