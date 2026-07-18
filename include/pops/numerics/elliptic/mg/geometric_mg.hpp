@@ -24,8 +24,8 @@
 ///   a degenerate coarse BoxArray (duplicate 1x1 boxes) where average_down would read out of bounds (MPI bug);
 /// - current_residual() does a MANDATORY all_reduce_max (distributed multi-box coarse): otherwise the
 ///   stopping criterion fires at different iterations per rank -> MPI desynchronization;
-/// - replicated: level replicated on all ranks (per-fab V-cycle without communication), as expected by
-///   the AMR coupler; in serial bit-for-bit identical to round-robin;
+/// - FieldDistribution::Replicated: level replicated on all ranks (per-fab V-cycle without
+///   communication); in serial bit-for-bit identical to round-robin;
 /// - cut_cell: order-2 Shortley-Weller weights at the embedded boundary (vs staircase); cut_cell=false
 ///   bit-identical to the historical stencil;
 /// - device kernels are NAMED FUNCTORS (recipe #93/#64): extended lambda forbidden cross-TU under nvcc.
@@ -33,8 +33,10 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -42,7 +44,9 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/mesh/storage/field_replica_consensus.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -50,10 +54,13 @@
 #include <chrono>  // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>  // getenv
 #include <functional>
 #include <limits>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -80,12 +87,11 @@ class GeometricMG {
  public:
   // active(x, y): optional "active cell" predicate (interior of the conductor).
   // Empty => everything active (no embedded wall).
-  // replicated: if true, each level (mono-box covering the domain) is REPLICATED on
-  // all ranks (dmap = my_rank() everywhere) instead of the default round-robin. Each rank
-  // then solves the SAME coarse Poisson redundantly, WITHOUT communication (per-fab V-cycle,
-  // fill_boundary on a box covering the domain is local, and current_residual reduced by
-  // norm_inf = all_reduce_MAX, idempotent under replication). This is what the AMR coupler
-  // expects (level 0 replicated). In serial my_rank()=0 -> bit-for-bit identical to round-robin.
+  // distribution: a replicated field owns one complete level on every rank (dmap = my_rank()
+  // everywhere); a distributed field uses the supplied distribution or the default round-robin.
+  // Replicated ranks solve the same coarse Poisson redundantly, without communication inside the
+  // per-fab V-cycle. Any provider may select this explicit distribution contract. In serial the two
+  // distribution modes have identical storage but remain distinct semantic contracts.
   //
   // cut_cell + levelset: ORDER-2 embedded boundary (Shortley-Weller) instead of
   // the staircase. levelset(x, y) is a level-set function (< 0 inside, sign of
@@ -107,28 +113,41 @@ class GeometricMG {
   //                           this long smoothing stands in for an exact solve on the small bottom grid.
   // (solve_robust LOCALLY doubles nu1/nu2 if the embedded boundary makes the cycle diverge, then restores them.)
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
-              std::function<bool(Real, Real)> active = {}, bool replicated = false,
+              ActiveRegionProvider2D active = {},
+              FieldDistribution distribution = FieldDistribution::Distributed,
               int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
               int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
-              bool cut_cell = false, std::function<Real(Real, Real)> levelset = {},
+              bool cut_cell = false, LevelSetProvider2D levelset = {},
               Real cut_theta_min = kEbCutFractionFloor,
               int coarse_threshold = kMGDefaultCoarseThreshold,
               const DistributionMapping* finest_distribution = nullptr)
       : bc_(bc),
         active_(std::move(active)),
+        min_coarse_(min_coarse),
         nu1_(nu1),
         nu2_(nu2),
         nbottom_(nbottom),
         coarse_threshold_(
             coarse_threshold),          // ADC-644: total-cell coarsening ceiling (0 = disabled)
         cut_theta_min_(cut_theta_min),  // ADC-615: cut-fraction clamp shared with the EB transport
-        replicated_(replicated),
+        distribution_(distribution),
         cut_cell_(cut_cell),
         levelset_(std::move(levelset)) {
+    if (!field_distribution_is_valid(distribution_))
+      throw std::invalid_argument("GeometricMG received invalid field distribution");
+    if (is_replicated())
+      replica_validation_data_.assign(detail::field_replica_consensus_storage_size(), char{0});
+    if (is_replicated() && finest_distribution) {
+      const int rank = my_rank();
+      for (const int owner : finest_distribution->ranks())
+        if (owner != rank)
+          throw std::invalid_argument(
+              "replicated GeometricMG must own every finest-level box on every rank");
+    }
     bc_.dx = geom.dx();
     bc_.dy = geom.dy();
     if (cut_cell_ && levelset_ && !active_)
-      active_ = [ls = levelset_](Real x, Real y) { return ls(x, y) < Real(0); };
+      active_ = active_region_from_level_set(levelset_);
     add_level(geom, ba, finest_distribution);
     while (true) {
       const Geometry g = lev_.back().geom;
@@ -233,24 +252,58 @@ class GeometricMG {
         }
       }
     }
+    prepared_operator_contract_ = make_materialized_elliptic_operator_contract(
+        operator_identity(), this->geom(), bc_, active_, distribution_, rhs(), phi(),
+        construction_options_contract(min_coarse_, nu1_, nu2_, nbottom_, cut_cell_, levelset_,
+                                      cut_theta_min_, coarse_threshold_));
   }
 
   /// Build the finest level on an already materialized distribution. This is the prepared
-  /// preconditioner route: a custom but valid box ownership must remain co-distributed with the
+  /// preconditioner route: a custom but valid box distribution must remain co-distributed with the
   /// Krylov vectors instead of being silently replaced by a new round-robin mapping.
-  GeometricMG(const Geometry& geom, const BoxArray& ba, const DistributionMapping& distribution,
-              const BCRec& bc, std::function<bool(Real, Real)> active = {},
+  GeometricMG(const Geometry& geom, const BoxArray& ba, const DistributionMapping& mapping,
+              const BCRec& bc, ActiveRegionProvider2D active = {},
               int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
               int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
-              int coarse_threshold = kMGDefaultCoarseThreshold)
-      : GeometricMG(geom, ba, bc, std::move(active), /*replicated=*/false, min_coarse, nu1, nu2,
+              int coarse_threshold = kMGDefaultCoarseThreshold,
+              FieldDistribution field_distribution = FieldDistribution::Distributed)
+      : GeometricMG(geom, ba, bc, std::move(active), field_distribution, min_coarse, nu1, nu2,
                     nbottom, /*cut_cell=*/false, {}, kEbCutFractionFloor, coarse_threshold,
-                    &distribution) {}
+                    &mapping) {}
+
+  /// Backend-neutral factory entry point. The representation contract and the exact ownership map
+  /// are independent: replicated/distributed controls collective semantics, while @p mapping is the
+  /// already materialized layout authority and is never reconstructed by the solver.
+  GeometricMG(const Geometry& geom, const BoxArray& ba, const DistributionMapping& mapping,
+              const BCRec& bc, ActiveRegionProvider2D active, FieldDistribution field_distribution)
+      : GeometricMG(geom, ba, mapping, bc, std::move(active), kMGDefaultMinCoarse,
+                    kMGDefaultPreSmooth, kMGDefaultPostSmooth, kMGDefaultBottomSweeps,
+                    kMGDefaultCoarseThreshold, field_distribution) {}
 
   MultiFab& phi() { return lev_[0].phi; }
   MultiFab& rhs() { return lev_[0].rhs; }
   const Geometry& geom() const { return lev_[0].geom; }
   int num_levels() const { return static_cast<int>(lev_.size()); }
+  FieldDistribution field_distribution() const noexcept { return distribution_; }
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.elliptic.geometric-mg", 1};
+  }
+  static EllipticOperatorContract expected_operator_contract(
+      const EllipticBuildRequest& request, int min_coarse = kMGDefaultMinCoarse,
+      int nu1 = kMGDefaultPreSmooth, int nu2 = kMGDefaultPostSmooth,
+      int nbottom = kMGDefaultBottomSweeps, bool cut_cell = false, LevelSetProvider2D levelset = {},
+      Real cut_theta_min = kEbCutFractionFloor, int coarse_threshold = kMGDefaultCoarseThreshold) {
+    EllipticBuildRequest effective = request;
+    if (cut_cell && levelset && !effective.active)
+      effective.active = active_region_from_level_set(levelset);
+    return make_expected_elliptic_operator_contract(
+        operator_identity(), effective,
+        construction_options_contract(min_coarse, nu1, nu2, nbottom, cut_cell, levelset,
+                                      cut_theta_min, coarse_threshold));
+  }
+  const EllipticOperatorContract& prepared_operator_contract() const noexcept {
+    return prepared_operator_contract_;
+  }
 
   const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
   void reset_diagnostics() { diagnostics_.clear(); }
@@ -278,9 +331,12 @@ class GeometricMG {
   // by level (rather than restricting from the fine level) gives the EXACT permittivity
   // at each coarse resolution, which preserves order 2. Call once
   // after construction, before solve. DO NOT call => uniform eps (historical path).
-  void set_epsilon(std::function<Real(Real, Real)> eps_fn) {
+  void set_epsilon(ScalarFieldProvider2D eps_fn) {
+    if (!eps_fn)
+      throw std::invalid_argument("GeometricMG epsilon provider must not be empty");
     // 1 ghost (box-boundary neighbors read), ghosts filled (do_fill).
     sample_per_level(&MGLevel::eps, eps_fn, 1, true, eps_bc());
+    eps_provider_contract_ = eps_fn.collective_contract();
     has_eps_ = true;
   }
 
@@ -292,6 +348,7 @@ class GeometricMG {
   void set_epsilon(const MultiFab& eps_fine) {
     // copy on the fine + restriction to the coarse; 1 ghost, ghosts filled at each level.
     restrict_and_fill(&MGLevel::eps, eps_fine, 1, true, eps_bc());
+    eps_provider_contract_ = "pops.scalar-field.prepared-multifab@1";
     has_eps_ = true;
   }
 
@@ -303,11 +360,13 @@ class GeometricMG {
   // order 2 preserved) then ghosts filled. Use case: anisotropic medium/mesh.
   // Giving eps_x_fn == eps_y_fn gives back the isotropic operator eps=eps_x. Composable with
   // set_reaction (kappa). Call once after construction, before solve.
-  void set_epsilon_anisotropic(std::function<Real(Real, Real)> eps_x_fn,
-                               std::function<Real(Real, Real)> eps_y_fn) {
+  void set_epsilon_anisotropic(ScalarFieldProvider2D eps_x_fn, ScalarFieldProvider2D eps_y_fn) {
+    if (!eps_x_fn || !eps_y_fn)
+      throw std::invalid_argument("GeometricMG anisotropic epsilon providers must not be empty");
     set_epsilon(std::move(eps_x_fn));  // x faces: reuse the isotropic eps wiring
     // y faces: second eps_y field, same convention (1 ghost, ghosts filled).
     sample_per_level(&MGLevel::eps_y, eps_y_fn, 1, true, eps_bc());
+    eps_y_provider_contract_ = eps_y_fn.collective_contract();
     has_eps_y_ = true;
   }
 
@@ -319,6 +378,7 @@ class GeometricMG {
     set_epsilon(eps_x_fine);  // x faces: reuse the isotropic eps wiring (+ restriction)
     // y faces: second eps_y field, copy + restriction (1 ghost, ghosts filled at each level).
     restrict_and_fill(&MGLevel::eps_y, eps_y_fine, 1, true, eps_bc());
+    eps_y_provider_contract_ = "pops.scalar-field.prepared-multifab@1";
     has_eps_y_ = true;
   }
 
@@ -333,10 +393,13 @@ class GeometricMG {
   // read at a neighbor, so its ghosts cannot be needed); filling them would be dead work. The
   // invariant is locked by the VARYING-kappa MMS in tests/test_screened_poisson.cpp (cases D/E),
   // which a future stencil reading kappa on its unfilled ghosts would break.
-  void set_reaction(std::function<Real(Real, Real)> kappa_fn) {
+  void set_reaction(ScalarFieldProvider2D kappa_fn) {
+    if (!kappa_fn)
+      throw std::invalid_argument("GeometricMG reaction provider must not be empty");
     // kappa: DIAGONAL, read at (i,j) only -> 0 ghost and do_fill=false (NO fill_ghosts, historical).
     // ebc is then unused (BCRec{} never read).
     sample_per_level(&MGLevel::kappa, kappa_fn, 0, false, BCRec{});
+    kappa_provider_contract_ = kappa_fn.collective_contract();
     has_kappa_ = true;
   }
 
@@ -346,6 +409,7 @@ class GeometricMG {
   void set_reaction(const MultiFab& kappa_fine) {
     // kappa: DIAGONAL -> 0 ghost and do_fill=false (NO fill_ghosts, neither fine nor coarse, historical).
     restrict_and_fill(&MGLevel::kappa, kappa_fine, 0, false, BCRec{});
+    kappa_provider_contract_ = "pops.scalar-field.prepared-multifab@1";
     has_kappa_ = true;
   }
 
@@ -358,8 +422,9 @@ class GeometricMG {
   // construction, before solve. DO NOT call => DIAGONAL block (current path bit-identical).
   // WARNING: for strongly non-symmetric A the 5-point GS V-cycle (smoother of the DIAGONAL
   // block, EXPLICIT cross terms) may NOT converge; a Krylov would then be required.
-  void set_cross_terms(std::function<Real(Real, Real)> a_xy_fn,
-                       std::function<Real(Real, Real)> a_yx_fn) {
+  void set_cross_terms(ScalarFieldProvider2D a_xy_fn, ScalarFieldProvider2D a_yx_fn) {
+    if (!a_xy_fn || !a_yx_fn)
+      throw std::invalid_argument("GeometricMG cross-term providers must not be empty");
     const BCRec ebc = eps_bc();
     for (auto& L : lev_) {
       L.a_xy = MultiFab(L.ba, L.dm, 1, 1);  // 1 ghost: the face average reads the boundary neighbor
@@ -380,6 +445,8 @@ class GeometricMG {
       fill_ghosts(L.a_xy, g.domain, ebc);
       fill_ghosts(L.a_yx, g.domain, ebc);
     }
+    a_xy_provider_contract_ = a_xy_fn.collective_contract();
+    a_yx_provider_contract_ = a_yx_fn.collective_contract();
     has_cross_ = true;
   }
 
@@ -415,6 +482,8 @@ class GeometricMG {
       fill_ghosts(lev_[l].a_xy, lev_[l].geom.domain, ebc);
       fill_ghosts(lev_[l].a_yx, lev_[l].geom.domain, ebc);
     }
+    a_xy_provider_contract_ = "pops.scalar-field.prepared-multifab@1";
+    a_yx_provider_contract_ = "pops.scalar-field.prepared-multifab@1";
     has_cross_ = true;
   }
 
@@ -437,11 +506,7 @@ class GeometricMG {
   // lifting. Its norm is independent of the incoming warm start: repeated solves do not demand
   // another rel_tol factor from an already-converged iterate.
   int solve(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
-    if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) || max_cycles < 1 ||
-        abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
-      throw std::invalid_argument(
-          "GeometricMG::solve requires finite rel_tol > 0, max_cycles >= 1 and "
-          "finite abs_tol >= 0");
+    require_collective_solve_contract_(rel_tol, max_cycles, abs_tol, "GeometricMG::solve");
     last_solve_report_ = {};
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
@@ -453,6 +518,7 @@ class GeometricMG {
                                  std::to_string(boundary_failure_.face) + " cell (" +
                                  std::to_string(boundary_failure_.i) + "," +
                                  std::to_string(boundary_failure_.j) + ")");
+      require_exact_published_phi_("GeometricMG::solve");
       return cycles;
     };
     auto invalid_evaluation = [&](int cycles, Real residual) {
@@ -515,7 +581,10 @@ class GeometricMG {
   // depend on the concept, not on GeometricMG directly. Propagates abs_tol_ (absolute
   // floor, default 0 -> historical relative criterion unchanged) to the mixed criterion.
   void solve() {
+    require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
+                                      "GeometricMG::solve()");
     if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
+      require_collective_solve_inputs_("GeometricMG::solve()");
       if (!has_field_newton_options_)
         throw std::runtime_error(
             "iterate-dependent field boundary requires an installed nonlinear outer solver");
@@ -523,6 +592,7 @@ class GeometricMG {
       if (!last_solve_report_.solved())
         throw std::runtime_error(std::string("field Newton solve failed: ") +
                                  last_solve_report_.status_name());
+      require_exact_published_phi_("GeometricMG::solve()");
       return;
     }
     solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_);
@@ -562,20 +632,29 @@ class GeometricMG {
   //      converges. Any run stable today did NOT diverge (divergence -> nan -> not
   //      recorded), so phase 2 never fires for them: bit-identical.
   int solve_robust(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
-    if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) || max_cycles < 1 ||
-        abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
-      throw std::invalid_argument(
-          "GeometricMG::solve_robust requires finite rel_tol > 0, max_cycles >= 1 and "
-          "finite abs_tol >= 0");
+    require_collective_solve_contract_(rel_tol, max_cycles, abs_tol, "GeometricMG::solve_robust");
     last_solve_report_ = {};
     last_bottom_seconds_ = 0.0;
+    const bool fallible_linear_boundary =
+        has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
+    if (fallible_linear_boundary)
+      boundary_failure_.reset();
+    auto finish = [&](int cycles) {
+      if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
+        throw std::runtime_error("field boundary evaluation failed at face " +
+                                 std::to_string(boundary_failure_.face) + " cell (" +
+                                 std::to_string(boundary_failure_.i) + "," +
+                                 std::to_string(boundary_failure_.j) + ")");
+      require_exact_published_phi_("GeometricMG::solve_robust");
+      return cycles;
+    };
     auto invalid_evaluation = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
       last_solve_report_.iters = cycles;
       last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
       last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-      return cycles;
+      return finish(cycles);
     };
     double initial_norms[2] = {static_cast<double>(forcing_residual_local()),
                                static_cast<double>(current_residual_local())};
@@ -593,7 +672,7 @@ class GeometricMG {
       last_solve_report_.iters = cycles;
       last_solve_report_.rel_residual = residual / report_denom;
       last_solve_report_.mark_solved();
-      return cycles;
+      return finish(cycles);
     };
     auto iteration_limit = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
@@ -601,7 +680,7 @@ class GeometricMG {
       last_solve_report_.iters = cycles;
       last_solve_report_.rel_residual = residual / report_denom;
       last_solve_report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-      return cycles;
+      return finish(cycles);
     };
     if (r0 <= stop)
       return solved(0, r0);
@@ -691,6 +770,7 @@ class GeometricMG {
     boundary_kernel_ = kernel;
     boundary_context_ = context;
     boundary_context_.failure = &boundary_failure_;
+    ensure_replica_validation_storage_(boundary_context_);
     has_boundary_kernel_ = true;
     lev_[0].boundary_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
     lev_[0].direction_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
@@ -707,6 +787,7 @@ class GeometricMG {
       throw std::runtime_error("GeometricMG boundary context installed without a compiled kernel");
     boundary_context_ = context;
     boundary_context_.failure = &boundary_failure_;
+    ensure_replica_validation_storage_(boundary_context_);
   }
 
   void set_field_newton_options(const FieldNewtonOptions& options) {
@@ -737,6 +818,227 @@ class GeometricMG {
   }
 
  private:
+  void require_collective_configuration_(Real rel_tol, int max_cycles, Real abs_tol,
+                                         const char* where) const {
+    bool invalid = !(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) ||
+                   max_cycles < 1 || abs_tol < Real(0) ||
+                   !std::isfinite(static_cast<double>(abs_tol)) ||
+                   !field_distribution_is_valid(distribution_);
+    if (has_boundary_kernel_) {
+      invalid =
+          invalid || boundary_context_.state_count < 0 || boundary_context_.field_count < 0 ||
+          boundary_context_.parameter_count < 0 ||
+          (boundary_context_.state_count > 0 && boundary_context_.states == nullptr) ||
+          (boundary_context_.state_count > 0 && boundary_context_.state_distributions == nullptr) ||
+          (boundary_context_.field_count > 0 && boundary_context_.fields == nullptr) ||
+          (boundary_context_.field_count > 0 && boundary_context_.field_distributions == nullptr) ||
+          (boundary_context_.parameter_count > 0 && boundary_context_.parameters == nullptr) ||
+          (boundary_context_.parameters != nullptr &&
+           static_cast<std::size_t>(boundary_context_.parameter_count) >
+               boundary_context_.parameters->size());
+      if (!invalid) {
+        for (int index = 0; index < boundary_context_.state_count; ++index)
+          invalid = invalid || boundary_context_.states[index] == nullptr ||
+                    !field_distribution_is_valid(boundary_context_.state_distributions[index]);
+        for (int index = 0; index < boundary_context_.field_count; ++index)
+          invalid = invalid || boundary_context_.fields[index] == nullptr ||
+                    !field_distribution_is_valid(boundary_context_.field_distributions[index]);
+      }
+    }
+    if (all_reduce_max(invalid ? 1L : 0L) != 0)
+      throw std::invalid_argument(std::string(where) +
+                                  ": invalid controls or generated-boundary context");
+
+    std::string contract;
+    const auto append = [&](const auto& value) {
+      detail::append_exact_contract_value(contract, value);
+    };
+    const auto append_text = [&](std::string_view value) {
+      append(static_cast<std::uint64_t>(value.size()));
+      contract.append(value.data(), value.size());
+    };
+    append(rel_tol);
+    append(max_cycles);
+    append(abs_tol);
+    append(static_cast<std::uint8_t>(distribution_));
+    append(nu1_);
+    append(nu2_);
+    append(nbottom_);
+    append(coarse_threshold_);
+    append(cut_theta_min_);
+    append_text(active_.collective_contract());
+    append_text(levelset_.collective_contract());
+    append(cut_cell_);
+    append(has_eps_);
+    append(has_eps_y_);
+    append(has_kappa_);
+    append(has_cross_);
+    append_text(eps_provider_contract_);
+    append_text(eps_y_provider_contract_);
+    append_text(kappa_provider_contract_);
+    append_text(a_xy_provider_contract_);
+    append_text(a_yx_provider_contract_);
+    append(has_boundary_kernel_);
+    append(has_field_newton_options_);
+    append(static_cast<std::uint64_t>(lev_.size()));
+
+    append(static_cast<std::uint8_t>(bc_.xlo));
+    append(static_cast<std::uint8_t>(bc_.xhi));
+    append(static_cast<std::uint8_t>(bc_.ylo));
+    append(static_cast<std::uint8_t>(bc_.yhi));
+    append(bc_.xlo_val);
+    append(bc_.xhi_val);
+    append(bc_.ylo_val);
+    append(bc_.yhi_val);
+    append(bc_.xlo_alpha);
+    append(bc_.xlo_beta);
+    append(bc_.xhi_alpha);
+    append(bc_.xhi_beta);
+    append(bc_.ylo_alpha);
+    append(bc_.ylo_beta);
+    append(bc_.yhi_alpha);
+    append(bc_.yhi_beta);
+    append(bc_.dx);
+    append(bc_.dy);
+    for (const MGLevel& level : lev_) {
+      append(level.geom.domain.lo[0]);
+      append(level.geom.domain.lo[1]);
+      append(level.geom.domain.hi[0]);
+      append(level.geom.domain.hi[1]);
+      append(level.geom.xlo);
+      append(level.geom.xhi);
+      append(level.geom.ylo);
+      append(level.geom.yhi);
+    }
+
+    if (has_boundary_kernel_) {
+      append_text(boundary_kernel_.identity);
+      append_text(boundary_kernel_.residual_identity);
+      append_text(boundary_kernel_.jvp_identity);
+      append(boundary_kernel_.observes_iteration);
+      append(boundary_context_.point.time);
+      append(boundary_context_.point.dt);
+      append(boundary_context_.point.clock_slot);
+      append(boundary_context_.point.partition_slot);
+      append(boundary_context_.point.stage_slot);
+      append(boundary_context_.point.step);
+      append(boundary_context_.point.substep);
+      append(boundary_context_.point.iteration);
+      append(boundary_context_.state_count);
+      append(boundary_context_.field_count);
+      append(boundary_context_.parameter_count);
+      for (int index = 0; index < boundary_context_.state_count; ++index)
+        append(static_cast<std::uint8_t>(boundary_context_.state_distributions[index]));
+      for (int index = 0; index < boundary_context_.field_count; ++index)
+        append(static_cast<std::uint8_t>(boundary_context_.field_distributions[index]));
+      for (int index = 0; index < boundary_context_.parameter_count; ++index)
+        append((*boundary_context_.parameters)[static_cast<std::size_t>(index)]);
+    }
+    if (has_field_newton_options_) {
+      append(field_newton_options_.tolerance);
+      append(field_newton_options_.max_iterations);
+      append(field_newton_options_.linear_tolerance);
+      append(field_newton_options_.linear_max_iterations);
+      append(field_newton_options_.restart);
+      append(field_newton_options_.armijo);
+      append(field_newton_options_.minimum_step);
+    }
+
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("geometric-mg-collective-contract"), std::string_view(contract)}}))
+      throw std::invalid_argument(std::string(where) +
+                                  ": collective contract differs between communicator ranks");
+  }
+
+  void require_collective_solve_inputs_(const char* where) {
+    const auto require_field = [&](const MultiFab& field, FieldDistribution field_distribution,
+                                   std::string_view role) {
+      const std::string location = std::string(where) + ": " + std::string(role);
+      detail::require_collective_field_distribution_layout(field, field_distribution,
+                                                           location.c_str());
+      if (field_distribution == FieldDistribution::Replicated)
+        detail::require_exact_replicated_field_values_prevalidated(
+            field, replica_validation_data_.data(), replica_validation_data_.size(),
+            location.c_str());
+    };
+    const auto require_boundary_dependency =
+        [&](const MultiFab& field, FieldDistribution field_distribution, std::string_view role) {
+          require_field(field, field_distribution, role);
+          bool materializes_local_solver_patches =
+              field.box_array().boxes() == lev_[0].phi.box_array().boxes();
+          for (int local = 0; materializes_local_solver_patches && local < lev_[0].phi.local_size();
+               ++local) {
+            const int global = lev_[0].phi.global_index(local);
+            const int dependency_local = field.local_index_of(global);
+            materializes_local_solver_patches =
+                dependency_local >= 0 && field.box(dependency_local) == lev_[0].phi.box(local);
+          }
+          if (all_reduce_max(materializes_local_solver_patches ? 0L : 1L) != 0)
+            throw std::invalid_argument(
+                std::string(where) + ": GeometricMG generated-boundary dependency " +
+                std::string(role) +
+                " does not materialize every local patch required by the solved field");
+        };
+
+    require_field(lev_[0].phi, distribution_, "finest phi");
+    require_field(lev_[0].rhs, distribution_, "finest rhs");
+    for (std::size_t level_index = 0; level_index < lev_.size(); ++level_index) {
+      const MGLevel& level = lev_[level_index];
+      const std::string prefix = "level " + std::to_string(level_index) + " ";
+      if (active_)
+        require_field(level.mask, distribution_, prefix + "mask");
+      if (cut_cell_)
+        require_field(level.coef, distribution_, prefix + "cut-cell coefficients");
+      if (has_eps_)
+        require_field(level.eps, distribution_, prefix + "epsilon-x");
+      if (has_eps_y_)
+        require_field(level.eps_y, distribution_, prefix + "epsilon-y");
+      if (has_kappa_)
+        require_field(level.kappa, distribution_, prefix + "reaction coefficient");
+      if (has_cross_) {
+        require_field(level.a_xy, distribution_, prefix + "a-xy");
+        require_field(level.a_yx, distribution_, prefix + "a-yx");
+      }
+    }
+    if (has_boundary_kernel_) {
+      for (int index = 0; index < boundary_context_.state_count; ++index)
+        require_boundary_dependency(*boundary_context_.states[index],
+                                    boundary_context_.state_distributions[index],
+                                    "state " + std::to_string(index));
+      for (int index = 0; index < boundary_context_.field_count; ++index)
+        require_boundary_dependency(*boundary_context_.fields[index],
+                                    boundary_context_.field_distributions[index],
+                                    "field " + std::to_string(index));
+    }
+  }
+
+  void require_collective_solve_contract_(Real rel_tol, int max_cycles, Real abs_tol,
+                                          const char* where) {
+    require_collective_configuration_(rel_tol, max_cycles, abs_tol, where);
+    require_collective_solve_inputs_(where);
+  }
+
+  void require_exact_published_phi_(const char* where) {
+    if (!is_replicated())
+      return;
+    detail::require_exact_replicated_field_values_prevalidated(
+        lev_[0].phi, replica_validation_data_.data(), replica_validation_data_.size(), where);
+  }
+
+  void ensure_replica_validation_storage_(const FieldBoundaryExecutionContext& context) {
+    bool needs_storage = is_replicated();
+    if (context.state_distributions != nullptr)
+      for (int index = 0; index < context.state_count; ++index)
+        needs_storage =
+            needs_storage || context.state_distributions[index] == FieldDistribution::Replicated;
+    if (context.field_distributions != nullptr)
+      for (int index = 0; index < context.field_count; ++index)
+        needs_storage =
+            needs_storage || context.field_distributions[index] == FieldDistribution::Replicated;
+    if (needs_storage && replica_validation_data_.empty())
+      replica_validation_data_.assign(detail::field_replica_consensus_storage_size(), char{0});
+  }
+
   Real evaluate_residual_local(MultiFab& iterate) {
     auto& L = lev_[0];
     poisson_residual(iterate, L.rhs, L.geom, bc_, L.res, mask_ptr(0), coef_ptr(0), eps_ptr(0),
@@ -788,8 +1090,10 @@ class GeometricMG {
       return field;
     }
 
-    static OperatorFingerprint make_linear_topology(GeometricMG& owner, const MultiFab& prototype) {
-      OperatorFingerprint topology = detail::layout_fingerprint(prototype);
+    static OperatorFingerprint make_linear_topology(
+        GeometricMG& owner, const MultiFab& prototype,
+        const PreparedVectorDistribution& vector_distribution) {
+      OperatorFingerprint topology = detail::layout_fingerprint(prototype, vector_distribution);
       detail::fingerprint_geometry(topology, owner.lev_[0].geom);
       detail::fingerprint_boundary(topology, owner.bc_);
       return topology;
@@ -797,8 +1101,9 @@ class GeometricMG {
 
     BoundaryNewtonCache(GeometricMG& owner, int restart)
         : owner_(&owner),
-          phi_layout_(detail::layout_fingerprint(owner.lev_[0].phi)),
-          rhs_layout_(detail::layout_fingerprint(owner.lev_[0].rhs)),
+          vector_distribution_(PreparedVectorDistribution(owner.distribution_)),
+          phi_layout_(detail::layout_fingerprint(owner.lev_[0].phi, vector_distribution_)),
+          rhs_layout_(detail::layout_fingerprint(owner.lev_[0].rhs, vector_distribution_)),
           restart_(restart),
           published_snapshot_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
           accepted_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
@@ -807,18 +1112,25 @@ class GeometricMG {
           trial_residual_(allocate_like(owner.lev_[0].rhs, /*ghosts=*/0)),
           delta_(allocate_like(owner.lev_[0].phi, owner.lev_[0].phi.n_grow())),
           rhs_snapshot_(allocate_like(owner.lev_[0].rhs, owner.lev_[0].rhs.n_grow())),
-          footprint_{delta_.ncomp(), delta_.n_grow(), restart, true},
-          linear_topology_(make_linear_topology(owner, delta_)),
+          footprint_{delta_.ncomp(), delta_.n_grow(), true},
+          linear_topology_(make_linear_topology(owner, delta_, vector_distribution_)),
           linear_problem_(
               delta_, [this](MultiFab& out, const MultiFab& in) { apply_jacobian(out, in); },
               PreparedLinearPreconditioner(
                   delta_,
-                  [this](MultiFab& out, const MultiFab& in) { apply_preconditioner(out, in); },
-                  [this]() { prepare_linear_preconditioner(); }),
+                  PreparedLinearPreconditionerProvider::trusted_extension(
+                      {"pops.elliptic.geometric-mg.boundary-newton-preconditioner", 1},
+                      std::string(owner.prepared_operator_contract().exact_fingerprint()),
+                      [this]() { prepare_linear_preconditioner(); },
+                      [this](MultiFab& out, const MultiFab& in) {
+                        apply_preconditioner(out, in);
+                      }),
+                  vector_distribution_),
               LinearOperatorProperties::general(), footprint_,
-              PreparedNullspacePolicy::nonsingular(),
-              [this]() { return probe_linear_snapshot(); }),
-          linear_workspace_(delta_, KrylovMethod::kGmres, footprint_) {}
+              PreparedNullspacePolicy::nonsingular(), [this]() { return probe_linear_snapshot(); },
+              {}, vector_distribution_),
+          linear_workspace_(delta_, gmres_krylov_method(restart), footprint_,
+                            vector_distribution_) {}
 
     BoundaryNewtonCache(const BoundaryNewtonCache&) = delete;
     BoundaryNewtonCache& operator=(const BoundaryNewtonCache&) = delete;
@@ -826,8 +1138,9 @@ class GeometricMG {
     BoundaryNewtonCache& operator=(BoundaryNewtonCache&&) = delete;
 
     bool compatible(const MultiFab& phi, const MultiFab& rhs, int restart) const {
-      return restart_ == restart && phi_layout_ == detail::layout_fingerprint(phi) &&
-             rhs_layout_ == detail::layout_fingerprint(rhs);
+      return restart_ == restart &&
+             phi_layout_ == detail::layout_fingerprint(phi, vector_distribution_) &&
+             rhs_layout_ == detail::layout_fingerprint(rhs, vector_distribution_);
     }
 
     std::size_t allocation_count() const {
@@ -943,6 +1256,7 @@ class GeometricMG {
     }
 
     GeometricMG* owner_;
+    PreparedVectorDistribution vector_distribution_;
     OperatorFingerprint phi_layout_{};
     OperatorFingerprint rhs_layout_{};
     int restart_ = 0;
@@ -1030,9 +1344,9 @@ class GeometricMG {
 
     // Tolerances and iteration limits remain per-call controls. Only restart changes storage shape
     // and therefore participates in cache compatibility.
-    const KrylovControls linear_controls{
-        KrylovMethod::kGmres,          options.linear_tolerance, Real(0),
-        options.linear_max_iterations, options.restart,          Real(1)};
+    const KrylovControls linear_controls{gmres_krylov_method(options.restart),
+                                         options.linear_tolerance, Real(0),
+                                         options.linear_max_iterations};
 
     for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
       boundary_context_.point.iteration = iteration;
@@ -1133,14 +1447,17 @@ class GeometricMG {
     return b;
   }
 
+  bool is_replicated() const noexcept { return distribution_ == FieldDistribution::Replicated; }
+
   void add_level(const Geometry& g, const BoxArray& ba,
                  const DistributionMapping* distribution = nullptr) {
     if (distribution && distribution->size() != ba.size())
       throw std::invalid_argument("GeometricMG distribution size disagrees with BoxArray");
     DistributionMapping dm =
-        distribution ? *distribution
-                     : (replicated_ ? DistributionMapping(std::vector<int>(ba.size(), my_rank()))
-                                    : DistributionMapping(ba.size(), n_ranks()));
+        distribution
+            ? *distribution
+            : (is_replicated() ? DistributionMapping(std::vector<int>(ba.size(), my_rank()))
+                               : DistributionMapping(ba.size(), n_ranks()));
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1), MultiFab(ba, dm, 1, 0),
                            MultiFab(ba, dm, 1, 0), MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
                            MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
@@ -1163,8 +1480,8 @@ class GeometricMG {
   // Host PER-LEVEL sampling of a field from fn (std::function not device-callable): allocates
   // MultiFab(L.ba, L.dm, 1, nghost) at each level, writes f(x_cell, y_cell) at the center, then ghosts
   // (fill_ghosts with ebc) ONLY if do_fill. Body extracted word-for-word from set_epsilon(fn) etc.
-  void sample_per_level(MultiFab MGLevel::* field, const std::function<Real(Real, Real)>& fn,
-                        int nghost, bool do_fill, const BCRec& ebc) {
+  void sample_per_level(MultiFab MGLevel::* field, const ScalarFieldProvider2D& fn, int nghost,
+                        bool do_fill, const BCRec& ebc) {
     for (auto& L : lev_) {
       MultiFab& F = L.*field;
       F = MultiFab(L.ba, L.dm, 1, nghost);
@@ -1274,18 +1591,41 @@ class GeometricMG {
       trace_mark("vcycle_rec(0): after gs_smooth(nu2)");
   }
 
+  static std::string construction_options_contract(int min_coarse, int nu1, int nu2, int nbottom,
+                                                   bool cut_cell,
+                                                   const LevelSetProvider2D& levelset,
+                                                   Real cut_theta_min, int coarse_threshold) {
+    ExactContractBuilder contract;
+    contract.text("pops.elliptic.geometric-mg.options")
+        .scalar(std::uint32_t{1})
+        .scalar(min_coarse)
+        .scalar(nu1)
+        .scalar(nu2)
+        .scalar(nbottom)
+        .scalar(cut_cell)
+        .optional_collective_contract(levelset)
+        .scalar(cut_theta_min)
+        .scalar(coarse_threshold);
+    return std::move(contract).release();
+  }
+
   BCRec bc_;
-  std::function<bool(Real, Real)> active_;
-  int nu1_, nu2_, nbottom_;
+  ActiveRegionProvider2D active_;
+  int min_coarse_, nu1_, nu2_, nbottom_;
   int coarse_threshold_ =
       kMGDefaultCoarseThreshold;              ///< ADC-644: total-cell coarsening ceiling (0 = off).
   Real cut_theta_min_ = kEbCutFractionFloor;  ///< ADC-615: cut-fraction clamp (default 1e-3).
-  bool replicated_ = false;
+  FieldDistribution distribution_ = FieldDistribution::Distributed;
   bool cut_cell_ = false;
   bool has_eps_ = false;
   bool has_eps_y_ = false;
   bool has_kappa_ = false;
   bool has_cross_ = false;  // off-diagonal Axy/Ayx coefficients (FULL tensor) active
+  std::string eps_provider_contract_;
+  std::string eps_y_provider_contract_;
+  std::string kappa_provider_contract_;
+  std::string a_xy_provider_contract_;
+  std::string a_yx_provider_contract_;
   bool has_boundary_kernel_ = false;
   CompiledFieldBoundaryKernel boundary_kernel_{};
   FieldBoundaryFailure boundary_failure_{};
@@ -1303,9 +1643,11 @@ class GeometricMG {
   double last_bottom_seconds_ = 0.0;
   RuntimeDiagnosticsReport diagnostics_ =
       make_runtime_diagnostics_report("pops.numerics.elliptic.geometric_mg");
-  std::function<Real(Real, Real)> levelset_;
+  LevelSetProvider2D levelset_;
   std::vector<MGLevel> lev_;
+  std::vector<char, comm_allocator<char>> replica_validation_data_;
   BoundaryNewtonCacheSlot boundary_newton_cache_;
+  EllipticOperatorContract prepared_operator_contract_;
 };
 
 inline std::uint64_t GeometricMG::boundary_newton_cache_generation() const {

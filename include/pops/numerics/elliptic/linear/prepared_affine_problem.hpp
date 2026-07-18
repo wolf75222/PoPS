@@ -8,8 +8,9 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
-#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
+#include <pops/numerics/elliptic/linear/prepared_vector_metric.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/prepared_provider_consensus.hpp>
 
 #include <array>
 #include <bit>
@@ -17,19 +18,84 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace pops {
 
 class PreparedAffineLinearProblem;
+namespace runtime::program {
+class ProgramContext;
+class AmrProgramContext;
+}  // namespace runtime::program
 namespace detail {
 struct PreparedProblemAccess;
+
+struct MaterializePreparedNullspaceBasisKernel {
+  Array4 values;
+  ConstArray4 mask;
+  ConstArray4 coverage;
+  int component;
+  bool masked;
+  bool covered;
+  POPS_HD void operator()(int i, int j) const {
+    const Real basis = masked ? mask(i, j, 0) : Real(1);
+    values(i, j, component) = basis * (covered ? coverage(i, j, 0) : Real(1));
+  }
+};
+
+template <class Distribution>
+void preflight_prepared_nullspace_provider(
+    const MultiFab& layout, bool singular, const FieldNullspacePlan& plan, int first_level,
+    const Distribution& distribution) {
+  FieldNullspacePreflightPayload payload;
+  payload.append_scalar(static_cast<std::uint8_t>(singular));
+  payload.append_scalar(first_level);
+  payload.append_plan(plan, distribution);
+  validate_field_nullspace_plan_locally(payload, plan);
+  if (singular) {
+    const bool level_resolved = first_level >= 0;
+    payload.require(level_resolved && !plan.bases.empty() &&
+                    plan.gauges.size() == plan.bases.size());
+    payload.append_layout(&layout, distribution);
+  } else {
+    payload.require(plan.bases.empty() && plan.gauges.empty());
+  }
+  finish_field_nullspace_preflight(payload, FieldNullspaceCollectiveBoundary::Preparation);
+
+  // The common preflight above must establish one uniform singular/nonsingular branch before any
+  // branch-specific layout or exact-value collective. Otherwise one rank could enter a nullspace
+  // validation reduction while another rank returns through the nonsingular path.
+  if (singular) {
+    distribution.require_collective_layout(layout, "prepared nullspace solved vector");
+    std::vector<char, comm_allocator<char>> validation(
+        distribution.validation_scratch_byte_count(), char{0});
+    distribution.require_exact_values(layout, validation, "prepared nullspace solved vector");
+    for (const FieldNullspaceBasis& basis : plan.bases) {
+      for (const auto& mask : basis.masks) {
+        if (!mask)
+          continue;
+        distribution.require_collective_layout(*mask, "prepared nullspace basis mask");
+        distribution.require_exact_values(*mask, validation, "prepared nullspace basis mask");
+      }
+      for (const auto& coverage : basis.coverage) {
+        if (!coverage)
+          continue;
+        distribution.require_collective_layout(*coverage, "prepared nullspace coverage mask");
+        distribution.require_exact_values(*coverage, validation,
+                                          "prepared nullspace coverage mask");
+      }
+    }
+  }
 }
+}  // namespace detail
 
 /// Host-side matrix-free application. The callback must overwrite every valid output cell and owns
 /// any typed halo/boundary fill required before it reads input ghosts. Device work remains inside the
@@ -40,7 +106,130 @@ struct PreparedProblemAccess;
 using ApplyFn = std::function<void(MultiFab& out, const MultiFab& in)>;
 using PreparedResourceFn = std::function<void()>;
 
-enum class KrylovMethod : std::uint8_t { kCg, kBicgstab, kGmres, kRichardson };
+/// One exact source owns both preconditioner resource preparation and application.  Keeping these
+/// callbacks in one authenticated handle prevents an untracked prepare hook from changing the
+/// numerical implementation while retaining another provider's fingerprint.
+template <class Source>
+concept PreparedLinearPreconditionerSource =
+    std::copy_constructible<std::remove_cvref_t<Source>> &&
+    requires(const std::remove_cvref_t<Source>& source, ExactContractBuilder& contract,
+             MultiFab& out, const MultiFab& in) {
+      {
+        std::remove_cvref_t<Source>::provider_identity()
+      } noexcept -> std::same_as<PreparedProviderIdentity>;
+      { source.serialize_exact_parameters(contract) } -> std::same_as<void>;
+      { source.prepare() } -> std::same_as<void>;
+      { source.apply(out, in) } -> std::same_as<void>;
+    };
+
+class PreparedLinearPreconditionerProvider {
+ public:
+  PreparedLinearPreconditionerProvider() = default;
+
+  template <PreparedLinearPreconditionerSource Source>
+  explicit PreparedLinearPreconditionerProvider(Source source)
+      : implementation_(std::make_shared<Model<std::remove_cvref_t<Source>>>(
+            std::move(source))) {}
+
+  /// Explicit plugin/ABI trust boundary when a concrete source type cannot cross the boundary.
+  /// The single exact-parameter contract must cover both callbacks; neither callback can be
+  /// replaced after construction.
+  [[nodiscard]] static PreparedLinearPreconditionerProvider trusted_extension(
+      PreparedProviderIdentity identity, std::string exact_parameters,
+      PreparedResourceFn prepare, ApplyFn apply) {
+    PreparedLinearPreconditionerProvider provider;
+    provider.implementation_ = std::make_shared<TrustedModel>(
+        identity, std::move(exact_parameters), std::move(prepare), std::move(apply));
+    return provider;
+  }
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return static_cast<bool>(implementation_);
+  }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return implementation_ ? implementation_->collective_contract() : std::string_view{};
+  }
+  void prepare() const {
+    if (!implementation_)
+      throw std::logic_error("cannot prepare an empty linear preconditioner provider");
+    implementation_->prepare();
+  }
+  void operator()(MultiFab& out, const MultiFab& in) const {
+    if (!implementation_)
+      throw std::logic_error("cannot apply an empty linear preconditioner provider");
+    implementation_->apply(out, in);
+  }
+
+ private:
+  struct Concept {
+    virtual ~Concept() = default;
+    [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
+    virtual void prepare() const = 0;
+    virtual void apply(MultiFab&, const MultiFab&) const = 0;
+  };
+
+  static std::string make_contract_(PreparedProviderIdentity identity,
+                                    std::string_view exact_parameters) {
+    if (identity.name.empty() || identity.version == 0)
+      throw std::invalid_argument(
+          "prepared linear preconditioner source requires an exact identity");
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-linear-preconditioner-source")
+        .scalar(std::uint32_t{1})
+        .text(identity.name)
+        .scalar(identity.version)
+        .bytes(exact_parameters);
+    return std::move(contract).release();
+  }
+
+  template <PreparedLinearPreconditionerSource Source>
+  class Model final : public Concept {
+   public:
+    explicit Model(Source source) : source_(std::move(source)) {
+      ExactContractBuilder parameters;
+      source_.serialize_exact_parameters(parameters);
+      collective_contract_ =
+          make_contract_(Source::provider_identity(), parameters.view());
+    }
+    std::string_view collective_contract() const noexcept override {
+      return collective_contract_;
+    }
+    void prepare() const override { source_.prepare(); }
+    void apply(MultiFab& out, const MultiFab& in) const override { source_.apply(out, in); }
+
+   private:
+    Source source_;
+    std::string collective_contract_;
+  };
+
+  class TrustedModel final : public Concept {
+   public:
+    TrustedModel(PreparedProviderIdentity identity, std::string exact_parameters,
+                 PreparedResourceFn prepare, ApplyFn apply)
+        : prepare_(std::move(prepare)),
+          apply_(std::move(apply)),
+          collective_contract_(make_contract_(identity, exact_parameters)) {
+      if (!apply_)
+        throw std::invalid_argument(
+            "prepared linear preconditioner extension requires an apply callback");
+    }
+    std::string_view collective_contract() const noexcept override {
+      return collective_contract_;
+    }
+    void prepare() const override {
+      if (prepare_)
+        prepare_();
+    }
+    void apply(MultiFab& out, const MultiFab& in) const override { apply_(out, in); }
+
+   private:
+    PreparedResourceFn prepare_;
+    ApplyFn apply_;
+    std::string collective_contract_;
+  };
+
+  std::shared_ptr<const Concept> implementation_;
+};
 
 enum class LinearOperatorProperty : std::uint32_t {
   kNone = 0,
@@ -125,10 +314,18 @@ class PreparedNullspacePolicy {
   /// boundary: callers that invoke this policy themselves may not have completed the fixed
   /// PreparedAffineLinearProblem consensus preflight, so a rank-local early return could split
   /// the Gram reduction below.
-  void prepare(const MultiFab& layout) {
+  void prepare(const MultiFab& layout, const PreparedVectorDistribution& distribution) {
+    prepare(layout, PreparedVectorMetric::euclidean(layout, distribution));
+  }
+
+  void prepare(const MultiFab& layout, const PreparedVectorMetric& metric) {
     prepared_ = false;
+    detail::preflight_prepared_nullspace_provider(
+        layout, singular_, plan_, first_level_, metric.distribution());
     if (!singular_) {
-      moments_.clear();
+      basis_vectors_.clear();
+      basis_metric_gram_factor_.clear();
+      gauge_coefficients_.clear();
       prepared_ = true;
       return;
     }
@@ -141,25 +338,107 @@ class PreparedNullspacePolicy {
     for (const FieldGaugeConstraint& gauge : plan_.gauges)
       if (!std::isfinite(static_cast<double>(gauge.value)))
         throw std::invalid_argument("prepared nullspace gauge values must be finite");
-    validate_field_nullspace_basis(std::vector<const MultiFab*>{&layout}, plan_, first_level_);
-    moments_.assign(plan_.bases.size() * 2u, 0.0);
+    if (!metric.compatible_with(layout, metric.distribution()))
+      throw std::invalid_argument(
+          "prepared nullspace metric disagrees with the single-field vector space");
+
+    basis_vectors_.clear();
+    basis_metric_gram_factor_.clear();
+    gauge_coefficients_.clear();
+    basis_vectors_.reserve(plan_.bases.size());
+    for (const FieldNullspaceBasis& basis : plan_.bases) {
+      detail::validate_basis_layout(layout, basis.mask(first_level_), basis);
+      basis_vectors_.emplace_back(layout.box_array(), layout.dmap(), layout.ncomp(),
+                                  layout.n_grow());
+      MultiFab& materialized = basis_vectors_.back();
+      materialized.share_halo_cache_from(layout);
+      detail::PreparedFieldAlgebra::zero(materialized);
+      const MultiFab* mask = basis.mask(first_level_);
+      const MultiFab* coverage = basis.coverage_mask(first_level_);
+      detail::validate_mask_layout(layout, coverage, "coverage");
+      for (int local = 0; local < materialized.local_size(); ++local) {
+        const ConstArray4 mask_values =
+            mask == nullptr ? ConstArray4{} : mask->fab(local).const_array();
+        const ConstArray4 coverage_values =
+            coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
+        for_each_cell(materialized.box(local), detail::MaterializePreparedNullspaceBasisKernel{
+                                                   materialized.fab(local).array(), mask_values,
+                                                   coverage_values, basis.field_component,
+                                                   mask != nullptr, coverage != nullptr});
+      }
+    }
+
+    const std::size_t basis_count = basis_vectors_.size();
+    basis_metric_gram_factor_.assign(
+        detail::checked_field_nullspace_collective_product(
+            basis_count, basis_count, "prepared nullspace Gram matrix"),
+        0.0);
+    gauge_coefficients_.assign(basis_count, 0.0);
+    for (std::size_t left = 0; left < basis_vectors_.size(); ++left) {
+      for (std::size_t right = left; right < basis_vectors_.size(); ++right) {
+        if (plan_.bases[left].field_component == plan_.bases[right].field_component &&
+            plan_.bases[left].measure(first_level_) != plan_.bases[right].measure(first_level_))
+          throw std::invalid_argument(
+              "prepared nullspace bases disagree on the single-field cell measure");
+        const double overlap = static_cast<double>(metric.nullspace_inner_product(
+            basis_vectors_[left], basis_vectors_[right],
+            plan_.bases[left].measure(first_level_)));
+        basis_metric_gram_factor_[left * basis_count + right] = overlap;
+        basis_metric_gram_factor_[right * basis_count + left] = overlap;
+      }
+    }
+    detail::factor_field_nullspace_gram(basis_metric_gram_factor_, basis_count,
+                                        "prepared nullspace Gram matrix");
     prepared_ = true;
   }
 
-  void require_compatible(const MultiFab& normalized_rhs) const {
+  void require_compatible(const MultiFab& normalized_rhs,
+                          const PreparedVectorMetric& metric) const {
     require_prepared();
     if (!singular_)
       return;
-    detail::require_field_nullspace_compatible_prevalidated(normalized_rhs, plan_, first_level_,
-                                                            moments_.data(), moments_.size());
+    for (std::size_t index = 0; index < basis_vectors_.size(); ++index) {
+      const Real measure = plan_.bases[index].measure(first_level_);
+      const Real moment =
+          metric.nullspace_inner_product(normalized_rhs, basis_vectors_[index], measure);
+      const Real absolute =
+          metric.nullspace_absolute_inner_product(normalized_rhs, basis_vectors_[index], measure);
+      if (!std::isfinite(static_cast<double>(moment)) ||
+          !std::isfinite(static_cast<double>(absolute)))
+        throw FieldNullspaceInvalidEvaluation(
+            "field RHS has a non-finite compatibility moment for nullspace basis '" +
+            plan_.bases[index].identity + "'; silent projection is forbidden");
+      const Real scale = absolute > Real(1) ? absolute : Real(1);
+      const Real tolerance = Real(128) * std::numeric_limits<Real>::epsilon() * scale;
+      if (std::abs(moment) > tolerance)
+        throw FieldNullspaceIncompatibleRhs("field RHS is incompatible with nullspace basis '" +
+                                            plan_.bases[index].identity +
+                                            "'; silent projection is forbidden");
+    }
   }
 
-  void apply_gauge(MultiFab& iterate) const {
+  void apply_gauge(MultiFab& iterate, const PreparedVectorMetric& metric) const {
     require_prepared();
     if (!singular_)
       return;
-    detail::apply_field_gauge_prevalidated(iterate, plan_, first_level_, moments_.data(),
-                                           moments_.size());
+    for (std::size_t index = 0; index < basis_vectors_.size(); ++index) {
+      const std::size_t gauge = detail::gauge_index(plan_, plan_.bases[index].identity);
+      if (gauge == plan_.gauges.size())
+        throw std::logic_error("prepared nullspace gauge does not cover every basis");
+      gauge_coefficients_[index] = static_cast<double>(metric.nullspace_inner_product(
+          iterate, basis_vectors_[index], plan_.bases[index].measure(first_level_)));
+    }
+    detail::solve_field_nullspace_gram(basis_metric_gram_factor_, basis_vectors_.size(),
+                                       gauge_coefficients_);
+    for (std::size_t index = 0; index < basis_vectors_.size(); ++index) {
+      const std::size_t gauge = detail::gauge_index(plan_, plan_.bases[index].identity);
+      const Real coefficient =
+          static_cast<Real>(gauge_coefficients_[index]) - plan_.gauges[gauge].value;
+      if (!std::isfinite(static_cast<double>(coefficient)))
+        throw FieldNullspaceInvalidEvaluation(
+            "field gauge produced a non-finite metric coefficient");
+      detail::PreparedFieldAlgebra::axpy(iterate, -coefficient, basis_vectors_[index]);
+    }
   }
 
  private:
@@ -170,11 +449,12 @@ class PreparedNullspacePolicy {
 
   /// This route is private to PreparedAffineLinearProblem. Its caller has just established the
   /// exact fixed collective contract, including the immutable plan, layout, prepared bit, and
-  /// persistent moment capacity on every rank. Only that consensus authorizes reusing the Gram
+  /// persistent metric-basis capacity on every rank. Only that consensus authorizes reusing the Gram
   /// certificate; public prepare() above remains deliberately uncached.
-  void prepare_after_collective_preflight_(const MultiFab& layout) {
+  void prepare_after_collective_preflight_(const MultiFab& layout,
+                                           const PreparedVectorMetric& metric) {
     if (!prepared_)
-      prepare(layout);
+      prepare(layout, metric);
   }
 
   /// A failed collective preparation stage may have completed the local certificate on only a
@@ -189,7 +469,9 @@ class PreparedNullspacePolicy {
 
   FieldNullspacePlan plan_{};
   std::array<std::uint64_t, 4> plan_fingerprint_{};
-  mutable std::vector<double> moments_{};
+  std::vector<MultiFab> basis_vectors_{};
+  std::vector<double> basis_metric_gram_factor_{};
+  mutable std::vector<double> gauge_coefficients_{};
   int first_level_ = 0;
   bool singular_ = false;
   bool prepared_ = false;
@@ -206,7 +488,6 @@ struct PreparedEquationReference {
 struct KrylovFootprint {
   int components = 1;
   int input_ghosts = 0;
-  int restart = 0;
   bool preconditioned = false;
 
   friend bool operator==(const KrylovFootprint&, const KrylovFootprint&) = default;
@@ -216,6 +497,32 @@ struct KrylovFootprint {
 /// canonical Program/IR identity. The remaining fields authenticate the actual runtime evaluation
 /// point and topology. Binary64 values travel as exact bit patterns, never rounded text.
 using OperatorFingerprint = std::array<std::uint64_t, 4>;
+
+namespace detail {
+
+/// Capability issued only by a compiled-Program runtime context.  Direct/native extension
+/// callbacks cannot disable the verified apply path merely by selecting a public enum value.
+class AuthenticatedProgramApplyToken {
+ public:
+  AuthenticatedProgramApplyToken(const AuthenticatedProgramApplyToken&) = default;
+  AuthenticatedProgramApplyToken& operator=(const AuthenticatedProgramApplyToken&) = default;
+
+ private:
+  explicit AuthenticatedProgramApplyToken(OperatorFingerprint authority)
+      : authority_(authority) {
+    if (std::all_of(authority_.begin(), authority_.end(),
+                    [](std::uint64_t word) { return word == 0; }))
+      throw std::invalid_argument("authenticated Program operator authority must be non-zero");
+  }
+
+  friend class ::pops::runtime::program::ProgramContext;
+  friend class ::pops::runtime::program::AmrProgramContext;
+  friend class ::pops::PreparedAffineLinearProblem;
+
+  OperatorFingerprint authority_{};
+};
+
+}  // namespace detail
 
 struct OperatorEvaluationSnapshot {
   OperatorFingerprint authority{};
@@ -252,15 +559,6 @@ struct OperatorEvaluationSnapshot {
 /// converts a probe failure on any one rank into the same exception on every rank.
 using OperatorSnapshotProbe = std::function<OperatorEvaluationSnapshot()>;
 
-/// Trust boundary for the native operator callback. Generated PoPS applies are compiled from a
-/// restricted, side-effect-free Program region and need no second snapshot probe or collective
-/// after each matvec. Extension callbacks default to verified mode, whose rank-symmetric gate
-/// detects a mutation performed by the callback itself before the result can be consumed.
-enum class OperatorApplyPurity : std::uint8_t {
-  kVerifyAfterApply,
-  kAuthenticatedProgram,
-};
-
 namespace detail {
 
 struct PreparedProblemAccess;
@@ -291,21 +589,12 @@ inline void fingerprint_mix(OperatorFingerprint& hash, std::string_view value) {
     fingerprint_mix(hash, static_cast<std::uint64_t>(byte));
 }
 
-inline OperatorFingerprint layout_fingerprint(const MultiFab& value) {
+inline OperatorFingerprint layout_fingerprint(
+    const MultiFab& value,
+    PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
   OperatorFingerprint hash = fingerprint_seed();
-  fingerprint_mix(hash, static_cast<std::uint64_t>(value.ncomp()));
-  fingerprint_mix(hash, static_cast<std::uint64_t>(value.n_grow()));
-  const auto& boxes = value.box_array().boxes();
-  const auto& ranks = value.dmap().ranks();
-  fingerprint_mix(hash, static_cast<std::uint64_t>(boxes.size()));
-  for (std::size_t index = 0; index < boxes.size(); ++index) {
-    const Box2D& box = boxes[index];
-    for (int axis = 0; axis < 2; ++axis) {
-      fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(box.lo[axis])));
-      fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[axis])));
-    }
-    fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(ranks[index])));
-  }
+  fingerprint_mix(hash, ownership.collective_contract());
+  fingerprint_mix(hash, ownership.layout_contract(value));
   return hash;
 }
 
@@ -377,7 +666,7 @@ inline std::array<char, 19 * sizeof(std::uint64_t)> snapshot_consensus_payload(
 /// min/max is intentional: it preserves exact binary64 bits and detects disagreement without
 /// interpreting unsigned fingerprints as signed MPI integers.
 struct KrylovCollectivePayload {
-  static constexpr std::size_t kCapacity = 1024;
+  static constexpr std::size_t kCapacity = 2048;
   static constexpr std::size_t kUsableCapacity = kCapacity - 1u;
   static constexpr std::size_t kFingerprintBytes = 4u * sizeof(std::uint64_t);
   static constexpr std::size_t kSnapshotBytes = 19u * sizeof(std::uint64_t);
@@ -387,17 +676,19 @@ struct KrylovCollectivePayload {
   // alias bit. Keeping this arithmetic here makes the fixed capacity a compile-time contract
   // instead of a rank-local overflow path. Update it with any new payload append sequence.
   static constexpr std::size_t kPreparedProblemContractBytes =
-      sizeof(std::uint32_t) + 3u * sizeof(int) + 4u * sizeof(std::uint8_t) + kSnapshotBytes +
-      kFingerprintBytes + 2u * sizeof(std::uint8_t) + sizeof(std::uint64_t) + kFingerprintBytes +
-      sizeof(std::uint8_t) + sizeof(std::uint64_t) + 2u * kFingerprintBytes + sizeof(std::uint8_t) +
-      kSnapshotBytes;
+      sizeof(std::uint32_t) + 3u * sizeof(int) + 8u * sizeof(std::uint8_t) + kSnapshotBytes +
+      3u * kFingerprintBytes + 2u * sizeof(std::uint8_t) + sizeof(std::uint64_t) +
+      kFingerprintBytes + sizeof(std::uint8_t) + sizeof(std::uint64_t) +
+      2u * kFingerprintBytes + sizeof(std::uint8_t) + kSnapshotBytes + kFingerprintBytes +
+      sizeof(std::uint64_t);
   static constexpr std::size_t kPreparedProblemAccessBytes =
       kPreparedProblemContractBytes + sizeof(std::uint8_t) + kSnapshotBytes;
-  static constexpr std::size_t kWorkspaceStateBytes = sizeof(std::uint8_t) + 3u * sizeof(int) +
-                                                      sizeof(std::uint8_t) + kFingerprintBytes +
-                                                      sizeof(std::uint8_t) + kSnapshotBytes;
+  static constexpr std::size_t kWorkspaceStateBytes =
+      3u * kFingerprintBytes + 3u * sizeof(int) + 4u * sizeof(std::uint8_t) +
+      8u * sizeof(std::uint64_t) + kSnapshotBytes;
   static constexpr std::size_t kControlsBytes =
-      sizeof(std::uint8_t) + 3u * sizeof(std::uint64_t) + 2u * sizeof(int);
+      kFingerprintBytes + 3u * sizeof(std::uint64_t) + 2u * sizeof(int) +
+      sizeof(std::uint32_t);
   static constexpr std::size_t kFieldContractBytes = kFingerprintBytes + 2u * sizeof(int);
   static constexpr std::size_t kMaximumKnownPayloadBytes =
       kPreparedProblemAccessBytes + kWorkspaceStateBytes + kControlsBytes +
@@ -463,31 +754,38 @@ class PreparedLinearPreconditioner {
  public:
   static PreparedLinearPreconditioner identity() { return PreparedLinearPreconditioner(); }
 
-  PreparedLinearPreconditioner() = default;
-  explicit PreparedLinearPreconditioner(const MultiFab& prototype, ApplyFn raw_apply,
-                                        PreparedResourceFn prepare = {})
-      : raw_apply_(std::move(raw_apply)),
-        prepare_(std::move(prepare)),
+  PreparedLinearPreconditioner() { initialize_provider_fingerprint_(); }
+  explicit PreparedLinearPreconditioner(
+      const MultiFab& prototype, PreparedLinearPreconditionerProvider provider,
+      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed)
+      : provider_(std::move(provider)),
         zero_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow()),
         constant_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow()),
-        layout_(detail::layout_fingerprint(prototype)) {
-    if (!raw_apply_)
-      throw std::invalid_argument("PreparedLinearPreconditioner requires a non-empty apply");
+        layout_(detail::layout_fingerprint(prototype, vector_distribution)),
+        vector_distribution_(vector_distribution),
+        vector_distribution_layout_valid_(
+            detail::field_distribution_layout_matches(prototype, vector_distribution)) {
+    if (!provider_)
+      throw std::invalid_argument(
+          "PreparedLinearPreconditioner requires a non-empty authenticated provider");
     zero_.share_halo_cache_from(prototype);
     constant_.share_halo_cache_from(prototype);
+    initialize_provider_fingerprint_();
   }
 
-  bool is_identity() const { return !static_cast<bool>(raw_apply_); }
-  bool compatible_with(const MultiFab& prototype) const {
-    return is_identity() || layout_ == detail::layout_fingerprint(prototype);
+  bool is_identity() const { return !static_cast<bool>(provider_); }
+  bool compatible_with(const MultiFab& prototype,
+                       PreparedVectorDistribution vector_distribution) const {
+    return is_identity() || (vector_distribution_ == vector_distribution &&
+                             layout_ == detail::layout_fingerprint(prototype, vector_distribution));
   }
 
   void prepare(const OperatorEvaluationSnapshot& snapshot) {
     snapshot_.reset();
     if (!snapshot.valid())
       throw std::invalid_argument("PreparedLinearPreconditioner received an invalid snapshot");
-    if (prepare_)
-      prepare_();
+    if (!is_identity())
+      provider_.prepare();
     if (!is_identity()) {
       // A physical-BC preconditioner can itself be affine. Evaluate its exact zero response once
       // after all resources are materialized, then subtract it from every search-direction apply.
@@ -495,7 +793,7 @@ class PreparedLinearPreconditioner {
       // callback/halo resource before the iteration begins.
       detail::PreparedFieldAlgebra::zero(zero_);
       detail::PreparedFieldAlgebra::zero(constant_);
-      raw_apply_(constant_, zero_);
+      provider_(constant_, zero_);
     }
     snapshot_ = snapshot;
   }
@@ -508,7 +806,7 @@ class PreparedLinearPreconditioner {
     if (is_identity())
       detail::PreparedFieldAlgebra::copy(out, in);
     else {
-      raw_apply_(out, in);
+      provider_(out, in);
       detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
     }
   }
@@ -518,11 +816,20 @@ class PreparedLinearPreconditioner {
 
   void invalidate_collective_preparation_() noexcept { snapshot_.reset(); }
 
-  ApplyFn raw_apply_{};
-  PreparedResourceFn prepare_{};
+  void initialize_provider_fingerprint_() {
+    ExactContractBuilder contract;
+    contract.optional_collective_contract(provider_);
+    provider_fingerprint_ = detail::fingerprint_seed();
+    detail::fingerprint_mix(provider_fingerprint_, contract.view());
+  }
+
+  PreparedLinearPreconditionerProvider provider_{};
   MultiFab zero_{};
   MultiFab constant_{};
   OperatorFingerprint layout_{};
+  PreparedVectorDistribution vector_distribution_ = PreparedVectorDistribution::Distributed;
+  bool vector_distribution_layout_valid_ = true;
+  OperatorFingerprint provider_fingerprint_{};
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
 };
 
@@ -537,7 +844,8 @@ class PreparedAffineLinearProblem {
       LinearOperatorProperties properties, KrylovFootprint footprint,
       PreparedNullspacePolicy nullspace_policy, OperatorSnapshotProbe snapshot_probe,
       PreparedResourceFn freeze_resources = {},
-      OperatorApplyPurity apply_purity = OperatorApplyPurity::kVerifyAfterApply)
+      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed,
+      PreparedVectorMetric metric = {})
       : raw_apply_(std::move(raw_apply)),
         preconditioner_(std::move(preconditioner)),
         properties_(properties),
@@ -545,15 +853,21 @@ class PreparedAffineLinearProblem {
         nullspace_policy_(std::move(nullspace_policy)),
         snapshot_probe_(std::move(snapshot_probe)),
         freeze_resources_(std::move(freeze_resources)),
-        apply_purity_(apply_purity),
+        vector_distribution_(vector_distribution),
+        metric_(metric ? std::move(metric)
+                       : PreparedVectorMetric::euclidean(prototype, vector_distribution)),
         zero_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), footprint.input_ghosts),
         constant_(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                   footprint.input_ghosts),
-        layout_(detail::layout_fingerprint(prototype)) {
+        layout_(detail::layout_fingerprint(prototype, vector_distribution)),
+        vector_distribution_layout_valid_(
+            detail::field_distribution_layout_matches(prototype, vector_distribution)) {
     zero_.share_halo_cache_from(prototype);
     constant_.share_halo_cache_from(prototype);
     if (!raw_apply_)
       throw std::invalid_argument("PreparedAffineLinearProblem requires a raw affine apply");
+    distribution_validation_data_.assign(
+        vector_distribution_.validation_scratch_byte_count(), char{0});
     if (!properties_.valid())
       throw std::invalid_argument("PreparedAffineLinearProblem received incoherent properties");
     if (nullspace_policy_.singular() && properties_.has(LinearOperatorProperty::kPositiveDefinite))
@@ -564,24 +878,51 @@ class PreparedAffineLinearProblem {
       throw std::invalid_argument(
           "a nullspace-complement certificate requires a prepared nullspace policy");
     if (footprint_.components != prototype.ncomp() || footprint_.components < 1 ||
-        footprint_.input_ghosts < 0 || footprint_.input_ghosts != prototype.n_grow() ||
-        footprint_.restart < 0)
+        footprint_.input_ghosts < 0 || footprint_.input_ghosts != prototype.n_grow())
       throw std::invalid_argument("PreparedAffineLinearProblem footprint disagrees with prototype");
     if (footprint_.preconditioned != !preconditioner_.is_identity())
       throw std::invalid_argument(
           "PreparedAffineLinearProblem footprint disagrees with preconditioner presence");
-    if (!preconditioner_.compatible_with(prototype))
+    if (!preconditioner_.compatible_with(prototype, vector_distribution_))
       throw std::invalid_argument(
           "PreparedAffineLinearProblem preconditioner layout disagrees with prototype");
     if (!snapshot_probe_)
       throw std::invalid_argument("PreparedAffineLinearProblem requires a snapshot probe");
+    if (!metric_.compatible_with(prototype, vector_distribution_))
+      throw std::invalid_argument(
+          "PreparedAffineLinearProblem metric disagrees with the solved vector space");
+    metric_fingerprint_ = detail::fingerprint_seed();
+    detail::fingerprint_mix(metric_fingerprint_, metric_.collective_contract());
     nullspace_policy_.plan_fingerprint_ = compute_nullspace_plan_fingerprint_();
+  }
+
+  PreparedAffineLinearProblem(
+      const MultiFab& prototype, ApplyFn raw_apply, PreparedLinearPreconditioner preconditioner,
+      LinearOperatorProperties properties, KrylovFootprint footprint,
+      PreparedNullspacePolicy nullspace_policy, OperatorSnapshotProbe snapshot_probe,
+      PreparedResourceFn freeze_resources,
+      detail::AuthenticatedProgramApplyToken authenticated_program,
+      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed,
+      PreparedVectorMetric metric = {})
+      : PreparedAffineLinearProblem(
+            prototype, std::move(raw_apply), std::move(preconditioner), properties, footprint,
+            std::move(nullspace_policy), std::move(snapshot_probe), std::move(freeze_resources),
+            std::move(vector_distribution), std::move(metric)) {
+    authenticated_program_authority_ = authenticated_program.authority_;
   }
 
   void prepare(const OperatorEvaluationSnapshot& snapshot) {
     require_collective_prepare_contract_();
     snapshot_.reset();
     require_collective_prepare_snapshot_(snapshot);
+    const long authenticated_authority_failure = all_reduce_max(
+        authenticated_program_authority_.has_value() &&
+                snapshot.authority != *authenticated_program_authority_
+            ? 1L
+            : 0L);
+    if (authenticated_authority_failure != 0)
+      throw std::invalid_argument(
+          "compiled Program operator authority disagrees with its authenticated apply token");
     run_collective_prepare_stage_(PrepareStage::kFreeze, [&] {
       if (freeze_resources_)
         freeze_resources_();
@@ -599,11 +940,17 @@ class PreparedAffineLinearProblem {
       throw;
     }
     require_collective_snapshot_match_(snapshot, PrepareStage::kPreconditioner);
+    if (!preconditioner_.is_identity())
+      vector_distribution_.require_exact_values(
+          preconditioner_.constant_, distribution_validation_data_,
+          "prepared preconditioner constant");
     run_collective_prepare_stage_(PrepareStage::kOperatorConstant, [&] {
       detail::PreparedFieldAlgebra::zero(zero_);
       raw_apply_(constant_, zero_);  // exact c = A(0) after every resource is materialized
     });
     require_collective_snapshot_match_(snapshot, PrepareStage::kOperatorConstant);
+    vector_distribution_.require_exact_values(
+        constant_, distribution_validation_data_, "prepared operator constant");
     snapshot_ = snapshot;
   }
 
@@ -613,6 +960,8 @@ class PreparedAffineLinearProblem {
     return *snapshot_;
   }
   const OperatorFingerprint& layout_fingerprint() const { return layout_; }
+  const PreparedVectorDistribution& vector_distribution() const { return vector_distribution_; }
+  const PreparedVectorMetric& metric() const { return metric_; }
   const LinearOperatorProperties& properties() const { return properties_; }
   const KrylovFootprint& footprint() const { return footprint_; }
   const MultiFab& constant_term() const {
@@ -626,14 +975,14 @@ class PreparedAffineLinearProblem {
     require_current();
     require_collective_arguments_(vector_field_failure_(normalized_rhs),
                                   "PreparedAffineLinearProblem::require_nullspace_compatible");
-    nullspace_policy_.require_compatible(normalized_rhs);
+    nullspace_policy_.require_compatible(normalized_rhs, metric_);
   }
 
   void apply_nullspace_gauge(MultiFab& iterate) const {
     require_current();
     require_collective_arguments_(operator_field_failure_(iterate),
                                   "PreparedAffineLinearProblem::apply_nullspace_gauge");
-    nullspace_policy_.apply_gauge(iterate);
+    nullspace_policy_.apply_gauge(iterate, metric_);
   }
 
   void effective_rhs(MultiFab& out, const MultiFab& rhs) const {
@@ -641,6 +990,7 @@ class PreparedAffineLinearProblem {
     long failure = std::max(vector_field_failure_(rhs), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, rhs));
     require_collective_arguments_(failure, "PreparedAffineLinearProblem::effective_rhs");
+    require_public_replica_input_(rhs, "prepared effective rhs input");
     effective_rhs_prepared_(out, rhs);
   }
 
@@ -650,6 +1000,7 @@ class PreparedAffineLinearProblem {
     long failure = std::max(operator_field_failure_(direction), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, direction));
     require_collective_arguments_(failure, "PreparedAffineLinearProblem::apply_linear");
+    require_public_replica_input_(direction, "prepared linear operator input");
     apply_linear_prepared_(out, direction);
   }
 
@@ -661,6 +1012,8 @@ class PreparedAffineLinearProblem {
     failure = std::max(failure, distinct_storage_failure_(out, rhs));
     failure = std::max(failure, distinct_storage_failure_(out, iterate));
     require_collective_arguments_(failure, "PreparedAffineLinearProblem::true_residual");
+    require_public_replica_input_(rhs, "prepared residual rhs");
+    require_public_replica_input_(iterate, "prepared residual iterate");
     true_residual_prepared_(out, rhs, iterate);
   }
 
@@ -669,6 +1022,7 @@ class PreparedAffineLinearProblem {
     long failure = std::max(operator_field_failure_(in), operator_field_failure_(out));
     failure = std::max(failure, distinct_storage_failure_(out, in));
     require_collective_arguments_(failure, "PreparedAffineLinearProblem::apply_preconditioner");
+    require_public_replica_input_(in, "prepared preconditioner input");
     apply_preconditioner_prepared_(out, in);
   }
 
@@ -680,14 +1034,17 @@ class PreparedAffineLinearProblem {
     require_collective_arguments_(
         std::max(vector_field_failure_(left), vector_field_failure_(right)),
         "PreparedAffineLinearProblem::inner_product");
-    return PureFieldAlgebra::dot(left, right);
+    require_public_replica_input_(left, "prepared inner-product left input");
+    require_public_replica_input_(right, "prepared inner-product right input");
+    return metric_.inner_product(left, right);
   }
 
   Real residual_norm(const MultiFab& value) const {
     require_current();
     require_collective_arguments_(vector_field_failure_(value),
                                   "PreparedAffineLinearProblem::residual_norm");
-    return PureFieldAlgebra::norm(value);
+    require_public_replica_input_(value, "prepared residual-norm input");
+    return metric_.norm(value);
   }
 
  private:
@@ -774,14 +1131,13 @@ class PreparedAffineLinearProblem {
     return {snapshot.topology_revision, snapshot.topology, snapshot.resources};
   }
 
-  OperatorFingerprint compute_nullspace_plan_fingerprint_() const noexcept {
+  OperatorFingerprint compute_nullspace_plan_fingerprint_() const {
     OperatorFingerprint hash = detail::fingerprint_seed();
     const FieldNullspacePlan& plan = nullspace_policy_.plan_;
     detail::fingerprint_mix(hash, static_cast<std::uint64_t>(
                                       static_cast<std::int64_t>(nullspace_policy_.first_level_)));
     detail::fingerprint_mix(hash, plan.identity);
     detail::fingerprint_mix(hash, plan.layout_identity);
-    detail::fingerprint_mix(hash, static_cast<std::uint64_t>(plan.scope));
     detail::fingerprint_mix(hash, static_cast<std::uint64_t>(plan.bases.size()));
     for (const FieldNullspaceBasis& basis : plan.bases) {
       detail::fingerprint_mix(hash, basis.identity);
@@ -790,18 +1146,24 @@ class PreparedAffineLinearProblem {
       detail::fingerprint_mix(
           hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(basis.field_component)));
       detail::fingerprint_mix(hash, static_cast<std::uint64_t>(basis.masks.size()));
-      for (const auto& mask : basis.masks) {
+      for (std::size_t level = 0; level < basis.masks.size(); ++level) {
+        const auto& mask = basis.masks[level];
         detail::fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<bool>(mask)));
-        if (mask)
-          for (const std::uint64_t word : detail::layout_fingerprint(*mask))
+        if (mask) {
+          for (const std::uint64_t word :
+               detail::layout_fingerprint(*mask, vector_distribution_))
             detail::fingerprint_mix(hash, word);
+        }
       }
       detail::fingerprint_mix(hash, static_cast<std::uint64_t>(basis.coverage.size()));
-      for (const auto& coverage : basis.coverage) {
+      for (std::size_t level = 0; level < basis.coverage.size(); ++level) {
+        const auto& coverage = basis.coverage[level];
         detail::fingerprint_mix(hash, static_cast<std::uint64_t>(static_cast<bool>(coverage)));
-        if (coverage)
-          for (const std::uint64_t word : detail::layout_fingerprint(*coverage))
+        if (coverage) {
+          for (const std::uint64_t word :
+               detail::layout_fingerprint(*coverage, vector_distribution_))
             detail::fingerprint_mix(hash, word);
+        }
       }
       detail::fingerprint_mix(hash, static_cast<std::uint64_t>(basis.cell_measure.size()));
       for (const Real measure : basis.cell_measure)
@@ -819,16 +1181,20 @@ class PreparedAffineLinearProblem {
     payload.append(properties_.bits);
     payload.append(footprint_.components);
     payload.append(footprint_.input_ghosts);
-    payload.append(footprint_.restart);
     payload.append(static_cast<std::uint8_t>(footprint_.preconditioned));
     payload.append(static_cast<std::uint8_t>(preconditioner_.is_identity()));
     payload.append(static_cast<std::uint8_t>(preconditioner_.snapshot_.has_value()));
     payload.append(preconditioner_.snapshot_.value_or(OperatorEvaluationSnapshot{}));
-    payload.append(static_cast<std::uint8_t>(apply_purity_));
+    payload.append(static_cast<std::uint8_t>(authenticated_program_authority_.has_value()));
+    payload.append(authenticated_program_authority_.value_or(OperatorFingerprint{}));
+    payload.append(static_cast<std::uint8_t>(vector_distribution_layout_valid_));
+    payload.append(static_cast<std::uint8_t>(preconditioner_.vector_distribution_layout_valid_));
+    payload.append(preconditioner_.provider_fingerprint_);
+    payload.append(preconditioner_.layout_);
     payload.append(layout_);
     payload.append(static_cast<std::uint8_t>(nullspace_policy_.singular_));
     payload.append(static_cast<std::uint8_t>(nullspace_policy_.prepared_));
-    payload.append(static_cast<std::uint64_t>(nullspace_policy_.moments_.size()));
+    payload.append(static_cast<std::uint64_t>(nullspace_policy_.basis_vectors_.size()));
     payload.append(nullspace_policy_.plan_fingerprint_);
     payload.append(static_cast<std::uint8_t>(nullspace_certificate_identity_cache_.has_value()));
     const NullspaceCertificateIdentity nullspace_identity =
@@ -838,14 +1204,36 @@ class PreparedAffineLinearProblem {
     payload.append(nullspace_identity.resources);
     payload.append(static_cast<std::uint8_t>(snapshot_.has_value()));
     payload.append(snapshot_.value_or(OperatorEvaluationSnapshot{}));
+    payload.append(metric_fingerprint_);
+    payload.append(static_cast<std::uint64_t>(metric_.robust_payload_width()));
   }
 
   void require_collective_prepare_contract_() const {
     detail::KrylovCollectivePayload payload;
     append_collective_contract_(payload);
-    if (!detail::collective_payload_agrees(payload))
+    const bool agrees = detail::collective_payload_agrees(payload);
+    const bool metric_agrees = all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("pops.prepared-vector-metric"), metric_.collective_contract()}});
+    require_prepared_provider_collective_consensus(preconditioner_.provider_);
+    const bool valid_layout =
+        vector_distribution_layout_valid_ &&
+        (preconditioner_.is_identity() || preconditioner_.vector_distribution_layout_valid_);
+    const long invalid_layout = all_reduce_max(valid_layout ? 0L : 1L);
+    if (invalid_layout != 0)
+      throw std::invalid_argument(
+          "prepared vector-distribution provider rejected the authenticated layout");
+    if (!metric_agrees)
+      throw std::invalid_argument(
+          "prepared vector metric contract differs across communicator ranks");
+    if (!agrees)
       throw std::logic_error(
           "prepared affine problem contract differs across communicator ranks before preparation");
+    detail::require_collective_field_distribution_layout(zero_, vector_distribution_,
+                                                         "PreparedAffineLinearProblem::prepare");
+    if (!preconditioner_.is_identity())
+      detail::require_collective_field_distribution_layout(
+          preconditioner_.zero_, vector_distribution_,
+          "PreparedAffineLinearProblem::prepare(preconditioner)");
   }
 
   template <class Operation>
@@ -885,7 +1273,7 @@ class PreparedAffineLinearProblem {
     nullspace_certificate_identity_cache_.reset();
     try {
       run_collective_prepare_stage_(PrepareStage::kNullspace, [&] {
-        nullspace_policy_.prepare_after_collective_preflight_(zero_);
+        nullspace_policy_.prepare_after_collective_preflight_(zero_, metric_);
       });
       nullspace_certificate_identity_cache_ = identity;
     } catch (...) {
@@ -979,7 +1367,7 @@ class PreparedAffineLinearProblem {
 
   template <class Operation>
   void run_external_apply_(Operation&& operation) const {
-    if (apply_purity_ == OperatorApplyPurity::kAuthenticatedProgram) {
+    if (authenticated_program_authority_) {
       std::forward<Operation>(operation)();
       return;
     }
@@ -1022,7 +1410,7 @@ class PreparedAffineLinearProblem {
     // overflow/underflow without globally rescaling b and A(0) before subtraction, which could
     // erase a small but representable residual on cells far below an unrelated global maximum.
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
-    const Real reference = PureFieldAlgebra::norm(out);
+    const Real reference = metric_.norm(out);
     if (!std::isfinite(static_cast<double>(reference)))
       return {reference};
     if (reference > Real(0)) {
@@ -1037,6 +1425,7 @@ class PreparedAffineLinearProblem {
   void apply_linear_prepared_(MultiFab& out, const MultiFab& direction) const {
     require_hot_apply_ready_();
     run_external_apply_([&] { raw_apply_(out, direction); });
+    require_verified_replica_output_(out, "prepared linear operator output");
     detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
   }
 
@@ -1044,40 +1433,51 @@ class PreparedAffineLinearProblem {
                                          Real equation_scale) const {
     require_hot_apply_ready_();
     run_external_apply_([&] { raw_apply_(out, direction); });
+    require_verified_replica_output_(out, "prepared normalized operator output");
     detail::PreparedFieldAlgebra::normalized_difference(out, out, constant_, equation_scale);
   }
 
   void true_residual_prepared_(MultiFab& out, const MultiFab& rhs, const MultiFab& iterate) const {
     require_hot_apply_ready_();
     run_external_apply_([&] { raw_apply_(out, iterate); });
+    require_verified_replica_output_(out, "prepared residual operator output");
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), out);
   }
 
   void apply_preconditioner_prepared_(MultiFab& out, const MultiFab& in) const {
     require_hot_apply_ready_();
     run_external_apply_([&] { preconditioner_.apply(out, in, *snapshot_); });
+    require_verified_replica_output_(out, "prepared preconditioner output");
+  }
+
+  void require_verified_replica_output_(const MultiFab& output, const char* where) const {
+    if (authenticated_program_authority_)
+      return;
+    vector_distribution_.require_exact_values(output, distribution_validation_data_, where);
+  }
+
+  void require_public_replica_input_(const MultiFab& input, const char* where) const {
+    vector_distribution_.require_exact_values(input, distribution_validation_data_, where);
   }
 
   Real inner_product_prepared_(const MultiFab& left, const MultiFab& right) const {
-    return detail::PreparedFieldAlgebra::dot(left, right);
+    return metric_.inner_product(left, right);
   }
 
   Real local_inner_product_prepared_(const MultiFab& left, const MultiFab& right) const {
-    return detail::PreparedFieldAlgebra::local_dot(left, right);
+    return metric_.local_inner_product(left, right);
   }
 
   void local_robust_inner_product_payload_prepared_(const MultiFab& left, const MultiFab& right,
-                                                    double* payload) const {
-    detail::PreparedFieldAlgebra::local_robust_dot_payload(left, right, payload);
+                                                    std::span<double> payload) const {
+    metric_.local_robust_inner_product_payload(left, right, payload);
   }
 
-  Real inner_product_from_global_robust_payload_prepared_(const double* payload) const {
-    return detail::PreparedFieldAlgebra::dot_from_global_robust_payload(payload);
+  Real inner_product_from_global_robust_payload_prepared_(std::span<const double> payload) const {
+    return metric_.inner_product_from_global_robust_payload(payload);
   }
 
-  Real residual_norm_prepared_(const MultiFab& value) const {
-    return detail::PreparedFieldAlgebra::norm(value);
-  }
+  Real residual_norm_prepared_(const MultiFab& value) const { return metric_.norm(value); }
 
   ApplyFn raw_apply_;
   mutable PreparedLinearPreconditioner preconditioner_;
@@ -1086,10 +1486,15 @@ class PreparedAffineLinearProblem {
   PreparedNullspacePolicy nullspace_policy_;
   OperatorSnapshotProbe snapshot_probe_;
   PreparedResourceFn freeze_resources_;
-  OperatorApplyPurity apply_purity_ = OperatorApplyPurity::kVerifyAfterApply;
+  std::optional<OperatorFingerprint> authenticated_program_authority_;
+  PreparedVectorDistribution vector_distribution_ = PreparedVectorDistribution::Distributed;
+  PreparedVectorMetric metric_;
   MultiFab zero_;
   MultiFab constant_;
   OperatorFingerprint layout_{};
+  OperatorFingerprint metric_fingerprint_{};
+  bool vector_distribution_layout_valid_ = true;
+  mutable std::vector<char, comm_allocator<char>> distribution_validation_data_;
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
   std::optional<NullspaceCertificateIdentity> nullspace_certificate_identity_cache_{};
 };
@@ -1098,7 +1503,8 @@ namespace detail {
 
 /// Private, allocation-free access used only after solve_prepared_affine has authenticated the
 /// caller-owned iterate/RHS and KrylovWorkspace against the prepared problem. Public direct calls on
-/// PreparedAffineLinearProblem retain their complete defensive layout validation.
+/// PreparedAffineLinearProblem retain their complete defensive layout and exact replica-value
+/// validation.
 struct PreparedProblemAccess {
   static long append_collective_state(const PreparedAffineLinearProblem& problem,
                                       KrylovCollectivePayload& payload) noexcept {
@@ -1125,6 +1531,20 @@ struct PreparedProblemAccess {
     return problem.snapshot_;
   }
 
+  static PreparedVectorDistribution vector_distribution(
+      const PreparedAffineLinearProblem& problem) noexcept {
+    return problem.vector_distribution_;
+  }
+
+  static const PreparedVectorMetric& metric(const PreparedAffineLinearProblem& problem) noexcept {
+    return problem.metric_;
+  }
+
+  static const OperatorFingerprint& metric_fingerprint(
+      const PreparedAffineLinearProblem& problem) noexcept {
+    return problem.metric_fingerprint_;
+  }
+
   static bool matches_vector_space(const PreparedAffineLinearProblem& problem,
                                    const MultiFab& value) noexcept {
     return PureFieldAlgebra::same_vector_space(problem.zero_, value);
@@ -1136,10 +1556,10 @@ struct PreparedProblemAccess {
   }
   static void require_nullspace_compatible(const PreparedAffineLinearProblem& problem,
                                            const MultiFab& normalized_rhs) {
-    problem.nullspace_policy_.require_compatible(normalized_rhs);
+    problem.nullspace_policy_.require_compatible(normalized_rhs, problem.metric_);
   }
   static void apply_nullspace_gauge(const PreparedAffineLinearProblem& problem, MultiFab& iterate) {
-    problem.nullspace_policy_.apply_gauge(iterate);
+    problem.nullspace_policy_.apply_gauge(iterate, problem.metric_);
   }
   static void apply_linear(const PreparedAffineLinearProblem& problem, MultiFab& out,
                            const MultiFab& direction, Real equation_scale) {
@@ -1163,11 +1583,11 @@ struct PreparedProblemAccess {
   }
   static void local_robust_inner_product_payload(const PreparedAffineLinearProblem& problem,
                                                  const MultiFab& left, const MultiFab& right,
-                                                 double* payload) {
+                                                 std::span<double> payload) {
     problem.local_robust_inner_product_payload_prepared_(left, right, payload);
   }
   static Real inner_product_from_global_robust_payload(const PreparedAffineLinearProblem& problem,
-                                                       const double* payload) {
+                                                       std::span<const double> payload) {
     return problem.inner_product_from_global_robust_payload_prepared_(payload);
   }
   static Real residual_norm(const PreparedAffineLinearProblem& problem, const MultiFab& value) {

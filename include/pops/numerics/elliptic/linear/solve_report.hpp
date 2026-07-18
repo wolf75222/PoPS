@@ -9,6 +9,7 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -112,5 +113,46 @@ struct SolveReport {
     return report;
   }
 };
+
+/// Structural validation shared by every boundary that publishes a report produced by a prepared
+/// provider. Scientific convergence remains provider-owned because only that provider owns the
+/// exact operator and residual contract; the runtime nevertheless rejects malformed status values,
+/// contradictory publication state, impossible iteration counts and non-finite norms.
+inline bool solve_report_is_publishable(const SolveReport& report,
+                                        int maximum_iterations) noexcept {
+  const auto known_status = [](SolveStatus status) noexcept {
+    switch (status) {
+      case SolveStatus::kSolved:
+      case SolveStatus::kSingular:
+      case SolveStatus::kBreakdown:
+      case SolveStatus::kIterationLimit:
+      case SolveStatus::kInvalidEvaluation:
+      case SolveStatus::kCapabilityFailure:
+      case SolveStatus::kInvalidInput:
+      case SolveStatus::kIncompatibleRhs:
+        return true;
+    }
+    return false;
+  };
+  const auto known_action = [](SolveAction action) noexcept {
+    switch (action) {
+      case SolveAction::kNone:
+      case SolveAction::kFailRun:
+      case SolveAction::kRejectAttempt:
+        return true;
+    }
+    return false;
+  };
+  const auto finite_nonnegative = [](Real value) noexcept {
+    return std::isfinite(value) && value >= Real(0);
+  };
+  return maximum_iterations >= 0 && report.iters >= 0 &&
+         report.iters <= maximum_iterations && known_status(report.status) &&
+         known_action(report.action) && report.valid() &&
+         report.solved_value_available() == (report.status == SolveStatus::kSolved) &&
+         finite_nonnegative(report.rel_residual) &&
+         finite_nonnegative(report.reference_residual_norm) &&
+         finite_nonnegative(report.residual_norm);
+}
 
 }  // namespace pops

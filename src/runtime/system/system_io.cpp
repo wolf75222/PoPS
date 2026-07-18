@@ -334,6 +334,14 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       throw;
     }
   }
+  std::vector<pops::runtime::program::ProgramOperatorAuthority> operator_authorities;
+  try {
+    operator_authorities =
+        pops::runtime::program::read_program_operator_authorities(h);
+  } catch (...) {
+    pops::dynlib::close(h);
+    throw;
+  }
   auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {
     pops::dynlib::close(h);
@@ -466,10 +474,17 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // Dynamic field-boundary launchers are installed from the same problem.so that owns their direct
   // function pointers.  Static-boundary artifacts export no entry and keep the historical fast path.
   // Install only after ABI/requirements/block/parameter preflight has completed.
-  if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
-          pops::dynlib::sym(h, "pops_install_field_boundaries")))
-    install_boundaries(static_cast<void*>(this));
-  install(static_cast<void*>(this));
+  const auto previous_operator_authorities = p_->program_.operator_authorities_;
+  p_->program_.operator_authorities_ = operator_authorities;
+  try {
+    if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
+            pops::dynlib::sym(h, "pops_install_field_boundaries")))
+      install_boundaries(static_cast<void*>(this));
+    install(static_cast<void*>(this));
+  } catch (...) {
+    p_->program_.operator_authorities_ = previous_operator_authorities;
+    throw;
+  }
   // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
   // compiled Program is rejected fail-loud. Missing symbol (older module) -> empty hash, no guard.

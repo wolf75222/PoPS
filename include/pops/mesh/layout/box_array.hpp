@@ -10,15 +10,21 @@
 
 #include <pops/mesh/index/box2d.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <limits>
+#include <set>
 #include <utility>
 #include <vector>
 
 namespace pops {
 
-/// Ordered list of boxes tiling a level. Expected INVARIANT (not checked): boxes
-/// disjoint and covering the domain. The ORDER is significant (global box index = position
-/// in the vector; shared by MultiFab / DistributionMapping). Copyable (vector of Box2D).
+/// Ordered list of boxes tiling a level. Construction preserves arbitrary box lists; use
+/// tiles_exactly() where the disjoint-and-covering invariant is required. The ORDER is significant
+/// (global box index = position in the vector; shared by MultiFab / DistributionMapping). Copyable
+/// (vector of Box2D).
 class BoxArray {
  public:
   BoxArray() = default;
@@ -45,6 +51,23 @@ class BoxArray {
   /// View on the underlying vector (element-by-element equality = same boxes AND same order).
   const std::vector<Box2D>& boxes() const { return boxes_; }
 
+  /// Return whether the boxes form an exact tiling of `domain`.
+  ///
+  /// Every box must be non-empty and contained in `domain`; boxes must be pairwise disjoint and
+  /// their exact integer area must equal the domain area.  Overlaps are detected in O(N log N)
+  /// with a sweep over half-open rectangles.  At a shared x edge, removals are processed before
+  /// insertions so adjacent boxes are accepted.  Coordinate and area arithmetic cannot overflow.
+  /// An empty BoxArray exactly tiles an empty domain.
+  bool tiles_exactly(const Box2D& domain) const noexcept {
+    try {
+      return tiles_exactly_impl(domain);
+    } catch (...) {
+      // Validation is a total predicate.  Allocation failure (or a standard-container size
+      // failure) cannot turn an invalid/unverified layout into a valid one.
+      return false;
+    }
+  }
+
   /// Total number of valid cells (sum of num_cells over all boxes).
   std::int64_t num_cells() const {
     std::int64_t n = 0;
@@ -68,6 +91,118 @@ class BoxArray {
   }
 
  private:
+  struct ExactArea {
+    std::uint64_t high = 0;  // coefficient of 2^64 (at most one for a Box2D)
+    std::uint64_t low = 0;
+  };
+
+  static ExactArea exact_area(const Box2D& box) noexcept {
+    static_assert(std::numeric_limits<int>::digits <= 31,
+                  "BoxArray exact-area arithmetic assumes the 32-bit Box2D index contract");
+    const auto width = static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[0]) -
+                                                  static_cast<std::int64_t>(box.lo[0]) + 1);
+    const auto height = static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[1]) -
+                                                   static_cast<std::int64_t>(box.lo[1]) + 1);
+    if (width != 0 && height > std::numeric_limits<std::uint64_t>::max() / width)
+      return {1, 0};  // the only possible overflow is exactly 2^32 * 2^32 = 2^64
+    return {0, width * height};
+  }
+
+  static bool area_less(const ExactArea& lhs, const ExactArea& rhs) noexcept {
+    return lhs.high < rhs.high || (lhs.high == rhs.high && lhs.low < rhs.low);
+  }
+
+  static void subtract_area(ExactArea& lhs, const ExactArea& rhs) noexcept {
+    const bool borrow = lhs.low < rhs.low;
+    lhs.low -= rhs.low;
+    lhs.high -= rhs.high;
+    if (borrow)
+      --lhs.high;
+  }
+
+  bool tiles_exactly_impl(const Box2D& domain) const {
+    if (domain.empty())
+      return boxes_.empty();
+    if (boxes_.empty())
+      return false;
+
+    struct Event {
+      std::int64_t x;
+      bool insertion;  // false sorts first: remove [x0, x) before inserting [x, x1)
+      std::size_t box;
+    };
+    struct Interval {
+      std::int64_t y0;
+      std::int64_t y1;
+      std::size_t box;
+    };
+    struct IntervalLess {
+      bool operator()(const Interval& lhs, const Interval& rhs) const noexcept {
+        if (lhs.y0 != rhs.y0)
+          return lhs.y0 < rhs.y0;
+        if (lhs.y1 != rhs.y1)
+          return lhs.y1 < rhs.y1;
+        return lhs.box < rhs.box;
+      }
+    };
+
+    std::vector<Event> events;
+    if (boxes_.size() > events.max_size() / 2)
+      return false;
+    events.reserve(boxes_.size() * 2);
+
+    ExactArea remaining = exact_area(domain);
+    for (std::size_t index = 0; index < boxes_.size(); ++index) {
+      const Box2D& box = boxes_[index];
+      if (box.empty() || !domain.contains(box))
+        return false;
+
+      const ExactArea area = exact_area(box);
+      if (area_less(remaining, area))
+        return false;
+      subtract_area(remaining, area);
+
+      // Inclusive Box2D -> half-open sweep interval.  Widen before adding one so INT_MAX is safe.
+      const auto x0 = static_cast<std::int64_t>(box.lo[0]);
+      const auto x1 = static_cast<std::int64_t>(box.hi[0]) + 1;
+      events.push_back({x0, true, index});
+      events.push_back({x1, false, index});
+    }
+    if (remaining.high != 0 || remaining.low != 0)
+      return false;
+
+    std::sort(events.begin(), events.end(), [](const Event& lhs, const Event& rhs) {
+      if (lhs.x != rhs.x)
+        return lhs.x < rhs.x;
+      if (lhs.insertion != rhs.insertion)
+        return lhs.insertion < rhs.insertion;
+      return lhs.box < rhs.box;
+    });
+
+    std::set<Interval, IntervalLess> active;
+    for (const Event& event : events) {
+      const Box2D& box = boxes_[event.box];
+      const Interval interval{static_cast<std::int64_t>(box.lo[1]),
+                              static_cast<std::int64_t>(box.hi[1]) + 1, event.box};
+      if (!event.insertion) {
+        if (active.erase(interval) != 1)
+          return false;
+        continue;
+      }
+
+      const auto next = active.lower_bound(interval);
+      if (next != active.end() && next->y0 < interval.y1)
+        return false;
+      if (next != active.begin()) {
+        const auto previous = std::prev(next);
+        if (previous->y1 > interval.y0)
+          return false;
+      }
+      active.insert(next, interval);
+    }
+    return active.empty();
+  }
+
   // Split [lo, hi] into segments of length <= m, distributed evenly:
   // n = ceil(len/m) segments, the first `rem` of them one notch longer.
   static std::vector<std::pair<int, int>> split_range(int lo, int hi, int m) {

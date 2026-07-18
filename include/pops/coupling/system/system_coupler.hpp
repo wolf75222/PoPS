@@ -19,9 +19,10 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/prepared_provider_consensus.hpp>
 
 #include <algorithm>
-#include <functional>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -62,6 +63,28 @@ struct ScopedBlockState {
 
   ~ScopedBlockState() { block.state = old_state; }
 };
+
+template <CoupledSystemLike System>
+DistributionMapping system_layout_mapping_or_throw(System& system, const BoxArray& boxes) {
+  DistributionMapping mapping;
+  bool initialized = false;
+  system.for_each_block([&](const auto& block) {
+    const MultiFab& state = block.U();
+    if (state.box_array().boxes() != boxes.boxes())
+      throw std::invalid_argument(
+          "SystemAssembler state BoxArray disagrees with its authored solver layout");
+    if (!initialized) {
+      mapping = state.dmap();
+      initialized = true;
+    } else if (state.dmap().ranks() != mapping.ranks()) {
+      throw std::invalid_argument(
+          "SystemAssembler blocks must share one exact DistributionMapping");
+    }
+  });
+  if (!initialized)
+    throw std::invalid_argument("SystemAssembler requires at least one state-bearing block");
+  return mapping;
+}
 }  // namespace detail
 
 // === ASSEMBLER: fields (system Poisson + aux) + block residual. No stepping. ======
@@ -78,20 +101,25 @@ class SystemAssembler {
   // by the blocks (aux_comps): a block reading B_z (n_aux=4) sees it, a base block (3)
   // ignores the component. Without an extra-field block the width stays 3 -> allocation and numerics
   // strictly bit-identical to history.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
   SystemAssembler(System system, const Geometry& geom, const BoxArray& ba, const BCRec& bcPhi,
-                  RhsAssembler rhs_assembler, std::function<bool(Real, Real)> active = {},
-                  std::function<Real(Real, Real)> bz = {})
+                  RhsAssembler rhs_assembler, ActiveRegionProvider2D active = {},
+                  ScalarFieldProvider2D bz = {}, FactoryT elliptic_factory = {})
       : system_(std::move(system)),
         rhs_assembler_(std::move(rhs_assembler)),
         geom_(geom),
         ba_(ba),
-        dm_(ba.size(), n_ranks()),
+        dm_(detail::system_layout_mapping_or_throw(system_, ba_)),
         bcPhi_(bcPhi),
         aux_bc_(detail::derive_aux_bc(bcPhi)),
-        mg_(geom, ba, bcPhi, std::move(active)),
+        mg_(make_elliptic_solver<Elliptic>(
+            {geom_, ba_, dm_, bcPhi_, std::move(active), FieldDistribution::Distributed},
+            std::move(elliptic_factory))),
         aux_ncomp_(system_aux_comps(system_)),
         aux_(ba, dm_, aux_ncomp_, 1),
         bz_(std::move(bz)) {
+    require_prepared_provider_collective_consensus(bz_);
     fill_bz();  // populates B_z (no-op if no block requests it or if bz is empty)
   }
 
@@ -171,7 +199,7 @@ class SystemAssembler {
   Elliptic mg_;
   int aux_ncomp_;  // width of the shared aux channel (max over blocks); init before aux_
   MultiFab aux_;
-  std::function<Real(Real, Real)> bz_;  // external B_z(x, y) (empty if not supplied)
+  ScalarFieldProvider2D bz_;  // prepared external B_z(x, y) (empty if not supplied)
 };
 
 // === DRIVER: advances the system. Owns an Assembler, delegates the fields to it. =========
@@ -183,11 +211,13 @@ class SystemDriver {
  public:
   /// Builds the driver (which builds the underlying assembler). @p active: optional wall predicate
   /// passed to the MG; @p bz: optional B_z(x, y) field shared by the blocks.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
   SystemDriver(System system, const Geometry& geom, const BoxArray& ba, const BCRec& bcPhi,
-               RhsAssembler rhs_assembler, std::function<bool(Real, Real)> active = {},
-               std::function<Real(Real, Real)> bz = {})
+               RhsAssembler rhs_assembler, ActiveRegionProvider2D active = {},
+               ScalarFieldProvider2D bz = {}, FactoryT elliptic_factory = {})
       : asm_(std::move(system), geom, ba, bcPhi, std::move(rhs_assembler), std::move(active),
-             std::move(bz)) {}
+             std::move(bz), std::move(elliptic_factory)) {}
 
   // Accessors delegated to the assembler (compat with the old SystemCoupler API).
   System& system() { return asm_.system(); }

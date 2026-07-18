@@ -8,6 +8,7 @@
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
@@ -15,10 +16,15 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/amr/field_solver_options.hpp>
+#include <pops/runtime/amr/hierarchy_policy_authority.hpp>
+#include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
+#include <array>
 #include <functional>
 #include <cstddef>
 #include <cstdint>
@@ -54,14 +60,17 @@
 namespace pops {
 
 class WorldCommunicator;
+namespace runtime::program {
+class AmrProgramContext;
+}
 
 /// Exact read-only backend configuration retained for one resolved AMR field solver.
 struct AmrFieldSolverConfiguration {
   std::string plan_identity;
+  std::string provider_identity;
   std::string solver;
-  std::string hierarchy;
-  GeometricMgOptions mg{};
-  CompositeFacOptions fac{};
+  AmrFieldHierarchyPolicyAuthority hierarchy_policy;
+  AmrFieldSolverOptions options;
 };
 
 // Forward declarations of the runtime multi-block engine (definitions in amr_runtime.hpp /
@@ -80,6 +89,7 @@ struct AmrRuntimeBlock;
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
 class MultiFab;
 class PreparedBoundaryPlan;
+class AmrFieldSolverProvider;
 class
     AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
 namespace detail {
@@ -174,21 +184,8 @@ struct AmrBuildParams {
   } regrid;
   /// Coarse Poisson boundary condition + conductive wall (resolved by set_poisson).
   struct Poisson {
-    BCRec bc;                              ///< coarse Poisson BC
-    std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
-    // ADC-645: opt-in COMPOSITE FAC field solve (the fine patch refines the elliptic;
-    // AmrCouplerMP::set_composite_poisson). false (default) = the historical Option A coarse solve +
-    // gradient injection, bit-identical. The fac_* knobs mirror the SchurStage block below (<= 0 =
-    // the kFAC* default, same convention).
-    bool composite = false;           ///< true: composite FAC field solve (single-block coupler)
-    int fac_max_iters = 0;            ///< FAC outer iterations (<= 0 = default kFACDefaultMaxIters)
-    int fac_fine_sweeps = 0;          ///< SOR sweeps per fine solve (<= 0 = kFACDefaultFineSweeps)
-    double fac_rel_tol = 0.0;         ///< relative composite stop (0 = kFACDefaultRelTol)
-    double fac_abs_tol = 0.0;         ///< absolute composite floor (0 = kFACDefaultAbsTol)
-    double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = kFACInitialCoarseRelTol)
-    double fac_coarse_abs_tol = 0.0;  ///< internal coarse abs_tol (0 = kFACInitialCoarseAbsTol)
-    int fac_coarse_cycles = 0;  ///< internal coarse cycles (<= 0 = kFACInitialCoarseMaxCycles)
-    bool fac_verbose = false;   ///< record the FAC per-iteration residual trace
+    BCRec bc;                     ///< coarse Poisson BC
+    ActiveRegionProvider2D wall;  ///< conductive wall predicate (empty = none)
   } poisson;
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
@@ -412,17 +409,13 @@ class AmrSystem {
   ///         did not enable newton_diagnostics. Forces the lazy build (ensure_built).
   SourceNewtonReport newton_report(const std::string& name);
 
-  /// Registers a COMPILED block (add_compiled_model path, header amr_dsl_block.hpp). TWO type-erased
-  /// builders are frozen here, for the TWO routings of the facade:
-  ///  - @p mono_builder: given the AmrBuildParams frozen at lazy build, returns the
-  ///    AmrCompiledHooks of a concrete AmrCouplerMP<Model>. Used IN MONO-BLOCK (1 single compiled block)
-  ///    -> historical AmrCouplerMP path, UNTOUCHED, bit-identical.
-  ///  - @p multi_builder: given the SHARED layout materialized at lazy build (common to all
-  ///    blocks), returns the type-erased AmrRuntimeBlock of the block. Used IN MULTI-BLOCK (>= 2 blocks,
-  ///    compiled and/or native mixed) -> AmrRuntime runtime engine, exactly like add_block.
+  /// Registers a COMPILED block (add_compiled_model path, header amr_dsl_block.hpp). The single
+  /// type-erased builder materializes an AmrRuntimeBlock on the runtime-owned shared hierarchy.
+  /// Single- and multi-block systems deliberately use this same route: no hidden AmrCouplerMP
+  /// orchestration or second elliptic-solver authority survives behind this facade.
   /// @p recon_prim / @p imex / @p time_method / @p stride / @p implicit_vars / @p implicit_roles:
   /// metadata of the block (temporal scheme, multirate, partial IMEX mask) frozen at add time, consumed by the
-  /// multi-block routing (the mono-block already carries them in the AmrBuildParams via mono_builder).
+  /// runtime routing.
   /// DO NOT call directly: go through the free function add_compiled_model(AmrSystem&, ...).
   /// @throws std::runtime_error if the system is already built.
   /// DEFAULT VISIBILITY (POPS_EXPORT): the ONLY method called by the header template
@@ -432,9 +425,8 @@ class AmrSystem {
   /// -fvisibility=hidden (pybind11), the module would not export it without this annotation and the dlopen
   /// of the loader would fail. Symmetric with the POPS_EXPORT methods of System (grid_context/install_block).
   POPS_EXPORT void set_compiled_block(
-      int ncomp, double gamma, int substeps,
-      std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
-      AmrCompiledBlockBuilder multi_builder = {}, const std::string& name = std::string(),
+      int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
+      const std::string& name = std::string(),
       bool recon_prim = false, bool imex = false, int time_method = 0, int stride = 1,
       const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0);
@@ -529,10 +521,8 @@ class AmrSystem {
   /// model whose refinement variable is NOT at component 0 refines correctly (ADC-296). Resolution is
   /// STRICT -- a block lacking the requested name/role raises an explicit error at build, never a silent
   /// fallback to component 0 (mirror of add_coupled_source). At most one of @p variable / @p role may be
-  /// set. MULTI-BLOCK only for a non-default selector (the AmrRuntime union-of-tags regrid carries the
-  /// per-block predicates); the mono-block AmrCouplerMP path and the compiled .so loader refine on
-  /// component 0 only and reject a non-empty selector, mirroring how set_phi_refinement is multi-block
-  /// only. @param threshold refinement threshold (@c 1e30 default elsewhere => no refinement, frozen).
+  /// set. The AmrRuntime union-of-tags regrid carries the same per-block predicates for one or many
+  /// blocks. @param threshold refinement threshold (@c 1e30 default elsewhere => no refinement, frozen).
   /// @param variable conserved-variable NAME to threshold; empty (default) => component 0.
   /// @param role conserved-variable physical ROLE to threshold; empty (default) => component 0.
   void set_refinement(double threshold, const std::string& variable = std::string(),
@@ -567,28 +557,20 @@ class AmrSystem {
   ///        effect (the regrid is never called). To be called BEFORE the first step.
   void set_phi_refinement(double grad_threshold);
 
-  /// Configures the coarse Poisson (cf. System::set_poisson). On AMR the elliptic solver is
-  /// ALWAYS GeometricMG and the right-hand side ALWAYS f = sum of the block's elliptic bricks.
+  /// Configures the default coarse elliptic field. This convenience uses the same provider registry
+  /// and exact option contract as resolved named fields; it is not a second solver path. The
+  /// right-hand side is always the sum of the blocks' elliptic bricks.
   /// @param rhs    "charge_density" | "composite" (same composed right-hand side as System)
-  /// @param solver "geometric_mg" only (the only one wired on the hierarchy; no FFT)
+  /// @param solver exact registered provider identity
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
   /// @param wall   "none" | "circle" (circular conductive wall, requires wall_radius > 0)
-  /// @param composite ADC-645: true opts the FIELD solve into the composite FAC path (the fine patch
-  ///                  refines the elliptic; AmrCouplerMP::set_composite_poisson). Supported scope =
-  ///                  the coupler's: single block, 2 levels, ONE mono-box fine patch, replicated
-  ///                  coarse -- an out-of-scope hierarchy REFUSES at build (never a silent fallback).
-  ///                  false (default) = the historical Option A solve, bit-identical.
-  /// @param fac_max_iters / fac_fine_sweeps / fac_rel_tol / fac_abs_tol / fac_coarse_rel_tol /
-  ///        fac_coarse_abs_tol / fac_coarse_cycles / fac_verbose the composite-FAC knobs (0 = the
-  ///        kFAC* default); inert when composite is false.
-  /// @throws std::runtime_error if rhs, solver, bc, wall or a FAC knob is outside the supported domain.
+  /// @param solver_options provider-owned typed options. An empty carrier requests the provider's
+  ///        exact defaults; the AMR facade never interprets option keys.
+  /// @throws std::runtime_error if rhs, provider, options, bc or wall violates the provider contract.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
                    const std::string& wall = "none", double wall_radius = 0.0,
-                   bool composite = false, int fac_max_iters = 0, int fac_fine_sweeps = 0,
-                   double fac_rel_tol = 0.0, double fac_abs_tol = 0.0,
-                   double fac_coarse_rel_tol = 0.0, double fac_coarse_abs_tol = 0.0,
-                   int fac_coarse_cycles = 0, bool fac_verbose = false);
+                   const AmrFieldSolverOptions& solver_options = {});
 
   /// Install one fully resolved AMR field route. The registry key is the digest of its
   /// block-qualified provider identity. ``plan_identity`` independently commits the complete
@@ -603,10 +585,34 @@ class AmrSystem {
                              const std::vector<std::string>& provider_blocks,
                              const std::vector<std::string>& provider_keys,
                              const std::vector<double>& provider_coefficients,
-                             const std::string& solver, const std::string& hierarchy,
-                             double abs_tol, double rel_tol, int max_cycles, int min_coarse,
-                             int pre_smooth, int post_smooth, int bottom_sweeps,
-                             int coarse_threshold, const CompositeFacOptions& fac_options);
+                             const std::string& solver,
+                             const AmrFieldHierarchyPolicyAuthority& hierarchy_policy,
+                             const AmrFieldSolverOptions& solver_options);
+  /// Adds one native AMR field solver provider before binding. Builtins and extensions are resolved
+  /// through the same per-system registry and must expose exact collective contracts.
+  void register_field_solver_provider(std::shared_ptr<const AmrFieldSolverProvider> provider);
+  /// Adds one native field-nullspace provider before binding. The selected route is resolved only
+  /// after operator, boundary, topology and distribution facts have materialized.
+  void register_field_nullspace_provider(std::shared_ptr<const FieldNullspaceProvider> provider);
+  /// Select the provider for the principal field configured by set_poisson. The AMR facade retains
+  /// only the opaque provider identity and its exact typed options; it never interprets a nullspace
+  /// family or gauge name.
+  void set_default_field_nullspace(const std::string& nullspace_provider_identity,
+                                   const PreparedProviderOptions& options);
+  /// Adds one hierarchy tensor-solver provider before binding. Compiled Programs resolve their
+  /// opaque provider identity through this per-system registry; builtins and extensions use the
+  /// same preparation protocol.
+  void register_hierarchy_tensor_solver_provider(
+      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider> provider);
+  /// Collective generated-Program extension seam. Unlike the pre-build authoring registration
+  /// above, this may run after materialization: it mutates only the provider registry, authenticates
+  /// the exact declaration on every rank, and is idempotent for the same component declaration.
+  POPS_EXPORT void register_program_hierarchy_tensor_solver_provider(
+      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider> provider);
+  /// Internal generated-Program seam. The returned immutable registry outlives every installed
+  /// Program context because it is owned by this facade.
+  POPS_EXPORT std::shared_ptr<const runtime::program::HierarchyTensorSolverProviderRegistry>
+  hierarchy_tensor_solver_provider_registry() const;
   /// Exact read-only backend configuration retained by one resolved field plan.
   AmrFieldSolverConfiguration field_solver_configuration(const std::string& provider_slot) const;
   /// Install the resolved scalar reaction coefficient of one named screened field.
@@ -635,8 +641,9 @@ class AmrSystem {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
-  void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
-                           bool mean_zero_gauge);
+  void set_field_nullspace(const std::string& provider_slot,
+                           const std::string& nullspace_provider_identity,
+                           const PreparedProviderOptions& options);
 
   /// Sets the initial density on the coarse level (component 0), n*n row-major.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).
@@ -733,7 +740,7 @@ class AmrSystem {
   /// Solved potential of named @p field on the COARSE level, n*n row-major (read-back). Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
-  /// field is unregistered (or in the single-block AmrCouplerMP path, which carries no named field).
+  /// field is unregistered.
   std::vector<double> named_field_values(const std::string& field);
   std::vector<std::string> field_provider_slots() const;
   int field_provider_levels(const std::string& provider_slot);
@@ -1114,6 +1121,11 @@ class AmrSystem {
   std::vector<double> potential();
 
  private:
+  friend class runtime::program::AmrProgramContext;
+  /// Read-only compiled-artifact capability check; artifact authority installation is private to
+  /// AmrSystem::install_program and cannot be injected through the public facade.
+  POPS_EXPORT bool program_owns_operator_authority(
+      const std::array<std::uint64_t, 4>& authority) const noexcept;
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

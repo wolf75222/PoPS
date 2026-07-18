@@ -13,21 +13,24 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>      // Real, POPS_HD
-#include <pops/runtime/program/profiler.hpp>   // Profiler / ProfileScope (per-node timing, ADC-459)
+#include <pops/core/foundation/types.hpp>     // Real, POPS_HD
+#include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope (per-node timing, ADC-459)
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/wire_ids.hpp>   // stable compiled-Program numeric protocol
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/execution/for_each.hpp>  // for_each_cell (per-cell coeff / reconstruct kernels + negated divergence copy)
 #include <pops/mesh/geometry/geometry.hpp>  // Geometry (mesh metric of the Laplacian / gradient)
-#include <pops/mesh/storage/fab2d.hpp>      // Array4 / ConstArray4 (per-cell handles)
-#include <pops/mesh/storage/mf_arith.hpp>   // saxpy (linear combine over a MultiFab)
-#include <pops/mesh/storage/multifab.hpp>   // MultiFab
+#include <pops/mesh/layout/field_distribution.hpp>  // FieldDistribution
+#include <pops/mesh/storage/fab2d.hpp>              // Array4 / ConstArray4 (per-cell handles)
+#include <pops/mesh/storage/mf_arith.hpp>           // saxpy (linear combine over a MultiFab)
+#include <pops/mesh/storage/multifab.hpp>           // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
@@ -88,8 +91,7 @@ class ProgramContext {
         throw std::overflow_error("Program logical evaluation child window is not finite");
       const amr::Rational child_fraction(iteration, count);
       const amr::Rational child_span = saved_phase_span_ * amr::Rational(1, count);
-      const amr::Rational child_begin =
-          saved_phase_begin_ + saved_phase_span_ * child_fraction;
+      const amr::Rational child_begin = saved_phase_begin_ + saved_phase_span_ * child_fraction;
 
       owner.invalidate_active_operator_snapshot_();
       child_dt_ = child_dt;
@@ -268,10 +270,10 @@ class ProgramContext {
     return sys_->solve_fields_from_state_at(point, provider_slot, sys_block(b), u_stage);
   }
   template <class Body>
-  void evaluate_with_field_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int b, MultiFab& evaluation_state,
-      MultiFab& restore_state, Body&& body) const {
+  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::string& provider_slot, int b,
+                                    MultiFab& evaluation_state, MultiFab& restore_state,
+                                    Body&& body) const {
     const auto restore = [&]() {
       const SolveReport restored =
           solve_fields_from_state_at(point, provider_slot, b, restore_state);
@@ -537,11 +539,11 @@ class ProgramContext {
   /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
   /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
   /// templated assembly free function writes straight into the level-0-bound scratch the codegen
-  /// allocated, byte-for-byte as before. The @p role tag (a field id defined by the assembly module) is
-  /// ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy, redirect the write
-  /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
-  MultiFab& assembly_target(MultiFab& field, int role) const {
-    validate_assembly_write_role(role, "ProgramContext::assembly_target");
+  /// allocated, byte-for-byte as before. The opaque prepared field-slot identity is ignored here; it
+  /// exists so an AMR provider can redirect the write to its own per-level storage without extending
+  /// this context for every new operator envelope.
+  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_target");
     return field;
   }
 
@@ -549,8 +551,8 @@ class ProgramContext {
   /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
   /// ProgramContext redirects the READ to the current level's published composite field on a refined
   /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, int role) const {
-    validate_assembly_read_role(role, "ProgramContext::assembly_source");
+  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_source");
     return field;
   }
   /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
@@ -559,23 +561,22 @@ class ProgramContext {
   /// Authenticate the exact operator evaluation point. Generated code supplies a canonical 256-bit
   /// Program/operator authority plus the prepared field/resource identities; the context supplies the
   /// monotonic evaluation revision and exact native clock values.
-  OperatorEvaluationSnapshot operator_evaluation_snapshot(
-      OperatorFingerprint authority, const MultiFab& prototype,
-      OperatorFingerprint resources) const {
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
+                                                          const MultiFab& prototype,
+                                                          OperatorFingerprint resources) const {
     if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("operator snapshot requested outside a prepared Program step");
     const GridContext gc = sys_->grid_context();
-    OperatorFingerprint topology = ::pops::detail::layout_fingerprint(prototype);
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
     if (sys_->program_is_polar())
-      ::pops::detail::fingerprint_geometry(topology,
-                                           sys_->program_polar_geometry());
+      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
     else
       ::pops::detail::fingerprint_geometry(topology, gc.geom);
     ::pops::detail::fingerprint_boundary(topology, gc.bc);
     if (gc.boundary_plan) {
       ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
-      ::pops::detail::fingerprint_mix(topology,
-                                      gc.boundary_plan->state_identity());
+      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->state_identity());
       ::pops::detail::fingerprint_mix(
           topology, static_cast<std::uint64_t>(gc.boundary_plan->required_depth()));
     } else {
@@ -595,9 +596,10 @@ class ProgramContext {
   /// revision is reproduced only while it is the context's active mint; logical-scope entry/exit
   /// clears that authority, so an exactly restored outer clock still probes unequal until reminted.
   /// The uniform mesh fingerprint remains reusable, keeping the Krylov probe free of layout walks.
-  OperatorEvaluationSnapshot probe_operator_evaluation(
-      OperatorFingerprint authority, OperatorFingerprint topology,
-      OperatorFingerprint resources, std::uint64_t revision) const {
+  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                       OperatorFingerprint topology,
+                                                       OperatorFingerprint resources,
+                                                       std::uint64_t revision) const {
     const std::uint64_t probe_revision =
         revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
     return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
@@ -608,13 +610,13 @@ class ProgramContext {
     active_operator_snapshot_revision_ = 0;
   }
 
-  OperatorEvaluationSnapshot operator_evaluation_snapshot_(
-      OperatorFingerprint authority, OperatorFingerprint topology,
-      OperatorFingerprint resources, std::uint64_t revision) const {
+  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
+                                                           OperatorFingerprint topology,
+                                                           OperatorFingerprint resources,
+                                                           std::uint64_t revision) const {
     if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const amr::Rational evaluation_stage =
-        logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
     const double evaluation_time = static_cast<double>(physical_time()) +
                                    logical_physical_time_offset_ +
                                    stage_time_.value() * current_dt_;
@@ -631,13 +633,42 @@ class ProgramContext {
   }
 
  public:
+  /// Capability for an operator body emitted inside this compiled Program artifact. Direct C++
+  /// extensions cannot construct the token and therefore remain on the verified apply path.
+  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
+      OperatorFingerprint authority) const {
+    if (sys_ == nullptr || !sys_->program_owns_operator_authority(authority))
+      throw std::invalid_argument(
+          "compiled Program requested an operator authority not owned by its installed artifact");
+    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
+  }
 
   /// Execute an already prepared affine problem with its bound persistent workspace. The raw callback,
   /// integer method wire, lazy preconditioner path and per-call scratch allocations no longer exist.
   SolveReport solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, MultiFab& sol,
-                                    const MultiFab& rhs, const KrylovControls& controls) const {
+                                    KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
+                                    const KrylovControls& controls) const {
     return pops::solve_prepared_affine(problem, workspace, sol, rhs, controls);
+  }
+
+  /// Physical ownership of fields allocated for one generated Program resource bundle. A uniform
+  /// System partitions its one mesh across communicator ranks; exposing the descriptor through the
+  /// same context protocol as AMR keeps generic codegen independent from the runtime target.
+  const PreparedVectorDistribution& program_resource_vector_distribution() const noexcept {
+    return PreparedVectorDistribution::Distributed;
+  }
+  FieldDistribution program_resource_field_storage_distribution() const noexcept {
+    return FieldDistribution::Distributed;
+  }
+  int program_resource_field_level() const noexcept { return 0; }
+  /// Resolve the topology-dependent part of an authored field-nullspace plan at the same boundary
+  /// that allocates its persistent Program resource. Generic codegen supplies only the mathematical
+  /// basis/gauge; the context owns layout scope, physical measure and communicator ownership.
+  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
+    const GridContext gc = grid_context();
+    const Real measure = gc.geom.dx() * gc.geom.dy();
+    for (FieldNullspaceBasis& basis : plan.bases)
+      basis.cell_measure = {measure};
   }
 
   /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
@@ -690,9 +721,8 @@ class ProgramContext {
   /// Metric-aware tensor div(A grad(in)). The authored ApplyFn remains the sole mathematical
   /// operator on Cartesian and polar meshes; solver dispatch never swaps it for a second loop with
   /// different tolerances, preconditioning or residual semantics.
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx,
-                        const MultiFab& a_yy, const MultiFab& a_xy,
-                        const MultiFab& a_yx) const {
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx) const {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_grid_ghosts(in, gc);
@@ -1103,8 +1133,7 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
-    const amr::Rational evaluation_stage =
-        logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
@@ -1121,12 +1150,11 @@ class ProgramContext {
   }
 
   [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
-                                                       const char* detail) {
+                                                      const char* detail) {
     if (report.action == SolveAction::kRejectAttempt)
       throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
-    throw std::runtime_error(
-        std::string("prepared field evaluation failed: ") + report.status_name() +
-        " (" + detail + ")");
+    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
+                             report.status_name() + " (" + detail + ")");
   }
 
   mutable ClockScheduleState clock_schedule_;

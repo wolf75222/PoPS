@@ -1,11 +1,11 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>  // Real
+#include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (the level-set domain it lives in since ADC-327)
 
-#include <cmath>       // std::hypot
-#include <functional>  // std::function
-#include <stdexcept>   // std::runtime_error
+#include <cmath>      // std::hypot
+#include <stdexcept>  // std::runtime_error
 #include <string>
 
 /// @file
@@ -21,20 +21,36 @@
 namespace pops {
 namespace detail {
 
+struct CircleWallActiveRegionSource2D {
+  Real radius = Real(0);
+  Real extent = Real(0);
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.active-region.circle", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(radius).scalar(extent);
+  }
+
+  [[nodiscard]] bool operator()(Real x, Real y) const {
+    const Real center = Real(0.5) * extent;
+    return std::hypot(x - center, y - center) < radius;
+  }
+};
+
 /// Builds the "inside the conductor" predicate (embedded wall for the Poisson solver)
 /// from the wall mode @p wall, the radius @p wall_radius and the domain size @p L.
 ///   - "none": no wall -> empty predicate.
 ///   - "circle": disc centered at (L/2, L/2) with radius @p wall_radius.
 ///   - other: error, prefixed by @p err_context (e.g. "System::set_poisson").
 /// Body reused identically from the System / AmrSystem runtimes (bit-identical).
-inline std::function<bool(Real, Real)> wall_predicate(const std::string& wall, double wall_radius,
-                                                      double L, const std::string& err_context) {
+inline ActiveRegionProvider2D wall_predicate(const std::string& wall, double wall_radius, double L,
+                                             const std::string& err_context) {
   if (wall == "none")
     return {};
-  if (wall == "circle") {
-    const double cx = 0.5 * L, cy = 0.5 * L, R = wall_radius;
-    return [cx, cy, R](Real x, Real y) { return std::hypot(x - cx, y - cy) < R; };
-  }
+  if (wall == "circle")
+    return ActiveRegionProvider2D(CircleWallActiveRegionSource2D{Real(wall_radius), Real(L)});
   throw std::runtime_error(err_context + ": unknown wall '" + wall + "'");
 }
 

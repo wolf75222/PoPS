@@ -18,6 +18,38 @@
 // legacy-name architecture gate still finds them in this exact file.
 namespace {
 
+PreparedProviderOptions prepared_provider_options_from_python(const std::string& schema_identity,
+                                                              const py::dict& values) {
+  PreparedProviderOptions options;
+  options.schema_identity = schema_identity;
+  for (const auto& item : values) {
+    if (!py::isinstance<py::str>(item.first))
+      throw py::type_error("prepared provider option names must be exact strings");
+    const std::string name = py::cast<std::string>(item.first);
+    const py::handle value = item.second;
+    PreparedProviderOptionValue converted;
+    if (py::isinstance<py::bool_>(value)) {
+      converted = py::cast<bool>(value);
+    } else if (py::isinstance<py::int_>(value)) {
+      try {
+        converted = py::cast<std::int64_t>(value);
+      } catch (const py::cast_error&) {
+        converted = py::cast<std::uint64_t>(value);
+      }
+    } else if (py::isinstance<py::float_>(value)) {
+      converted = py::cast<double>(value);
+    } else if (py::isinstance<py::str>(value)) {
+      converted = py::cast<std::string>(value);
+    } else {
+      throw py::type_error(
+          "prepared provider option values must be exact bool/int/float/string scalars");
+    }
+    options.values.emplace(name, std::move(converted));
+  }
+  (void)options.exact_contract();
+  return options;
+}
+
 // Assembly seams: per-block composition + compiled/native/program install (the "what to assemble" API).
 void bind_system_assembly(py::class_<System>& cls) {
   cls.def(py::init<const SystemConfig&>())
@@ -453,17 +485,26 @@ void bind_system_physics(py::class_<System>& cls) {
           py::arg("post_smooth") = kMGDefaultPostSmooth,
           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
           py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
+      .def(
+          "register_configured_field_solver_provider",
+          [](System& system, const std::string& family_route,
+             const std::string& provider_route, const std::string& schema_identity,
+             const py::dict& options) {
+            return system.register_configured_field_solver_provider(
+                family_route, provider_route,
+                prepared_provider_options_from_python(schema_identity, options));
+          },
+          py::arg("family_route"), py::arg("provider_route"), py::arg("schema_identity"),
+          py::arg("options"))
       .def("set_field_solver_plan", &System::set_field_solver_plan, py::arg("provider_slot"),
            py::arg("plan_identity"), py::arg("provider_identity"), py::arg("output_owner_identity"),
            py::arg("output_block"), py::arg("output_key"), py::arg("provider_identities"),
            py::arg("provider_blocks"), py::arg("provider_keys"), py::arg("provider_coefficients"),
-           py::arg("solver"), py::arg("abs_tol"), py::arg("rel_tol"), py::arg("max_cycles"),
-           py::arg("min_coarse"), py::arg("pre_smooth"), py::arg("post_smooth"),
-           py::arg("bottom_sweeps"), py::arg("coarse_threshold"))
+           py::arg("backend_provider_route"))
       .def("set_field_reaction", &System::set_field_reaction, py::arg("provider_slot"),
            py::arg("reaction"))
       .def(
-          "_install_field_solver_components",
+          "register_field_solver_provider",
           [](System& system, const std::string& provider_slot,
              std::shared_ptr<pops::component::LoadedComponent> topology,
              std::shared_ptr<pops::component::LoadedComponent> solver,
@@ -477,8 +518,8 @@ void bind_system_physics(py::class_<System>& cls) {
                 solver_parameters_json, source_layout_identity, topology_recipe_identity,
                 boundary_contract_json, relative_tolerance, absolute_tolerance, max_iterations,
                 execution);
-            system.install_field_solver_components(provider_slot, std::move(spec),
-                                                   std::move(topology), std::move(solver));
+            return system.register_field_solver_provider(
+                provider_slot, std::move(spec), std::move(topology), std::move(solver));
           },
           py::arg("provider_slot"), py::arg("topology_component"), py::arg("solver_component"),
           py::arg("topology_binding"), py::arg("solver_binding"),
@@ -517,8 +558,26 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("field_blocks"), py::arg("field_keys"), py::arg("field_components"))
       .def("set_field_boundary_parameters", &System::set_field_boundary_parameters,
            py::arg("provider_slot"), py::arg("parameters"))
-      .def("set_field_nullspace", &System::set_field_nullspace, py::arg("provider_slot"),
-           py::arg("constant_kernel"), py::arg("mean_zero_gauge"))
+      .def(
+          "set_default_field_nullspace",
+          [](System& system, const std::string& provider_identity,
+             const std::string& schema_identity, const py::dict& options) {
+            system.set_default_field_nullspace(
+                provider_identity,
+                prepared_provider_options_from_python(schema_identity, options));
+          },
+          py::arg("provider_identity"), py::arg("schema_identity"), py::arg("options"))
+      .def(
+          "set_field_nullspace",
+          [](System& system, const std::string& provider_slot,
+             const std::string& provider_identity, const std::string& schema_identity,
+             const py::dict& options) {
+            system.set_field_nullspace(
+                provider_slot, provider_identity,
+                prepared_provider_options_from_python(schema_identity, options));
+          },
+          py::arg("provider_slot"), py::arg("provider_identity"), py::arg("schema_identity"),
+          py::arg("options"))
       .def("set_field_newton_plan", &System::set_field_newton_plan, py::arg("provider_slot"),
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),

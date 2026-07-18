@@ -10,6 +10,8 @@
 //
 #include <pops/runtime/dynamic/dynlib.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <set>
 #include <stdexcept>
@@ -127,6 +129,37 @@ inline std::pair<std::vector<std::string>, std::vector<std::string>> module_spac
 }
 
 }  // namespace detail
+
+using ProgramOperatorAuthority = std::array<std::uint64_t, 4>;
+
+/// Read the exact prepared-operator authority table exported by the generated artifact. Both
+/// accessors are mandatory even for a Program with zero prepared operators; malformed, zero, or
+/// duplicate rows fail before the install entry can issue any trusted hot-apply capability.
+inline std::vector<ProgramOperatorAuthority> read_program_operator_authorities(
+    pops::dynlib::handle dl_handle) {
+  if (!pops::dynlib::valid(dl_handle))
+    throw std::runtime_error("compiled Program operator authorities require a valid module handle");
+  const int count =
+      detail::require_module_count(dl_handle, "pops_program_operator_authority_count");
+  using WordFn = std::uint64_t (*)(int, int);
+  const WordFn word = detail::require_module_symbol<WordFn>(
+      dl_handle, "pops_program_operator_authority_word");
+  std::vector<ProgramOperatorAuthority> authorities;
+  authorities.reserve(static_cast<std::size_t>(count));
+  std::set<ProgramOperatorAuthority> unique;
+  for (int index = 0; index < count; ++index) {
+    ProgramOperatorAuthority authority{};
+    for (int lane = 0; lane < 4; ++lane)
+      authority[static_cast<std::size_t>(lane)] = word(index, lane);
+    if (std::all_of(authority.begin(), authority.end(),
+                    [](std::uint64_t value) { return value == 0; }))
+      throw std::runtime_error("compiled Program contains a zero operator authority");
+    if (!unique.insert(authority).second)
+      throw std::runtime_error("compiled Program contains a duplicate operator authority");
+    authorities.push_back(authority);
+  }
+  return authorities;
+}
 
 /// Read and authenticate the complete GeneratedModule metadata from an already-open problem module.
 /// Every count/accessor family is mandatory; missing, empty, duplicated, or malformed metadata fails

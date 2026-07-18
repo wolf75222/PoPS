@@ -1,13 +1,17 @@
 #pragma once
 
 #include <functional>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include <pops/core/foundation/types.hpp>      // Real
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/storage/multifab.hpp>      // MultiFab
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/linear/prepared_affine_problem.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond)
@@ -33,10 +37,8 @@ namespace pops {
 namespace runtime {
 namespace program {
 
-// The AssemblyFieldRole enum (kEpsX..kPhi, the write/read-redirection wire ids) lives on the always-
-// included facade program_context.hpp so every generated .so sees it, whether or not it pulls THIS header
-// (a condensed-only Program includes block_inverse.hpp, not this). AmrTensorElliptic::target switches
-// on the same ints.
+// Prepared hierarchy providers receive stable field-slot identities from the emitted assembly.  The
+// facade treats those identities opaquely; only the selected provider maps them to concrete storage.
 
 /// out = div(A grad in), A = [[eps_x, a_xy], [a_yx, eps_y]] -- the coefficiented matrix-free matvec of a
 /// tensor elliptic operator. Fills @p in's ghosts (transport BC) then forwards to the SAME
@@ -82,7 +84,10 @@ struct GeometricMgPreconditioner {
   /// authenticated topology is a no-op; a geometry, boundary-plan, box, distribution, component, or
   /// ghost-layout change rebuilds the cache at this explicit preparation boundary.
   template <class Ctx>
-  void prepare(const Ctx& ctx, const MultiFab& prototype) {
+  void prepare(const Ctx& ctx, const MultiFab& prototype,
+               const PreparedVectorDistribution& vector_distribution =
+                   PreparedVectorDistribution::Distributed,
+               FieldDistribution storage_distribution = FieldDistribution::Distributed) {
     if (prototype.ncomp() != 1)
       throw std::invalid_argument(
           "GeometricMgPreconditioner supports exactly one component; a multi-component "
@@ -95,7 +100,12 @@ struct GeometricMgPreconditioner {
     BCRec prepared_bc = gc.bc;
     prepared_bc.dx = gc.geom.dx();
     prepared_bc.dy = gc.geom.dy();
-    OperatorFingerprint topology = ::pops::detail::layout_fingerprint(prototype);
+    vector_distribution.require_collective_layout(
+        prototype, "GeometricMgPreconditioner::prepare");
+    if (!field_distribution_is_valid(storage_distribution))
+      throw std::invalid_argument("GeometricMgPreconditioner received invalid field ownership");
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, vector_distribution);
     ::pops::detail::fingerprint_geometry(topology, gc.geom);
     ::pops::detail::fingerprint_boundary(topology, prepared_bc);
     if (gc.boundary_plan)
@@ -106,8 +116,39 @@ struct GeometricMgPreconditioner {
       return;
     mg.reset();
     prepared_topology_.reset();
-    mg.emplace(gc.geom, prototype.box_array(), prototype.dmap(), prepared_bc,
-               std::function<bool(Real, Real)>{}, min_coarse_, nu1_, nu2_, nbottom_);
+    struct PreparedMgFactory {
+      int min_coarse;
+      int nu1;
+      int nu2;
+      int nbottom;
+      std::string contract;
+
+      std::string_view collective_contract() const noexcept { return contract; }
+      EllipticOperatorContract expected_operator_contract(
+          const EllipticBuildRequest& request) const {
+        return GeometricMG::expected_operator_contract(request, min_coarse, nu1, nu2, nbottom);
+      }
+      FieldDistribution materialized_distribution(
+          const EllipticBuildRequest& request) const noexcept {
+        return request.distribution;
+      }
+      bool supports(const EllipticBuildRequest&) const noexcept { return true; }
+      EllipticFactoryBuildResult<GeometricMG> build(EllipticBuildRequest request) const noexcept {
+        return capture_local_elliptic_factory_build<GeometricMG>(
+            [this, request = std::move(request)]() mutable {
+              return GeometricMG(request.geometry, request.boxes, request.mapping, request.boundary,
+                                 std::move(request.active), min_coarse, nu1, nu2, nbottom,
+                                 kMGDefaultCoarseThreshold, request.distribution);
+            });
+      }
+    };
+    std::string factory_contract{"pops.preconditioner.geometric-mg@1"};
+    factory_contract.append(
+        exact_provider_parameters(min_coarse_, nu1_, nu2_, nbottom_, n_vcycles_));
+    GeometricMG prepared = make_elliptic_solver<GeometricMG>(
+        {gc.geom, prototype.box_array(), prototype.dmap(), prepared_bc, {}, storage_distribution},
+        PreparedMgFactory{min_coarse_, nu1_, nu2_, nbottom_, std::move(factory_contract)});
+    mg.emplace(std::move(prepared));
     if (!PureFieldAlgebra::same_vector_space(mg->phi(), prototype))
       throw std::logic_error(
           "GeometricMgPreconditioner failed to preserve the prepared distribution");

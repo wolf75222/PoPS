@@ -26,7 +26,9 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <mutex>
@@ -37,6 +39,21 @@
 #include <vector>
 
 namespace pops {
+
+namespace detail {
+
+inline std::atomic<std::uint64_t>& exact_consensus_dynamic_storage_counter() noexcept {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+
+}  // namespace detail
+
+/// Diagnostic count of calls to the exact-consensus helper that materializes dynamic vectors.
+/// Prepared hot paths can snapshot this after bind and prove they never re-enter that helper.
+inline std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
+  return detail::exact_consensus_dynamic_storage_counter().load(std::memory_order_relaxed);
+}
 
 #ifdef POPS_HAS_MPI
 
@@ -303,6 +320,22 @@ inline void all_reduce_max_inplace(char* buf, std::size_t n) {
   }
 }
 
+/// Broadcast an exact bounded byte payload from one canonical rank. Large payloads are chunked only
+/// at the MPI native count limit; callers that need a tighter memory bound own their scientific
+/// chunking. In serial this is an identity.
+inline void broadcast_bytes_inplace(char* buf, std::size_t n, int root = 0) {
+  if (!detail::comm_active_unlocked() || n == 0)
+    return;
+  while (n != 0) {
+    const int count =
+        static_cast<int>(std::min(n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    detail::require_mpi_success(MPI_Bcast(buf, count, MPI_BYTE, root, MPI_COMM_WORLD),
+                                "MPI_Bcast(byte payload)");
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
 /// Batched structural consensus for canonical integral payloads.
 inline void all_reduce_min_inplace(long* buf, std::size_t n) {
   if (!detail::comm_active_unlocked() || n == 0)
@@ -369,6 +402,7 @@ inline void all_reduce_max_inplace(double*, int) {}        // serial: identity
 inline void all_reduce_or_inplace(char*, std::size_t) {}   // serial: identity
 inline void all_reduce_min_inplace(char*, std::size_t) {}  // serial: identity
 inline void all_reduce_max_inplace(char*, std::size_t) {}  // serial: identity
+inline void broadcast_bytes_inplace(char*, std::size_t, int = 0) {}  // serial: identity
 inline void all_reduce_min_inplace(long*, std::size_t) {}  // serial: identity
 inline void all_reduce_max_inplace(long*, std::size_t) {}  // serial: identity
 
@@ -426,6 +460,7 @@ inline int mpi_thread_level() noexcept {
 /// iteration order over (provider_slot, plan_identity).
 inline bool all_ranks_agree_exact_ordered_byte_pairs(
     const std::vector<std::pair<std::string_view, std::string_view>>& values) {
+  detail::exact_consensus_dynamic_storage_counter().fetch_add(1, std::memory_order_relaxed);
   const long local_count = static_cast<long>(values.size());
   const long minimum_count = all_reduce_min(local_count);
   const long maximum_count = all_reduce_max(local_count);

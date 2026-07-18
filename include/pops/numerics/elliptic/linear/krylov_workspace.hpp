@@ -3,14 +3,17 @@
 /// @file
 /// @brief Persistent storage for prepared affine Krylov solves.
 
-#include <pops/numerics/elliptic/linear/prepared_affine_problem.hpp>
+#include <pops/numerics/elliptic/linear/krylov_method_provider.hpp>
 #include <pops/numerics/elliptic/linear/scaled_scalar.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace pops {
@@ -20,103 +23,132 @@ struct KrylovWorkspaceAccess;
 }
 
 struct KrylovControls {
-  KrylovMethod method = KrylovMethod::kCg;
+  PreparedKrylovMethod method{};
   Real rel_tol = Real(1e-8);
   Real abs_tol = Real(0);
   int max_iterations = 1;
-  int restart = 0;
-  Real relaxation = Real(1);
 };
 
 class KrylovWorkspace {
  public:
-  static constexpr int max_gmres_restart() {
-    return std::numeric_limits<int>::max() /
-               static_cast<int>(detail::PreparedFieldAlgebra::kRobustDotPayloadWidth) -
-           1;
+  static int max_batched_basis_extent() {
+    return max_krylov_batched_basis_extent(detail::PreparedFieldAlgebra::kRobustDotPayloadWidth);
   }
 
-  KrylovWorkspace(const MultiFab& prototype, KrylovMethod method, KrylovFootprint footprint)
-      : method_(method), footprint_(footprint), layout_(detail::layout_fingerprint(prototype)) {
-    if (footprint_.components != prototype.ncomp() || footprint_.input_ghosts != prototype.n_grow())
+  static int max_batched_basis_extent(std::size_t robust_payload_width) {
+    return max_krylov_batched_basis_extent(robust_payload_width);
+  }
+
+  KrylovWorkspace(
+      const MultiFab& prototype, PreparedKrylovMethod method, KrylovFootprint footprint,
+      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed,
+      PreparedVectorMetric metric = {})
+      : method_(std::move(method)),
+        footprint_(footprint),
+        vector_distribution_(std::move(vector_distribution)),
+        metric_(std::move(metric)) {
+    const long footprint_failure_local =
+        footprint_.components != prototype.ncomp() ||
+                footprint_.input_ghosts != prototype.n_grow()
+            ? 1L
+            : 0L;
+    if (all_reduce_max(footprint_failure_local) != 0)
       throw std::invalid_argument("KrylovWorkspace footprint disagrees with prototype");
-    if (method_ == KrylovMethod::kGmres) {
-      if (footprint_.restart < 1)
-        throw std::invalid_argument("KrylovWorkspace GMRES restart must be positive");
-      if (footprint_.restart > max_gmres_restart())
-        throw std::invalid_argument(
-            "KrylovWorkspace GMRES restart exceeds the native batched robust-dot collective "
-            "capacity");
-      gmres_restart_ = static_cast<std::size_t>(footprint_.restart);
-      if (gmres_restart_ > std::numeric_limits<std::size_t>::max() / (gmres_restart_ + 1))
-        throw std::length_error("KrylovWorkspace GMRES Hessenberg size overflows size_t");
-    } else if (footprint_.restart != 0) {
-      throw std::invalid_argument("KrylovWorkspace restart belongs only to GMRES");
-    }
-    const std::size_t count = required_fields(method_, footprint_);
-    fields_.reserve(count);
-    for (std::size_t index = 0; index < count; ++index)
-      fields_.emplace_back(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
-                           footprint_.input_ghosts);
-    for (MultiFab& field : fields_)
-      field.share_halo_cache_from(prototype);
-    allocation_count_ = count;
-    if (method_ == KrylovMethod::kGmres) {
-      h_.assign((gmres_restart_ + 1) * gmres_restart_, Real(0));
-      cosine_.assign(gmres_restart_, Real(0));
-      sine_.assign(gmres_restart_, Real(0));
-      rotated_rhs_.assign(gmres_restart_ + 1, Real(0));
-      solution_coefficient_.assign(gmres_restart_, Real(0));
-      // These mirrors carry the least-squares right hand side and triangular coefficients through
-      // exponent ranges which cannot be represented by a `Real`.  They are sized here, before the
-      // solve boundary, so a GMRES iteration never allocates while avoiding an overflowing y/H*y.
-      scaled_h_.assign((gmres_restart_ + 1) * gmres_restart_, detail::ScaledScalar::zero());
-      scaled_rotated_rhs_.assign(gmres_restart_ + 1, detail::ScaledScalar::zero());
-      scaled_solution_coefficient_.assign(gmres_restart_, detail::ScaledScalar::zero());
-      // One persistent contiguous MPI payload for all Arnoldi projections of a column (plus its
-      // local norm term). The normal pass and the selective DGKS reorthogonalization reuse it; no
-      // temporary vector appears in the loop.
-      const std::size_t ordinary_count = gmres_restart_ + 1;
-      constexpr std::size_t kValuesPerProjection =
-          detail::PreparedFieldAlgebra::kRobustDotPayloadWidth + 1;
-      if (ordinary_count > std::numeric_limits<std::size_t>::max() / kValuesPerProjection)
-        throw std::length_error("KrylovWorkspace GMRES reduction storage overflows size_t");
-      gmres_reduction_data_.assign(ordinary_count * kValuesPerProjection, 0.0);
-    }
-  }
 
-  static std::size_t required_fields(KrylovMethod method, const KrylovFootprint& footprint) {
-    if (method != KrylovMethod::kGmres && footprint.restart != 0)
-      throw std::invalid_argument("KrylovWorkspace restart belongs only to GMRES");
-    switch (method) {
-      case KrylovMethod::kRichardson:
-        if (footprint.preconditioned)
-          throw std::invalid_argument("Richardson has no prepared preconditioner slot");
-        return 2;  // b_eff, true residual
-      case KrylovMethod::kCg:
-        if (footprint.preconditioned)
-          throw std::invalid_argument("CG has no prepared preconditioner slot");
-        return 4;  // b_eff, r, p, Ap/true residual
-      case KrylovMethod::kBicgstab:
-        return footprint.preconditioned ? 9 : 7;
-      case KrylovMethod::kGmres:
-        if (footprint.restart < 1 || footprint.restart > max_gmres_restart())
-          throw std::invalid_argument(
-              "GMRES restart exceeds the native batched robust-dot collective capacity");
-        // b_eff, V[0..restart], w/raw residual, plus one preconditioned Arnoldi vector only when
-        // M is non-identity. The identity route neither allocates nor copies through a fake M slot.
-        return static_cast<std::size_t>(footprint.restart) + (footprint.preconditioned ? 4u : 3u);
+    // Layout authentication is a materialization-time provider callback.  Its exact contract and
+    // every dynamic consensus allocation are completed here, never lazily inside solve.
+    vector_distribution_.require_collective_layout(prototype, "KrylovWorkspace");
+    long vector_space_failure_local = 0;
+    try {
+      layout_ = detail::layout_fingerprint(prototype, vector_distribution_);
+      vector_distribution_layout_valid_ =
+          detail::field_distribution_layout_matches(prototype, vector_distribution_);
+      if (!metric_)
+        metric_ = PreparedVectorMetric::euclidean(prototype, vector_distribution_);
+      if (!metric_.compatible_with(prototype, vector_distribution_))
+        vector_space_failure_local = 1;
+    } catch (...) {
+      vector_space_failure_local = 1;
     }
-    throw std::invalid_argument("unknown Krylov method");
+    if (all_reduce_max(vector_space_failure_local) != 0)
+      throw std::invalid_argument("KrylovWorkspace metric disagrees with the vector space");
+    metric_fingerprint_ = detail::fingerprint_seed();
+    detail::fingerprint_mix(metric_fingerprint_, metric_.collective_contract());
+    distribution_fingerprint_ = detail::fingerprint_seed();
+    detail::fingerprint_mix(distribution_fingerprint_,
+                            vector_distribution_.collective_contract());
+    long provider_failure_local = 0;
+    try {
+      requirements_ = method_.workspace_requirements(KrylovWorkspaceRequest{
+          footprint_, vector_distribution_, metric_.robust_payload_width()});
+    } catch (...) {
+      provider_failure_local = 1;
+    }
+    if (all_reduce_max(provider_failure_local) != 0)
+      throw std::invalid_argument(
+          "prepared Krylov provider failed to produce workspace requirements on at least one "
+          "communicator rank");
+
+    ExactContractBuilder requirements_contract;
+    append_requirements_contract_(requirements_contract, requirements_);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("prepared-krylov-workspace"), requirements_contract.view()}}))
+      throw std::invalid_argument(
+          "prepared Krylov workspace requirements differ between communicator ranks");
+    long materialization_failure_local = 0;
+    try {
+      distribution_validation_data_.assign(
+          vector_distribution_.validation_scratch_byte_count(), char{0});
+      fields_.reserve(requirements_.field_count);
+      for (std::size_t index = 0; index < requirements_.field_count; ++index)
+        fields_.emplace_back(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+                             footprint_.input_ghosts);
+      for (MultiFab& field : fields_)
+        field.share_halo_cache_from(prototype);
+      real_values_.assign(requirements_.real_count, Real(0));
+      scaled_values_.assign(requirements_.scaled_scalar_count, detail::ScaledScalar::zero());
+      collective_values_.assign(requirements_.collective_value_count, 0.0);
+      distribution_reduction_data_.assign(
+          vector_distribution_.reduction_scratch_value_count(
+              std::max(requirements_.reduction_value_capacity, std::size_t{1})),
+          0.0);
+      state_words_.assign(requirements_.state_word_count, std::uint64_t{0});
+    } catch (...) {
+      materialization_failure_local = 1;
+    }
+    if (all_reduce_max(materialization_failure_local) != 0) {
+      fields_.clear();
+      real_values_.clear();
+      scaled_values_.clear();
+      collective_values_.clear();
+      distribution_reduction_data_.clear();
+      distribution_validation_data_.clear();
+      state_words_.clear();
+      throw std::runtime_error(
+          "prepared Krylov persistent workspace materialization failed on at least one "
+          "communicator rank");
+    }
+    allocation_count_ = requirements_.field_count;
+  }
+  static std::size_t required_fields(const PreparedKrylovMethod& method,
+                                     const KrylovWorkspaceRequest& request) {
+    return method.workspace_requirements(request).field_count;
   }
 
   void bind(const PreparedAffineLinearProblem& problem) {
     detail::KrylovCollectivePayload payload;
     long local_failure = detail::PreparedProblemAccess::append_collective_state(problem, payload);
     append_collective_state_(payload);
+    if (local_failure == 0 && !vector_distribution_layout_valid_)
+      local_failure = 8;
     if (local_failure == 0 &&
-        (problem.layout_fingerprint() != layout_ || problem.footprint() != footprint_))
+        (problem.layout_fingerprint() != layout_ || problem.footprint() != footprint_ ||
+         problem.vector_distribution() != vector_distribution_))
       local_failure = 4;
+    if (local_failure == 0 &&
+        (detail::PreparedProblemAccess::metric_fingerprint(problem) != metric_fingerprint_ ||
+         problem.metric().collective_contract() != metric_.collective_contract()))
+      local_failure = 9;
     if (local_failure == 0 && problem.has_preconditioner() != footprint_.preconditioned)
       local_failure = 5;
     const bool agrees = detail::collective_payload_agrees(payload);
@@ -136,8 +168,7 @@ class KrylovWorkspace {
     const auto& problem_snapshot = detail::PreparedProblemAccess::stored_snapshot(problem);
     if (local_failure == 0 && (!snapshot_ || !problem_snapshot || *snapshot_ != *problem_snapshot))
       local_failure = 6;
-    if (local_failure == 0 &&
-        (controls.method != method_ || controls.restart != footprint_.restart))
+    if (local_failure == 0 && !(controls.method == method_))
       local_failure = 7;
     const bool agrees = detail::collective_payload_agrees(payload);
     const long collective_failure = all_reduce_max(local_failure);
@@ -146,44 +177,75 @@ class KrylovWorkspace {
       throw std::logic_error("KrylovWorkspace bound contract differs across communicator ranks");
   }
 
-  KrylovMethod method() const { return method_; }
+  const PreparedKrylovMethod& method() const { return method_; }
+  const PreparedVectorDistribution& vector_distribution() const { return vector_distribution_; }
+  const PreparedVectorMetric& metric() const { return metric_; }
   const KrylovFootprint& footprint() const { return footprint_; }
   /// Number of persistent MultiFab work vectors (not heap-allocation events).
   std::size_t allocation_count() const { return allocation_count_; }
   std::size_t scalar_value_count() const {
-    return h_.size() + cosine_.size() + sine_.size() + rotated_rhs_.size() +
-           solution_coefficient_.size() + scaled_h_.size() + scaled_rotated_rhs_.size() +
-           scaled_solution_coefficient_.size();
+    return real_values_.size() + scaled_values_.size();
   }
-  std::size_t collective_value_count() const { return gmres_reduction_data_.size(); }
+  std::size_t collective_value_count() const {
+    return collective_values_.size() + distribution_reduction_data_.size();
+  }
+  std::size_t distribution_validation_byte_count() const {
+    return distribution_validation_data_.size();
+  }
 
  private:
   friend struct detail::KrylovWorkspaceAccess;
+  friend class PreparedKrylovSolveContext;
 
   static void append_footprint_(detail::KrylovCollectivePayload& payload,
                                 const KrylovFootprint& footprint) noexcept {
     payload.append(footprint.components);
     payload.append(footprint.input_ghosts);
-    payload.append(footprint.restart);
     payload.append(static_cast<std::uint8_t>(footprint.preconditioned));
   }
 
   static void append_controls_(detail::KrylovCollectivePayload& payload,
                                const KrylovControls& controls) noexcept {
-    payload.append(static_cast<std::uint8_t>(controls.method));
+    payload.append(controls.method.fingerprint());
     payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
     payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
     payload.append(controls.max_iterations);
-    payload.append(controls.restart);
-    payload.append(std::bit_cast<std::uint64_t>(controls.relaxation));
   }
 
   void append_collective_state_(detail::KrylovCollectivePayload& payload) const noexcept {
-    payload.append(static_cast<std::uint8_t>(method_));
+    payload.append(method_.fingerprint());
     append_footprint_(payload, footprint_);
+    append_requirements_(payload, requirements_);
     payload.append(layout_);
+    payload.append(distribution_fingerprint_);
+    payload.append(static_cast<std::uint8_t>(vector_distribution_layout_valid_));
     payload.append(static_cast<std::uint8_t>(snapshot_.has_value()));
     payload.append(snapshot_.value_or(OperatorEvaluationSnapshot{}));
+    payload.append(metric_fingerprint_);
+    payload.append(static_cast<std::uint64_t>(metric_.robust_payload_width()));
+  }
+
+  static void append_requirements_(detail::KrylovCollectivePayload& payload,
+                                   const KrylovWorkspaceRequirements& requirements) noexcept {
+    payload.append(static_cast<std::uint64_t>(requirements.field_count));
+    payload.append(static_cast<std::uint64_t>(requirements.real_count));
+    payload.append(static_cast<std::uint64_t>(requirements.scaled_scalar_count));
+    payload.append(static_cast<std::uint64_t>(requirements.collective_value_count));
+    payload.append(static_cast<std::uint64_t>(requirements.reduction_value_capacity));
+    payload.append(static_cast<std::uint64_t>(requirements.state_word_count));
+    payload.append(static_cast<std::uint64_t>(requirements.initial_residual_field));
+  }
+
+  static void append_requirements_contract_(
+      ExactContractBuilder& contract,
+      const KrylovWorkspaceRequirements& requirements) {
+    contract.scalar(static_cast<std::uint64_t>(requirements.field_count))
+        .scalar(static_cast<std::uint64_t>(requirements.real_count))
+        .scalar(static_cast<std::uint64_t>(requirements.scaled_scalar_count))
+        .scalar(static_cast<std::uint64_t>(requirements.collective_value_count))
+        .scalar(static_cast<std::uint64_t>(requirements.reduction_value_capacity))
+        .scalar(static_cast<std::uint64_t>(requirements.state_word_count))
+        .scalar(static_cast<std::uint64_t>(requirements.initial_residual_field));
   }
 
   static void throw_collective_failure_(long failure) {
@@ -203,6 +265,11 @@ class KrylovWorkspace {
       throw std::invalid_argument("KrylovWorkspace preconditioner footprint mismatch");
     if (failure == 6)
       throw std::logic_error("KrylovWorkspace snapshot is not bound to prepared problem");
+    if (failure == 8)
+      throw std::invalid_argument(
+          "KrylovWorkspace vector layout was rejected by its distribution provider");
+    if (failure == 9)
+      throw std::invalid_argument("KrylovWorkspace metric is incompatible with prepared problem");
     throw std::invalid_argument("KrylovWorkspace method/restart mismatch");
   }
 
@@ -220,47 +287,69 @@ class KrylovWorkspace {
     return fields_[index];
   }
 
-  Real& h(int row, int column) {
-    return h_[static_cast<std::size_t>(row) * gmres_restart_ + static_cast<std::size_t>(column)];
+  Real& real_value(std::size_t index) { return real_values_.at(index); }
+  detail::ScaledScalar& scaled_value(std::size_t index) { return scaled_values_.at(index); }
+  double* collective_data() { return collective_values_.data(); }
+  std::size_t collective_data_size() const { return collective_values_.size(); }
+  std::uint64_t& state_word(std::size_t index) { return state_words_.at(index); }
+  double* distribution_reduction_data() { return distribution_reduction_data_.data(); }
+  std::size_t distribution_reduction_size() const {
+    return distribution_reduction_data_.size();
   }
-  Real& cosine(int index) { return cosine_[static_cast<std::size_t>(index)]; }
-  Real& sine(int index) { return sine_[static_cast<std::size_t>(index)]; }
-  Real& rotated_rhs(int index) { return rotated_rhs_[static_cast<std::size_t>(index)]; }
-  Real& solution_coefficient(int index) {
-    return solution_coefficient_[static_cast<std::size_t>(index)];
+  char* distribution_validation_data() { return distribution_validation_data_.data(); }
+  std::size_t distribution_validation_size() const {
+    return distribution_validation_data_.size();
   }
-  detail::ScaledScalar& scaled_h(int row, int column) {
-    return scaled_h_[static_cast<std::size_t>(row) * gmres_restart_ +
-                     static_cast<std::size_t>(column)];
-  }
-  detail::ScaledScalar& scaled_rotated_rhs(int index) {
-    return scaled_rotated_rhs_[static_cast<std::size_t>(index)];
-  }
-  detail::ScaledScalar& scaled_solution_coefficient(int index) {
-    return scaled_solution_coefficient_[static_cast<std::size_t>(index)];
-  }
-  double* gmres_reduction_data() { return gmres_reduction_data_.data(); }
-  double* gmres_robust_reduction_data() {
-    return gmres_reduction_data_.data() + gmres_restart_ + 1;
-  }
-  std::size_t gmres_reduction_size() const { return gmres_restart_ + 1; }
+  const KrylovWorkspaceRequirements& requirements() const { return requirements_; }
+  std::size_t metric_robust_payload_width() const { return metric_.robust_payload_width(); }
 
-  KrylovMethod method_;
+  bool provider_report_reason_agrees_(std::string_view reason) {
+    constexpr std::size_t kLengthBytes = sizeof(std::uint64_t);
+    constexpr std::size_t kOverflowBytes = 1;
+    constexpr std::size_t kPayloadCapacity =
+        kProviderReportReasonConsensusCapacity - kLengthBytes - kOverflowBytes;
+    const bool overflow = reason.size() > kPayloadCapacity;
+    const std::size_t copied = std::min(reason.size(), kPayloadCapacity);
+
+    provider_report_reason_min_.fill(char{0});
+    const std::uint64_t length = static_cast<std::uint64_t>(reason.size());
+    for (std::size_t byte = 0; byte < kLengthBytes; ++byte)
+      provider_report_reason_min_[byte] =
+          static_cast<char>((length >> (8u * byte)) & std::uint64_t{0xff});
+    if (copied != 0)
+      std::copy_n(reason.data(), copied,
+                  provider_report_reason_min_.data() + kLengthBytes);
+    provider_report_reason_min_.back() = overflow ? char{1} : char{0};
+    provider_report_reason_max_ = provider_report_reason_min_;
+    all_reduce_min_inplace(provider_report_reason_min_.data(),
+                           provider_report_reason_min_.size());
+    all_reduce_max_inplace(provider_report_reason_max_.data(),
+                           provider_report_reason_max_.size());
+    return provider_report_reason_min_.back() == char{0} &&
+           provider_report_reason_min_ == provider_report_reason_max_;
+  }
+
+  PreparedKrylovMethod method_;
   KrylovFootprint footprint_;
+  KrylovWorkspaceRequirements requirements_{};
   OperatorFingerprint layout_{};
+  PreparedVectorDistribution vector_distribution_ = PreparedVectorDistribution::Distributed;
+  OperatorFingerprint distribution_fingerprint_{};
+  PreparedVectorMetric metric_;
+  OperatorFingerprint metric_fingerprint_{};
+  bool vector_distribution_layout_valid_ = true;
   std::vector<MultiFab> fields_;
   std::size_t allocation_count_ = 0;
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
-  std::size_t gmres_restart_ = 0;
-  std::vector<Real> h_;
-  std::vector<Real> cosine_;
-  std::vector<Real> sine_;
-  std::vector<Real> rotated_rhs_;
-  std::vector<Real> solution_coefficient_;
-  std::vector<detail::ScaledScalar> scaled_h_;
-  std::vector<detail::ScaledScalar> scaled_rotated_rhs_;
-  std::vector<detail::ScaledScalar> scaled_solution_coefficient_;
-  std::vector<double> gmres_reduction_data_;
+  std::vector<Real> real_values_;
+  std::vector<detail::ScaledScalar> scaled_values_;
+  std::vector<double> collective_values_;
+  std::vector<double> distribution_reduction_data_;
+  std::vector<char, comm_allocator<char>> distribution_validation_data_;
+  std::vector<std::uint64_t> state_words_;
+  static constexpr std::size_t kProviderReportReasonConsensusCapacity = 4096;
+  std::array<char, kProviderReportReasonConsensusCapacity> provider_report_reason_min_{};
+  std::array<char, kProviderReportReasonConsensusCapacity> provider_report_reason_max_{};
 };
 
 }  // namespace pops

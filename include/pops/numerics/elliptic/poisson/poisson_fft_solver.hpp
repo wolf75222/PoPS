@@ -38,8 +38,11 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef POPS_HAS_MPI
@@ -48,17 +51,35 @@
 
 namespace pops {
 
+namespace detail {
+
+inline BCRec fft_materialized_periodic_boundary(const Geometry& geometry) {
+  BCRec boundary;
+  boundary.dx = geometry.dx();
+  boundary.dy = geometry.dy();
+  return boundary;
+}
+
+inline std::string fft_operator_options_contract(bool spectral) {
+  ExactContractBuilder contract;
+  contract.text("pops.elliptic.fft.options").scalar(std::uint32_t{1}).scalar(spectral);
+  return std::move(contract).release();
+}
+
+}  // namespace detail
+
 class PoissonFFTSolver {
  public:
   /// @p spectral: Laplacian symbol (false = discrete 5-point stencil, bit-identical default;
   /// true = continuous symbol -(kx^2+ky^2), faithful to spectral references -- cf. PoissonFFT).
   PoissonFFTSolver(const Geometry& geom, const BoxArray& ba, const BCRec& = BCRec{},
-                   std::function<bool(Real, Real)> = {}, bool spectral = false)
+                   ActiveRegionProvider2D = {}, bool spectral = false)
       : geom_(geom),
         dm_(ba.size(), n_ranks()),
         phi_(ba, dm_, 1, 1),
         rhs_(ba, dm_, 1, 0),
         res_(ba, dm_, 1, 0),
+        spectral_(spectral),
         fft_(geom.domain.nx(), geom.domain.ny(), geom.xhi - geom.xlo, geom.yhi - geom.ylo,
              spectral) {
     // HARD guard (active in Release, NDEBUG does NOT remove it): this direct solver is single-rank /
@@ -75,11 +96,27 @@ class PoissonFFTSolver {
       throw std::runtime_error(
           "PoissonFFTSolver: single box required (ba.size()==1); for a distributed multi-box "
           "domain, use DistributedFFTSolver or geometric_mg");
+    const BCRec materialized_boundary = detail::fft_materialized_periodic_boundary(geom_);
+    prepared_operator_contract_ = make_materialized_elliptic_operator_contract(
+        operator_identity(), geom_, materialized_boundary, {}, FieldDistribution::Distributed, rhs_,
+        phi_, detail::fft_operator_options_contract(spectral_));
   }
 
   MultiFab& rhs() { return rhs_; }
   MultiFab& phi() { return phi_; }
   const Geometry& geom() const { return geom_; }
+  FieldDistribution field_distribution() const noexcept { return FieldDistribution::Distributed; }
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.elliptic.poisson-fft", 1};
+  }
+  static EllipticOperatorContract expected_operator_contract(const EllipticBuildRequest& request,
+                                                             bool spectral = false) {
+    return make_expected_elliptic_operator_contract(
+        operator_identity(), request, detail::fft_operator_options_contract(spectral));
+  }
+  const EllipticOperatorContract& prepared_operator_contract() const noexcept {
+    return prepared_operator_contract_;
+  }
 
   // Solve lap(phi) = rhs in place (direct, one forward FFT + inverse).
   void solve() {
@@ -118,7 +155,9 @@ class PoissonFFTSolver {
   Geometry geom_;
   DistributionMapping dm_;
   MultiFab phi_, rhs_, res_;
+  bool spectral_ = false;
   PoissonFFT fft_;
+  EllipticOperatorContract prepared_operator_contract_;
 };
 
 static_assert(EllipticSolver<PoissonFFTSolver>, "PoissonFFTSolver must model EllipticSolver");
@@ -146,8 +185,7 @@ static_assert(EllipticSolver<PoissonFFTSolver>, "PoissonFFTSolver must model Ell
 /// - in serial (n_ranks() == 1) a single slab covers the domain -> identical to PoissonFFTSolver.
 class DistributedFFTSolver {
  public:
-  DistributedFFTSolver(const Geometry& geom, const BCRec& = BCRec{},
-                       std::function<bool(Real, Real)> = {})
+  DistributedFFTSolver(const Geometry& geom, const BCRec& = BCRec{}, ActiveRegionProvider2D = {})
       : geom_(geom),
         Nx_(geom.domain.nx()),
         nyl_(geom.domain.ny() / n_ranks()),
@@ -166,11 +204,26 @@ class DistributedFFTSolver {
     phi_ = MultiFab(ba, dm_, 1, 1);
     rhs_ = MultiFab(ba, dm_, 1, 0);
     res_ = MultiFab(ba, dm_, 1, 0);
+    const BCRec materialized_boundary = detail::fft_materialized_periodic_boundary(geom_);
+    prepared_operator_contract_ = make_materialized_elliptic_operator_contract(
+        operator_identity(), geom_, materialized_boundary, {}, FieldDistribution::Distributed, rhs_,
+        phi_, detail::fft_operator_options_contract(false));
   }
 
   MultiFab& rhs() { return rhs_; }
   MultiFab& phi() { return phi_; }
   const Geometry& geom() const { return geom_; }
+  FieldDistribution field_distribution() const noexcept { return FieldDistribution::Distributed; }
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.elliptic.distributed-poisson-fft", 1};
+  }
+  static EllipticOperatorContract expected_operator_contract(const EllipticBuildRequest& request) {
+    return make_expected_elliptic_operator_contract(operator_identity(), request,
+                                                    detail::fft_operator_options_contract(false));
+  }
+  const EllipticOperatorContract& prepared_operator_contract() const noexcept {
+    return prepared_operator_contract_;
+  }
 
   // Solve lap(phi) = rhs in place: local slab -> flat array -> PoissonFFT (internal MPI transpose)
   // -> rewrite the local slab. Mode k=0 set to zero (phi with zero mean).
@@ -204,6 +257,7 @@ class DistributedFFTSolver {
   DistributionMapping dm_;
   MultiFab phi_, rhs_, res_;
   PoissonFFT fft_;
+  EllipticOperatorContract prepared_operator_contract_;
 };
 
 static_assert(EllipticSolver<DistributedFFTSolver>,
@@ -250,7 +304,7 @@ class RemappedFFTSolver {
   /// bit-identical default; true = continuous symbol -(kx^2+ky^2)). Same constructor shape as
   /// PoissonFFTSolver (BCRec and wall predicate accepted but ignored: periodic constant coefficient).
   RemappedFFTSolver(const Geometry& geom, const BoxArray& ba, const BCRec& = BCRec{},
-                    std::function<bool(Real, Real)> = {}, bool spectral = false)
+                    ActiveRegionProvider2D = {}, bool spectral = false)
       : geom_(geom),
         dm_(ba.size(), n_ranks()),  // SAME layout System uses: box i -> rank i % np
         phi_(ba, dm_, 1, 1),
@@ -260,6 +314,7 @@ class RemappedFFTSolver {
         Ny_(geom.domain.ny()),
         nyl_(geom.domain.ny() / n_ranks()),
         owner_rank_(ba.size() > 0 ? dm_[0] : 0),
+        spectral_(spectral),
         fft_(geom.domain.nx(), geom.domain.ny(), geom.xhi - geom.xlo, geom.yhi - geom.ylo,
              spectral) {
     // CONTRACT (ADC-273 vote on ADC-287): this solver is valid ONLY for System's round-robin
@@ -279,11 +334,27 @@ class RemappedFFTSolver {
       throw std::runtime_error(
           "RemappedFFTSolver: Ny must be divisible by n_ranks() for the slab FFT");
     }
+    const BCRec materialized_boundary = detail::fft_materialized_periodic_boundary(geom_);
+    prepared_operator_contract_ = make_materialized_elliptic_operator_contract(
+        operator_identity(), geom_, materialized_boundary, {}, FieldDistribution::Distributed, rhs_,
+        phi_, detail::fft_operator_options_contract(spectral_));
   }
 
   MultiFab& rhs() { return rhs_; }
   MultiFab& phi() { return phi_; }
   const Geometry& geom() const { return geom_; }
+  FieldDistribution field_distribution() const noexcept { return FieldDistribution::Distributed; }
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.elliptic.remapped-poisson-fft", 1};
+  }
+  static EllipticOperatorContract expected_operator_contract(const EllipticBuildRequest& request,
+                                                             bool spectral = false) {
+    return make_expected_elliptic_operator_contract(
+        operator_identity(), request, detail::fft_operator_options_contract(spectral));
+  }
+  const EllipticOperatorContract& prepared_operator_contract() const noexcept {
+    return prepared_operator_contract_;
+  }
 
   // Solve lap(phi) = rhs in place. THREE MPI collectives, in order: (1) MPI_Scatter the owner's box-major
   // rhs into per-rank nyl_ x Nx_ slabs; (2) PoissonFFT::solve runs its internal MPI_Alltoall (y<->x
@@ -377,7 +448,9 @@ class RemappedFFTSolver {
   DistributionMapping dm_;
   MultiFab phi_, rhs_, res_;
   int Nx_, Ny_, nyl_, owner_rank_;
+  bool spectral_ = false;
   PoissonFFT fft_;
+  EllipticOperatorContract prepared_operator_contract_;
 };
 
 static_assert(EllipticSolver<RemappedFFTSolver>, "RemappedFFTSolver must model EllipticSolver");

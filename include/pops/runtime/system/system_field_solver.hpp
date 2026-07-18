@@ -10,6 +10,11 @@
 #include <pops/mesh/boundary/physical_bc.hpp>  // BCRec, fill_ghosts, fill_boundary
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
@@ -18,12 +23,17 @@
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>              // detail::wall_predicate
 #include <pops/runtime/config/generated_component_catalog.hpp>
+#include <pops/core/identity/prepared_provider_options.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
+#include <pops/runtime/system/system_elliptic_backend.hpp>
+#include <pops/mesh/storage/field_replica_consensus.hpp>
 
 #include <algorithm>
 #include <cstdlib>  // getenv
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <map>  // named_aux_: NAMED aux fields (comp -> field), re-applied after channel realloc
@@ -31,7 +41,9 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -45,9 +57,10 @@
 ///        back-pointer owner_->.
 ///
 /// CONTRACT / INVARIANTS
-/// - OWNS: the elliptic solvers (ell_ cartesian GeometricMG/PoissonFFTSolver; pell_ polar
-///   PolarPoissonSolver), the Poisson configuration tokens (p_rhs/p_solver/p_bc/p_wall/
-///   p_wall_radius/p_eps_), the coefficient fields and flags (eps(x), eps_x/eps_y, kappa) as well as
+/// - OWNS: the prepared cartesian elliptic backend selected by provider identity and its accepted
+///   build request
+///   (ell_), the separate direct polar backend (pell_), the Poisson configuration tokens (p_rhs/p_solver/p_bc/p_wall/
+///   p_wall_radius/p_eps_), the typed coefficient form (scalar/diagonal/full tensor plus kappa) and
 ///   the aux field APPLICATION buffers (bz_field_ and te_src_) with their methods apply_bz /
 ///   apply_te.
 /// - READS (without owning) the SHARED aux and the block list via owner_->: the aux is populated by
@@ -70,12 +83,6 @@
 namespace pops {
 
 namespace detail {
-struct SubtractFieldMeanKernel {
-  Array4 field;
-  Real mean;
-  POPS_HD void operator()(int i, int j) const { field(i, j, 0) -= mean; }
-};
-
 /// Publishes one solved named potential and its optional signed centered gradient into the
 /// block-owned aux components.  Keep this as a named device-callable functor: external generated
 /// translation units instantiate this path, where an extended lambda is not portable under nvcc.
@@ -123,8 +130,82 @@ class SystemFieldSolver {
  public:
   using NamedAuxField = std::vector<Real, fab_allocator<Real>>;
 
+  /// Exactly one mathematically complete diffusion-coefficient shape can be present in a prepared
+  /// request.  The provider-neutral native request accepts scalar, diagonal, or full 2-D tensor
+  /// fields, so an extension can submit its exact materialized operator without parallel presence
+  /// flags.  The current System authoring surface exposes only scalar and diagonal coefficients;
+  /// there is deliberately no claim that named-field lowering already supplies full tensors.
+  template <class Field>
+  struct ScalarDiffusionCoefficient {
+    Field value;
+  };
+
+  template <class Field>
+  struct DiagonalDiffusionCoefficient {
+    Field x;
+    Field y;
+  };
+
+  template <class Field>
+  struct FullTensorDiffusionCoefficient {
+    Field xx;
+    Field xy;
+    Field yx;
+    Field yy;
+  };
+
+  template <class Field>
+  using DiffusionCoefficient =
+      std::variant<std::monostate, ScalarDiffusionCoefficient<Field>,
+                   DiagonalDiffusionCoefficient<Field>, FullTensorDiffusionCoefficient<Field>>;
+
+  using AuthoredDiffusionCoefficient =
+      std::variant<std::monostate, ScalarDiffusionCoefficient<std::vector<double>>,
+                   DiagonalDiffusionCoefficient<std::vector<double>>>;
+  using MaterializedDiffusionCoefficient = DiffusionCoefficient<MultiFab>;
+
   /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
-  explicit SystemFieldSolver(Impl* owner) : owner_(owner) {}
+  explicit SystemFieldSolver(Impl* owner)
+      : owner_(owner),
+        nullspace_provider_registry_(make_default_field_nullspace_provider_registry()) {
+    install_builtin_provider_presets_();
+  }
+
+  struct FieldSolveConfig;
+
+  class NamedFieldBackend {
+   public:
+    virtual ~NamedFieldBackend() = default;
+    [[nodiscard]] virtual std::string_view provider_identity() const noexcept = 0;
+    [[nodiscard]] virtual std::uint64_t provider_version() const noexcept = 0;
+    [[nodiscard]] virtual std::string_view provider_contract() const noexcept = 0;
+    virtual MultiFab& rhs() = 0;
+    virtual MultiFab& phi() = 0;
+    [[nodiscard]] virtual const Geometry& geometry() const noexcept = 0;
+    [[nodiscard]] virtual FieldDistribution field_distribution() const noexcept = 0;
+    [[nodiscard]] virtual MultiFab snapshot() = 0;
+    virtual void restore(const MultiFab&) = 0;
+    virtual void configure_boundary(FieldSolveConfig&) = 0;
+    virtual void prepare_rhs(SystemFieldSolver&, MultiFab&, const FieldSolveConfig&,
+                             FieldNullspaceWorkspace&) = 0;
+    virtual SolveReport solve(SystemFieldSolver&) = 0;
+    virtual void finalize(SystemFieldSolver&, const FieldSolveConfig&,
+                          FieldNullspaceWorkspace&) = 0;
+    virtual void reset_diagnostics() {}
+    [[nodiscard]] virtual RuntimeDiagnosticsReport diagnostics_report() const {
+      return make_runtime_diagnostics_report("pops.runtime.elliptic_backend");
+    }
+    [[nodiscard]] virtual runtime::system::EllipticBackendMetrics metrics() const noexcept {
+      return {};
+    }
+    [[nodiscard]] virtual const EllipticOperatorContract* operator_contract() const noexcept {
+      return nullptr;
+    }
+    [[nodiscard]] virtual std::vector<runtime::field::FieldTopologyReportRow> topology_report()
+        const {
+      return {};
+    }
+  };
 
   /// Canonical component of T_e (after phi/grad/B_z); cf. pops::Aux and AUX_CANONICAL on the DSL side.
   static constexpr int kTeComp = kAuxBaseComps + 1;  // = 4
@@ -148,30 +229,16 @@ class SystemFieldSolver {
   const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
   void reset_diagnostics() {
     diagnostics_.clear();
-    if (ell_) {
-      std::visit(
-          [](auto& e) {
-            using T = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<T, GeometricMG>)
-              e.reset_diagnostics();
-          },
-          *ell_);
-    }
+    if (ell_)
+      ell_->reset_diagnostics();
   }
 
   RuntimeDiagnosticsReport combined_diagnostics_report() const {
     RuntimeDiagnosticsReport report = diagnostics_;
     if (ell_) {
-      std::visit(
-          [&](const auto& e) {
-            using T = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<T, GeometricMG>) {
-              const RuntimeDiagnosticsReport& mg_report = e.diagnostics_report();
-              report.events.insert(report.events.end(), mg_report.events.begin(),
-                                   mg_report.events.end());
-            }
-          },
-          *ell_);
+      const RuntimeDiagnosticsReport backend_report = ell_->diagnostics_report();
+      report.events.insert(report.events.end(), backend_report.events.begin(),
+                           backend_report.events.end());
     }
     return report;
   }
@@ -198,10 +265,10 @@ class SystemFieldSolver {
 
   StepSnapshot step_snapshot() {
     StepSnapshot out;
-    out.had_elliptic = ell_.has_value();
+    out.had_elliptic = static_cast<bool>(ell_);
     out.had_polar_solver = pell_.has_value();
     if (ell_)
-      out.potential = std::visit([](auto& e) { return MultiFab(e.phi()); }, *ell_);
+      out.potential = ell_->snapshot();
     if (pell_)
       out.polar_potential = pell_->phi();
     if (phi_src_polar_)
@@ -219,9 +286,9 @@ class SystemFieldSolver {
 
   void restore_step_snapshot(const StepSnapshot& snapshot) {
     if (!snapshot.had_elliptic)
-      ell_.reset();
+      invalidate_primary_backend_();
     else if (snapshot.potential && ell_)
-      std::visit([&](auto& e) { e.phi() = *snapshot.potential; }, *ell_);
+      ell_->restore(*snapshot.potential);
     if (!snapshot.had_polar_solver)
       pell_.reset();
     else if (snapshot.polar_potential && pell_)
@@ -230,7 +297,7 @@ class SystemFieldSolver {
     for (auto& item : named_fields_) {
       if (std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), item.first) !=
           snapshot.named_unbuilt.end()) {
-        item.second.backend.reset();
+        invalidate_named_backend_(item.second);
         continue;
       }
       const auto saved = snapshot.named_potentials.find(item.first);
@@ -247,34 +314,62 @@ class SystemFieldSolver {
   std::string p_bc = "auto";
   bool p_has_explicit_bc = false;
   BCRec p_explicit_bc{};
-  bool p_nullspace_const = false;
-  bool p_mean_zero_gauge = false;
+  FieldNullspacePlan p_nullspace_{};
+  FieldNullspaceProviderSelection p_nullspace_provider_ =
+      operator_topology_zero_mean_nullspace();
+  bool p_nullspace_ready_ = false;
+  // Compatibility and gauge are sequential operations on the same physical vector space.  Halo
+  // width is not part of its scientific identity, so one persistent allocation-free evaluator is
+  // shared by the backend RHS and solution representations.
+  std::unique_ptr<FieldNullspaceWorkspace> p_nullspace_workspace_;
   std::string p_wall = "none";
   double p_wall_radius = 0.0;
   Real p_eps_ = 1;  // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps
-  // ABSOLUTE floor of the GeometricMG V-cycle stopping criterion (same units as the residual). Default 0:
-  // purely relative criterion (historical bit-identical behavior). Set > 0 (problem scale),
-  // it makes the off-step solve_fields exit WITHOUT cycling on an already converged state (diagnostics, oracles,
-  // restart). Inert for the FFT solver (direct, without iterative tolerance).
-  Real p_abs_tol_ = 0;
-  // GeometricMG V-cycle knobs (ADC-613): rel_tol / max_cycles / min_coarse / nu1 / nu2 / nbottom,
-  // resolved from the pops.solvers.elliptic.GeometricMG descriptor by set_poisson. Defaults are the
-  // kMG* constants, so an unconfigured System builds and solves the historical V-cycle bit-for-bit
-  // (rel_tol 1e-8, max_cycles 50, min_coarse 2, nu 2/2, nbottom 50). p_abs_tol_ above is kept as the
-  // pre-613 absolute-floor field and mirrored into p_mg_opts_.abs_tol at set_poisson time (single
-  // source: the resolved options struct feeds both the ctor and the solve call).
-  GeometricMgOptions p_mg_opts_;
-  bool has_eps_field_ = false;  // VARIABLE permittivity eps(x) provided (carried by the operator)
-  std::vector<double> p_eps_field_;  // field eps(x), n*n row-major (if has_eps_field_)
-  bool has_eps_xy_field_ =
-      false;  // ANISOTROPIC permittivity eps_x(x), eps_y(x) (operator div(diag(eps_x,eps_y) grad phi))
-  std::vector<double>
-      p_eps_x_field_;  // field eps_x(x), n*n row-major (faces normal to x; if has_eps_xy_field_)
-  std::vector<double>
-      p_eps_y_field_;  // field eps_y(x), n*n row-major (faces normal to y; if has_eps_xy_field_)
+  AuthoredDiffusionCoefficient p_diffusion_coefficient_{};
   bool has_kappa_field_ = false;  // REACTION term kappa(x) provided: div(eps grad phi) - kappa phi
   std::vector<double> p_kappa_field_;  // field kappa(x), n*n row-major (if has_kappa_field_)
-  std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell_;
+
+  [[nodiscard]] bool has_variable_diffusion_coefficient() const noexcept {
+    return !std::holds_alternative<std::monostate>(p_diffusion_coefficient_);
+  }
+
+  [[nodiscard]] bool has_scalar_diffusion_coefficient() const noexcept {
+    return std::holds_alternative<ScalarDiffusionCoefficient<std::vector<double>>>(
+        p_diffusion_coefficient_);
+  }
+
+  [[nodiscard]] bool has_anisotropic_diffusion_coefficient() const noexcept {
+    return std::holds_alternative<DiagonalDiffusionCoefficient<std::vector<double>>>(
+        p_diffusion_coefficient_);
+  }
+
+  void configure_scalar_diffusion_coefficient(std::vector<double> values) {
+    if (!std::holds_alternative<std::monostate>(p_diffusion_coefficient_) &&
+        !std::holds_alternative<ScalarDiffusionCoefficient<std::vector<double>>>(
+            p_diffusion_coefficient_))
+      throw std::runtime_error(
+          "System diffusion coefficient already has another exact shape; scalar, diagonal and "
+          "full-tensor coefficients cannot be combined");
+    p_diffusion_coefficient_ =
+        ScalarDiffusionCoefficient<std::vector<double>>{std::move(values)};
+    invalidate_primary_backend_();
+  }
+
+  void configure_diagonal_diffusion_coefficient(std::vector<double> x,
+                                                 std::vector<double> y) {
+    if (!std::holds_alternative<std::monostate>(p_diffusion_coefficient_) &&
+        !std::holds_alternative<DiagonalDiffusionCoefficient<std::vector<double>>>(
+            p_diffusion_coefficient_))
+      throw std::runtime_error(
+          "System diffusion coefficient already has another exact shape; scalar, diagonal and "
+          "full-tensor coefficients cannot be combined");
+    p_diffusion_coefficient_ = DiagonalDiffusionCoefficient<std::vector<double>>{
+        std::move(x), std::move(y)};
+    invalidate_primary_backend_();
+  }
+  // Prepared through the provider registry.  The core owns one type-erased backend and never
+  // switches on a numerical implementation type.
+  std::unique_ptr<NamedFieldBackend> ell_;
   // Transaction scratch is materialized on the first prepared evaluation (A(0)) and then reused by
   // every field-coupled Jacobian apply.  No MultiFab construction remains in the Krylov loop.
   std::optional<MultiFab> published_phi_scratch_;
@@ -321,7 +416,9 @@ class SystemFieldSolver {
     std::string output_block;
     std::string output_key;
     std::vector<FieldProviderBinding> providers;
-    std::string solver = "geometric_mg";
+    // Exact registry key. Builtins use the resolved route identity; installed native components
+    // replace it with their manifest-qualified PreparedFieldSolverComponent identity.
+    std::string backend_provider_identity = "geometric_mg";
     std::string bc = "auto";
     bool has_explicit_bc = false;
     BCRec explicit_bc{};
@@ -334,95 +431,120 @@ class SystemFieldSolver {
     std::vector<std::string> boundary_field_keys;
     std::vector<int> boundary_field_components;
     std::vector<const MultiFab*> boundary_state_buffers;
+    std::vector<FieldDistribution> boundary_state_distributions;
     std::vector<const MultiFab*> boundary_field_buffers;
+    std::vector<FieldDistribution> boundary_field_distributions;
     FieldBoundaryExecutionContext boundary_context{};
     bool has_reaction = false;
     Real reaction = Real(0);
     bool has_newton = false;
     FieldNewtonOptions newton{};
     FieldNullspacePlan nullspace{};
-    GeometricMgOptions mg_opts{};
+    FieldNullspaceProviderSelection nullspace_provider =
+        operator_topology_zero_mean_nullspace();
     std::string topology_provider_kind;
     std::string topology_provenance;
     std::string topology_digest;
   };
 
-  class NamedFieldBackend {
-   public:
-    virtual ~NamedFieldBackend() = default;
-    virtual MultiFab& rhs() = 0;
-    virtual MultiFab& phi() = 0;
-    [[nodiscard]] virtual MultiFab snapshot() = 0;
-    virtual void restore(const MultiFab&) = 0;
-    virtual void configure_boundary(FieldSolveConfig&) = 0;
-    virtual void prepare_rhs(SystemFieldSolver&, MultiFab&, const FieldSolveConfig&) = 0;
-    virtual SolveReport solve(SystemFieldSolver&, const FieldSolveConfig&) = 0;
-    virtual void finalize(SystemFieldSolver&, const FieldSolveConfig&) = 0;
-    [[nodiscard]] virtual std::vector<runtime::field::FieldTopologyReportRow> topology_report()
-        const = 0;
-  };
+  [[nodiscard]] static EllipticOperatorContract compose_provider_operator_contract_(
+      std::string_view provider_identity, const EllipticOperatorContract& backend_contract,
+      std::string_view exact_configuration_contract) {
+    ExactContractBuilder options;
+    options.text(provider_identity).bytes(exact_configuration_contract);
+    return EllipticOperatorContract::make({"pops.runtime.system-elliptic-provider", 1},
+                                          std::string(backend_contract.exact_fingerprint()),
+                                          std::move(options).release());
+  }
 
-  class BuiltinNamedFieldBackend final : public NamedFieldBackend {
+  class GeometricMgPreparedBackend final : public NamedFieldBackend {
    public:
-    using Solver = std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>;
-
-    template <class T, class... Args>
-    BuiltinNamedFieldBackend(std::in_place_type_t<T> type, std::string topology_digest,
-                             std::string topology_provenance, std::size_t material_points,
-                             Args&&... args)
-        : solver_(type, std::forward<Args>(args)...),
+    template <class... Args>
+    GeometricMgPreparedBackend(std::string provider_identity, std::string provider_contract,
+                               GeometricMgOptions solve_controls,
+                               std::string exact_configuration_contract,
+                               std::string topology_digest, std::string topology_provenance,
+                               std::size_t material_points, Args&&... args)
+        : solver_(std::forward<Args>(args)...),
+          provider_identity_(std::move(provider_identity)),
+          provider_contract_(std::move(provider_contract)),
+          solve_controls_(solve_controls),
           topology_digest_(std::move(topology_digest)),
           topology_provenance_(std::move(topology_provenance)),
-          material_points_(material_points) {}
+          material_points_(material_points) {
+      operator_contract_ = compose_provider_operator_contract_(
+          provider_identity_, solver_.prepared_operator_contract(), exact_configuration_contract);
+    }
 
-    MultiFab& rhs() override {
-      return std::visit([](auto& solver) -> MultiFab& { return solver.rhs(); }, solver_);
+    [[nodiscard]] std::string_view provider_identity() const noexcept override {
+      return provider_identity_;
     }
-    MultiFab& phi() override {
-      return std::visit([](auto& solver) -> MultiFab& { return solver.phi(); }, solver_);
+    [[nodiscard]] std::uint64_t provider_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view provider_contract() const noexcept override {
+      return provider_contract_;
     }
-    [[nodiscard]] MultiFab snapshot() override {
-      return std::visit([](auto& solver) { return MultiFab(solver.phi()); }, solver_);
+    MultiFab& rhs() override { return solver_.rhs(); }
+    MultiFab& phi() override { return solver_.phi(); }
+    [[nodiscard]] const Geometry& geometry() const noexcept override { return solver_.geom(); }
+    [[nodiscard]] FieldDistribution field_distribution() const noexcept override {
+      return solver_.field_distribution();
     }
-    void restore(const MultiFab& value) override { phi() = value; }
+    [[nodiscard]] MultiFab snapshot() override { return MultiFab(solver_.phi()); }
+    void restore(const MultiFab& value) override { solver_.phi() = value; }
     void configure_boundary(FieldSolveConfig& plan) override {
-      if (!plan.has_boundary_kernel)
-        return;
-      auto* geometric = std::get_if<GeometricMG>(&solver_);
-      if (geometric == nullptr)
-        throw std::runtime_error("System: prepared boundary providers require GeometricMG");
-      geometric->set_boundary_context(plan.boundary_context);
+      if (plan.has_boundary_kernel)
+        solver_.set_boundary_context(plan.boundary_context);
     }
     void prepare_rhs(SystemFieldSolver& owner, MultiFab& value,
-                     const FieldSolveConfig& plan) override {
-      require_field_nullspace_compatible(value, plan.nullspace);
-      // FieldOperator authoring uses the physical ``-div(A grad phi)+kappa*phi=rhs``
-      // convention. GeometricMG/FFT carry the historical internal
-      // ``div(A grad phi)-kappa*phi=rhs_native`` residual, so builtin routes consume the
-      // opposite RHS. External components receive the public convention directly.
+                     const FieldSolveConfig&, FieldNullspaceWorkspace& nullspace) override {
+      nullspace.require_compatible(value);
       scale(value, Real(-1) / owner.p_eps_);
     }
-    SolveReport solve(SystemFieldSolver&, const FieldSolveConfig& plan) override {
-      return std::visit(
-          [&plan](auto& solver) {
-            using T = std::decay_t<decltype(solver)>;
-            if constexpr (std::is_same_v<T, GeometricMG>) {
-              if (plan.has_boundary_kernel && plan.boundary_kernel.observes_iteration)
-                solver.solve();
-              else
-                solver.solve(plan.mg_opts.rel_tol, plan.mg_opts.max_cycles, plan.mg_opts.abs_tol);
-              return solver.last_solve_report();
-            } else {
-              solver.solve();
-              SolveReport direct;
-              direct.mark_solved();
-              return direct;
-            }
-          },
-          solver_);
+    SolveReport solve(SystemFieldSolver&) override {
+      if (boundary_observes_iteration_)
+        solver_.solve();
+      else
+        solver_.solve(solve_controls_.rel_tol, solve_controls_.max_cycles, solve_controls_.abs_tol);
+      return solver_.last_solve_report();
     }
-    void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan) override {
-      apply_field_gauge(phi(), plan.nullspace);
+    void finalize(SystemFieldSolver&, const FieldSolveConfig&,
+                  FieldNullspaceWorkspace& nullspace) override {
+      nullspace.apply_gauge(solver_.phi());
+    }
+    void set_scalar_coefficient(const MultiFab& coefficient) {
+      solver_.set_epsilon(coefficient);
+    }
+    void set_diagonal_tensor_coefficient(const MultiFab& x, const MultiFab& y) {
+      solver_.set_epsilon_anisotropic(x, y);
+    }
+    void set_full_tensor_coefficient(const MultiFab& xx, const MultiFab& xy, const MultiFab& yx,
+                                     const MultiFab& yy) {
+      solver_.set_epsilon_anisotropic(xx, yy);
+      solver_.set_cross_terms(xy, yx);
+    }
+    void set_reaction_coefficient(const MultiFab& coefficient) {
+      solver_.set_reaction(coefficient);
+    }
+    void set_reaction_coefficient(ScalarFieldProvider2D coefficient) {
+      solver_.set_reaction(std::move(coefficient));
+    }
+    void set_dynamic_boundary(const CompiledFieldBoundaryKernel& kernel,
+                              const FieldBoundaryExecutionContext& context) {
+      solver_.set_boundary_kernel(kernel, context);
+      boundary_observes_iteration_ = kernel.observes_iteration;
+    }
+    void set_nonlinear_boundary(const FieldNewtonOptions& options) {
+      solver_.set_field_newton_options(options);
+    }
+    void reset_diagnostics() override { solver_.reset_diagnostics(); }
+    [[nodiscard]] RuntimeDiagnosticsReport diagnostics_report() const override {
+      return solver_.diagnostics_report();
+    }
+    [[nodiscard]] runtime::system::EllipticBackendMetrics metrics() const noexcept override {
+      return {solver_.last_cycles(), 0, solver_.num_levels(), solver_.last_bottom_seconds()};
+    }
+    [[nodiscard]] const EllipticOperatorContract* operator_contract() const noexcept override {
+      return &operator_contract_;
     }
     [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow> topology_report()
         const override {
@@ -430,10 +552,94 @@ class SystemFieldSolver {
         return {};
       return {{"builtin:domain", topology_digest_, topology_provenance_, material_points_, 1}};
     }
-    GeometricMG* geometric() { return std::get_if<GeometricMG>(&solver_); }
+
+   private:
+    GeometricMG solver_;
+    EllipticOperatorContract operator_contract_;
+    std::string provider_identity_;
+    std::string provider_contract_;
+    GeometricMgOptions solve_controls_{};
+    bool boundary_observes_iteration_ = false;
+    std::string topology_digest_;
+    std::string topology_provenance_;
+    std::size_t material_points_ = 0;
+  };
+
+  template <class Solver>
+  class DirectPreparedBackend final : public NamedFieldBackend {
+   public:
+    template <class... Args>
+    DirectPreparedBackend(std::string provider_identity, std::string provider_contract,
+                          std::string exact_configuration_contract, std::string topology_digest,
+                          std::string topology_provenance, std::size_t material_points,
+                          Args&&... args)
+        : solver_(std::forward<Args>(args)...),
+          provider_identity_(std::move(provider_identity)),
+          provider_contract_(std::move(provider_contract)),
+          topology_digest_(std::move(topology_digest)),
+          topology_provenance_(std::move(topology_provenance)),
+          material_points_(material_points) {
+      operator_contract_ = compose_provider_operator_contract_(
+          provider_identity_, solver_.prepared_operator_contract(), exact_configuration_contract);
+    }
+
+    [[nodiscard]] std::string_view provider_identity() const noexcept override {
+      return provider_identity_;
+    }
+    [[nodiscard]] std::uint64_t provider_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view provider_contract() const noexcept override {
+      return provider_contract_;
+    }
+    MultiFab& rhs() override { return solver_.rhs(); }
+    MultiFab& phi() override { return solver_.phi(); }
+    [[nodiscard]] const Geometry& geometry() const noexcept override { return solver_.geom(); }
+    [[nodiscard]] FieldDistribution field_distribution() const noexcept override {
+      return solver_.field_distribution();
+    }
+    [[nodiscard]] MultiFab snapshot() override { return MultiFab(solver_.phi()); }
+    void restore(const MultiFab& value) override { solver_.phi() = value; }
+    void configure_boundary(FieldSolveConfig& plan) override {
+      if (plan.has_boundary_kernel)
+        throw std::logic_error(
+            "direct elliptic backend received a dynamic boundary after request validation");
+    }
+    void prepare_rhs(SystemFieldSolver& owner, MultiFab& value,
+                     const FieldSolveConfig&, FieldNullspaceWorkspace& nullspace) override {
+      nullspace.require_compatible(value);
+      scale(value, Real(-1) / owner.p_eps_);
+    }
+    SolveReport solve(SystemFieldSolver&) override {
+      solver_.solve();
+      SolveReport report;
+      report.mark_solved();
+      return report;
+    }
+    void finalize(SystemFieldSolver&, const FieldSolveConfig&,
+                  FieldNullspaceWorkspace& nullspace) override {
+      nullspace.apply_gauge(solver_.phi());
+    }
+    void reset_diagnostics() override {}
+    [[nodiscard]] RuntimeDiagnosticsReport diagnostics_report() const override {
+      return make_runtime_diagnostics_report("pops.runtime.direct_elliptic_backend");
+    }
+    [[nodiscard]] runtime::system::EllipticBackendMetrics metrics() const noexcept override {
+      return {};
+    }
+    [[nodiscard]] const EllipticOperatorContract* operator_contract() const noexcept override {
+      return &operator_contract_;
+    }
+    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow> topology_report()
+        const override {
+      if (topology_digest_.empty() || topology_provenance_.empty())
+        return {};
+      return {{"builtin:domain", topology_digest_, topology_provenance_, material_points_, 1}};
+    }
 
    private:
     Solver solver_;
+    EllipticOperatorContract operator_contract_;
+    std::string provider_identity_;
+    std::string provider_contract_;
     std::string topology_digest_;
     std::string topology_provenance_;
     std::size_t material_points_ = 0;
@@ -442,15 +648,31 @@ class SystemFieldSolver {
   class ExternalNamedFieldBackend final : public NamedFieldBackend {
    public:
     ExternalNamedFieldBackend(
-        const BoxArray& boxes, const DistributionMapping& mapping,
+        const Geometry& geometry, const BoxArray& boxes, const DistributionMapping& mapping,
+        int rhs_ghosts, int phi_ghosts,
         std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component)
-        : rhs_(boxes, mapping, 1, 1), phi_(boxes, mapping, 1, 1), component_(std::move(component)) {
+        : geometry_(geometry),
+          rhs_(boxes, mapping, 1, rhs_ghosts),
+          phi_(boxes, mapping, 1, phi_ghosts),
+          component_(std::move(component)) {
       if (!component_)
         throw std::invalid_argument("external named field backend has no component pair");
     }
 
+    [[nodiscard]] std::string_view provider_identity() const noexcept override {
+      return component_->provider_identity();
+    }
+    [[nodiscard]] std::uint64_t provider_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view provider_contract() const noexcept override {
+      return component_->collective_contract();
+    }
+
     MultiFab& rhs() override { return rhs_; }
     MultiFab& phi() override { return phi_; }
+    [[nodiscard]] const Geometry& geometry() const noexcept override { return geometry_; }
+    [[nodiscard]] FieldDistribution field_distribution() const noexcept override {
+      return FieldDistribution::Distributed;
+    }
     [[nodiscard]] MultiFab snapshot() override { return MultiFab(phi_); }
     void restore(const MultiFab& value) override { phi_ = value; }
     void configure_boundary(FieldSolveConfig& plan) override {
@@ -459,20 +681,31 @@ class SystemFieldSolver {
             "System: external FieldSolver v2 cannot consume generated dynamic boundary kernels");
     }
     void prepare_rhs(SystemFieldSolver& owner, MultiFab& value,
-                     const FieldSolveConfig& plan) override {
-      require_field_nullspace_compatible(value, plan.nullspace);
+                     const FieldSolveConfig&, FieldNullspaceWorkspace& nullspace) override {
+      nullspace.require_compatible(value);
       if (owner.p_eps_ != Real(1))
         scale(value, Real(1) / owner.p_eps_);
     }
-    SolveReport solve(SystemFieldSolver& owner, const FieldSolveConfig&) override {
+    SolveReport solve(SystemFieldSolver& owner) override {
       return component_->solve(rhs_, phi_, owner.owner_->geom, owner.owner_->per_);
     }
-    void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan) override {
-      apply_field_gauge(phi_, plan.nullspace);
+    void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan,
+                  FieldNullspaceWorkspace& nullspace) override {
+      nullspace.apply_gauge(phi_);
       if (owner.owner_->periodic_)
         fill_boundary(phi_, owner.owner_->dom, owner.owner_->per_);
       else
         fill_ghosts(phi_, owner.owner_->dom, owner.named_field_bc(plan));
+    }
+    void reset_diagnostics() override {}
+    [[nodiscard]] RuntimeDiagnosticsReport diagnostics_report() const override {
+      return make_runtime_diagnostics_report("pops.runtime.external_elliptic_backend");
+    }
+    [[nodiscard]] runtime::system::EllipticBackendMetrics metrics() const noexcept override {
+      return {};
+    }
+    [[nodiscard]] const EllipticOperatorContract* operator_contract() const noexcept override {
+      return nullptr;
     }
     [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow> topology_report()
         const override {
@@ -480,10 +713,675 @@ class SystemFieldSolver {
     }
 
    private:
+    Geometry geometry_;
     MultiFab rhs_;
     MultiFab phi_;
     std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component_;
   };
+
+  struct EllipticBackendBuildRequest {
+    EllipticBuildRequest elliptic;
+    MaterializedDiffusionCoefficient diffusion_coefficient{};
+    std::optional<MultiFab> reaction_coefficient;
+    std::optional<CompiledFieldBoundaryKernel> dynamic_boundary;
+    FieldBoundaryExecutionContext boundary_context{};
+    std::optional<FieldNewtonOptions> nonlinear_boundary;
+    std::string topology_digest;
+    std::string topology_provenance;
+    std::size_t material_points = 0;
+    bool require_exact_operator_contract = true;
+    std::string exact_configuration_contract;
+  };
+
+  class EllipticBackendProvider {
+   public:
+    virtual ~EllipticBackendProvider() = default;
+    [[nodiscard]] virtual std::string_view identity() const noexcept = 0;
+    [[nodiscard]] virtual std::uint64_t interface_version() const noexcept = 0;
+    [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
+    /// Opaque declarations used for authentication and inspection only.  The registry never
+    /// assigns semantics to an entry; supports(request) is the sole compatibility authority.
+    [[nodiscard]] virtual std::vector<std::string> capability_contracts() const = 0;
+    [[nodiscard]] virtual PreparedProviderSupport supports(
+        const EllipticBackendBuildRequest& request) const noexcept = 0;
+    virtual void write_effective_options(EffectivePoissonOptions&) const = 0;
+    [[nodiscard]] virtual std::unique_ptr<EllipticBackendProvider> configured(
+        std::string identity, const PreparedProviderOptions& options) const = 0;
+    [[nodiscard]] virtual std::optional<EllipticOperatorContract> expected_operator_contract(
+        const EllipticBuildRequest&) const = 0;
+    [[nodiscard]] virtual std::unique_ptr<NamedFieldBackend> prepare(
+        EllipticBackendBuildRequest) const = 0;
+  };
+
+  class GeometricMgBackendProvider final : public EllipticBackendProvider {
+   public:
+    GeometricMgBackendProvider(std::string identity, const PreparedProviderOptions& options)
+        : identity_(std::move(identity)),
+          options_contract_(options.exact_contract()),
+          options_(decode_options_(options)) {
+      if (identity_.empty())
+        throw std::invalid_argument("geometric-MG provider requires an exact identity");
+      ExactContractBuilder contract;
+      contract.text("pops.runtime.geometric-mg-provider")
+          .scalar(std::uint32_t{1})
+          .text(identity_)
+          .bytes(options_contract_);
+      collective_contract_ = std::move(contract).release();
+    }
+
+    [[nodiscard]] std::string_view identity() const noexcept override { return identity_; }
+    [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view collective_contract() const noexcept override {
+      return collective_contract_;
+    }
+    [[nodiscard]] std::vector<std::string> capability_contracts() const override { return {}; }
+    [[nodiscard]] PreparedProviderSupport supports(
+        const EllipticBackendBuildRequest&) const noexcept override {
+      return PreparedProviderSupport::accept();
+    }
+
+    void write_effective_options(EffectivePoissonOptions& report) const override {
+      report.rel_tol = static_cast<double>(options_.rel_tol);
+      report.abs_tol = static_cast<double>(options_.abs_tol);
+      report.max_cycles = options_.max_cycles;
+      report.min_coarse = options_.min_coarse;
+      report.pre_smooth = options_.nu1;
+      report.post_smooth = options_.nu2;
+      report.bottom_sweeps = options_.nbottom;
+      report.coarse_threshold = options_.coarse_threshold;
+    }
+
+    [[nodiscard]] std::unique_ptr<EllipticBackendProvider> configured(
+        std::string identity, const PreparedProviderOptions& options) const override {
+      return std::make_unique<GeometricMgBackendProvider>(std::move(identity), options);
+    }
+
+    [[nodiscard]] std::optional<EllipticOperatorContract> expected_operator_contract(
+        const EllipticBuildRequest& request) const override {
+      return GeometricMG::expected_operator_contract(
+          request, options_.min_coarse, options_.nu1, options_.nu2, options_.nbottom, false, {},
+          kEbCutFractionFloor, options_.coarse_threshold);
+    }
+
+    [[nodiscard]] std::unique_ptr<NamedFieldBackend> prepare(
+        EllipticBackendBuildRequest request) const override {
+      auto backend = std::make_unique<GeometricMgPreparedBackend>(
+          std::string(identity()), collective_contract_, options_, request.exact_configuration_contract,
+          std::move(request.topology_digest),
+          std::move(request.topology_provenance), request.material_points,
+          request.elliptic.geometry, request.elliptic.boxes, request.elliptic.mapping,
+          request.elliptic.boundary, std::move(request.elliptic.active), options_.min_coarse,
+          options_.nu1, options_.nu2, options_.nbottom, options_.coarse_threshold,
+          request.elliptic.distribution);
+      if (const auto* scalar =
+              std::get_if<ScalarDiffusionCoefficient<MultiFab>>(&request.diffusion_coefficient))
+        backend->set_scalar_coefficient(scalar->value);
+      else if (const auto* diagonal =
+                   std::get_if<DiagonalDiffusionCoefficient<MultiFab>>(
+                       &request.diffusion_coefficient))
+        backend->set_diagonal_tensor_coefficient(diagonal->x, diagonal->y);
+      else if (const auto* tensor =
+                   std::get_if<FullTensorDiffusionCoefficient<MultiFab>>(
+                       &request.diffusion_coefficient))
+        backend->set_full_tensor_coefficient(tensor->xx, tensor->xy, tensor->yx, tensor->yy);
+      if (request.reaction_coefficient)
+        backend->set_reaction_coefficient(*request.reaction_coefficient);
+      if (request.dynamic_boundary)
+        backend->set_dynamic_boundary(*request.dynamic_boundary, request.boundary_context);
+      if (request.nonlinear_boundary)
+        backend->set_nonlinear_boundary(*request.nonlinear_boundary);
+      return backend;
+    }
+
+   private:
+    template <class Value>
+    [[nodiscard]] static Value option_(const PreparedProviderOptions& options,
+                                       std::string_view name) {
+      const auto found = options.values.find(std::string(name));
+      if (found == options.values.end() || !std::holds_alternative<Value>(found->second))
+        throw std::invalid_argument("geometric-MG provider option '" + std::string(name) +
+                                    "' is missing or has the wrong exact type");
+      return std::get<Value>(found->second);
+    }
+
+    [[nodiscard]] static int int_option_(const PreparedProviderOptions& options,
+                                         std::string_view name) {
+      const std::int64_t value = option_<std::int64_t>(options, name);
+      if (value < static_cast<std::int64_t>(std::numeric_limits<int>::min()) ||
+          value > static_cast<std::int64_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("geometric-MG provider option '" + std::string(name) +
+                                    "' is outside the native integer range");
+      return static_cast<int>(value);
+    }
+
+    [[nodiscard]] static GeometricMgOptions decode_options_(
+        const PreparedProviderOptions& options) {
+      if (options.schema_identity != "pops.system.geometric-mg-options@1" ||
+          options.values.size() != 8)
+        throw std::invalid_argument("geometric-MG provider received an incompatible option schema");
+      GeometricMgOptions decoded;
+      decoded.rel_tol = static_cast<Real>(option_<double>(options, "rel_tol"));
+      decoded.abs_tol = static_cast<Real>(option_<double>(options, "abs_tol"));
+      decoded.max_cycles = int_option_(options, "max_cycles");
+      decoded.min_coarse = int_option_(options, "min_coarse");
+      decoded.nu1 = int_option_(options, "pre_smooth");
+      decoded.nu2 = int_option_(options, "post_smooth");
+      decoded.nbottom = int_option_(options, "bottom_sweeps");
+      decoded.coarse_threshold = int_option_(options, "coarse_threshold");
+      if (!std::isfinite(static_cast<double>(decoded.rel_tol)) || decoded.rel_tol <= Real(0) ||
+          !std::isfinite(static_cast<double>(decoded.abs_tol)) || decoded.abs_tol < Real(0) ||
+          decoded.max_cycles < 1 || decoded.min_coarse < 1 || decoded.nu1 < 0 ||
+          decoded.nu2 < 0 || decoded.nbottom < 0 || decoded.coarse_threshold < 0)
+        throw std::invalid_argument("geometric-MG provider options are outside their exact domain");
+      return decoded;
+    }
+
+    std::string identity_;
+    std::string options_contract_;
+    GeometricMgOptions options_;
+    std::string collective_contract_;
+  };
+
+  template <class Solver>
+  static std::unique_ptr<NamedFieldBackend> make_fft_backend_(
+      const EllipticBackendBuildRequest& request, std::string_view identity,
+      std::string_view provider_contract, bool spectral) {
+    return std::make_unique<DirectPreparedBackend<Solver>>(
+        std::string(identity), std::string(provider_contract), request.exact_configuration_contract,
+        request.topology_digest, request.topology_provenance, request.material_points,
+        request.elliptic.geometry, request.elliptic.boxes, request.elliptic.boundary,
+        request.elliptic.active, spectral);
+  }
+
+  class FftBackendProvider final : public EllipticBackendProvider {
+   public:
+    FftBackendProvider(std::string identity, const PreparedProviderOptions& options)
+        : identity_(std::move(identity)),
+          options_contract_(options.exact_contract()),
+          spectral_(decode_spectral_(options)) {
+      if (identity_.empty())
+        throw std::invalid_argument("FFT provider requires an exact identity");
+      ExactContractBuilder contract;
+      contract.text("pops.runtime.fft-provider")
+          .scalar(std::uint32_t{1})
+          .text(identity_)
+          .bytes(options_contract_);
+      collective_contract_ = std::move(contract).release();
+    }
+
+    [[nodiscard]] std::string_view identity() const noexcept override { return identity_; }
+    [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view collective_contract() const noexcept override {
+      return collective_contract_;
+    }
+    [[nodiscard]] std::vector<std::string> capability_contracts() const override { return {}; }
+    [[nodiscard]] PreparedProviderSupport supports(
+        const EllipticBackendBuildRequest& request) const noexcept override {
+      if (request.elliptic.active)
+        return PreparedProviderSupport::reject(
+            1, "FFT provider does not accept an active-region field");
+      if (!std::holds_alternative<std::monostate>(request.diffusion_coefficient))
+        return PreparedProviderSupport::reject(
+            2, "FFT provider does not accept a materialized diffusion coefficient");
+      if (request.reaction_coefficient)
+        return PreparedProviderSupport::reject(
+            4, "FFT provider does not accept a reaction coefficient field");
+      if (request.dynamic_boundary)
+        return PreparedProviderSupport::reject(
+            5, "FFT provider does not accept a generated dynamic boundary");
+      if (request.nonlinear_boundary)
+        return PreparedProviderSupport::reject(
+            6, "FFT provider does not accept a nonlinear boundary solve");
+      const BCRec& boundary = request.elliptic.boundary;
+      if (boundary.xlo != BCType::Periodic || boundary.xhi != BCType::Periodic ||
+          boundary.ylo != BCType::Periodic || boundary.yhi != BCType::Periodic)
+        return PreparedProviderSupport::reject(
+            7, "FFT provider requires periodic physical boundaries");
+      return PreparedProviderSupport::accept();
+    }
+    void write_effective_options(EffectivePoissonOptions&) const override {}
+    [[nodiscard]] std::unique_ptr<EllipticBackendProvider> configured(
+        std::string identity, const PreparedProviderOptions& options) const override {
+      return std::make_unique<FftBackendProvider>(std::move(identity), options);
+    }
+
+    [[nodiscard]] std::optional<EllipticOperatorContract> expected_operator_contract(
+        const EllipticBuildRequest& request) const override {
+      if (n_ranks() > 1)
+        return RemappedFFTSolver::expected_operator_contract(request, spectral_);
+      return PoissonFFTSolver::expected_operator_contract(request, spectral_);
+    }
+
+    [[nodiscard]] std::unique_ptr<NamedFieldBackend> prepare(
+        EllipticBackendBuildRequest request) const override {
+      // The provider owns this backend-specific layout choice.  SystemFieldSolver sees one provider
+      // identity and one capability contract regardless of communicator size.
+      if (n_ranks() > 1)
+        return make_fft_backend_<RemappedFFTSolver>(request, identity(), collective_contract(),
+                                                    spectral_);
+      return make_fft_backend_<PoissonFFTSolver>(request, identity(), collective_contract(),
+                                                 spectral_);
+    }
+
+   private:
+    [[nodiscard]] static bool decode_spectral_(const PreparedProviderOptions& options) {
+      const auto spectral = options.values.find("spectral");
+      if (options.schema_identity != "pops.system.fft-options@1" ||
+          options.values.size() != 1 || spectral == options.values.end() ||
+          !std::holds_alternative<bool>(spectral->second))
+        throw std::invalid_argument("FFT provider received an incompatible option schema");
+      return std::get<bool>(spectral->second);
+    }
+
+    std::string identity_;
+    std::string options_contract_;
+    bool spectral_ = false;
+    std::string collective_contract_;
+  };
+
+  class ExternalComponentBackendProvider final : public EllipticBackendProvider {
+   public:
+    explicit ExternalComponentBackendProvider(
+        std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component)
+        : component_(std::move(component)) {
+      if (!component_)
+        throw std::invalid_argument("external elliptic provider requires a prepared component");
+    }
+
+    [[nodiscard]] std::string_view identity() const noexcept override {
+      return component_->provider_identity();
+    }
+    [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
+    [[nodiscard]] std::string_view collective_contract() const noexcept override {
+      return component_->collective_contract();
+    }
+    [[nodiscard]] std::vector<std::string> capability_contracts() const override { return {}; }
+    [[nodiscard]] PreparedProviderSupport supports(
+        const EllipticBackendBuildRequest& request) const noexcept override {
+      if (request.elliptic.active)
+        return PreparedProviderSupport::reject(
+            1, "external field component does not accept an active-region field");
+      if (!std::holds_alternative<std::monostate>(request.diffusion_coefficient))
+        return PreparedProviderSupport::reject(
+            2, "external field component does not accept a materialized diffusion coefficient");
+      if (request.reaction_coefficient)
+        return PreparedProviderSupport::reject(
+            4, "external field component does not accept a reaction coefficient field");
+      if (request.dynamic_boundary)
+        return PreparedProviderSupport::reject(
+            5, "external field component does not accept a generated dynamic boundary");
+      if (request.nonlinear_boundary)
+        return PreparedProviderSupport::reject(
+            6, "external field component does not accept a nonlinear boundary solve");
+      if (request.require_exact_operator_contract)
+        return PreparedProviderSupport::reject(
+            7, "external field component does not publish an exact operator contract");
+      const BCRec& boundary = request.elliptic.boundary;
+      if (boundary.xlo != BCType::Periodic || boundary.xhi != BCType::Periodic ||
+          boundary.ylo != BCType::Periodic || boundary.yhi != BCType::Periodic)
+        return PreparedProviderSupport::reject(
+            8, "external field component requires periodic physical boundaries");
+      return PreparedProviderSupport::accept();
+    }
+    void write_effective_options(EffectivePoissonOptions&) const override {}
+    [[nodiscard]] std::unique_ptr<EllipticBackendProvider> configured(
+        std::string, const PreparedProviderOptions& options) const override {
+      if (options.schema_identity != "pops.system.prepared-provider-reference@1" ||
+          !options.values.empty())
+        throw std::invalid_argument(
+            "external field providers are already exact and accept only a reference schema");
+      return std::make_unique<ExternalComponentBackendProvider>(component_);
+    }
+    [[nodiscard]] std::optional<EllipticOperatorContract> expected_operator_contract(
+        const EllipticBuildRequest&) const override {
+      return std::nullopt;
+    }
+    [[nodiscard]] std::unique_ptr<NamedFieldBackend> prepare(
+        EllipticBackendBuildRequest request) const override {
+      return std::make_unique<ExternalNamedFieldBackend>(
+          request.elliptic.geometry, request.elliptic.boxes, request.elliptic.mapping,
+          request.elliptic.rhs_ghosts, request.elliptic.phi_ghosts, component_);
+    }
+
+   private:
+    std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component_;
+  };
+
+  class EllipticBackendRegistry {
+   public:
+    void add(std::unique_ptr<EllipticBackendProvider> provider) {
+      if (!provider)
+        throw std::invalid_argument("elliptic backend registry requires a provider");
+      add(std::string(provider->identity()), std::move(provider));
+    }
+
+    void add(std::string route, std::unique_ptr<EllipticBackendProvider> provider) {
+      if (route.empty() || !provider || provider->identity().empty() ||
+          provider->interface_version() == 0 || provider->collective_contract().empty())
+        throw std::invalid_argument("elliptic backend registry requires a named provider");
+      (void)exact_provider_declaration_(*provider);
+      if (!providers_.emplace(route, std::move(provider)).second)
+        throw std::invalid_argument("duplicate elliptic backend provider route '" + route +
+                                    "'");
+    }
+
+    void replace(std::string route, std::unique_ptr<EllipticBackendProvider> provider) {
+      if (route.empty() || !provider || provider->identity().empty() ||
+          provider->interface_version() == 0 || provider->collective_contract().empty())
+        throw std::invalid_argument("elliptic backend registry requires a named provider");
+      (void)exact_provider_declaration_(*provider);
+      providers_.insert_or_assign(std::move(route), std::move(provider));
+    }
+
+    [[nodiscard]] bool contains(std::string_view route) const {
+      return providers_.find(std::string(route)) != providers_.end();
+    }
+
+    [[nodiscard]] std::string add_configured(std::string_view family_route,
+                                             std::string instance_route,
+                                             const PreparedProviderOptions& options) {
+      const auto family = providers_.find(std::string(family_route));
+      if (family == providers_.end())
+        throw std::invalid_argument("unknown elliptic provider family route '" +
+                                    std::string(family_route) + "'");
+      const std::string option_contract = options.exact_contract();
+      const std::vector<std::uint8_t> option_bytes(option_contract.begin(), option_contract.end());
+      const std::string configured_identity =
+          std::string(family->second->identity()) + ":configured:sha256:" +
+          identity::sha256_hex(option_bytes);
+      auto provider = family->second->configured(configured_identity, options);
+      const std::string exact_identity(provider->identity());
+      add(std::move(instance_route), std::move(provider));
+      return exact_identity;
+    }
+
+    void reconfigure(std::string_view route, const PreparedProviderOptions& options) {
+      const auto found = providers_.find(std::string(route));
+      if (found == providers_.end())
+        throw std::invalid_argument("unknown elliptic provider route '" + std::string(route) +
+                                    "'");
+      const std::string identity(found->second->identity());
+      auto provider = found->second->configured(identity, options);
+      replace(std::string(route), std::move(provider));
+    }
+
+    void write_effective_options(std::string_view route, EffectivePoissonOptions& report) const {
+      const auto found = providers_.find(std::string(route));
+      if (found == providers_.end())
+        throw std::invalid_argument("unknown elliptic backend provider route '" +
+                                    std::string(route) + "'");
+      found->second->write_effective_options(report);
+    }
+
+    [[nodiscard]] std::unique_ptr<NamedFieldBackend> prepare(
+        std::string_view identity, EllipticBackendBuildRequest request) const {
+      request.elliptic.boundary.dx = request.elliptic.geometry.dx();
+      request.elliptic.boundary.dy = request.elliptic.geometry.dy();
+      const bool valid_configuration_shape =
+          !request.nonlinear_boundary || request.dynamic_boundary;
+      const long invalid_request = all_reduce_max(
+          detail::elliptic_build_request_is_valid(request.elliptic, my_rank(), n_ranks()) &&
+                  valid_configuration_shape
+              ? 0L
+              : 1L);
+      if (invalid_request != 0)
+        throw std::invalid_argument(
+            "elliptic backend registry received an invalid construction request");
+      const std::string construction_contract =
+          detail::elliptic_build_request_contract(request.elliptic);
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("provider-identity"), identity},
+               {std::string_view("construction"), construction_contract},
+               {std::string_view("configuration"), request.exact_configuration_contract}}))
+        throw std::invalid_argument("elliptic provider request differs between communicator ranks");
+
+      const auto found = providers_.find(std::string(identity));
+      const long provider_missing = all_reduce_max(found == providers_.end() ? 1L : 0L);
+      if (provider_missing != 0)
+        throw std::invalid_argument("unknown elliptic backend provider '" + std::string(identity) +
+                                    "' (registered: " + registered_identities_() + ")");
+      const bool require_exact_operator_contract = request.require_exact_operator_contract;
+      std::optional<EllipticOperatorContract> expected_operator_contract;
+      PreparedProviderSupport support;
+      std::string provider_declaration_contract;
+      std::string exact_support_contract;
+      std::string support_reason;
+      bool local_declaration_failed = false;
+      try {
+        provider_declaration_contract = exact_provider_declaration_(*found->second);
+        support = found->second->supports(request);
+        support_reason = std::string(support.reason);
+        exact_support_contract = exact_prepared_provider_support(support);
+        if (support.accepted()) {
+          const auto base_contract = found->second->expected_operator_contract(request.elliptic);
+          if (base_contract) {
+            if (!base_contract->valid())
+              throw std::invalid_argument(
+                  "elliptic provider returned an invalid expected operator contract");
+            expected_operator_contract = compose_provider_operator_contract_(
+                found->second->identity(), *base_contract,
+                request.exact_configuration_contract);
+          }
+        }
+      } catch (...) {
+        local_declaration_failed = true;
+      }
+      if (all_reduce_max(local_declaration_failed ? 1L : 0L) != 0)
+        throw std::runtime_error(
+            "elliptic provider declaration failed on at least one communicator rank");
+      ExactContractBuilder support_declaration;
+      support_declaration.bytes(provider_declaration_contract)
+          .bytes(exact_support_contract)
+          .presence(expected_operator_contract.has_value());
+      if (expected_operator_contract)
+        support_declaration.bytes(expected_operator_contract->exact_fingerprint());
+      const std::string support_declaration_contract =
+          std::move(support_declaration).release();
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("provider-support"), support_declaration_contract}}))
+        throw std::runtime_error(
+            "elliptic provider declaration differs between communicator ranks");
+      if (!support.accepted())
+        throw std::invalid_argument("elliptic provider '" + std::string(identity) +
+                                    "' rejected request (code " +
+                                    std::to_string(support.code) + "): " + support_reason);
+      if (require_exact_operator_contract && !expected_operator_contract)
+        throw std::runtime_error(
+            "elliptic provider accepted a request requiring an exact operator contract but "
+            "published none");
+
+      const Geometry expected_geometry = request.elliptic.geometry;
+      const auto expected_boxes = request.elliptic.boxes.boxes();
+      const auto expected_owners = request.elliptic.mapping.ranks();
+      const FieldDistribution expected_distribution = request.elliptic.distribution;
+      const int expected_rhs_ghosts = request.elliptic.rhs_ghosts;
+      const int expected_phi_ghosts = request.elliptic.phi_ghosts;
+      std::unique_ptr<NamedFieldBackend> backend;
+      bool local_build_failed = false;
+      try {
+        backend = found->second->prepare(std::move(request));
+        local_build_failed = !backend;
+      } catch (...) {
+        local_build_failed = true;
+      }
+      if (all_reduce_max(local_build_failed ? 1L : 0L) != 0)
+        throw std::runtime_error(
+            "elliptic provider construction failed on at least one communicator rank");
+
+      bool local_inspection_failed = false;
+      bool local_materialization_mismatch = false;
+      std::string actual_identity;
+      std::uint64_t actual_provider_version = 0;
+      std::string actual_provider_contract;
+      std::string actual_operator_contract;
+      std::string rhs_layout_contract;
+      std::string phi_layout_contract;
+      try {
+        actual_identity = backend->provider_identity();
+        actual_provider_version = backend->provider_version();
+        actual_provider_contract = backend->provider_contract();
+        MultiFab& rhs = backend->rhs();
+        MultiFab& phi = backend->phi();
+        const auto* actual_contract = backend->operator_contract();
+        const bool actual_contract_present = actual_contract != nullptr;
+        if (actual_contract_present)
+          actual_operator_contract = std::string(actual_contract->exact_fingerprint());
+        const auto field_mismatch = [&](const MultiFab& field, int expected_ghosts) {
+          return field.box_array().boxes() != expected_boxes ||
+                 field.dmap().ranks() != expected_owners || field.ncomp() != 1 ||
+                 field.n_grow() != expected_ghosts ||
+                 !detail::field_distribution_layout_matches(field, expected_distribution);
+        };
+        local_materialization_mismatch =
+            actual_contract_present != expected_operator_contract.has_value() ||
+            (actual_contract_present &&
+             (actual_operator_contract.empty() ||
+              actual_operator_contract != expected_operator_contract->exact_fingerprint())) ||
+            backend->field_distribution() != expected_distribution ||
+            field_mismatch(rhs, expected_rhs_ghosts) ||
+            field_mismatch(phi, expected_phi_ghosts) || rhs.shares_storage_with(phi) ||
+            !detail::elliptic_geometry_exactly_matches(backend->geometry(), expected_geometry);
+        rhs_layout_contract =
+            detail::field_distribution_layout_contract(rhs, expected_distribution);
+        phi_layout_contract =
+            detail::field_distribution_layout_contract(phi, expected_distribution);
+        local_materialization_mismatch =
+            local_materialization_mismatch || actual_identity != found->second->identity() ||
+            actual_provider_version != found->second->interface_version() ||
+            actual_provider_contract != found->second->collective_contract();
+      } catch (...) {
+        local_inspection_failed = true;
+      }
+      if (all_reduce_max(local_inspection_failed ? 1L : 0L) != 0)
+        throw std::runtime_error(
+            "elliptic provider inspection failed on at least one communicator rank");
+      if (all_reduce_max(local_materialization_mismatch ? 1L : 0L) != 0)
+        throw std::runtime_error(
+            "elliptic provider materialized a backend that diverges from its exact contract");
+      ExactContractBuilder actual_provider_declaration;
+      actual_provider_declaration.text(actual_identity)
+          .scalar(actual_provider_version)
+          .bytes(actual_provider_contract);
+      const std::string actual_provider_declaration_contract =
+          std::move(actual_provider_declaration).release();
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("provider-materialization"),
+                actual_provider_declaration_contract},
+               {std::string_view("operator-contract"), actual_operator_contract},
+               {std::string_view("rhs-layout"), rhs_layout_contract},
+               {std::string_view("phi-layout"), phi_layout_contract}}))
+        throw std::runtime_error(
+            "elliptic provider materialization differs between communicator ranks");
+      return backend;
+    }
+
+   private:
+    [[nodiscard]] static std::string exact_provider_declaration_(
+        const EllipticBackendProvider& provider) {
+      if (provider.identity().empty() || provider.interface_version() == 0 ||
+          provider.collective_contract().empty())
+        throw std::invalid_argument("elliptic backend provider requires exact identities");
+      std::vector<std::string> capabilities = provider.capability_contracts();
+      std::sort(capabilities.begin(), capabilities.end());
+      if (std::any_of(capabilities.begin(), capabilities.end(),
+                      [](const std::string& value) { return value.empty(); }) ||
+          std::adjacent_find(capabilities.begin(), capabilities.end()) != capabilities.end())
+        throw std::invalid_argument(
+            "elliptic backend provider capabilities require unique exact identities");
+      ExactContractBuilder declaration;
+      declaration.text("pops.system.elliptic-backend-provider-declaration")
+          .scalar(std::uint32_t{1})
+          .text(provider.identity())
+          .scalar(provider.interface_version())
+          .bytes(provider.collective_contract())
+          .sequence(capabilities,
+                    [](ExactContractBuilder& item, const std::string& capability) {
+                      item.text(capability);
+                    });
+      return std::move(declaration).release();
+    }
+
+    [[nodiscard]] std::string registered_identities_() const {
+      std::string result;
+      for (const auto& [identity, provider] : providers_) {
+        if (!result.empty())
+          result += "|";
+        result += identity;
+      }
+      return result;
+    }
+
+    std::map<std::string, std::unique_ptr<EllipticBackendProvider>> providers_;
+  };
+
+  [[nodiscard]] static std::unique_ptr<EllipticBackendProvider> geometric_mg_provider(
+      std::string identity, const PreparedProviderOptions& options) {
+    return std::make_unique<GeometricMgBackendProvider>(std::move(identity), options);
+  }
+
+  [[nodiscard]] static PreparedProviderOptions geometric_mg_provider_options(
+      const GeometricMgOptions& options) {
+    return {"pops.system.geometric-mg-options@1",
+            {{"abs_tol", static_cast<double>(options.abs_tol)},
+             {"bottom_sweeps", static_cast<std::int64_t>(options.nbottom)},
+             {"coarse_threshold", static_cast<std::int64_t>(options.coarse_threshold)},
+             {"max_cycles", static_cast<std::int64_t>(options.max_cycles)},
+             {"min_coarse", static_cast<std::int64_t>(options.min_coarse)},
+             {"post_smooth", static_cast<std::int64_t>(options.nu2)},
+             {"pre_smooth", static_cast<std::int64_t>(options.nu1)},
+             {"rel_tol", static_cast<double>(options.rel_tol)}}};
+  }
+
+  [[nodiscard]] static std::unique_ptr<EllipticBackendProvider> fft_provider(
+      std::string identity, const PreparedProviderOptions& options) {
+    return std::make_unique<FftBackendProvider>(std::move(identity), options);
+  }
+
+  [[nodiscard]] static PreparedProviderOptions fft_provider_options(bool spectral) {
+    return {"pops.system.fft-options@1", {{"spectral", spectral}}};
+  }
+
+  void register_elliptic_provider(std::string route,
+                                  std::unique_ptr<EllipticBackendProvider> provider) {
+    elliptic_registry_.add(std::move(route), std::move(provider));
+  }
+
+  [[nodiscard]] std::string register_configured_elliptic_provider(
+      std::string_view family_route, std::string instance_route,
+      const PreparedProviderOptions& options) {
+    return elliptic_registry_.add_configured(family_route, std::move(instance_route), options);
+  }
+
+  void reconfigure_primary_provider_preset(std::string_view route,
+                                           const PreparedProviderOptions& options) {
+    for (const auto& entry : named_field_plans_)
+      if (entry.second.backend_provider_identity == route)
+        throw std::logic_error(
+            "cannot reconfigure a primary provider preset referenced by a named field plan");
+    elliptic_registry_.reconfigure(route, options);
+    if (p_solver == route)
+      invalidate_primary_backend_();
+  }
+
+  [[nodiscard]] bool has_elliptic_provider(std::string_view route) const {
+    return elliptic_registry_.contains(route);
+  }
+
+  void write_effective_poisson_options(EffectivePoissonOptions& report) const {
+    elliptic_registry_.write_effective_options(p_solver, report);
+  }
+
+  void install_builtin_provider_presets_() {
+    const GeometricMgOptions defaults;
+    elliptic_registry_.add(
+        "geometric_mg",
+        geometric_mg_provider("pops.system.geometric-mg", geometric_mg_provider_options(defaults)));
+    elliptic_registry_.add("fft",
+                           fft_provider("pops.system.fft", fft_provider_options(false)));
+    elliptic_registry_.add(
+        "fft_spectral",
+        fft_provider("pops.system.fft-spectral", fft_provider_options(true)));
+  }
 
   struct NamedField {
     struct PreparedProvider {
@@ -501,18 +1399,119 @@ class SystemFieldSolver {
     std::unique_ptr<NamedFieldBackend> backend;
     std::optional<MultiFab> contribution_scratch;
     std::optional<MultiFab> published_phi_scratch;
+    bool nullspace_ready = false;
+    std::unique_ptr<FieldNullspaceWorkspace> nullspace_workspace;
   };
+
+  static void invalidate_named_backend_(NamedField& field) {
+    field.backend.reset();
+    field.nullspace_ready = false;
+    field.nullspace_workspace.reset();
+  }
+
+  void invalidate_primary_nullspace_() {
+    p_nullspace_ = {};
+    p_nullspace_ready_ = false;
+    p_nullspace_workspace_.reset();
+  }
+
+  void invalidate_primary_backend_() {
+    ell_.reset();
+    invalidate_primary_nullspace_();
+  }
   std::map<std::string, NamedField> named_fields_;
   // Field plans are installed before compiled block loaders register their output components.
   // Keep the exact per-provider plan independently, then attach it when register_named_field runs.
   std::map<std::string, FieldSolveConfig> named_field_plans_;
   std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
       external_field_components_;
+  EllipticBackendRegistry elliptic_registry_;
+  std::shared_ptr<FieldNullspaceProviderRegistry> nullspace_provider_registry_;
 
   /// Invalidate the collective witness after a new plan is added while the low-level C++ facade is
   /// still assembling.  Python normally validates once in System::mark_bound; the lazy-backend guard
   /// below also covers direct C++ users that intentionally never bind.
   void invalidate_field_plan_consensus() { field_plan_consensus_verified_ = false; }
+
+  static void append_boundary_contract_(ExactContractBuilder& contract, const BCRec& boundary) {
+    contract.scalar(boundary.xlo)
+        .scalar(boundary.xhi)
+        .scalar(boundary.ylo)
+        .scalar(boundary.yhi)
+        .scalar(boundary.xlo_val)
+        .scalar(boundary.xhi_val)
+        .scalar(boundary.ylo_val)
+        .scalar(boundary.yhi_val)
+        .scalar(boundary.xlo_alpha)
+        .scalar(boundary.xlo_beta)
+        .scalar(boundary.xhi_alpha)
+        .scalar(boundary.xhi_beta)
+        .scalar(boundary.ylo_alpha)
+        .scalar(boundary.ylo_beta)
+        .scalar(boundary.yhi_alpha)
+        .scalar(boundary.yhi_beta)
+        .scalar(boundary.dx)
+        .scalar(boundary.dy);
+  }
+
+  [[nodiscard]] static std::string exact_field_plan_contract_(
+      const FieldSolveConfig& plan) {
+    ExactContractBuilder contract;
+    contract.text("pops.system.native-field-plan")
+        .scalar(std::uint32_t{1})
+        .text(plan.provider_identity)
+        .text(plan.plan_identity)
+        .text(plan.output_owner_identity)
+        .text(plan.output_block)
+        .text(plan.output_key)
+        .sequence(plan.providers,
+                  [](ExactContractBuilder& item, const FieldProviderBinding& provider) {
+                    item.text(provider.identity)
+                        .text(provider.owner_block)
+                        .text(provider.native_key)
+                        .scalar(provider.coefficient);
+                  })
+        .text(plan.backend_provider_identity)
+        .text(plan.bc)
+        .presence(plan.has_explicit_bc);
+    if (plan.has_explicit_bc)
+      append_boundary_contract_(contract, plan.explicit_bc);
+    contract.presence(plan.has_boundary_kernel);
+    if (plan.has_boundary_kernel)
+      contract.text(plan.boundary_kernel.identity)
+          .text(plan.boundary_kernel.residual_identity)
+          .text(plan.boundary_kernel.jvp_identity)
+          .scalar(plan.boundary_kernel.observes_iteration);
+    if (plan.boundary_parameters)
+      contract.sequence(*plan.boundary_parameters);
+    else
+      contract.sequence(std::vector<Real>{});
+    const auto append_text = [](ExactContractBuilder& item, const std::string& value) {
+      item.text(value);
+    };
+    contract.sequence(plan.boundary_state_blocks, append_text)
+        .sequence(plan.boundary_state_components)
+        .sequence(plan.boundary_field_blocks, append_text)
+        .sequence(plan.boundary_field_keys, append_text)
+        .sequence(plan.boundary_field_components)
+        .presence(plan.has_reaction);
+    if (plan.has_reaction)
+      contract.scalar(plan.reaction);
+    contract.presence(plan.has_newton);
+    if (plan.has_newton)
+      contract.scalar(plan.newton.tolerance)
+          .scalar(static_cast<std::int64_t>(plan.newton.max_iterations))
+          .scalar(plan.newton.linear_tolerance)
+          .scalar(static_cast<std::int64_t>(plan.newton.linear_max_iterations))
+          .scalar(static_cast<std::int64_t>(plan.newton.restart))
+          .scalar(plan.newton.armijo)
+          .scalar(plan.newton.minimum_step);
+    contract.bytes(plan.nullspace_provider.exact_contract())
+        .text(plan.topology_provider_kind)
+        .text(plan.topology_provenance)
+        .text(plan.topology_digest);
+    return std::move(contract).release();
+  }
 
   /// Require exact rank agreement over the complete canonical field-plan registry.  std::map gives
   /// insertion-order-independent ordering, and the collective helper agrees every pair/component
@@ -520,11 +1519,12 @@ class SystemFieldSolver {
   void require_field_plan_consensus() {
     if (field_plan_consensus_verified_)
       return;
-    std::vector<std::pair<std::string_view, std::string_view>> identities;
-    identities.reserve(named_field_plans_.size());
+    ExactContractBuilder registry_contract;
+    registry_contract.text("pops.system.field-plan-registry").scalar(std::uint32_t{1});
     for (const auto& [slot, plan] : named_field_plans_)
-      identities.emplace_back(slot, plan.plan_identity);
-    if (!all_ranks_agree_exact_ordered_byte_pairs(identities))
+      registry_contract.text(slot).bytes(exact_field_plan_contract_(plan));
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-field-plan-registry", registry_contract.view()}}))
       throw std::runtime_error("System: ordered resolved field plans differ across MPI ranks");
     field_plan_consensus_verified_ = true;
   }
@@ -559,8 +1559,9 @@ class SystemFieldSolver {
     auto registered = named_fields_.find(slot);
     if (registered != named_fields_.end()) {
       registered->second.plan = found->second;
-      registered->second.backend.reset();
+      invalidate_named_backend_(registered->second);
     }
+    invalidate_field_plan_consensus();
   }
 
   void set_named_reaction(const std::string& slot, Real reaction) {
@@ -570,38 +1571,137 @@ class SystemFieldSolver {
     auto found = named_field_plans_.find(slot);
     if (found == named_field_plans_.end())
       throw std::runtime_error("screened field reaction names an unknown provider slot");
-    if (found->second.solver != "geometric_mg")
-      throw std::runtime_error("screened fields require the GeometricMG provider");
     found->second.has_reaction = true;
     found->second.reaction = reaction;
     auto registered = named_fields_.find(slot);
     if (registered != named_fields_.end()) {
       registered->second.plan = found->second;
-      registered->second.backend.reset();
+      invalidate_named_backend_(registered->second);
     }
+    invalidate_field_plan_consensus();
   }
 
-  void install_external_solver(const std::string& slot,
-                               runtime::field::PreparedFieldSolverSpec spec,
-                               std::shared_ptr<component::LoadedComponent> topology,
-                               std::shared_ptr<component::LoadedComponent> solver) {
+  void register_field_nullspace_provider(std::shared_ptr<const FieldNullspaceProvider> provider) {
+    nullspace_provider_registry_->add(std::move(provider));
+  }
+
+  void set_primary_nullspace_provider(FieldNullspaceProviderSelection selection) {
+    const auto provider = nullspace_provider_registry_->resolve(selection.provider_identity);
+    if (!provider->accepts_options(selection.options))
+      throw std::invalid_argument("field-nullspace provider rejected its exact options");
+    (void)selection.exact_contract();
+    p_nullspace_provider_ = std::move(selection);
+    invalidate_primary_nullspace_();
+  }
+
+  void set_named_nullspace_provider(const std::string& slot,
+                                    FieldNullspaceProviderSelection selection) {
     auto found = named_field_plans_.find(slot);
-    if (found == named_field_plans_.end() || found->second.solver != "external_component_v1")
-      throw std::runtime_error(
-          "external field solver requires its exact resolved provider plan first");
+    if (found == named_field_plans_.end())
+      throw std::runtime_error("field nullspace names an unknown provider slot");
+    const auto provider = nullspace_provider_registry_->resolve(selection.provider_identity);
+    if (!provider->accepts_options(selection.options))
+      throw std::invalid_argument("field-nullspace provider rejected its exact options");
+    (void)selection.exact_contract();
+    found->second.nullspace_provider = std::move(selection);
+    found->second.nullspace = {};
+    auto registered = named_fields_.find(slot);
+    if (registered != named_fields_.end()) {
+      registered->second.has_plan = true;
+      registered->second.plan = found->second;
+      invalidate_named_backend_(registered->second);
+    }
+    invalidate_field_plan_consensus();
+  }
+
+  [[nodiscard]] PreparedFieldNullspace prepare_field_nullspace_(
+      const FieldNullspaceProviderSelection& selection,
+      FieldNullspaceProviderRequest request) const {
+    return prepare_field_nullspace_collectively(*nullspace_provider_registry_, selection,
+                                                std::move(request));
+  }
+
+  [[nodiscard]] static std::unique_ptr<FieldNullspaceWorkspace> make_nullspace_workspace_(
+      const FieldNullspacePlan& plan, const MultiFab& layout, FieldDistribution distribution) {
+    return std::make_unique<FieldNullspaceWorkspace>(
+        plan, std::vector<const MultiFab*>{&layout},
+        std::vector<PreparedVectorDistribution>{PreparedVectorDistribution(distribution)});
+  }
+
+  void prepare_primary_nullspace_workspace_() {
+    if (!ell_)
+      throw std::logic_error("primary nullspace workspace requires a prepared elliptic backend");
+    const FieldDistribution distribution = ell_->field_distribution();
+    p_nullspace_workspace_ =
+        make_nullspace_workspace_(p_nullspace_, ell_->phi(), distribution);
+  }
+
+  [[nodiscard]] FieldNullspaceProviderRequest uniform_nullspace_request_(
+      std::string plan_identity, std::string topology_identity, const BCRec& boundary,
+      bool has_reaction, bool has_internal_constraint, NamedFieldBackend& backend) const {
+    FieldNullspaceProviderRequest request;
+    request.plan_identity = std::move(plan_identity);
+    request.operator_facts = field_nullspace_operator_facts_from_bc_rec(
+        boundary, has_reaction, has_internal_constraint);
+    request.topology.identity = std::move(topology_identity);
+    request.topology.exact_layout_contract =
+        detail::field_distribution_layout_contract(backend.phi(), backend.field_distribution());
+    request.topology.field_component = 0;
+    if (!has_internal_constraint)
+      request.topology.connected_component_contract =
+          request.topology.identity + ":connected-component@1";
+    request.topology.layouts = {&backend.phi()};
+    request.topology.cell_measure = {backend.geometry().dx() * backend.geometry().dy()};
+    request.topology.level_distributions = {
+        PreparedVectorDistribution(backend.field_distribution())};
+    return request;
+  }
+
+  void prepare_named_nullspace_(NamedField& field) {
+    if (field.nullspace_ready)
+      return;
+    if (!field.backend)
+      throw std::logic_error("named field nullspace requires a prepared elliptic backend");
+    const std::string topology_identity =
+        (field.plan.topology_digest.empty() ? field.plan.plan_identity
+                                            : field.plan.topology_digest) +
+        ":uniform-layout";
+    auto request = uniform_nullspace_request_(
+        field.plan.provider_identity + ":topology-nullspace", topology_identity,
+        named_field_bc(field.plan), field.plan.has_reaction, false, *field.backend);
+    field.plan.nullspace =
+        prepare_field_nullspace_(field.plan.nullspace_provider, std::move(request)).plan;
+    const FieldDistribution distribution = field.backend->field_distribution();
+    field.nullspace_workspace =
+        make_nullspace_workspace_(field.plan.nullspace, field.backend->phi(), distribution);
+    field.nullspace_ready = true;
+  }
+
+  std::string register_external_solver_provider(
+      const std::string& slot, runtime::field::PreparedFieldSolverSpec spec,
+      std::shared_ptr<component::LoadedComponent> topology,
+      std::shared_ptr<component::LoadedComponent> solver) {
+    auto found = named_field_plans_.find(slot);
     if (spec.provider_slot != slot)
       throw std::invalid_argument("external field solver provider slot mismatch");
-    external_field_components_[slot] =
-        std::make_shared<runtime::field::PreparedFieldSolverComponent>(
-            std::move(spec), std::move(topology), std::move(solver));
-    found->second.topology_provider_kind = "external_component_v1";
+    auto component = std::make_shared<runtime::field::PreparedFieldSolverComponent>(
+        std::move(spec), std::move(topology), std::move(solver));
+    register_elliptic_provider(
+        slot, std::make_unique<ExternalComponentBackendProvider>(component));
+    external_field_components_[slot] = component;
+    if (found == named_field_plans_.end())
+      return std::string(component->provider_identity());
+    found->second.backend_provider_identity = slot;
+    found->second.topology_provider_kind = std::string(component->provider_identity());
     found->second.topology_provenance = "pending-component-materialization";
     found->second.topology_digest.clear();
     auto registered = named_fields_.find(slot);
     if (registered != named_fields_.end()) {
       registered->second.plan = found->second;
-      registered->second.backend.reset();
+      invalidate_named_backend_(registered->second);
     }
+    invalidate_field_plan_consensus();
+    return std::string(component->provider_identity());
   }
 
   std::vector<runtime::field::FieldTopologyReportRow> topology_report(
@@ -622,6 +1722,8 @@ class SystemFieldSolver {
     auto& plan = field.plan;
     plan.boundary_state_buffers.clear();
     plan.boundary_state_buffers.reserve(plan.boundary_state_blocks.size());
+    plan.boundary_state_distributions.clear();
+    plan.boundary_state_distributions.reserve(plan.boundary_state_blocks.size());
     for (std::size_t index = 0; index < plan.boundary_state_blocks.size(); ++index) {
       const int block = owner_->index(plan.boundary_state_blocks[index]);
       const MultiFab* value = (stage_state != nullptr && block == stage_block)
@@ -631,9 +1733,12 @@ class SystemFieldSolver {
           plan.boundary_state_components[index] >= value->ncomp())
         throw std::runtime_error("System: boundary state dependency component is out of range");
       plan.boundary_state_buffers.push_back(value);
+      plan.boundary_state_distributions.push_back(FieldDistribution::Distributed);
     }
     plan.boundary_field_buffers.clear();
     plan.boundary_field_buffers.reserve(plan.boundary_field_keys.size());
+    plan.boundary_field_distributions.clear();
+    plan.boundary_field_distributions.reserve(plan.boundary_field_keys.size());
     for (std::size_t index = 0; index < plan.boundary_field_keys.size(); ++index) {
       auto dependency =
           std::find_if(named_fields_.begin(), named_fields_.end(), [&](const auto& item) {
@@ -648,12 +1753,19 @@ class SystemFieldSolver {
           plan.boundary_field_components[index] >= value.ncomp())
         throw std::runtime_error("System: boundary field dependency component is out of range");
       plan.boundary_field_buffers.push_back(&value);
+      plan.boundary_field_distributions.push_back(FieldDistribution::Distributed);
     }
     plan.boundary_context.states =
         plan.boundary_state_buffers.empty() ? nullptr : plan.boundary_state_buffers.data();
+    plan.boundary_context.state_distributions = plan.boundary_state_distributions.empty()
+                                                    ? nullptr
+                                                    : plan.boundary_state_distributions.data();
     plan.boundary_context.state_count = static_cast<int>(plan.boundary_state_buffers.size());
     plan.boundary_context.fields =
         plan.boundary_field_buffers.empty() ? nullptr : plan.boundary_field_buffers.data();
+    plan.boundary_context.field_distributions = plan.boundary_field_distributions.empty()
+                                                    ? nullptr
+                                                    : plan.boundary_field_distributions.data();
     plan.boundary_context.field_count = static_cast<int>(plan.boundary_field_buffers.size());
   }
 
@@ -844,17 +1956,47 @@ class SystemFieldSolver {
   }
   /// "Conductor interior" predicate from p_wall / p_wall_radius / cfg.L (cf. wall_predicate);
   /// empty if no wall.
-  std::function<bool(Real, Real)> wall_active() {
+  ActiveRegionProvider2D wall_active() {
     return detail::wall_predicate(p_wall, p_wall_radius, owner_->cfg.L, "System::set_poisson");
   }
-  /// Builds the cartesian elliptic solver (ell_) LAZILY according to p_solver: GeometricMG
-  /// (carries eps(x)/aniso/kappa if provided) or PoissonFFTSolver (constant coefficient, single-rank,
-  /// no wall; kind 'fft' = discrete stencil, 'fft_spectral' = continuous spectral symbol).
-  /// No-op if ell_ already exists. @throws std::runtime_error on unknown rhs/solver or
-  /// unsupported combination (fft + MPI/wall/variable eps/kappa; kappa + constant eps != 1).
+  [[nodiscard]] MultiFab materialize_system_coefficient_(const std::vector<double>& values) const {
+    const std::size_t expected = static_cast<std::size_t>(owner_->cfg.n) * owner_->cfg.n;
+    if (values.size() != expected)
+      throw std::invalid_argument("system elliptic coefficient has invalid materialized extent");
+    MultiFab field(owner_->ba, owner_->dm, 1, 0);
+    const int n = owner_->cfg.n;
+    for (int local = 0; local < field.local_size(); ++local) {
+      Array4 output = field.fab(local).array();
+      const Box2D valid = field.box(local);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          output(i, j, 0) = static_cast<Real>(values[static_cast<std::size_t>(j) * n + i]);
+    }
+    return field;
+  }
+
+  /// Builds the cartesian elliptic backend lazily through the prepared provider registry.  The
+  /// provider identity selects an implementation; the core only materializes physical inputs and
+  /// submits one complete typed request before construction.
   void ensure_elliptic() {
-    if (ell_)
+    const bool operator_has_reaction =
+        has_kappa_field_ &&
+        std::any_of(p_kappa_field_.begin(), p_kappa_field_.end(),
+                    [](double value) { return value > 0.0; });
+    if (ell_ && p_nullspace_ready_)
       return;
+    if (ell_) {
+      const bool has_internal_constraint = static_cast<bool>(wall_active());
+      auto request = uniform_nullspace_request_(
+          "pops://system/default-field/nullspace-plan@1",
+          "pops://system/default-field/uniform-layout@1", poisson_bc(), operator_has_reaction,
+          has_internal_constraint, *ell_);
+      p_nullspace_ =
+          prepare_field_nullspace_(p_nullspace_provider_, std::move(request)).plan;
+      prepare_primary_nullspace_workspace_();
+      p_nullspace_ready_ = true;
+      return;
+    }
     // The system right-hand side is ALWAYS f = Sum_s elliptic_rhs_s(u_s), assembled by
     // solve_fields from the elliptic brick of EACH block (charge q n, background alpha (n-n0),
     // gravity coupling 4piG (rho-rho0)). The token is thus NOT a computation mode but a LABEL
@@ -865,146 +2007,65 @@ class SystemFieldSolver {
                                "' (valid: " + kPoissonRhsRouteTokensCsv +
                                "; the right-hand side = sum of the "
                                "per-block elliptic bricks)");
-    const BCRec pbc = poisson_bc();
-    std::function<bool(Real, Real)> active = wall_active();
-    if (p_solver == "fft" || p_solver == "fft_spectral") {
-      // The FFT path is CONSTANT-coefficient and PERIODIC only: reject walls, variable / anisotropic
-      // permittivity and reaction kappa FIRST (each guard fires identically on all ranks -> no
-      // deadlock), so only the pure periodic constant-coefficient case reaches the layout switch below.
-      if (active)
-        throw std::runtime_error("System: solver '" + p_solver +
-                                 "' incompatible with a wall -> 'geometric_mg'");
-      if (has_eps_field_)
-        throw std::runtime_error("System: solver '" + p_solver +
-                                 "' has a CONSTANT coefficient, incompatible with a "
-                                 "variable eps(x) field -> use solver='geometric_mg'");
-      if (has_eps_xy_field_)
-        throw std::runtime_error(
-            "System: solver '" + p_solver +
-            "' has a CONSTANT coefficient, incompatible with an "
-            "ANISOTROPIC permittivity eps_x(x), eps_y(x) -> use solver='geometric_mg'");
-      if (has_kappa_field_)
-        throw std::runtime_error("System: solver '" + p_solver +
-                                 "' (pure Poisson) incompatible with a "
-                                 "reaction term kappa(x) -> use solver='geometric_mg'");
-      // 'fft_spectral': same plumbing, CONTINUOUS symbol -(kx^2+ky^2) (fidelity to the spectral
-      // references, e.g. poisson_fft.m of RIEMOM2D); 'fft' keeps the discrete stencil (bit-identical).
-      const bool spectral = (p_solver == "fft_spectral");
-      if (n_ranks() > 1) {
-        // ADC-287: distributed periodic FFT via a box<->slab remap. System distributes ONE box
-        // round-robin (DistributionMapping(1, n_ranks())), so a direct PoissonFFTSolver would
-        // dereference a nonexistent fab(0) on a rank without a box (SIGSEGV). RemappedFFTSolver presents
-        // the SAME single-box layout outward (rhs()/phi() on owner_->ba/dm, aligned with the aux) and
-        // hides a scatter/gather around PoissonFFT inside solve() -> the field-solve path is untouched.
-        // COLLECTIVE: every rank constructs the same type; its Ny % n_ranks() guard throws on all ranks
-        // (no deadlock). NOTE: pending the ADC-273 design vote (structural change to the ell_ variant).
-        ell_.emplace(std::in_place_type<RemappedFFTSolver>, owner_->geom, owner_->ba, pbc, active,
-                     spectral);
-      } else {
-        // Single-rank: the proven direct FFT on the System box. PoissonFFTSolver keeps a hard guard in
-        // its constructor (rejects n_ranks()>1 / ba.size()!=1).
-        ell_.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
-                     spectral);
-      }
-    } else if (p_solver == "geometric_mg") {
-      // ADC-613: build the V-cycle with the resolved GeometricMG knobs (min_coarse / nu1 / nu2 /
-      // nbottom from the Python descriptor) instead of the ctor defaults. replicated=false: System
-      // distributes ONE box round-robin (the replicated hierarchy is the AMR coupler's contract).
-      // ADC-644: the trailing cut_cell / levelset / cut_theta_min are spelled at their defaults so the
-      // new coarse_threshold (total-cell coarsening ceiling; 0 = disabled = the historical hierarchy)
-      // reaches the ctor. Passing the EB defaults keeps this construction byte-identical.
-      ell_.emplace(
-          std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active),
-          /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1, p_mg_opts_.nu2,
-          p_mg_opts_.nbottom, /*cut_cell=*/false, /*levelset=*/std::function<Real(Real, Real)>{},
-          kEbCutFractionFloor, p_mg_opts_.coarse_threshold);
-      std::get<GeometricMG>(*ell_).set_abs_tol(
-          p_mg_opts_.abs_tol);  // absolute floor of the V-cycle (0 = relative only)
-      if (has_eps_field_)
-        apply_epsilon_field();  // operator div(eps grad phi) with variable eps(x)
-      if (has_eps_xy_field_)
-        apply_epsilon_anisotropic_field();  // div(diag(eps_x, eps_y) grad phi)
-      if (has_kappa_field_)
-        apply_reaction_field();  // term - kappa phi (screened Poisson / Helmholtz)
-      // Guard: with kappa and a CONSTANT permittivity eps != 1 (without an eps(x) field), the rhs
-      // would be scaled by 1/eps (shortcut lap phi = f/eps) -- inconsistent with the term -kappa phi.
-      // We then require eps = 1 or an eps(x) field (carried by the operator, without scaling).
-      if (has_kappa_field_ && !has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1))
-        throw std::runtime_error(
-            "System: reaction term kappa(x) + CONSTANT permittivity eps != 1 "
-            "unsupported; use eps = 1 or an eps(x) field (set_epsilon_field)");
-    } else {
-      throw std::runtime_error("System::set_poisson: unknown solver '" + p_solver +
-                               "' (catalog: " + kFieldSolverRouteTokensCsv + ")");
-    }
+    if (has_kappa_field_ && !has_variable_diffusion_coefficient() && p_eps_ != Real(1))
+      throw std::runtime_error(
+          "System: reaction term kappa(x) + constant permittivity eps != 1 is inconsistent; "
+          "use eps = 1 or a materialized coefficient field");
+
+    ActiveRegionProvider2D active_region = wall_active();
+    const bool has_internal_constraint = static_cast<bool>(active_region);
+    EllipticBackendBuildRequest request;
+    request.elliptic = {owner_->geom,
+                        owner_->ba,
+                        owner_->dm,
+                        poisson_bc(),
+                        std::move(active_region),
+                        FieldDistribution::Distributed,
+                        0,
+                        1};
+    request.material_points = static_cast<std::size_t>(owner_->dom.num_cells());
+    ExactContractBuilder configuration;
+    configuration.text("pops.runtime.system-elliptic-configuration")
+        .scalar(std::uint32_t{2})
+        .scalar(p_eps_)
+        .scalar(static_cast<std::uint32_t>(p_diffusion_coefficient_.index()));
+    if (const auto* scalar =
+            std::get_if<ScalarDiffusionCoefficient<std::vector<double>>>(
+                &p_diffusion_coefficient_))
+      configuration.sequence(scalar->value);
+    else if (const auto* diagonal =
+                 std::get_if<DiagonalDiffusionCoefficient<std::vector<double>>>(
+                     &p_diffusion_coefficient_))
+      configuration.sequence(diagonal->x).sequence(diagonal->y);
+    configuration.presence(has_kappa_field_);
+    if (has_kappa_field_)
+      configuration.sequence(p_kappa_field_);
+    request.exact_configuration_contract = std::move(configuration).release();
+    if (const auto* scalar =
+            std::get_if<ScalarDiffusionCoefficient<std::vector<double>>>(
+                &p_diffusion_coefficient_))
+      request.diffusion_coefficient = ScalarDiffusionCoefficient<MultiFab>{
+          materialize_system_coefficient_(scalar->value)};
+    else if (const auto* diagonal =
+                 std::get_if<DiagonalDiffusionCoefficient<std::vector<double>>>(
+                     &p_diffusion_coefficient_))
+      request.diffusion_coefficient = DiagonalDiffusionCoefficient<MultiFab>{
+          materialize_system_coefficient_(diagonal->x),
+          materialize_system_coefficient_(diagonal->y)};
+    if (has_kappa_field_)
+      request.reaction_coefficient = materialize_system_coefficient_(p_kappa_field_);
+
+    ell_ = elliptic_registry_.prepare(p_solver, std::move(request));
+    auto nullspace_request = uniform_nullspace_request_(
+        "pops://system/default-field/nullspace-plan@1",
+        "pops://system/default-field/uniform-layout@1", poisson_bc(), operator_has_reaction,
+        has_internal_constraint, *ell_);
+    p_nullspace_ =
+        prepare_field_nullspace_(p_nullspace_provider_, std::move(nullspace_request)).plan;
+    prepare_primary_nullspace_workspace_();
+    p_nullspace_ready_ = true;
   }
-  /// Installs the eps(x) field (n*n row-major) on the GeometricMG: the operator becomes
-  /// div(eps grad phi) = f, eps CARRIED BY THE OPERATOR (harmonic face coefficient, order 2),
-  /// without 1/eps scaling of the right-hand side. Only GeometricMG supports this variable coefficient.
-  void apply_epsilon_field() {
-    GeometricMG& mg = std::get<GeometricMG>(*ell_);
-    MultiFab eps_fine(owner_->ba, owner_->dm, 1, 0);
-    const int n = owner_->cfg.n;
-    // Filling of the source field LOCAL to the owner rank (iteration over the local fabs, never
-    // fab(0) hardcoded): no-op on a rank without a local box at np>1, identical to before on the
-    // owner. mg.set_epsilon is then COLLECTIVE (local copy + MPI-safe restriction).
-    for (int li = 0; li < eps_fine.local_size(); ++li) {
-      Array4 e = eps_fine.fab(li).array();
-      const Box2D v = eps_fine.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          e(i, j, 0) = static_cast<Real>(p_eps_field_[static_cast<std::size_t>(j) * n + i]);
-    }
-    mg.set_epsilon(
-        eps_fine);  // copy on the fine level + restriction (average_down) to the coarse ones
-  }
-  /// Installs the eps_x(x), eps_y(x) fields (n*n row-major each) on the GeometricMG: the operator
-  /// becomes div(diag(eps_x, eps_y) grad phi) = f. The faces normal to x read eps_x, those
-  /// normal to y read eps_y (harmonic face coefficients, order 2), CARRIED BY THE OPERATOR
-  /// without 1/eps scaling of the right-hand side. GeometricMG only (variable tensor coefficient).
-  void apply_epsilon_anisotropic_field() {
-    GeometricMG& mg = std::get<GeometricMG>(*ell_);
-    MultiFab eps_x_fine(owner_->ba, owner_->dm, 1, 0), eps_y_fine(owner_->ba, owner_->dm, 1, 0);
-    const int n = owner_->cfg.n;
-    // LOCAL filling on the owner rank (cf. apply_epsilon_field): iteration over the local fabs
-    // (no-op on an empty rank at np>1). eps_x_fine and eps_y_fine share ba/dm -> same
-    // local indexing. mg.set_epsilon_anisotropic is then COLLECTIVE (copy + restriction).
-    for (int li = 0; li < eps_x_fine.local_size(); ++li) {
-      Array4 ex = eps_x_fine.fab(li).array();
-      Array4 ey = eps_y_fine.fab(li).array();
-      const Box2D v = eps_x_fine.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          const std::size_t k = static_cast<std::size_t>(j) * n + i;
-          ex(i, j, 0) = static_cast<Real>(p_eps_x_field_[k]);
-          ey(i, j, 0) = static_cast<Real>(p_eps_y_field_[k]);
-        }
-    }
-    mg.set_epsilon_anisotropic(eps_x_fine,
-                               eps_y_fine);  // faces x <- eps_x, faces y <- eps_y (+ restriction)
-  }
-  /// Installs the reaction term kappa(x) (n*n row-major) on the GeometricMG: the operator becomes
-  /// div(eps grad phi) - kappa phi = f (screened Poisson / Helmholtz; kappa = 1/lambda_D^2 for Debye).
-  /// kappa is DIAGONAL (read at cell), restricted by averaging to the coarse levels. GeometricMG only.
-  void apply_reaction_field() {
-    GeometricMG& mg = std::get<GeometricMG>(*ell_);
-    MultiFab kappa_fine(owner_->ba, owner_->dm, 1, 0);
-    const int n = owner_->cfg.n;
-    // LOCAL filling on the owner rank (cf. apply_epsilon_field): iteration over the local fabs
-    // (no-op on an empty rank at np>1). mg.set_reaction is then COLLECTIVE.
-    for (int li = 0; li < kappa_fine.local_size(); ++li) {
-      Array4 k = kappa_fine.fab(li).array();
-      const Box2D v = kappa_fine.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          k(i, j, 0) = static_cast<Real>(p_kappa_field_[static_cast<std::size_t>(j) * n + i]);
-    }
-    mg.set_reaction(kappa_fine);
-  }
-  /// Right-hand side f of the active cartesian elliptic solver (GeometricMG or FFT), via std::visit.
-  MultiFab& ell_rhs() {
-    return std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *ell_);
-  }
+  MultiFab& ell_rhs() { return ell_->rhs(); }
   /// Ghosted potential used by field post-processing and generated Programs. Cartesian returns the
   /// active elliptic solver's field. Polar materializes a dedicated one-ghost copy because the direct
   /// PolarPoissonSolver stores valid cells only.
@@ -1023,120 +2084,40 @@ class SystemFieldSolver {
       }
       return *phi_src_polar_;
     }
-    return std::visit([](auto& e) -> MultiFab& { return e.phi(); }, *ell_);
+    return ell_->phi();
   }
   /// Solves the active cartesian Poisson (GeometricMG V-cycle or direct FFT). Sets the trace
   /// markers; the device_fence after ell_solve is carried by the CALLER (solve_fields), not here.
   SolveReport ell_solve() {
-    trace_mark("ell_solve: before std::visit");
-    SolveReport report = std::visit(
-        [this](auto& e) {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, GeometricMG>) {
-            // ADC-613: drive the V-cycle with the resolved rel_tol / max_cycles / abs_tol from the
-            // Python descriptor instead of the no-argument solve() default (1e-8 / 50). The defaults
-            // of p_mg_opts_ ARE those constants, so an unconfigured System is bit-identical.
-            trace_mark("ell_solve: GeometricMG::solve() start");
-            e.solve(p_mg_opts_.rel_tol, p_mg_opts_.max_cycles, p_mg_opts_.abs_tol);
-            return e.last_solve_report();
-          } else {
-            // Direct FFT solver: no iterative tolerance, keep the concept-level no-argument solve().
-            trace_mark("ell_solve: FFT solver::solve() start");
-            e.solve();
-            SolveReport direct;
-            direct.mark_solved();
-            return direct;
-          }
-        },
-        *ell_);
-    trace_mark("ell_solve: after std::visit");
+    trace_mark("ell_solve: before provider solve");
+    SolveReport report = ell_->solve(*this);
+    trace_mark("ell_solve: after provider solve");
     return report;
   }
-
-  void require_nullspace_compatible(const MultiFab& rhs, bool constant_kernel) const {
-    if (!constant_kernel)
-      return;
-    const Real signed_sum = reduce_sum(rhs, 0);
-    const Real scale = reduce_abs_sum(rhs, 0);
-    const Real tolerance =
-        Real(128) * std::numeric_limits<Real>::epsilon() * (scale > Real(1) ? scale : Real(1));
-    if (std::abs(signed_sum) > tolerance)
-      throw std::runtime_error(
-          "field RHS is incompatible with the declared constant nullspace; silent projection "
-          "is forbidden");
-  }
-
-  void apply_mean_zero_gauge(MultiFab& phi, bool mean_zero_gauge) const {
-    if (!mean_zero_gauge)
-      return;
-    const Real cells = Real(owner_->dom.nx()) * Real(owner_->dom.ny());
-    const Real mean = reduce_sum(phi, 0) / cells;
-    for (int li = 0; li < phi.local_size(); ++li) {
-      Array4 p = phi.fab(li).array();
-      const Box2D valid = phi.box(li);
-      for_each_cell(valid, detail::SubtractFieldMeanKernel{p, mean});
-    }
-  }
-
-  void require_nullspace_compatible(const MultiFab& rhs) const {
-    require_nullspace_compatible(rhs, p_nullspace_const);
-  }
-
-  void apply_mean_zero_gauge(MultiFab& phi) const { apply_mean_zero_gauge(phi, p_mean_zero_gauge); }
 
   // --- ELLIPTIC-SOLVER PROFILING COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43) ----------
   // Read-back accessors for the per-solve stats of the ACTIVE cartesian elliptic solver, queried at
   // the System solve_fields seam AFTER ell_solve()+device_fence() to populate the native profiler
   // counters (mg_cycles / krylov_iters / mg_levels / elliptic_bottom). LOW-INVASIVE by design: the
-  // deep numerics never sees the profiler -- GeometricMG caches the stats per solve (chrono only) and
-  // we visit the variant here. Solvers that lack a notion (FFT: direct, no cycles/levels/iters)
-  // return 0 HONESTLY -- not every solver has these. nullopt ell_ (never solved) -> 0.
+  // deep numerics never sees the profiler -- providers publish their exact backend metrics through
+  // the prepared interface. Solvers that lack a notion (direct methods: no cycles/levels/iters)
+  // return 0 HONESTLY -- not every solver has these. An absent backend (never solved) -> 0.
   //
   // krylov_iters is 0 on the cartesian field-solve path: the default Poisson uses GeometricMG (or a
   // direct FFT), never a Krylov solver (the Krylov path lives in the condensed Schur SOURCE stage,
   // which is not the ell_ elliptic solve). The counter is emitted for completeness / future Krylov
   // elliptic backends; it stays an honest 0 here.
   int last_mg_cycles() const {
-    if (!ell_)
-      return 0;
-    return std::visit(
-        [](const auto& e) -> int {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, GeometricMG>)
-            return e.last_cycles();
-          else
-            return 0;  // direct FFT solver: no V-cycles
-        },
-        *ell_);
+    return ell_ ? ell_->metrics().multigrid_cycles : 0;
   }
   int last_krylov_iters() const {
-    return 0;  // cartesian ell_ = GeometricMG / FFT, never a Krylov elliptic solver (see note above)
+    return ell_ ? ell_->metrics().krylov_iterations : 0;
   }
   int last_num_levels() const {
-    if (!ell_)
-      return 0;
-    return std::visit(
-        [](const auto& e) -> int {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, GeometricMG>)
-            return e.num_levels();
-          else
-            return 0;  // direct FFT solver: no multigrid hierarchy
-        },
-        *ell_);
+    return ell_ ? ell_->metrics().multigrid_levels : 0;
   }
   double last_bottom_seconds() const {
-    if (!ell_)
-      return 0.0;
-    return std::visit(
-        [](const auto& e) -> double {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, GeometricMG>)
-            return e.last_bottom_seconds();
-          else
-            return 0.0;  // direct FFT solver: no coarsest-grid bottom solve
-        },
-        *ell_);
+    return ell_ ? ell_->metrics().bottom_seconds : 0.0;
   }
 
   // --- direct POLAR Poisson (PolarPoissonSolver) -------------------------
@@ -1157,7 +2138,7 @@ class SystemFieldSolver {
           "System::set_poisson (polar): solver '" + p_solver +
           "' unsupported on a ring; the polar Poisson is direct (FFT-in-theta + tridiag-in-r). "
           "Leave the default ('geometric_mg') or request 'polar'.");
-    if (has_eps_field_ || has_eps_xy_field_ || has_kappa_field_)
+    if (has_variable_diffusion_coefficient() || has_kappa_field_)
       throw std::runtime_error(
           "System::set_poisson (polar): variable / anisotropic permittivity / reaction unsupported "
           "by the direct polar Poisson (Phase 2b; operator (1/r) d_r(r d_r) + (1/r^2) d_theta^2)");
@@ -1274,21 +2255,21 @@ class SystemFieldSolver {
     trace_mark("solve_fields: start");
     ensure_elliptic();
     MultiFab& phi_before = ell_phi();
-    MultiFab& published_phi = reusable_scratch_(
-        published_phi_scratch_, phi_before, phi_before.ncomp(), phi_before.n_grow());
+    MultiFab& published_phi = reusable_scratch_(published_phi_scratch_, phi_before,
+                                                phi_before.ncomp(), phi_before.n_grow());
     PureFieldAlgebra::copy(published_phi, phi_before);
     trace_mark("solve_fields: after ensure_elliptic");
     MultiFab& rhs = ell_rhs();
     // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
     // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
     assemble_poisson_rhs(rhs, target_block, U_stage);
-    require_nullspace_compatible(rhs);
+    p_nullspace_workspace_->require_compatible(rhs);
     trace_mark("solve_fields: after add_poisson_rhs");
     // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
     // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
     // operator carries eps directly (apply_epsilon_field / apply_epsilon_anisotropic_field), the
     // rhs stays f as is.
-    if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
+    if (!has_variable_diffusion_coefficient() && p_eps_ != Real(1)) {
       scale(rhs, Real(1) / p_eps_);
     }
     trace_mark("solve_fields: before ell_solve");
@@ -1308,7 +2289,7 @@ class SystemFieldSolver {
     // (loop executed once, bit-identical to np=1). ell_phi() and aux share the same
     // DistributionMapping -> same local indexing.
     MultiFab& phi_mf = ell_phi();
-    apply_mean_zero_gauge(phi_mf);
+    p_nullspace_workspace_->apply_gauge(phi_mf);
     device_fence();
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       const ConstArray4 p = phi_mf.fab(li).const_array();
@@ -1389,15 +2370,16 @@ class SystemFieldSolver {
       return solve_fields_polar_from_blocks(U_stages);
     ensure_elliptic();
     MultiFab& phi_before = ell_phi();
-    MultiFab& published_phi = reusable_scratch_(
-        published_phi_scratch_, phi_before, phi_before.ncomp(), phi_before.n_grow());
+    MultiFab& published_phi = reusable_scratch_(published_phi_scratch_, phi_before,
+                                                phi_before.ncomp(), phi_before.n_grow());
     PureFieldAlgebra::copy(published_phi, phi_before);
     // Coupled multi-block solve always re-solves the Poisson from the requested stage states.
     SolveReport report;
     {
       MultiFab& rhs = ell_rhs();
       assemble_poisson_rhs_from_blocks(rhs, U_stages);
-      if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
+      p_nullspace_workspace_->require_compatible(rhs);
+      if (!has_variable_diffusion_coefficient() && p_eps_ != Real(1)) {
         scale(rhs, Real(1) / p_eps_);
       }
       report = ell_solve();
@@ -1409,6 +2391,8 @@ class SystemFieldSolver {
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     MultiFab& phi_mf = ell_phi();
+    p_nullspace_workspace_->apply_gauge(phi_mf);
+    device_fence();
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       const ConstArray4 p = phi_mf.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
@@ -1430,80 +2414,57 @@ class SystemFieldSolver {
   }
 
   // --- NAMED multi-elliptic field (ADC-428) ----------------------------------
-  /// Builds the DEDICATED cartesian elliptic solver of named field @p nf, the SAME poisson operator as
-  /// the default ell_ (ensure_elliptic): GeometricMG (default) or PoissonFFTSolver/RemappedFFTSolver,
-  /// with the System's Poisson BC and wall. REUSES the native solver -- no operator is reimplemented.
-  /// The variable / anisotropic permittivity of the DEFAULT Poisson is not carried onto a named
-  /// field. A named field may carry its own resolved scalar reaction coefficient; it is installed
-  /// only on GeometricMG. Built lazily; no-op if already built.
+  /// Builds the dedicated cartesian backend for named field @p nf through the same provider protocol
+  /// as the default field. The core materializes one complete physical request; the selected
+  /// provider owns its compatibility decision, implementation, exact contract and configuration. The variable
+  /// or anisotropic permittivity of the default field is not inherited by a named field. Built
+  /// lazily; no-op if already built.
   void ensure_named_backend(NamedField& nf, const std::string& slot) {
-    if (nf.backend)
+    if (nf.backend) {
+      prepare_named_nullspace_(nf);
       return;
+    }
     require_field_plan_consensus();
-    if (nf.plan.solver == "external_component_v1") {
-      if (nf.plan.has_reaction)
-        throw std::runtime_error(
-            "System: external FieldSolver ABI v2 cannot consume a reaction coefficient");
-      const auto by_slot = external_field_components_.find(slot);
-      if (by_slot == external_field_components_.end())
-        throw std::runtime_error(
-            "System: external field provider has no installed topology+solver component pair");
-      nf.backend =
-          std::make_unique<ExternalNamedFieldBackend>(owner_->ba, owner_->dm, by_slot->second);
-      return;
-    }
-    const std::string& solver = nf.has_plan ? nf.plan.solver : p_solver;
-    const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
+    const std::string& provider_identity =
+        nf.has_plan ? nf.plan.backend_provider_identity : p_solver;
     const BCRec pbc = nf.has_plan ? named_field_bc(nf.plan) : poisson_bc();
-    std::function<bool(Real, Real)> active =
-        nf.has_plan ? std::function<bool(Real, Real)>{} : wall_active();
-    if (solver == "fft" || solver == "fft_spectral") {
-      if (nf.plan.has_reaction)
-        throw std::runtime_error("System: FFT field solvers cannot consume a reaction coefficient");
-      if (nf.plan.has_boundary_kernel)
-        throw std::runtime_error(
-            "System: generated field boundary kernels require a residual/JVP solver route; "
-            "FFT accepts only its constant periodic closure");
-      if (active)
-        throw std::runtime_error("System: named elliptic field solver '" + solver +
-                                 "' incompatible with a wall -> 'geometric_mg'");
-      const bool spectral = (solver == "fft_spectral");
-      if (n_ranks() > 1)
-        nf.backend = std::make_unique<BuiltinNamedFieldBackend>(
-            std::in_place_type<RemappedFFTSolver>, nf.plan.topology_digest,
-            nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
-            owner_->geom, owner_->ba, pbc, active, spectral);
-      else
-        nf.backend = std::make_unique<BuiltinNamedFieldBackend>(
-            std::in_place_type<PoissonFFTSolver>, nf.plan.topology_digest,
-            nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
-            owner_->geom, owner_->ba, pbc, active, spectral);
-    } else if (solver == "geometric_mg") {
-      auto backend = std::make_unique<BuiltinNamedFieldBackend>(
-          std::in_place_type<GeometricMG>, nf.plan.topology_digest, nf.plan.topology_provenance,
-          static_cast<std::size_t>(owner_->dom.num_cells()), owner_->geom, owner_->ba, pbc,
-          std::move(active), /*replicated=*/false, mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom,
-          /*cut_cell=*/false,
-          /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
-          mg.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
-      auto* geometric = backend->geometric();
-      if (geometric == nullptr)
-        throw std::logic_error("System: builtin GeometricMG backend lost its solver type");
-      geometric->set_abs_tol(mg.abs_tol);
-      if (nf.plan.has_reaction) {
-        const Real reaction = nf.plan.reaction;
-        geometric->set_reaction([reaction](Real, Real) { return reaction; });
-      }
-      if (nf.plan.has_boundary_kernel) {
-        geometric->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
-        if (nf.plan.has_newton)
-          geometric->set_field_newton_options(nf.plan.newton);
-      }
-      nf.backend = std::move(backend);
-    } else {
-      throw std::runtime_error("System: named elliptic field solver '" + solver +
-                               "' unsupported (catalog: " + kFieldSolverRouteTokensCsv + ")");
+    EllipticBackendBuildRequest request;
+    request.elliptic = {owner_->geom,
+                        owner_->ba,
+                        owner_->dm,
+                        pbc,
+                        nf.has_plan ? ActiveRegionProvider2D{} : wall_active(),
+                        FieldDistribution::Distributed,
+                        0,
+                        1};
+    request.topology_digest = nf.plan.topology_digest;
+    request.topology_provenance = nf.plan.topology_provenance;
+    request.material_points = static_cast<std::size_t>(owner_->dom.num_cells());
+    // External components authenticate their own pair of prepared component manifests.  They do not
+    // publish the optional native EllipticOperatorContract; builtin providers still expose it.
+    request.require_exact_operator_contract = false;
+    ExactContractBuilder configuration;
+    configuration.text("pops.runtime.named-elliptic-configuration")
+        .scalar(std::uint32_t{1})
+        .text(nf.plan.plan_identity)
+        .presence(nf.plan.has_reaction);
+    if (nf.plan.has_reaction)
+      configuration.scalar(nf.plan.reaction);
+    configuration.presence(nf.plan.has_boundary_kernel).presence(nf.plan.has_newton);
+    request.exact_configuration_contract = std::move(configuration).release();
+    if (nf.plan.has_reaction) {
+      request.reaction_coefficient.emplace(owner_->ba, owner_->dm, 1, 0);
+      request.reaction_coefficient->set_val(nf.plan.reaction);
     }
+    if (nf.plan.has_boundary_kernel) {
+      request.dynamic_boundary = nf.plan.boundary_kernel;
+      request.boundary_context = nf.plan.boundary_context;
+    }
+    if (nf.plan.has_newton)
+      request.nonlinear_boundary = nf.plan.newton;
+
+    nf.backend = elliptic_registry_.prepare(provider_identity, std::move(request));
+    prepare_named_nullspace_(nf);
   }
 
   /// Assembles the RIGHT-HAND SIDE of named field @p field into @p rhs: f = Sum_s
@@ -1518,8 +2479,7 @@ class SystemFieldSolver {
     if (route == named_fields_.end() || !route->second.has_plan)
       throw std::runtime_error("System: field provider slot '" + field + "' is not installed");
     prepare_field_providers(route->second);
-    MultiFab& contribution = reusable_scratch_(
-        route->second.contribution_scratch, rhs, 1, 0);
+    MultiFab& contribution = reusable_scratch_(route->second.contribution_scratch, rhs, 1, 0);
     for (const auto& binding : route->second.prepared_providers) {
       const int b = binding.block;
       auto& state = owner_->sp[static_cast<std::size_t>(b)];
@@ -1573,17 +2533,15 @@ class SystemFieldSolver {
     nf.backend->configure_boundary(nf.plan);
     MultiFab& rhs = nf.backend->rhs();
     MultiFab& phi_mf = nf.backend->phi();
-    MultiFab& published_phi = reusable_scratch_(
-        nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
+    MultiFab& published_phi =
+        reusable_scratch_(nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
     PureFieldAlgebra::copy(published_phi, phi_mf);
-    auto restore_published = [&]() {
-      PureFieldAlgebra::copy(phi_mf, published_phi);
-    };
+    auto restore_published = [&]() { PureFieldAlgebra::copy(phi_mf, published_phi); };
     assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
-    nf.backend->prepare_rhs(*this, rhs, nf.plan);
+    nf.backend->prepare_rhs(*this, rhs, nf.plan, *nf.nullspace_workspace);
     SolveReport report;
     try {
-      report = nf.backend->solve(*this, nf.plan);
+      report = nf.backend->solve(*this);
       if (!report.solved_value_available()) {
         restore_published();
         return report;
@@ -1593,7 +2551,7 @@ class SystemFieldSolver {
       throw;
     }
     device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as ell_)
-    nf.backend->finalize(*this, nf.plan);
+    nf.backend->finalize(*this, nf.plan, *nf.nullspace_workspace);
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
@@ -1619,12 +2577,12 @@ class SystemFieldSolver {
   }
 
  private:
-  static MultiFab& reusable_scratch_(std::optional<MultiFab>& storage,
-                                     const MultiFab& prototype, int ncomp, int ghosts) {
+  static MultiFab& reusable_scratch_(std::optional<MultiFab>& storage, const MultiFab& prototype,
+                                     int ncomp, int ghosts) {
     const bool compatible = storage &&
-        storage->box_array().boxes() == prototype.box_array().boxes() &&
-        storage->dmap().ranks() == prototype.dmap().ranks() &&
-        storage->ncomp() == ncomp && storage->n_grow() == ghosts;
+                            storage->box_array().boxes() == prototype.box_array().boxes() &&
+                            storage->dmap().ranks() == prototype.dmap().ranks() &&
+                            storage->ncomp() == ncomp && storage->n_grow() == ghosts;
     if (!compatible)
       storage.emplace(prototype.box_array(), prototype.dmap(), ncomp, ghosts);
     return *storage;

@@ -54,12 +54,11 @@ inline double AmrRuntime::composite_reduce_field(const std::string& provider_slo
   metrics.reserve(static_cast<std::size_t>(count));
   for (int level = 0; level < count; ++level) {
     values.push_back(&provider_potential_level(provider_slot, level));
-    const AmrLevelMP& shared =
-        blocks_.front().levels->at(static_cast<std::size_t>(level));
+    const AmrLevelMP& shared = blocks_.front().levels->at(static_cast<std::size_t>(level));
     metrics.emplace_back(shared.dx, shared.dy);
   }
   return runtime::amr::composite_reduce_fields(values, metrics, replicated_coarse_, kind, comp,
-                                                levels);
+                                               levels);
 }
 
 inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
@@ -188,9 +187,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     detail::same_layout_or_throw(ref);
   }
   for (auto& item : named_fields_) {
-    item.second.mg.reset();
-    item.second.level_mg.clear();
-    item.second.fac.reset();
+    item.second.solver.reset();
     item.second.nullspace = {};
     item.second.level_nullspace.clear();
     item.second.nullspace_ready = false;

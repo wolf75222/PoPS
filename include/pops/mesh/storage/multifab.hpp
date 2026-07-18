@@ -106,7 +106,7 @@ class MultiFab {
   /// memory = a targeted device_fence().
   void sync_host() const { pops::sync_host(); }
   /// Marks a DEVICE residence (before a kernel). No-op under unified memory.
-  void sync_device() { pops::sync_device(); }
+  void sync_device() const { pops::sync_device(); }
 
   /// Fills all cells (valid + ghosts) of every local fab with v. Synchronizes host residence first
   /// (a kernel may have written these fabs).

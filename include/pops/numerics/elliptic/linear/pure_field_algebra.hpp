@@ -9,6 +9,7 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 
 #ifdef POPS_HAS_KOKKOS
 #include <Kokkos_MathematicalFunctions.hpp>
@@ -19,8 +20,10 @@
 #include <cstddef>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace pops {
 
@@ -64,6 +67,26 @@ struct ScaledDotKernel {
   int component;
   POPS_HD void operator()(int i, int j, Real& sum) const {
     sum += (left(i, j, component) / left_scale) * (right(i, j, component) / right_scale);
+  }
+};
+
+struct AbsDotKernel {
+  ConstArray4 left, right;
+  int component;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    const Real product = left(i, j, component) * right(i, j, component);
+    sum += product < Real(0) ? -product : product;
+  }
+};
+
+struct MeasuredDotKernel {
+  ConstArray4 left, right;
+  Real measure;
+  int component;
+  bool absolute;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    const Real product = left(i, j, component) * right(i, j, component) * measure;
+    sum += absolute && product < Real(0) ? -product : product;
   }
 };
 
@@ -308,12 +331,76 @@ inline Real robust_dot_global_value(const MultiFab& left, const MultiFab& right,
   return robust_dot_reconstruct(bands);
 }
 
+inline Real robust_dot_owned_value(const MultiFab& left, const MultiFab& right, bool all_components,
+                                   const PreparedVectorDistribution& ownership,
+                                   std::span<double> scratch) {
+  RobustDotBands bands{};
+  robust_dot_local_payload(left, right, all_components, bands.data());
+  ownership.reduce_sum_values(bands, scratch, "prepared robust dot product");
+  if (bands[kRobustDotNonfiniteIndex] != 0.0)
+    return std::numeric_limits<Real>::quiet_NaN();
+  return robust_dot_reconstruct(bands);
+}
+
 inline Real fast_dot_local(const MultiFab& left, const MultiFab& right, bool all_components) {
   return all_components ? pops::dot_all_local(left, right) : pops::dot_local(left, right);
 }
 
 inline Real fast_dot_global(const MultiFab& left, const MultiFab& right, bool all_components) {
   return all_components ? pops::dot_all(left, right) : pops::dot(left, right);
+}
+
+inline Real fast_dot_owned(const MultiFab& left, const MultiFab& right, bool all_components,
+                           const PreparedVectorDistribution& ownership,
+                           std::span<double> scratch) {
+  double value = static_cast<double>(fast_dot_local(left, right, all_components));
+  ownership.reduce_sum_values(std::span<double>(&value, 1), scratch, "prepared dot product");
+  return static_cast<Real>(value);
+}
+
+inline Real absolute_dot_local(const MultiFab& left, const MultiFab& right) {
+  Real result = Real(0);
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < left.ncomp(); ++component)
+      result += reduce_sum_cell(valid, AbsDotKernel{left_values, right_values, component});
+  }
+  return result;
+}
+
+inline Real absolute_dot_owned(const MultiFab& left, const MultiFab& right,
+                               const PreparedVectorDistribution& ownership,
+                               std::span<double> scratch) {
+  double value = static_cast<double>(absolute_dot_local(left, right));
+  ownership.reduce_sum_values(std::span<double>(&value, 1), scratch,
+                              "prepared absolute inner product");
+  return static_cast<Real>(value);
+}
+
+inline Real measured_dot_local(const MultiFab& left, const MultiFab& right, Real measure,
+                               bool absolute) {
+  Real result = Real(0);
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < left.ncomp(); ++component)
+      result += reduce_sum_cell(
+          valid, MeasuredDotKernel{left_values, right_values, measure, component, absolute});
+  }
+  return result;
+}
+
+inline Real measured_dot_owned(const MultiFab& left, const MultiFab& right, Real measure,
+                               bool absolute, const PreparedVectorDistribution& ownership,
+                               std::span<double> scratch) {
+  double value = static_cast<double>(measured_dot_local(left, right, measure, absolute));
+  ownership.reduce_sum_values(
+      std::span<double>(&value, 1), scratch,
+      absolute ? "prepared absolute nullspace pairing" : "prepared nullspace pairing");
+  return static_cast<Real>(value);
 }
 
 inline bool robust_dot_fallback_needed(Real value) {
@@ -333,6 +420,59 @@ inline Real robust_dot_after_fast_global(const MultiFab& left, const MultiFab& r
   return robust_dot_global_value(left, right, all_components);
 }
 
+inline Real robust_dot_after_fast_owned(const MultiFab& left, const MultiFab& right,
+                                        bool all_components, Real fast,
+                                        const PreparedVectorDistribution& ownership,
+                                        std::span<double> scratch) {
+  if (!robust_dot_fallback_needed(fast))
+    return fast;
+  if (fast == Real(0)) {
+    double activity = static_cast<double>(robust_dot_activity_local(left, right, all_components));
+    ownership.reduce_sum_values(std::span<double>(&activity, 1), scratch,
+                                "prepared dot-product activity");
+    if (activity == 0.0)
+      return Real(0);
+  }
+  return robust_dot_owned_value(left, right, all_components, ownership, scratch);
+}
+
+inline void require_public_field_distribution(const MultiFab& value,
+                                              PreparedVectorDistribution distribution,
+                                              const char* where) {
+  // Public algebra has no prepared authority, so it authenticates both the exact layout and the
+  // complete replica contents. Prepared hot paths bypass this boundary after their own one-time
+  // solve preflight.
+  require_collective_field_distribution_layout(value, distribution, where);
+    std::vector<char, comm_allocator<char>> storage(
+        distribution.validation_scratch_byte_count());
+  distribution.require_exact_values(value, storage, where);
+}
+
+inline Real max_abs_owned_unchecked(const MultiFab& value,
+                                    const PreparedVectorDistribution& ownership,
+                                    std::span<double> scratch) {
+  double result = static_cast<double>(local_max_abs(value));
+  ownership.reduce_max_values(std::span<double>(&result, 1), scratch,
+                              "prepared vector maximum norm");
+  return static_cast<Real>(result);
+}
+
+inline Real scale_safe_norm_owned_unchecked(const MultiFab& value,
+                                            const PreparedVectorDistribution& ownership,
+                                            std::span<double> scratch) {
+  const Real scale = max_abs_owned_unchecked(value, ownership, scratch);
+  if (!std::isfinite(static_cast<double>(scale)))
+    return std::numeric_limits<Real>::quiet_NaN();
+  if (scale == Real(0))
+    return Real(0);
+  double normalized_square = static_cast<double>(scaled_dot_local(value, value, scale, scale));
+  ownership.reduce_sum_values(std::span<double>(&normalized_square, 1), scratch,
+                              "prepared normalized vector square");
+  if (!std::isfinite(normalized_square) || normalized_square < 0.0)
+    return std::numeric_limits<Real>::quiet_NaN();
+  return rescale_product(std::sqrt(static_cast<Real>(normalized_square)), scale, Real(1));
+}
+
 }  // namespace detail
 
 struct PureFieldAlgebra {
@@ -350,10 +490,13 @@ struct PureFieldAlgebra {
 
   static void zero(MultiFab& value) { value.set_val(Real(0)); }
 
-  /// Global maximum magnitude over every valid component. Non-finite input is represented by
-  /// +infinity so no rank can silently hide an invalid sample from the MPI maximum.
-  static Real max_abs(const MultiFab& value) {
-    return static_cast<Real>(all_reduce_max(static_cast<double>(detail::local_max_abs(value))));
+  /// Global maximum magnitude over every valid component. Non-finite input remains a collective
+  /// non-finite witness so no rank can silently hide an invalid sample.
+  static Real max_abs(const MultiFab& value, PreparedVectorDistribution ownership =
+                                                 PreparedVectorDistribution::Distributed) {
+    detail::require_public_field_distribution(value, ownership, "PureFieldAlgebra::max_abs");
+    std::vector<double> scratch(ownership.reduction_scratch_value_count(1));
+    return detail::max_abs_owned_unchecked(value, ownership, scratch);
   }
 
   /// Fill valid cells on the active Kokkos execution space. Ghosts are deliberately left for the
@@ -397,23 +540,40 @@ struct PureFieldAlgebra {
 
   /// One collective full-vector dot product. Every rank calls the same reduction, including ranks
   /// with no local box.
-  static Real dot(const MultiFab& left, const MultiFab& right) {
-    require_same_vector_space(left, right, "PureFieldAlgebra::dot");
-    const Real fast = detail::fast_dot_global(left, right, true);
-    return detail::robust_dot_after_fast_global(left, right, true, fast);
+  static Real dot(const MultiFab& left, const MultiFab& right,
+                  PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
+    detail::require_public_field_distribution(left, ownership, "PureFieldAlgebra::dot");
+    const long vector_space_mismatch = all_reduce_max(same_vector_space(left, right) ? 0L : 1L);
+    if (vector_space_mismatch != 0)
+      throw std::invalid_argument(
+          "PureFieldAlgebra::dot: fields do not share box, distribution, and component space");
+    detail::require_public_field_distribution(right, ownership, "PureFieldAlgebra::dot(right)");
+    std::vector<double> scratch(
+        ownership.reduction_scratch_value_count(detail::kRobustDotPayloadWidth));
+    const Real fast = detail::fast_dot_owned(left, right, true, ownership, scratch);
+    return detail::robust_dot_after_fast_owned(left, right, true, fast, ownership, scratch);
   }
 
-  static Real norm(const MultiFab& value) {
-    const Real scale = max_abs(value);
-    if (!std::isfinite(static_cast<double>(scale)))
-      return std::numeric_limits<Real>::quiet_NaN();
-    if (scale == Real(0))
-      return Real(0);
-    const Real normalized_square = static_cast<Real>(
-        all_reduce_sum(static_cast<double>(detail::scaled_dot_local(value, value, scale, scale))));
-    if (!std::isfinite(static_cast<double>(normalized_square)) || normalized_square < Real(0))
-      return std::numeric_limits<Real>::quiet_NaN();
-    return detail::rescale_product(std::sqrt(normalized_square), scale, Real(1));
+  static Real absolute_dot(
+      const MultiFab& left, const MultiFab& right,
+      PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
+    detail::require_public_field_distribution(left, ownership, "PureFieldAlgebra::absolute_dot");
+    const long vector_space_mismatch = all_reduce_max(same_vector_space(left, right) ? 0L : 1L);
+    if (vector_space_mismatch != 0)
+      throw std::invalid_argument(
+          "PureFieldAlgebra::absolute_dot: fields do not share vector space");
+    detail::require_public_field_distribution(right, ownership,
+                                              "PureFieldAlgebra::absolute_dot(right)");
+    std::vector<double> scratch(ownership.reduction_scratch_value_count(1));
+    return detail::absolute_dot_owned(left, right, ownership, scratch);
+  }
+
+  static Real norm(const MultiFab& value,
+                   PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
+    detail::require_public_field_distribution(value, ownership, "PureFieldAlgebra::norm");
+    std::vector<double> scratch(
+        ownership.reduction_scratch_value_count(detail::kRobustDotPayloadWidth));
+    return detail::scale_safe_norm_owned_unchecked(value, ownership, scratch);
   }
 };
 
@@ -468,10 +628,36 @@ struct PreparedFieldAlgebra {
     }
   }
 
-  static Real dot(const MultiFab& left, const MultiFab& right) {
+  static Real max_abs(const MultiFab& value, const PreparedVectorDistribution& ownership,
+                      std::span<double> scratch) {
+    return detail::max_abs_owned_unchecked(value, ownership, scratch);
+  }
+
+  static Real dot(const MultiFab& left, const MultiFab& right,
+                  const PreparedVectorDistribution& ownership, std::span<double> scratch) {
     const bool all_components = left.ncomp() != 1;
-    const Real fast = detail::fast_dot_global(left, right, all_components);
-    return detail::robust_dot_after_fast_global(left, right, all_components, fast);
+    const Real fast = detail::fast_dot_owned(left, right, all_components, ownership, scratch);
+    return detail::robust_dot_after_fast_owned(left, right, all_components, fast, ownership,
+                                               scratch);
+  }
+
+  static Real dot(const MultiFab& left, const MultiFab& right,
+                  PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
+    std::vector<double> scratch(
+        ownership.reduction_scratch_value_count(kRobustDotPayloadWidth));
+    return dot(left, right, ownership, scratch);
+  }
+
+  static Real absolute_dot(const MultiFab& left, const MultiFab& right,
+                           const PreparedVectorDistribution& ownership,
+                           std::span<double> scratch) {
+    return detail::absolute_dot_owned(left, right, ownership, scratch);
+  }
+
+  static Real nullspace_pairing(const MultiFab& left, const MultiFab& right, Real cell_measure,
+                                bool absolute, const PreparedVectorDistribution& ownership,
+                                std::span<double> scratch) {
+    return detail::measured_dot_owned(left, right, cell_measure, absolute, ownership, scratch);
   }
 
   static Real local_dot(const MultiFab& left, const MultiFab& right) {
@@ -491,11 +677,12 @@ struct PreparedFieldAlgebra {
     return detail::robust_dot_reconstruct(payload);
   }
 
-  static Real norm(const MultiFab& value) {
+  static Real norm(const MultiFab& value, const PreparedVectorDistribution& ownership,
+                   std::span<double> scratch) {
     const bool all_components = value.ncomp() != 1;
     // A zero square is handled by the existing max-scaled norm below.  Do not route an exact zero
     // through every exponent band merely to rediscover that a zero field has zero norm.
-    const Real square = detail::fast_dot_global(value, value, all_components);
+    const Real square = detail::fast_dot_owned(value, value, all_components, ownership, scratch);
     if (std::isfinite(static_cast<double>(square)) && square > Real(0))
       return std::sqrt(square);
     if (square < Real(0))
@@ -504,7 +691,14 @@ struct PreparedFieldAlgebra {
     // the max-scaled norm only when squaring a finite subnormal vector underflowed to zero, or when
     // an intermediate square overflowed.  This keeps the common hot path unchanged while allowing
     // GMRES to distinguish a true lucky breakdown from a representable subnormal Arnoldi column.
-    return ::pops::PureFieldAlgebra::norm(value);
+    return detail::scale_safe_norm_owned_unchecked(value, ownership, scratch);
+  }
+
+  static Real norm(const MultiFab& value,
+                   PreparedVectorDistribution ownership = PreparedVectorDistribution::Distributed) {
+    std::vector<double> scratch(
+        ownership.reduction_scratch_value_count(kRobustDotPayloadWidth));
+    return norm(value, ownership, scratch);
   }
 };
 

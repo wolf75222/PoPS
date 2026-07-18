@@ -12,10 +12,14 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledSourceKernel + CsProgram (flat ABI, P5 bytecode)
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/advance/amr_advance.hpp>  // PreparedAmrTemporalPlan
@@ -31,15 +35,18 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
+#include <pops/runtime/amr/field_solver_options.hpp>
+#include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/export.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
-#include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
 #include <array>
@@ -112,7 +119,7 @@ struct AmrFieldSolveConfig {
   std::string output_key;
   std::vector<FieldProviderBinding> providers;
   std::string solver = "geometric_mg";
-  std::string hierarchy = "composite";
+  AmrFieldHierarchyPolicyAuthority hierarchy_policy;
   std::string bc = "auto";
   bool has_explicit_bc = false;
   BCRec explicit_bc{};
@@ -122,16 +129,341 @@ struct AmrFieldSolveConfig {
   std::vector<std::string> boundary_state_blocks;
   std::vector<int> boundary_state_components;
   std::vector<const MultiFab*> boundary_state_buffers;
+  std::vector<FieldDistribution> boundary_state_distributions;
   FieldBoundaryExecutionContext boundary_context{};
   bool has_reaction = false;
   Real reaction = Real(0);
   bool has_newton = false;
   FieldNewtonOptions newton{};
-  std::string nullspace_assertion = "none";
-  std::string gauge = "none";
-  GeometricMgOptions mg_opts{};
-  CompositeFacOptions fac_opts{};
+  FieldNullspaceProviderSelection nullspace;
+  AmrFieldSolverOptions solver_options;
 };
+
+/// Canonical native contract of one fully resolved AMR field plan.  The caller-supplied
+/// ``plan_identity`` is retained as provenance, never trusted as a substitute for these bytes.
+/// Runtime pointers and callable addresses are deliberately excluded; their authenticated semantic
+/// identities and every declared dependency/value are included instead.
+inline std::string exact_amr_field_solve_config_contract(const AmrFieldSolveConfig& plan) {
+  ExactContractBuilder contract;
+  contract.text("pops.amr.field-solve-config")
+      .scalar(std::uint32_t{1})
+      .text(plan.plan_identity)
+      .text(plan.provider_identity)
+      .text(plan.topology_provider_kind)
+      .text(plan.topology_provenance)
+      .text(plan.topology_digest)
+      .text(plan.output_owner_identity)
+      .text(plan.output_block)
+      .text(plan.output_key)
+      .sequence(plan.providers, [](ExactContractBuilder& item, const FieldProviderBinding& value) {
+        item.text(value.identity)
+            .text(value.owner_block)
+            .text(value.native_key)
+            .scalar(value.coefficient);
+      })
+      .text(plan.solver)
+      .bytes(plan.hierarchy_policy.exact_contract())
+      .text(plan.bc)
+      .scalar(plan.has_explicit_bc);
+  if (plan.has_explicit_bc) {
+    const BCRec& bc = plan.explicit_bc;
+    contract.scalar(bc.xlo)
+        .scalar(bc.xhi)
+        .scalar(bc.ylo)
+        .scalar(bc.yhi)
+        .scalar(bc.xlo_val)
+        .scalar(bc.xhi_val)
+        .scalar(bc.ylo_val)
+        .scalar(bc.yhi_val)
+        .scalar(bc.xlo_alpha)
+        .scalar(bc.xlo_beta)
+        .scalar(bc.xhi_alpha)
+        .scalar(bc.xhi_beta)
+        .scalar(bc.ylo_alpha)
+        .scalar(bc.ylo_beta)
+        .scalar(bc.yhi_alpha)
+        .scalar(bc.yhi_beta)
+        .scalar(bc.dx)
+        .scalar(bc.dy);
+  }
+  contract.scalar(plan.has_boundary_kernel);
+  if (plan.has_boundary_kernel) {
+    contract.text(plan.boundary_kernel.identity)
+        .text(plan.boundary_kernel.residual_identity)
+        .text(plan.boundary_kernel.jvp_identity)
+        .scalar(plan.boundary_kernel.observes_iteration);
+  }
+  const std::vector<Real> empty_parameters;
+  const auto& parameters = plan.boundary_parameters ? *plan.boundary_parameters : empty_parameters;
+  contract.sequence(parameters)
+      .sequence(plan.boundary_state_blocks,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(plan.boundary_state_components)
+      .scalar(plan.has_reaction)
+      .scalar(plan.reaction)
+      .scalar(plan.has_newton);
+  if (plan.has_newton) {
+    contract.scalar(plan.newton.tolerance)
+        .scalar(static_cast<std::int32_t>(plan.newton.max_iterations))
+        .scalar(plan.newton.linear_tolerance)
+        .scalar(static_cast<std::int32_t>(plan.newton.linear_max_iterations))
+        .scalar(static_cast<std::int32_t>(plan.newton.restart))
+        .scalar(plan.newton.armijo)
+        .scalar(plan.newton.minimum_step);
+  }
+  contract.bytes(plan.nullspace.exact_contract()).bytes(plan.solver_options.exact_contract());
+  return std::move(contract).release();
+}
+
+struct AmrFieldSolverBuildRequest {
+  Geometry geometry;
+  AmrHierarchyLayout hierarchy;
+  BCRec boundary;
+  ActiveRegionProvider2D active;
+  bool replicated_coarse = false;
+  std::string use_contract_identity;
+  AmrFieldSolveConfig plan;
+};
+
+/// Type-erased, fully materialized hierarchy solver.  Every runtime operation needed after prepare
+/// is expressed here, so the AMR core never branches on a concrete solver type.
+class AmrPreparedFieldSolver {
+ public:
+  virtual ~AmrPreparedFieldSolver() = default;
+  [[nodiscard]] virtual std::string_view provider_identity() const noexcept = 0;
+  [[nodiscard]] virtual std::string_view exact_prepared_contract() const noexcept = 0;
+  [[nodiscard]] virtual bool couples_hierarchy_levels() const noexcept = 0;
+  [[nodiscard]] virtual int level_count() const noexcept = 0;
+  [[nodiscard]] virtual FieldDistribution level_distribution(int level) const = 0;
+  virtual MultiFab& rhs_level(int level) = 0;
+  virtual MultiFab& phi_level(int level) = 0;
+  virtual void set_boundary_context(const FieldBoundaryExecutionContext& context) = 0;
+  virtual SolveReport solve() = 0;
+  [[nodiscard]] virtual const SolveReport& last_solve_report() const noexcept = 0;
+};
+
+/// Execute one provider-owned AMR field solve behind an exact collective publication boundary.
+/// Providers may either return a report or throw after recording a typed reject-attempt report;
+/// both forms are normalized before the core decides whether to publish or roll back. Unknown
+/// exceptions, malformed reports, and valid-but-rank-divergent reports fail uniformly.
+inline SolveReport solve_prepared_amr_field_solver_collectively(AmrPreparedFieldSolver& solver) {
+  SolveReport report;
+  bool provider_failed = false;
+  try {
+    report = solver.solve();
+  } catch (...) {
+    const SolveReport& attempted = solver.last_solve_report();
+    if (attempted.failed() && attempted.action == SolveAction::kRejectAttempt)
+      report = attempted;
+    else
+      provider_failed = true;
+  }
+  if (all_reduce_max(provider_failed ? 1L : 0L) != 0)
+    throw std::runtime_error("AMR field-solver provider failed on at least one MPI rank");
+
+  const bool malformed =
+      !solve_report_is_publishable(report, std::numeric_limits<int>::max());
+  if (all_reduce_max(malformed ? 1L : 0L) != 0)
+    throw std::runtime_error("AMR field-solver provider published a malformed SolveReport");
+
+  ExactSolveReportConsensusScratch report_consensus;
+  if (!report_consensus.agrees(report))
+    throw std::runtime_error("AMR field-solver provider report differs between MPI ranks");
+  return report;
+}
+
+/// Prepared AMR field solver source.  Providers own construction policy and implementation-specific
+/// options; the registry and runtime consume only stable identity and exact contracts. Capability
+/// declarations are opaque provider-owned identities; semantic compatibility is decided exclusively
+/// by supports(request).
+class AmrFieldSolverProvider {
+ public:
+  virtual ~AmrFieldSolverProvider() = default;
+  [[nodiscard]] virtual std::string_view identity() const noexcept = 0;
+  [[nodiscard]] virtual std::uint64_t interface_version() const noexcept = 0;
+  [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
+  [[nodiscard]] virtual std::vector<std::string> capability_contracts() const = 0;
+  [[nodiscard]] virtual AmrFieldSolverOptions default_field_options() const = 0;
+  /// Optional provider-owned default for a particular use envelope. Providers that only accept
+  /// explicit authored policies return std::nullopt; the core never invents or interprets one.
+  [[nodiscard]] virtual std::optional<AmrFieldHierarchyPolicyAuthority>
+  default_hierarchy_policy(std::string_view use_contract_identity) const = 0;
+  [[nodiscard]] virtual PreparedProviderSupport accepts_options(
+      const AmrFieldSolverOptions& options) const noexcept = 0;
+  [[nodiscard]] virtual PreparedProviderSupport supports(
+      const AmrFieldSolverBuildRequest& request) const noexcept = 0;
+  [[nodiscard]] virtual std::string expected_prepared_contract(
+      const AmrFieldSolverBuildRequest& request) const = 0;
+  [[nodiscard]] virtual std::unique_ptr<AmrPreparedFieldSolver> build(
+      const AmrFieldSolverBuildRequest& request) const = 0;
+};
+
+inline std::string exact_amr_field_solver_provider_declaration(
+    const AmrFieldSolverProvider& provider) {
+  std::vector<std::string> capabilities = provider.capability_contracts();
+  std::sort(capabilities.begin(), capabilities.end());
+  if (std::any_of(capabilities.begin(), capabilities.end(),
+                  [](const std::string& value) { return value.empty(); }) ||
+      std::adjacent_find(capabilities.begin(), capabilities.end()) != capabilities.end())
+    throw std::invalid_argument(
+        "AMR field solver provider capabilities require unique exact identities");
+  ExactContractBuilder contract;
+  contract.text("pops.amr.field-solver-provider-declaration")
+      .scalar(std::uint32_t{1})
+      .text(provider.identity())
+      .scalar(provider.interface_version())
+      .text(provider.collective_contract())
+      .sequence(capabilities,
+                [](ExactContractBuilder& item, const std::string& capability) {
+                  item.text(capability);
+                })
+      .bytes(provider.default_field_options().exact_contract());
+  return std::move(contract).release();
+}
+
+class AmrFieldSolverProviderRegistry {
+ public:
+  void add(std::shared_ptr<const AmrFieldSolverProvider> provider) {
+    if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
+        provider->collective_contract().empty())
+      throw std::invalid_argument("AMR field solver provider requires exact identities");
+    const std::string identity(provider->identity());
+    (void)exact_amr_field_solver_provider_declaration(*provider);
+    if (!providers_.emplace(identity, std::move(provider)).second)
+      throw std::invalid_argument("duplicate AMR field solver provider identity '" + identity +
+                                  "'");
+  }
+
+  [[nodiscard]] std::shared_ptr<const AmrFieldSolverProvider> resolve(
+      std::string_view identity) const {
+    const auto found = providers_.find(std::string(identity));
+    if (found == providers_.end())
+      throw std::invalid_argument("unknown AMR field solver provider '" + std::string(identity) +
+                                  "'");
+    return found->second;
+  }
+
+ private:
+  std::map<std::string, std::shared_ptr<const AmrFieldSolverProvider>> providers_;
+};
+
+struct AmrFieldSolverSupportAssessment {
+  PreparedProviderSupport options;
+  PreparedProviderSupport request;
+
+  [[nodiscard]] bool accepted() const noexcept {
+    return options.accepted() && request.accepted();
+  }
+  [[nodiscard]] std::string exact_contract() const {
+    if (!options.well_formed() || !request.well_formed() ||
+        (!options.accepted() && request.accepted()))
+      throw std::invalid_argument("AMR field solver returned malformed support decisions");
+    ExactContractBuilder contract;
+    contract.text("pops.amr.field-solver-support")
+        .scalar(std::uint32_t{1})
+        .bytes(exact_prepared_provider_support(options))
+        .bytes(exact_prepared_provider_support(request));
+    return std::move(contract).release();
+  }
+};
+
+inline AmrFieldSolverSupportAssessment inspect_amr_field_solver_support(
+    const AmrFieldSolverProvider& provider, const AmrFieldSolverBuildRequest& request) {
+  AmrFieldSolverSupportAssessment support{
+      provider.accepts_options(request.plan.solver_options), provider.supports(request)};
+  (void)support.exact_contract();
+  return support;
+}
+
+inline AmrFieldSolverSupportAssessment inspect_amr_field_solver_support_collectively(
+    const AmrFieldSolverProvider& provider, const AmrFieldSolverBuildRequest& request) {
+  AmrFieldSolverSupportAssessment support;
+  std::string declaration;
+  std::string support_contract;
+  bool inspection_failed = false;
+  try {
+    declaration = exact_amr_field_solver_provider_declaration(provider);
+    support = inspect_amr_field_solver_support(provider, request);
+    support_contract = support.exact_contract();
+  } catch (...) {
+    inspection_failed = true;
+  }
+  if (all_reduce_max(inspection_failed ? 1L : 0L) != 0)
+    throw std::runtime_error(
+        "AMR field solver support inspection failed on at least one MPI rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-field-solver-provider", declaration},
+           {"amr-field-solver-support", support_contract}}))
+    throw std::runtime_error(
+        "AMR field solver declaration or support decision differs across MPI ranks");
+  if (!support.options.accepted())
+    throw std::invalid_argument(
+        "AMR field solver provider rejected options (code " +
+        std::to_string(support.options.code) + "): " + std::string(support.options.reason));
+  if (!support.request.accepted())
+    throw std::invalid_argument(
+        "AMR field solver provider rejected request (code " +
+        std::to_string(support.request.code) + "): " + std::string(support.request.reason));
+  return support;
+}
+
+inline std::string make_amr_field_solver_contract(std::string_view provider_identity,
+                                                  const AmrFieldSolverBuildRequest& request) {
+  ExactContractBuilder contract;
+  contract.text("pops.amr.prepared-field-solver")
+      .scalar(std::uint32_t{1})
+      .text(provider_identity)
+      .text(request.plan.plan_identity)
+      .text(request.use_contract_identity)
+      .bytes(request.plan.hierarchy_policy.exact_contract())
+      .scalar(request.replicated_coarse)
+      .optional_collective_contract(request.active)
+      .scalar(request.plan.has_reaction)
+      .scalar(request.plan.reaction)
+      .scalar(request.plan.has_boundary_kernel)
+      .text(request.plan.has_boundary_kernel ? request.plan.boundary_kernel.identity : "")
+      .text(request.plan.has_boundary_kernel ? request.plan.boundary_kernel.residual_identity : "")
+      .text(request.plan.has_boundary_kernel ? request.plan.boundary_kernel.jvp_identity : "")
+      .scalar(request.plan.has_newton)
+      .bytes(request.plan.nullspace.exact_contract())
+      .bytes(request.plan.solver_options.exact_contract());
+  if (request.plan.has_newton) {
+    const auto& options = request.plan.newton;
+    contract.scalar(options.tolerance)
+        .scalar(options.max_iterations)
+        .scalar(options.linear_tolerance)
+        .scalar(options.linear_max_iterations)
+        .scalar(options.restart)
+        .scalar(options.armijo)
+        .scalar(options.minimum_step);
+  }
+  int refinement = 1;
+  for (std::size_t level = 0; level < request.hierarchy.ba.size(); ++level) {
+    const Geometry geometry = request.geometry.refine(refinement);
+    const FieldDistribution distribution = level == 0 && request.replicated_coarse
+                                               ? FieldDistribution::Replicated
+                                               : FieldDistribution::Distributed;
+    EllipticBuildRequest level_request{geometry,
+                                       request.hierarchy.ba[level],
+                                       request.hierarchy.dm[level],
+                                       request.boundary,
+                                       request.active,
+                                       distribution,
+                                       0,
+                                       1};
+    level_request.boundary.dx = geometry.dx();
+    level_request.boundary.dy = geometry.dy();
+    contract.bytes(detail::elliptic_build_request_contract(level_request));
+    if (level < request.hierarchy.refinement_ratios.size())
+      refinement *= request.hierarchy.refinement_ratios[level];
+  }
+  return std::move(contract).release();
+}
+
+/// Builtin provider composition lives in its own translation unit. The AMR core depends only on the
+/// open registry protocol and never interprets a provider or hierarchy-policy identity.
+POPS_EXPORT std::shared_ptr<AmrFieldSolverProviderRegistry>
+make_default_amr_field_solver_registry();
 
 namespace detail {
 
@@ -600,7 +932,15 @@ class AmrRuntime {
   /// @param active      conductive-wall predicate (passed to MG; empty = none).
   AmrRuntime(const Geometry& geom, AmrHierarchyLayout hierarchy, const BCRec& bcPhi,
              std::vector<AmrRuntimeBlock> blocks, Periodicity base_per = Periodicity{true, true},
-             bool replicated_coarse = true, std::function<bool(Real, Real)> active = {})
+             bool replicated_coarse = true, ActiveRegionProvider2D active = {},
+             std::shared_ptr<const AmrFieldSolverProviderRegistry> field_solver_registry =
+                 make_default_amr_field_solver_registry(),
+             std::shared_ptr<const FieldNullspaceProviderRegistry> nullspace_provider_registry =
+                 make_default_field_nullspace_provider_registry(),
+             FieldNullspaceProviderSelection default_field_nullspace =
+                 operator_topology_zero_mean_nullspace(),
+             std::string default_field_solver = "geometric_mg",
+             AmrFieldSolverOptions default_field_options = {})
       : geom_(geom),
         dom_(geom.domain),
         base_per_(base_per),
@@ -608,9 +948,14 @@ class AmrRuntime {
         aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
         hierarchy_(std::move(hierarchy)),
-        mg_(geom, hierarchy_.ba.at(0), bcPhi, active, replicated_coarse),
-        wall_active_(std::move(active)),  // copy already consumed by mg_ (earlier in decl order)
+        wall_active_(std::move(active)),
+        field_solver_registry_(std::move(field_solver_registry)),
+        nullspace_provider_registry_(std::move(nullspace_provider_registry)),
         blocks_(std::move(blocks)) {
+    if (!field_solver_registry_)
+      throw std::invalid_argument("AmrRuntime requires an AMR field solver provider registry");
+    if (!nullspace_provider_registry_)
+      throw std::invalid_argument("AmrRuntime requires a field-nullspace provider registry");
     if (blocks_.empty())
       throw std::runtime_error("AmrRuntime : at least one block required");
     for (const auto& b : blocks_)
@@ -630,13 +975,6 @@ class AmrRuntime {
           hierarchy_.dy[level] != hierarchy_.dy[level + 1] * Real(ratio))
         throw std::runtime_error("AmrRuntime : inconsistent hierarchy refinement metric");
     }
-    const bool fully_periodic = bcPhi_.xlo == BCType::Periodic && bcPhi_.xhi == BCType::Periodic &&
-                                bcPhi_.ylo == BCType::Periodic && bcPhi_.yhi == BCType::Periodic;
-    if (fully_periodic && !wall_active_)
-      default_field_nullspace_ =
-          constant_mean_zero_nullspace("pops://amr/default-field/nullspace/constant@1",
-                                       "fully periodic AMR default field", geom_.dx() * geom_.dy());
-
     // EXACT layout consistency between blocks (the aux is shared per level): same number of levels,
     // and per level same BoxArray (boxes AND order), same DistributionMapping, same dx/dy. SAME guard
     // as AmrSystemCoupler (detail::same_layout_or_throw): all blocks live on ALL patches of the
@@ -657,6 +995,139 @@ class AmrRuntime {
               "AmrRuntime : block storage differs from runtime-owned hierarchy");
       }
     }
+
+    AmrHierarchyLayout coarse_hierarchy;
+    coarse_hierarchy.ba = {hierarchy_.ba.front()};
+    coarse_hierarchy.dm = {hierarchy_.dm.front()};
+    coarse_hierarchy.dx = {hierarchy_.dx.front()};
+    coarse_hierarchy.dy = {hierarchy_.dy.front()};
+    AmrFieldSolveConfig default_plan;
+    default_plan.provider_identity = "pops://amr/default-field";
+    default_plan.plan_identity = "pops://amr/default-field/plan@1";
+    default_plan.solver = std::move(default_field_solver);
+    default_plan.nullspace = default_field_nullspace;
+    default_plan.solver_options = std::move(default_field_options);
+    std::shared_ptr<const AmrFieldSolverProvider> default_provider;
+    std::string default_provider_declaration;
+    std::string expected_default_contract;
+    bool default_declaration_failed = false;
+    try {
+      default_provider = field_solver_registry_->resolve(default_plan.solver);
+      if (default_plan.solver_options.schema_identity.empty())
+        default_plan.solver_options = default_provider->default_field_options();
+      const auto hierarchy_policy = default_provider->default_hierarchy_policy(
+          "pops.amr.field-solver-use.default@1");
+      if (!hierarchy_policy)
+        throw std::runtime_error(
+            "default AMR field provider requires an explicit hierarchy policy");
+      default_plan.hierarchy_policy = *hierarchy_policy;
+    } catch (...) {
+      default_declaration_failed = true;
+    }
+    if (all_reduce_max(default_declaration_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver provider declaration failed on at least one rank");
+    const AmrFieldSolverBuildRequest default_request{
+        geom_,
+        coarse_hierarchy,
+        bcPhi_,
+        wall_active_,
+        replicated_coarse_,
+        "pops.amr.field-solver-use.default@1",
+        default_plan};
+    try {
+      default_provider_declaration =
+          exact_amr_field_solver_provider_declaration(*default_provider);
+    } catch (...) {
+      default_declaration_failed = true;
+    }
+    if (all_reduce_max(default_declaration_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver provider declaration is invalid");
+    (void)inspect_amr_field_solver_support_collectively(*default_provider, default_request);
+    try {
+      expected_default_contract = default_provider->expected_prepared_contract(default_request);
+    } catch (...) {
+      default_declaration_failed = true;
+    }
+    if (all_reduce_max(default_declaration_failed || expected_default_contract.empty() ? 1L : 0L) !=
+        0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver provider failed to publish an exact contract");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-default-field-provider", default_provider_declaration},
+             {"amr-default-field-expected-contract", expected_default_contract}}))
+      throw std::runtime_error(
+          "AmrRuntime: default field solver declaration differs across MPI ranks");
+    bool default_build_failed = false;
+    try {
+      default_field_solver_ = default_provider->build(default_request);
+    } catch (...) {
+      default_build_failed = true;
+    }
+    if (all_reduce_max(default_build_failed || !default_field_solver_ ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver construction failed on at least one rank");
+    bool default_inspection_failed = false;
+    bool default_materialization_mismatch = false;
+    std::string actual_default_contract;
+    try {
+      const MultiFab& default_rhs = default_field_solver_->rhs_level(0);
+      const MultiFab& default_phi = default_field_solver_->phi_level(0);
+      const FieldDistribution default_distribution =
+          replicated_coarse_ ? FieldDistribution::Replicated : FieldDistribution::Distributed;
+      actual_default_contract = default_field_solver_->exact_prepared_contract();
+      default_materialization_mismatch =
+          default_field_solver_->provider_identity() != default_provider->identity() ||
+          actual_default_contract != expected_default_contract ||
+          default_field_solver_->level_count() != 1 ||
+          default_field_solver_->couples_hierarchy_levels() || default_rhs.ncomp() != 1 ||
+          default_rhs.n_grow() != 0 || default_phi.ncomp() != 1 || default_phi.n_grow() != 1 ||
+          default_rhs.box_array().boxes() != coarse_hierarchy.ba.front().boxes() ||
+          default_phi.box_array().boxes() != coarse_hierarchy.ba.front().boxes() ||
+          default_rhs.dmap().ranks() != coarse_hierarchy.dm.front().ranks() ||
+          default_phi.dmap().ranks() != coarse_hierarchy.dm.front().ranks() ||
+          !detail::field_distribution_layout_matches(default_rhs, default_distribution) ||
+          !detail::field_distribution_layout_matches(default_phi, default_distribution) ||
+          default_rhs.shares_storage_with(default_phi);
+    } catch (...) {
+      default_inspection_failed = true;
+    }
+    if (all_reduce_max(default_inspection_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver inspection failed on at least one rank");
+    if (all_reduce_max(default_materialization_mismatch ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: default field solver provider materialized an invalid coarse contract");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-default-field-actual-contract", actual_default_contract}}))
+      throw std::runtime_error(
+          "AmrRuntime: default field solver materialization differs across MPI ranks");
+
+    FieldNullspaceProviderRequest default_nullspace_request;
+    default_nullspace_request.plan_identity =
+        "pops://amr/default-field/nullspace-plan@1";
+    default_nullspace_request.operator_facts = field_nullspace_operator_facts_from_bc_rec(
+        bcPhi_, /*has_reaction=*/false, static_cast<bool>(wall_active_));
+    default_nullspace_request.topology.identity =
+        "pops://amr/default-field/coarse-layout@1";
+    default_nullspace_request.topology.exact_layout_contract = actual_default_contract;
+    default_nullspace_request.topology.field_component = 0;
+    if (!wall_active_)
+      default_nullspace_request.topology.connected_component_contract =
+          default_nullspace_request.topology.identity + ":connected-component@1";
+    default_nullspace_request.topology.layouts = {&default_field_solver_->phi_level(0)};
+    default_nullspace_request.topology.cell_measure = {geom_.dx() * geom_.dy()};
+    default_nullspace_request.topology.level_distributions = {
+        PreparedVectorDistribution(default_field_solver_->level_distribution(0))};
+    default_field_nullspace_ =
+        prepare_field_nullspace(default_field_nullspace, std::move(default_nullspace_request))
+            .plan;
+    default_field_nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace>(
+        default_field_nullspace_,
+        std::vector<const MultiFab*>{&default_field_solver_->phi_level(0)},
+        std::vector<PreparedVectorDistribution>{PreparedVectorDistribution(
+            default_field_solver_->level_distribution(0))});
 
     // Width of the SHARED aux channel: max of the blocks' aux_comps (>= kAuxBaseComps). Counterpart of
     // AmrSystemCoupler::system_aux_comps: a block reading an extra field (B_z, T_e) has the room at
@@ -743,7 +1214,7 @@ class AmrRuntime {
         BlockTransferAuthority{std::move(coarse_fine), std::move(temporal), refinement_ratio, true};
   }
   void set_bootstrap_threshold_tag(std::size_t block, int component, Real threshold,
-                                   std::string provider_identity = "legacy:component_threshold") {
+                                   std::string provider_identity) {
     if (block >= blocks_.size() || component < 0 || component >= blocks_[block].ncomp ||
         provider_identity.empty() || bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::set_bootstrap_threshold_tag invalid descriptor");
@@ -1194,11 +1665,11 @@ class AmrRuntime {
   /// report enumerates the AMR couplings as typed operators. A raw add_coupled_source registers an
   /// "unchecked" (empty-contract) entry; add_coupling_operator records the declared contract.
   const std::vector<CouplingOperatorView>& coupled_operators() const { return coupled_operators_; }
-  MultiFab& phi() { return mg_.phi(); }
+  MultiFab& phi() { return default_field_solver_->phi_level(0); }
   // System Poisson right-hand side after the last solve_fields: f = Sum_b elliptic_rhs_b(U_b) on the
   // shared coarse. Exposed to check the CO-LOCATED SUM (PR1 test); same grid as the coarse (the
   // blocks' contributions are accumulated there at the same cells).
-  MultiFab& poisson_rhs() { return mg_.rhs(); }
+  MultiFab& poisson_rhs() { return default_field_solver_->rhs_level(0); }
   const MultiFab& aux(int k) const { return aux_[k]; }
   std::vector<AmrLevelMP>& levels(std::size_t b) { return *blocks_[b].levels; }
   Real mass(std::size_t b) const { return blocks_[b].mass(); }
@@ -1234,22 +1705,16 @@ class AmrRuntime {
     }
     out.hierarchy = hierarchy_;
     out.aux = aux_;
-    out.phi = mg_.phi();
-    out.poisson_rhs = mg_.rhs();
+    out.phi = default_field_solver_->phi_level(0);
+    out.poisson_rhs = default_field_solver_->rhs_level(0);
     for (auto& [name, field] : named_fields_) {
       StepSnapshot::NamedFieldSnapshot saved;
-      saved.allocated = field.fac || !field.level_mg.empty();
-      if (field.fac) {
-        saved.allocated = true;
-        saved.composite = true;
-        for (int k = 0; k < field.fac->n_levels(); ++k) {
-          saved.phi.push_back(field.fac->phi_level(k));
-          saved.rhs.push_back(field.fac->rhs_level(k));
-        }
-      } else {
-        for (const auto& solver : field.level_mg) {
-          saved.phi.push_back(solver->phi());
-          saved.rhs.push_back(solver->rhs());
+      saved.allocated = static_cast<bool>(field.solver);
+      if (field.solver) {
+        saved.composite = field.solver->couples_hierarchy_levels();
+        for (int k = 0; k < field.solver->level_count(); ++k) {
+          saved.phi.push_back(field.solver->phi_level(k));
+          saved.rhs.push_back(field.solver->rhs_level(k));
         }
       }
       out.named_fields.emplace(name, std::move(saved));
@@ -1294,8 +1759,8 @@ class AmrRuntime {
     for (auto& block : blocks_)
       for (int k = 0; k < nlev_; ++k)
         (*block.levels)[static_cast<std::size_t>(k)].aux = &aux_[static_cast<std::size_t>(k)];
-    mg_.phi() = saved.phi;
-    mg_.rhs() = saved.poisson_rhs;
+    default_field_solver_->phi_level(0) = saved.phi;
+    default_field_solver_->rhs_level(0) = saved.poisson_rhs;
     // Solver objects own topology-specific BoxArrays.  Always rebuild them against the restored
     // accepted hierarchy before replaying their warm starts; a rejected regrid/bootstrap may have
     // replaced a level-local solver with FAC (or changed the number of level-local solvers).
@@ -1308,30 +1773,18 @@ class AmrRuntime {
       }
       auto& field = it->second;
       if (!accepted->second.allocated) {
-        field.mg.reset();
-        field.level_mg.clear();
-        field.fac.reset();
+        field.solver.reset();
         field.nullspace = {};
         field.level_nullspace.clear();
         field.nullspace_ready = false;
       } else {
         ensure_named_elliptic(field);
-        if (accepted->second.composite) {
-          if (!field.fac ||
-              accepted->second.phi.size() != static_cast<std::size_t>(field.fac->n_levels()))
-            throw std::runtime_error("AmrRuntime::restore_step_snapshot: field hierarchy mismatch");
-          for (int k = 0; k < field.fac->n_levels(); ++k) {
-            field.fac->phi_level(k) = accepted->second.phi[static_cast<std::size_t>(k)];
-            field.fac->rhs_level(k) = accepted->second.rhs[static_cast<std::size_t>(k)];
-          }
-        } else {
-          if (accepted->second.phi.size() != field.level_mg.size())
-            throw std::runtime_error(
-                "AmrRuntime::restore_step_snapshot: level-local field hierarchy mismatch");
-          for (std::size_t k = 0; k < field.level_mg.size(); ++k) {
-            field.level_mg[k]->phi() = accepted->second.phi[k];
-            field.level_mg[k]->rhs() = accepted->second.rhs[k];
-          }
+        if (field.solver->couples_hierarchy_levels() != accepted->second.composite ||
+            accepted->second.phi.size() != static_cast<std::size_t>(field.solver->level_count()))
+          throw std::runtime_error("AmrRuntime::restore_step_snapshot: field hierarchy mismatch");
+        for (int k = 0; k < field.solver->level_count(); ++k) {
+          field.solver->phi_level(k) = accepted->second.phi[static_cast<std::size_t>(k)];
+          field.solver->rhs_level(k) = accepted->second.rhs[static_cast<std::size_t>(k)];
         }
       }
       ++it;
@@ -1675,8 +2128,7 @@ class AmrRuntime {
           throw std::runtime_error(
               "AmrRuntime materialized block has no exact qualified state identity");
       }
-      boundary_stage_states_.emplace(
-          BoundaryStageStateView{point, &states, -1, nullptr});
+      boundary_stage_states_.emplace(BoundaryStageStateView{point, &states, -1, nullptr});
       stage_reset.slot = &boundary_stage_states_;
     }
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
@@ -1816,8 +2268,8 @@ class AmrRuntime {
   /// Native level-composite reduction over one qualified elliptic field provider.  The provider is
   /// materialized on the shared hierarchy, then folded directly on its Kokkos MultiFabs with the
   /// same coverage/metric/MPI contract as composite_reduce; no output snapshot arrays participate.
-  double composite_reduce_field(const std::string& provider_slot, const std::string& kind,
-                                int comp, const std::vector<int>& levels = {});
+  double composite_reduce_field(const std::string& provider_slot, const std::string& kind, int comp,
+                                const std::vector<int>& levels = {});
 
   /// Impose a mid-run hierarchy from a checkpoint (multi-block, all levels, reusing regrid R6/R7):
   /// build each level's BoxArray + DistributionMapping from the manifest, reallocate every block's
@@ -1929,12 +2381,12 @@ class AmrRuntime {
   /// A SECOND elliptic solve (beyond the default coarse Poisson) for a user-named field
   /// (m.elliptic_field("psi", rhs=..., aux=[...])) on the AMR hierarchy. AMR counterpart of
   /// SystemFieldSolver::register_named_field / solve_named_field_from_state. Each named field owns a
-  /// DEDICATED coarse GeometricMG solver (built lazily, REUSING the native solver -- the operator is
-  /// never reimplemented), its RHS = sum over blocks of @c named_elliptic_rhs[field], and its own aux
+  /// dedicated prepared provider instance built lazily from the exact hierarchy contract, its RHS =
+  /// sum over blocks of @c named_elliptic_rhs[field], and its own aux
   /// output components (the model's named aux slots, >= kAuxNamedBase). solve_fields() solves every
   /// registered named field right after the default Poisson and injects its aux to the fine levels, so a
   /// bare run() leaves the field SOLVED (readable via named_field_values). The default Poisson path
-  /// (mg_) is untouched / bit-identical. Empty default -> the named-field loop is a no-op.
+  /// is untouched / bit-identical. Empty default -> the named-field loop is a no-op.
   /// @{
   /// Registers named @c field's aux output components: @p phi_comp where the solved potential lands, @p
   /// gx_comp / @p gy_comp where its centered gradient lands. Both equal -1 for phi-only; otherwise
@@ -1951,23 +2403,24 @@ class AmrRuntime {
       if (provider.identity.empty() || provider.owner_block.empty() ||
           provider.native_key.empty() || !std::isfinite(static_cast<double>(provider.coefficient)))
         throw std::runtime_error("AmrRuntime: invalid field provider-pack entry");
-    const auto& mg = plan.mg_opts;
-    if (!std::isfinite(static_cast<double>(mg.abs_tol)) || mg.abs_tol < Real(0) ||
-        !std::isfinite(static_cast<double>(mg.rel_tol)) || mg.rel_tol <= Real(0) ||
-        mg.max_cycles < 1 || mg.min_coarse < 1 || mg.nu1 < 0 || mg.nu2 < 0 || mg.nbottom < 0 ||
-        mg.coarse_threshold < 0)
-      throw std::runtime_error("AmrRuntime: invalid field multigrid options");
-    const auto& fac = plan.fac_opts;
-    if (fac.max_iters < 1 || fac.fine_sweeps < 1 || fac.coarse_cycles < 1 ||
-        !std::isfinite(static_cast<double>(fac.rel_tol)) || fac.rel_tol <= Real(0) ||
-        fac.rel_tol >= Real(1) || !std::isfinite(static_cast<double>(fac.abs_tol)) ||
-        fac.abs_tol < Real(0) || !std::isfinite(static_cast<double>(fac.coarse_rel_tol)) ||
-        fac.coarse_rel_tol <= Real(0) || fac.coarse_rel_tol >= Real(1) ||
-        !std::isfinite(static_cast<double>(fac.coarse_abs_tol)) || fac.coarse_abs_tol < Real(0))
-      throw std::runtime_error("AmrRuntime: invalid field FAC options");
-    if (plan.solver != "geometric_mg" ||
-        (plan.hierarchy != "composite" && plan.hierarchy != "level_local"))
-      throw std::runtime_error("AmrRuntime: unsupported field solver/hierarchy policy");
+    try {
+      (void)plan.nullspace.exact_contract();
+      (void)plan.hierarchy_policy.exact_contract();
+    } catch (...) {
+      throw std::runtime_error(
+          "AmrRuntime: incomplete field-nullspace or hierarchy-policy authority");
+    }
+    const BCRec field_boundary = plan.has_explicit_bc ? plan.explicit_bc : bcPhi_;
+    const AmrFieldSolverBuildRequest request{
+        geom_,
+        hierarchy_,
+        field_boundary,
+        wall_active_,
+        replicated_coarse_,
+        "pops.amr.field-solver-use.named@1",
+        plan};
+    const auto provider = field_solver_registry_->resolve(plan.solver);
+    (void)inspect_amr_field_solver_support_collectively(*provider, request);
     auto existing = named_fields_.find(provider_slot);
     if (existing != named_fields_.end())
       throw std::runtime_error("AmrRuntime: duplicate qualified field provider slot");
@@ -1987,9 +2440,7 @@ class AmrRuntime {
     found->second.plan.has_boundary_kernel = true;
     if (!kernel.observes_iteration)
       found->second.plan.boundary_context.point.iteration = 0;
-    found->second.mg.reset();
-    found->second.level_mg.clear();
-    found->second.fac.reset();
+    invalidate_named_field_solver(found->second);
   }
 
   void set_field_logical_timepoint(const std::string& provider_slot,
@@ -2002,12 +2453,8 @@ class AmrRuntime {
     if (!field.plan.has_boundary_kernel || !field.plan.boundary_kernel.observes_iteration)
       field.plan.boundary_context.point.iteration = 0;
     if (field.plan.has_boundary_kernel) {
-      for (auto& solver : field.level_mg)
-        solver->set_boundary_context(field.plan.boundary_context);
-      if (field.mg && field.level_mg.empty())
-        field.mg->set_boundary_context(field.plan.boundary_context);
-      if (field.fac)
-        field.fac->set_boundary_context(field.plan.boundary_context);
+      if (field.solver)
+        field.solver->set_boundary_context(field.plan.boundary_context);
     }
   }
 
@@ -2023,12 +2470,8 @@ class AmrRuntime {
     plan.boundary_context.parameters = plan.boundary_parameters.get();
     plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
     if (plan.has_boundary_kernel) {
-      for (auto& solver : found->second.level_mg)
-        solver->set_boundary_context(plan.boundary_context);
-      if (found->second.mg && found->second.level_mg.empty())
-        found->second.mg->set_boundary_context(plan.boundary_context);
-      if (found->second.fac)
-        found->second.fac->set_boundary_context(plan.boundary_context);
+      if (found->second.solver)
+        found->second.solver->set_boundary_context(plan.boundary_context);
     }
   }
 
@@ -2040,9 +2483,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime: unknown field boundary-dependency slot");
     found->second.plan.boundary_state_blocks = state_blocks;
     found->second.plan.boundary_state_components = state_components;
-    found->second.mg.reset();
-    found->second.level_mg.clear();
-    found->second.fac.reset();
+    invalidate_named_field_solver(found->second);
   }
 
   void set_field_newton_plan(const std::string& provider_slot, const FieldNewtonOptions& options) {
@@ -2052,9 +2493,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime: unknown field provider nonlinear-plan slot");
     found->second.plan.newton = options;
     found->second.plan.has_newton = true;
-    found->second.mg.reset();
-    found->second.level_mg.clear();
-    found->second.fac.reset();
+    invalidate_named_field_solver(found->second);
   }
 
   void register_named_field(const std::string& block, const std::string& provider_key, int phi_comp,
@@ -2081,12 +2520,7 @@ class AmrRuntime {
       field.gx_comp = gx_comp;
       field.gy_comp = gy_comp;
       field.gradient_sign = gradient_sign;
-      field.mg.reset();
-      field.level_mg.clear();
-      field.fac.reset();
-      field.nullspace = {};
-      field.level_nullspace.clear();
-      field.nullspace_ready = false;
+      invalidate_named_field_solver(field);
       matched = true;
     }
     if (!matched)
@@ -2130,7 +2564,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime: unknown qualified field provider slot '" +
                                provider_slot + "'");
     const NamedField& field = found->second;
-    if (!field.mg && field.level_mg.empty() && !field.fac)
+    if (!field.solver)
       return std::nullopt;
     std::vector<PatchBox> result;
     for (int level = 0; level < hierarchy_.nlev(); ++level)
@@ -2145,7 +2579,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime: unknown qualified field provider slot '" +
                                provider_slot + "'");
     ensure_named_elliptic(it->second);
-    return it->second.fac ? it->second.fac->phi_level(0) : it->second.level_mg.at(0)->phi();
+    return it->second.solver->phi_level(0);
   }
 
   int provider_potential_levels(const std::string& provider_slot) {
@@ -2153,8 +2587,7 @@ class AmrRuntime {
     if (it == named_fields_.end())
       throw std::runtime_error("AmrRuntime: unknown qualified field provider slot");
     ensure_named_elliptic(it->second);
-    return it->second.fac ? it->second.fac->n_levels()
-                          : static_cast<int>(it->second.level_mg.size());
+    return it->second.solver->level_count();
   }
 
   MultiFab& provider_potential_level(const std::string& provider_slot, int level) {
@@ -2162,12 +2595,10 @@ class AmrRuntime {
     if (it == named_fields_.end())
       throw std::runtime_error("AmrRuntime: unknown qualified field provider slot");
     ensure_named_elliptic(it->second);
-    const int levels =
-        it->second.fac ? it->second.fac->n_levels() : static_cast<int>(it->second.level_mg.size());
+    const int levels = it->second.solver->level_count();
     if (level < 0 || level >= levels)
       throw std::out_of_range("AmrRuntime: qualified field provider level out of range");
-    return it->second.fac ? it->second.fac->phi_level(level)
-                          : it->second.level_mg[static_cast<std::size_t>(level)]->phi();
+    return it->second.solver->phi_level(level);
   }
 
   std::vector<double> named_field_values(const std::string& provider_slot) {
@@ -2451,23 +2882,23 @@ class AmrRuntime {
 
     // 2. SUMMED and CO-LOCATED system RHS: f = Sum_b elliptic_rhs_b(U_b) on the coarse. We reset to
     // zero then each block ACCUMULATES (+=) its contribution on the SAME cells of the shared coarse
-    // (mg_.rhs() shares the coarse layout).
-    mg_.rhs().set_val(Real(0));
+    // (the prepared provider RHS shares the coarse layout).
+    default_field_solver_->rhs_level(0).set_val(Real(0));
     for (auto& b : blocks_)
-      b.add_elliptic_rhs((*b.levels)[0].U, mg_.rhs());
-    require_field_nullspace_compatible(mg_.rhs(), default_field_nullspace_);
-    mg_.solve();
-    const SolveReport report = mg_.last_solve_report();
+      b.add_elliptic_rhs((*b.levels)[0].U, default_field_solver_->rhs_level(0));
+    default_field_nullspace_workspace_->require_compatible(default_field_solver_->rhs_level(0));
+    const SolveReport report =
+        solve_prepared_amr_field_solver_collectively(*default_field_solver_);
     if (!report.solved())
       return report;
-    apply_field_gauge(mg_.phi(), default_field_nullspace_);
+    default_field_nullspace_workspace_->apply_gauge(default_field_solver_->phi_level(0));
 
     // 3. coarse aux = (phi, grad phi) via the SAME clean path as AmrSystemCoupler: fill the ghosts of
     // phi according to bcPhi_, field_postprocess (phi + grad), fill the ghosts of aux according to
     // aux_bc_ (derived from bcPhi_). Handles the non-periodic case (Foextrap).
-    fill_ghosts_profiled(mg_.phi(), dom_, bcPhi_);
+    fill_ghosts_profiled(default_field_solver_->phi_level(0), dom_, bcPhi_);
     const Real cx = Real(1) / (2 * geom_.dx()), cy = Real(1) / (2 * geom_.dy());
-    field_postprocess(mg_.phi(), aux_[0], cx, cy,
+    field_postprocess(default_field_solver_->phi_level(0), aux_[0], cx, cy,
                       FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
     // 3b. model-NAMED aux (ADC-291): re-apply the static named fields onto the coarse valid cells
     // BEFORE fill_ghosts (so their ghosts are filled) and the injection (so they reach every level).
@@ -2480,9 +2911,9 @@ class AmrRuntime {
 
   /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
   /// into the field's own aux components, ghost-fills them and injects coarse->fine. Mirror of the
-  /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
-  /// default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only path
-  /// stays bit-identical).
+  /// default Poisson block above (steps 2-4), but each named field uses its resolved prepared provider.
+  /// The default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only
+  /// path stays bit-identical).
   SolveReport solve_named_fields_uncommitted(const std::string* selected = nullptr) {
     SolveReport completed;
     bool has_completed_solve = false;
@@ -2507,6 +2938,7 @@ class AmrRuntime {
         throw std::runtime_error(
             "AmrRuntime: named elliptic field output components exceed the aux channel width");
       nf.plan.boundary_state_buffers.clear();
+      nf.plan.boundary_state_distributions.clear();
       for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
         const int block = block_index(nf.plan.boundary_state_blocks[index]);
         if (block < 0)
@@ -2516,18 +2948,20 @@ class AmrRuntime {
             nf.plan.boundary_state_components[index] >= state.ncomp())
           throw std::runtime_error("AmrRuntime: boundary state component is out of range");
         nf.plan.boundary_state_buffers.push_back(&state);
+        nf.plan.boundary_state_distributions.push_back(
+            replicated_coarse_ ? FieldDistribution::Replicated : FieldDistribution::Distributed);
       }
       nf.plan.boundary_context.states =
           nf.plan.boundary_state_buffers.empty() ? nullptr : nf.plan.boundary_state_buffers.data();
+      nf.plan.boundary_context.state_distributions =
+          nf.plan.boundary_state_distributions.empty()
+              ? nullptr
+              : nf.plan.boundary_state_distributions.data();
       nf.plan.boundary_context.state_count =
           static_cast<int>(nf.plan.boundary_state_buffers.size());
       ensure_named_elliptic(nf);
-      if (nf.plan.has_boundary_kernel) {
-        if (nf.fac)
-          nf.fac->set_boundary_context(nf.plan.boundary_context);
-        else
-          nf.level_mg.at(0)->set_boundary_context(nf.plan.boundary_context);
-      }
+      if (nf.plan.has_boundary_kernel)
+        nf.solver->set_boundary_context(nf.plan.boundary_context);
       prepare_named_field_providers(nf);
       // The provider registry has already resolved the complete block-qualified route.  Assembly
       // reads exactly one block and one closure; local provider names can therefore repeat freely in
@@ -2549,60 +2983,30 @@ class AmrRuntime {
         // native MG/FAC residual stores ``div(A grad phi)-kappa*phi=rhs_native``.
         scale(rhs, Real(-1));
       };
-      derive_named_nullspace(nf);
-      const SolveReport* attempted_report = nullptr;
-      try {
-        if (nf.fac) {
-          std::vector<const MultiFab*> rhs_levels;
-          for (int k = 0; k < nlev_; ++k)
-            assemble(k, nf.fac->rhs_level(k));
-          for (int k = 0; k < nlev_; ++k)
-            rhs_levels.push_back(&nf.fac->rhs_level(k));
-          require_field_nullspace_compatible(rhs_levels, nf.nullspace);
-          attempted_report = &nf.fac->last_solve_report();
-          nf.fac->solve();
-          completed = nf.fac->last_solve_report();
-          has_completed_solve = true;
-          if (!completed.solved())
-            return completed;
-        } else {
-          for (int k = 0; k < static_cast<int>(nf.level_mg.size()); ++k) {
-            auto& solver = *nf.level_mg[static_cast<std::size_t>(k)];
-            assemble(k, solver.rhs());
-            if (!nf.level_nullspace.empty())
-              require_field_nullspace_compatible(std::vector<const MultiFab*>{&solver.rhs()},
-                                                 nf.level_nullspace[static_cast<std::size_t>(k)],
-                                                 k);
-            attempted_report = &solver.last_solve_report();
-            if (k == 0 && nf.plan.has_boundary_kernel && nf.plan.boundary_kernel.observes_iteration)
-              solver.solve();
-            else
-              solver.solve(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.max_cycles,
-                           nf.plan.mg_opts.abs_tol);
-            completed = solver.last_solve_report();
-            has_completed_solve = true;
-            if (!completed.solved())
-              return completed;
-          }
-        }
-      } catch (...) {
-        // The nonlinear and composite solvers historically throw after recording a typed,
-        // collective rejection.  Preserve that report as data; unrelated capability, boundary,
-        // nullspace, and configuration exceptions still propagate unchanged.
-        if (attempted_report != nullptr && attempted_report->failed() &&
-            attempted_report->action == SolveAction::kRejectAttempt)
-          return *attempted_report;
-        throw;
+      prepare_named_nullspace(nf);
+      for (int level = 0; level < nf.solver->level_count(); ++level)
+        assemble(level, nf.solver->rhs_level(level));
+      if (nf.solver->couples_hierarchy_levels()) {
+        nf.nullspace_workspace->require_compatible(nf.nullspace_rhs_levels);
+      } else {
+        for (int level = 0; level < nf.solver->level_count(); ++level)
+          if (!nf.level_nullspace.empty())
+            nf.level_nullspace_workspaces[static_cast<std::size_t>(level)]->require_compatible(
+                nf.solver->rhs_level(level));
       }
+      completed = solve_prepared_amr_field_solver_collectively(*nf.solver);
+      has_completed_solve = true;
+      if (!completed.solved())
+        return completed;
       device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as mg_)
-      if (nf.fac || nf.level_mg.size() > 1)
+      if (nf.solver->level_count() > 1)
         continue;  // every multilevel field is published level-by-level below
       // Write phi (+ centered grad) into the field's OWN aux components on the coarse valid cells. The
       // default field_postprocess hardcodes comps 0..2, so we write the named comps with a dedicated
       // loop (mirror of SystemFieldSolver::solve_named_field_from_state). Per-local-fab (MPI-safe).
-      MultiFab& phi_mf = nf.level_mg[0]->phi();
+      MultiFab& phi_mf = nf.solver->phi_level(0);
       if (!nf.level_nullspace.empty())
-        apply_field_gauge(phi_mf, nf.level_nullspace[0]);
+        nf.level_nullspace_workspaces[0]->apply_gauge(phi_mf);
       device_fence();
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
       const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
@@ -2622,25 +3026,20 @@ class AmrRuntime {
     for (auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
         continue;
-      if (!nf.fac && nf.level_mg.size() <= 1)
+      if (nf.solver->level_count() <= 1)
         continue;
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
       const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
       const bool grad = nf.gx_comp >= 0 && nf.gy_comp >= 0;
-      if (nf.fac) {
-        std::vector<MultiFab*> phi_levels;
-        for (int k = 0; k < nlev_; ++k)
-          phi_levels.push_back(&nf.fac->phi_level(k));
-        apply_field_gauge(phi_levels, nf.nullspace);
-      }
-      for (int k = 0; k < nlev_; ++k) {
-        MultiFab& phi =
-            nf.fac ? nf.fac->phi_level(k) : nf.level_mg[static_cast<std::size_t>(k)]->phi();
-        if (!nf.fac && !nf.level_nullspace.empty())
-          apply_field_gauge(std::vector<MultiFab*>{&phi},
-                            nf.level_nullspace[static_cast<std::size_t>(k)], k);
-        const Real level_dx = geom_.dx() / Real(1 << k);
-        const Real level_dy = geom_.dy() / Real(1 << k);
+      if (nf.solver->couples_hierarchy_levels())
+        nf.nullspace_workspace->apply_gauge(nf.nullspace_phi_levels);
+      for (int k = 0; k < nf.solver->level_count(); ++k) {
+        MultiFab& phi = nf.solver->phi_level(k);
+        if (!nf.solver->couples_hierarchy_levels() && !nf.level_nullspace.empty())
+          nf.level_nullspace_workspaces[static_cast<std::size_t>(k)]->apply_gauge(phi);
+        const Real refinement = static_cast<Real>(level_refinement(k));
+        const Real level_dx = geom_.dx() / refinement;
+        const Real level_dy = geom_.dy() / refinement;
         for (int li = 0; li < aux_[static_cast<std::size_t>(k)].local_size(); ++li) {
           const ConstArray4 p = phi.fab(li).const_array();
           Array4 a = aux_[static_cast<std::size_t>(k)].fab(li).array();
@@ -2765,20 +3164,16 @@ class AmrRuntime {
                                                        0.0,
                                                        component_physical_time_};
     if (boundary_stage_states_)
-      throw std::runtime_error(
-          "AMR Tagger ghost production overlaps another boundary evaluation");
+      throw std::runtime_error("AMR Tagger ghost production overlaps another boundary evaluation");
     std::map<std::string, std::size_t> qualified_routes;
     std::vector<MultiFab*> staged(blocks_.size(), nullptr);
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
       if (blocks_[block].state_identity.empty() ||
           !qualified_routes.emplace(blocks_[block].state_identity, block).second)
-        throw std::runtime_error(
-            "AMR Tagger requires unique qualified state storage routes");
-      staged[block] =
-          &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+        throw std::runtime_error("AMR Tagger requires unique qualified state storage routes");
+      staged[block] = &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
     }
-    boundary_stage_states_.emplace(
-        BoundaryStageStateView{point, &staged, -1, nullptr});
+    boundary_stage_states_.emplace(BoundaryStageStateView{point, &staged, -1, nullptr});
     struct StageStateReset {
       std::optional<BoundaryStageStateView>* slot;
       ~StageStateReset() { slot->reset(); }
@@ -3795,7 +4190,7 @@ class AmrRuntime {
     const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
     std::vector<double> out(nf * nf, 0.0);
     device_fence();
-    const MultiFab& P = (k == 0) ? mg_.phi() : aux_[k];
+    const MultiFab& P = (k == 0) ? default_field_solver_->phi_level(0) : aux_[k];
     fill_level_phi(P, nf, out);
     return out;
   }
@@ -3819,7 +4214,7 @@ class AmrRuntime {
     if (p.size() != nf * nf)
       throw std::runtime_error("AmrRuntime::set_level_potential : phi size != nf*nf");
     device_fence();
-    MultiFab& P = (k == 0) ? mg_.phi() : aux_[k];
+    MultiFab& P = (k == 0) ? default_field_solver_->phi_level(0) : aux_[k];
     for (int li = 0; li < P.local_size(); ++li) {
       Array4 q = P.fab(li).array();
       const Box2D v = P.box(li);
@@ -3935,11 +4330,7 @@ class AmrRuntime {
     }
   }
 
-  // NAMED multi-elliptic field (ADC-428): a field name's aux output components + a DEDICATED coarse
-  // GeometricMG (built lazily, REUSING the native solver; the operator is never reimplemented).
-  // shared_ptr<GeometricMG>: GeometricMG owns Fabs (non-copyable/non-movable), and named_fields_ is a
-  // std::map (stable nodes), so a heap GeometricMG gives a stable address without making NamedField
-  // movable. Defined here (before ensure_named_elliptic, whose parameter type must be visible).
+  // NAMED multi-elliptic field (ADC-428): aux outputs plus one type-erased prepared backend.
   struct NamedField {
     struct PreparedProvider {
       std::size_t block = 0;
@@ -3953,12 +4344,13 @@ class AmrRuntime {
     bool has_plan = false;
     AmrFieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
-    std::shared_ptr<GeometricMG>
-        mg;  // dedicated coarse solver, built lazily by ensure_named_elliptic
-    std::vector<std::shared_ptr<GeometricMG>> level_mg;
-    std::shared_ptr<CompositeFacPoisson> fac;
+    std::unique_ptr<AmrPreparedFieldSolver> solver;
     FieldNullspacePlan nullspace;
     std::vector<FieldNullspacePlan> level_nullspace;
+    std::unique_ptr<FieldNullspaceWorkspace> nullspace_workspace;
+    std::vector<std::unique_ptr<FieldNullspaceWorkspace>> level_nullspace_workspaces;
+    std::vector<const MultiFab*> nullspace_rhs_levels;
+    std::vector<MultiFab*> nullspace_phi_levels;
     bool nullspace_ready = false;
   };
 
@@ -4009,15 +4401,20 @@ class AmrRuntime {
                                report.status_name() + " action=" + report.action_name());
   }
 
+  static void invalidate_named_field_solver(NamedField& field) noexcept {
+    field.nullspace_workspace.reset();
+    field.level_nullspace_workspaces.clear();
+    field.nullspace_rhs_levels.clear();
+    field.nullspace_phi_levels.clear();
+    field.solver.reset();
+    field.nullspace = {};
+    field.level_nullspace.clear();
+    field.nullspace_ready = false;
+  }
+
   void invalidate_named_field_topology() {
-    for (auto& [_, field] : named_fields_) {
-      field.mg.reset();
-      field.level_mg.clear();
-      field.fac.reset();
-      field.nullspace = {};
-      field.level_nullspace.clear();
-      field.nullspace_ready = false;
-    }
+    for (auto& [_, field] : named_fields_)
+      invalidate_named_field_solver(field);
   }
 
   void prepare_named_field_providers(NamedField& field) {
@@ -4039,73 +4436,108 @@ class AmrRuntime {
     field.prepared_providers = std::move(prepared);
   }
 
-  // Builds a NAMED elliptic field's dedicated coarse GeometricMG (ADC-428), lazily, IDENTICAL to the
-  // default mg_ (same coarse geometry / BoxArray / Poisson BC / wall predicate / replication). REUSES the
-  // native solver -- no operator is reimplemented. The variable / anisotropic permittivity of the
-  // default Poisson is not carried onto a named field. A resolved scalar reaction coefficient is
-  // installed on every GeometricMG level or on the composite FAC Helmholtz operator. No-op if
-  // already built.
+  // Materializes one resolved named-field provider lazily.  Provider declaration, exact request,
+  // construction failure and post-build storage are communicator-wide contracts; no rank may escape
+  // around a collective because its local extension failed first.
   void ensure_named_elliptic(NamedField& nf) {
-    if (nf.mg || nf.fac || !nf.level_mg.empty())
+    if (nf.solver)
       return;
     const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
-    if (nf.plan.hierarchy == "composite" && nlev_ > 1) {
-      std::vector<BoxArray> fine_boxes;
-      fine_boxes.reserve(static_cast<std::size_t>(nlev_ - 1));
-      for (int k = 1; k < nlev_; ++k)
-        fine_boxes.push_back((*blocks_[0].levels)[static_cast<std::size_t>(k)].U.box_array());
-      nf.fac = std::make_shared<CompositeFacPoisson>(geom_, hierarchy_.ba[0], boundary, fine_boxes);
-      nf.fac->set_options(nf.plan.fac_opts);
-      if (nf.plan.has_reaction)
-        nf.fac->set_reaction(nf.plan.reaction);
-      if (nf.plan.has_boundary_kernel)
-        nf.fac->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
-      if (nf.plan.has_newton)
-        nf.fac->set_field_nonlinear_options(nf.plan.newton);
-      return;
+    const AmrFieldSolverBuildRequest request{
+        geom_,
+        hierarchy_,
+        boundary,
+        wall_active_,
+        replicated_coarse_,
+        "pops.amr.field-solver-use.named@1",
+        nf.plan};
+    std::shared_ptr<const AmrFieldSolverProvider> provider;
+    bool declaration_failed = false;
+    std::string provider_declaration;
+    std::string expected_contract;
+    try {
+      provider = field_solver_registry_->resolve(nf.plan.solver);
+      provider_declaration = exact_amr_field_solver_provider_declaration(*provider);
+    } catch (...) {
+      declaration_failed = true;
     }
-    const auto& mg = nf.plan.mg_opts;
-    const int levels = nf.plan.hierarchy == "level_local" ? nlev_ : 1;
-    nf.level_mg.reserve(static_cast<std::size_t>(levels));
-    for (int k = 0; k < levels; ++k) {
-      const Geometry g = level_geom(k);
-      const MultiFab& layout = (*blocks_[0].levels)[static_cast<std::size_t>(k)].U;
-      auto solver = std::make_shared<GeometricMG>(
-          g, layout.box_array(), boundary, wall_active_, replicated_coarse_ && k == 0,
-          mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom, /*cut_cell=*/false,
-          std::function<Real(Real, Real)>{}, kEbCutFractionFloor, mg.coarse_threshold);
-      solver->set_abs_tol(mg.abs_tol);
-      if (nf.plan.has_reaction) {
-        const Real reaction = nf.plan.reaction;
-        solver->set_reaction([reaction](Real, Real) { return reaction; });
+    if (all_reduce_max(declaration_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider declaration failed on at least one rank");
+    (void)inspect_amr_field_solver_support_collectively(*provider, request);
+    try {
+      expected_contract = provider->expected_prepared_contract(request);
+    } catch (...) {
+      declaration_failed = true;
+    }
+    if (all_reduce_max(declaration_failed || expected_contract.empty() ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider failed to publish an exact hierarchy contract");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-field-provider", provider_declaration},
+             {"amr-field-expected-contract", expected_contract}}))
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider declaration differs across MPI ranks");
+
+    std::unique_ptr<AmrPreparedFieldSolver> prepared;
+    bool build_failed = false;
+    try {
+      prepared = provider->build(request);
+    } catch (...) {
+      build_failed = true;
+    }
+    if (all_reduce_max(build_failed || !prepared ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider construction failed on at least one rank");
+
+    bool inspection_failed = false;
+    bool materialization_mismatch = false;
+    std::string actual_contract;
+    try {
+      actual_contract = prepared->exact_prepared_contract();
+      materialization_mismatch = prepared->provider_identity() != provider->identity() ||
+                                 actual_contract != expected_contract ||
+                                 prepared->level_count() != nlev_;
+      for (int level = 0; level < prepared->level_count(); ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        MultiFab& rhs = prepared->rhs_level(level);
+        MultiFab& phi = prepared->phi_level(level);
+        const FieldDistribution distribution = level == 0 && replicated_coarse_
+                                                   ? FieldDistribution::Replicated
+                                                   : FieldDistribution::Distributed;
+        materialization_mismatch = materialization_mismatch ||
+                                   rhs.box_array().boxes() != hierarchy_.ba[index].boxes() ||
+                                   phi.box_array().boxes() != hierarchy_.ba[index].boxes() ||
+                                   rhs.dmap().ranks() != hierarchy_.dm[index].ranks() ||
+                                   phi.dmap().ranks() != hierarchy_.dm[index].ranks() ||
+                                   rhs.ncomp() != 1 || phi.ncomp() != 1 || rhs.n_grow() != 0 ||
+                                   phi.n_grow() != 1 || rhs.shares_storage_with(phi) ||
+                                   !detail::field_distribution_layout_matches(rhs, distribution) ||
+                                   !detail::field_distribution_layout_matches(phi, distribution);
       }
-      if (nf.plan.has_boundary_kernel && k == 0)
-        solver->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
-      if (nf.plan.has_newton && k == 0)
-        solver->set_field_newton_options(nf.plan.newton);
-      nf.level_mg.push_back(std::move(solver));
+    } catch (...) {
+      inspection_failed = true;
     }
-    nf.mg = nf.level_mg.front();
+    if (all_reduce_max(inspection_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider inspection failed on at least one rank");
+    if (all_reduce_max(materialization_mismatch ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: field solver provider did not materialize the exact hierarchy contract");
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-field-actual-contract", actual_contract}}))
+      throw std::runtime_error("AmrRuntime: field solver materialization differs across MPI ranks");
+    nf.solver = std::move(prepared);
   }
 
-  static bool field_bc_has_constant_kernel(const BCRec& bc) {
-    auto singular_face = [](BCType type, Real alpha) {
-      return type == BCType::Periodic || type == BCType::Foextrap ||
-             (type == BCType::Robin && alpha == Real(0));
-    };
-    return singular_face(bc.xlo, bc.xlo_alpha) && singular_face(bc.xhi, bc.xhi_alpha) &&
-           singular_face(bc.ylo, bc.ylo_alpha) && singular_face(bc.yhi, bc.yhi_alpha);
-  }
-
-  std::shared_ptr<const MultiFab> composite_valid_mask(int level) const {
-    const MultiFab& layout = (*blocks_[0].levels)[static_cast<std::size_t>(level)].U;
+  std::shared_ptr<const MultiFab> composite_valid_mask(AmrPreparedFieldSolver& solver,
+                                                       int level) const {
+    const MultiFab& layout = solver.phi_level(level);
     auto mask =
         std::make_shared<MultiFab>(layout.box_array(), layout.dmap(), /*ncomp=*/1, /*ngrow=*/0);
     mask->set_val(Real(1));
-    if (level + 1 >= nlev_)
+    if (level + 1 >= solver.level_count())
       return mask;
-    const BoxArray& fine_boxes =
-        (*blocks_[0].levels)[static_cast<std::size_t>(level + 1)].U.box_array();
+    const BoxArray& fine_boxes = solver.phi_level(level + 1).box_array();
     std::vector<Box2D> coarse_coverage;
     coarse_coverage.reserve(static_cast<std::size_t>(fine_boxes.size()));
     for (const Box2D& fine : fine_boxes.boxes())
@@ -4125,69 +4557,100 @@ class AmrRuntime {
     return mask;
   }
 
-  void derive_named_nullspace(NamedField& nf) {
+  PreparedFieldNullspace prepare_field_nullspace(
+      const FieldNullspaceProviderSelection& selection,
+      FieldNullspaceProviderRequest request) const {
+    return prepare_field_nullspace_collectively(*nullspace_provider_registry_, selection,
+                                                std::move(request));
+  }
+
+  void prepare_named_nullspace(NamedField& nf) {
     if (nf.nullspace_ready)
       return;
+    nf.nullspace = {};
+    nf.level_nullspace.clear();
+    nf.nullspace_workspace.reset();
+    nf.level_nullspace_workspaces.clear();
+    nf.nullspace_rhs_levels.clear();
+    nf.nullspace_phi_levels.clear();
     const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
-    const bool derived_constant = !nf.plan.has_reaction && field_bc_has_constant_kernel(boundary);
-    if (nf.plan.nullspace_assertion == "constant" && !derived_constant)
-      throw std::runtime_error(
-          "AMR field nullspace assertion disagrees with operator + topology + boundary closure");
-    if (nf.plan.nullspace_assertion != "none" && nf.plan.nullspace_assertion != "constant")
-      throw std::runtime_error("AMR field nullspace assertion is unsupported");
-    if (!derived_constant) {
-      if (nf.plan.gauge != "none")
-        throw std::runtime_error("AMR field gauge was declared for an invertible operator");
-      nf.nullspace_ready = true;
-      return;
-    }
-    if (nf.plan.gauge != "mean_zero")
-      throw std::runtime_error(
-          "AMR topology-derived nullspace requires an explicit per-mode mean-zero gauge");
-
-    const std::string root = nf.plan.provider_identity + ":topology-nullspace";
-    if (nf.plan.hierarchy == "composite" && nlev_ > 1) {
-      nf.nullspace.identity = root;
-      nf.nullspace.layout_identity = root + ":composite-layout:" + std::to_string(nlev_) +
-                                     ":epoch:" + std::to_string(topology_epoch_);
-      nf.nullspace.scope = FieldNullspaceScope::Composite;
-      FieldNullspaceBasis basis;
-      basis.identity = root + ":connected-component:0";
-      basis.provenance = "derived:operator+topology+boundary:connected-component:0";
-      basis.recipe_identity = nf.nullspace.layout_identity + ":coverage-recipe-v1";
-      basis.field_component = 0;  // the current native Poisson operator is genuinely scalar
-      for (int k = 0; k < nlev_; ++k) {
-        basis.coverage.push_back(composite_valid_mask(k));
+    const FieldNullspaceOperatorFacts operator_facts =
+        field_nullspace_operator_facts_from_bc_rec(
+            boundary, nf.plan.has_reaction, static_cast<bool>(wall_active_));
+    if (nf.solver->couples_hierarchy_levels()) {
+      FieldNullspaceProviderRequest request;
+      request.plan_identity = nf.plan.provider_identity + ":topology-nullspace";
+      request.operator_facts = operator_facts;
+      request.topology.identity = nf.plan.topology_digest + ":composite-layout:" +
+                                  std::to_string(nf.solver->level_count()) + ":epoch:" +
+                                  std::to_string(topology_epoch_);
+      request.topology.exact_layout_contract =
+          std::string(nf.solver->exact_prepared_contract());
+      request.topology.field_component = 0;
+      if (!wall_active_)
+        request.topology.connected_component_contract =
+            request.topology.identity + ":connected-component@1";
+      for (int k = 0; k < nf.solver->level_count(); ++k) {
+        request.topology.layouts.push_back(&nf.solver->phi_level(k));
+        request.topology.coverage.push_back(composite_valid_mask(*nf.solver, k));
+        ExactContractBuilder coverage_contract;
+        coverage_contract.text("pops.amr.composite-valid-coverage")
+            .scalar(std::uint32_t{1})
+            .text(nf.plan.topology_digest)
+            .bytes(request.topology.exact_layout_contract)
+            .scalar(static_cast<std::uint64_t>(topology_epoch_))
+            .scalar(static_cast<std::int64_t>(k));
+        request.topology.coverage_contracts.push_back(
+            std::move(coverage_contract).release());
         const Geometry g = level_geom(k);
-        basis.cell_measure.push_back(g.dx() * g.dy());
+        request.topology.cell_measure.push_back(g.dx() * g.dy());
+        request.topology.level_distributions.emplace_back(nf.solver->level_distribution(k));
       }
-      nf.nullspace.bases.push_back(std::move(basis));
-      nf.nullspace.gauges.push_back(FieldGaugeConstraint{nf.nullspace.bases[0].identity, Real(0)});
+      nf.nullspace = prepare_field_nullspace(nf.plan.nullspace, std::move(request)).plan;
       std::vector<const MultiFab*> layouts;
-      for (int k = 0; k < nlev_; ++k)
-        layouts.push_back(&(*blocks_[0].levels)[static_cast<std::size_t>(k)].U);
-      validate_field_nullspace_basis(layouts, nf.nullspace);
+      std::vector<PreparedVectorDistribution> distributions;
+      layouts.reserve(static_cast<std::size_t>(nf.solver->level_count()));
+      distributions.reserve(static_cast<std::size_t>(nf.solver->level_count()));
+      nf.nullspace_rhs_levels.reserve(static_cast<std::size_t>(nf.solver->level_count()));
+      nf.nullspace_phi_levels.reserve(static_cast<std::size_t>(nf.solver->level_count()));
+      for (int k = 0; k < nf.solver->level_count(); ++k) {
+        layouts.push_back(&nf.solver->phi_level(k));
+        distributions.emplace_back(nf.solver->level_distribution(k));
+        nf.nullspace_rhs_levels.push_back(&nf.solver->rhs_level(k));
+        nf.nullspace_phi_levels.push_back(&nf.solver->phi_level(k));
+      }
+      nf.nullspace_workspace = std::make_unique<FieldNullspaceWorkspace>(
+          nf.nullspace, std::move(layouts), std::move(distributions));
     } else {
-      nf.level_nullspace.reserve(static_cast<std::size_t>(nlev_));
-      for (int k = 0; k < nlev_; ++k) {
-        FieldNullspacePlan plan;
-        plan.identity = root + ":level:" + std::to_string(k);
-        plan.layout_identity = plan.identity + ":layout:epoch:" + std::to_string(topology_epoch_);
-        plan.scope = FieldNullspaceScope::LevelLocal;
-        FieldNullspaceBasis basis;
-        basis.identity = plan.identity + ":connected-component:0";
-        basis.provenance = "derived:level-local-topology:connected-component:0";
-        basis.recipe_identity = plan.layout_identity + ":recipe-v1";
-        basis.field_component = 0;
-        basis.cell_measure.resize(static_cast<std::size_t>(nlev_), Real(0));
+      nf.level_nullspace.reserve(static_cast<std::size_t>(nf.solver->level_count()));
+      nf.level_nullspace_workspaces.reserve(
+          static_cast<std::size_t>(nf.solver->level_count()));
+      for (int k = 0; k < nf.solver->level_count(); ++k) {
+        FieldNullspaceProviderRequest request;
+        request.plan_identity = nf.plan.provider_identity + ":topology-nullspace:level:" +
+                                std::to_string(k);
+        request.operator_facts = operator_facts;
+        request.topology.identity = nf.plan.topology_digest + ":level:" + std::to_string(k) +
+                                    ":epoch:" + std::to_string(topology_epoch_);
+        request.topology.exact_layout_contract =
+            std::string(nf.solver->exact_prepared_contract());
+        request.topology.first_level = k;
+        request.topology.field_component = 0;
+        if (!wall_active_)
+          request.topology.connected_component_contract =
+              request.topology.identity + ":connected-component@1";
+        request.topology.layouts = {&nf.solver->phi_level(k)};
         const Geometry g = level_geom(k);
-        basis.cell_measure[static_cast<std::size_t>(k)] = g.dx() * g.dy();
-        plan.bases.push_back(std::move(basis));
-        plan.gauges.push_back(FieldGaugeConstraint{plan.bases[0].identity, Real(0)});
-        validate_field_nullspace_basis(
-            std::vector<const MultiFab*>{&(*blocks_[0].levels)[static_cast<std::size_t>(k)].U},
-            plan, k);
-        nf.level_nullspace.push_back(std::move(plan));
+        request.topology.cell_measure = {g.dx() * g.dy()};
+        request.topology.level_distributions.emplace_back(nf.solver->level_distribution(k));
+        nf.level_nullspace.push_back(
+            prepare_field_nullspace(nf.plan.nullspace, std::move(request)).plan);
+        nf.level_nullspace_workspaces.push_back(std::make_unique<FieldNullspaceWorkspace>(
+            nf.level_nullspace.back(),
+            std::vector<const MultiFab*>{&nf.solver->phi_level(k)},
+            std::vector<PreparedVectorDistribution>{PreparedVectorDistribution(
+                nf.solver->level_distribution(k))},
+            k));
       }
     }
     nf.nullspace_ready = true;
@@ -4256,9 +4719,12 @@ class AmrRuntime {
   AmrHierarchyLayout hierarchy_;
   std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
   std::optional<detail::PreparedAmrTemporalPlan> temporal_execution_plan_;
-  GeometricMG mg_;
-  std::function<bool(Real, Real)> wall_active_;
+  ActiveRegionProvider2D wall_active_;
+  std::shared_ptr<const AmrFieldSolverProviderRegistry> field_solver_registry_;
+  std::shared_ptr<const FieldNullspaceProviderRegistry> nullspace_provider_registry_;
+  std::unique_ptr<AmrPreparedFieldSolver> default_field_solver_;
   FieldNullspacePlan default_field_nullspace_;
+  std::unique_ptr<FieldNullspaceWorkspace> default_field_nullspace_workspace_;
   std::vector<AmrRuntimeBlock> blocks_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
@@ -4269,9 +4735,8 @@ class AmrRuntime {
     MultiFab* state(std::size_t block) const {
       if (states != nullptr)
         return block < states->size() ? (*states)[block] : nullptr;
-      return single_block >= 0 && block == static_cast<std::size_t>(single_block)
-                 ? single_state
-                 : nullptr;
+      return single_block >= 0 && block == static_cast<std::size_t>(single_block) ? single_state
+                                                                                  : nullptr;
     }
   };
   std::optional<BoundaryStageStateView> boundary_stage_states_;
@@ -4313,10 +4778,7 @@ class AmrRuntime {
   // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
   // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;
-  // NAMED multi-elliptic fields (ADC-428): field name -> its aux output components + a DEDICATED coarse
-  // GeometricMG. The NamedField struct itself is defined higher up (before ensure_named_elliptic, which
-  // takes it by reference: a parameter type must be visible at the function declaration, unlike a member
-  // body). Empty default -> bit-identical (the solve_named_fields loop early-returns).
+  // NAMED multi-elliptic fields (ADC-428): field name -> aux outputs + prepared provider instance.
   std::map<std::string, NamedField> named_fields_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)

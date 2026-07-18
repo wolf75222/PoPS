@@ -5,6 +5,8 @@
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
+#include <algorithm>
+
 namespace pops {
 
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
@@ -216,6 +218,12 @@ void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
 }
 const std::vector<int>& System::program_block_map() const {
   return p_->program_.block_map_;
+}
+bool System::program_owns_operator_authority(
+    const std::array<std::uint64_t, 4>& authority) const noexcept {
+  return std::find(p_->program_.operator_authorities_.begin(),
+                   p_->program_.operator_authorities_.end(),
+                   authority) != p_->program_.operator_authorities_.end();
 }
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure and rejects an absent capability.

@@ -21,8 +21,8 @@
 #include <pops/numerics/fv/spatial_discretisation.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/prepared_provider_consensus.hpp>
 
-#include <functional>
 #include <type_traits>
 #include <utility>
 
@@ -82,19 +82,35 @@ class Coupler {
   // then fills aux component 3 once and for all (B_z static, external to the
   // elliptic solve: derive_aux does not touch it). Empty => no B_z. The aux channel is
   // allocated to the MODEL width: a base model (3) stays bit-identical.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
   Coupler(const Model& model, const Geometry& geom, const BoxArray& ba, const BCRec& bcU,
-          const BCRec& bcPhi, std::function<bool(Real, Real)> active = {},
-          std::function<Real(Real, Real)> bz = {})
+          const BCRec& bcPhi, ActiveRegionProvider2D active = {}, ScalarFieldProvider2D bz = {},
+          FactoryT elliptic_factory = {})
+      : Coupler(model, geom, ba, DistributionMapping(ba.size(), n_ranks()), bcU, bcPhi,
+                std::move(active), std::move(bz), std::move(elliptic_factory)) {}
+
+  /// Explicit-layout overload for externally load-balanced fields. The mapping is copied into the
+  /// coupler and remains the single layout authority for aux storage and the elliptic backend.
+  template <class FactoryT = DefaultEllipticFactory<Elliptic>>
+    requires pops::EllipticFactory<FactoryT, Elliptic>
+  Coupler(const Model& model, const Geometry& geom, const BoxArray& ba,
+          const DistributionMapping& mapping, const BCRec& bcU, const BCRec& bcPhi,
+          ActiveRegionProvider2D active = {}, ScalarFieldProvider2D bz = {},
+          FactoryT elliptic_factory = {})
       : model_(model),
         geom_(geom),
         ba_(ba),
-        dm_(ba.size(), n_ranks()),
+        dm_(mapping),
         bcU_(bcU),
         bcPhi_(bcPhi),
         aux_bc_(detail::derive_aux_bc(bcPhi)),
-        mg_(geom, ba, bcPhi, std::move(active)),
+        mg_(make_elliptic_solver<Elliptic>(
+            {geom_, ba_, dm_, bcPhi_, std::move(active), FieldDistribution::Distributed},
+            std::move(elliptic_factory))),
         aux_(ba, dm_, aux_comps<Model>(), 1),
         bz_(std::move(bz)) {
+    require_prepared_provider_collective_consensus(bz_);
     fill_bz();  // fills the B_z component (no-op if base model or empty bz)
   }
 
@@ -219,7 +235,7 @@ class Coupler {
   BCRec bcU_, bcPhi_, aux_bc_;
   Elliptic mg_;
   MultiFab aux_;
-  std::function<Real(Real, Real)> bz_;  // external B_z(x, y) (empty if not provided)
+  ScalarFieldProvider2D bz_;  // prepared external B_z(x, y) (empty if not provided)
 };
 
 // The coupler elliptic backend honors the common contract: swapping

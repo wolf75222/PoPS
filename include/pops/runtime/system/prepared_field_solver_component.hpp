@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -73,6 +74,7 @@ class PreparedFieldSolverComponent final {
         topology_component_(std::move(topology)),
         solver_component_(std::move(solver)) {
     validate_();
+    prepare_provider_contract_();
     const PopsExecutionContextV1 execution = spec_.execution->view();
     topology_state_ = topology_component_->prepared_state(
         POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version, execution,
@@ -80,6 +82,11 @@ class PreparedFieldSolverComponent final {
     solver_state_ = solver_component_->prepared_state(POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2,
                                                       spec_.solver_interface_version, execution,
                                                       spec_.solver_parameters_json);
+  }
+
+  [[nodiscard]] std::string_view provider_identity() const noexcept { return provider_identity_; }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
   }
 
   SolveReport solve(MultiFab& rhs, MultiFab& solution, const Geometry& geometry,
@@ -149,6 +156,30 @@ class PreparedFieldSolverComponent final {
   }
 
  private:
+  void prepare_provider_contract_() {
+    ExactContractBuilder contract;
+    contract.text("pops.runtime.external-field-solver-provider")
+        .scalar(std::uint32_t{1})
+        .text(spec_.provider_slot)
+        .text(spec_.topology_component_id)
+        .text(spec_.topology_manifest_identity)
+        .scalar(spec_.topology_interface_version)
+        .text(spec_.topology_parameters_json)
+        .text(spec_.solver_component_id)
+        .text(spec_.solver_manifest_identity)
+        .scalar(spec_.solver_interface_version)
+        .text(spec_.solver_parameters_json)
+        .text(spec_.source_layout_identity)
+        .text(spec_.topology_recipe_identity)
+        .text(spec_.boundary_contract_json)
+        .scalar(spec_.relative_tolerance)
+        .scalar(spec_.absolute_tolerance)
+        .scalar(spec_.max_iterations)
+        .text(spec_.execution->identity());
+    collective_contract_ = std::move(contract).release();
+    provider_identity_ = hashed_identity_("external-field-solver-provider", collective_contract_);
+  }
+
   static SolveStatus solve_status_(PopsSolveStatusV2 status) {
     switch (status) {
       case POPS_SOLVE_SOLVED_V2:
@@ -557,6 +588,8 @@ class PreparedFieldSolverComponent final {
   }
 
   PreparedFieldSolverSpec spec_;
+  std::string provider_identity_;
+  std::string collective_contract_;
   std::shared_ptr<component::LoadedComponent> topology_component_;
   std::shared_ptr<component::LoadedComponent> solver_component_;
   void* topology_state_ = nullptr;
