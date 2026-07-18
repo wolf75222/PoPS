@@ -350,7 +350,7 @@ concept PreparedAffineOperatorSource =
 /// Authenticated factory for fresh affine-operator sessions. The provider is immutable and may be
 /// shared. An Independent provider owns all mutable apply state in each returned session; an
 /// Exclusive trusted extension may instead borrow one external mutable execution context and is
-/// protected by the prepared problem's invocation reservation.
+/// protected by one source-owned lease shared by every provider copy and prepared problem.
 class PreparedAffineOperatorProvider {
  public:
   PreparedAffineOperatorProvider() = default;
@@ -414,7 +414,21 @@ class PreparedAffineOperatorProvider {
   }
 
  private:
+  friend class PreparedAffineLinearProblem;
   friend struct detail::PreparedProblemAccess;
+
+  [[nodiscard]] bool try_reserve_source_() const noexcept {
+    if (!implementation_ ||
+        implementation_->concurrency() != PreparedOperatorConcurrency::Exclusive)
+      return true;
+    return implementation_->try_reserve_exclusive();
+  }
+
+  void release_source_() const noexcept {
+    if (implementation_ &&
+        implementation_->concurrency() == PreparedOperatorConcurrency::Exclusive)
+      implementation_->release_exclusive();
+  }
 
   [[nodiscard]] detail::PreparedProviderSourceIdentity source_identity_() const noexcept {
     return detail::PreparedProviderSourceIdentity(std::shared_ptr<const void>(implementation_));
@@ -426,6 +440,19 @@ class PreparedAffineOperatorProvider {
     [[nodiscard]] virtual PreparedOperatorConcurrency concurrency() const noexcept = 0;
     [[nodiscard]] virtual PreparedAffineOperatorSession make_session(
         const ExecutionLane&) const = 0;
+
+    [[nodiscard]] bool try_reserve_exclusive() const noexcept {
+      bool expected = false;
+      return exclusive_reserved_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    void release_exclusive() const noexcept {
+      exclusive_reserved_.store(false, std::memory_order_release);
+    }
+
+   private:
+    mutable std::atomic<bool> exclusive_reserved_{false};
   };
 
   static std::string make_contract_(PreparedProviderIdentity identity,
@@ -1931,11 +1958,18 @@ class PreparedAffineLinearProblem {
 
   [[nodiscard]] bool try_reserve_mutation_() noexcept {
     std::size_t expected = 0;
-    return active_use_reservations_.compare_exchange_strong(
-        expected, kMutationReservation, std::memory_order_acq_rel, std::memory_order_acquire);
+    if (!active_use_reservations_.compare_exchange_strong(
+            expected, kMutationReservation, std::memory_order_acq_rel,
+            std::memory_order_acquire))
+      return false;
+    if (operator_provider_.try_reserve_source_())
+      return true;
+    active_use_reservations_.store(0, std::memory_order_release);
+    return false;
   }
 
   void release_mutation_() noexcept {
+    operator_provider_.release_source_();
     active_use_reservations_.store(0, std::memory_order_release);
   }
 
@@ -2515,8 +2549,13 @@ struct PreparedProblemAccess {
   static bool try_reserve_use(const PreparedAffineLinearProblem& problem) noexcept {
     if (problem.operator_provider_.concurrency() == PreparedOperatorConcurrency::Exclusive) {
       std::size_t expected = 0;
-      return problem.active_use_reservations_.compare_exchange_strong(
-          expected, 1, std::memory_order_acq_rel, std::memory_order_acquire);
+      if (!problem.active_use_reservations_.compare_exchange_strong(
+              expected, 1, std::memory_order_acq_rel, std::memory_order_acquire))
+        return false;
+      if (problem.operator_provider_.try_reserve_source_())
+        return true;
+      problem.active_use_reservations_.store(0, std::memory_order_release);
+      return false;
     }
     std::size_t current = problem.active_use_reservations_.load(std::memory_order_acquire);
     while (current < PreparedAffineLinearProblem::kMutationReservation - 1) {
@@ -2528,6 +2567,7 @@ struct PreparedProblemAccess {
   }
 
   static void release_use(const PreparedAffineLinearProblem& problem) noexcept {
+    problem.operator_provider_.release_source_();
     problem.active_use_reservations_.fetch_sub(1, std::memory_order_acq_rel);
   }
 

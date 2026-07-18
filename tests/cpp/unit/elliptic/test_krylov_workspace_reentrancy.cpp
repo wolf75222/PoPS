@@ -967,6 +967,142 @@ TEST(test_krylov_workspace_reentrancy,
 }
 
 TEST(test_krylov_workspace_reentrancy,
+     exclusive_operator_lease_is_shared_by_provider_copies_across_prepared_problems) {
+  comm_init();
+  const Box2D domain{{0, 0}, {3, 3}};
+  const BoxArray boxes = BoxArray::from_domain(domain, 2);
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab prototype(boxes, mapping, 1, 0);
+  prototype.set_val(Real(0));
+  OperatorEvaluationSnapshot first_snapshot = test_snapshot(prototype);
+  OperatorEvaluationSnapshot second_snapshot = test_snapshot(prototype);
+  PreparedAffineOperatorProvider first_provider =
+      PreparedAffineOperatorProvider::trusted_extension(
+          {"pops.test.krylov.shared-exclusive-operator", 1}, {},
+          [](const ExecutionLane&) {
+            return PreparedAffineOperatorSessionCallbacks{{},
+                                                          [](MultiFab& out, const MultiFab& in) {
+                                                            detail::PreparedFieldAlgebra::copy(out,
+                                                                                               in);
+                                                          },
+                                                          [] { return std::size_t{0}; }};
+          },
+          PreparedOperatorConcurrency::Exclusive);
+  PreparedAffineOperatorProvider second_provider = first_provider;
+  const KrylovFootprint footprint{1, 0, false};
+  PreparedAffineLinearProblem first_problem(
+      prototype, std::move(first_provider), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&first_snapshot] { return first_snapshot; });
+  PreparedAffineLinearProblem second_problem(
+      prototype, std::move(second_provider), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&second_snapshot] { return second_snapshot; });
+  const PreparedKrylovMethod method = cg_krylov_method();
+  KrylovWorkspace first_workspace(prototype, method, footprint);
+  KrylovWorkspace second_workspace(prototype, method, footprint);
+  first_problem.prepare(first_snapshot);
+  second_problem.prepare(second_snapshot);
+  first_workspace.bind(first_problem);
+  second_workspace.bind(second_problem);
+
+  MultiFab first_iterate(boxes, mapping, 1, 0);
+  MultiFab second_iterate(boxes, mapping, 1, 0);
+  MultiFab first_rhs(boxes, mapping, 1, 0);
+  MultiFab second_rhs(boxes, mapping, 1, 0);
+  first_iterate.set_val(Real(0));
+  second_iterate.set_val(Real(0));
+  first_rhs.set_val(Real(2));
+  second_rhs.set_val(Real(-3));
+  const KrylovControls controls{method, Real(1e-12), Real(0), 4};
+
+  {
+    PreparedKrylovInvocation first = prepare_krylov_solve(
+        first_problem, first_workspace, first_iterate, first_rhs, controls);
+    std::string prepare_rejection;
+    try {
+      second_problem.prepare(second_snapshot);
+    } catch (const std::logic_error& error) {
+      prepare_rejection = error.what();
+    }
+    EXPECT_EQ(prepare_rejection,
+              "PreparedAffineLinearProblem cannot be prepared while another prepared operation "
+              "is active");
+    std::string bind_rejection;
+    try {
+      second_workspace.bind(second_problem);
+    } catch (const std::logic_error& error) {
+      bind_rejection = error.what();
+    }
+    EXPECT_EQ(bind_rejection,
+              "KrylovWorkspace cannot be rebound while its prepared problem is mutating or in "
+              "exclusive use");
+    std::string rejection;
+    try {
+      (void)prepare_krylov_solve(second_problem, second_workspace, second_iterate, second_rhs,
+                                 controls);
+    } catch (const std::logic_error& error) {
+      rejection = error.what();
+    }
+    EXPECT_EQ(rejection,
+              "prepared affine problem is being mutated or its operator requires exclusive "
+              "access to its external execution context");
+    const SolveReport first_report = first.execute();
+    EXPECT_TRUE(first_report.solved()) << first_report.reason;
+  }
+
+  PreparedKrylovInvocation second = prepare_krylov_solve(
+      second_problem, second_workspace, second_iterate, second_rhs, controls);
+  const SolveReport second_report = second.execute();
+  EXPECT_TRUE(second_report.solved()) << second_report.reason;
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     workspace_bind_rejects_affine_zero_response_drift_between_provider_sessions) {
+  comm_init();
+  const Box2D domain{{0, 0}, {3, 3}};
+  const BoxArray boxes = BoxArray::from_domain(domain, 2);
+  const DistributionMapping mapping(boxes.size(), n_ranks());
+  MultiFab prototype(boxes, mapping, 1, 0);
+  prototype.set_val(Real(0));
+  OperatorEvaluationSnapshot snapshot = test_snapshot(prototype);
+  auto next_session = std::make_shared<std::atomic<int>>(0);
+  PreparedAffineOperatorProvider operator_provider =
+      PreparedAffineOperatorProvider::trusted_extension(
+          {"pops.test.krylov.session-dependent-affine-constant", 1}, {},
+          [next_session](const ExecutionLane&) {
+            const Real offset =
+                static_cast<Real>(next_session->fetch_add(1, std::memory_order_relaxed));
+            return PreparedAffineOperatorSessionCallbacks{
+                {},
+                [offset](MultiFab& out, const MultiFab& in) {
+                  out.set_val(offset);
+                  detail::PreparedFieldAlgebra::axpy(out, Real(1), in);
+                },
+                [] { return std::size_t{0}; }};
+          });
+  const KrylovFootprint footprint{1, 0, false};
+  PreparedAffineLinearProblem problem(
+      prototype, std::move(operator_provider), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  const PreparedKrylovMethod method = cg_krylov_method();
+  KrylovWorkspace workspace(prototype, method, footprint);
+  problem.prepare(snapshot);
+
+  std::string rejection;
+  try {
+    workspace.bind(problem);
+  } catch (const std::runtime_error& error) {
+    rejection = error.what();
+  }
+  EXPECT_EQ(next_session->load(std::memory_order_relaxed), 2);
+  EXPECT_EQ(rejection,
+            "KrylovWorkspace affine-operator session disagrees with the prepared problem's "
+            "exact zero response");
+}
+
+TEST(test_krylov_workspace_reentrancy,
      prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator) {
 #ifndef POPS_HAS_MPI
   GTEST_SKIP() << "custom communicator execution requires MPI";

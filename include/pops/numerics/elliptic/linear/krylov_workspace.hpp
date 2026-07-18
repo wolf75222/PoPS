@@ -329,6 +329,17 @@ class KrylovWorkspace {
     vector_distribution_.require_exact_values(
         operator_probe, distribution_validation_data_,
         "KrylovWorkspace prepared affine operator zero response", lane_);
+    const long operator_constant_mismatch =
+        detail::PreparedFieldAlgebra::local_exact_values_equal(operator_probe,
+                                                               problem.constant_term())
+            ? 0L
+            : 1L;
+    if (all_reduce_max(operator_constant_mismatch, lane_) != 0) {
+      invalidate_bound_state_();
+      throw std::runtime_error(
+          "KrylovWorkspace affine-operator session disagrees with the prepared problem's exact "
+          "zero response");
+    }
 
     long operator_allocation_count_failure_local = 0;
     try {
