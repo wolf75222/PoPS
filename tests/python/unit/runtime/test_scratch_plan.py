@@ -10,8 +10,8 @@ compile, NO .so on disk -- and assert that
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
   - the REJECTED reuse names an inspectable REASON (a still-live occupant, an aux/field barrier);
-  - persistent Krylov bundles report solution, apply, prepared-problem and workspace fields
-    separately, while multigrid remains explicitly topology-dependent;
+  - persistent Krylov bundles report solution, apply, prepared-problem, workspace and both private
+    operator-session field sets separately, while multigrid remains explicitly topology-dependent;
   - ``to_dict`` / ``to_json`` / ``str`` / ``repr`` work and round-trip through JSON.
 
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
@@ -363,13 +363,22 @@ def test_persistent_krylov_buffers():
     chk(operators[0]["apply_scratch_buffers"] == 1
         and operators[0]["apply_accumulator_buffers"] == 1,
         "the authored Laplacian scratch and generated apply accumulator are counted")
+    chk(krylov[0]["prepared_problem_operator_session_buffers_min"] == 2,
+        "the prepared problem owns one private clone of the two-field operator template")
+    chk(krylov[0]["workspace_operator_session_buffers_min"] == 2,
+        "the bound workspace owns an independent two-field operator session")
+    chk(krylov[0]["operator_session_buffers_min"] == 4
+        and krylov[0]["operator_session_buffers_min"]
+        == krylov[0]["prepared_problem_operator_session_buffers_min"]
+        + krylov[0]["workspace_operator_session_buffers_min"],
+        "the two private operator sessions contribute four fields without aliasing")
     chk(krylov[0]["prepared_core_buffers"] is None
-        and krylov[0]["prepared_core_buffers_min"] == 3,
-        "the prepared core reports its structural lower bound")
-    chk(krylov[0]["buffers"] == 4 and krylov[0]["buffers_max"] is None
+        and krylov[0]["prepared_core_buffers_min"] == 7,
+        "the prepared core includes workspace, A(0)/zero and both operator sessions")
+    chk(krylov[0]["buffers"] == 8 and krylov[0]["buffers_max"] is None
         and operators[0]["buffers"] == operators[0]["buffers_max"] == 2
-        and krylov[0]["buffers"] + operators[0]["buffers"] == 6,
-        "the solve and operator owners expose a six-field structural lower bound")
+        and krylov[0]["buffers"] + operators[0]["buffers"] == 10,
+        "the solve owner exposes eight fields plus its separate two-field operator template")
     chk(krylov[0]["exact"] is False,
         "the native method provider remains the sole exact workspace authority")
     chk(krylov[0]["per_materialized_level"] is True,
@@ -387,21 +396,32 @@ def test_persistent_krylov_buffers():
     prepared_operator = [
         p for p in prepared.persistent if p["kind"] == "matrix_free_operator"][0]
     chk(prepared_krylov["workspace_buffers"] is None
-        and prepared_krylov["workspace_buffers_min"] == 1,
-        "preconditioning does not make Python a workspace authority")
+        and prepared_krylov["workspace_buffers_min"] == 2,
+        "the preconditioned workspace lower bound includes recurrence storage and M(0)")
+    chk(prepared_krylov["prepared_problem_buffers"] == 2,
+        "the preconditioned problem still owns exactly zero and A(0)")
+    chk(prepared_krylov["prepared_problem_operator_session_buffers_min"] == 2,
+        "the preconditioned problem keeps its private two-field operator session")
+    chk(prepared_krylov["workspace_operator_session_buffers_min"] == 2,
+        "the preconditioned workspace keeps a distinct two-field operator session")
+    chk(prepared_krylov["operator_session_buffers_min"] == 4
+        and prepared_krylov["operator_session_buffers_min"]
+        == prepared_krylov["prepared_problem_operator_session_buffers_min"]
+        + prepared_krylov["workspace_operator_session_buffers_min"],
+        "preconditioning does not alias the problem and workspace operator sessions")
     chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
         "an affine prepared preconditioner owns zero and M_raw(0)")
     chk(prepared_krylov["workspace_scalar_values"] is None
         and prepared_krylov["collective_values"] is None,
         "native scalar and collective storage remains provider-owned")
     chk(prepared_krylov["prepared_core_buffers"] is None
-        and prepared_krylov["prepared_core_buffers_min"] == 5,
-        "the preconditioned core exposes its five-field structural lower bound")
-    chk(prepared_krylov["buffers"] == 6
+        and prepared_krylov["prepared_core_buffers_min"] == 10,
+        "the preconditioned core includes workspace, problem, preconditioner and both sessions")
+    chk(prepared_krylov["buffers"] == 11
         and prepared_krylov["buffers_max"] is None
         and prepared_operator["buffers"] == prepared_operator["buffers_max"] == 2
-        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 8,
-        "solve and shared operator owners expose an eight-field lower bound")
+        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 13,
+        "the preconditioned solve exposes eleven fields plus its two-field operator template")
     chk(prepared_krylov["exact"] is False,
         "the exact workspace is computed by the native provider at materialization")
     chk(
@@ -427,8 +447,19 @@ def test_persistent_krylov_buffers_descend_nested_subcycles_once():
         "the top-level matrix-free operator remains one shared allocation owner")
     chk(krylov[0]["workspace_buffers"] is None
         and krylov[0]["workspace_buffers_min"] == 1
-        and krylov[0]["buffers"] == 4,
+        and krylov[0]["prepared_problem_buffers"] == 2,
         "the nested solve keeps the same provider-owned workspace lower bound")
+    chk(krylov[0]["prepared_problem_operator_session_buffers_min"] == 2
+        and krylov[0]["workspace_operator_session_buffers_min"] == 2
+        and krylov[0]["operator_session_buffers_min"] == 4,
+        "the nested solve reports both private two-field operator sessions")
+    chk(krylov[0]["prepared_core_buffers"] is None
+        and krylov[0]["prepared_core_buffers_min"] == 7
+        and krylov[0]["buffers"] == 8
+        and krylov[0]["buffers_max"] is None,
+        "the nested solve retains the exact eight-field structural lower bound")
+    chk(operators[0]["buffers"] == operators[0]["buffers_max"] == 2,
+        "the nested solve's reusable operator template remains a separate two-field owner")
     chk(krylov[0]["operator_id"] == operators[0]["operator_id"],
         "the nested solve references the separately counted shared operator owner")
 

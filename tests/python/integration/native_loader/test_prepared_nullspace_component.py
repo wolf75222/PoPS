@@ -54,13 +54,19 @@ def _write_component(root: Path) -> None:
 #include <cstdint>
 
 namespace vendor {
-inline std::atomic<std::uint64_t> plan_calls{0};
+namespace {
+// Keep the complete instrumented provider local to each generated Program DSO. The test loads a
+// low-level artifact and a public-lifecycle artifact in one process; externally linked inline
+// symbols may be coalesced by ELF and would turn their independent lifecycles into one cumulative
+// counter.
+std::atomic<std::uint64_t> plan_calls{0};
 
-inline pops::FieldNullspacePlan periodic_constant_plan() {
+pops::FieldNullspacePlan periodic_constant_plan() {
   plan_calls.fetch_add(1, std::memory_order_relaxed);
   return pops::constant_mean_zero_nullspace(
       "vendor-periodic-constant", "external prepared nullspace provider");
 }
+}  // namespace
 }  // namespace vendor
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_nullspace_plan_calls() noexcept {
@@ -228,7 +234,7 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     generated_path = compiled.dump_cpp(tmp_path / "generated.cpp")
     generated = Path(generated_path).read_text(encoding="utf-8")
     assert "#include <vendor/prepared_nullspace.hpp>" in generated
-    assert "vendor::periodic_constant_plan()" in generated
+    assert generated.count("vendor::periodic_constant_plan()") == 1
     compiled_solve = next(
         value for value in compiled.program._values if value.op == "solve_linear"
     )
@@ -253,13 +259,15 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     initial = np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
     simulation.set_state("blk", np.stack([initial]))
     simulation.install_program(compiled.so_path)
+    low_plan_calls_after_bind = _native_plan_calls(compiled.so_path)
+    assert low_plan_calls_after_bind == 1
     simulation.step(0.01)
     result = np.asarray(simulation.get_state("blk"))[0]
     assert np.isfinite(result).all()
     assert abs(float(np.mean(result))) < 1.0e-12
     assert float(np.max(np.abs(result - initial))) > 1.0e-4
-    low_plan_calls = _native_plan_calls(compiled.so_path)
-    assert low_plan_calls >= 1
+    low_plan_calls_after_run = _native_plan_calls(compiled.so_path)
+    assert low_plan_calls_after_run == low_plan_calls_after_bind
 
     # The same external header/provider must survive the final public lifecycle.  The low-level
     # proof above remains valuable for the exact generated seam; this second half prevents a private
@@ -282,16 +290,18 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
         include=repo_include(),
     )
     public_compiled = pops.compile(resolved)
+    assert _native_plan_calls(public_compiled.so_path) == 0
     public_runtime = pops.bind(
         public_compiled,
         initial_state={"blk": np.stack([initial])},
     )
+    public_plan_calls_after_bind = _native_plan_calls(public_compiled.so_path)
+    assert public_plan_calls_after_bind == 1
     public_report = pops.run(public_runtime, t_end=0.01, max_steps=1)
     public_result = np.asarray(public_runtime.state_global("blk"), dtype=np.float64)[0]
     assert public_report.accepted_steps == 1
     assert np.isfinite(public_result).all()
     assert abs(float(np.mean(public_result))) < 1.0e-12
     assert float(np.max(np.abs(public_result - initial))) > 1.0e-4
-    public_plan_calls = _native_plan_calls(public_compiled.so_path)
-    assert public_plan_calls >= 1
-    assert low_plan_calls + public_plan_calls >= 2
+    public_plan_calls_after_run = _native_plan_calls(public_compiled.so_path)
+    assert public_plan_calls_after_run == public_plan_calls_after_bind

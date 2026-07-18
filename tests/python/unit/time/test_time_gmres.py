@@ -7,10 +7,11 @@ robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnate
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
 (A) Codegen + validation (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)``
-    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``ctx.solve_prepared_linear`` with the
-    restart length; the restart default (30) and an override both appear in the generated C++; the
-    validation errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a
-    non-gmres method).
+    solved by gmres lowers to a workspace-private prepared operator session, an authenticated generic
+    provider/problem, a persistent Krylov workspace and ``ctx.solve_prepared_linear`` with the restart
+    length; the restart default (30) and an override both appear in the generated C++; the validation
+    errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a non-gmres
+    method).
 
 (B) Internal native-ABI parity (skips unless the full toolchain is present): two solves through the
     private ``_system`` installation seam. It protects the low-level loader but is not counted as a
@@ -141,11 +142,24 @@ def _helmholtz(P, x):
 # ---- (A) codegen + validation: pure Python, always runs ----
 def test_gmres_codegen(t):
     src = emit_cpp_program(_spd_program(t, method="gmres"))
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_prepared_linear",
-                 "pops::PreparedAffineLinearProblem",
-                 "pops::PreparedLinearPreconditioner::identity()",
-                 "ctx.authenticated_program_apply_token"):
+    for frag in (
+        "pops::PreparedAffineOperatorSessionFactory make_apply_A",
+        "pops::ApplyFn apply =",
+        "pops::PreparedAffineOperatorSessionCallbacks",
+        "pops::PreparedAffineOperatorProvider::trusted_extension",
+        "pops::PreparedOperatorConcurrency::Independent",
+        "ctx.laplacian",
+        "std::make_shared<pops::PreparedAffineLinearProblem>",
+        "pops::PreparedLinearPreconditioner::identity()",
+        "ctx.authenticated_program_apply_token",
+        "ctx.program_resource_vector_distribution()",
+        "std::make_shared<pops::KrylovWorkspace>",
+        "->prepare(*operator_snapshot",
+        "->bind(*prepared_problem",
+        "ctx.solve_prepared_linear",
+    ):
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
+    assert "pops::ApplyFn apply_A" not in src
 
 
 def test_gmres_restart_default_in_codegen(t):

@@ -59,9 +59,12 @@ def _write_component(root: Path) -> None:
 #include <variant>
 
 namespace vendor::one_step_krylov {
-
-inline std::atomic<std::uint64_t> workspace_calls{0};
-inline std::atomic<std::uint64_t> solve_calls{0};
+namespace {
+// Keep the complete instrumented provider local to each generated Program DSO. ELF may coalesce
+// externally linked inline variables, functions and class members across the low-level and public
+// artifacts, turning two independent lifecycle proofs into one misleading cumulative counter set.
+std::atomic<std::uint64_t> workspace_calls{0};
+std::atomic<std::uint64_t> solve_calls{0};
 
 inline const double* physical_step(const pops::PreparedProviderOptions& options) noexcept {
   if (options.schema_identity != "vendor.one-step-krylov.options@1" ||
@@ -144,6 +147,7 @@ inline pops::PreparedKrylovMethod method(double step) {
           "vendor.one-step-krylov.options@1", {{"physical_step", step}}});
 }
 
+}  // namespace
 }  // namespace vendor::one_step_krylov
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_krylov_workspace_calls() noexcept {

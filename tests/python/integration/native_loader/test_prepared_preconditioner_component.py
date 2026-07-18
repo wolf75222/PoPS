@@ -128,11 +128,15 @@ def _write_component(root: Path) -> None:
 #include <memory>
 
 namespace vendor {
-inline std::atomic<std::uint64_t> factory_calls{0};
-inline std::atomic<std::uint64_t> session_state_constructions{0};
-inline std::atomic<std::uint64_t> prepare_calls{0};
-inline std::atomic<std::uint64_t> apply_calls{0};
-inline std::atomic<std::uint64_t> apply_before_prepare_calls{0};
+namespace {
+// Keep the complete instrumented provider local to each generated Program DSO. ELF may coalesce
+// externally linked inline variables, functions and class members across the low-level and public
+// artifacts, turning two independent lifecycle proofs into one misleading cumulative counter set.
+std::atomic<std::uint64_t> factory_calls{0};
+std::atomic<std::uint64_t> session_state_constructions{0};
+std::atomic<std::uint64_t> prepare_calls{0};
+std::atomic<std::uint64_t> apply_calls{0};
+std::atomic<std::uint64_t> apply_before_prepare_calls{0};
 
 struct PreparedIdentitySessionState {
   PreparedIdentitySessionState() {
@@ -142,7 +146,7 @@ struct PreparedIdentitySessionState {
   std::atomic<bool> prepared{false};
 };
 
-inline pops::PreparedLinearPreconditionerSessionFactory prepared_identity_session_factory() {
+pops::PreparedLinearPreconditionerSessionFactory prepared_identity_session_factory() {
   return [](const pops::ExecutionLane&) {
     factory_calls.fetch_add(1, std::memory_order_relaxed);
     auto state = std::make_shared<PreparedIdentitySessionState>();
@@ -160,6 +164,7 @@ inline pops::PreparedLinearPreconditionerSessionFactory prepared_identity_sessio
         [] { return std::size_t{0}; }};
   };
 }
+}  // namespace
 }  // namespace vendor
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_preconditioner_factory_calls() noexcept {

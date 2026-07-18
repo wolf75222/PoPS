@@ -598,10 +598,14 @@ def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_ident
 
 #include <atomic>
 namespace pops_test_hierarchy {
-inline std::atomic<std::uint64_t> register_calls{0};
-inline std::atomic<std::uint64_t> prepare_calls{0};
-inline std::atomic<std::uint64_t> execution_queries{0};
-inline std::atomic<std::uint64_t> solve_calls{0};
+namespace {
+// Keep the complete instrumented provider local to this generated Program DSO. A future test may
+// load another artifact containing this header in the same process; no inline counter, provider
+// method or vtable may then be coalesced into process-global lifecycle evidence.
+std::atomic<std::uint64_t> register_calls{0};
+std::atomic<std::uint64_t> prepare_calls{0};
+std::atomic<std::uint64_t> execution_queries{0};
+std::atomic<std::uint64_t> solve_calls{0};
 
 class DelegatingPrepared final
     : public pops::runtime::program::PreparedHierarchyTensorSolver {
@@ -734,17 +738,18 @@ class Provider final
   }
 };
 
-inline void register_provider(pops::runtime::program::AmrProgramContext& ctx) {
+void register_provider(pops::runtime::program::AmrProgramContext& ctx) {
   register_calls.fetch_add(1, std::memory_order_relaxed);
   ctx.register_hierarchy_tensor_solver_provider(std::make_shared<Provider>());
 }
 
-inline pops::SolveReport solve(
+pops::SolveReport solve(
     pops::runtime::program::AmrProgramContext& ctx, int block, int components,
     pops::Real relative_tolerance, pops::Real absolute_tolerance, int max_iterations) {
   return ctx.solve_hierarchy_tensor(
       block, components, relative_tolerance, absolute_tolerance, max_iterations);
 }
+}  // namespace
 }  // namespace pops_test_hierarchy
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_register_calls() noexcept {
