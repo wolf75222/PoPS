@@ -46,7 +46,7 @@ jobs:
           name: pops-macos-arm64-cp312
           path: ${{ runner.temp }}/wheelhouse
 
-      - uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-version: latest
           activate-environment: pops
