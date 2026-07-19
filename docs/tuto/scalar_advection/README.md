@@ -8,12 +8,11 @@ execute exactement le cycle public final :
 Case -> validate -> resolve -> compile -> bind -> run
 ```
 
-Les huit scripts de simulation sont deliberement top-level et quasi lineaires. Python
+Les treize scripts de simulation sont deliberement top-level et quasi lineaires. Python
 construit un graphe type et prepare la condition initiale ; les flux, reconstructions,
 stages temporels et mises a jour de cellules sont compiles puis executes en C++/Kokkos.
-Chaque fichier montre exactement une plateforme et une ecriture temporelle : aucun helper partage,
-argument de ligne de commande ou branche de selection de backend ne masque le parcours. Le bilan
-affiche le nom exact du backend natif charge.
+Chaque fichier isole un seul nouveau choix : aucun helper partage, argument de ligne de commande ou
+branche de selection de backend ne masque le parcours.
 
 ## Installation
 
@@ -43,14 +42,24 @@ Les commandes OpenMP et MPI sont regroupees dans
 | AMR, OpenMP 7 threads | [`05_openmp_amr_preset_ssprk2.py`](05_openmp_amr_preset_ssprk2.py) | [`06_openmp_amr_explicit_ssprk2.py`](06_openmp_amr_explicit_ssprk2.py) |
 | AMR distribue, MPI natif | [`07_mpi_amr_preset_ssprk2.py`](07_mpi_amr_preset_ssprk2.py) | [`08_mpi_amr_explicit_ssprk2.py`](08_mpi_amr_explicit_ssprk2.py) |
 
+Les variantes specialisees ne dupliquent pas toute cette matrice :
+
+| Concept isole | Script autonome |
+|---|---|
+| Tagging AMR sur $\|\nabla u\|$ | [`09_openmp_amr_gradient_ssprk2.py`](09_openmp_amr_gradient_ssprk2.py) |
+| Horloges AMR synchrones | [`10_openmp_amr_synchronous_ssprk2.py`](10_openmp_amr_synchronous_ssprk2.py) |
+| Deux binds, une seule compilation | [`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) |
+| HDF5 et ParaView | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
+| Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
+
 Les scripts OpenMP appellent explicitement `pops.set_threads(7)` avant l'initialisation native.
 Les scripts MPI fixent un thread par rang, construisent toujours
 `ExecutionContext.mpi_world(artifact)` et transmettent cette ressource a `pops.bind`; ils n'importent
-pas `mpi4py`. Les huit fichiers contiennent toute la
+pas `mpi4py`. Les treize fichiers contiennent toute la
 declaration du cas afin de rester copiables et comprehensibles separement.
 
-Aucun script GPU n'est fourni aujourd'hui. Un emplacement lui est reserve dans ce parcours, mais il
-ne sera rempli qu'avec une API GPU publique et executable de bout en bout.
+Aucun script GPU n'est fourni aujourd'hui. Le futur fichier `14_gpu_...` ne sera ajoute qu'avec une
+API GPU publique et executable de bout en bout.
 
 ## Probleme physique
 
@@ -360,6 +369,101 @@ mpiexec -n 2 python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
 Chaque script affiche le nombre de niveaux, de patches fins et de regrids termines. Il ne fabrique
 pas un faux champ global composite et n'effectue aucune boucle de calcul en Python.
 
+## Variante specialisee 1 : tagging par gradient
+
+[`09_openmp_amr_gradient_ssprk2.py`](09_openmp_amr_gradient_ssprk2.py) raffine les fronts plutot
+que les cellules dont la valeur depasse un seuil. Deux seuils evitent les decisions contradictoires :
+
+```python
+gradient_magnitude = norm(grad(ValueExpr(tracer_U)))
+
+tagging = AMRTagging(
+    rules=(
+        Tag(gradient_magnitude > case.value(refine_threshold)),
+        Coarsen(gradient_magnitude < case.value(coarsen_threshold)),
+        Buffer(cells=2),
+    ),
+    hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+    conflict_policy=ConflictPolicy.REFINE_WINS,
+)
+```
+
+Le stencil, l'ordre et les halos du gradient sont derives de la methode spatiale. Ils ne sont pas
+redonnes dans la configuration AMR.
+
+```bash
+python docs/tuto/scalar_advection/09_openmp_amr_gradient_ssprk2.py
+```
+
+## Variante specialisee 2 : niveaux synchrones
+
+[`10_openmp_amr_synchronous_ssprk2.py`](10_openmp_amr_synchronous_ssprk2.py) conserve le ratio
+spatial 2:1 mais fait avancer les deux niveaux avec le meme pas :
+
+```python
+hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+execution=AMRExecution.synchronous(),
+```
+
+La variante montre pourquoi le ratio temporel n'est jamais deduit du ratio spatial.
+
+```bash
+python docs/tuto/scalar_advection/10_openmp_amr_synchronous_ssprk2.py
+```
+
+## Variante specialisee 3 : compiler une fois, binder plusieurs fois
+
+[`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) declare la vitesse avec des
+`RuntimeParam`, compile un seul artefact, puis cree deux installations independantes :
+
+```python
+artifact = pops.compile(resolved)
+
+slow = pops.bind(
+    artifact,
+    params={a_x_param: 0.50, a_y_param: 0.10},
+    initial_state={"tracer": initial_state.copy()},
+)
+fast = pops.bind(
+    artifact,
+    params={a_x_param: 1.00, a_y_param: 0.25},
+    initial_state={"tracer": initial_state.copy()},
+)
+```
+
+Les cles sont des handles owner-qualifies obtenus apres validation, jamais des strings libres.
+
+```bash
+python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
+```
+
+## Variante specialisee 4 : sorties scientifiques
+
+[`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie HDF5 et ParaView a un
+`ConsumerGraph`. Les deux formats sont publies seulement a la fin acceptee du run, puis rouverts par
+leurs lecteurs publics afin d'afficher leurs identites authentifiees.
+
+```bash
+python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
+```
+
+Les fichiers sont ecrits sous
+`docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`.
+
+## Variante specialisee 5 : checkpoint et restart exact
+
+[`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) avance jusqu'a un temps intermediaire et
+cree un checkpoint avec l'API publique du runtime. Un bind frais restaure l'etat, la topologie AMR
+et les horloges, puis poursuit la simulation. Les deux niveaux et les patches sont compares a la
+trajectoire continue sans introduire de sortie scientifique dans ce script.
+
+```bash
+python docs/tuto/scalar_advection/13_openmp_amr_restart.py
+```
+
+Le checkpoint est ecrit sous
+`docs/tuto/scalar_advection/results/13_openmp_amr_restart/`.
+
 ## Figures generees
 
 Apres les deux simulations OpenMP :
@@ -401,6 +505,5 @@ implicite. Ce premier tutoriel reste volontairement explicite et utilise SSPRK2.
 ## Aller plus loin
 
 [L'exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
-etend ce premier AMR avec trois niveaux, tagging par gradient, diagnostics, sorties HDF5/ParaView
-et restart bit-identique. Il sert de reference exhaustive, tandis que les scripts de ce dossier
-restent le parcours de prise en main.
+compose toutes ces briques avec trois niveaux, diagnostics, controles d'identite et preuves de
+restart exhaustives. Les scripts de ce dossier gardent volontairement une seule idee a la fois.

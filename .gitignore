@@ -26,6 +26,9 @@ __pycache__/
 # Artefacts compiles du tutoriel (les figures/provenance sont versionnees)
 docs/sphinx/tutorials/_assets/*.so
 
+# Sorties runtime recreees par les scripts de tutoriel.
+docs/tuto/**/results/
+
 # Environnement pixi (l'env vit DANS le projet ; seul pixi.lock se committe)
 .pixi/
 

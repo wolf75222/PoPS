@@ -23,7 +23,7 @@ bash scripts/kokkos_openmp_conda.sh
 bash scripts/build_python.sh --clean
 ```
 
-Les quatre scripts OpenMP appellent ensuite cette autorite publique avant tout objet susceptible
+Les scripts OpenMP appellent ensuite cette autorite publique avant tout objet susceptible
 d'initialiser le runtime natif :
 
 ```python
@@ -33,20 +33,28 @@ pops.set_threads(7)
 ```
 
 Le nombre de threads ne vient donc ni d'un argument cache, ni d'une branche sur le backend, ni d'une
-variable shell. Le bilan final affiche le backend Kokkos reellement charge. Lancer les deux variantes
-temporelles sans argument :
+variable shell. Le bilan final affiche le backend Kokkos reellement charge. Lancer les variantes
+sans argument :
 
 ```bash
 python docs/tuto/scalar_advection/01_openmp_preset_ssprk2.py
 python docs/tuto/scalar_advection/02_openmp_explicit_ssprk2.py
 python docs/tuto/scalar_advection/05_openmp_amr_preset_ssprk2.py
 python docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py
+python docs/tuto/scalar_advection/09_openmp_amr_gradient_ssprk2.py
+python docs/tuto/scalar_advection/10_openmp_amr_synchronous_ssprk2.py
+python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
+python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
+python docs/tuto/scalar_advection/13_openmp_amr_restart.py
 ```
 
-Elles ecrivent respectivement :
+Les deux premieres variantes ecrivent les champs utilises par les figures :
 
 - `results/01_openmp_preset_ssprk2.npz` ;
 - `results/02_openmp_explicit_ssprk2.npz`.
+
+La variante 12 publie HDF5 et ParaView sous `results/12_openmp_amr_outputs/`. La variante 13
+ecrit uniquement son checkpoint sous `results/13_openmp_amr_restart/`.
 
 Les figures comparent ces deux executions OpenMP :
 
@@ -114,7 +122,7 @@ GPU prendra la place suivante dans le parcours seulement lorsque son API publiqu
 fournie :
 
 ```text
-09_gpu_<api-publique-a-definir>.py
+14_gpu_<api-publique-a-definir>.py
 ```
 
 ## Verifier l'environnement
@@ -126,6 +134,6 @@ python -c "import pops; from pops.runtime.doctor import doctor; print(pops.__ver
 ```
 
 Les scripts restent minimaux et ne dupliquent pas cette verification dans le chemin de simulation.
-Le nom exact du backend Kokkos installe est affiche dans les huit bilans. Les temps de ces petits cas
+Le nom exact du backend Kokkos installe est affiche dans les bilans. Les temps de ces petits cas
 sont domines
 par les couts de lancement et ne sont pas publies comme un benchmark de scaling.
