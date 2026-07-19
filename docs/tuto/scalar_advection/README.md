@@ -36,15 +36,15 @@ Les commandes OpenMP et MPI sont regroupees dans
 On transporte une quantite scalaire $u(x,y,t)$ avec une vitesse constante
 $a=(a_x,a_y)$ sur le carre unite :
 
-$$
+```math
 \frac{\partial u}{\partial t} + \nabla \cdot (a u) = 0.
-$$
+```
 
 Le tutoriel choisit
 
-$$
+```math
 a_x = 1, \qquad a_y = 0.25,
-$$
+```
 
 et une bosse gaussienne comme condition initiale. Les deux composantes de la vitesse sont
 positives : les faces $x_{min}$ et $y_{min}$ sont donc entrantes, tandis que les faces
@@ -54,21 +54,21 @@ $x_{max}$ et $y_{max}$ sont sortantes.
 
 La variable stockee est la moyenne cellulaire
 
-$$
+```math
 U_{ij}(t) = \frac{1}{|\Omega_{ij}|}
 \int_{\Omega_{ij}} u(x,y,t)\,d\Omega.
-$$
+```
 
 Pour garder le script lisible, la bosse initiale est echantillonnee au centre des cellules.
 Cette valeur est une approximation d'ordre deux de la moyenne exacte definie ci-dessus.
 
 L'integration de l'equation sur la cellule et le theoreme de Gauss donnent
 
-$$
+```math
 \frac{dU_{ij}}{dt}
 + \frac{1}{|\Omega_{ij}|}
 \sum_{f \in \partial\Omega_{ij}} \widehat{F}_f = 0.
-$$
+```
 
 Dans le script, les trois niveaux restent separes :
 
@@ -105,13 +105,13 @@ repete donc ni `order=2`, ni un nombre de cellules fantomes.
 
 Pour une face de normale $n_f$, la vitesse normale vaut $a\cdot n_f$. Le flux upwind est
 
-$$
+```math
 \widehat{F}(U_L,U_R) =
 \begin{cases}
 (a\cdot n_f)U_L, & a\cdot n_f > 0,\\
 (a\cdot n_f)U_R, & a\cdot n_f \le 0.
 \end{cases}
-$$
+```
 
 Pour cette equation lineaire, le flux de Rusanov avec
 $\lambda=|a\cdot n_f|$ est algebriquement identique au flux upwind. Le descriptor
@@ -123,15 +123,15 @@ generique de Rusanov.
 Une methode constante par cellule est robuste mais tres dissipative. MUSCL reconstruit une
 variation lineaire dans chaque cellule :
 
-$$
+```math
 U_{ij}(x) = U_{ij} + \nabla U_{ij}\cdot(x-x_{ij}).
-$$
+```
 
 Le limiteur Van Leer reduit la pente pres des variations fortes :
 
-$$
+```math
 \phi(r)=\frac{r+|r|}{1+|r|}.
-$$
+```
 
 Dans une zone reguliere, la reconstruction conserve une precision nominale d'ordre deux.
 Pres d'un extremum ou d'un front, le limiteur reduit localement l'ordre pour eviter les
@@ -181,21 +181,21 @@ Le resultat final est ecrit dans
 
 Apres discretisation spatiale, le systeme s'ecrit
 
-$$
+```math
 \frac{dU}{dt}=L(U).
-$$
+```
 
 SSPRK2 utilise deux evaluations de $L$ :
 
-$$
+```math
 U^{(1)} = U^n + \Delta t L(U^n),
-$$
+```
 
-$$
+```math
 U^{n+1}
 = U^n + \frac{\Delta t}{2}L(U^n)
 + \frac{\Delta t}{2}L(U^{(1)}).
-$$
+```
 
 Le premier script demande simplement la fabrique de bibliotheque :
 
@@ -311,8 +311,7 @@ implicite. Ce premier tutoriel reste volontairement explicite et utilise SSPRK2.
 
 ## Aller plus loin
 
-L'
-[exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
+[L'exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 ajoute AMR, tagging par gradient, transferts conservatifs, reflux, sorties HDF5/ParaView et
 restart bit-identique. Il sert de reference exhaustive, tandis que les scripts de ce dossier
 restent le parcours de prise en main.

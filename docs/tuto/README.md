@@ -16,6 +16,6 @@ cellules sont executes par le backend C++/Kokkos.
   MUSCL-Van Leer, flux upwind, SSPRK2, conditions aux limites et premieres executions
   OpenMP/MPI.
 
-Le prochain niveau de detail est l'
-[exemple final d'advection avec AMR](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py),
+Le prochain niveau de detail est
+[l'exemple final d'advection avec AMR](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py),
 qui ajoute remaillage, transferts conservatifs, sorties scientifiques et restart exact.
