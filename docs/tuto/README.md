@@ -12,9 +12,9 @@ cellules sont executes par le backend C++/Kokkos.
 ## Parcours disponibles
 
 - [Advection scalaire 2D](scalar_advection/README.md) : modele conservatif, volumes finis,
-  MUSCL-Van Leer, flux upwind, SSPRK2, conditions aux limites et premieres executions
-  OpenMP/MPI.
+  MUSCL-Van Leer, flux upwind, SSPRK2, conditions aux limites, maillages uniformes et AMR,
+  avec des fichiers autonomes OpenMP/MPI.
 
-Le prochain niveau de detail est [l'exemple final d'advection avec
-AMR](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py), qui ajoute remaillage,
-transferts conservatifs, sorties scientifiques et restart exact.
+Le prochain niveau de detail est [l'exemple final d'advection
+scalaire](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py), qui etend l'AMR
+minimal avec tagging par gradient, sorties scientifiques et restart exact.

@@ -8,7 +8,7 @@ execute exactement le cycle public final :
 Case -> validate -> resolve -> compile -> bind -> run
 ```
 
-Les quatre scripts de simulation sont deliberement top-level et quasi lineaires. Python
+Les huit scripts de simulation sont deliberement top-level et quasi lineaires. Python
 construit un graphe type et prepare la condition initiale ; les flux, reconstructions,
 stages temporels et mises a jour de cellules sont compiles puis executes en C++/Kokkos.
 Chaque fichier montre exactement une plateforme et une ecriture temporelle : aucun helper partage,
@@ -36,15 +36,17 @@ Les commandes OpenMP et MPI sont regroupees dans
 
 ## Choisir un script autonome
 
-| Plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
+| Maillage et plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
 |---|---|---|
-| OpenMP, 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
-| MPI natif, 1 thread par rang | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
+| Uniforme, OpenMP 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
+| Uniforme, MPI natif | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
+| AMR, OpenMP 7 threads | [`05_openmp_amr_preset_ssprk2.py`](05_openmp_amr_preset_ssprk2.py) | [`06_openmp_amr_explicit_ssprk2.py`](06_openmp_amr_explicit_ssprk2.py) |
+| AMR distribue, MPI natif | [`07_mpi_amr_preset_ssprk2.py`](07_mpi_amr_preset_ssprk2.py) | [`08_mpi_amr_explicit_ssprk2.py`](08_mpi_amr_explicit_ssprk2.py) |
 
 Les scripts OpenMP appellent explicitement `pops.set_threads(7)` avant l'initialisation native.
 Les scripts MPI fixent un thread par rang, construisent toujours
 `ExecutionContext.mpi_world(artifact)` et transmettent cette ressource a `pops.bind`; ils n'importent
-pas `mpi4py`. Les quatre fichiers contiennent toute la
+pas `mpi4py`. Les huit fichiers contiennent toute la
 declaration du cas afin de rester copiables et comprehensibles separement.
 
 Aucun script GPU n'est fourni aujourd'hui. Un emplacement lui est reserve dans ce parcours, mais il
@@ -297,6 +299,67 @@ semantique et doivent produire le meme resultat.
 La meme construction explicite est repetee sans helper dans le script MPI autonome
 [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py).
 
+## Tutoriels 3 et 4 : raffinement adaptatif
+
+Les quatre variantes suivantes remplacent le maillage uniforme par une hierarchie AMR a deux
+niveaux. La grille de base contient $32\times32$ cellules. La bosse est projetee
+conservativement sur la hierarchie et les cellules ou $u>0.30$ sont raffinees, avec un buffer de
+deux cellules autour de la zone marquee.
+
+```python
+refine_threshold = case.param(RuntimeParam("refine_u", default=0.30))
+
+tagging = AMRTagging(
+    rules=(
+        Tag(ValueExpr(tracer_U) > case.value(refine_threshold)),
+        Buffer(cells=2),
+    ),
+    hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+    conflict_policy=ConflictPolicy.REFINE_WINS,
+)
+
+transfer = AMRTransfer()
+transfer.state(tracer_U, StateTransfer())
+```
+
+Le layout rassemble ensuite les autorites adaptatives sans repeter l'ordre de la reconstruction
+ou du transfert :
+
+```python
+layout = AMR(
+    grid=grid,
+    hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+    tagging=tagging,
+    regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
+    transfer=transfer,
+    execution=AMRExecution.subcycled((
+        AMRClockRelation(0, 1, 2),
+    )),
+)
+```
+
+Le ratio spatial et le ratio temporel valent ici tous deux `2`, mais ils restent deux choix
+independants : la hierarchie ne devine jamais le programme des horloges. `AMR` fournit directement
+le tagger symbolique et le clusterer Berger-Rigoutsos preimplementes, donc les scripts ne les
+repetent pas.
+
+Lancer les variantes OpenMP :
+
+```bash
+python docs/tuto/scalar_advection/05_openmp_amr_preset_ssprk2.py
+python docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py
+```
+
+Les variantes MPI ajoutent seulement la distribution des patches grossiers et le contexte natif :
+
+```bash
+mpiexec -n 2 python docs/tuto/scalar_advection/07_mpi_amr_preset_ssprk2.py
+mpiexec -n 2 python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
+```
+
+Chaque script affiche le nombre de niveaux, de patches fins et de regrids termines. Il ne fabrique
+pas un faux champ global composite et n'effectue aucune boucle de calcul en Python.
+
 ## Figures generees
 
 Apres les deux simulations OpenMP :
@@ -338,6 +401,6 @@ implicite. Ce premier tutoriel reste volontairement explicite et utilise SSPRK2.
 ## Aller plus loin
 
 [L'exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
-ajoute AMR, tagging par gradient, transferts conservatifs, reflux, sorties HDF5/ParaView et
-restart bit-identique. Il sert de reference exhaustive, tandis que les scripts de ce dossier
+etend ce premier AMR avec trois niveaux, tagging par gradient, diagnostics, sorties HDF5/ParaView
+et restart bit-identique. Il sert de reference exhaustive, tandis que les scripts de ce dossier
 restent le parcours de prise en main.

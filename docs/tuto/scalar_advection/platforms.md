@@ -4,10 +4,12 @@ Le modele, les flux et le programme temporel restent identiques. Chaque fichier 
 precise et le cycle complet sans argument de ligne de
 commande, helper partage ou branche de detection du backend.
 
-| Plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
+| Maillage et plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
 |---|---|---|
-| OpenMP, 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
-| MPI natif, 1 thread par rang | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
+| Uniforme, OpenMP 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
+| Uniforme, MPI natif | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
+| AMR, OpenMP 7 threads | [`05_openmp_amr_preset_ssprk2.py`](05_openmp_amr_preset_ssprk2.py) | [`06_openmp_amr_explicit_ssprk2.py`](06_openmp_amr_explicit_ssprk2.py) |
+| AMR distribue, MPI natif | [`07_mpi_amr_preset_ssprk2.py`](07_mpi_amr_preset_ssprk2.py) | [`08_mpi_amr_explicit_ssprk2.py`](08_mpi_amr_explicit_ssprk2.py) |
 
 ## OpenMP : sept threads explicites
 
@@ -21,7 +23,7 @@ bash scripts/kokkos_openmp_conda.sh
 bash scripts/build_python.sh --clean
 ```
 
-Les deux scripts OpenMP appellent ensuite cette autorite publique avant tout objet susceptible
+Les quatre scripts OpenMP appellent ensuite cette autorite publique avant tout objet susceptible
 d'initialiser le runtime natif :
 
 ```python
@@ -37,6 +39,8 @@ temporelles sans argument :
 ```bash
 python docs/tuto/scalar_advection/01_openmp_preset_ssprk2.py
 python docs/tuto/scalar_advection/02_openmp_explicit_ssprk2.py
+python docs/tuto/scalar_advection/05_openmp_amr_preset_ssprk2.py
+python docs/tuto/scalar_advection/06_openmp_amr_explicit_ssprk2.py
 ```
 
 Elles ecrivent respectivement :
@@ -61,7 +65,7 @@ bash scripts/build_python.sh --mpi --clean
 conda activate pops
 ```
 
-Les deux scripts MPI fixent un thread par rang et ne possedent pas de chemin serie. Apres
+Les quatre scripts MPI fixent un thread par rang et ne possedent pas de chemin serie. Apres
 `pops.compile`, ils construisent inconditionnellement le monde natif et le transmettent au bind :
 
 ```python
@@ -81,6 +85,8 @@ par une variable shell. Lancer chaque fichier sans argument :
 ```bash
 mpiexec -n 2 python docs/tuto/scalar_advection/03_mpi_preset_ssprk2.py
 mpiexec -n 2 python docs/tuto/scalar_advection/04_mpi_explicit_ssprk2.py
+mpiexec -n 2 python docs/tuto/scalar_advection/07_mpi_amr_preset_ssprk2.py
+mpiexec -n 2 python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
 ```
 
 Ces fichiers MPI se limitent volontairement au calcul et au bilan de chaque rang. Les figures sont
@@ -94,6 +100,10 @@ srun --ntasks=4 --cpus-per-task=1 \
   python docs/tuto/scalar_advection/03_mpi_preset_ssprk2.py
 srun --ntasks=4 --cpus-per-task=1 \
   python docs/tuto/scalar_advection/04_mpi_explicit_ssprk2.py
+srun --ntasks=4 --cpus-per-task=1 \
+  python docs/tuto/scalar_advection/07_mpi_amr_preset_ssprk2.py
+srun --ntasks=4 --cpus-per-task=1 \
+  python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
 ```
 
 ## GPU : emplacement reserve
@@ -104,7 +114,7 @@ GPU prendra la place suivante dans le parcours seulement lorsque son API publiqu
 fournie :
 
 ```text
-05_gpu_<api-publique-a-definir>.py
+09_gpu_<api-publique-a-definir>.py
 ```
 
 ## Verifier l'environnement
@@ -116,6 +126,6 @@ python -c "import pops; from pops.runtime.doctor import doctor; print(pops.__ver
 ```
 
 Les scripts restent minimaux et ne dupliquent pas cette verification dans le chemin de simulation.
-Le nom exact du backend Kokkos installe est affiche dans les quatre bilans. Les temps de petits cas
-$64\times64$ sont domines
+Le nom exact du backend Kokkos installe est affiche dans les huit bilans. Les temps de ces petits cas
+sont domines
 par les couts de lancement et ne sont pas publies comme un benchmark de scaling.
