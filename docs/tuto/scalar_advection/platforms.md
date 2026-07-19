@@ -1,119 +1,111 @@
 # Executer le tutoriel sur plusieurs plateformes
 
-Le modele, les flux et le programme temporel ne changent pas avec la plateforme. Le backend
-est choisi au build, puis le meme script est lance avec les ressources de la machine.
+Le modele, les flux et le programme temporel restent identiques. Chaque fichier montre une plateforme
+precise et le cycle complet sans argument de ligne de
+commande, helper partage ou branche de detection du backend.
 
-## CPU, un seul thread
+| Plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
+|---|---|---|
+| OpenMP, 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
+| MPI natif, 1 thread par rang | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
 
-Construire le module officiel :
+## OpenMP : sept threads explicites
+
+Le backend OpenMP se choisit lors de la construction de Kokkos. Depuis la racine du depot,
+preparer l'environnement, installer Kokkos Serial + OpenMP, puis reconstruire le module :
 
 ```bash
 bash scripts/setup_env.sh
-bash scripts/build_python.sh
-conda activate pops
-```
-
-Sur une installation Kokkos OpenMP, limiter l'execution a un thread donne le chemin CPU
-mono-thread :
-
-```bash
-OMP_NUM_THREADS=1 KOKKOS_NUM_THREADS=1 OMP_PROC_BIND=false \
-  python docs/tuto/scalar_advection/01_pops_library.py
-```
-
-Le script affiche le backend Kokkos reel. Il ne faut pas appeler une execution OpenMP
-« Kokkos Serial » si le manifest annonce `OpenMP`.
-
-## CPU OpenMP
-
-Le backend OpenMP se choisit lors de la construction de Kokkos, pas avec une variable au
-moment du lancement. Dans l'environnement `pops`, preparer une fois l'installation
-Serial + OpenMP puis reconstruire le module :
-
-```bash
 conda activate pops
 bash scripts/kokkos_openmp_conda.sh
 bash scripts/build_python.sh --clean
 ```
 
-Le nombre de threads est ensuite fixe avant l'initialisation de Kokkos :
+Les deux scripts OpenMP appellent ensuite cette autorite publique avant tout objet susceptible
+d'initialiser le runtime natif :
 
-```bash
-OMP_NUM_THREADS=4 KOKKOS_NUM_THREADS=4 \
-OMP_PROC_BIND=spread OMP_PLACES=cores \
-  python docs/tuto/scalar_advection/01_pops_library.py
+```python
+import pops
+
+pops.set_threads(7)
 ```
 
-Sur un cluster, utiliser le nombre de CPU alloue par l'ordonnanceur. Par exemple avec Slurm :
+Le nombre de threads ne vient donc ni d'un argument cache, ni d'une branche sur le backend, ni d'une
+variable shell. Le bilan final affiche le backend Kokkos reellement charge. Lancer les deux variantes
+temporelles sans argument :
 
 ```bash
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-export KOKKOS_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-srun --cpu-bind=cores python docs/tuto/scalar_advection/01_pops_library.py
+python docs/tuto/scalar_advection/01_openmp_preset_ssprk2.py
+python docs/tuto/scalar_advection/02_openmp_explicit_ssprk2.py
 ```
 
-## MPI
+Elles ecrivent respectivement :
 
-La route distribuee officielle active ensemble MPI et HDF5 parallele natif :
+- `results/01_openmp_preset_ssprk2.npz` ;
+- `results/02_openmp_explicit_ssprk2.npz`.
+
+Les figures comparent ces deux executions OpenMP :
 
 ```bash
-# --clean est necessaire lorsqu'on bascule depuis un artifact serie deja configure.
+python docs/tuto/scalar_advection/plot_openmp_results.py
+```
+
+## MPI natif : monde explicite
+
+La route distribuee officielle active ensemble MPI et HDF5 parallele natif. Reconstruire le module
+pour ce contrat exact :
+
+```bash
+bash scripts/setup_env.sh
 bash scripts/build_python.sh --mpi --clean
 conda activate pops
-POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi" \
-OMP_NUM_THREADS=1 KOKKOS_NUM_THREADS=1 OMP_PROC_BIND=false \
-  mpiexec -n 2 python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
-Le cache de code genere est volontairement distinct du cache serie. Un changement de backend
-natif ne doit jamais reutiliser un artifact de modele compile pour un autre contrat.
+Les deux scripts MPI fixent un thread par rang et ne possedent pas de chemin serie. Apres
+`pops.compile`, ils construisent inconditionnellement le monde natif et le transmettent au bind :
 
-Le script lit le contrat du `CompiledArtifact`. Pour un artifact MPI, il cree explicitement
-`ExecutionContext.mpi_world(artifact)` puis le fournit a `pops.bind`. Il n'utilise ni
-`mpi4py`, ni collectives Python, ni moteur parallele alternatif. La copie globale finale sert
-uniquement a produire la figure apres l'execution native.
+```python
+pops.set_threads(1)
+execution_context = pops.ExecutionContext.mpi_world(artifact)
+simulation = pops.bind(
+    artifact,
+    initial_state={"tracer": initial_state},
+    resources={"execution_context": execution_context},
+)
+```
 
-Sur Slurm :
+Il n'y a ni `mpi4py`, ni handle MPI fabrique en Python, ni moteur parallele alternatif. L'identite du
+backend et du contrat MPI fait deja partie du cache compile ; aucun repertoire de cache n'est impose
+par une variable shell. Lancer chaque fichier sans argument :
 
 ```bash
-POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi" \
-srun --ntasks=4 --cpus-per-task=2 \
-  python docs/tuto/scalar_advection/01_pops_library.py
+mpiexec -n 2 python docs/tuto/scalar_advection/03_mpi_preset_ssprk2.py
+mpiexec -n 2 python docs/tuto/scalar_advection/04_mpi_explicit_ssprk2.py
 ```
 
-Les deux niveaux de parallelisme peuvent etre combines si le module MPI a lui-meme ete
-construit contre l'installation Kokkos OpenMP :
+Ces fichiers MPI se limitent volontairement au calcul et au bilan de chaque rang. Les figures sont
+produites par les variantes OpenMP, ce qui evite toute branche de publication ou ecriture concurrente
+dans les scripts MPI minimaux.
+
+Sur Slurm, les memes scripts restent inchanges :
 
 ```bash
-conda activate pops
-bash scripts/kokkos_openmp_conda.sh
-bash scripts/build_python.sh --mpi --clean
+srun --ntasks=4 --cpus-per-task=1 \
+  python docs/tuto/scalar_advection/03_mpi_preset_ssprk2.py
+srun --ntasks=4 --cpus-per-task=1 \
+  python docs/tuto/scalar_advection/04_mpi_explicit_ssprk2.py
 ```
 
-On choisit ensuite le nombre de threads par rang :
+## GPU : emplacement reserve
 
-```bash
-export OMP_NUM_THREADS=2
-export KOKKOS_NUM_THREADS=2
-export OMP_PROC_BIND=spread
-export OMP_PLACES=cores
-POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi-openmp" \
-  mpiexec -n 4 python docs/tuto/scalar_advection/01_pops_library.py
+Aucun script GPU n'est cree dans ce tutoriel. Une installation Kokkos CUDA ne suffit pas a prouver
+le pipeline Python final, et le tutoriel ne fabrique pas de contexte ou de fallback. Le futur fichier
+GPU prendra la place suivante dans le parcours seulement lorsque son API publique reelle sera
+fournie :
+
+```text
+05_gpu_<api-publique-a-definir>.py
 ```
-
-## GPU
-
-L'environnement peut preparer une installation Kokkos CUDA avec :
-
-```bash
-bash scripts/setup_env.sh --cuda
-```
-
-Ce n'est pas encore une promesse d'execution du pipeline Python final. La version 1.0.0
-n'annonce pas de provider de contexte GPU executable pour ce tutoriel et doit refuser cette
-route avant `run`. Le cas GPU n'est donc ni execute ni presente comme valide ici. Il sera ajoute
-quand le `PlatformManifest`, la memoire des composants et le contexte d'execution GPU seront
-supportes de bout en bout.
 
 ## Verifier l'environnement
 
@@ -123,24 +115,7 @@ Apres chaque build :
 python -c "import pops; from pops.runtime.doctor import doctor; print(pops.__version__); doctor()"
 ```
 
-Le rapport doit correspondre au backend que l'on veut mesurer. Les temps d'un run de
-tutoriel ne sont comparables que si la grille, le nombre de rangs, le nombre de threads et le
-backend annonce sont identiques.
-
-## Execution verifiee
-
-Les commandes ci-dessus ont ete executees le 19 juillet 2026 sur un Apple M1 Pro (8 coeurs),
-avec PoPS 1.0.0, une grille $64\times64$, 29 pas acceptes et $t_{fin}=0,2$. Le tableau donne
-le temps de la boucle native rapporte par le script ; il exclut la compilation initiale du
-modele.
-
-| Programme | Backend annonce | Ressources | Temps natif |
-|---|---|---:|---:|
-| `SSPRK2` preimplemente | Kokkos OpenMP | 1 thread, 1 processus | 0,029741 s |
-| `SSPRK2` preimplemente | Kokkos OpenMP | 4 threads, 1 processus | 0,032976 s |
-| `pops.Program` explicite | Kokkos OpenMP | 4 threads, 1 processus | 0,033584 s |
-| `SSPRK2` preimplemente | Kokkos OpenMP + `MPI_COMM_WORLD` | 1 thread x 2 rangs | 0,034608 s |
-
-Le preset, le programme explicite et le run MPI produisent ici le meme champ final bit a bit
-(`max_abs = 0`). Ce petit probleme sert a verifier le parcours, pas a mesurer le scaling : les
-couts de lancement et de communication dominent deja le calcul sur $64\times64$ cellules.
+Les scripts restent minimaux et ne dupliquent pas cette verification dans le chemin de simulation.
+Le nom exact du backend Kokkos installe est affiche dans les quatre bilans. Les temps de petits cas
+$64\times64$ sont domines
+par les couts de lancement et ne sont pas publies comme un benchmark de scaling.

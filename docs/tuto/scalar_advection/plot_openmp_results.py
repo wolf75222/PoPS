@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genere les figures du tutoriel a partir des deux executions PoPS."""
+"""Genere les figures a partir des deux executions OpenMP du tutoriel."""
 
 from pathlib import Path
 
@@ -12,13 +12,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 
 HERE = Path(__file__).resolve().parent
-LIBRARY_RESULT = HERE / "results" / "01_pops_library.npz"
-EXPLICIT_RESULT = HERE / "results" / "02_explicit_ssprk2.npz"
+LIBRARY_RESULT = HERE / "results" / "01_openmp_preset_ssprk2.npz"
+EXPLICIT_RESULT = HERE / "results" / "02_openmp_explicit_ssprk2.npz"
 FIGURE_DIR = HERE / "figures"
 
 if not LIBRARY_RESULT.is_file() or not EXPLICIT_RESULT.is_file():
     raise FileNotFoundError(
-        "run 01_pops_library.py and 02_explicit_ssprk2.py before generating figures"
+        "run 01_openmp_preset_ssprk2.py and 02_openmp_explicit_ssprk2.py "
+        "before generating figures"
     )
 
 with np.load(LIBRARY_RESULT, allow_pickle=False) as data:

@@ -8,9 +8,12 @@ execute exactement le cycle public final :
 Case -> validate -> resolve -> compile -> bind -> run
 ```
 
-Les deux scripts de simulation sont deliberement top-level et quasi lineaires. Python
+Les quatre scripts de simulation sont deliberement top-level et quasi lineaires. Python
 construit un graphe type et prepare la condition initiale ; les flux, reconstructions,
 stages temporels et mises a jour de cellules sont compiles puis executes en C++/Kokkos.
+Chaque fichier montre exactement une plateforme et une ecriture temporelle : aucun helper partage,
+argument de ligne de commande ou branche de selection de backend ne masque le parcours. Le bilan
+affiche le nom exact du backend natif charge.
 
 ## Installation
 
@@ -30,6 +33,22 @@ python -m pip install matplotlib
 
 Les commandes OpenMP et MPI sont regroupees dans
 [`platforms.md`](platforms.md).
+
+## Choisir un script autonome
+
+| Plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
+|---|---|---|
+| OpenMP, 7 threads | [`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py) | [`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) |
+| MPI natif, 1 thread par rang | [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py) | [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py) |
+
+Les scripts OpenMP appellent explicitement `pops.set_threads(7)` avant l'initialisation native.
+Les scripts MPI fixent un thread par rang, construisent toujours
+`ExecutionContext.mpi_world(artifact)` et transmettent cette ressource a `pops.bind`; ils n'importent
+pas `mpi4py`. Les quatre fichiers contiennent toute la
+declaration du cas afin de rester copiables et comprehensibles separement.
+
+Aucun script GPU n'est fourni aujourd'hui. Un emplacement lui est reserve dans ce parcours, mais il
+ne sera rempli qu'avec une API GPU publique et executable de bout en bout.
 
 ## Probleme physique
 
@@ -154,8 +173,8 @@ ce tutoriel sans inventer une fausse route Python dans la boucle de calcul.
 
 ## Tutoriel 1 : briques preimplementees
 
-Le script complet est
-[`01_pops_library.py`](01_pops_library.py). Il se lit dans cet ordre :
+Le premier script OpenMP est
+[`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py). Il se lit dans cet ordre :
 
 1. rectangle, repere et grille ;
 2. etat conservatif ;
@@ -171,11 +190,15 @@ Le script complet est
 Lancer le cas :
 
 ```bash
-python docs/tuto/scalar_advection/01_pops_library.py
+python docs/tuto/scalar_advection/01_openmp_preset_ssprk2.py
 ```
 
 Le resultat final est ecrit dans
-`docs/tuto/scalar_advection/results/01_pops_library.npz`.
+`docs/tuto/scalar_advection/results/01_openmp_preset_ssprk2.npz`.
+
+La version MPI autonome du meme preset est
+[`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py). Sa commande de lancement exacte est donnee
+dans [`platforms.md`](platforms.md).
 
 ## Integration temporelle SSPRK2
 
@@ -225,8 +248,8 @@ couples, mais leur construction sortirait du probleme d'advection explicite de p
 
 ## Tutoriel 2 : programme temporel explicite
 
-Le script
-[`02_explicit_ssprk2.py`](02_explicit_ssprk2.py) reconstruit exactement le meme schema avec
+Le script OpenMP
+[`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) reconstruit exactement le meme schema avec
 les operations generiques de `pops.Program`. C'est la personnalisation executable montree
 ici : la methode spatiale reste volontairement le meme MUSCL/Van Leer/ScalarUpwind natif afin
 d'isoler la construction du programme temporel.
@@ -264,23 +287,26 @@ program.commit(q.next, q_next)
 Lancer ce second cas :
 
 ```bash
-python docs/tuto/scalar_advection/02_explicit_ssprk2.py
+python docs/tuto/scalar_advection/02_openmp_explicit_ssprk2.py
 ```
 
 Cette ecriture n'execute pas les stages en Python. Elle construit le graphe que PoPS abaisse
 vers les operateurs C++/Kokkos. Le preset `SSPRK2()` et le programme explicite ont la meme
 semantique et doivent produire le meme resultat.
 
+La meme construction explicite est repetee sans helper dans le script MPI autonome
+[`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py).
+
 ## Figures generees
 
-Apres les deux simulations :
+Apres les deux simulations OpenMP :
 
 ```bash
-python docs/tuto/scalar_advection/03_make_figures.py
+python docs/tuto/scalar_advection/plot_openmp_results.py
 ```
 
-La premiere figure montre la condition initiale, la solution advectee et la difference entre
-les deux ecritures de SSPRK2.
+La premiere figure compare les deux executions OpenMP : condition initiale, solution advectee et
+difference entre les deux ecritures de SSPRK2.
 
 ![Initial state, final state and SSPRK2 parity](figures/scalar_advection_fields.png)
 
