@@ -1,11 +1,12 @@
 """Internal environment preparation and inspection for the compiled Kokkos runtime.
 
-The compute backend is COMPILED into _pops. Multi-threading (and the GPU) are possible ONLY if
-_pops was built with -DPOPS_USE_KOKKOS=ON (OpenMP device). At runtime, Kokkos initializes
-LAZILY at the creation of the 1st System/AmrSystem and reads OMP_NUM_THREADS at that exact moment.
+The compute backend is COMPILED into _pops. ``set_threads`` configures a thread-based Kokkos
+execution space such as OpenMP; it never changes Serial into OpenMP and never changes a CPU build
+into CUDA/HIP. At runtime, Kokkos initializes LAZILY at the creation of the 1st System/AmrSystem
+and reads the thread environment at that exact moment.
 The final public API selects resources before bind and also honors the standard thread environment.
-This private module retains low-level helpers for diagnostics/tests; it is not a second lifecycle
-route and its path is deliberately outside the public API.
+This private module owns the implementation re-exported as :func:`pops.set_threads`; its module path
+is not a second public runtime surface and importing it never initializes Kokkos or loads ``_pops``.
 
 ``_first_system_built`` is the shared mutable flag : read here and by
 ``doctor``, and WRITTEN by ``System.__init__`` / ``AmrSystem.__init__`` via
@@ -43,7 +44,7 @@ def _threads_from_env() -> Any:
 
 
 def has_kokkos() -> Any:
-    """True if _pops was compiled with Kokkos (multi-thread/GPU possible), False if SERIAL.
+    """True if _pops was compiled with Kokkos, False if it was built without Kokkos.
 
     None if the module is too old to expose the info (attribute __has_kokkos__ absent)."""
     from pops import _pops
@@ -54,17 +55,16 @@ def set_threads(n: Any = None) -> None:
     """Prepare thread environment before native initialization.
 
     Equivalent to exporting OMP_NUM_THREADS=n before launching Python, but without touching the shell. Has
-    an effect only if _pops was compiled with -DPOPS_USE_KOKKOS=ON (preset 'python-parallel'), and MUST
-    be called BEFORE the 1st System/AmrSystem (Kokkos initializes lazily at that moment and
-    reads OMP_NUM_THREADS only once) :
+    an effect only for a thread-based Kokkos backend such as OpenMP, and MUST be called BEFORE the
+    1st System/AmrSystem (Kokkos initializes lazily at that moment and reads the setting once) :
 
-        from pops.runtime import _threading
-        _threading.set_threads(8)
+        import pops
+        pops.set_threads(8)
 
     With no argument the default is taken from ``POPS_THREADS`` (a positive integer); an explicit
     ``n`` ALWAYS wins, and an unset / unparseable env value falls back to ``os.cpu_count()``.
 
-    A SERIAL module or a late call are flagged by a warning (without raising an exception)."""
+    A module built without Kokkos or a late call is flagged by a warning (without raising)."""
     import os
     import warnings
     if n is None:                       # default : POPS_THREADS, else all logical cores
@@ -81,14 +81,13 @@ def set_threads(n: Any = None) -> None:
     _kokkos_started = getattr(_pops, "kokkos_is_initialized", lambda: _first_system_built)()
     if _kokkos_started or _first_system_built:
         warnings.warn(
-            "thread environment changed after native initialization; the request has no effect",
+            "pops.set_threads() was called after native initialization; the request has no effect",
             RuntimeWarning, stacklevel=2)
         return
     if has_kokkos() is False:
         warnings.warn(
-            "the installed _pops module is SERIAL, so the thread setting is ignored at compute "
-            "time; rebuild with -DPOPS_USE_KOKKOS=ON "
-            "-DKokkos_ROOT=$CONDA_PREFIX for multi-threading.", RuntimeWarning, stacklevel=2)
+            "pops.set_threads() cannot affect a module built without Kokkos; the request is "
+            "ignored at compute time.", RuntimeWarning, stacklevel=2)
     # We write the env even in case of doubt (harmless) : a DSL .so with backend='production' compiled with
     # Kokkos will also read OMP_NUM_THREADS at its initialization.
     # We set TWO variables to be agnostic to the backend that Kokkos was compiled with :

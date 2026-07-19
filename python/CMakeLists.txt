@@ -81,6 +81,14 @@ target_compile_definitions(_pops PRIVATE POPS_VERSION="${PROJECT_VERSION}")
 # __VERSION__ different -> rejet ABI. dsl.py prefere ce chemin s'il existe encore sur la machine.
 target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
+# Closed Kokkos development manifest selected by the host build.  Runtime codegen reauthenticates
+# these files before replaying their include paths; it never guesses from sys.prefix/conda.
+target_compile_definitions(_pops PRIVATE
+  POPS_KOKKOS_ABI="${POPS_NATIVE_KOKKOS_ABI}"
+  POPS_KOKKOS_INCLUDE="${POPS_NATIVE_KOKKOS_INCLUDE}"
+  POPS_KOKKOS_HEADER_PATHS="${POPS_NATIVE_KOKKOS_HEADER_PATHS}"
+  POPS_KOKKOS_HEADER_HASHES="${POPS_NATIVE_KOKKOS_HEADER_HASHES}")
+
 # Contrat MPI::MPI_CXX exact du build, bake dans le module : includes, options/definitions de
 # compilation, options/libraries de lien, chemins et hashes de mpi.h/libraries, plus l'empreinte ABI
 # globale. Les composants natifs hors CMake rejouent puis reauthentifient ce manifeste integral.

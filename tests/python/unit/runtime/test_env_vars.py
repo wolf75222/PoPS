@@ -41,10 +41,10 @@ def test_threads_from_env_is_lenient(monkeypatch, raw, expected):
 
 # ---- POPS_THREADS supplies the set_threads() default ------------------------------------------
 def _run_set_threads(monkeypatch, *args):
-    """Call set_threads with the late-init / serial guards neutralized, capture the threads written.
+    """Call set_threads with the late-init / no-Kokkos guards neutralized, capture the threads written.
 
-    We force a serial-but-not-yet-initialized module so set_threads reaches the env-write path
-    without needing _pops; the SERIAL warning is expected and suppressed. Returns the int written to
+    We force a no-Kokkos, not-yet-initialized module so set_threads reaches the env-write path
+    without needing _pops; the warning is expected and suppressed. Returns the int written to
     OMP_NUM_THREADS, or None if nothing was written (the early-return paths).
     """
     monkeypatch.setattr(th, "_first_system_built", False)

@@ -388,16 +388,151 @@ def _probe_cxx_std(cc: Any, std: Any) -> str:
 
 
 def _native_kokkos_root() -> Any:
-    """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
+    """Concrete Kokkos prefix selected by the authenticated module contract.
 
-    PoPS is KOKKOS-ONLY: every production DSL .so that includes the PoPS headers MUST be compiled
-    with Kokkos (for_each.hpp #error otherwise). The root is read from POPS_KOKKOS_ROOT / Kokkos_ROOT /
-    KOKKOS_ROOT; None if not found (the caller then raises an explicit error)."""
-    for key in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
-        root = os.environ.get(key)
-        if root and os.path.isfile(os.path.join(root, "include", "Kokkos_Core.hpp")):
-            return root
-    return None
+    An explicit environment override remains supported for relocatable installations, but its two
+    defining headers must match the hashes baked into ``_pops``.  With no override, the exact include
+    tree selected by CMake is replayed.  No ``sys.prefix``/conda heuristic is accepted.
+    """
+    selected = _native_kokkos_selection()
+    return None if selected is None else selected[0]
+
+
+_KOKKOS_CONTRACT_FIELDS = frozenset({
+    "schema_version", "abi_sha256", "include_dirs", "header_paths", "header_sha256",
+})
+
+
+def _file_sha256(path: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _native_kokkos_contract(module: Any = None) -> Mapping[str, Any] | None:
+    """Validate and reauthenticate the Kokkos development manifest baked into ``_pops``."""
+    import hashlib
+    import re
+
+    if module is None:
+        module = _pops_module()
+    if module is None:
+        return None
+    enabled = getattr(module, "__has_kokkos__", None)
+    raw = getattr(module, "__kokkos_contract__", None)
+    if enabled is False and raw is None:
+        return None
+    if enabled is not True:
+        raise RuntimeError("loaded pops._pops exposes no exact __has_kokkos__ boolean contract")
+    if not isinstance(raw, Mapping) or set(raw) != _KOKKOS_CONTRACT_FIELDS:
+        raise RuntimeError(
+            "Kokkos-enabled pops._pops must expose the exact __kokkos_contract__ schema; "
+            "rebuild PoPS")
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        raise RuntimeError("unsupported pops._pops.__kokkos_contract__ schema_version")
+    abi = raw["abi_sha256"]
+    if not isinstance(abi, str) or re.fullmatch(r"[0-9a-f]{64}", abi) is None:
+        raise RuntimeError("Kokkos contract abi_sha256 must be a lowercase SHA-256")
+
+    tuples = {}
+    for name in ("include_dirs", "header_paths", "header_sha256"):
+        value = raw[name]
+        if type(value) is not tuple or not value or any(
+                not isinstance(item, str) or not item for item in value):
+            raise RuntimeError(
+                "pops._pops.__kokkos_contract__[%r] must be a non-empty tuple of text" % name)
+        tuples[name] = value
+    includes = tuples["include_dirs"]
+    paths = tuples["header_paths"]
+    hashes = tuples["header_sha256"]
+    if len(set(includes)) != len(includes):
+        raise RuntimeError("Kokkos contract include_dirs must be unique")
+    if len(paths) != 2 or len(hashes) != 2:
+        raise RuntimeError("Kokkos contract must authenticate exactly two defining headers")
+    if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in hashes):
+        raise RuntimeError("Kokkos contract header hashes must be lowercase SHA-256 values")
+    if any(any(token in value for token in ("|", ";", "\r", "\n"))
+           for value in (*includes, *paths)):
+        raise RuntimeError("Kokkos contract contains an ambiguous serialized delimiter")
+    if any(not os.path.isabs(include) for include in includes):
+        raise RuntimeError("Kokkos contract include directories must be absolute")
+    if any(not os.path.isabs(path) or os.path.dirname(path) not in includes for path in paths):
+        raise RuntimeError("Kokkos contract headers must belong to its include directories")
+    if {os.path.basename(path) for path in paths} != {"Kokkos_Core.hpp", "KokkosCore_config.h"}:
+        raise RuntimeError("Kokkos contract does not identify its two defining headers")
+    ordered_paths = tuple(
+        os.path.join(include, name)
+        for include in includes
+        for name in ("Kokkos_Core.hpp", "KokkosCore_config.h")
+        if os.path.join(include, name) in paths
+    )
+    if ordered_paths != paths:
+        raise RuntimeError("Kokkos contract header order is not canonical")
+    header_hashes = dict(zip(paths, hashes, strict=True))
+    material_lines = []
+    for include in includes:
+        material_lines.append("include=%s\n" % include)
+        for name in ("Kokkos_Core.hpp", "KokkosCore_config.h"):
+            path = os.path.join(include, name)
+            if path in header_hashes:
+                material_lines.append(
+                    "header=%s;sha256=%s\n" % (path, header_hashes[path]))
+    material = "".join(material_lines).encode()
+    if hashlib.sha256(material).hexdigest() != abi:
+        raise RuntimeError("Kokkos contract payload does not authenticate its abi_sha256")
+    return raw
+
+
+def _native_kokkos_selection() -> tuple[str, tuple[str, ...], str] | None:
+    """Return ``(root, include_dirs, abi)`` after closed contract validation."""
+    contract = _native_kokkos_contract()
+    override = next((os.environ[key] for key in (
+        "POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT") if os.environ.get(key)), None)
+    if contract is None:
+        if override:
+            raise RuntimeError(
+                "a Kokkos root override cannot be authenticated because loaded pops._pops has no "
+                "Kokkos contract; rebuild PoPS")
+        return None
+
+    includes = tuple(contract["include_dirs"])
+    paths = tuple(contract["header_paths"])
+    hashes = tuple(contract["header_sha256"])
+    if override:
+        root = os.path.realpath(override)
+        include = os.path.join(root, "include")
+        relocated = tuple(os.path.join(include, os.path.basename(path)) for path in paths)
+        if any(not os.path.isfile(path) for path in relocated):
+            raise RuntimeError(
+                "explicit Kokkos root does not contain the defining headers: %s" % root)
+        if tuple(_file_sha256(path) for path in relocated) != hashes:
+            raise RuntimeError(
+                "explicit Kokkos root differs from the installation used to build pops._pops: %s"
+                % root)
+        return root, (include,), str(contract["abi_sha256"])
+
+    if any(not os.path.isdir(include) for include in includes):
+        raise RuntimeError("baked Kokkos include directory is unavailable; rebuild PoPS")
+    if any(not os.path.isfile(path) for path in paths):
+        raise RuntimeError("baked Kokkos defining header is unavailable; rebuild PoPS")
+    for path, expected in zip(paths, hashes, strict=True):
+        if _file_sha256(path) != expected:
+            raise RuntimeError(
+                "Kokkos header changed in place after pops._pops was built: %s; rebuild PoPS" % path)
+    core = next(path for path in paths if os.path.basename(path) == "Kokkos_Core.hpp")
+    core_include = os.path.dirname(core)
+    root = os.path.dirname(core_include) if os.path.basename(core_include) == "include" \
+        else core_include
+    return root, includes, str(contract["abi_sha256"])
+
+
+def _native_kokkos_include_dirs() -> tuple[str, ...]:
+    selected = _native_kokkos_selection()
+    return () if selected is None else selected[1]
 
 
 def _libomp_prefix() -> Any:
@@ -420,22 +555,17 @@ def _native_feature_key() -> str:
     """Traits that change the inline code of the native loader and must therefore enter the cache (else
     a cached SERIAL .so would be reused on a Kokkos module -> silent serial fallback).
 
-    Beyond on/off, the key fingerprints KokkosCore_config.h of the targeted install: this generated
-    header encodes the Kokkos VERSION AND its active backends. Without it, changing Kokkos between two
-    runs (update, switch Serial->OpenMP at the same prefix) would not invalidate the cache -> reuse
-    of a .so compiled against the old Kokkos."""
+    Beyond on/off, the key carries the authenticated Kokkos contract ABI.  That identity covers both
+    defining headers, including the generated backend/version configuration, so an in-place update or
+    Serial/OpenMP switch cannot reuse an old loader."""
     root = _native_kokkos_root()
-    if not root:
+    if root is None:
         kk = "kokkos=off"
     else:
-        import hashlib
-        cfg = os.path.join(root, "include", "KokkosCore_config.h")
-        try:
-            with open(cfg, "rb") as f:
-                tag = hashlib.sha256(f.read()).hexdigest()[:12]
-        except OSError:
-            tag = "unknown"
-        kk = "kokkos=on;kcfg=%s" % tag
+        selected = _native_kokkos_selection()
+        if selected is None:  # Defensive: root and contract selection must remain one authority.
+            raise RuntimeError("Kokkos root selected without an authenticated Kokkos contract")
+        kk = "kokkos=on;kabi=%s" % selected[2]
     # The native-loader manifest changes cross-DSO declarations and must partition every cached
     # plugin even in serial builds. Replaying it here also fails closed before a stale host contract
     # can select an artifact built under the header-only exception mode.
@@ -451,31 +581,8 @@ def _native_feature_key() -> str:
 
 
 def _warn_kokkos_parity() -> None:
-    """Warns (without blocking) when the BACKEND of the native loader would diverge from that of the _pops
-    module:
-    - Kokkos module + serial loader (POPS_KOKKOS_ROOT missing) -> the DSL block falls back to the
-      SERIAL path silently: zero-copy but DOES NOT SCALE with threads/GPU (ROMEO measurement: DSL warm
-      invariant threads=1/4/8). This is a silent PERF degradation, not a crash -> explicit warning.
-    - serial module + POPS_KOKKOS_ROOT defined -> the loader would instantiate -DPOPS_HAS_KOKKOS against a
-      module that is not (divergent allocator/type layouts, not covered by the ABI key).
-    Source of truth: _pops.__has_kokkos__ (baked by the build) vs _native_kokkos_root() (env)."""
-    import warnings
-    mod = _pops_module()
-    has = getattr(mod, "__has_kokkos__", None) if mod is not None else None
-    root = _native_kokkos_root()
-    if has is True and root is None:
-        warnings.warn(
-            "pops.dsl: the _pops module is compiled WITH Kokkos but POPS_KOKKOS_ROOT is not defined "
-            "-> the 'production' DSL block will be compiled SERIAL (it will run, but will not scale "
-            "with threads/GPU). Set POPS_KOKKOS_ROOT=<build Kokkos install> for parity.",
-            RuntimeWarning, stacklevel=3)
-    elif has is False and root is not None:
-        warnings.warn(
-            "pops.dsl: POPS_KOKKOS_ROOT is defined but the _pops module is SERIAL (compiled without "
-            "-DPOPS_USE_KOKKOS=ON) -> the loader would be compiled with Kokkos against a module that is "
-            "not (divergent memory layouts, not covered by the ABI key). Remove "
-            "POPS_KOKKOS_ROOT or rebuild _pops with Kokkos (preset python-parallel).",
-            RuntimeWarning, stacklevel=3)
+    """Compatibility preflight kept at the compile-driver seam; validation now fails closed."""
+    _native_kokkos_selection()
 
 
 def _env_truthy(value: Any) -> bool:
@@ -515,18 +622,22 @@ def _native_kokkos_flags() -> tuple:
     """Compile/link flags so the production DSL loader instantiates add_compiled_model WITH Kokkos.
 
     The loader contains the header-only templates (make_block / assemble_rhs / for_each_cell). Compiled
-    without POPS_HAS_KOKKOS while _pops is built WITH Kokkos, the DSL block stays zero-copy but its kernels
-    are instantiated on the SERIAL fallback (does not scale threads/GPU). POPS_KOKKOS_ROOT forces parity."""
-    root = _native_kokkos_root()
-    if not root:
+    without POPS_HAS_KOKKOS while _pops is built WITH Kokkos would diverge from its allocator and
+    execution ABI, so the authenticated contract is mandatory."""
+    include_dirs = _native_kokkos_include_dirs()
+    if not include_dirs:
         return [], []
-    inc = os.path.join(root, "include")
     if sys.platform == "win32":
         # MSVC/clang-cl: Kokkos as a SHARED DLL -> link the import lib kokkoscore.lib (ONE single runtime;
         # _pops loads the same kokkoscore.dll). cl accepts -D/-I. No -fopenmp/-ldl/-pthread (POSIX).
-        return (["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc],
-                [os.path.join(root, "lib", "kokkoscore.lib")])
-    compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc]
+        root = _native_kokkos_root()
+        compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE"]
+        for include in include_dirs:
+            compile_flags.extend(("-I", include))
+        return compile_flags, [os.path.join(root, "lib", "kokkoscore.lib")]
+    compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE"]
+    for include in include_dirs:
+        compile_flags.extend(("-I", include))
     # Do NOT link libkokkos* INTO the .so: the _pops module has already loaded the Kokkos runtime, a
     # SINGLETON (global registry of execution spaces), and add_native_block promotes it to global
     # scope (RTLD_GLOBAL). Linking a 2nd copy of Kokkos into the loader gives two runtimes: the
@@ -561,13 +672,14 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
     against the Kokkos runtime already loaded by _pops (no 2nd copy). Raises if no installed Kokkos is
-    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU). The host's central native
+    visible through the authenticated contract baked into _pops (an explicit relocated root may
+    override it only when the defining headers match). The host's central native
     loader manifest is replayed for every route before the optional MPI manifest, so serial and MPI
     plugins consume the same exported exception RTTI without acquiring the producer definition."""
     if _native_kokkos_root() is None:
         raise RuntimeError(
-            "pops_loader_build_flags: PoPS is Kokkos-only -- point to an installed Kokkos via "
-            "POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos`.")
+            "pops_loader_build_flags: PoPS is Kokkos-only and loaded pops._pops exposes no "
+            "authenticated Kokkos development contract; rebuild PoPS.")
     cc = _native_kokkos_compiler(cxx)
     cflags, lflags = _native_kokkos_flags()
     module = _pops_module()

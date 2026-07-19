@@ -17,9 +17,11 @@ deriving the published version from this same `project(VERSION)` value.
 
 What a version bump is allowed to break is exactly this surface:
 
-- Python lifecycle: exactly `Model`, `Program`, `Case`, `validate`, `inspect`, `explain`, `resolve`,
-  `compile`, `bind`, `run`, and `__version__` at package root. `pops.run` is the sole execution
-  transition; native engines and imperative stepping methods are implementation details.
+- Python root surface: exactly `Model`, `Program`, `Case`, `RunReport`, `RunStopReason`,
+  `ExecutionContext`, `set_threads`, `validate`, `inspect`, `explain`, `resolve`, `compile`, `bind`,
+  `run`, and `__version__`. `pops.run` is the sole execution transition; `set_threads` only prepares
+  the thread count before native Kokkos initialization. Native engines and imperative stepping
+  methods are implementation details.
 - Documented typed authoring protocols: qualified handles, immutable expressions, component
   interfaces, numerical/layout descriptors, `Program.solve(problem, solver=...)`, and the
   consumer/checkpoint declarations used by the final examples. A catalog row is public only when

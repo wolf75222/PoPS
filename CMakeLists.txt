@@ -262,6 +262,67 @@ endif()
 target_link_libraries(pops INTERFACE Kokkos::kokkos)
 target_compile_definitions(pops INTERFACE POPS_HAS_KOKKOS)
 set(POPS_HAS_KOKKOS ON)
+
+# Exact Kokkos development contract replayed by Python runtime compilation.  The build scripts may
+# use an environment variable to let CMake find Kokkos, but that shell state does not survive the
+# script.  Bake the concrete, authenticated include tree selected by Kokkos::kokkos into _pops so a
+# later ``pops.compile()`` can reproduce the native backend without guessing a conda/sys.prefix.
+get_target_property(_pops_kokkos_include_dirs Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
+if(NOT _pops_kokkos_include_dirs)
+  message(FATAL_ERROR
+    "Kokkos::kokkos exposes no include directories; runtime-compiled PoPS components cannot "
+    "reproduce the host Kokkos contract.")
+endif()
+set(_pops_kokkos_normalized_includes "")
+foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
+  if(_pops_kokkos_include MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
+    set(_pops_kokkos_include "${CMAKE_MATCH_1}")
+  elseif(_pops_kokkos_include MATCHES "^\\$<INSTALL_INTERFACE:.*>$")
+    continue()
+  elseif(_pops_kokkos_include MATCHES "\\$<")
+    message(FATAL_ERROR
+      "Kokkos::kokkos exposes a non-replayable include expression: ${_pops_kokkos_include}")
+  endif()
+  cmake_path(NORMAL_PATH _pops_kokkos_include OUTPUT_VARIABLE _pops_kokkos_include_normalized)
+  if(NOT IS_ABSOLUTE "${_pops_kokkos_include_normalized}" OR
+     NOT IS_DIRECTORY "${_pops_kokkos_include_normalized}")
+    message(FATAL_ERROR
+      "Kokkos::kokkos include is not an existing absolute directory: "
+      "${_pops_kokkos_include_normalized}")
+  endif()
+  list(APPEND _pops_kokkos_normalized_includes "${_pops_kokkos_include_normalized}")
+endforeach()
+list(REMOVE_DUPLICATES _pops_kokkos_normalized_includes)
+
+set(_pops_kokkos_header_paths "")
+set(_pops_kokkos_header_hashes "")
+set(_pops_kokkos_abi_material "")
+foreach(_pops_kokkos_include IN LISTS _pops_kokkos_normalized_includes)
+  if(_pops_kokkos_include MATCHES "[|;\r\n]")
+    message(FATAL_ERROR "Kokkos include cannot be serialized exactly: ${_pops_kokkos_include}")
+  endif()
+  string(APPEND _pops_kokkos_abi_material "include=${_pops_kokkos_include}\n")
+  foreach(_pops_kokkos_header_name Kokkos_Core.hpp KokkosCore_config.h)
+    set(_pops_kokkos_header "${_pops_kokkos_include}/${_pops_kokkos_header_name}")
+    if(EXISTS "${_pops_kokkos_header}")
+      file(SHA256 "${_pops_kokkos_header}" _pops_kokkos_header_sha256)
+      list(APPEND _pops_kokkos_header_paths "${_pops_kokkos_header}")
+      list(APPEND _pops_kokkos_header_hashes "${_pops_kokkos_header_sha256}")
+      string(APPEND _pops_kokkos_abi_material
+        "header=${_pops_kokkos_header};sha256=${_pops_kokkos_header_sha256}\n")
+    endif()
+  endforeach()
+endforeach()
+list(LENGTH _pops_kokkos_header_paths _pops_kokkos_header_count)
+if(NOT _pops_kokkos_header_count EQUAL 2)
+  message(FATAL_ERROR
+    "Kokkos::kokkos must expose exactly Kokkos_Core.hpp and KokkosCore_config.h for authenticated "
+    "runtime compilation (found ${_pops_kokkos_header_count} contract headers).")
+endif()
+string(SHA256 POPS_NATIVE_KOKKOS_ABI "${_pops_kokkos_abi_material}")
+list(JOIN _pops_kokkos_normalized_includes "|" POPS_NATIVE_KOKKOS_INCLUDE)
+list(JOIN _pops_kokkos_header_paths "|" POPS_NATIVE_KOKKOS_HEADER_PATHS)
+list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
 # Pool Ninja taille 1 des TU de production du module Python (_pops) : serialisation anti-OOM de
 # leurs compiles -O3 sous Kokkos, cf. python/CMakeLists.txt. Declare ICI et UNE SEULE fois : un nom
 # de pool duplique dans la propriete GLOBALE JOB_POOLS rend build.ninja invalide

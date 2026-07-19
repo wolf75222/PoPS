@@ -13,6 +13,7 @@ from .physics.board import Model
 from ._platform_contracts import ExecutionContext
 from .problem import Case
 from .runtime.run_report import RunReport, RunStopReason
+from .runtime._threading import set_threads
 from .time._program.api import Program
 
 
@@ -23,6 +24,7 @@ __all__ = [
     "RunReport",
     "RunStopReason",
     "ExecutionContext",
+    "set_threads",
     "validate",
     "inspect",
     "explain",

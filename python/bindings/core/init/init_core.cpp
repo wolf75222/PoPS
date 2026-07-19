@@ -49,6 +49,18 @@
 #ifndef POPS_MPI_LIBRARY_HASHES
 #define POPS_MPI_LIBRARY_HASHES ""
 #endif
+#ifndef POPS_KOKKOS_ABI
+#define POPS_KOKKOS_ABI ""
+#endif
+#ifndef POPS_KOKKOS_INCLUDE
+#define POPS_KOKKOS_INCLUDE ""
+#endif
+#ifndef POPS_KOKKOS_HEADER_PATHS
+#define POPS_KOKKOS_HEADER_PATHS ""
+#endif
+#ifndef POPS_KOKKOS_HEADER_HASHES
+#define POPS_KOKKOS_HEADER_HASHES ""
+#endif
 
 namespace pops::detail {
 
@@ -409,8 +421,16 @@ void init_core(py::module_& m) {
   // build exposes False; no false negative.
 #ifdef POPS_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
+  py::dict kokkos_contract;
+  kokkos_contract["schema_version"] = 1;
+  kokkos_contract["abi_sha256"] = POPS_KOKKOS_ABI;
+  kokkos_contract["include_dirs"] = pipe_tuple(POPS_KOKKOS_INCLUDE);
+  kokkos_contract["header_paths"] = pipe_tuple(POPS_KOKKOS_HEADER_PATHS);
+  kokkos_contract["header_sha256"] = pipe_tuple(POPS_KOKKOS_HEADER_HASHES);
+  m.attr("__kokkos_contract__") = std::move(kokkos_contract);
 #else
   m.attr("__has_kokkos__") = false;
+  m.attr("__kokkos_contract__") = py::none();
 #endif
 
   // Central, closed compile-definition manifest replayed by every native plugin compiler. The host

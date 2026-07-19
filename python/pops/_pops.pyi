@@ -17,6 +17,7 @@ __all__ = (
     "__cxx_std__",
     "__cxx_compiler__",
     "__has_kokkos__",
+    "__kokkos_contract__",
     "__has_mpi__",
     "__has_parallel_hdf5__",
     "__native_loader_contract__",
@@ -53,6 +54,7 @@ __checkpoint_schema_version__: int
 __cxx_std__: int
 __cxx_compiler__: str
 __has_kokkos__: bool
+__kokkos_contract__: dict[str, object] | None
 __has_mpi__: bool
 __has_parallel_hdf5__: bool
 __native_loader_contract__: dict[str, object]

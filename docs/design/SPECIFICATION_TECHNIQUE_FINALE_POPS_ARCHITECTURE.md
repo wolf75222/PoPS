@@ -18,6 +18,7 @@ pops.Case
 pops.RunReport
 pops.RunStopReason
 pops.ExecutionContext
+pops.set_threads
 pops.validate
 pops.inspect
 pops.explain
@@ -32,13 +33,22 @@ Tout autre concept public est importé depuis son module thématique. Les moteur
 `AmrSystem`, les enregistrements `BindInputs` et `InstallPlan`, et les fonctions d'installation sont
 des détails internes. Ils ne constituent ni une seconde API, ni une voie de secours.
 
-`pops.ExecutionContext` est l'unique valeur racine supplémentaire parce qu'elle matérialise une
-ressource de lancement, pas un second moteur. La route MPI actuelle se construit par
+`pops.ExecutionContext` et `pops.set_threads` sont les deux contrôles d'exécution racine ; ils ne
+constituent pas un second moteur. `ExecutionContext` matérialise les ressources authentifiées de
+lancement. La route MPI actuelle se construit par
 `pops.ExecutionContext.mpi_world(artifact)` après compilation et se transmet à
 `pops.bind(..., resources={"execution_context": context})`. Le contexte obtient exclusivement du
 module C++ le `MPI_COMM_WORLD` natif, son rang, sa taille et ses handles ABI ; aucun objet MPI Python
 n'entre dans le contrat public ou privé. Elle refuse tout communicateur custom, toute extension
 non-MPI et toute divergence de rang/taille ; aucune exécution série de repli n'est autorisée.
+
+`pops.set_threads(n)` fixe, depuis Python, le nombre positif de threads du backend Kokkos OpenMP
+déjà installé. Il doit être appelé avant la première initialisation ou allocation Kokkos ; il prépare
+les variables standard `OMP_NUM_THREADS` et `KOKKOS_NUM_THREADS`. Un appel tardif ou un module compilé
+sans Kokkos produit un avertissement explicite ; un backend qui ne consomme pas ces variables les
+ignore. Cette fonction ne sélectionne pas l'espace d'exécution Kokkos : Serial, OpenMP, CUDA ou HIP
+reste une propriété de l'installation native. Aucun descripteur Python inerte ne peut transformer un
+build CPU en build GPU.
 
 ### 1.1 Objectifs
 

@@ -18,6 +18,7 @@ _PUBLIC = (
     "RunReport",
     "RunStopReason",
     "ExecutionContext",
+    "set_threads",
     "validate",
     "inspect",
     "explain",
@@ -76,6 +77,7 @@ import pops
 
 assert tuple(pops.__all__) == {_PUBLIC!r}
 assert "pops._pops" not in sys.modules
+assert pops.set_threads.__module__ == "pops.runtime._threading"
 for removed in {_retired_names()!r}:
     assert not hasattr(pops, removed)
 for absent_submodule in ("restart", "schedule"):
