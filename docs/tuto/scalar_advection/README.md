@@ -1,18 +1,16 @@
 # Advection scalaire 2D avec PoPS
 
-Ce premier tutoriel construit une simulation complete et executable de l'equation
-d'advection scalaire. Il introduit chaque objet PoPS au moment ou il devient utile, puis
-execute exactement le cycle public final :
+Ce tutoriel construit une simulation de l'equation d'advection scalaire. Chaque objet PoPS
+apparait au moment ou il devient utile, jusqu'au cycle d'execution :
 
 ```text
 Case -> validate -> resolve -> compile -> bind -> run
 ```
 
-Les treize scripts de simulation sont deliberement top-level et quasi lineaires. Python
-construit un graphe type et prepare la condition initiale ; les flux, reconstructions,
-stages temporels et mises a jour de cellules sont compiles puis executes en C++/Kokkos.
-Chaque fichier isole un seul nouveau choix : aucun helper partage, argument de ligne de commande ou
-branche de selection de backend ne masque le parcours.
+Les treize scripts se lisent de haut en bas. Python construit le graphe type et prepare la
+condition initiale. Le C++/Kokkos execute les flux, les reconstructions, les stages temporels et
+les mises a jour des cellules. Chaque fichier traite un seul choix numerique ou d'execution et
+contient la declaration complete du cas.
 
 ## Installation
 
@@ -33,7 +31,7 @@ python -m pip install matplotlib
 Les commandes OpenMP et MPI sont regroupees dans
 [`platforms.md`](platforms.md).
 
-## Choisir un script autonome
+## Choisir un script
 
 | Maillage et plateforme | SSPRK2 preimplemente | SSPRK2 explicite |
 |---|---|---|
@@ -42,9 +40,9 @@ Les commandes OpenMP et MPI sont regroupees dans
 | AMR, OpenMP 7 threads | [`05_openmp_amr_preset_ssprk2.py`](05_openmp_amr_preset_ssprk2.py) | [`06_openmp_amr_explicit_ssprk2.py`](06_openmp_amr_explicit_ssprk2.py) |
 | AMR distribue, MPI natif | [`07_mpi_amr_preset_ssprk2.py`](07_mpi_amr_preset_ssprk2.py) | [`08_mpi_amr_explicit_ssprk2.py`](08_mpi_amr_explicit_ssprk2.py) |
 
-Les variantes specialisees ne dupliquent pas toute cette matrice :
+Les autres scripts traitent chacun un point precis :
 
-| Concept isole | Script autonome |
+| Sujet | Script |
 |---|---|
 | Tagging AMR sur $\|\nabla u\|$ | [`09_openmp_amr_gradient_ssprk2.py`](09_openmp_amr_gradient_ssprk2.py) |
 | Horloges AMR synchrones | [`10_openmp_amr_synchronous_ssprk2.py`](10_openmp_amr_synchronous_ssprk2.py) |
@@ -52,14 +50,10 @@ Les variantes specialisees ne dupliquent pas toute cette matrice :
 | HDF5 et ParaView | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
 
-Les scripts OpenMP appellent explicitement `pops.set_threads(7)` avant l'initialisation native.
-Les scripts MPI fixent un thread par rang, construisent toujours
+Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
+fixent un thread par rang, construisent
 `ExecutionContext.mpi_world(artifact)` et transmettent cette ressource a `pops.bind`; ils n'importent
-pas `mpi4py`. Les treize fichiers contiennent toute la
-declaration du cas afin de rester copiables et comprehensibles separement.
-
-Aucun script GPU n'est fourni aujourd'hui. Le futur fichier `14_gpu_...` ne sera ajoute qu'avec une
-API GPU publique et executable de bout en bout.
+pas `mpi4py`. Chaque fichier contient la declaration complete du cas.
 
 ## Probleme physique
 
@@ -70,14 +64,14 @@ $a=(a_x,a_y)$ sur le carre unite :
 \frac{\partial u}{\partial t} + \nabla \cdot (a u) = 0.
 ```
 
-Le tutoriel choisit
+On utilise
 
 ```math
 a_x = 1, \qquad a_y = 0.25,
 ```
 
-et une bosse gaussienne comme condition initiale. Les deux composantes de la vitesse sont
-positives : les faces $x_{min}$ et $y_{min}$ sont donc entrantes, tandis que les faces
+La condition initiale est une bosse gaussienne. Les deux composantes de la vitesse sont positives.
+Les faces $x_{min}$ et $y_{min}$ sont donc entrantes, tandis que les faces
 $x_{max}$ et $y_{max}$ sont sortantes.
 
 ## Semi-discretisation en volumes finis
@@ -89,8 +83,8 @@ U_{ij}(t) = \frac{1}{|\Omega_{ij}|}
 \int_{\Omega_{ij}} u(x,y,t)\,d\Omega.
 ```
 
-Pour garder le script lisible, la bosse initiale est echantillonnee au centre des cellules.
-Cette valeur est une approximation d'ordre deux de la moyenne exacte definie ci-dessus.
+La bosse initiale est echantillonnee au centre des cellules. Cette valeur approche a l'ordre deux
+la moyenne exacte definie ci-dessus.
 
 L'integration de l'equation sur la cellule et le theoreme de Gauss donnent
 
@@ -100,7 +94,7 @@ L'integration de l'equation sur la cellule et le theoreme de Gauss donnent
 \sum_{f \in \partial\Omega_{ij}} \widehat{F}_f = 0.
 ```
 
-Dans le script, les trois niveaux restent separes :
+Le script separe la physique, l'equation d'evolution et sa discretisation :
 
 ```python
 physical_flux = model.flux(
@@ -125,8 +119,8 @@ finite_volume = FiniteVolume(
 ```
 
 - `physical_flux` exprime la physique $F(U)=aU$ ;
-- `advection_rate` exprime l'equation d'evolution ;
-- `FiniteVolume` choisit la realisation numerique de ce flux.
+- `advection_rate` donne l'equation d'evolution ;
+- `FiniteVolume` choisit la discretisation du flux.
 
 PoPS deduit l'ordre formel et la profondeur de halos de `MUSCL(VanLeer())`. Le script ne
 repete donc ni `order=2`, ni un nombre de cellules fantomes.
@@ -178,14 +172,14 @@ reconstruction.WENO5()  # implementation native WENO5-Z
 
 Le document source cite aussi les limiteurs MC et Superbee. Leurs fonctions usuelles sont
 $\phi_{MC}(r)=\max(0,\min(2r,(1+r)/2,2))$ et
-$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. Ils ne disposent pas encore d'un descriptor
-natif dans PoPS 1.0.0 : on peut les comparer sur le papier, mais pas les selectionner dans
-ce tutoriel sans inventer une fausse route Python dans la boucle de calcul.
+$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. PoPS 1.0.0 ne fournit pas encore de descriptor
+natif pour ces deux limiteurs. Ils peuvent etre compares sur le papier, mais ne sont pas
+selectionnables dans ce tutoriel.
 
 ## Tutoriel 1 : briques preimplementees
 
 Le premier script OpenMP est
-[`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py). Il se lit dans cet ordre :
+[`01_openmp_preset_ssprk2.py`](01_openmp_preset_ssprk2.py). Il definit successivement :
 
 1. rectangle, repere et grille ;
 2. etat conservatif ;
@@ -207,7 +201,7 @@ python docs/tuto/scalar_advection/01_openmp_preset_ssprk2.py
 Le resultat final est ecrit dans
 `docs/tuto/scalar_advection/results/01_openmp_preset_ssprk2.npz`.
 
-La version MPI autonome du meme preset est
+La version MPI du meme preset est
 [`03_mpi_preset_ssprk2.py`](03_mpi_preset_ssprk2.py). Sa commande de lancement exacte est donnee
 dans [`platforms.md`](platforms.md).
 
@@ -238,12 +232,10 @@ program = SSPRK2(tracer_U, rate=advection_rate)
 program.step_strategy(AdaptiveCFL(cfl=CFL, max_dt=MAX_DT))
 ```
 
-La strategie CFL appartient au programme. `pops.run` ne choisit ni le schema temporel, ni
-le flux, ni la reconstruction ; il recoit seulement la fin de simulation et la limite de
-pas.
+La strategie CFL appartient au programme. `pops.run` recoit seulement le temps final et la limite
+du nombre de pas. Le schema temporel, le flux et la reconstruction sont deja fixes.
 
-Les autres briques temporelles demandees dans le document source se placent dans le meme
-contrat :
+Les autres schemas temporels explicites utilisent le meme contrat :
 
 ```python
 from pops.lib.time import ForwardEuler, SSPRK2, SSPRK3
@@ -253,17 +245,16 @@ from pops.lib.time import ForwardEuler, SSPRK2, SSPRK3
 - `SSPRK2(...)` est le compromis d'ordre deux execute ici ;
 - `SSPRK3(...)` ajoute un troisieme stage et atteint l'ordre trois en temps.
 
-Euler implicite n'est pas un simple preset explicite interchangeable : il requiert un
-operateur residuel et une resolution implicite. PoPS expose ces briques pour les programmes
-couples, mais leur construction sortirait du probleme d'advection explicite de prise en main.
+Euler implicite demande un operateur residuel et une resolution implicite. Ce cas d'advection reste
+explicite ; les exemples implicites se trouvent dans
+[`advection_relaxation`](../advection_relaxation/README.md).
 
 ## Tutoriel 2 : programme temporel explicite
 
 Le script OpenMP
-[`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) reconstruit exactement le meme schema avec
-les operations generiques de `pops.Program`. C'est la personnalisation executable montree
-ici : la methode spatiale reste volontairement le meme MUSCL/Van Leer/ScalarUpwind natif afin
-d'isoler la construction du programme temporel.
+[`02_openmp_explicit_ssprk2.py`](02_openmp_explicit_ssprk2.py) reconstruit le meme schema avec les
+operations generiques de `pops.Program`. La methode spatiale reste MUSCL/Van Leer avec
+`ScalarUpwind`, ce qui permet de comparer uniquement les deux ecritures du programme temporel.
 
 ```python
 program = pops.Program("SSPRK2")
@@ -301,11 +292,11 @@ Lancer ce second cas :
 python docs/tuto/scalar_advection/02_openmp_explicit_ssprk2.py
 ```
 
-Cette ecriture n'execute pas les stages en Python. Elle construit le graphe que PoPS abaisse
-vers les operateurs C++/Kokkos. Le preset `SSPRK2()` et le programme explicite ont la meme
-semantique et doivent produire le meme resultat.
+Cette ecriture construit le graphe des stages. PoPS l'abaisse ensuite vers les operateurs
+C++/Kokkos. Le preset `SSPRK2()` et le programme explicite ont la meme semantique et produisent le
+meme resultat.
 
-La meme construction explicite est repetee sans helper dans le script MPI autonome
+Le script MPI reprend cette construction
 [`04_mpi_explicit_ssprk2.py`](04_mpi_explicit_ssprk2.py).
 
 ## Tutoriels 3 et 4 : raffinement adaptatif
@@ -331,8 +322,8 @@ transfer = AMRTransfer()
 transfer.state(tracer_U, StateTransfer())
 ```
 
-Le layout rassemble ensuite les autorites adaptatives sans repeter l'ordre de la reconstruction
-ou du transfert :
+Le layout rassemble la hierarchie, le tagging, le calendrier de regrillage, le transfert et les
+horloges :
 
 ```python
 layout = AMR(
@@ -347,10 +338,9 @@ layout = AMR(
 )
 ```
 
-Le ratio spatial et le ratio temporel valent ici tous deux `2`, mais ils restent deux choix
-independants : la hierarchie ne devine jamais le programme des horloges. `AMR` fournit directement
-le tagger symbolique et le clusterer Berger-Rigoutsos preimplementes, donc les scripts ne les
-repetent pas.
+Le ratio spatial et le ratio temporel valent ici tous deux `2`, mais ce sont deux choix
+independants. La hierarchie ne deduit pas le programme des horloges. `AMR` fournit le tagger
+symbolique et le clusterer Berger-Rigoutsos.
 
 Lancer les variantes OpenMP :
 
@@ -366,10 +356,10 @@ mpiexec -n 2 python docs/tuto/scalar_advection/07_mpi_amr_preset_ssprk2.py
 mpiexec -n 2 python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
 ```
 
-Chaque script affiche le nombre de niveaux, de patches fins et de regrids termines. Il ne fabrique
-pas un faux champ global composite et n'effectue aucune boucle de calcul en Python.
+Chaque script affiche le nombre de niveaux, de patches fins et de regrids termines. Le runtime
+C++/Kokkos effectue les calculs sur les cellules.
 
-## Variante specialisee 1 : tagging par gradient
+## Tagging par gradient
 
 [`09_openmp_amr_gradient_ssprk2.py`](09_openmp_amr_gradient_ssprk2.py) raffine les fronts plutot
 que les cellules dont la valeur depasse un seuil. Deux seuils evitent les decisions contradictoires :
@@ -388,14 +378,13 @@ tagging = AMRTagging(
 )
 ```
 
-Le stencil, l'ordre et les halos du gradient sont derives de la methode spatiale. Ils ne sont pas
-redonnes dans la configuration AMR.
+PoPS deduit le stencil, l'ordre et les halos du gradient a partir de la methode spatiale.
 
 ```bash
 python docs/tuto/scalar_advection/09_openmp_amr_gradient_ssprk2.py
 ```
 
-## Variante specialisee 2 : niveaux synchrones
+## Niveaux AMR synchrones
 
 [`10_openmp_amr_synchronous_ssprk2.py`](10_openmp_amr_synchronous_ssprk2.py) conserve le ratio
 spatial 2:1 mais fait avancer les deux niveaux avec le meme pas :
@@ -405,13 +394,13 @@ hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
 execution=AMRExecution.synchronous(),
 ```
 
-La variante montre pourquoi le ratio temporel n'est jamais deduit du ratio spatial.
+Le ratio temporel est ainsi choisi independamment du ratio spatial.
 
 ```bash
 python docs/tuto/scalar_advection/10_openmp_amr_synchronous_ssprk2.py
 ```
 
-## Variante specialisee 3 : compiler une fois, binder plusieurs fois
+## Compiler une fois, binder plusieurs fois
 
 [`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) declare la vitesse avec des
 `RuntimeParam`, compile un seul artefact, puis cree deux installations independantes :
@@ -431,17 +420,17 @@ fast = pops.bind(
 )
 ```
 
-Les cles sont des handles owner-qualifies obtenus apres validation, jamais des strings libres.
+Les cles sont les handles owner-qualifies obtenus apres validation.
 
 ```bash
 python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 ```
 
-## Variante specialisee 4 : sorties scientifiques
+## Sorties HDF5 et ParaView
 
-[`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie HDF5 et ParaView a un
-`ConsumerGraph`. Les deux formats sont publies seulement a la fin acceptee du run, puis rouverts par
-leurs lecteurs publics afin d'afficher leurs identites authentifiees.
+[`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie les sorties HDF5 et ParaView a un
+`ConsumerGraph`. Les deux fichiers sont publies a la fin du run, puis rouverts avec leurs lecteurs
+publics. Le script affiche leur identite.
 
 ```bash
 python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
@@ -450,12 +439,11 @@ python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 Les fichiers sont ecrits sous
 `docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`.
 
-## Variante specialisee 5 : checkpoint et restart exact
+## Checkpoint et restart exact
 
 [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) avance jusqu'a un temps intermediaire et
-cree un checkpoint avec l'API publique du runtime. Un bind frais restaure l'etat, la topologie AMR
-et les horloges, puis poursuit la simulation. Les deux niveaux et les patches sont compares a la
-trajectoire continue sans introduire de sortie scientifique dans ce script.
+cree un checkpoint. Un second bind restaure l'etat, la topologie AMR et les horloges, puis poursuit
+la simulation. Les deux niveaux et les patches sont compares a la trajectoire continue.
 
 ```bash
 python docs/tuto/scalar_advection/13_openmp_amr_restart.py
@@ -481,29 +469,27 @@ La seconde compare une coupe horizontale et la position theorique du centre de l
 
 ![Horizontal scalar-advection cut](figures/scalar_advection_cut.png)
 
-## Ce qui est vraiment personnalisable aujourd'hui
+## Personnaliser le modele et le programme
 
-Ce tutoriel montre deux extensions finales et executees :
+Deux parties sont ecrites directement dans le script :
 
 - un flux physique utilisateur, ecrit symboliquement avec `model.flux(...)` puis compile ;
 - un programme temporel utilisateur, compose avec les operations generiques de
   `pops.Program` puis compile.
 
-Un limiteur ou un flux de Riemann Python ne doit jamais etre appele dans la boucle de calcul.
-La surface 1.0.0 fournit actuellement les reconstructions et flux natifs listes plus haut.
-L'interface de composant `NumericalFlux` externe est reelle pour les interfaces conservatives
-entre blocs, mais elle n'est pas encore la route du flux interieur mono-bloc de ce premier
-tutoriel. Le document ne simule donc pas un support qui n'existe pas.
+Les limiteurs et les flux de Riemann de la boucle de calcul viennent des implementations natives
+listees plus haut. L'interface externe `NumericalFlux` traite les interfaces conservatives entre
+blocs. Elle ne sert pas encore de flux interieur pour ce cas mono-bloc.
 
-## Correction apportee au document source
+## Note sur Euler implicite
 
 Le PDF source indiquait qu'Euler implicite est « inconditionnellement instable » pour les
-problemes lineaires. C'est une coquille. Euler implicite est au contraire A-stable ; son
-interet et sa precision dependent ensuite du probleme, du solveur et du cout de la resolution
-implicite. Ce premier tutoriel reste volontairement explicite et utilise SSPRK2.
+problemes lineaires. Il s'agit d'une coquille : Euler implicite est A-stable. Son interet et sa
+precision dependent du probleme, du solveur et du cout de la resolution implicite. Le cas presente
+ici utilise SSPRK2.
 
 ## Aller plus loin
 
 [L'exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 compose toutes ces briques avec trois niveaux, diagnostics, controles d'identite et preuves de
-restart exhaustives. Les scripts de ce dossier gardent volontairement une seule idee a la fois.
+restart exhaustives.

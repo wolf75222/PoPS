@@ -1,18 +1,21 @@
-# Advection, relaxation et implicite
+# Advection et relaxation
 
-Ce parcours ajoute les termes implicites sans cacher leur nature numerique. Les deux scripts sont
-autonomes, top-level et se lisent dans l'ordre physique du probleme.
+Les quatre fichiers resolvent une advection avec relaxation. Les deux premiers traitent la source
+implicitement. Les deux suivants composent explicitement le transport et la source, une fois avec
+Lie et une fois avec Strang.
 
-## Choisir la bonne version
+## Quel script lancer
 
-| Probleme | Script | Solve implicite |
+| Methode | Script | Ordre des operations |
 |---|---|---|
-| Advection-relaxation locale | [`01_openmp_imex_local.py`](01_openmp_imex_local.py) | `DenseLU` natif par cellule |
-| Advection-diffusion-relaxation | [`02_openmp_imex_cg.py`](02_openmp_imex_cg.py) | CG matrix-free global |
+| IMEX local | [`01_openmp_imex_local.py`](01_openmp_imex_local.py) | transport explicite, relaxation implicite locale |
+| IMEX global | [`02_openmp_imex_cg.py`](02_openmp_imex_cg.py) | transport explicite, diffusion-relaxation par CG |
+| Lie explicite | [`03_openmp_lie_splitting.py`](03_openmp_lie_splitting.py) | $T(\Delta t)$ puis $S(\Delta t)$ |
+| Strang explicite | [`04_openmp_strang_splitting.py`](04_openmp_strang_splitting.py) | $S(\Delta t/2)$, $T(\Delta t)$, $S(\Delta t/2)$ |
 
-Les deux fichiers sont separes volontairement. La relaxation locale ne couple pas les cellules :
-lui imposer un Krylov global ajouterait un cout et donnerait une image fausse de la physique. La
-diffusion, elle, couple les cellules voisines et justifie une resolution lineaire globale.
+La relaxation locale ne couple pas les cellules. Elle se resout donc cellule par cellule avec
+`DenseLU`. La diffusion fait intervenir les cellules voisines et justifie l'emploi d'un Krylov
+global.
 
 ## Version 1 : IMEX local
 
@@ -41,8 +44,8 @@ program = IMEX(
 )
 ```
 
-`pops.lib.time.IMEX` construit IMEX Euler. Son solve local est compile et execute par le `DenseLU`
-natif, sans boucle Python sur les cellules.
+`pops.lib.time.IMEX` construit IMEX Euler. Le `DenseLU` natif compile et execute le solve local.
+Python ne parcourt pas les cellules.
 
 ```bash
 python docs/tuto/advection_relaxation/01_openmp_imex_local.py
@@ -78,15 +81,49 @@ next_state = program.solve(
 ).consume(action=FailRun())
 ```
 
-L'unique `lambda` Python du script decrit le corps symbolique de l'operateur matrix-free pendant
-l'authoring. Les iterations, produits scalaires, applications du Laplacien et reductions sont
-ensuite executes dans le runtime C++/Kokkos.
+L'unique `lambda` Python du script decrit l'operateur matrix-free au moment de construire le graphe.
+Le runtime C++/Kokkos execute ensuite les iterations, les produits scalaires, le Laplacien et les
+reductions.
 
 ```bash
 python docs/tuto/advection_relaxation/02_openmp_imex_cg.py
 ```
 
-Cette version est un solve de niveau uniforme. Un solve composite AMR ne doit pas reutiliser
-silencieusement ce contrat : il requiert une autorite de hierarchie et un provider FAC dedie. Le
-parcours avance correspondant est
+Ce solve travaille sur un niveau uniforme. Un solve composite AMR utilise une autorite de
+hierarchie et un provider FAC. Le cas correspondant se trouve dans
 [`condensed_fac/01_openmp_amr_composite_fac.py`](../condensed_fac/01_openmp_amr_composite_fac.py).
+
+## Version 3 : splitting de Lie explicite
+
+[`03_openmp_lie_splitting.py`](03_openmp_lie_splitting.py) avance d'abord l'advection sur un pas
+complet, puis applique la relaxation sur ce nouvel etat :
+
+```math
+u^{n+1}=\Phi^S_{\Delta t}\!\left(\Phi^T_{\Delta t}(u^n)\right).
+```
+
+Le fichier ecrit les deux sous-pas directement dans `pops.Program`. Le transport et la relaxation
+utilisent ici Euler explicite, ce qui donne une methode d'ordre un.
+
+```bash
+python docs/tuto/advection_relaxation/03_openmp_lie_splitting.py
+```
+
+## Version 4 : splitting de Strang explicite
+
+[`04_openmp_strang_splitting.py`](04_openmp_strang_splitting.py) encadre le transport par deux
+demi-pas de relaxation :
+
+```math
+u^{n+1}=\Phi^S_{\Delta t/2}\!\left(
+\Phi^T_{\Delta t}\!\left(\Phi^S_{\Delta t/2}(u^n)\right)
+\right).
+```
+
+Les deux sous-flots sont d'ordre deux. La source utilise RK2 sur chaque demi-pas et le transport
+utilise SSPRK2 sur le pas complet. Cette precision compte : l'ordre symetrique de Strang ne suffit
+pas si un sous-flot reste d'ordre un.
+
+```bash
+python docs/tuto/advection_relaxation/04_openmp_strang_splitting.py
+```

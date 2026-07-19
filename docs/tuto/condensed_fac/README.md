@@ -1,8 +1,8 @@
 # Source implicite condensée et FAC composite
 
-Ce parcours avancé montre un véritable solve elliptique composite sur une hiérarchie AMR. Il ne
-transpose pas artificiellement l’advection scalaire vers FAC : le problème physique contient deux
-moments couplés par une rotation locale et un potentiel qui réagit à leur déplacement.
+Ce tutoriel résout un problème elliptique composite sur une hiérarchie AMR. Le problème physique
+contient deux moments couplés par une rotation locale et un potentiel qui réagit à leur
+déplacement.
 
 La condensation élimine d’abord le bloc local de moments. Elle produit un problème scalaire
 tensoriel sur le potentiel :
@@ -11,36 +11,35 @@ $$
 -\nabla\!\cdot\!\left(A\nabla\phi\right)=b.
 $$
 
-`Hierarchy()` indique qu’il existe un seul problème mathématique sur tous les niveaux.
-`CompositeTensorFAC()` choisit le provider natif qui assemble les coefficients et le second membre
-sur chaque niveau, effectue un solve FAC composite, puis publie les solutions avant la
-reconstruction des moments.
+`Hierarchy()` définit un seul problème mathématique sur tous les niveaux.
+`CompositeTensorFAC()` choisit le provider natif. Celui-ci assemble les coefficients et le second
+membre sur chaque niveau, effectue le solve FAC composite, puis publie les solutions avant de
+reconstruire les moments.
 
 ## Script
 
 - [`01_openmp_amr_composite_fac.py`](01_openmp_amr_composite_fac.py) : deux niveaux AMR synchrones,
   opérateur condensé explicite et solve FAC en C++/Kokkos OpenMP.
 
-Le fichier reste volontairement top-level : domaine, modèles, plans numériques, programme,
-initialisation, AMR et cycle `validate -> resolve -> compile -> bind -> run` apparaissent dans leur
-ordre d’exécution. La petite `lambda` passée à `set_apply` est la définition symbolique de
-l’opérateur matrix-free ; ce n’est ni une boucle numérique Python ni un callback exécuté par
-cellule.
+Le fichier commence par le domaine, puis définit les modèles, les plans numériques, le programme,
+l’initialisation et l’AMR. Le cycle `validate -> resolve -> compile -> bind -> run` vient ensuite.
+La `lambda` passée à `set_apply` définit symboliquement l’opérateur matrix-free. Le runtime ne
+l’appelle pas sur chaque cellule.
 
 ```bash
 python docs/tuto/condensed_fac/01_openmp_amr_composite_fac.py
 ```
 
-## Pourquoi ce parcours est séparé
+## Contrat de `CompositeTensorFAC`
 
-`CompositeTensorFAC` n’est pas un alias universel pour n’importe quel Laplacien. Son contrat public
-actuel demande les trois briques cohérentes `condensed_coeffs`, `condensed_rhs` et
-`condensed_reconstruct`, avec un opérateur scalaire de portée `Hierarchy()`. Un simple remplacement
-du CG du tutoriel diffusion par FAC serait donc mathématiquement et techniquement faux.
+`CompositeTensorFAC` ne remplace pas n’importe quel Laplacien. Son contrat public demande les trois
+briques `condensed_coeffs`, `condensed_rhs` et `condensed_reconstruct`, avec un opérateur scalaire
+de portée `Hierarchy()`. Le CG du tutoriel de diffusion ne peut donc pas être remplacé directement
+par FAC.
 
 Le marqueur scalaire sert uniquement au tagging AMR. L’état physique condensé comporte trois
-composantes et le provider de tagging direct travaille sur un état scalaire ; garder les deux rôles
-séparés rend cette limitation visible au lieu de choisir silencieusement une composante.
+composantes, tandis que le provider de tagging direct travaille sur un état scalaire. Les deux
+rôles sont donc déclarés séparément.
 
-Le domaine est non périodique afin que le problème elliptique soit non singulier. Le script déclare
-donc honnêtement `nullspace=None` ; la gauge composite périodique n’est pas prétendue disponible.
+Le domaine est non périodique, ce qui rend le problème elliptique non singulier. Le script déclare
+donc `nullspace=None`.
