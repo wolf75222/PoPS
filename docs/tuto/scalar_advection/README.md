@@ -171,11 +171,11 @@ Le script complet est
 Lancer le cas :
 
 ```bash
-python tutorials/scalar_advection/01_pops_library.py
+python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 Le resultat final est ecrit dans
-`tutorials/scalar_advection/results/01_pops_library.npz`.
+`docs/tuto/scalar_advection/results/01_pops_library.npz`.
 
 ## Integration temporelle SSPRK2
 
@@ -264,7 +264,7 @@ program.commit(q.next, q_next)
 Lancer ce second cas :
 
 ```bash
-python tutorials/scalar_advection/02_explicit_ssprk2.py
+python docs/tuto/scalar_advection/02_explicit_ssprk2.py
 ```
 
 Cette ecriture n'execute pas les stages en Python. Elle construit le graphe que PoPS abaisse
@@ -276,7 +276,7 @@ semantique et doivent produire le meme resultat.
 Apres les deux simulations :
 
 ```bash
-python tutorials/scalar_advection/03_make_figures.py
+python docs/tuto/scalar_advection/03_make_figures.py
 ```
 
 La premiere figure montre la condition initiale, la solution advectee et la difference entre
@@ -312,7 +312,7 @@ implicite. Ce premier tutoriel reste volontairement explicite et utilise SSPRK2.
 ## Aller plus loin
 
 L'
-[exemple final d'advection scalaire](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
+[exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 ajoute AMR, tagging par gradient, transferts conservatifs, reflux, sorties HDF5/ParaView et
 restart bit-identique. Il sert de reference exhaustive, tandis que les scripts de ce dossier
 restent le parcours de prise en main.

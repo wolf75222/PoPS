@@ -173,7 +173,7 @@ The documentation corpus describes the final public lifecycle and its current im
 - [Final technical specification](docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md):
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
-- [Tutorials](tutorials/README.md): linear, executable introductions built with the public API.
+- [Tutorials](docs/tuto/README.md): linear, executable introductions built with the public API.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.

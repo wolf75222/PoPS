@@ -18,7 +18,7 @@ mono-thread :
 
 ```bash
 OMP_NUM_THREADS=1 KOKKOS_NUM_THREADS=1 OMP_PROC_BIND=false \
-  python tutorials/scalar_advection/01_pops_library.py
+  python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 Le script affiche le backend Kokkos reel. Il ne faut pas appeler une execution OpenMP
@@ -41,7 +41,7 @@ Le nombre de threads est ensuite fixe avant l'initialisation de Kokkos :
 ```bash
 OMP_NUM_THREADS=4 KOKKOS_NUM_THREADS=4 \
 OMP_PROC_BIND=spread OMP_PLACES=cores \
-  python tutorials/scalar_advection/01_pops_library.py
+  python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 Sur un cluster, utiliser le nombre de CPU alloue par l'ordonnanceur. Par exemple avec Slurm :
@@ -49,7 +49,7 @@ Sur un cluster, utiliser le nombre de CPU alloue par l'ordonnanceur. Par exemple
 ```bash
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 export KOKKOS_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-srun --cpu-bind=cores python tutorials/scalar_advection/01_pops_library.py
+srun --cpu-bind=cores python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 ## MPI
@@ -62,7 +62,7 @@ bash scripts/build_python.sh --mpi --clean
 conda activate pops
 POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi" \
 OMP_NUM_THREADS=1 KOKKOS_NUM_THREADS=1 OMP_PROC_BIND=false \
-  mpiexec -n 2 python tutorials/scalar_advection/01_pops_library.py
+  mpiexec -n 2 python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 Le cache de code genere est volontairement distinct du cache serie. Un changement de backend
@@ -78,7 +78,7 @@ Sur Slurm :
 ```bash
 POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi" \
 srun --ntasks=4 --cpus-per-task=2 \
-  python tutorials/scalar_advection/01_pops_library.py
+  python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 Les deux niveaux de parallelisme peuvent etre combines si le module MPI a lui-meme ete
@@ -98,7 +98,7 @@ export KOKKOS_NUM_THREADS=2
 export OMP_PROC_BIND=spread
 export OMP_PLACES=cores
 POPS_CACHE_DIR="${TMPDIR:-/tmp}/pops-tutorial-mpi-openmp" \
-  mpiexec -n 4 python tutorials/scalar_advection/01_pops_library.py
+  mpiexec -n 4 python docs/tuto/scalar_advection/01_pops_library.py
 ```
 
 ## GPU
