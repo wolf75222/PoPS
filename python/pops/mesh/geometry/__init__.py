@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from .._descriptor import MeshDescriptor
 from ..masks import TransportMask, lower_transport_mask
@@ -285,7 +285,7 @@ def _balanced_level_set_composition(
         if len(expressions) % 2:
             next_level.append(expressions[-1])
         expressions = tuple(next_level)
-    return LevelSet(expressions[0])
+    return LevelSet(cast(tuple[ScalarExpr], expressions)[0])
 
 
 class GeometryComposition(Geometry):

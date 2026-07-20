@@ -226,11 +226,12 @@ def _transform_cell(values: np.ndarray, cutoff: float, mach: float, small: float
     )
     for block in blocks:
         eigenvalues = np.linalg.eigvals(block)
-        scale = max(np.max(abs(eigenvalues.real)), 1.0)
-        if np.max(abs(eigenvalues.imag)) > spectral_tolerance * scale:
+        scale = max(float(np.max(np.abs(np.real(eigenvalues)))), 1.0)
+        if float(np.max(np.abs(np.imag(eigenvalues)))) > spectral_tolerance * scale:
             s[(2, 1)] = s[(1, 2)] = 0.0
             s[(2, 2)] = max(s[(2, 2)], 1.0 / 3.0)
-    if not correlation_repair and np.min(np.linalg.eigvals(_p2p2(s)).real) <= cutoff:
+    minimum_eigenvalue = float(np.min(np.real(np.linalg.eigvals(_p2p2(s)))))
+    if not correlation_repair and minimum_eigenvalue <= cutoff:
         s.update(_collision(s, small))
     repaired = dict(central)
     repaired[(1, 1)] = s[(1, 1)] * sx * sy
@@ -249,7 +250,8 @@ def _apply_hyqmom15_relaxation_array(values: Any, *, cutoff: float, mach: float,
         raise FloatingPointError("HyQMOM15 relaxation received a non-finite state")
     flat = state.reshape((len(_INDICES), -1))
     result = np.empty_like(flat)
-    for cell in range(flat.shape[1]):
+    cell_count = flat.size // len(_INDICES)
+    for cell in range(cell_count):
         _, _, _, central = _central(dict(zip(_INDICES, flat[:, cell], strict=True)))
         if flat[0, cell] <= 0.0 or central[(2, 0)] <= 0.0 or central[(0, 2)] <= 0.0:
             raise ValueError("HyQMOM15 relaxation input has non-positive density or variance")

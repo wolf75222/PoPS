@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from pops.identity import Identity
+
 from .._layout_plan_contracts import LayoutPlan
 from .hierarchy import LevelTransition
 from .hierarchy_resolution import ResolvedHierarchy
@@ -22,6 +24,9 @@ class _InitialConditionPlanContract(Protocol):
 
     layout_plan_id: str
     bindings: tuple[Any, ...]
+
+    @property
+    def identity(self) -> Identity: ...
 
     def canonical_identity(self) -> dict[str, Any]: ...
 

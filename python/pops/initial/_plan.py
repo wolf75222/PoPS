@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import math
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pops.identity import Identity, make_identity
 from pops.model import Handle
@@ -43,14 +43,15 @@ def _layout_plan(value: Any) -> _LayoutPlanContract:
             "InitialConditionPlanBuilder requires an immutable layout-plan authority "
             "exposing qualified_id, canonical_identity(), layout_for(), and normalized()"
         )
-    identity = canonical_identity()
+    plan = cast(_LayoutPlanContract, value)
+    identity = plan.canonical_identity()
     if not isinstance(identity, Mapping) \
             or identity.get("report_type") != "layout_plan" \
             or identity.get("qualified_id") != qualified_id:
         raise ValueError(
             "initial-condition layout-plan authority has an unauthenticated canonical identity"
         )
-    return value
+    return plan
 
 
 def _canonical_handle(value: Any, *, where: str) -> Any:
@@ -160,7 +161,9 @@ class InitialConditionSource:
                     "InitialConditionSource.options must be InitialConditionOptions or expose "
                     "a data-only to_data() projection"
                 )
-            options = InitialConditionOptions(to_data())
+            options = InitialConditionOptions(
+                cast(Mapping[str, Any], to_data())
+            )
             object.__setattr__(self, "options", options)
 
     def canonical_identity(self) -> dict[str, Any]:

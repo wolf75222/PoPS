@@ -12,7 +12,7 @@ from decimal import Decimal
 from fractions import Fraction
 import math
 from numbers import Real
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from pops.frames import CartesianAxis
 
@@ -605,7 +605,8 @@ def _validate_predicate_local(value: PredicateExpr) -> None:
     if not valid:
         raise TypeError("analytic predicate %s has invalid argument kinds" % value._op)
     if value._op == "between":
-        lower, upper = value._arguments[1:]
+        _, lower, upper = cast(
+            tuple[ScalarExpr, ScalarExpr, ScalarExpr], value._arguments)
         if lower._op == "constant" and upper._op == "constant" \
                 and lower._literal > upper._literal:  # type: ignore[operator]
             raise ValueError("between lower bound must be <= upper bound")

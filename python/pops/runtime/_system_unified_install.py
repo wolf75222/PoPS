@@ -178,6 +178,8 @@ class _SystemUnifiedInstall(_System):
             validate_initial_source,
         )
 
+        if not isinstance(source, Mapping):
+            raise TypeError("uniform initial source must be a canonical mapping")
         route = validate_initial_source(source, where="uniform initial source")
         if route == "bound_level_zero":
             value = row.get("value")
@@ -221,8 +223,8 @@ class _SystemUnifiedInstall(_System):
             from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
             lowered = lower_analytic_components(
-                source.get("components"),
-                frame_id=source.get("frame_id"),
+                source["components"],
+                frame_id=source["frame_id"],
                 bindings=params,
             )
             self._s._set_analytic_expression_state(
@@ -238,8 +240,8 @@ class _SystemUnifiedInstall(_System):
             from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
             seed = lower_analytic_components(
-                source.get("seed_components"),
-                frame_id=source.get("frame_id"),
+                source["seed_components"],
+                frame_id=source["frame_id"],
                 bindings=params,
             )
             self._s._set_analytic_expression_state(
@@ -252,11 +254,11 @@ class _SystemUnifiedInstall(_System):
             )
             self._s.solve_fields()
             mapped = lower_analytic_components(
-                source.get("components"),
-                frame_id=source.get("frame_id"),
+                source["components"],
+                frame_id=source["frame_id"],
                 bindings=params,
             )
-            inputs = sorted(source.get("inputs"), key=lambda row: row["value_id"])
+            inputs = sorted(source["inputs"], key=lambda row: row["value_id"])
             input_sources = [
                 "%s:%d" % (row["source"], int(row["component"]))
                 for row in inputs
