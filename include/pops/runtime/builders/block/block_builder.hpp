@@ -598,36 +598,9 @@ struct BlockRhsEvalMasked {
                                        pos_floor, weno_eps);
   }
 
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R) const {
-    require_geometry_aware_boundary_provider(ctx, "masked Program residual");
-    eval_core(point, U, R);
-    add_grid_boundary_residual(U, R, ctx, point);
-  }
-
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    require_geometry_aware_boundary_provider(ctx, "prepared masked Program residual");
-    eval_core(point, U, R, boundary);
-    add_grid_boundary_residual(U, R, boundary, point);
-  }
-
-  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                 MultiFab& R) const {
-    require_geometry_aware_boundary_provider(ctx, "masked Program core residual");
-    fill_grid_ghosts(U, ctx, point);
-    eval_core_filled(U, R);
-  }
-
-  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                 MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    require_geometry_aware_boundary_provider(ctx, "prepared masked Program core residual");
-    fill_grid_ghosts(U, boundary, point);
-    eval_core_filled(U, R);
-  }
-
- private:
-  void eval_core_filled(MultiFab& U, MultiFab& R) const {
+  /// Program core after its point-qualified host protocol has produced ghosts. Kept as the only
+  /// extra Model/Limiter/Flux instantiation; point/prepared/boundary composition is out of line.
+  void eval_program_core(MultiFab& U, MultiFab& R) const {
     const BoundaryFaceOmission omission = prepared_boundary_face_omission(ctx);
     assemble_rhs_masked_impl<Limiter, Flux>(model, U, *ctx.aux, *mask, ctx.geom, R, recon_prim,
                                             pos_floor, weno_eps, omission);
@@ -656,36 +629,9 @@ struct BlockRhsEvalEb {
                                             pos_floor, face_open_eps, weno_eps);
   }
 
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R) const {
-    require_geometry_aware_boundary_provider(ctx, "cut-cell Program residual");
-    eval_core(point, U, R);
-    add_grid_boundary_residual(U, R, ctx, point);
-  }
-
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    require_geometry_aware_boundary_provider(ctx, "prepared cut-cell Program residual");
-    eval_core(point, U, R, boundary);
-    add_grid_boundary_residual(U, R, boundary, point);
-  }
-
-  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                 MultiFab& R) const {
-    require_geometry_aware_boundary_provider(ctx, "cut-cell Program core residual");
-    fill_grid_ghosts(U, ctx, point);
-    eval_core_filled(U, R);
-  }
-
-  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                 MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    require_geometry_aware_boundary_provider(ctx, "prepared cut-cell Program core residual");
-    fill_grid_ghosts(U, boundary, point);
-    eval_core_filled(U, R);
-  }
-
- private:
-  void eval_core_filled(MultiFab& U, MultiFab& R) const {
+  /// Program core after its point-qualified host protocol has produced ghosts. See the staircase
+  /// twin above; geometry metrics remain statically compiled into this native callback.
+  void eval_program_core(MultiFab& U, MultiFab& R) const {
     const Real face_open_eps =
         ctx.eb_thresholds ? ctx.eb_thresholds->face_open_eps : ctx.eb_face_open_eps;
     const PreparedEbMetricsProvider provider{ctx.domain_mask, inverse_volume_fraction};
@@ -695,33 +641,13 @@ struct BlockRhsEvalEb {
   }
 };
 
-/// Type-erased Program closures are built from this one policy adaptor.  `Eval` is either the
-/// staircase or cut-cell evaluator above; limiter, Riemann solver, reconstruction and WENO options
-/// remain compile-time/frozen members of Eval.
+/// The only model-dependent adaptor required by the point-qualified Program protocol. Its erased
+/// signature is consumed by make_geometry_residual_closures(), whose host-only point/prepared/core
+/// wrappers are non-template and therefore compiled once per TU rather than once per transport leaf.
 template <class Eval>
-struct PointQualifiedGeometryRhs {
+struct GeometryProgramCore {
   Eval eval;
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R) const {
-    eval(point, U, R);
-  }
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    eval(point, U, R, boundary);
-  }
-};
-
-template <class Eval>
-struct PointQualifiedGeometryCoreRhs {
-  Eval eval;
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R) const {
-    eval.eval_core(point, U, R);
-  }
-  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
-                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
-    eval.eval_core(point, U, R, boundary);
-  }
+  void operator()(MultiFab& U, MultiFab& R) const { eval.eval_program_core(U, R); }
 };
 
 /// MASKED EXPLICIT advance: n substeps of the @c Stepper stepper on the MASKED transport residual.
@@ -994,24 +920,9 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
     const FullEval full_eval{m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
     const FluxEval flux_eval{
         SourceFreeModel<Model>{m}, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
-    bc.staircase_residuals.full = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-    bc.staircase_residuals.flux_only = detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    bc.staircase_residuals.core = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
-    bc.staircase_residuals.flux_only_core =
-        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
-    bc.staircase_residuals.full_prepared = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-    bc.staircase_residuals.flux_only_full_prepared =
-        detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    bc.staircase_residuals.core_prepared =
-        detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
-    bc.staircase_residuals.flux_only_core_prepared =
-        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
-    if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
-      bc.staircase_residuals.without_prepared_interfaces =
-          detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-      bc.staircase_residuals.flux_only_without_prepared_interfaces =
-          detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    }
+    bc.staircase_residuals = make_geometry_residual_closures(
+        ctx, detail::GeometryProgramCore<FullEval>{full_eval},
+        detail::GeometryProgramCore<FluxEval>{flux_eval}, "masked Program residual");
   }
   if (supports_embedded_boundary && eb_inverse_volume_fraction) {
     using FullEval = detail::BlockRhsEvalEb<Limiter, Flux, Model>;
@@ -1023,23 +934,9 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
                              recon_prim,
                              pos_floor,
                              weno_eps};
-    bc.cutcell_residuals.full = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-    bc.cutcell_residuals.flux_only = detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    bc.cutcell_residuals.core = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
-    bc.cutcell_residuals.flux_only_core =
-        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
-    bc.cutcell_residuals.full_prepared = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-    bc.cutcell_residuals.flux_only_full_prepared =
-        detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    bc.cutcell_residuals.core_prepared = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
-    bc.cutcell_residuals.flux_only_core_prepared =
-        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
-    if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
-      bc.cutcell_residuals.without_prepared_interfaces =
-          detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
-      bc.cutcell_residuals.flux_only_without_prepared_interfaces =
-          detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
-    }
+    bc.cutcell_residuals = make_geometry_residual_closures(
+        ctx, detail::GeometryProgramCore<FullEval>{full_eval},
+        detail::GeometryProgramCore<FluxEval>{flux_eval}, "cut-cell Program residual");
   }
   if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
     bc.rhs_without_prepared_interfaces =

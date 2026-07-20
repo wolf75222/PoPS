@@ -7,6 +7,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
+from pops._dense_spectral import DENSE_SPECTRAL
+
 from .expr import Expr, _wrap
 from pops.identity.scalar import exact_numeric_scalar, scalar_cpp, scalar_literal
 
@@ -43,6 +45,9 @@ _EIG_FIELDS = {
 # sous repli, donc lu comme reel). Compose dans les masques branchless de m.projection.
 _EIG_PREDICATES = {
     "all_real": "all_real",  # 1.0 ssi le bloc a CONVERGE et le spectre est reel (sinon 0.0)
+    # 1.0 reel, 0.0 complexe, NaN si non-convergence/non-fini. Les kernels fail-closed utilisent
+    # ce statut au lieu de confondre une panne du solveur avec une paire complexe physique.
+    "real_status": "real_status",
 }
 
 
@@ -52,8 +57,8 @@ class EigWitness(Expr):
     par ``pops::real_eig_minmax`` (dense_eig.hpp, POPS_HD, repli Gershgorin sur non-convergence, cap QR
     releve par ADC-195) ; @c field choisit le champ rendu de @c pops::EigBounds : ``max_im`` (temoin de
     VP complexes : 0 = spectre reel donc hyperbolique), ``lmin`` / ``lmax`` (extremes des parties
-    reelles), ou le PREDICAT ``all_real`` (ADC-362, cf. dsl.eig_all_real) qui rend 1.0/0.0 (spectre reel
-    ET convergent, sinon 0.0) abaisse sur ``pops::EigBounds::all_real(im_tol)`` (verrouille sur converged).
+    reelles), le PREDICAT ``all_real`` (1.0 reel, 0.0 sinon), ou ``real_status`` (1.0 reel,
+    0.0 complexe, NaN si le solveur spectral est invalide ou non converge).
     Sert la logique branchless de m.projection : ``si max_im > tol alors corriger`` s'ecrit
     en masque max/min/sign sur cette valeur, sans branche dynamique.
 
@@ -78,9 +83,15 @@ class EigWitness(Expr):
         k = len(rows)
         if k < 1:
             raise ValueError("EigWitness : matrice vide (au moins 1 ligne)")
-        if k > 16:
-            raise ValueError("EigWitness : matrice %dx%d > 16x16 (limite de real_eig_minmax, "
-                             "tampon pile O(N^2) par thread device)" % (k, k))
+        DENSE_SPECTRAL.require(
+            k,
+            operation="EigWitness",
+            alternative=(
+                "Use a block decomposition with at most %d components per witness, or a "
+                "spectral provider designed for a larger matrix."
+                % DENSE_SPECTRAL.max_components
+            ),
+        )
         for r in rows:
             if len(r) != k:
                 raise ValueError("EigWitness : matrice non carree (%d lignes, ligne de %d entrees)"

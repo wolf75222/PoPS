@@ -20,6 +20,7 @@ from pops.codegen.cpp_writer import (
     _count_cons_denoms,
     _recip_rewrite,
 )
+from pops._ir.visitors import _dependencies
 
 # --- Aux channel constants (mirrors of pops.dsl module-level constants) -----
 # These duplicate the values from pops.dsl intentionally to avoid an import
@@ -80,14 +81,13 @@ def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
     prim = model.prim_defs
     live = set()
     stack = [n for n in seed if n in prim]
-    for e in exprs:
-        stack.extend(d for d in e.deps() if d in prim)
+    stack.extend(name for name in _dependencies(exprs) if name in prim)
     while stack:
         nm = stack.pop()
         if nm in live:
             continue
         live.add(nm)
-        stack.extend(d for d in prim[nm].deps() if d in prim)
+        stack.extend(name for name in _dependencies(prim[nm]) if name in prim)
     return live
 
 

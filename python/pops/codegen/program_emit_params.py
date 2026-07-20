@@ -21,7 +21,8 @@ from pops.codegen.program_models import ProgramModelGraph, model_for_node
 
 
 _MODEL_PARAM_OPS = frozenset({
-    "source", "apply", "solve_local_linear", "rhs", "solve_local_nonlinear",
+    "source", "apply", "local_transform", "solve_local_linear", "rhs",
+    "solve_local_nonlinear",
 })
 
 
@@ -53,11 +54,17 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     src = getattr(impl, "_source_terms", {}) or {}
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
+    transforms = getattr(impl, "_local_transforms", {}) or {}
     if v.op == "source":
         out += list(src.get(v.attrs.get("source"), []))
     elif v.op == "apply" or v.op == "solve_local_linear":
         for row in lin.get(v.attrs.get("linear_source"), []):
             out += list(row)
+    elif v.op == "local_transform":
+        transform = transforms.get(v.attrs.get("transform"))
+        if transform is not None:
+            out += list(transform["expressions"])
+            out.append(transform["valid_if"])
     elif v.op == "rhs":
         for s in (v.attrs.get("sources") or []):
             if s != "default":

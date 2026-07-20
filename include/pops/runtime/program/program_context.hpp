@@ -535,6 +535,39 @@ class ProgramContext {
     sys_->require_cartesian_generated_operator(sys_block(b), operation);
   }
 
+  /// Return the prepared active-cell mask for a pointwise generated operator owned by Program block
+  /// @p b.  A Cartesian block has no mask (nullptr means every valid cell is active).  Embedded
+  /// geometries expose the same stable, block-qualified mask used by the native residual and field
+  /// algebra.  The field layout is authenticated here, before generated code launches a device
+  /// kernel; pointwise providers therefore never infer geometry from a case name or mode.
+  const MultiFab* pointwise_active_mask(int b, const MultiFab& field) const {
+    const GridContext context = sys_->grid_context(sys_block(b));
+    if (context.embedded_boundary_set == nullptr || !*context.embedded_boundary_set ||
+        context.geometry_mode == nullptr || *context.geometry_mode == GeometryMode::None)
+      return nullptr;
+    if (context.domain_mask == nullptr)
+      throw std::runtime_error(
+          "ProgramContext pointwise operator has no prepared active-cell mask");
+    pops::detail::validate_relative_cell_measure(
+        field, RelativeCellMeasure{context.domain_mask, nullptr},
+        "ProgramContext pointwise active-cell mask");
+    return context.domain_mask;
+  }
+
+  /// Collective fail-closed reduction for a pointwise generated operator.  @p active_cells must be
+  /// the exact block-qualified mask returned by pointwise_active_mask for @p status; this prevents a
+  /// generated kernel from evaluating one physical domain and validating another.
+  Real pointwise_status_max(int b, const MultiFab& status,
+                            const MultiFab* active_cells) const {
+    const MultiFab* expected = pointwise_active_mask(b, status);
+    if (expected != active_cells)
+      throw std::invalid_argument(
+          "ProgramContext pointwise status reduction received a different active-cell mask");
+    const Real reduced =
+        pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
+    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
+  }
+
   /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) -- the
   /// SAME hmin the native CFL uses. Forwards to System::cfl_min_dx. A compiled time Program's dt bound
   /// (epic ADC-399 / ADC-417, spec s18) reads it to express e.g. cfl * hmin / max_wave_speed.

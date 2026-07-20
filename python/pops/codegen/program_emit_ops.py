@@ -29,6 +29,7 @@ from pops.codegen.program_emit_model_kernels import (
     _emit_apply_kernel,
     _emit_coupled_rate_kernel,
     _emit_flux_kernel,
+    _emit_local_transform_kernel,
     _emit_solve_local_linear_kernel,
     _emit_solve_local_nonlinear_kernel,
     _emit_solve_coupled_implicit_kernel,
@@ -308,6 +309,41 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (state_in,) = v.inputs
         lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
         var[v.id] = var[state_in.id]
+    elif v.op == "local_transform":
+        if prelude is None:
+            raise NotImplementedError(
+                "local_transform requires an install-time resource scope")
+        state_in = v.inputs[0]
+        var[v.id] = "u%d" % v.id
+        status = "transform_status_field_%d" % v.id
+        state_resource = "transform_state_resource_%d" % v.id
+        status_resource = "transform_status_resource_%d" % v.id
+        active_mask = "transform_active_mask_%d" % v.id
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab>(ctx.scratch_state_like(ctx.state(%d)));"
+            % (state_resource, bidx))
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 0));"
+            % status_resource)
+        lines.append("pops::MultiFab& %s = *%s;" % (var[v.id], state_resource))
+        lines.append("pops::MultiFab& %s = *%s;" % (status, status_resource))
+        lines.append(
+            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, var[v.id]))
+        lines += _emit_local_transform_kernel(
+            node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
+            active_mask, bidx)
+        reduced = "transform_failed_%d" % v.id
+        lines.append(
+            "const pops::Real %s = ctx.pointwise_status_max(%d, %s, %s);"
+            % (reduced, bidx, status, active_mask))
+        lines.append("if (%s != pops::Real(0)) {" % reduced)
+        lines.append(
+            "  throw pops::runtime::program::StepAttemptRejected("
+            "pops::SolveStatus::kInvalidEvaluation, \"local_transform\", %s);"
+            % json.dumps("transform '%s' rejected a non-finite or out-of-domain state"
+                         % v.attrs["transform"]))
+        lines.append("}")
     elif v.op == "cell_compare":
         # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
         # a fresh 1-component scalar_field. Lowered to a for_each_cell select kernel (the mask the

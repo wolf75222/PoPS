@@ -566,6 +566,54 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   EXPECT_EQ(cutcell_context.norm_inf(0, cutcell_field), Real(2));
 }
 
+TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 12;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+
+  for (const std::string mode : {"staircase", "cutcell"}) {
+    System system(cfg);
+    add_gas(system, gamma, "none");
+    system.set_disc_domain(0.5, 0.5, 0.32, mode);
+    const std::vector<double> mask = system.disc_mask();
+    system.set_state("gas", std::vector<double>(4 * cells, 2.0));
+    system.set_program_block_map({0});
+
+    runtime::program::ProgramContext context(&system);
+    MultiFab& state = context.state(0);
+    const MultiFab* prepared = context.pointwise_active_mask(0, state);
+    ASSERT_NE(prepared, nullptr) << mode;
+    MultiFab status = context.alloc_scalar_field(1, 0);
+    int active = 0;
+    int inactive = 0;
+    for (int li = 0; li < status.local_size(); ++li) {
+      Fab2D& fab = status.fab(li);
+      const Box2D box = fab.box();
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+          const bool is_active = mask[static_cast<std::size_t>(j * n + i)] >= 0.5;
+          active += is_active ? 1 : 0;
+          inactive += is_active ? 0 : 1;
+          fab(i, j, 0) = is_active ? Real(0) : Real(1);
+        }
+      }
+    }
+    ASSERT_GT(active, 0) << mode;
+    ASSERT_GT(inactive, 0) << mode;
+    EXPECT_EQ(context.pointwise_status_max(0, status, prepared), Real(0)) << mode;
+    EXPECT_THROW((void)context.pointwise_status_max(0, status, &status),
+                 std::invalid_argument)
+        << mode;
+  }
+}
+
 TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

@@ -300,6 +300,26 @@ def test_coupled_rate_builder_failure_restores_operator_registry(monkeypatch):
     assert _snapshot(model) == before
 
 
+def test_multispecies_local_transform_builder_failure_restores_registry(monkeypatch):
+    model = Model("transform_builder")
+    electrons = model.species("electrons", state=["ne"])
+    model.species("ions", state=["ni"])
+    module = model._multi_module
+    before = _snapshot(model)
+    original = module.operator
+
+    def fail_after_registration(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("injected local-transform builder failure")
+
+    monkeypatch.setattr(module, "operator", fail_after_registration)
+    with pytest.raises(RuntimeError, match="injected"):
+        model.local_transform(
+            "repair", (electrons["ne"] + 1.0,), on=electrons)
+
+    assert _snapshot(model) == before
+
+
 def test_foreign_multispecies_handle_does_not_register_coupled_operator():
     model = Model("multi_local")
     electrons = model.species("electrons", state=["ne"])

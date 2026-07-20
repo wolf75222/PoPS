@@ -17,41 +17,14 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux, DiffusiveModel
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>    // fill_wave_speed_cache
-#include <pops/parallel/comm.hpp>
-
-#include <stdexcept>
-#include <string>
-
 namespace pops {
 
 namespace detail {
-struct NonFiniteComponentKernel {
-  ConstArray4 values;
-  int ncomp;
-  POPS_HD Real operator()(int i, int j) const {
-    Real failed = Real(0);
-    for (int c = 0; c < ncomp; ++c)
-      failed += Kokkos::isfinite(values(i, j, c)) ? Real(0) : Real(1);
-    return failed;
-  }
-};
-
-inline void reject_nonfinite_residual(const MultiFab& R, const char* where) {
-  double local = 0.0;
-  for (int li = 0; li < R.local_size(); ++li)
-    local += static_cast<double>(for_each_cell_reduce_sum(
-        R.box(li), NonFiniteComponentKernel{R.fab(li).const_array(), R.ncomp()}));
-  const double global = all_reduce_sum(local);
-  if (global != 0.0)
-    throw std::runtime_error(std::string(where) +
-                             " rejected a non-finite residual; a flux evaluation failed or the "
-                             "dense HLL Jacobian lost hyperbolicity");
-}
-
 /// AssembleRhsKernel<Limiter,NumericalFlux,Model>: device kernel of the central residual of
 /// assemble_rhs.
 ///
@@ -165,7 +138,7 @@ void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux, co
     for_each_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
                          model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
-  detail::reject_nonfinite_residual(R, "assemble_rhs");
+  detail::reject_nonfinite_finite_volume_data("assemble_rhs", R);
 }
 
 namespace detail {
@@ -199,10 +172,11 @@ struct AssembleRhsHllCachedKernel {
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     // face signal speeds = union (min of the lo, max of the hi) of the two adjacent cells: the LEFT
     // cell is always the lower-index neighbor (same operands/order as hll_speeds).
-    const Real sLxm = ws(i - 1, j, 0) < ws(i, j, 0) ? ws(i - 1, j, 0) : ws(i, j, 0);
-    const Real sRxm = ws(i - 1, j, 1) > ws(i, j, 1) ? ws(i - 1, j, 1) : ws(i, j, 1);
-    const Real sLxp = ws(i, j, 0) < ws(i + 1, j, 0) ? ws(i, j, 0) : ws(i + 1, j, 0);
-    const Real sRxp = ws(i, j, 1) > ws(i + 1, j, 1) ? ws(i, j, 1) : ws(i + 1, j, 1);
+    Real sLxm, sRxm, sLxp, sRxp;
+    union_hll_speed_intervals(ws(i - 1, j, 0), ws(i - 1, j, 1), ws(i, j, 0), ws(i, j, 1),
+                              sLxm, sRxm);
+    union_hll_speed_intervals(ws(i, j, 0), ws(i, j, 1), ws(i + 1, j, 0), ws(i + 1, j, 1),
+                              sLxp, sRxp);
     const FaceContext xface = FaceContext::axis_aligned(0);
     const PhysicalFluxView<Model> physical{model};
     const auto Fxm =
@@ -229,10 +203,11 @@ struct AssembleRhsHllCachedKernel {
         reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const Real sLym = ws(i, j - 1, 2) < ws(i, j, 2) ? ws(i, j - 1, 2) : ws(i, j, 2);
-    const Real sRym = ws(i, j - 1, 3) > ws(i, j, 3) ? ws(i, j - 1, 3) : ws(i, j, 3);
-    const Real sLyp = ws(i, j, 2) < ws(i, j + 1, 2) ? ws(i, j, 2) : ws(i, j + 1, 2);
-    const Real sRyp = ws(i, j, 3) > ws(i, j + 1, 3) ? ws(i, j, 3) : ws(i, j + 1, 3);
+    Real sLym, sRym, sLyp, sRyp;
+    union_hll_speed_intervals(ws(i, j - 1, 2), ws(i, j - 1, 3), ws(i, j, 2), ws(i, j, 3),
+                              sLym, sRym);
+    union_hll_speed_intervals(ws(i, j, 2), ws(i, j, 3), ws(i, j + 1, 2), ws(i, j + 1, 3),
+                              sLyp, sRyp);
     const FaceContext yface = FaceContext::axis_aligned(1);
     const auto Fym =
         apply_face_measure(
@@ -291,7 +266,7 @@ void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiF
     for_each_cell(v, detail::AssembleRhsHllCachedKernel<Limiter, Model>{
                          model, u, ax, ws, r, dx, dy, lim, recon_prim, pos_floor, pos_comp});
   }
-  detail::reject_nonfinite_residual(R, "assemble_rhs_hll_cached");
+  detail::reject_nonfinite_finite_volume_data("assemble_rhs_hll_cached", R);
 }
 
 }  // namespace pops

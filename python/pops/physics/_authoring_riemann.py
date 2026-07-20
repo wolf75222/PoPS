@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from pops._ir import Expr, _wrap  # noqa: F401  -- _wrap in roe_dissipation, Expr in hook checks
 
+from pops._dense_spectral import DENSE_SPECTRAL
+
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
 else:
@@ -133,20 +135,30 @@ class _RiemannMixin(_HyperbolicModel):
                 _roe_validate(e, False)  # rejects any variable outside a left()/right() marker
         self._roe_rows = rows
 
-    def roe_from_jacobian(self) -> None:
+    def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
         """Generic moment Roe: emit the hook ``roe_dissipation(UL, AL, UR, AR, dir)`` =
         ``|A| (UR - UL)`` with ``A = dF_dir/dU`` the flux Jacobian (m.flux_jacobian, autodiff)
         evaluated at the ARITHMETIC MEAN interface state ``Uavg = 1/2 (UL + UR)``, and ``|A|`` via
         the matrix-sign kernel ``pops::roe_abs_apply`` (dense_eig.hpp): for a real-diagonalizable A
-        this is ``R |Lambda| R^-1`` exactly, the dissipation of the reference flux_ROE. On a complex
-        or singular spectrum the kernel returns false and the hook FALLS BACK to a spectral-radius
-        (Rusanov) dissipation ``rho (UR - UL)``, ``rho = max(|lmin|, |lmax|)`` of
-        ``pops::real_eig_minmax(A)`` -- so the dissipation is always well defined.
+        this is ``R |Lambda| R^-1`` exactly. ``entropy_fix`` optionally selects the Harten spectral
+        function used by the reference ``flux_ROE_local.m``::
+
+          Phi_delta(lambda) = |lambda|                              if |lambda| >= delta
+                            = 0.5 * (lambda^2 / delta + delta)       otherwise
+
+        ``delta`` is an exact, finite, strictly-positive authoring scalar and participates in the
+        compiled-model identity.  This configured path handles a zero eigenvalue natively; a
+        complex or non-converged spectrum is refused by the generated native residual instead of
+        being silently replaced by another Riemann solver.  Without ``entropy_fix``, the native
+        matrix absolute value uses a scale-relative zero-mode projector for a singular real
+        Jacobian; it likewise never substitutes Rusanov.
 
         Unlike m.enable_roe (which needs fluid roles Density/MomentumX/MomentumY + primitive 'p'),
         this path needs NEITHER -- it is the GENERIC provider for a moment hierarchy (HyQMOM), making
         riemann='roe' available with no Euler-4-var assumption. The FULL n_vars x n_vars Jacobian is
-        always eigendecomposed (as the reference flux_ROE does), not a block partition.
+        always eigendecomposed (as the reference flux_ROE does), not a block partition. Consequently
+        this bounded dense provider accepts at most 16 state components and rejects a larger state
+        during authoring; use an explicit Roe provider designed for that larger system instead.
 
         EXCLUSIVE with m.enable_roe and m.roe_dissipation: the three are providers of the SAME
         roe_dissipation hook (declaring more than one raises). Requires set_flux(...); the hook is
@@ -158,4 +170,26 @@ class _RiemannMixin(_HyperbolicModel):
         if self._roe_rows is not None:
             raise ValueError("roe_from_jacobian : roe_dissipation(...) already provided -- one single "
                              "provider of the roe_dissipation hook")
-        self._roe_jacobian = {"x": self.flux_jacobian(0), "y": self.flux_jacobian(1)}
+        DENSE_SPECTRAL.require(
+            self.n_vars,
+            operation="roe_from_jacobian",
+            alternative=(
+                "Select HLL with explicit model.wave_speeds(...) bounds, or install a native Roe "
+                "spectral provider whose declared capacity covers this state."
+            ),
+        )
+        selected_entropy_fix = None
+        if entropy_fix is not None:
+            from ._scalars import exact_physics_scalar, native_real
+            selected_entropy_fix = exact_physics_scalar(
+                entropy_fix, where="roe_from_jacobian.entropy_fix", positive=True)
+            lowered = native_real(
+                selected_entropy_fix, where="roe_from_jacobian.entropy_fix")
+            if not lowered > 0.0:
+                raise OverflowError(
+                    "roe_from_jacobian.entropy_fix underflows the positive pops::Real range")
+        self._roe_jacobian = {
+            "x": self.flux_jacobian(0),
+            "y": self.flux_jacobian(1),
+            "entropy_fix": selected_entropy_fix,
+        }

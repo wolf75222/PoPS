@@ -11,16 +11,50 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import math
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 
 from pops.identity import Identity, make_identity
-from pops.mesh._layout_plan_contracts import LayoutHandle, LayoutPlan
+from pops.model import Handle
+
+
+class _LayoutPlanContract(Protocol):
+    """Small immutable layout authority consumed by initial-condition resolution."""
+
+    @property
+    def qualified_id(self) -> str: ...
+
+    def canonical_identity(self) -> dict[str, Any]: ...
+
+    def layout_for(self, subject: Any) -> Handle: ...
+
+    def normalized(self, layout: Any) -> Any: ...
+
+
+def _layout_plan(value: Any) -> _LayoutPlanContract:
+    """Authenticate the data and lookup protocol without depending on mesh implementation."""
+
+    qualified_id = getattr(value, "qualified_id", None)
+    canonical_identity = getattr(value, "canonical_identity", None)
+    layout_for = getattr(value, "layout_for", None)
+    normalized = getattr(value, "normalized", None)
+    if not isinstance(qualified_id, str) or not qualified_id \
+            or not all(callable(member) for member in (canonical_identity, layout_for, normalized)):
+        raise TypeError(
+            "InitialConditionPlanBuilder requires an immutable layout-plan authority "
+            "exposing qualified_id, canonical_identity(), layout_for(), and normalized()"
+        )
+    identity = canonical_identity()
+    if not isinstance(identity, Mapping) \
+            or identity.get("report_type") != "layout_plan" \
+            or identity.get("qualified_id") != qualified_id:
+        raise ValueError(
+            "initial-condition layout-plan authority has an unauthenticated canonical identity"
+        )
+    return value
 
 
 def _canonical_handle(value: Any, *, where: str) -> Any:
     """Require and round-trip one real immutable owner-qualified Handle."""
-
-    from pops.model import Handle
 
     if not isinstance(value, Handle) or not value.is_resolved:
         raise TypeError("%s requires a canonical owner-qualified Handle" % where)
@@ -28,6 +62,15 @@ def _canonical_handle(value: Any, *, where: str) -> Any:
     rebuilt = Handle.from_canonical_identity(data)
     if rebuilt.canonical_identity() != data or rebuilt != value or hash(rebuilt) != hash(value):
         raise ValueError("%s Handle canonical identity does not round-trip" % where)
+    return value
+
+
+def _layout_handle(value: Any, *, where: str) -> Handle:
+    """Require a canonical layout identity through the generic Handle contract."""
+
+    value = _canonical_handle(value, where=where)
+    if value.kind != "layout":
+        raise TypeError("%s requires a canonical Handle with kind='layout'" % where)
     return value
 
 
@@ -130,7 +173,7 @@ class InitialConditionSource:
 @dataclass(frozen=True, slots=True)
 class InitialConditionBinding:
     subject: Any
-    layout: LayoutHandle
+    layout: Handle
     source: InitialConditionSource
     __pops_ir_immutable__ = True
 
@@ -139,8 +182,7 @@ class InitialConditionBinding:
         if self.subject.kind not in {"state", "particle"}:
             raise ValueError(
                 "initial conditions may target only physical state/particle Handles")
-        if not isinstance(self.layout, LayoutHandle):
-            raise TypeError("InitialConditionBinding.layout must be a LayoutHandle")
+        _layout_handle(self.layout, where="InitialConditionBinding.layout")
         if type(self.source) is not InitialConditionSource:
             raise TypeError("InitialConditionBinding.source must be InitialConditionSource")
 
@@ -231,9 +273,10 @@ class InitialConditionPlan:
 class InitialConditionPlanBuilder:
     """Resolve exact initialization coverage against any immutable LayoutPlan."""
 
-    def __init__(self, layout_plan: LayoutPlan, expected_subjects: Any) -> None:
-        if type(layout_plan) is not LayoutPlan:
-            raise TypeError("InitialConditionPlanBuilder requires an exact LayoutPlan")
+    def __init__(
+        self, layout_plan: _LayoutPlanContract, expected_subjects: Any
+    ) -> None:
+        layout_plan = _layout_plan(layout_plan)
         if isinstance(expected_subjects, (str, bytes, Mapping)):
             raise TypeError(
                 "InitialConditionPlanBuilder expected_subjects must be a finite Handle iterable")
@@ -267,7 +310,7 @@ class InitialConditionPlanBuilder:
         subject: Any,
         source: InitialConditionSource,
         *,
-        layout: LayoutHandle | None = None,
+        layout: Handle | None = None,
         authoring_alias: Any = None,
     ) -> InitialConditionBinding:
         subject = _canonical_handle(
@@ -288,7 +331,10 @@ class InitialConditionPlanBuilder:
             ) from exc
         if layout is None:
             layout = assigned_layout
-        elif layout != assigned_layout:
+        else:
+            layout = _layout_handle(
+                layout, where="InitialConditionPlanBuilder.add layout")
+        if layout != assigned_layout:
             raise ValueError(
                 "initial-condition layout differs from the subject's LayoutPlan assignment"
             )

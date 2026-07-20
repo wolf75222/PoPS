@@ -212,3 +212,10 @@ def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> 
         "pops.validate(", "pops.resolve(", "pops.compile(", "pops.bind(", "pops.run(",
     ):
         assert call in source
+
+
+def test_magnetic_wave_selects_the_matlab_complex_spectrum_order() -> None:
+    source = (ROOT / "docs/tuto/hyqmom/05_openmp_magnetic_wave_hll.py").read_text(
+        encoding="utf-8")
+    assert "np.lexsort((np.angle(eigenvalues), np.abs(eigenvalues)))" in source
+    assert "np.argsort(eigenvalues.real)" not in source

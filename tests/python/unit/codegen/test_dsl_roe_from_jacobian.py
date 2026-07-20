@@ -7,15 +7,19 @@ import numpy as np
 import pytest
 
 import pops
+from pops._dense_spectral import (
+    DenseSpectralCapacityError,
+    is_exact_block_triangular,
+)
+from pops._ir.expr import Const
 from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.lib.models.moments import Gaussian
 from pops.lib.time import ForwardEuler
+from pops.math import ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.riemann import FromJacobian, provider_of
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
 from pops.time import FixedDt
@@ -24,7 +28,6 @@ from pops.time import FixedDt
 ROOT = Path(__file__).resolve().parents[4]
 N = 24
 DT = 5.0e-4
-STEPS = 10
 
 pytestmark = [
     pytest.mark.compiler,
@@ -34,42 +37,68 @@ pytestmark = [
 ]
 
 
-def _smooth_density(n: int) -> np.ndarray:
-    points = (np.arange(n) + 0.5) / n
-    x, y = np.meshgrid(points, points, indexing="xy")
-    return 1.0 + 0.4 * np.exp(-60.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
+def test_exact_block_triangular_certificate_is_structural_and_complete() -> None:
+    lower = [
+        [Const(1.0), Const(0.0), Const(0.0)],
+        [Const(2.0), Const(3.0), Const(4.0)],
+        [Const(5.0), Const(6.0), Const(7.0)],
+    ]
+    assert is_exact_block_triangular(lower, [[0], [1, 2]])
+    assert not is_exact_block_triangular(lower, [[0], [1]])
+
+    coupled = [
+        [Const(1.0), Const(2.0)],
+        [Const(3.0), Const(4.0)],
+    ]
+    assert not is_exact_block_triangular(coupled, [[0], [1]])
 
 
-def test_final_gaussian_moments_run_generic_roe_from_jacobian(
+def _nonhyperbolic_roe_model() -> Model:
+    frame = Rectangle(
+        "nonhyperbolic-roe-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("nonhyperbolic_dense_roe", frame=frame)
+    state = model.state("U", components=("q1", "q2"))
+    q1, q2 = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (-q2, q1), y_axis: (-q2, q1)},
+    )
+    model.roe_from_jacobian(entropy_fix=1.0e-6)
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
+
+
+def _diagonal_roe_model(name: str, components: int) -> Model:
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U", components=tuple("q%d" % index for index in range(components)))
+    model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: tuple(state), y_axis: tuple(state)},
+    )
+    return model
+
+
+def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
     isolated_native_cache, native_cxx, kokkos_root
 ) -> None:
     del isolated_native_cache, kokkos_root
-    frame = Rectangle(
-        "final-gaussian-roe-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
-    model = Gaussian.transport(
-        order=2,
-        name="final_gaussian_roe",
-        robust=True,
-        exact_speeds=True,
-        roe=True,
-        frame=frame,
-    )
-    assert isinstance(model, Model)
-    provider = provider_of(model)
-    assert provider is not None
-    assert provider.kind == FromJacobian(eig="numeric").kind
-
-    # The generic route cannot have accidentally fallen back to the fluid-role implementation.
+    model = _nonhyperbolic_roe_model()
     state = model.states["U"]
-    roles = set(state.space.roles.values())
-    assert "Density" in roles
-    assert not roles.intersection({"MomentumX", "MomentumY", "Energy"})
-
     flux = model.fluxes["transport"]
     rate = model.operators["transport"]
-    case = pops.Case("final_gaussian_roe_case")
-    block = case.block("moments", model)
+    case = pops.Case("nonhyperbolic_dense_roe_case")
+    block = case.block("toy", model)
     numerics = DiscretizationPlan()
     numerics.rates.add(
         rate,
@@ -84,7 +113,6 @@ def test_final_gaussian_moments_run_generic_roe_from_jacobian(
     program = ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(DT))
     case.program(program)
-
     layout = Uniform(
         CartesianGrid(
             frame=model.frame,
@@ -100,23 +128,29 @@ def test_final_gaussian_moments_run_generic_roe_from_jacobian(
     )
     artifact = pops.compile(resolved)
     artifact.verify()
-    assert len(artifact.blocks) == 1
-    compiled_model = artifact.blocks[0].model
-    assert compiled_model.has_roe
-    assert compiled_model.has_wave_speeds
+    initial = np.ones((2, N, N), dtype=np.float64)
+    initial[1] = 0.25
+    simulation = pops.bind(artifact, initial_state={"toy": initial})
 
-    # Realizable centered Maxwellian moments (u=v=0, covariance=I), modulated by density.
-    maxwellian = np.array((1.0, 0.0, 1.0, 0.0, 0.0, 1.0))
-    initial = maxwellian[:, None, None] * _smooth_density(N)[None, :, :]
-    simulation = pops.bind(
-        artifact,
-        initial_state={"moments": np.ascontiguousarray(initial)},
+    with pytest.raises(RuntimeError, match="non-finite finite-volume data"):
+        pops.run(simulation, t_end=DT, max_steps=1)
+    np.testing.assert_array_equal(
+        np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(initial.shape),
+        initial,
     )
-    report = pops.run(simulation, t_end=STEPS * DT, max_steps=STEPS)
-    assert report.accepted_steps == STEPS
-    final = np.asarray(simulation.get_state("moments"), dtype=np.float64).reshape(
-        initial.shape
-    )
-    assert np.isfinite(final).all()
-    assert not np.array_equal(final, initial)
-    np.testing.assert_allclose(final[0].sum(), initial[0].sum(), rtol=1.0e-12, atol=1.0e-12)
+
+
+def test_roe_dense_spectral_capacity_fails_during_authoring() -> None:
+    boundary = _diagonal_roe_model("dense_roe_boundary", 16)
+    boundary.roe_from_jacobian(entropy_fix=1.0e-6)
+    assert boundary._dsl._m._roe_jacobian is not None
+
+    too_large = _diagonal_roe_model("dense_roe_too_large", 17)
+    with pytest.raises(DenseSpectralCapacityError) as caught:
+        too_large.roe_from_jacobian(entropy_fix=1.0e-6)
+    assert caught.value.components == 17
+    assert caught.value.max_components == 16
+    assert "HLL" in str(caught.value)
+    assert "model.wave_speeds" in str(caught.value)
+    assert "native Roe spectral provider" in str(caught.value)
+    assert too_large._dsl._m._roe_jacobian is None

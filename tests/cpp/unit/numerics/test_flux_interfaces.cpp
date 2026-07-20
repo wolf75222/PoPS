@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <type_traits>
 
 namespace {
@@ -21,6 +22,27 @@ struct Advect {
 };
 
 struct OtherAdvect : Advect {};
+
+struct SelectiveInvalidAdvect {
+  using State = pops::StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  POPS_HD State flux(const State& state, const Aux&, int) const { return State{state[0]}; }
+  POPS_HD pops::Real max_wave_speed(const State& state, const Aux&, int) const {
+    return state[0] == pops::Real(-1) ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                      : pops::Real(2);
+  }
+  POPS_HD void wave_speeds(const State& state, const Aux&, int, pops::Real& lower,
+                           pops::Real& upper) const {
+    if (state[0] == pops::Real(-2)) {
+      lower = upper = std::numeric_limits<pops::Real>::quiet_NaN();
+      return;
+    }
+    lower = pops::Real(-1);
+    upper = pops::Real(1);
+  }
+};
 
 struct ProviderAdvect {
   using State = pops::StateVec<1>;
@@ -93,6 +115,88 @@ TEST(test_flux_interfaces, orientation_reversal_swaps_traces_and_negates_flux) {
   ASSERT_EQ(positive.status, pops::EvaluationStatus::kOk);
   ASSERT_EQ(reversed.status, pops::EvaluationStatus::kOk);
   EXPECT_DOUBLE_EQ(reversed.checked_density().value[0], -positive.checked_density().value[0]);
+}
+
+TEST(test_flux_interfaces, invalid_trace_stability_is_rejected_on_both_orientations) {
+  const SelectiveInvalidAdvect physical{};
+  const SelectiveInvalidAdvect::State invalid{pops::Real(-1)}, valid{pops::Real(1)};
+  const auto bound = providers<SelectiveInvalidAdvect>();
+  const auto positive = pops::FaceContext::axis_aligned(
+      0, pops::Real(1), pops::FaceOrientation::kPositive);
+  const auto negative = pops::FaceContext::axis_aligned(
+      0, pops::Real(1), pops::FaceOrientation::kNegative);
+
+  for (const auto policy : {0, 1}) {
+    const auto left_invalid = policy == 0
+        ? pops::evaluate_numerical_flux(
+              pops::RusanovFlux{}, physical, invalid, bound, valid, bound, positive)
+        : pops::evaluate_numerical_flux(
+              pops::HLLFlux{}, physical, invalid, bound, valid, bound, positive);
+    const auto right_invalid = policy == 0
+        ? pops::evaluate_numerical_flux(
+              pops::RusanovFlux{}, physical, valid, bound, invalid, bound, positive)
+        : pops::evaluate_numerical_flux(
+              pops::HLLFlux{}, physical, valid, bound, invalid, bound, positive);
+    const auto reversed = policy == 0
+        ? pops::evaluate_numerical_flux(
+              pops::RusanovFlux{}, physical, valid, bound, invalid, bound, negative)
+        : pops::evaluate_numerical_flux(
+              pops::HLLFlux{}, physical, valid, bound, invalid, bound, negative);
+    EXPECT_EQ(left_invalid.status, pops::EvaluationStatus::kReject);
+    EXPECT_EQ(right_invalid.status, pops::EvaluationStatus::kReject);
+    EXPECT_EQ(reversed.status, pops::EvaluationStatus::kReject);
+    EXPECT_TRUE(std::isnan(left_invalid.checked_density().value[0]));
+  }
+}
+
+TEST(test_flux_interfaces, hll_intervals_and_stability_metadata_are_validated_per_trace) {
+  const pops::Real nan = std::numeric_limits<pops::Real>::quiet_NaN();
+  pops::Real lower = pops::Real(0), upper = pops::Real(0);
+  pops::detail::union_hll_speed_intervals(
+      nan, pops::Real(1), pops::Real(-2), pops::Real(3), lower, upper);
+  EXPECT_TRUE(std::isnan(lower) && std::isnan(upper));
+  pops::detail::union_hll_speed_intervals(
+      pops::Real(-2), pops::Real(3), nan, pops::Real(1), lower, upper);
+  EXPECT_TRUE(std::isnan(lower) && std::isnan(upper));
+  pops::detail::union_hll_speed_intervals(
+      pops::Real(2), pops::Real(-2), pops::Real(-3), pops::Real(4), lower, upper);
+  EXPECT_TRUE(std::isnan(lower) && std::isnan(upper));
+  pops::detail::union_hll_speed_intervals(
+      pops::Real(-2), pops::Real(1), pops::Real(-3), pops::Real(4), lower, upper);
+  EXPECT_EQ(lower, pops::Real(-3));
+  EXPECT_EQ(upper, pops::Real(4));
+
+  const SelectiveInvalidAdvect physical{};
+  const SelectiveInvalidAdvect::State invalid_waves{pops::Real(-2)}, valid_state{pops::Real(1)};
+  const auto providers_pack = providers<SelectiveInvalidAdvect>();
+  const auto face = pops::FaceContext::axis_aligned(0);
+  EXPECT_EQ(
+      pops::evaluate_numerical_flux(
+          pops::HLLFlux{}, physical, invalid_waves, providers_pack, valid_state, providers_pack,
+          face).status,
+      pops::EvaluationStatus::kReject);
+  EXPECT_EQ(
+      pops::evaluate_numerical_flux(
+          pops::HLLFlux{}, physical, valid_state, providers_pack, invalid_waves, providers_pack,
+          face).status,
+      pops::EvaluationStatus::kReject);
+
+  pops::StabilityBound result{};
+  const pops::StabilityBound valid{
+      pops::Real(2), pops::StabilityUnit::kLengthPerTime,
+      pops::StabilityConvention::kNormalSpectralRadius};
+  EXPECT_FALSE(pops::detail::max_normal_stability_bound(
+      {nan, pops::StabilityUnit::kLengthPerTime,
+       pops::StabilityConvention::kNormalSpectralRadius}, valid, result));
+  EXPECT_FALSE(pops::detail::max_normal_stability_bound(
+      {pops::Real(-1), pops::StabilityUnit::kLengthPerTime,
+       pops::StabilityConvention::kNormalSpectralRadius}, valid, result));
+  EXPECT_FALSE(pops::detail::max_normal_stability_bound(
+      {pops::Real(1), pops::StabilityUnit::kInverseTime,
+       pops::StabilityConvention::kNormalSpectralRadius}, valid, result));
+  EXPECT_FALSE(pops::detail::max_normal_stability_bound(
+      {pops::Real(1), pops::StabilityUnit::kLengthPerTime,
+       pops::StabilityConvention::kSourceFrequency}, valid, result));
 }
 
 TEST(test_flux_interfaces, spatial_operator_applies_face_measure_once) {

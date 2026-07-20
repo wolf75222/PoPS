@@ -1,7 +1,7 @@
 """Authoring mixin: sources, elliptic RHS, named operators, stability hooks.
 
 Methods only; the touched attributes (``_source`` / ``_elliptic`` /
-``_source_terms`` / ``_linear_sources`` / ``_elliptic_fields`` / ``_stab_speed``
+``_source_terms`` / ``_linear_sources`` / ``_local_transforms`` / ``_elliptic_fields`` / ``_stab_speed``
 / ``_stab_dt`` / ``_src_freq`` / ``_proj`` / ``_src_jac`` / ``_rate_operators``)
 are created by ``HyperbolicModel.__init__``. Codegen-free and ``_pops``-free.
 """
@@ -66,6 +66,8 @@ class _SourceMixin(_HyperbolicModel):
                              % (name, operator))
         if name in self._elliptic_fields:
             raise ValueError("elliptic_field('%s'): already declared" % name)
+        if name in self._local_transforms:
+            raise ValueError("elliptic_field('%s'): name collides with a local_transform" % name)
         aux = list(aux) if aux is not None else ["phi", "grad_x", "grad_y"]
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
@@ -138,6 +140,8 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError("source_term('%s'): already declared" % name)
         if name in self._linear_sources:
             raise ValueError("source_term('%s'): name collides with a linear_source" % name)
+        if name in self._local_transforms:
+            raise ValueError("source_term('%s'): name collides with a local_transform" % name)
         self._source_terms[name] = exprs
         return OperatorHandle(name, kind="local_source", owner=self.owner_path)
 
@@ -175,8 +179,84 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError("linear_source('%s'): already declared" % name)
         if name in self._source_terms:
             raise ValueError("linear_source('%s'): name collides with a source_term" % name)
+        if name in self._local_transforms:
+            raise ValueError("linear_source('%s'): name collides with a local_transform" % name)
         self._linear_sources[name] = wrapped
         return OperatorHandle(name, kind="local_linear_operator", owner=self.owner_path)
+
+    def local_transform(
+        self, name: Any, exprs: Any, *, valid_if: Any = 1.0,
+    ) -> Any:
+        """Declare a named pointwise ``State -> State`` transformation.
+
+        A local transform is not assumed idempotent and is never inserted by the runtime.  It is
+        evaluated exactly once only when its typed handle is called from a :class:`pops.Program`.
+        ``valid_if`` is a symbolic per-cell domain predicate; a false predicate or a non-finite
+        output rejects the step collectively instead of publishing a plausible state.  Both the
+        map and its predicate are emitted as one C++/Kokkos kernel.
+        """
+        n = self.n_vars
+        if n == 0:
+            raise ValueError("local_transform(%r): declare conservative_vars(...) first" % name)
+        if not isinstance(name, str) or not name:
+            raise ValueError("local_transform: name must be a non-empty string")
+        if not name.isidentifier():
+            raise ValueError(
+                "local_transform('%s'): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % name)
+        if name in self._local_transforms:
+            raise ValueError("local_transform('%s'): already declared" % name)
+        if name in self._source_terms:
+            raise ValueError("local_transform('%s'): name collides with a source_term" % name)
+        if name in self._linear_sources:
+            raise ValueError("local_transform('%s'): name collides with a linear_source" % name)
+        collisions = {
+            "flux_term": self._flux_terms,
+            "elliptic_field": self._elliptic_fields,
+            "rate_operator": self._rate_operators,
+            "operator_alias": self._aliases,
+        }
+        for family, registry in collisions.items():
+            if name in registry:
+                raise ValueError(
+                    "local_transform('%s'): name collides with a %s" % (name, family))
+        wrapped = tuple(_wrap(expr) for expr in exprs)
+        if len(wrapped) != n:
+            raise ValueError(
+                "local_transform('%s'): %d expressions for %d conservative variables"
+                % (name, len(wrapped), n))
+        self._local_transforms[name] = {
+            "expressions": wrapped,
+            "valid_if": _wrap(valid_if),
+        }
+        self._invalidate_authoring_views()
+        return OperatorHandle(name, kind="local_transform", owner=self.owner_path)
+
+    def local_transform_value(self, name: Any, U: Any, aux: Any = None) -> Any:
+        """Apply one declared local transform once through the NumPy authoring oracle."""
+        try:
+            transform = self._local_transforms[name]
+        except KeyError:
+            raise ValueError(
+                "local_transform_value: unknown transform %r; declared: %s"
+                % (name, sorted(self._local_transforms))) from None
+        env = self._env(U, aux)
+        if not np.isfinite(np.asarray(U)).all():
+            raise FloatingPointError("local transform %r received a non-finite state" % name)
+        shape = np.asarray(U[0]).shape
+        valid = np.broadcast_to(transform["valid_if"].eval(env), shape)
+        if not np.isfinite(np.asarray(valid)).all():
+            raise FloatingPointError(
+                "local transform %r produced a non-finite domain predicate" % name)
+        if not np.asarray(valid, dtype=bool).all():
+            raise ValueError("local transform %r rejected an input outside its domain" % name)
+        result = np.stack([
+            np.broadcast_to(expr.eval(env), shape)
+            for expr in transform["expressions"]
+        ], axis=0)
+        if not np.isfinite(result).all():
+            raise FloatingPointError("local transform %r produced a non-finite state" % name)
+        return result
 
     def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
                       fluxes: Any = None) -> Any:
@@ -199,8 +279,9 @@ class _SourceMixin(_HyperbolicModel):
                              "(letters/digits/_, no leading digit)" % (name,))
         if name in self._rate_operators:
             raise ValueError("rate_operator('%s'): already declared" % name)
-        if name in self._source_terms or name in self._linear_sources:
-            raise ValueError("rate_operator('%s'): name collides with a source_term/linear_source"
+        if name in self._source_terms or name in self._linear_sources or name in self._local_transforms:
+            raise ValueError("rate_operator('%s'): name collides with a source_term/linear_source/"
+                             "local_transform"
                              % name)
         flx = list(fluxes) if fluxes else None
         if not flux and flx:

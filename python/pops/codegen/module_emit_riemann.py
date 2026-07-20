@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
     _codegen_exprs,
@@ -24,6 +25,50 @@ from pops.codegen.module_emit_helpers import (
     _roles_for,
 )
 from pops.identity.scalar import scalar_cpp
+
+
+def _certified_roe_blocks(model: Any, jacobians: Any) -> Any:
+    """Return exact block-triangular certificates reusable by dense Roe, or ``None``.
+
+    A wave-speed partition is only reused after proving the *Roe* Jacobian itself is structurally
+    block triangular in both directions.  Sampling, user assertion, finite-difference Jacobians and
+    incomplete partitions never qualify.
+    """
+
+    waves = getattr(model, "_ws_jacobian", None)
+    if not waves or waves.get("eig") != "numeric":
+        return None
+    blocks = waves.get("blocks")
+    if not isinstance(blocks, dict) or set(blocks) != {"x", "y"}:
+        return None
+    if not all(
+        is_exact_block_triangular(jacobians[direction], blocks[direction])
+        for direction in ("x", "y")
+    ):
+        return None
+    return blocks
+
+
+def _emit_real_spectrum_blocks(blocks: Any, *, indent: str, im_tol: str, max_iter: int) -> list:
+    lines = []
+    for block_index, block in enumerate(blocks):
+        size = len(block)
+        name = "roe_block_%d_" % block_index
+        lines.append("%s{" % indent)
+        lines.append("%s  pops::Real %s[%d][%d];" % (indent, name, size, size))
+        for row, global_row in enumerate(block):
+            for column, global_column in enumerate(block):
+                lines.append(
+                    "%s  %s[%d][%d] = A[%d][%d];"
+                    % (indent, name, row, column, global_row, global_column)
+                )
+        lines.append(
+            "%s  if (pops::real_spectrum(%s, static_cast<pops::Real>(%s), %d) "
+            "!= pops::Spectrum::kReal) spectrum_real_ = false;"
+            % (indent, name, im_tol, max_iter)
+        )
+        lines.append("%s}" % indent)
+    return lines
 
 
 def _emit_hllc(model: Any, nc: Any) -> list:
@@ -198,18 +243,26 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     """CAPABILITY ROE FROM THE FLUX JACOBIAN (m.roe_from_jacobian): generic moment Roe. The hook
     builds A = dF_dir/dU at Uavg = 1/2(UL+UR) (cons locals bound to the mean, like the
     wave_speeds-from-jacobian path binds them to U), then d = |A| (UR-UL) via pops::roe_abs_apply
-    (matrix-sign |A| = A sign(A); for a real-diagonalizable A this is R|Lambda|R^-1 exactly,
-    the reference flux_ROE dissipation). On a complex/singular spectrum the kernel returns false
-    -> spectral-radius (Rusanov) fallback rho (UR-UL), rho = max(|lmin|,|lmax|) of
-    pops::real_eig_minmax(A). Roles-free (no 'p', no Density/Momentum): the generic provider for a
-    moment hierarchy. The core (HasRoeDissipation) does F = 1/2(FL+FR) - 1/2 d."""
+    (matrix-sign |A| = A sign(A); for a real-diagonalizable A this is R|Lambda|R^-1 exactly).
+    When ``entropy_fix`` is configured, pops::roe_entropy_fix_apply applies the generic Harten
+    function Phi_delta(A), including zero eigenvalues, and returns false for complex/non-converged
+    spectra; the emitted NaN is then rejected by the native residual contract.  The unconfigured
+    route uses the true matrix absolute value with a zero-mode projector for singular real
+    Jacobians. Neither route substitutes another Riemann solver. Roles-free (no 'p', no
+    Density/Momentum): the generic provider for a moment hierarchy. The core
+    (HasRoeDissipation) does F = 1/2(FL+FR) - 1/2 d."""
     out = []
     Jx = model._roe_jacobian["x"]
     Jy = model._roe_jacobian["y"]
+    entropy_fix = model._roe_jacobian.get("entropy_fix")
     live = _live_prims(model, [e for row in (Jx + Jy) for e in row])
     out.append("  // CAPABILITY ROE depuis la JACOBIENNE (roe_from_jacobian) : d = |A| (UR-UL),")
-    out.append("  // A = dF/dU a l'etat moyen Uavg = 1/2(UL+UR) ; |A| via pops::roe_abs_apply")
-    out.append("  // (matrix-sign), repli rayon spectral (real_eig_minmax) si complexe/singulier.")
+    out.append("  // A = dF/dU a l'etat moyen Uavg = 1/2(UL+UR) ; fonction spectrale native")
+    if entropy_fix is None:
+        out.append("  // (matrix-sign + projecteur du noyau) ; complexe/non converge refuse.")
+    else:
+        out.append("  // Phi_delta(A), delta=%s ; spectre complexe/non converge refuse."
+                   % scalar_cpp(entropy_fix))
     out.append("  POPS_HD State roe_dissipation(const State& UL, const pops::Aux&, "
                "const State& UR, const pops::Aux&, int dir) const {")
     # conservatives at the ARITHMETIC-MEAN interface state Uavg = 1/2 (UL + UR)
@@ -233,30 +286,59 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     out.append("    pops::Real dU[%d], out[%d];" % (nc, nc))
     out += ["    dU[%d] = UR[%d] - UL[%d];" % (i, i, i) for i in range(nc)]
     out.append("    State d{};")
-    # ADC-645: eig knobs set via m.wave_speeds_from_jacobian(eig_max_iter=, im_tol=) are baked into
-    # the Roe |A| gate (roe_abs_apply forwards them to real_spectrum) and the spectral-radius
-    # fallback; absent (the default) both calls emit the EXACT historical text, byte-identical.
+    # Eig knobs from wave_speeds_from_jacobian are also the Roe spectral-classification contract.
+    # None selects the native roundoff floor; an explicit zero keeps the exact-zero predicate, and
+    # an explicit positive value is an author-controlled relaxation.  A structurally proven
+    # block-triangular partition certifies the full spectrum from its diagonal blocks; the matrix
+    # function itself is still applied to the complete Jacobian.
     ws = getattr(model, "_ws_jacobian", None) or {}
     eig_max_iter = ws.get("eig_max_iter")
     im_tol = ws.get("im_tol")
+    eig_max_iter_value = int(eig_max_iter) if eig_max_iter is not None else 100
+    im_tol_cpp = scalar_cpp(im_tol) if im_tol is not None else "pops::kEigStrictImagTol"
+    certified_blocks = _certified_roe_blocks(model, {"x": Jx, "y": Jy})
+    if certified_blocks is not None:
+        out.append("    bool spectrum_real_ = true;")
+        out.append("    if (dir == 0) {")
+        out += _emit_real_spectrum_blocks(
+            certified_blocks["x"],
+            indent="      ",
+            im_tol=im_tol_cpp,
+            max_iter=eig_max_iter_value,
+        )
+        out.append("    } else {")
+        out += _emit_real_spectrum_blocks(
+            certified_blocks["y"],
+            indent="      ",
+            im_tol=im_tol_cpp,
+            max_iter=eig_max_iter_value,
+        )
+        out.append("    }")
     if eig_max_iter is not None or im_tol is not None:
         roe_args = ", 80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d" % (
-            scalar_cpp(im_tol) if im_tol is not None else "1e-5",
-            int(eig_max_iter) if eig_max_iter is not None else 100)
+            im_tol_cpp,
+            eig_max_iter_value)
     else:
         roe_args = ""
-    out.append("    if (pops::roe_abs_apply(A, dU, out%s)) {" % roe_args)
-    out += ["      d[%d] = out[%d];" % (i, i) for i in range(nc)]
-    out.append("    } else {  // spectre complexe/singulier : repli rayon spectral (Rusanov)")
-    if eig_max_iter is not None:
-        out.append("      const pops::EigBounds eb_ = pops::real_eig_minmax(A, %d);"
-                   % int(eig_max_iter))
+    if certified_blocks is not None and entropy_fix is None:
+        apply_call = (
+            "spectrum_real_ && pops::detail::roe_abs_apply_certified_real(A, dU, out)"
+        )
+    elif certified_blocks is not None:
+        apply_call = (
+            "spectrum_real_ && pops::detail::roe_entropy_fix_apply_certified_real("
+            "A, dU, out, static_cast<pops::Real>(%s))" % scalar_cpp(entropy_fix)
+        )
+    elif entropy_fix is None:
+        apply_call = "pops::roe_abs_apply(A, dU, out%s)" % roe_args
     else:
-        out.append("      const pops::EigBounds eb_ = pops::real_eig_minmax(A);")
-    out.append("      const pops::Real al_ = eb_.lmin < pops::Real(0) ? -eb_.lmin : eb_.lmin;")
-    out.append("      const pops::Real ah_ = eb_.lmax < pops::Real(0) ? -eb_.lmax : eb_.lmax;")
-    out.append("      const pops::Real rho_ = al_ > ah_ ? al_ : ah_;")
-    out += ["      d[%d] = rho_ * dU[%d];" % (i, i) for i in range(nc)]
+        apply_call = "pops::roe_entropy_fix_apply(A, dU, out, static_cast<pops::Real>(%s)%s)" % (
+            scalar_cpp(entropy_fix), roe_args)
+    out.append("    if (%s) {" % apply_call)
+    out += ["      d[%d] = out[%d];" % (i, i) for i in range(nc)]
+    out.append("    } else {  // complexe/non converge : refus par le contrat residual natif")
+    out += ["      d[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % i
+            for i in range(nc)]
     out.append("    }")
     out += ["    return d;", "  }", ""]
     return out

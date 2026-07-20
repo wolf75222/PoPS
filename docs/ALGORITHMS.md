@@ -236,12 +236,32 @@ compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to `
 references. The flux is passed by template: `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
 `assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
 independently of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
-`pressure` and `wave_speeds` only if the wrapped model exposes them (`requires` clause), so that an
-IMEX half-step stays on an HLLC flux. A moment hierarchy (no fluid roles, no primitive `p`) can also
-drive a generic Roe via the DSL emitter `m.roe_from_jacobian()` (section 23): `|A|` is applied by
+`pressure`, `wave_speeds`, and the optional HLLC/Roe structural hooks only when the wrapped model
+exposes them (`requires` clauses), so the explicit half-step keeps the selected Riemann provider.
+A moment hierarchy (no fluid roles, no primitive `p`) can also
+drive a dense Roe-type dissipation via the DSL emitter `m.roe_from_jacobian()` (section 23): `|A|` is applied by
 `pops::roe_abs_apply`
 ([`include/pops/numerics/linalg/dense_eig.hpp`](../include/pops/numerics/linalg/dense_eig.hpp)) behind a real-spectrum
-gate, with a spectral-radius Rusanov fallback when `|A|` is not a faithful real spectral function.
+gate. A real singular Jacobian uses the native zero-mode projector. A complex or non-converged
+spectrum is rejected; the provider never substitutes another Riemann solver. Passing
+`entropy_fix=delta` applies the Harten spectral function directly to the dense Jacobian. This provider
+evaluates the flux Jacobian at the arithmetic midpoint $(U_L+U_R)/2$. It is therefore a Roe-type
+linearization for a general nonlinear flux, not a claim that the resulting matrix satisfies the exact
+Roe secant identity $F_R-F_L=A(U_R-U_L)$.
+
+The related `m.wave_speeds_from_jacobian()` provider obtains HLL bounds from the extrema of each
+authored dense Jacobian block. It accepts a state larger than 16 components only when `blocks=` gives
+a certified block-triangular partition whose individual matrices contain at most 16 components; the
+unpartitioned Roe-type provider applies to the full state and therefore accepts at most 16 components.
+Both limits are checked during Python authoring, before code generation. For either provider, a complex
+or non-converged dense spectrum is an invalid numerical result: the native step rejects it before
+publishing state and never replaces it with a Gershgorin bound or a Rusanov flux. The default
+`im_tol=None` accepts only the native roundoff floor, $64\,\epsilon$ relative to the spectral scale;
+this prevents a repeated real root from being rejected solely by floating-point QR noise.
+`im_tol=0` requests an exact-zero predicate. A positive explicit value relaxes the classification
+relative to the spectral scale and is an opt-in numerical tolerance. When a complete partition is
+structurally proven block triangular, the Roe provider certifies those diagonal blocks and still
+applies its matrix function to the full Jacobian.
 
 **Constraints / remarks.** `RusanovFlux` is the only flux compatible with the minimal `PhysicalModel`
 (it reads only `max_wave_speed`): it is the robust default for scalar transport, at the cost of an

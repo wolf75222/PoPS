@@ -50,6 +50,7 @@ class _MultiSpeciesMixin(_BoardModel):
             name, components, roles = extra
             result = self._declare_species_on(candidate, name, components, roles)
             promoted[name] = result
+        self._migrate_first_species_local_transforms(candidate, promoted)
         self._multi_module = candidate
         self._species.update(promoted)
         self._states.update(promoted)
@@ -80,6 +81,142 @@ class _MultiSpeciesMixin(_BoardModel):
         vars_ = module.state_symbols(space)
         return StateHandle(
             name, comps, vars_, role_map, owner=self.owner_path, space=space)
+
+    def _local_transform_body(
+        self, name: Any, *, on: StateHandle, expressions: Any, valid_if: Any,
+    ) -> dict[str, Any]:
+        """Validate one exact block-local symbolic map without mutating a registry."""
+        from pops._ir import Var, _children, _wrap
+        from pops.model.state_symbols import state_component_symbol
+
+        name = require_name(name, "local_transform name")
+        if not name.isidentifier():
+            raise ValueError(
+                "local_transform(%r): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % name)
+        values = normalize_sequence(
+            expressions, "local_transform %s expressions" % name, nonempty=True)
+        if len(values) != len(on.components):
+            raise ValueError(
+                "local_transform(%r) on StateSpace %r has %d expression(s), expected %d"
+                % (name, on.space.name, len(values), len(on.components)))
+        wrapped = tuple(_wrap(self._to_expr(value)) for value in values)
+        predicate = _wrap(self._to_expr(valid_if))
+
+        state_spaces = self._multi_module.state_spaces()
+        known_symbols = {
+            state_component_symbol(space, component): (space.name, component)
+            for space in state_spaces.values()
+            for component in space.components
+        }
+        allowed_symbols = {
+            state_component_symbol(on.space, component)
+            for component in on.space.components
+        }
+        aux_reads = set()
+        seen = set()
+        stack = [*wrapped, predicate]
+        while stack:
+            node = stack.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if isinstance(node, Var):
+                if node.kind in ("cons", "prim") and node.name not in allowed_symbols:
+                    foreign = known_symbols.get(node.name)
+                    if foreign is not None:
+                        raise ValueError(
+                            "local_transform(%r) on StateSpace %r reads component %r from "
+                            "StateSpace %r; a local transform may read only its exact on= state"
+                            % (name, on.space.name, foreign[1], foreign[0]))
+                    raise ValueError(
+                        "local_transform(%r) on StateSpace %r reads an unauthenticated %s "
+                        "coordinate %r"
+                        % (name, on.space.name, node.kind, node.name))
+                if node.kind == "aux":
+                    aux_reads.add(node.name)
+            stack.extend(_children(node))
+        if aux_reads:
+            raise ValueError(
+                "local_transform(%r) reads field coordinate(s) %s, but the board API has no "
+                "implicit field selection for a multi-state transform; author an exact "
+                "Module.operator signature (StateSpace, FieldSpace) instead"
+                % (name, sorted(aux_reads)))
+        return {"expressions": wrapped, "valid_if": predicate}
+
+    def _register_multispecies_local_transform(
+        self, name: Any, *, on: StateHandle, expressions: Any, valid_if: Any,
+    ) -> Any:
+        """Register one exact ``StateSpace -> same StateSpace`` transform atomically."""
+        from .. import model as _model
+
+        species = self._species_handle("local_transform", name, on)
+        body = self._local_transform_body(
+            name, on=species, expressions=expressions, valid_if=valid_if)
+        module = self._multi_module
+        registry = module.operator_registry()
+        with atomic_attrs(
+            (registry, "_by_name"),
+            (registry, "_order"),
+            (self, "_module_cache"),
+        ):
+            module.operator(
+                name=name,
+                kind="local_transform",
+                signature=_model.Signature((species.space,), species.space),
+                capabilities={
+                    "local": True,
+                    "supports_device": True,
+                    "fail_closed": True,
+                },
+                expr=body,
+            )
+            self._invalidate_authoring_views()
+            return self._registered_operator_handle(name)
+
+    def _migrate_first_species_local_transforms(
+        self, candidate: Any, promoted: Mapping[str, StateHandle],
+    ) -> None:
+        """Move pre-promotion transforms into the unpublished multi-state Module.
+
+        A handle returned before the second species remains usable because operator identity is
+        owner/name/kind based; its derived single-state signature is re-authenticated against this
+        exact promoted registry when the Program calls it.
+        """
+        transforms = self._dsl._m._local_transforms
+        if not transforms:
+            return
+        if len(self._species) != 1:
+            raise RuntimeError(
+                "local-transform promotion requires one exact pre-existing species")
+        first_name = next(iter(self._species))
+        first = promoted[first_name]
+        previous_module = self._multi_module
+        self._multi_module = candidate
+        try:
+            from .. import model as _model
+
+            for name in sorted(transforms):
+                transform = transforms[name]
+                body = self._local_transform_body(
+                    name,
+                    on=first,
+                    expressions=transform["expressions"],
+                    valid_if=transform["valid_if"],
+                )
+                candidate.operator(
+                    name=name,
+                    kind="local_transform",
+                    signature=_model.Signature((first.space,), first.space),
+                    capabilities={
+                        "local": True,
+                        "supports_device": True,
+                        "fail_closed": True,
+                    },
+                    expr=body,
+                )
+        finally:
+            self._multi_module = previous_module
 
     # --- quantities ---
 

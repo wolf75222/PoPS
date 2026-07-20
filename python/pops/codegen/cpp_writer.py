@@ -9,9 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul
+from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul, Minimum, Maximum
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
-from pops._ir.visitors import _key, _children
+from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
 
 
@@ -48,7 +48,7 @@ def _cpp_identifier(value: Any) -> str:
     return identifier
 
 
-def _cpp_expand(e: Any, cse_map: Any) -> str:
+def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None) -> str:
     """C++ of node e expanding ITS level; the children go through _cpp_cse (-> CSE locals)."""
     if isinstance(e, Const):
         return e.to_cpp()
@@ -57,38 +57,53 @@ def _cpp_expand(e: Any, cse_map: Any) -> str:
     if isinstance(e, Var):
         return e.name
     if isinstance(e, Neg):
-        return "(-%s)" % _cpp_cse(e.a, cse_map)
+        return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo)
     if isinstance(e, Sqrt):
-        return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map)
+        return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map, key_memo)
     if isinstance(e, Abs):
-        return "std::fabs(%s)" % _cpp_cse(e.a, cse_map)
+        return "std::fabs(%s)" % _cpp_cse(e.a, cse_map, key_memo)
     if isinstance(e, Sign):
-        s = _cpp_cse(e.a, cse_map)  # l'enfant peut etre une locale CSE : evalue UNE fois
+        s = _cpp_cse(e.a, cse_map, key_memo)  # l'enfant peut etre une locale CSE : evalue UNE fois
         return "(pops::Real(%s > 0) - pops::Real(%s < 0))" % (s, s)
     if isinstance(e, EigWitness):
         # appel du foncteur nomme (declare dans la brique) : chaque entree passee en argument scalaire
         # (via _cpp_cse -> partage les locales CSE, evaluee une seule fois cote appelant). Un predicat
         # ajoute le seuil im_tol en dernier argument (cf. _extra_args_cpp / _eig_witness_helpers).
-        args = [_cpp_cse(c, cse_map) for c in e.entries()] + e._extra_args_cpp()
+        args = [_cpp_cse(c, cse_map, key_memo) for c in e.entries()] + e._extra_args_cpp()
         return "%s(%s)" % (e.helper_name(), ", ".join(args))
     if isinstance(e, Pow):
-        return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map), _cpp_cse(e.b, cse_map))
+        return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
+    if isinstance(e, Minimum):
+        return "Kokkos::fmin(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
+    if isinstance(e, Maximum):
+        return "Kokkos::fmax(%s, %s)" % (_cpp_cse(e.a, cse_map, key_memo), _cpp_cse(e.b, cse_map, key_memo))
     if isinstance(e, _Bin):
-        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map), e.op, _cpp_cse(e.b, cse_map))
+        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map, key_memo), e.op, _cpp_cse(e.b, cse_map, key_memo))
     raise TypeError("expression not handled by the codegen: %r" % (e,))
 
 
-def _cpp_cse(e: Any, cse_map: Any) -> str:
+def _cpp_cse(e: Any, cse_map: Any, key_memo: Any = None) -> str:
     """C++ of e; if e matches an already-defined CSE local, returns its name."""
-    k = _key(e)
+    k = _key(e, key_memo)
     if k in cse_map:
         return cse_map[k]
-    return _cpp_expand(e, cse_map)
+    return _cpp_expand(e, cse_map, key_memo)
 
 
-def _cse_emit(roots: Any, real: Any, indent: Any) -> Any:
+def _cse_emit(
+    roots: Any,
+    real: Any,
+    indent: Any,
+    *,
+    materialize_all: bool = False,
+    return_names: bool = False,
+) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
+
+    ``materialize_all`` gives fail-closed kernels an observation point for every non-leaf operation,
+    including a non-finite intermediate that a later comparison or IEEE min/max could otherwise
+    conceal. ``return_names`` additionally returns the local names in declaration order.
 
     Memo by id(): a shared Expr OBJECT (DAG, e.g. intermediates reused from a large model)
     is traversed only once; its later occurrences re-credit the counter of its
@@ -98,13 +113,14 @@ def _cse_emit(roots: Any, real: Any, indent: Any) -> Any:
     (post-order of the first visit) -> emitted C++ is bit-identical."""
     counts, rep, size = {}, {}, {}
     memo = {}  # id(e) -> (size, {key: occurrences} of the subtree, in post-order of insertion)
+    key_memo, _, _ = _dag_key_ids(roots)
 
     def visit(e: Any) -> Any:
         if isinstance(e, (Const, Var)):
             return 1, None
         sub = memo.get(id(e))
         if sub is None:
-            k = _key(e)
+            k = _key(e, key_memo)
             s, cnt = 1, {}
             for c in _children(e):
                 cs, ccnt = visit(c)
@@ -124,13 +140,20 @@ def _cse_emit(roots: Any, real: Any, indent: Any) -> Any:
         if cnt:
             for k, c in cnt.items():
                 counts[k] = counts.get(k, 0) + c
-    cand = sorted((k for k, c in counts.items() if c >= 2), key=lambda k: size[k])
+    cand = sorted(
+        (k for k, count in counts.items() if materialize_all or count >= 2),
+        key=lambda k: size[k],
+    )
     cse_map, lines = {}, []
     for i, k in enumerate(cand):
         name = "cse%d_" % i
-        lines.append("%sconst %s %s = %s;" % (indent, real, name, _cpp_expand(rep[k], cse_map)))
+        lines.append("%sconst %s %s = %s;" % (
+            indent, real, name, _cpp_expand(rep[k], cse_map, key_memo)))
         cse_map[k] = name
-    return lines, [_cpp_cse(r, cse_map) for r in roots]
+    rendered = [_cpp_cse(r, cse_map, key_memo) for r in roots]
+    if return_names:
+        return lines, rendered, tuple(cse_map[key] for key in cand)
+    return lines, rendered
 
 
 # --- Foncteurs nommes des temoins de valeurs propres (EigWitness, ADC-289) ---
@@ -176,13 +199,18 @@ def _eig_witness_helpers(pairs: Any, indent: str = "  ") -> Any:
         for r in range(k):
             sets = " ".join("M[%d][%d] = m%d;" % (r, c, r * k + c) for c in range(k))
             L.append("%s  %s" % (indent, sets))
+        L.append("%s  const pops::EigBounds bounds = pops::real_eig_minmax(M);" % indent)
         if is_pred:
             # predicat verrouille sur converged (un repli Gershgorin -> false -> 0.0, jamais reel) ;
-            # cast bool -> pops::Real (1.0/0.0) pour composer dans les masques branchless de m.projection.
-            L.append("%s  return pops::Real(pops::real_eig_minmax(M).%s(im_tol));"
+            # real_status conserve en plus NaN pour qu'un kernel physique distingue une panne QR.
+            L.append("%s  return pops::Real(bounds.%s(im_tol));"
                      % (indent, _EIG_PREDICATES[field]))
         else:
-            L.append("%s  return pops::real_eig_minmax(M).%s;" % (indent, _EIG_FIELDS[field]))
+            # Un extreme spectral non certifie ne doit jamais devenir une borne physique. Le NaN est
+            # observe par les kernels fail-closed avant publication.
+            L.append("%s  if (!bounds.valid())"
+                     " return std::numeric_limits<pops::Real>::quiet_NaN();" % indent)
+            L.append("%s  return bounds.%s;" % (indent, _EIG_FIELDS[field]))
         L.append("%s}" % indent)
     return L
 

@@ -10,6 +10,7 @@
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>  // detail::cut_fraction, CutFraction (PR1)
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (level-set domain; numerics, not runtime)
 #include <pops/numerics/spatial_operator.hpp>  // reconstruct<>, load_state/load_aux, *_face_box (REUSED verbatim)
 
@@ -384,6 +385,7 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
     for_each_cell(v, EbAssembleRhsKernel<Model, decltype(metrics)>{
                          model, u, ax, fx, fy, r, dx, dy, metrics});
   }
+  reject_nonfinite_finite_volume_data("assemble_rhs_eb", R);
 }
 
 }  // namespace detail

@@ -27,7 +27,9 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
-_MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
+_MODEL_OPS = (
+    "source", "apply", "local_transform", "solve_local_linear", "solve_local_nonlinear",
+)
 
 _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
@@ -225,9 +227,14 @@ def _coeff_metadata_cpp(powers: Any) -> str:
 # allocation-free: only stack scalars + fixed-size arrays, no std::vector / std::function / Eigen.
 
 def _model_impl(model: Any) -> Any:
-    """The underlying HyperbolicModel carrying the symbolic coefficients: the public pops.dsl.Model
-    wraps it as ``_m``; a HyperbolicModel is already itself."""
-    return getattr(model, "_m", model)
+    """Return the HyperbolicModel that owns the symbolic coefficients.
+
+    The public physics board wraps the DSL facade as ``_dsl`` and the facade wraps its implementation
+    as ``_m``.  Compiler-internal call sites may already carry either of the latter two objects.
+    """
+
+    facade = getattr(model, "_dsl", model)
+    return getattr(facade, "_m", facade)
 
 
 def _named_fluxes(v: Any) -> Any:
@@ -270,8 +277,12 @@ def _has_runtime_param(exprs: Any) -> bool:
     from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _children
     stack = list(exprs)
+    seen = set()
     while stack:
         e = stack.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
         if isinstance(e, RuntimeParamRef):
             return True
         stack.extend(_children(e))
@@ -287,9 +298,8 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     ``<state_var>A``, the aux Array4 is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
-    deps = set()
-    for e in exprs:
-        deps |= e.deps()
+    from pops._ir.visitors import _dependencies
+    deps = _dependencies(exprs)
     lines = []
     live = impl._live_prims(exprs) if with_prim else set()
     # A live primitive's formula (e.g. u = mx / rho) references conservative variables that the top
@@ -298,7 +308,7 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     # ADDS the cons a live prim pulls in -- it never drops one that was already bound.)
     cons_needed = set(deps)
     for p in live:
-        cons_needed |= {d for d in impl.prim_defs[p].deps() if d in impl.cons_names}
+        cons_needed |= {d for d in _dependencies(impl.prim_defs[p]) if d in impl.cons_names}
     if with_cons:
         for idx, c in enumerate(impl.cons_names):
             if c in cons_needed:
@@ -425,6 +435,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
+{model_helpers}
 extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
 {route_manifest}extern "C" const char* pops_program_name() {{ return {name}; }}
 extern "C" const char* pops_program_hash() {{ return "{hash}"; }}

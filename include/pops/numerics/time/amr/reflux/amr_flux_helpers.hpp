@@ -8,6 +8,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/layout/refinement.hpp>     // coarsen_index
 #include <pops/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source (IMEX implicit step)
 
 #include <stdexcept>
@@ -87,17 +88,33 @@ struct AmrSspRhsKernel {
   }
 };
 
-// R <- -div(Fx,Fy) + S(U, aux) on the valid cells (method-of-lines RHS at ONE level, evaluated
-// at the state U). Fused "combine" of mf_advance_faces + mf_apply_source for the SSPRK stages (the
-// stage flux Fx/Fy is assumed already computed by compute_face_fluxes at the state U).
+namespace detail {
+
+// Internal arithmetic-only form used when the owning integrator validates the post-combination
+// stage instead.  Keeping it separate preserves mf_eval_rhs as a safe standalone publication
+// boundary for compiled blocks and direct callers.
 template <class Model>
-inline void mf_eval_rhs(const Model& m, const MultiFab& U, const MultiFab& aux, const MultiFab& Fx,
-                        const MultiFab& Fy, Real dx, Real dy, MultiFab& R) {
+inline void mf_eval_rhs_unchecked(const Model& m, const MultiFab& U, const MultiFab& aux,
+                                  const MultiFab& Fx, const MultiFab& Fy, Real dx, Real dy,
+                                  MultiFab& R) {
   for (int li = 0; li < U.local_size(); ++li)
     for_each_cell(U.box(li),
                   AmrSspRhsKernel<Model>{m, U.fab(li).const_array(), aux.fab(li).const_array(),
                                          Fx.fab(li).const_array(), Fy.fab(li).const_array(),
                                          R.fab(li).array(), dx, dy});
+}
+
+}  // namespace detail
+
+// R <- -div(Fx,Fy) + S(U, aux) on the valid cells (method-of-lines RHS at ONE level, evaluated
+// at the state U). Fused "combine" of mf_advance_faces + mf_apply_source for the SSPRK stages (the
+// stage flux Fx/Fy is assumed already computed by compute_face_fluxes at the state U). Standalone
+// callers publish R directly, so this form validates R and its two input flux fields atomically.
+template <class Model>
+inline void mf_eval_rhs(const Model& m, const MultiFab& U, const MultiFab& aux, const MultiFab& Fx,
+                        const MultiFab& Fy, Real dx, Real dy, MultiFab& R) {
+  detail::mf_eval_rhs_unchecked(m, U, aux, Fx, Fy, dx, dy, R);
+  detail::reject_nonfinite_finite_volume_data("mf_eval_rhs", R, Fx, Fy);
 }
 
 /// Device-clean NAMED functor: U <- U - dt div(Fx,Fy) on a valid cell.

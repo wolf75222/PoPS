@@ -11,7 +11,12 @@ descriptors (:class:`MomentHierarchy` / :class:`MomentBasis` / ... ) and the clo
 surface (:mod:`pops.moments.closures`).
 """
 # --- generator surface (the engine) ----------------------------------------
-from .model_builder import moment_indices, moment_names, build_moment_model
+from .model_builder import (
+    build_moment_model,
+    moment_indices,
+    moment_names,
+    moment_transport_blocks,
+)
 from .sources import (lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
 from .closures import (gaussian_closure, closure, Closure, LocalClosure,
@@ -24,6 +29,7 @@ from .basis import MomentBasis, RawMomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
 from .speeds import ExactSpeeds
 from .projection import RealizabilityProjection, RealizableSet
+from .relaxation import HyQMOM15Relaxation
 from .space import VelocitySpace, MomentState
 from .transport import MomentTransport
 
@@ -31,6 +37,7 @@ __all__ = [
     # public generator surface
     "moment_indices",
     "moment_names",
+    "moment_transport_blocks",
     "gaussian_closure",
     "lorentz_sources",
     "maxwellian_moments",
@@ -46,6 +53,7 @@ __all__ = [
     "StandardizedTransform",
     "ExactSpeeds",
     "RealizabilityProjection",
+    "HyQMOM15Relaxation",
     "VlasovSources",
     "MagneticMomentSource",
     "closure",

@@ -217,13 +217,14 @@ class _EvalMixin(_HyperbolicModel):
             groups.append(exprs)
         for mat in self._linear_sources.values():  # NAMED linear operators (linear_source)
             groups.append([e for row in mat for e in row])
+        for transform in self._local_transforms.values():
+            groups.append(list(transform["expressions"]) + [transform["valid_if"]])
         for flx in self._flux_terms.values():  # NAMED fluxes (flux_term, ADC-419)
             groups.append(list(flx["x"]) + list(flx["y"]))
-        for e in self.prim_defs.values():
-            used |= e.deps()
+        from pops._ir.visitors import _dependencies
+        used |= _dependencies(self.prim_defs.values())
         for grp in groups:
-            for e in grp:
-                used |= e.deps()
+            used |= _dependencies(grp)
         if self._elliptic is not None:
             used |= self._elliptic.deps()
         for fld in self._elliptic_fields.values():  # NAMED elliptic fields (elliptic_field, ADC-419)

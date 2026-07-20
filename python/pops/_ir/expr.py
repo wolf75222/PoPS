@@ -163,6 +163,38 @@ class Pow(_Bin):
     def to_cpp(self) -> str: return "std::pow(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
 
 
+class Minimum(_Bin):
+    """Pointwise IEEE ``fmin``: return the numeric operand when exactly one input is NaN."""
+
+    op = "minimum"
+
+    def eval(self, env: Any) -> Any:
+        import numpy as np
+        return np.fmin(self.a.eval(env), self.b.eval(env))
+
+    def to_cpp(self) -> str:
+        return "Kokkos::fmin(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
+
+    def _str(self) -> str:
+        return "minimum(%s, %s)" % (self.a, self.b)
+
+
+class Maximum(_Bin):
+    """Pointwise IEEE ``fmax``: return the numeric operand when exactly one input is NaN."""
+
+    op = "maximum"
+
+    def eval(self, env: Any) -> Any:
+        import numpy as np
+        return np.fmax(self.a.eval(env), self.b.eval(env))
+
+    def to_cpp(self) -> str:
+        return "Kokkos::fmax(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
+
+    def _str(self) -> str:
+        return "maximum(%s, %s)" % (self.a, self.b)
+
+
 class Compare(_Bin):
     """A scalar symbolic comparison; Python never evaluates it as a bool."""
 

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import pops
+from pops._dense_spectral import DenseSpectralCapacityError
 from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -73,13 +74,29 @@ def _nonhyperbolic_jacobian_model(name: str) -> Model:
         frame=frame,
         state=state,
         components={
-            # Constant Jacobian [[0, -1], [1, 0]], eigenvalues +i and -i.
-            x_axis: (-q2, q1),
-            y_axis: (-q2, q1),
+            # Constant Jacobian [[1, -1e-6], [1e-6, 1]], eigenvalues 1 +- 1e-6 i.
+            # The tiny but genuine complex pair catches any implicit positive tolerance.
+            x_axis: (q1 - 1.0e-6 * q2, 1.0e-6 * q1 + q2),
+            y_axis: (q1 - 1.0e-6 * q2, 1.0e-6 * q1 + q2),
         },
     )
     model.wave_speeds_from_jacobian(eig="numeric")
     model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
+
+
+def _diagonal_jacobian_model(name: str, components: int) -> Model:
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U", components=tuple("q%d" % index for index in range(components)))
+    model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: tuple(state), y_axis: tuple(state)},
+    )
     return model
 
 
@@ -278,5 +295,27 @@ def test_hll_from_dense_jacobian_rejects_non_real_spectrum(
     state[0, :, :] = 1.0
     state[1, :, :] = 0.25
     simulation = pops.bind(artifact, initial_state={"toy": state})
-    with pytest.raises(RuntimeError, match="dense HLL Jacobian lost hyperbolicity"):
+    with pytest.raises(RuntimeError, match="non-finite finite-volume data"):
         pops.run(simulation, t_end=DT, max_steps=1)
+
+
+def test_hll_dense_spectral_capacity_is_checked_per_declared_block() -> None:
+    boundary = _diagonal_jacobian_model("dense_hll_boundary", 16)
+    boundary.wave_speeds_from_jacobian()
+    assert boundary._dsl._m._ws_jacobian["blocks"]["x"] == [list(range(16))]
+
+    too_large = _diagonal_jacobian_model("dense_hll_too_large", 17)
+    with pytest.raises(DenseSpectralCapacityError) as caught:
+        too_large.wave_speeds_from_jacobian()
+    assert caught.value.components == 17
+    assert caught.value.max_components == 16
+    assert "blocks=" in str(caught.value)
+    assert "model.wave_speeds" in str(caught.value)
+    assert too_large._dsl._m._ws_jacobian is None
+
+    partitioned = _diagonal_jacobian_model("dense_hll_partitioned", 17)
+    partitioned.wave_speeds_from_jacobian(
+        blocks=(tuple(range(16)), (16,)))
+    assert tuple(
+        len(block) for block in partitioned._dsl._m._ws_jacobian["blocks"]["x"]
+    ) == (16, 1)

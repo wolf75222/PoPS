@@ -13,7 +13,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+from pops.moments import CartesianVelocityMoments, HyQMOM15Closure, HyQMOM15Relaxation
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.time import AdaptiveCFL
@@ -53,6 +53,7 @@ model = hierarchy.build("hyqmom15_crossing_jets", frame=frame)
 state = model.states["U"]
 physical_flux = model.fluxes["transport"]
 explicit_rate = model.operators["transport"]
+relaxation = HyQMOM15Relaxation().declare(model, state)
 
 finite_volume = FiniteVolume(
     flux=physical_flux,
@@ -72,6 +73,7 @@ program = pops.Program("ForwardEuler-HyQMOM15-crossing-jets")
 moments = program.state(plasma_state)
 rhs = explicit_rate(moments.n)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
+candidate = program.transform(candidate, transform=relaxation, name="relaxed_candidate")
 program.commit(moments.next, candidate)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 case.program(program)

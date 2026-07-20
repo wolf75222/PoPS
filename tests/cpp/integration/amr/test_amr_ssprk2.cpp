@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -62,6 +63,51 @@ Real max_all_difference(const MultiFab& lhs, const MultiFab& rhs) {
   }
   return difference;
 }
+
+bool same_complete_storage(const MultiFab& lhs, const MultiFab& rhs) {
+  pops::device_fence();
+  if (lhs.local_size() != rhs.local_size() || lhs.ncomp() != rhs.ncomp() ||
+      lhs.n_grow() != rhs.n_grow())
+    return false;
+  for (int local = 0; local < lhs.local_size(); ++local) {
+    const ConstArray4 a = lhs.fab(local).const_array();
+    const ConstArray4 b = rhs.fab(local).const_array();
+    const Box2D grown = lhs.fab(local).grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        for (int component = 0; component < lhs.ncomp(); ++component)
+          if (a(i, j, component) != b(i, j, component))
+            return false;
+  }
+  return true;
+}
+
+struct NonFiniteSource : pops::validation::AdvectionDiffusion {
+  POPS_HD State source(const State&, const Aux&) const {
+    return State{std::numeric_limits<Real>::quiet_NaN()};
+  }
+};
+
+struct FineOnlyNonFiniteSource : pops::validation::AdvectionDiffusion {
+  POPS_HD State source(const State& state, const Aux&) const {
+    return State{state[0] < Real(0) ? std::numeric_limits<Real>::quiet_NaN() : Real(0)};
+  }
+};
+
+struct HugeFiniteSource : pops::validation::AdvectionDiffusion {
+  POPS_HD State source(const State&, const Aux&) const {
+    return State{std::numeric_limits<Real>::max()};
+  }
+};
+
+struct RejectingNumericalFlux {
+  template <pops::PhysicalFlux Physical>
+  POPS_HD pops::FluxEvaluation<typename Physical::State> operator()(
+      const Physical&, const typename Physical::Trace&, const typename Physical::Trace&,
+      const pops::FaceContext&) const {
+    return pops::FluxEvaluation<typename Physical::State>::reject(0x54455354u);
+  }
+};
 
 }  // namespace
 
@@ -183,6 +229,12 @@ TEST(test_amr_ssprk2, matches_shu_osher_identity_and_records_heun_effective_flux
                                           /*coarse_replicated=*/true,
                                           /*recon_prim=*/false, /*imex=*/false,
                                           pops::NewtonOptions{}, AmrTimeMethod::kEuler);
+  MultiFab euler_expected = initial;
+  pops::fill_boundary(euler_expected, domain, periodic);
+  pops::mf_advance_faces(euler_expected, flux0_x, flux0_y, dx, dy, dt);
+  pops::mf_apply_source(model, euler_expected, aux, dt);
+  EXPECT_TRUE(same_complete_storage(euler_levels.front().U, euler_expected))
+      << "successful transactional Euler path changed the historical arithmetic";
   EXPECT_GT(max_valid_difference(level.U, euler_levels.front().U), Real(1e-6));
 }
 
@@ -315,4 +367,114 @@ TEST(test_amr_ssprk2, rejects_imex_instead_of_ignoring_the_ssp_method) {
                    /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/true,
                    pops::NewtonOptions{}, AmrTimeMethod::kSsprk2)),
                std::runtime_error);
+}
+
+TEST(test_amr_ssprk2, euler_nonfinite_source_or_flux_never_publishes_state) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const BoxArray layout(std::vector<Box2D>{domain});
+  const DistributionMapping ownership(layout.size(), pops::n_ranks());
+  MultiFab initial(layout, ownership, 1, NoSlope::n_ghost);
+  MultiFab aux(layout, ownership, 3, 1);
+  initial.set_val(Real(1.25));
+  aux.set_val(Real(0));
+  const MultiFab snapshot = initial;
+
+  for (const bool imex : {false, true}) {
+    std::vector<AmrLevelMP> levels{
+        AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+    const NonFiniteSource model{};
+    EXPECT_THROW((pops::advance_amr<NoSlope, RusanovFlux>(
+                     model, levels, domain, Real(1e-3), Periodicity{true, true},
+                     /*coarse_replicated=*/true, /*recon_prim=*/false, imex,
+                     pops::NewtonOptions{}, AmrTimeMethod::kEuler)),
+                 std::runtime_error);
+    EXPECT_TRUE(same_complete_storage(levels.front().U, snapshot))
+        << (imex ? "implicit" : "explicit") << " source failure published state";
+  }
+
+  std::vector<AmrLevelMP> rejected_flux_levels{
+      AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+  const pops::validation::AdvectionDiffusion finite_model{/*ax=*/Real(1), /*ay=*/Real(0),
+                                                          /*nu=*/Real(0)};
+  EXPECT_THROW((pops::advance_amr<NoSlope, RejectingNumericalFlux>(
+                   finite_model, rejected_flux_levels, domain, Real(1e-3),
+                   Periodicity{true, true}, /*coarse_replicated=*/true,
+                   /*recon_prim=*/false, /*imex=*/false, pops::NewtonOptions{},
+                   AmrTimeMethod::kEuler)),
+               std::runtime_error);
+  EXPECT_TRUE(same_complete_storage(rejected_flux_levels.front().U, snapshot));
+}
+
+TEST(test_amr_ssprk2, finite_stage_data_that_overflows_is_not_published) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const BoxArray layout(std::vector<Box2D>{domain});
+  const DistributionMapping ownership(layout.size(), pops::n_ranks());
+  MultiFab initial(layout, ownership, 1, NoSlope::n_ghost);
+  MultiFab aux(layout, ownership, 3, 1);
+  initial.set_val(Real(0));
+  aux.set_val(Real(0));
+  const MultiFab snapshot = initial;
+  const HugeFiniteSource model{};
+
+  for (const AmrTimeMethod method : {AmrTimeMethod::kSsprk2, AmrTimeMethod::kSsprk3}) {
+    std::vector<AmrLevelMP> levels{
+        AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+    EXPECT_THROW((pops::advance_amr<NoSlope, RusanovFlux>(
+                     model, levels, domain, Real(2), Periodicity{true, true},
+                     /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/false,
+                     pops::NewtonOptions{}, method)),
+                 std::runtime_error);
+    EXPECT_TRUE(same_complete_storage(levels.front().U, snapshot));
+  }
+}
+
+TEST(test_amr_ssprk2, synchronization_overflow_is_rejected_before_hierarchy_publication) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const BoxArray layout(std::vector<Box2D>{domain});
+  const DistributionMapping ownership(layout.size(), pops::n_ranks());
+  MultiFab initial(layout, ownership, 1, NoSlope::n_ghost);
+  MultiFab aux(layout, ownership, 3, 1);
+  initial.set_val(Real(3));
+  aux.set_val(Real(0));
+
+  std::vector<AmrLevelMP> live{
+      AmrLevelMP{initial, &aux, Real(1) / 4, Real(1) / 4}};
+  const MultiFab snapshot = live.front().U;
+  std::vector<AmrLevelMP> attempt = live;
+  MultiFab finite_increment(layout, ownership, 1, NoSlope::n_ghost);
+  finite_increment.set_val(std::numeric_limits<Real>::max());
+  pops::saxpy(attempt.front().U, Real(2), finite_increment);
+
+  EXPECT_THROW(pops::detail::publish_amr_state_transaction(live, attempt), std::runtime_error);
+  EXPECT_TRUE(same_complete_storage(live.front().U, snapshot));
+}
+
+TEST(test_amr_ssprk2, legacy_two_level_attempt_is_atomic_on_fine_source_failure) {
+  const Box2D coarse_domain = Box2D::from_extents(8, 8);
+  const BoxArray coarse_layout(std::vector<Box2D>{coarse_domain});
+  const DistributionMapping coarse_ownership(coarse_layout.size(), pops::n_ranks());
+  const Box2D fine_box{{4, 4}, {11, 11}};
+  const BoxArray fine_layout(std::vector<Box2D>{fine_box});
+  const DistributionMapping fine_ownership(fine_layout.size(), pops::n_ranks());
+
+  MultiFab coarse(coarse_layout, coarse_ownership, 1, NoSlope::n_ghost);
+  MultiFab fine(fine_layout, fine_ownership, 1, NoSlope::n_ghost);
+  MultiFab coarse_aux(coarse_layout, coarse_ownership, 3, 1);
+  MultiFab fine_aux(fine_layout, fine_ownership, 3, 1);
+  coarse.set_val(Real(1));
+  fine.set_val(Real(-1));
+  coarse_aux.set_val(Real(0));
+  fine_aux.set_val(Real(0));
+  const MultiFab coarse_snapshot = coarse;
+  const MultiFab fine_snapshot = fine;
+  FineOnlyNonFiniteSource model{};
+  model.ax = Real(0);
+  model.ay = Real(0);
+
+  EXPECT_THROW((pops::amr_step_2level_multipatch<NoSlope, RusanovFlux>(
+                   model, coarse, coarse_domain, Real(1) / 8, Real(1) / 8, fine, coarse_aux,
+                   fine_aux, Real(1e-3))),
+               std::runtime_error);
+  EXPECT_TRUE(same_complete_storage(coarse, coarse_snapshot));
+  EXPECT_TRUE(same_complete_storage(fine, fine_snapshot));
 }

@@ -73,6 +73,23 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                          state.block, space=state.space, point=state.point,
                          field_context=state.field_context, state_ref=state.state_ref)
 
+    def transform(
+        self, state: Any, *, transform: Any, fields: Any = None, name: Any = None,
+    ) -> Any:
+        """Apply one named local ``State -> State`` transform exactly once.
+
+        ``transform`` must be the typed handle returned by ``Model.local_transform``.  The result is
+        a fresh State value; neither the input nor the live block state is mutated until an explicit
+        commit.  The transform is compiled into a pointwise C++/Kokkos kernel.
+        """
+        from pops.model import OperatorHandle
+
+        if not isinstance(transform, OperatorHandle) or transform.kind != "local_transform":
+            raise TypeError(
+                "transform= must be a local_transform OperatorHandle returned by the model")
+        args = (state,) if fields is None else (state, fields)
+        return self._call(transform, *args, name=name)
+
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
     ) -> ProgramValue:

@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
-from pops.mesh._descriptor import MeshDescriptor
 
 
 _NATIVE_EMBEDDED_BOUNDARY_FLUXES = frozenset({"zero_flux"})
 
 
-class EmbeddedBoundaryFlux(MeshDescriptor):
+class EmbeddedBoundaryFlux(Descriptor):
     """Extension interface for one prepared embedded-boundary numerical flux."""
 
     category = "embedded_boundary_flux"

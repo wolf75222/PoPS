@@ -63,6 +63,7 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
     _emit_apply_kernel,
     _emit_coupled_rate_kernel,
     _emit_flux_kernel,
+    _emit_local_transform_kernel,
     _emit_residual_eval,
     _emit_solve_local_linear_kernel,
     _emit_solve_local_nonlinear_kernel,
@@ -99,6 +100,7 @@ from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
 from pops.codegen._compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 from pops.codegen.program_lowerability import (
+    all_ops as _all_ops,
     check_model_owner_dispatch as _check_model_owner_dispatch,
     check_schedules_lowerable as _check_schedules_lowerable,
 )
@@ -214,6 +216,7 @@ def emit_cpp_program(
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
+        model_helpers=_emit_program_model_helpers(program, authority),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(target, prelude, body),
@@ -224,6 +227,30 @@ def emit_cpp_program(
             _emit_amr_hierarchy_bodies(
                 program, authority, field_plans or {}) if target == "amr_system" else None,
             dt_bound_body if target == "amr_system" else None))
+
+
+def _emit_program_model_helpers(program: Any, authority: Any) -> str:
+    """Emit device helpers required by model expressions in Program-inline kernels."""
+
+    from pops.codegen.cpp_writer import _collect_eig_witnesses, _eig_witness_helpers
+
+    expressions = []
+    seen = set()
+    for value in _all_ops(program):
+        if value.op != "local_transform":
+            continue
+        node_model = model_for_node(authority, value)
+        impl = _model_impl(node_model)
+        name = value.attrs["transform"]
+        identity = (id(impl), name)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        declaration = impl._local_transforms[name]
+        expressions.extend(declaration["expressions"])
+        expressions.append(declaration["valid_if"])
+    lines = _eig_witness_helpers(_collect_eig_witnesses(expressions), indent="")
+    return ("\n".join(lines) + "\n") if lines else ""
 
 
 def _emit_system_install(target: str, prelude: str, body: str) -> str:

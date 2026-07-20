@@ -18,12 +18,14 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/load_balance.hpp>
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
 #include <pops/runtime/builders/block/block_builder.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -124,8 +126,26 @@ static int pops_run_test_mpi_mbox_parity(int argc, char** argv) {
   double bSum, bSumsq, bMax;
   residual_norms(ba1, dm1, dom, geom, model, n, bSum, bSumsq, bMax);
 
-  int fails = 0;
+  // A failed device evaluator is represented by a non-finite field value.  Only rank zero owns
+  // this mono-box and injects the failure, but the publication preflight must reject coherently on
+  // every rank before any peer can enter a later conservation collective.
+  MultiFab nonfinite_probe(ba1, dm1, 1, 0);
+  nonfinite_probe.set_val(Real(0));
+  if (me == 0)
+    nonfinite_probe.fab(0)(dom.lo[0], dom.lo[1], 0) =
+        std::numeric_limits<Real>::quiet_NaN();
+  bool rejected_nonfinite = false;
+  try {
+    detail::reject_nonfinite_finite_volume_data("test_mpi_mbox_parity", nonfinite_probe);
+  } catch (const std::runtime_error&) {
+    rejected_nonfinite = true;
+  }
+  const long rejected_ranks = all_reduce_sum(rejected_nonfinite ? 1L : 0L);
+
+  int fails = rejected_ranks == np ? 0 : 1;
   if (me == 0) {
+    if (rejected_ranks != np)
+      std::printf("FAIL non-finite publication rejected on %ld/%d ranks\n", rejected_ranks, np);
     const double l2b = std::sqrt(bSumsq);        // norme L2 du residu mono-box
     const double dmax = std::fabs(aMax - bMax);  // max|R| : invariant EXACT
     const double dssq = std::fabs(aSumsq - bSumsq) / (bSumsq + 1e-300);

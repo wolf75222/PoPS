@@ -8,7 +8,11 @@ from pops.fields import FieldOutput, GradientOutput
 from pops.frames import Cartesian2D
 from pops.math import ddt, div, laplacian
 from pops.moments.closures import gaussian_closure
-from pops.moments.model_builder import moment_flux_expressions, moment_names
+from pops.moments.model_builder import (
+    moment_flux_expressions,
+    moment_names,
+    moment_transport_blocks,
+)
 from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
@@ -80,7 +84,10 @@ def _author(
         components={x_axis: expressions.x, y_axis: expressions.y},
     )
     if exact_speeds:
-        model.wave_speeds_from_jacobian()
+        model.wave_speeds_from_jacobian(
+            blocks=moment_transport_blocks(order),
+            im_tol=0,
+        )
     if roe:
         model.roe_from_jacobian()
 

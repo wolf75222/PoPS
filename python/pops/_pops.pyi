@@ -117,6 +117,8 @@ class _SolveReport:
 class SystemConfig:
     n: int
     L: float
+    xlo: float
+    ylo: float
     periodic: bool
     geometry: str
     nr: int
@@ -130,6 +132,8 @@ class SystemConfig:
 class AmrSystemConfig:
     n: int
     L: float
+    xlo: float
+    ylo: float
     regrid_every: int
     level_count: int
     regrid_grow: int

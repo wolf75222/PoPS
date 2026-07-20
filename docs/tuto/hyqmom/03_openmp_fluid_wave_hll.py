@@ -57,7 +57,7 @@ finite_volume = FiniteVolume(
     flux=physical_flux,
     variables=variables.Conservative(state),
     reconstruction=reconstruction.FirstOrder(),
-    riemann=riemann.HLL(waves=riemann.waves.FromJacobian()),
+    riemann=riemann.HLL(),
 )
 numerics = DiscretizationPlan()
 numerics.rates.add(explicit_rate, finite_volume)
@@ -163,7 +163,7 @@ np.savez_compressed(
 )
 
 print("PoPS HyQMOM15 fluid-wave tutorial finished")
-print("  Riemann solver   : HLL, full 15 x 15 Jacobian")
+print("  Riemann solver   : HLL")
 print("  selected mode    : %d" % MODE)
 print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
 print("  accepted steps   : %d" % report.accepted_steps)

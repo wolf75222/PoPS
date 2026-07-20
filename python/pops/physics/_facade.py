@@ -28,7 +28,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         "conservative_from", "flux", "flux_term", "eigenvalues", "wave_speeds",
         "wave_speeds_from_jacobian", "stability_speed", "stability_dt", "source",
         "source_term", "linear_source", "rate_operator", "rate", "field_solve",
-        "local_linear_map", "source_frequency", "source_jacobian", "projection",
+        "local_linear_map", "local_transform", "source_frequency", "source_jacobian", "projection",
         "implicit_source", "enable_hllc", "set_riemann_hooks", "enable_roe",
         "roe_dissipation", "roe_from_jacobian", "elliptic_rhs", "elliptic_field",
         "gamma",
@@ -160,9 +160,9 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         block, the only unconditionally correct mode -- the blocks ASSERT a
         block-triangular structure); fd_eps = the eig='fd' relative FD step (ADC-617; None = 1e-6, and
         it participates in the compile cache key); eig_max_iter / im_tol (ADC-645) = the Francis-QR
-        per-eigenvalue iteration cap of the emitted real_eig_minmax and the imaginary-part tolerance
-        of the Roe |A| real-spectrum gate (None = the native defaults, byte-identical emission; both
-        participate in the compile cache key when set)."""
+        per-eigenvalue iteration cap and the relative imaginary-part tolerance. ``im_tol=None`` uses
+        the strict native machine-roundoff floor, ``im_tol=0`` requests exact-zero classification,
+        and every explicit non-negative value participates in the compile cache key."""
         self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps,
                                               eig_max_iter=eig_max_iter, im_tol=im_tol)
         self._invalidate_authoring_views()
@@ -277,6 +277,22 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.linear_source(name, matrix)
         return self._typed_handle(name)
 
+    def local_transform(self, name: Any, expressions: Any, *, valid_if: Any = 1.0) -> Any:
+        """Declare an explicit pointwise ``State -> State`` map.
+
+        The returned typed handle is called by a Program at the exact authored location.  Unlike a
+        projection, the map is not required to be idempotent and is never applied implicitly.
+        """
+        self._m.local_transform(name, expressions, valid_if=valid_if)
+        self._invalidate_authoring_views()
+        return self._typed_handle(name)
+
+    def local_transform_value(
+        self, name: Any, state: Any, aux: Any = None,
+    ) -> Any:
+        """Evaluate one declared local transform once through its host oracle."""
+        return self._m.local_transform_value(name, state, aux)
+
     def source_frequency(self, expr_mu: Any) -> None:
         """Local frequency mu(U, aux) [1/s] of the source -- the 'source' step bound from the meeting
         (dt <= cfl*substeps/(stride*max mu), without a space step). Emitted on the generated SOURCE
@@ -345,13 +361,16 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         m.roe_dissipation, emits nothing. @p dir: 0/'x' or 1/'y'. Delegates to HyperbolicModel."""
         return self._m.flux_jacobian(dir)
 
-    def roe_from_jacobian(self) -> None:
+    def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
         """Generic moment Roe: emits roe_dissipation = ``|A| (UR-UL)`` with A the flux Jacobian at
-        Uavg = 1/2(UL+UR) and |A| via pops::roe_abs_apply (matrix-sign), spectral-radius Rusanov
-        fallback on a complex/singular spectrum. Roles-free (no Density/Momentum, no 'p'): makes
-        riemann='roe' available for a moment hierarchy. Exclusive with enable_roe / roe_dissipation.
+        Uavg = 1/2(UL+UR). ``entropy_fix=delta`` selects the generic Harten spectral function
+        ``Phi_delta(A)``; ``None`` uses the matrix absolute value with a real-singular zero-mode
+        projector. Both refuse complex/non-converged spectra and never substitute Rusanov.
+        Roles-free (no Density/Momentum, no 'p'): makes riemann='roe'
+        available for a moment hierarchy. Exclusive with enable_roe / roe_dissipation.
         Delegates to HyperbolicModel.roe_from_jacobian (cf. its doc)."""
-        self._m.roe_from_jacobian()
+        self._m.roe_from_jacobian(entropy_fix=entropy_fix)
+        self._invalidate_authoring_views()
 
     def left(self, expr: Any) -> Any:
         """Marks @p expr as evaluated on the LEFT state UL (m.roe_dissipation). Sugar for dsl.left."""

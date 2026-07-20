@@ -2,9 +2,14 @@
   "_meta": {
     "captured_utc": "2026-07-14",
     "ctest_parallel_jobs": 4,
+    "estimated_targets": [
+      "test_analytic_expression",
+      "test_analytic_level_set"
+    ],
+    "estimate_policy": "new unmeasured targets use the catalog median until the next CTest timing refresh",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 189,
+    "target_count": 191,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -44,6 +49,8 @@
   "test_amr_tensor_fac_provider": 0.02,
   "test_amr_transfer_properties": 0.01,
   "test_amr_weno5_native": 0.01,
+  "test_analytic_expression": 0.02,
+  "test_analytic_level_set": 0.02,
   "test_anisotropic_epsilon": 0.76,
   "test_ap_limit": 0.01,
   "test_assembler_driver": 0.02,

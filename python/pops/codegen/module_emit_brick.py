@@ -167,12 +167,15 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
                          % (ind, int(ws["eig_max_iter"])))
             else:
                 L.append("%s  const pops::EigBounds eb_ = pops::real_eig_minmax(Jb_);" % ind)
+            # A numerical flux must fail closed.  None accepts only the native roundoff floor (not
+            # the broader diagnostic tolerance); an explicit zero requests bit-exact zero imaginary
+            # part, while a positive authoring value is an explicit classification relaxation.
             im_tol = ws.get("im_tol")
-            if im_tol is not None:
-                L.append("%s  if (!eb_.all_real(static_cast<pops::Real>(%s))) {"
-                         % (ind, scalar_cpp(im_tol)))
-            else:
-                L.append("%s  if (!eb_.all_real()) {" % ind)
+            effective_im_tol = (
+                "pops::kEigStrictImagTol" if im_tol is None else scalar_cpp(im_tol)
+            )
+            L.append("%s  if (!eb_.all_real(static_cast<pops::Real>(%s))) {"
+                     % (ind, effective_im_tol))
             L.append("%s    %s = std::numeric_limits<pops::Real>::quiet_NaN();"
                      % (ind, lo))
             L.append("%s    %s = std::numeric_limits<pops::Real>::quiet_NaN();"
@@ -381,7 +384,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     elif model._ws_jacobian is not None:
         # EXACT speeds via jacobian eigenvalues (see set_wave_speeds_from_jacobian :
         # 'numeric' = entries as formulas, 'fd' = columns by finite differences of the compiled
-        # flux ; extremes per sub-block via pops::real_eig_minmax, safe Gershgorin fallback).
+        # flux ; extremes per sub-block via pops::real_eig_minmax. Non-convergence and non-real or
+        # non-finite spectra invalidate the provider; the diagnostic Gershgorin enclosure is never
+        # consumed as an HLL speed.)
         ws_aux = aux_param if model._ws_jacobian["eig"] != "fd" else "const Aux& a"
         S.append("  POPS_HD void wave_speeds(const State& U, %s, int dir, pops::Real& smin, "
                  "pops::Real& smax) const {" % ws_aux)

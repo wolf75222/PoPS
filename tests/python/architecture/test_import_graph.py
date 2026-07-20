@@ -5,12 +5,14 @@ The sub-packages form a directed acyclic dependency stack:
     _ir       -> identity                        (canonical scalar identity codec)
     identity  imports nothing else in pops
     frames    -> identity
+    analytic  -> frames                         (data-only coordinate expressions)
     domain    -> frames, identity
     model     -> _ir, identity, params
     problem   -> _ir, identity, model
     physics   -> _ir, identity, model, problem
     time      -> _ir, identity, model, params
-    mesh      -> domain, frames, identity, model, params
+    initial   -> identity, model                 (layout-plan consumer protocol)
+    mesh      -> analytic, domain, frames, identity, model, params
     amr       -> _ir, identity, mesh, model, time
     layouts   -> amr, mesh
     boundary  -> _ir, domain, identity, model, representations
@@ -51,13 +53,14 @@ ALLOWED = {
     "params": set(),
     "linalg": set(),
     "frames": {"identity"},
+    "analytic": {"frames"},
     "domain": {"frames", "identity"},
     "model": {"_ir", "identity", "params"},
     "problem": {"_ir", "identity", "model"},
     "physics": {"_ir", "identity", "model", "problem"},
     "time": {"_ir", "identity", "model", "params"},
-    "initial": {"model"},
-    "mesh": {"domain", "frames", "identity", "model", "params"},
+    "initial": {"identity", "model"},
+    "mesh": {"analytic", "domain", "frames", "identity", "model", "params"},
     "amr": {"_ir", "identity", "mesh", "model", "time"},
     "layouts": {"amr", "mesh"},
     "boundary": {"_ir", "domain", "identity", "model", "representations"},

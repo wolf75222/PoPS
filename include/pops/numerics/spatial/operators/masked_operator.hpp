@@ -17,6 +17,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux
@@ -170,6 +171,7 @@ void assemble_rhs_masked_impl(const Model& model, const MultiFab& U, const Multi
         v, AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
                model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp, omission});
   }
+  reject_nonfinite_finite_volume_data("assemble_rhs_masked", R);
 }
 }  // namespace detail
 

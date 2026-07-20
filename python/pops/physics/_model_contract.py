@@ -44,6 +44,7 @@ class _HyperbolicModel:
     _source: Any
     _source_terms: Any
     _linear_sources: Any
+    _local_transforms: Any
     _rate_operators: Any
     _elliptic: Any
     _elliptic_fields: Any

@@ -47,6 +47,9 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         for rows in (getattr(self, "_linear_sources", {}) or {}).values():
             for row in rows:
                 out += [_wrap(e) for e in row]
+        for transform in (getattr(self, "_local_transforms", {}) or {}).values():
+            out += [_wrap(e) for e in transform["expressions"]]
+            out.append(_wrap(transform["valid_if"]))
         for term in (getattr(self, "_flux_terms", {}) or {}).values():
             for d in ("x", "y"):
                 out += [_wrap(e) for e in term.get(d, [])]
@@ -69,16 +72,18 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         appear several times but shares the SAME node object). Order SORTED by name (stable index
         = position in this list, mirror of RuntimeParams on the C++ side)."""
         seen = {}
-
-        def walk(e: Any) -> None:
-            if isinstance(e, RuntimeParamRef):
-                seen.setdefault(e.name, e)
-                return
-            for c in _children(e):
-                walk(c)
-
-        for e in self._all_exprs():
-            walk(e)
+        visited: set[int] = set()
+        stack = list(self._all_exprs())
+        while stack:
+            node = stack.pop()
+            identity = id(node)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            if isinstance(node, RuntimeParamRef):
+                seen.setdefault(node.name, node)
+                continue
+            stack.extend(_children(node))
         return [seen[k] for k in sorted(seen)]
 
     def assign_runtime_indices(self) -> Any:

@@ -12,10 +12,12 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/primitives/wave_speed.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 using namespace pops;
 
@@ -35,9 +37,8 @@ struct AdvectX {
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };
 
-// ADC-267 : modele dont la vitesse d'onde est NaN (flux physique fini, 0). Verifie que le calcul
-// du pas CFL avale un NaN : system_max_wave_speed fait std::max(wmax_acc, .) avec wmax_acc a 0,
-// donc le NaN (2e argument) est avale (std::max(0, NaN) = 0) -> w_max reste fini -> dt fini.
+// Modele dont la vitesse d'onde est NaN (flux physique fini, 0). Le calcul CFL doit refuser cette
+// violation du contrat au point de reduction collectif, avant tout pas de temps.
 struct NanSpeed {
   using State = StateVec<1>;
   using Aux = pops::Aux;
@@ -48,6 +49,27 @@ struct NanSpeed {
   }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
+};
+
+struct BoundProbe {
+  using State = StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+  Real wave_x = Real(0);
+  Real wave_y = Real(0);
+  Real stability_x = Real(0);
+  Real stability_y = Real(0);
+  Real frequency = Real(0);
+  Real direct_dt = std::numeric_limits<Real>::infinity();
+
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int direction) const {
+    return direction == 0 ? wave_x : wave_y;
+  }
+  POPS_HD Real stability_speed(const State&, const Aux&, int direction) const {
+    return direction == 0 ? stability_x : stability_y;
+  }
+  POPS_HD Real source_frequency(const State&, const Aux&) const { return frequency; }
+  POPS_HD Real stability_dt(const State&, const Aux&) const { return direct_dt; }
 };
 
 struct ZeroSystemRhs {
@@ -114,11 +136,7 @@ TEST(test_cfl_dt, quiescent_system_dt_clamped_to_floor) {
   EXPECT_TRUE(std::isfinite(sum(Uq, 0))) << "quiescent_state_finite";  // a = 0 -> aucune advection
 }
 
-// ADC-267 : une vitesse d'onde NaN est avalee par le garde CFL -> le PAS reste fini. On ne fait
-// PAS avancer l'etat ici : le flux numerique (Rusanov) utilise aussi la vitesse d'onde, donc un
-// NaN s'y propagerait (comportement attendu du schema, pas du garde). Ce qu'on verifie, c'est la
-// robustesse du calcul du pas (cfl_dt sans avancer).
-TEST(test_cfl_dt, nan_wave_speed_is_swallowed_by_cfl_guard) {
+TEST(test_cfl_dt, nan_wave_speed_is_rejected_before_the_step) {
   const int n = 16;
   const Box2D dom = Box2D::from_extents(n, n);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -133,7 +151,45 @@ TEST(test_cfl_dt, nan_wave_speed_is_swallowed_by_cfl_guard) {
   NanBlk nblk{"nan", NanSpeed{}, Un, bc};
   CoupledSystem nsys{nblk};
   SystemCoupler nsim(nsys, geom, ba, bc, ZeroSystemRhs{});
-  const Real dtn = nsim.cfl_dt(cfl);                         // calcule le pas SANS avancer l'etat
-  EXPECT_TRUE(std::isfinite(dtn)) << "nan_speed_dt_finite";  // max(0, NaN) = 0 -> w_max = 0 -> fini
-  EXPECT_GT(dtn, Real(0)) << "nan_speed_dt_positive";
+  EXPECT_THROW((void)nsim.cfl_dt(cfl), std::domain_error);
+}
+
+TEST(test_cfl_dt, native_bound_reductions_reject_every_invalid_scalar_category) {
+  const Box2D dom = Box2D::from_extents(2, 2);
+  const BoxArray ba(std::vector<Box2D>{dom});
+  const DistributionMapping dm(1, n_ranks());
+  MultiFab U(ba, dm, 1, 0), aux(ba, dm, kAuxBaseComps, 0);
+  U.set_val(Real(1));
+  aux.set_val(Real(0));
+
+  const Real nan = std::numeric_limits<Real>::quiet_NaN();
+  const Real inf = std::numeric_limits<Real>::infinity();
+  for (const Real invalid : {Real(-1), nan, inf}) {
+    EXPECT_THROW((void)max_wave_speed_mf(
+                     BoundProbe{invalid, Real(1), Real(0), Real(0), Real(0)}, U, aux),
+                 std::domain_error);
+    EXPECT_THROW((void)max_stability_speed_mf(
+                     BoundProbe{Real(0), Real(0), invalid, Real(1), Real(0)}, U, aux),
+                 std::domain_error);
+    EXPECT_THROW((void)max_source_frequency_mf(
+                     BoundProbe{Real(0), Real(0), Real(0), Real(0), invalid}, U, aux),
+                 std::domain_error);
+  }
+
+  for (const Real invalid_dt : {Real(-1), Real(0), nan,
+                                -std::numeric_limits<Real>::infinity()}) {
+    EXPECT_THROW((void)min_stability_dt_mf(
+                     BoundProbe{Real(0), Real(0), Real(0), Real(0), Real(0), invalid_dt}, U, aux),
+                 std::domain_error);
+  }
+
+  const BoundProbe valid{Real(2), Real(1), Real(3), Real(2), Real(4)};
+  EXPECT_EQ(max_wave_speed_mf(valid, U, aux), Real(2));
+  EXPECT_EQ(max_stability_speed_mf(valid, U, aux), Real(3));
+  EXPECT_EQ(max_source_frequency_mf(valid, U, aux), Real(4));
+  EXPECT_EQ(min_stability_dt_mf(valid, U, aux), Real(0));  // documented +inf means no direct bound
+  const Real tiny = std::numeric_limits<Real>::denorm_min();
+  EXPECT_EQ(min_stability_dt_mf(
+                BoundProbe{Real(0), Real(0), Real(0), Real(0), Real(0), tiny}, U, aux),
+            tiny);
 }

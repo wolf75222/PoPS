@@ -418,6 +418,109 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     assert len(token.inputs) == 3, "all three species contribute to the field solve (none dropped)"
 
 
+def test_local_transforms_are_typed_to_one_exact_species():
+    m = physics.Model("two_species_transforms")
+    electrons = m.species("electrons", state=["ne"])
+    ions = m.species("ions", state=["ni"])
+    relax_e = m.local_transform(
+        "relax_electrons", (electrons["ne"] + 1.0,), on=electrons,
+        valid_if=electrons["ne"] > 0.0)
+    relax_i = m.local_transform(
+        "relax_ions", (2.0 * ions["ni"],), on=ions,
+        valid_if=ions["ni"] > 0.0)
+
+    module = m.module
+    e_space = module.state_spaces()["electrons"]
+    i_space = module.state_spaces()["ions"]
+    e_op = module.operator_registry().get("relax_electrons")
+    i_op = module.operator_registry().get("relax_ions")
+    assert e_op.signature.inputs == (e_space,)
+    assert e_op.signature.output == e_space
+    assert i_op.signature.inputs == (i_space,)
+    assert i_op.signature.output == i_space
+
+    _program, _, _, states = _typed_program_states(
+        "two_species_transforms",
+        module,
+        (("electrons", e_space), ("ions", i_space)),
+    )
+    e_value = relax_e(states["electrons"].n)
+    i_value = relax_i(states["ions"].n)
+    assert e_value.space == e_space and e_value.block != i_value.block
+    assert i_value.space == i_space
+    with pytest.raises((TypeError, ValueError), match="expects state|StateSpace|space"):
+        relax_e(states["ions"].n)
+
+    from pops.codegen.module_lowering import _module_to_model
+
+    lowered_e = _module_to_model(module, state_space="electrons")
+    lowered_i = _module_to_model(module, state_space="ions")
+    assert set(lowered_e._m._local_transforms) == {"relax_electrons"}
+    assert set(lowered_i._m._local_transforms) == {"relax_ions"}
+
+
+def test_local_transform_promotion_preserves_the_first_species_declaration():
+    m = physics.Model("promoted_transform")
+    electrons = m.species("electrons", state=["ne"])
+    transform = m.local_transform(
+        "repair_electrons", (electrons["ne"] + 1.0,), on=electrons)
+    ions = m.species("ions", state=["ni"])
+    module = m.module
+    electron_space = module.state_spaces()["electrons"]
+    ion_space = module.state_spaces()["ions"]
+    promoted = module.operator_handle("repair_electrons")
+    operator = module.operator_registry().get("repair_electrons")
+    assert transform == promoted
+    assert operator.signature.inputs == (electron_space,)
+    assert operator.signature.output == electron_space
+
+    _, _, _, states = _typed_program_states(
+        "promoted_transform",
+        module,
+        (("electrons", electron_space), ("ions", ion_space)),
+    )
+    result = transform(states["electrons"].n)
+    assert result.space == electron_space
+
+
+def test_multispecies_local_transform_rejects_ambiguous_or_foreign_routes():
+    m = physics.Model("transform_routes")
+    electrons = m.species("electrons", state=["ne"])
+    ions = m.species("ions", state=["ni"])
+    before = tuple(m.module.list_operators())
+
+    with pytest.raises(ValueError, match="StateHandle"):
+        m.local_transform("by_string", (electrons["ne"],), on="electrons")
+    with pytest.raises(ValueError, match="reads component.*ions"):
+        m.local_transform("cross_state", (ions["ni"],), on=electrons)
+    with pytest.raises(ValueError, match="expression.*expected"):
+        m.local_transform("wrong_arity", (electrons["ne"], electrons["ne"]), on=electrons)
+    assert tuple(m.module.list_operators()) == before
+
+    m.coupled_rate(
+        "collision",
+        inputs=[electrons, ions],
+        outputs={electrons: [ions["ni"]], ions: [electrons["ne"]]},
+    )
+    after_collision = tuple(m.module.list_operators())
+    with pytest.raises(ValueError, match="already registered"):
+        m.local_transform("collision", (electrons["ne"],), on=electrons)
+    assert tuple(m.module.list_operators()) == after_collision
+
+
+def test_multispecies_local_transform_freezes_with_its_module():
+    m = physics.Model("frozen_transform")
+    electrons = m.species("electrons", state=["ne"])
+    m.species("ions", state=["ni"])
+    m.local_transform("repair", (electrons["ne"],), on=electrons)
+    before = tuple(m.module.list_operators())
+    m.freeze()
+
+    with pytest.raises(RuntimeError, match="frozen"):
+        m.local_transform("late", (electrons["ne"],), on=electrons)
+    assert tuple(m.module.list_operators()) == before
+
+
 def test_duplicate_species_name_raises():
     # A reused species name would silently alias the StateSpace -> fail loud at authoring instead.
     m = physics.Model("dup")

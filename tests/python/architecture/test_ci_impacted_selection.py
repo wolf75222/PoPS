@@ -318,12 +318,13 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 71
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 72
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_distributed_coarse_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
+    assert ctest_plan["test_mpi_system_analytic_level_set_np2"] == 2
     assert ctest_plan["test_world_communicator_np2"] == 2
 
 

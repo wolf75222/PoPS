@@ -1810,7 +1810,12 @@ jobs:
 
       - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
         if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}
-        run: ccache -s
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s
+          else
+            echo "ccache was not installed because this job stopped before dependency setup"
+          fi
 
       - name: Save ccache (Kokkos OpenMP, ${{ matrix.lane }})
         if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}

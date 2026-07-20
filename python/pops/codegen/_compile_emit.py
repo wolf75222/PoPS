@@ -105,6 +105,13 @@ def model_hash(model: Any, params: Any = None) -> str:
         parts.append("linear_sources=%s" % ";".join(
             "%s:[%s]" % (k, ";".join(repr(e) for row in m._linear_sources[k] for e in row))
             for k in sorted(m._linear_sources)))
+    if getattr(m, "_local_transforms", None):
+        from pops._ir.visitors import _dag_key_data
+        parts.append("local_transforms=%s" % ";".join(
+            "%s:%r" % (k, _dag_key_data(
+                (*m._local_transforms[k]["expressions"],
+                 m._local_transforms[k]["valid_if"])))
+            for k in sorted(m._local_transforms)))
     if getattr(m, "_flux_terms", None):
         parts.append("flux_terms=%s" % ";".join(
             "%s:x[%s]:y[%s]" % (k,
@@ -140,6 +147,9 @@ def model_hash(model: Any, params: Any = None) -> str:
     if getattr(m, "_roe_jacobian", None) is not None:
         parts.append("roe_jac=%s" % ";".join(repr(e) for k in ("x", "y")
                                              for row in m._roe_jacobian[k] for e in row))
+        entropy_fix = m._roe_jacobian.get("entropy_fix")
+        if entropy_fix is not None:
+            parts.append("roe_jac_entropy_fix=%s" % _scalar_token(entropy_fix))
     if getattr(m, "_wave_speeds", None) is not None:
         parts.append("wave_speeds=%s" % ";".join(repr(e) for k in ("x", "y")
                                                  for e in m._wave_speeds[k]))

@@ -91,6 +91,11 @@ electric_field = plasma_field(moments.n).consume(action=FailRun())
 rhs = explicit_rate(moments.n, electric_field)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
 program.commit(moments.next, candidate)
+program.set_dt_bound(
+    lambda P, cfl: (
+        cfl * P.hmin() * P.max_wave_speed(moments.n) / (OMEGA_P * OMEGA_P)
+    )
+)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 case.program(program)
 

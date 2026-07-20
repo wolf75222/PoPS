@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .expr import Sqrt, Abs, Sign, _wrap
+from .expr import Sqrt, Abs, Sign, Minimum, Maximum, _wrap
 from .expr import Gradient, Partial, Laplacian, Divergence, TimeDerivative, Unknown, Integral
 from .elliptic import CoeffGradient, DivCoeffGrad
 from .values import EigWitness, StateRef
@@ -44,6 +44,18 @@ def abs_(x: Any) -> Any:
 def sign(x: Any) -> Any:
     """Signe symbolique (-1 / 0 / 1) : selections par masques sans branche par cellule."""
     return Sign(_wrap(x))
+
+
+def minimum(left: Any, right: Any) -> Any:
+    """Pointwise IEEE minimum, lowered directly to the native device backend."""
+
+    return Minimum(_wrap(left), _wrap(right))
+
+
+def maximum(left: Any, right: Any) -> Any:
+    """Pointwise IEEE maximum, lowered directly to the native device backend."""
+
+    return Maximum(_wrap(left), _wrap(right))
 
 
 def eig_max_im(rows: Any) -> Any:
@@ -86,6 +98,15 @@ def eig_all_real(rows: Any, im_tol: Any = 1e-5) -> Any:
     eval(env) : miroir hote via numpy (LAPACK converge toujours -> jamais de kUnknown cote hote ;
     coincide avec la brique sur matrices saines, le cas vise)."""
     return EigWitness(rows, "all_real", im_tol=im_tol)
+
+
+def eig_real_status(rows: Any, im_tol: Any = 1e-5) -> Any:
+    """Tri-state spectral witness for fail-closed generated kernels.
+
+    Returns 1.0 for a converged finite real spectrum, 0.0 for a converged finite complex spectrum,
+    and NaN when the native eigensolve did not converge or produced a non-finite diagnostic.
+    """
+    return EigWitness(rows, "real_status", im_tol=im_tol)
 
 
 def left(expr: Any) -> Any:

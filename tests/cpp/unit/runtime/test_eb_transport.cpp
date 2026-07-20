@@ -48,6 +48,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace pops;
 
@@ -72,7 +73,36 @@ struct Advect {
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 };
 
+struct FailedRoeAdvect : Advect {
+  POPS_HD State roe_dissipation(const State&, const Aux&, const State&, const Aux&, int) const {
+    return State{std::numeric_limits<Real>::quiet_NaN()};
+  }
+};
+
+struct AllActiveLevelSet {
+  POPS_HD Real operator()(Real, Real) const { return Real(-1); }
+};
+
 static_assert(PhysicalModel<Advect>, "Advect est un PhysicalModel");
+
+TEST(EbTransport, NonFiniteRoeCannotReachCutCellState) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes(std::vector<Box2D>{domain});
+  const DistributionMapping mapping(1, n_ranks());
+  MultiFab state(boxes, mapping, 1, NoSlope::n_ghost);
+  MultiFab providers(boxes, mapping, kAuxBaseComps, 1);
+  MultiFab residual(boxes, mapping, 1, 0);
+  state.set_val(Real(1));
+  providers.set_val(Real(0));
+
+  FailedRoeAdvect failed_roe;
+  failed_roe.vx = Real(0.7);
+  failed_roe.vy = Real(-0.4);
+  EXPECT_THROW((assemble_rhs_eb<NoSlope, RoeFlux>(failed_roe, state, providers,
+                                                  AllActiveLevelSet{}, geometry, residual)),
+               std::runtime_error);
+}
 
 // Level set "dalle mince" |y - yc| - h : interieur ssi |y - yc| < h. Centre dans la dalle (ls < 0),
 // les DEUX voisins en y dehors -> les deux demi-faces y sont coupees pres du centre, donc kappa =

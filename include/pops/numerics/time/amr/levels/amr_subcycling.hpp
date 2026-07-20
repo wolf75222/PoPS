@@ -57,35 +57,45 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc, Real dyc,
                                 MultiFab& Uf, const MultiFab& auxc, const MultiFab& auxf, Real dt) {
+  // The complete coarse/fine attempt is private.  A failed fine substep must not leave the
+  // coarse level advanced, and a failed coarse source must not even refresh the public ghosts.
+  // MultiFab copies own their storage; the final moves below are the sole publication point.
+  MultiFab coarse = Uc;
+  MultiFab fine = Uf;
   const SubcyclingSchedule sched(0, 1, amr::Rational(kAmrRefRatio, 1),
                                  amr::RemainderPolicy::IntegralOnly);
-  const int nc = Uc.ncomp();
+  const int nc = coarse.ncomp();
   const Real dxf = dxc / kAmrRefRatio, dyf = dyc / kAmrRefRatio, dtf = sched.dt_sub(dt);
   const int NX = dom.nx(), NY = dom.ny();
 
   // coarse-fine interface: coverage (coarse cells shadowed by a fine patch) + bordering reflux
   // routing. Coverage built on the GLOBAL BoxArray (all boxes, known to all ranks) -> correct
   // under MPI.
-  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, Uf.box_array());
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, fine.box_array());
   auto covered = [&](int I, int J) { return cfi.covered(I, J); };
 
-  MultiFab Uc_old = Uc;
-  fill_periodic_local(Uc, dom);  // replicated coarse -> local periodic fill (no MPI plan)
-  MultiFab fxc(BoxArray(std::vector<Box2D>{xface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
-  MultiFab fyc(BoxArray(std::vector<Box2D>{yface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, Uc, auxc, fxc, fyc, dxc, dyc);
+  MultiFab Uc_old = coarse;
+  fill_periodic_local(coarse, dom);  // replicated coarse -> local periodic fill (no MPI plan)
+  MultiFab fxc(BoxArray(std::vector<Box2D>{xface_box(coarse.box(0))}), coarse.dmap(), nc, 0);
+  MultiFab fyc(BoxArray(std::vector<Box2D>{yface_box(coarse.box(0))}), coarse.dmap(), nc, 0);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, coarse, auxc, fxc, fyc, dxc, dyc);
+  mf_advance_faces(coarse, fxc, fyc, dxc, dyc, dt);
+  mf_apply_source(m, coarse, auxc, dt);  // source S(U,aux) at the substep
+  // One collective covers every value the accepted coarse attempt would publish or record.
+  detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(coarse)", coarse, fxc,
+                                               fyc);
 
   // per fine-box register: coarse flux (without dt) saved at the 4 faces.
   struct Reg {
     int I0, I1, J0, J1;
     std::vector<Real> cL, cR, cB, cT, fL, fR, fB, fT;
   };
-  std::vector<Reg> regs(Uf.local_size());
+  std::vector<Reg> regs(fine.local_size());
   {
     device_fence();
     const ConstArray4 FX = fxc.fab(0).const_array(), FY = fyc.fab(0).const_array();
-    for (int li = 0; li < Uf.local_size(); ++li) {
-      const PatchRange pr(Uf.box(li));
+    for (int li = 0; li < fine.local_size(); ++li) {
+      const PatchRange pr(fine.box(li));
       Reg& g = regs[li];
       g.I0 = pr.I0;
       g.I1 = pr.I1;
@@ -112,28 +122,30 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
         }
     }
   }
-  mf_advance_faces(Uc, fxc, fyc, dxc, dyc, dt);
-  mf_apply_source(m, Uc, auxc, dt);  // source S(U,aux) at the substep
-
   // multi-box fine fluxes: one face-box per GLOBAL fine box, same dmap as Uf. Built on the global
   // box_array() (not the local boxes) so that BoxArray and DistributionMapping have the same size
   // under MPI: fxf.fab(li) then corresponds to Uf.fab(li) (same dmap, same global order). In
   // serial it is identical (local == global).
   std::vector<Box2D> fxb, fyb;
-  for (int g = 0; g < Uf.box_array().size(); ++g) {
-    fxb.push_back(xface_box(Uf.box_array()[g]));
-    fyb.push_back(yface_box(Uf.box_array()[g]));
+  for (int g = 0; g < fine.box_array().size(); ++g) {
+    fxb.push_back(xface_box(fine.box_array()[g]));
+    fyb.push_back(yface_box(fine.box_array()[g]));
   }
-  MultiFab fxf(BoxArray(std::move(fxb)), Uf.dmap(), nc, 0);
-  MultiFab fyf(BoxArray(std::move(fyb)), Uf.dmap(), nc, 0);
+  MultiFab fxf(BoxArray(std::move(fxb)), fine.dmap(), nc, 0);
+  MultiFab fyf(BoxArray(std::move(fyb)), fine.dmap(), nc, 0);
   const Box2D fdom = Box2D::from_extents(2 * NX, 2 * NY);
 
   for (int s = 0; s < sched.count(); ++s) {
-    mf_fill_fine_ghosts_multi(Uf, Uc_old, Uc, sched.frac(s));
-    fill_boundary(Uf, fdom, Periodicity{false, false});  // fine-fine halos
-    compute_face_fluxes<Limiter, NumericalFlux>(m, Uf, auxf, fxf, fyf, dxf, dyf);
+    mf_fill_fine_ghosts_multi(fine, Uc_old, coarse, sched.frac(s));
+    fill_boundary(fine, fdom, Periodicity{false, false});  // fine-fine halos
+    compute_face_fluxes<Limiter, NumericalFlux>(m, fine, auxf, fxf, fyf, dxf, dyf);
+    mf_advance_faces(fine, fxf, fyf, dxf, dyf, dtf);
+    mf_apply_source(m, fine, auxf, dtf);  // source S(U,aux) at the substep
+    // Validate before this substep contributes to the time-integrated fine register.
+    detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(fine)", fine, fxf,
+                                                 fyf);
     device_fence();
-    for (int li = 0; li < Uf.local_size(); ++li) {
+    for (int li = 0; li < fine.local_size(); ++li) {
       Reg& g = regs[li];
       const ConstArray4 FX = fxf.fab(li).const_array(), FY = fyf.fab(li).const_array();
       for (int J = g.J0; J <= g.J1; ++J)
@@ -151,8 +163,6 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
               Real(0.5) * (FY(2 * I, 2 * g.J1 + 2, k) + FY(2 * I + 1, 2 * g.J1 + 2, k)) * dtf;
         }
     }
-    mf_advance_faces(Uf, fxf, fyf, dxf, dyf, dtf);
-    mf_apply_source(m, Uf, auxf, dtf);  // source S(U,aux) at the substep
   }
 
   // DISTRIBUTED reflux THEN average_down, the coarse level being REPLICATED (each rank holds an
@@ -170,13 +180,13 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   // by 1 for the bordering reflux cells, clamped to the domain): the gather all_reduce goes from
   // O(NX*NY) to O(interface). Bit-identical: cells outside the interface were zero (uncovered,
   // without a face), skipped at application.
-  const Box2D fpc = coarsen(Uf.box_array(), kAmrRefRatio).bounding_box();
+  const Box2D fpc = coarsen(fine.box_array(), kAmrRefRatio).bounding_box();
   const Box2D rbox{{std::max(fpc.lo[0] - 1, 0), std::max(fpc.lo[1] - 1, 0)},
                    {std::min(fpc.hi[0] + 1, NX - 1), std::min(fpc.hi[1] + 1, NY - 1)}};
   FluxRegister avg(rbox, nc);  // average-down (overwrite of covered cells)
   FluxRegister ref(rbox, nc);  // reflux (addition to bordering cells)
-  for (int li = 0; li < Uf.local_size(); ++li) {
-    const ConstArray4 f = Uf.fab(li).const_array();
+  for (int li = 0; li < fine.local_size(); ++li) {
+    const ConstArray4 f = fine.fab(li).const_array();
     Reg& g = regs[li];
     for (int J = g.J0; J <= g.J1; ++J)
       for (int I = g.I0; I <= g.I1; ++I)
@@ -188,9 +198,9 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   }
   avg.gather();
   ref.gather();
-  if (Uc.local_size() > 0) {  // each rank holding a copy of the coarse level applies it
-    Array4 c = Uc.fab(0).array();
-    const Box2D cb = Uc.box(0);
+  if (coarse.local_size() > 0) {  // each rank holding a copy of the coarse level applies it
+    Array4 c = coarse.fab(0).array();
+    const Box2D cb = coarse.box(0);
     for (int J = cb.lo[1]; J <= cb.hi[1]; ++J)
       for (int I = cb.lo[0]; I <= cb.hi[0]; ++I) {
         if (!ref.in(I, J))
@@ -200,8 +210,15 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
           if (covered(I, J))
             c(I, J, k) = avg.at(I, J, k);  // sync phase 2: average-down
         }
-      }
+        }
   }
+  // Reflux and average-down are arithmetic too: finite stage data may still overflow while being
+  // accumulated or synchronized.  Reject the complete candidate before either public state moves.
+  detail::reject_nonfinite_finite_volume_data(
+      "amr_step_2level_multipatch(synchronization)", coarse, fine);
+  device_fence();
+  Uc = std::move(coarse);
+  Uf = std::move(fine);
 }
 
 // --- N-LEVEL MULTI-PATCH (multi-box at EACH level) ---
@@ -584,10 +601,13 @@ void ssprk2_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   MultiFab Fxs(fx.box_array(), fx.dmap(), nc, 0), Fys(fy.box_array(), fy.dmap(), nc, 0);
 
   // Stage 0: the caller already materialized F(U0).
-  mf_eval_rhs(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, R);
+  detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, R);
   saxpy(lv.U, dt, R);                         // U1 = U0 + dt L(U0)
   lincomb(fx, Real(1) / 2, fx, Real(0), fx);  // Feff <- 1/2 F(U0)
   lincomb(fy, Real(1) / 2, fy, Real(0), fy);
+  // Validate after the arithmetic: finite R and F0 can still overflow in dt*R or a weighted
+  // flux.  One collective covers both the stage state and everything already destined for reflux.
+  detail::reject_nonfinite_finite_volume_data("ssprk2_advance_level(stage 0)", lv.U, fx, fy);
 
   // Stage 1: refresh the stage state before evaluating F(U1) and L(U1).
   const Real stage1_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1));
@@ -596,12 +616,12 @@ void ssprk2_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
                                               pos_floor);
   device_fence();
-  mf_eval_rhs(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);
+  detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);
   saxpy(lv.U, dt, R);                                 // U1 + dt L(U1)
   lincomb(lv.U, Real(1) / 2, U0, Real(1) / 2, lv.U);  // Shu-Osher U_new
   saxpy(fx, Real(1) / 2, Fxs);                        // Feff += 1/2 F(U1)
   saxpy(fy, Real(1) / 2, Fys);
-  device_fence();
+  detail::reject_nonfinite_finite_volume_data("ssprk2_advance_level(stage 1)", lv.U, fx, fy);
 }
 
 // SSPRK3 (Shu-Osher, 3 stages, order 3) on ONE AMR level. (1) Advance lv.U from t to t+dt:
@@ -631,10 +651,11 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
       Fys(fy.box_array(), fy.dmap(), nc, 0);  // stage flux
 
   // --- stage 0: F(U0) already in (fx, fy), R0 = -div F0 + S(U0) ---
-  mf_eval_rhs(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, R);
+  detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, R);
   saxpy(lv.U, dt, R);                         // lv.U = U1 = U0 + dt R0
   lincomb(fx, Real(1) / 6, fx, Real(0), fx);  // Feff <- 1/6 F0 (pointwise aliasing, safe)
   lincomb(fy, Real(1) / 6, fy, Real(0), fy);
+  detail::reject_nonfinite_finite_volume_data("ssprk3_advance_level(stage 0)", lv.U, fx, fy);
 
   // --- stage 1: F(U1) ---
   const Real stage1_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1));
@@ -643,11 +664,13 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
                                               pos_floor);
   device_fence();
-  mf_eval_rhs(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);  // R1 = -div F1 + S(U1)
+  detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy,
+                                R);  // R1 = -div F1 + S(U1)
   saxpy(lv.U, dt, R);                                        // lv.U = U1 + dt R1
   lincomb(lv.U, Real(3) / 4, U0, Real(1) / 4, lv.U);         // lv.U = U2
   saxpy(fx, Real(1) / 6, Fxs);                               // Feff += 1/6 F1
   saxpy(fy, Real(1) / 6, Fys);
+  detail::reject_nonfinite_finite_volume_data("ssprk3_advance_level(stage 1)", lv.U, fx, fy);
 
   // --- stage 2: F(U2) ---
   const Real stage2_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1) / 2);
@@ -656,12 +679,13 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
                                               pos_floor);
   device_fence();
-  mf_eval_rhs(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);  // R2 = -div F2 + S(U2)
+  detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy,
+                                R);  // R2 = -div F2 + S(U2)
   saxpy(lv.U, dt, R);                                        // lv.U = U2 + dt R2
   lincomb(lv.U, Real(1) / 3, U0, Real(2) / 3, lv.U);         // lv.U = U_new (t + dt)
   saxpy(fx, Real(2) / 3, Fxs);                               // Feff += 2/3 F2
   saxpy(fy, Real(2) / 3, Fys);
-  device_fence();  // (fx, fy) = Feff and lv.U = U_new consistent for host reads (parentRegs/reflux)
+  detail::reject_nonfinite_finite_volume_data("ssprk3_advance_level(stage 2)", lv.U, fx, fy);
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
@@ -698,6 +722,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   const bool ssprk2 = (tmethod == AmrTimeMethod::kSsprk2);
   const bool ssprk3 = (tmethod == AmrTimeMethod::kSsprk3);
   const bool ssprk = ssprk2 || ssprk3;
+  const bool is_leaf = (lev + 1 >= static_cast<int>(L.size()));
 
   if (lev == 0) {
     fill_boundary(lv.U, base_dom, base_per);
@@ -730,7 +755,6 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   // SSPRK3).  The existing parent/fine register logic then remains scheme-independent and exactly
   // conservative for the selected time method.  Save the starting state for child interpolation.
   // Euler skips this block and retains the historical in-place path below.
-  const bool is_leaf = (lev + 1 >= static_cast<int>(L.size()));
   MultiFab ssp_U_old;  // state t (pre-advance capture); filled only for an SSP coarse role
   if (ssprk) {
     if (!is_leaf)
@@ -743,6 +767,19 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
       ssprk3_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
                                                    base_per, pOld, pNew, frac, parent_span,
                                                    coarse_replicated, pos_floor);
+  }
+
+  // Euler owns one private hierarchy transaction (created by the public driver below).  Advance
+  // the candidate before any parent/fine register sees its flux, then validate the candidate and
+  // both face fields with exactly one collective.  A failed explicit or implicit source therefore
+  // cannot publish a level or contaminate a conservation register.
+  MultiFab euler_U_old;
+  if (!ssprk) {
+    if (!is_leaf)
+      euler_U_old = lv.U;
+    mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
+    mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex, nopts);
+    detail::reject_nonfinite_finite_volume_data("subcycle_level_mp(Euler)", lv.U, fx, fy);
   }
 
   if (parentRegs) {  // FINE role: fine fluxes of THIS level into the parent register
@@ -766,12 +803,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     }
   }
 
-  if (is_leaf) {   // leaf
-    if (!ssprk) {  // forward Euler (legacy path); SSPRK already advanced lv.U above
-      mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-      mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
-                                nopts);  // explicit or IMEX source (Newton options)
-    }
+  if (is_leaf) {  // leaf: both Euler and SSPRK candidates were validated before register use
     return;
   }
 
@@ -874,16 +906,9 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     }
   }
 
-  // state t for the temporal interpolation of the children. SSPRK: lv.U is ALREADY advanced (the
-  // advance happened above), the state t is the pre-advance copy
-  // ssp_U_old; Euler: lv.U is still the state t here (the advance is just below), so U_old = lv.U
-  // (legacy copy).
-  MultiFab U_old = ssprk ? ssp_U_old : lv.U;
-  if (!ssprk) {  // forward Euler (legacy path); SSPRK already advanced lv.U
-    mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-    mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
-                              nopts);  // explicit or IMEX source (Newton options)
-  }
+  // State t for temporal interpolation of the children.  Both methods are already advanced; the
+  // method-specific snapshot was captured immediately before its first arithmetic update.
+  MultiFab U_old = ssprk ? ssp_U_old : euler_U_old;
   if (temporal_plan != nullptr) {
     for (const ExplicitTemporalSubstep& child : temporal_plan->transition(lev))
       subcycle_level_mp<Limiter, NumericalFlux>(
@@ -935,6 +960,18 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   mf_average_down_mb(L[lev + 1].U, lv.U);  // sync phase 2: average-down
 }
 
+// Publish only state storage; aux pointers and geometry belong to the prepared live hierarchy.
+// Every numerical operation, flux register and coarse/fine synchronization has already succeeded
+// on the private attempt when this function is reached.
+inline void publish_amr_state_transaction(std::vector<AmrLevelMP>& live,
+                                          std::vector<AmrLevelMP>& attempt) {
+  reject_nonfinite_finite_volume_hierarchy(
+      "publish_amr_state_transaction(synchronization)", attempt);
+  device_fence();
+  for (std::size_t level = 0; level < live.size(); ++level)
+    live[level].U = std::move(attempt[level].U);
+}
+
 // Driver: one dt step of the N-level multi-patch hierarchy (level 0 = coarse).
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom,
@@ -943,9 +980,11 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
                                     bool imex = false, const NewtonOptions& nopts = {},
                                     AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
                                     Real pos_floor = Real(0)) {
-  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+  std::vector<AmrLevelMP> attempt = L;
+  subcycle_level_mp<Limiter, NumericalFlux>(m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0),
                                             Real(0), nullptr, coarse_replicated, recon_prim, imex,
                                             nopts, tmethod, pos_floor, nullptr);
+  publish_amr_state_transaction(L, attempt);
 }
 
 /// Explicit-clock production route.  Validation of the full chain is completed before level zero
@@ -961,12 +1000,16 @@ void amr_step_multilevel_multipatch_with_temporal_relations(
     AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
   const PreparedAmrTemporalPlan plan =
       PreparedAmrTemporalPlan::prepare(temporal_relations, static_cast<int>(L.size()));
-  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+  std::vector<AmrLevelMP> attempt = L;
+  subcycle_level_mp<Limiter, NumericalFlux>(m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0),
                                             Real(0), nullptr, coarse_replicated, recon_prim, imex,
                                             nopts, tmethod, pos_floor, &plan);
+  publish_amr_state_transaction(L, attempt);
 }
 
-/// Allocation-free execution of a plan prepared by the owning runtime at relation installation.
+/// Relation-allocation-free execution of a plan prepared by the owning runtime at installation.
+/// The numerical step still owns the same private state transaction as every other production
+/// route, so failure cannot partially publish a hierarchy.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch_with_temporal_plan(
     const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
@@ -976,9 +1019,11 @@ void amr_step_multilevel_multipatch_with_temporal_plan(
     Real pos_floor = Real(0)) {
   if (temporal_plan.nlevels() != static_cast<int>(L.size()))
     throw std::runtime_error("prepared AMR temporal plan does not match the level hierarchy");
-  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+  std::vector<AmrLevelMP> attempt = L;
+  subcycle_level_mp<Limiter, NumericalFlux>(m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0),
                                             Real(0), nullptr, coarse_replicated, recon_prim, imex,
                                             nopts, tmethod, pos_floor, &temporal_plan);
+  publish_amr_state_transaction(L, attempt);
 }
 
 }  // namespace detail

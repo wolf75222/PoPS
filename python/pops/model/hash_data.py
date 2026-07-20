@@ -18,12 +18,15 @@ def canonical_hash_data(value: Any, *, where: str = "module hash") -> Any:
         return canonical_hash_data(hook(), where=where)
 
     if _is_expr(value):
-        from pops._ir.visitors import _key
+        from pops._ir.visitors import _dag_key_data
 
-        return {
-            "protocol": "pops.expr.key.v1",
-            "value": canonical_hash_data(_key(value), where="%s expression" % where),
-        }
+        return canonical_hash_data(
+            _dag_key_data((value,)), where="%s expression DAG" % where)
+    if isinstance(value, (tuple, list)) and value and all(_is_expr(item) for item in value):
+        from pops._ir.visitors import _dag_key_data
+
+        return canonical_hash_data(
+            _dag_key_data(value), where="%s expression DAG" % where)
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) or not key for key in value):
             raise TypeError("%s mapping keys must be non-empty strings" % where)

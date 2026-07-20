@@ -215,6 +215,20 @@ class _ProgramCall(_ProgramBase):
                           args: Any, name: Any) -> Any:
         return self.project(name=name, state=args[0])
 
+    def _lower_local_transform(self, op: Any, _operator_handle: Any, operator_name: Any,
+                               args: Any, name: Any) -> Any:
+        state = args[0]
+        fields = args[1] if len(args) > 1 else None
+        inputs = (state,) if fields is None else (state, fields)
+        field_context = state.field_context
+        if fields is not None:
+            from pops.time.field_context import require_field_read
+            field_context = require_field_read(fields, state, "local_transform")
+        return self._new(
+            "state", "local_transform", inputs, {"transform": operator_name}, name,
+            state.block, space=state.space, point=state.point,
+            field_context=field_context, state_ref=state.state_ref)
+
     def _lower_coupled_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
                             args: Any, name: Any) -> Any:
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.
@@ -304,6 +318,7 @@ _LOWER_CALL_HANDLERS = {
     "grid_operator": _ProgramCall._lower_rate,
     "local_rate": _ProgramCall._lower_rate,
     "local_linear_operator": _ProgramCall._lower_local_linear_operator,
+    "local_transform": _ProgramCall._lower_local_transform,
     "projection": _ProgramCall._lower_projection,
     "coupled_rate": _ProgramCall._lower_coupled_rate,
 }

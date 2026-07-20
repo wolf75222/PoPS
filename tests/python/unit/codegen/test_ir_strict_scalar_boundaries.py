@@ -4,9 +4,13 @@ from __future__ import annotations
 from decimal import Decimal
 from fractions import Fraction
 
+import numpy as np
 import pytest
 
-from pops._ir import Const, Divergence, EigWitness, RateExpr, RuntimeParamRef, ScalarLiteral, Var
+from pops._ir import (
+    Const, Divergence, EigWitness, Maximum, Minimum, RateExpr, RuntimeParamRef,
+    ScalarLiteral, Var,
+)
 from pops._ir.lowering import diff
 from pops._ir.values import set_runtime_param_indices
 from pops.model import Handle, OwnerPath
@@ -96,3 +100,14 @@ def test_rate_expr_requires_matching_handle_payload_and_finite_exact_sign():
 def test_exact_board_repr_never_formats_rationals_through_float():
     flux = Handle("F", kind="flux", owner=OwnerPath.model("transport"))
     assert "1/3" in repr(Divergence(flux, Fraction(1, 3)))
+
+
+def test_symbolic_minmax_oracle_matches_native_ieee_fmin_fmax_nan_semantics():
+    left = Var("left", "cons")
+    right = Var("right", "cons")
+    env = {"left": np.array([np.nan, 2.0]), "right": np.array([1.0, np.nan])}
+
+    np.testing.assert_array_equal(Minimum(left, right).eval(env), np.array([1.0, 2.0]))
+    np.testing.assert_array_equal(Maximum(left, right).eval(env), np.array([1.0, 2.0]))
+    assert Minimum(left, right).to_cpp() == "Kokkos::fmin(left, right)"
+    assert Maximum(left, right).to_cpp() == "Kokkos::fmax(left, right)"

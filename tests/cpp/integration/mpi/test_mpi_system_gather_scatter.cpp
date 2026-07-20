@@ -13,12 +13,11 @@
 //   (b) resultat INVARIANT au nombre de rangs (la box vit sur rang 0 quel que soit np) ;
 //   (c) step() / step_cfl() COLLECTIFS (tous les rangs participent aux all_reduce internes).
 //
-// RAISONNEMENT COLLECTIF MPI : rhs_into / advance / max_speed ne contiennent AUCUNE operation MPI
-// collective (contrairement au solve Poisson qui est collectif). La garde "if (U.local_size() == 0)
-// return;" est un no-op unilateral sur les rangs vides -> aucun risque d'interblocage. Le seul
-// collectif est l'all_reduce_max implicite dans step_cfl() (appele APRES les max_speed des blocs),
-// que TOUS les rangs atteignent (la garde early-return est AVANT ce collectif). De meme, mass()
-// est un all_reduce_sum appele collectivement en fin de test.
+// RAISONNEMENT COLLECTIF MPI : advance / max_speed gardent leur no-op local sur les rangs vides.
+// Le residual, lui, termine par un preflight natif collectif de finitude : eval_rhs() doit donc etre
+// appele par TOUS les rangs, comme step(), step_cfl() et mass(). Les rangs vides participent au
+// MPI_Allreduce puis renvoient naturellement un buffer local vide ; seul le proprietaire inspecte
+// les valeurs. Aucun communicateur factice ni branchement qui saute un collectif n'est permis.
 //
 // AVANT le fix : segfault / UB a np=2/4 sur les rangs sans box locale (rhs_into / advance /
 // max_speed dereferencaient fab(0) inexistant). APRES : np=1/2/4 verts, resultats identiques.
@@ -29,6 +28,7 @@
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity (scalaire 1 var)
 #include <pops/physics/bricks/source.hpp>                // NoSource
+#include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
@@ -36,6 +36,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -57,6 +58,15 @@ struct NoEll {
 };
 // Modele scalaire : transport E x B (vitesse nulle ici car phi=0) + source nulle + elliptic nul.
 using ScalarModel = CompositeModel<ExBVelocity, NoSource, NoEll>;
+
+struct DirectDtProbe {
+  using State = StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+  Real value;
+
+  POPS_HD Real stability_dt(const State&, const Aux&) const { return value; }
+};
 
 static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   comm_init(&argc, &argv);
@@ -113,11 +123,11 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   // les autres contribuent 0 a l'all_reduce, sans impact sur le max).
   chk(std::isfinite(dt_cfl), "dt_cfl_fini");
 
-  // (3) eval_rhs() exerce rhs_into (finding 8) : copie U -> applique le residu -> copie retour.
-  //     Avant le fix : crash sur les rangs vides. Apres : no-op sur les rangs vides ; le resultat
-  //     est lit uniquement par le rang proprietaire.
+  // (3) eval_rhs() exerce rhs_into (finding 8) : copie U -> applique le residu -> preflight
+  //     collectif de finitude -> copie retour. Tous les rangs doivent entrer dans ce contrat ; le
+  //     resultat n'est inspecte que par le rang proprietaire.
+  const std::vector<double> R = sys.eval_rhs("u");
   if (owns) {
-    const std::vector<double> R = sys.eval_rhs("u");
     bool rfin = (R.size() == nn);
     for (double r : R)
       rfin = rfin && std::isfinite(r);
@@ -151,6 +161,30 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   const double mtot = sys.mass("u");
   chk(std::isfinite(mtot), "masse_finie");
   chk(std::fabs(mtot - rho0 * static_cast<double>(nn)) < 1e-9, "masse_conservee");
+
+  // A direct model dt is also a native collective.  Only rank zero owns this one-box field; an
+  // invalid value observed there must make every empty peer reject at the same MPI_Allreduce, not
+  // return a different step or wait in a later collective.
+  const Box2D reduction_box = Box2D::from_extents(2, 2);
+  const BoxArray reduction_boxes(std::vector<Box2D>{reduction_box});
+  const DistributionMapping reduction_owners(1, np);
+  MultiFab reduction_state(reduction_boxes, reduction_owners, 1, 0);
+  MultiFab reduction_aux(reduction_boxes, reduction_owners, kAuxBaseComps, 0);
+  reduction_state.set_val(Real(1));
+  reduction_aux.set_val(Real(0));
+
+  bool rejected_invalid_dt = false;
+  try {
+    (void)min_stability_dt_mf(DirectDtProbe{me == 0 ? Real(0) : Real(1)}, reduction_state,
+                              reduction_aux);
+  } catch (const std::domain_error&) {
+    rejected_invalid_dt = true;
+  }
+  chk(rejected_invalid_dt, "stability_dt_invalide_rejetee_collectivement");
+
+  const Real direct_dt = min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state,
+                                              reduction_aux);
+  chk(direct_dt == Real(0.25), "stability_dt_valide_diffusee_aux_rangs_vides");
 
 #ifdef POPS_HAS_MPI
   if (np > 1) {

@@ -38,6 +38,28 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     genuinely multilevel run; a coarse-only / flat Program stays bit-identical."""
     if target != "amr_system":
         return ""
+    def walk(values: Any) -> Any:
+        for value in values:
+            yield value
+            for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                        "true_block", "false_block"):
+                nested = value.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    yield from walk(nested)
+
+    transform_guard = ""
+    transform_refresh_guard = ""
+    if any(value.op == "local_transform" for value in walk(program._values)):
+        transform_guard = (
+            '  auto _require_local_transform_level_contract = [ctx_owner]() {\n'
+            '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
+            '    if (ctx.nlev() > 1)\n'
+            '      throw std::runtime_error("local_transform on multi-level AMR requires a typed '
+            'post-synchronization Program phase; refusing pre-reflux execution");\n'
+            '  };\n'
+            '  _require_local_transform_level_contract();\n')
+        transform_refresh_guard = (
+            '    _require_local_transform_level_contract();\n')
     if hierarchy_bodies is None:
         phase_fields = '    std::function<void(double)> step;\n'
         phase_initializers = (
@@ -123,6 +145,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '    const std::uint64_t epoch = ctx.program_resource_topology_epoch();\n'
         '    const std::uint64_t generation = ctx.program_resource_topology_generation();\n'
         '    const int levels = ctx.nlev();\n'
+        + transform_refresh_guard +
         '    if (levels <= 0)\n'
         '      throw std::runtime_error("AMR Program resource refresh requires at least one level");\n'
         '    if (*_level_program_epoch == epoch &&\n'
@@ -158,7 +181,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         'extern "C" void pops_install_program_amr(void* sys) {\n'
         '  auto ctx_owner = std::make_shared<pops::runtime::program::AmrProgramContext>(sys);\n'
         '  pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-        + level_resources +
+        + transform_guard + level_resources +
         '\n  ctx.install([=](double dt) {\n'
         '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
         '    _refresh_level_programs();\n'

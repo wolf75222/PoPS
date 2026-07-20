@@ -791,6 +791,33 @@ class AmrProgramContext {
     return gc;
   }
 
+  /// Block/level-qualified active-cell mask for generated pointwise operators.  Current Cartesian AMR
+  /// levels return nullptr.  Geometry-aware AMR providers can populate GridContext::domain_mask and
+  /// automatically obtain the same protocol without changing generated Program code.
+  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const {
+    const GridContext context =
+        eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_);
+    if (context.domain_mask == nullptr)
+      return nullptr;
+    pops::detail::validate_relative_cell_measure(
+        field, RelativeCellMeasure{context.domain_mask, nullptr},
+        "AmrProgramContext pointwise active-cell mask");
+    return context.domain_mask;
+  }
+
+  /// AMR counterpart of ProgramContext::pointwise_status_max.  The exact mask view used by the
+  /// pointwise kernel is authenticated again before the collective reduction.
+  Real pointwise_status_max(int block, const MultiFab& status,
+                            const MultiFab* active_cells) const {
+    const MultiFab* expected = pointwise_active_mask(block, status);
+    if (expected != active_cells)
+      throw std::invalid_argument(
+          "AmrProgramContext pointwise status reduction received a different active-cell mask");
+    const Real reduced =
+        pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
+    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
+  }
+
   std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
       const MultiFab&, const ExecutionLane& lane) const {
     return std::make_shared<PreparedGridBoundarySession>(grid_context(), lane);

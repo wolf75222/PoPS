@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -487,6 +488,90 @@ struct PointQualifiedResidualClosures {
   PreparedAtPoint core_prepared;
   PreparedAtPoint flux_only_core_prepared;
 };
+
+/// Build the point/prepared/core host protocol around two already-compiled geometry kernels.
+///
+/// This function is non-template even though it stays inline to preserve block_builder's header-only
+/// consumer contract. Point qualification, ghost production and additive boundary composition are
+/// therefore compiled once per translation unit rather than once per Model/Limiter/Flux leaf. The
+/// two Core callbacks remain native compiled kernels; no interpreter or Python callback enters the
+/// execution path.
+inline PointQualifiedResidualClosures make_geometry_residual_closures(
+    GridContext context, std::function<void(MultiFab&, MultiFab&)> full_core,
+    std::function<void(MultiFab&, MultiFab&)> flux_only_core, std::string operation) {
+  struct Session {
+    using Core = std::function<void(MultiFab&, MultiFab&)>;
+    GridContext context;
+    Core full_core;
+    Core flux_only_core;
+    std::string operation;
+
+    void require_boundary_contract() const {
+      if (context.boundary_plan && context.boundary_plan->has_component_boundaries())
+        throw std::runtime_error(
+            operation +
+            ": embedded-boundary transport cannot execute a native boundary component because "
+            "that provider has no active-cell or cut-cell metric contract");
+    }
+    const Core& core(bool flux_only) const { return flux_only ? flux_only_core : full_core; }
+    void evaluate(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+                  MultiFab& residual, bool flux_only, bool add_boundary) const {
+      require_boundary_contract();
+      fill_grid_ghosts(state, context, point);
+      core(flux_only)(state, residual);
+      if (add_boundary)
+        add_grid_boundary_residual(state, residual, context, point);
+    }
+    void evaluate(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+                  MultiFab& residual, const PreparedGridBoundarySession& boundary, bool flux_only,
+                  bool add_boundary) const {
+      require_boundary_contract();
+      fill_grid_ghosts(state, boundary, point);
+      core(flux_only)(state, residual);
+      if (add_boundary)
+        add_grid_boundary_residual(state, residual, boundary, point);
+    }
+  };
+
+  auto session = std::make_shared<Session>(Session{std::move(context), std::move(full_core),
+                                                   std::move(flux_only_core), std::move(operation)});
+  PointQualifiedResidualClosures closures;
+  closures.full = [session](const auto& point, MultiFab& state, MultiFab& residual) {
+    session->evaluate(point, state, residual, false, true);
+  };
+  closures.flux_only = [session](const auto& point, MultiFab& state, MultiFab& residual) {
+    session->evaluate(point, state, residual, true, true);
+  };
+  closures.without_prepared_interfaces = closures.full;
+  closures.flux_only_without_prepared_interfaces = closures.flux_only;
+  closures.core = [session](const auto& point, MultiFab& state, MultiFab& residual) {
+    session->evaluate(point, state, residual, false, false);
+  };
+  closures.flux_only_core = [session](const auto& point, MultiFab& state, MultiFab& residual) {
+    session->evaluate(point, state, residual, true, false);
+  };
+  closures.full_prepared =
+      [session](const auto& point, MultiFab& state, MultiFab& residual,
+                const PreparedGridBoundarySession& boundary) {
+        session->evaluate(point, state, residual, boundary, false, true);
+      };
+  closures.flux_only_full_prepared =
+      [session](const auto& point, MultiFab& state, MultiFab& residual,
+                const PreparedGridBoundarySession& boundary) {
+        session->evaluate(point, state, residual, boundary, true, true);
+      };
+  closures.core_prepared =
+      [session](const auto& point, MultiFab& state, MultiFab& residual,
+                const PreparedGridBoundarySession& boundary) {
+        session->evaluate(point, state, residual, boundary, false, false);
+      };
+  closures.flux_only_core_prepared =
+      [session](const auto& point, MultiFab& state, MultiFab& residual,
+                const PreparedGridBoundarySession& boundary) {
+        session->evaluate(point, state, residual, boundary, true, false);
+      };
+  return closures;
+}
 
 /// Compiled block closures, frozen at add time.
 ///

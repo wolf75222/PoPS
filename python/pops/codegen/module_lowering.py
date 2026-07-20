@@ -21,7 +21,7 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from .lowering_coverage import (
@@ -199,7 +199,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             "provider:%s" % stable_key, "lowered",
             ("component_provider_pack:%s" % stable_key,)))
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
-                      "projection")
+                      "local_transform", "projection")
     # The native HyperbolicModel concept always needs one base flux, even when a typed Program reads
     # only a named grid operator.  For one exact StateSpace route, a sole named flux selected by its
     # local_rate is unambiguous: install it both as the concept's base flux and under its authored
@@ -301,14 +301,25 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     def _b_projection(op: Any) -> None:
         m.projection(_body_for_state(op.body))
 
+    def _b_local_transform(op: Any) -> None:
+        body = _body_for_state(op.body)
+        if not isinstance(body, Mapping) or set(body) != {"expressions", "valid_if"}:
+            raise TypeError(
+                "compile_problem: local_transform %r requires expressions and valid_if body"
+                % op.name)
+        m.local_transform(
+            op.name, body["expressions"], valid_if=body["valid_if"])
+
     builders = {"grid_operator": _b_grid_operator, "local_source": _b_local_source,
                 "local_linear_operator": _b_local_linear_operator,
                 "field_operator": _b_field_operator, "local_rate": _b_local_rate,
+                "local_transform": _b_local_transform,
                 "projection": _b_projection}
     builder_targets = {
         "grid_operator": "dsl:flux", "local_source": "dsl:source_term",
         "local_linear_operator": "dsl:linear_source",
         "field_operator": "dsl:elliptic_field", "local_rate": "dsl:rate_operator",
+        "local_transform": "dsl:local_transform",
         "projection": "dsl:projection",
     }
     assert set(_CODEGEN_KINDS) <= set(OPERATOR_KINDS) and set(builders) <= set(OPERATOR_KINDS)

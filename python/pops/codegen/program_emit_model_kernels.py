@@ -12,6 +12,7 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
+from pops.codegen.cpp_writer import _cse_emit
 
 from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
@@ -22,6 +23,85 @@ from pops.codegen.program_emit_kernels import (
     _kernel_open,
     _model_impl,
 )
+
+
+def _emit_local_transform_kernel(
+    model: Any, name: Any, state_var: Any, out_var: Any, status_var: Any,
+    active_mask_var: Any, block_idx: Any = 0,
+) -> list:
+    """Lower one named pointwise State -> State map into a fail-closed device kernel."""
+
+    impl = _model_impl(model)
+    transforms = getattr(impl, "_local_transforms", {}) or {}
+    if name not in transforms:
+        raise NotImplementedError(
+            "emit_cpp_program: local transform '%s' is not declared; declared: %s"
+            % (name, sorted(transforms)))
+    declaration = transforms[name]
+    exprs = list(declaration["expressions"])
+    valid_if = declaration["valid_if"]
+    if len(exprs) != len(impl.cons_names):
+        raise ValueError(
+            "local transform '%s' has %d outputs for %d conservative components"
+            % (name, len(exprs), len(impl.cons_names)))
+    roots = exprs + [valid_if]
+    impl.assign_runtime_indices()
+    params_block = block_idx if _has_runtime_param(roots) else None
+    body = _kernel_open(out_var, state_var, params_block)
+    lambda_index = next(
+        index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 statusA = %s.fab(li).array();" % status_var,
+        "  const bool transform_has_active_mask_ = %s != nullptr;" % active_mask_var,
+        "  const pops::ConstArray4 transform_activeA_ = "
+        "transform_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        % active_mask_var,
+    ]
+    body += [
+        "    if (transform_has_active_mask_ && "
+        "!(transform_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+    ]
+    for component in range(len(exprs)):
+        body.append(
+            "      outA(i, j, %d) = %sA(i, j, %d);"
+            % (component, state_var, component))
+    body += [
+        "      statusA(i, j, 0) = pops::Real(0);",
+        "      return;",
+        "    }",
+    ]
+    body += ["    " + line for line in _cell_locals(
+        impl, roots, state_var, with_cons=True, with_prim=True)]
+    temporaries, rendered, temporary_names = _cse_emit(
+        roots, "pops::Real", "    ", materialize_all=True, return_names=True)
+    body.append("    pops::Real transform_failed_ = pops::Real(0);")
+    for declaration_line, temporary_name in zip(
+        temporaries, temporary_names, strict=True,
+    ):
+        body.append(declaration_line)
+        body.append(
+            "    if (!Kokkos::isfinite(%s)) transform_failed_ = pops::Real(1);"
+            % temporary_name)
+    for component, expression in enumerate(rendered[:-1]):
+        body.append(
+            "    const pops::Real transformed_%d_ = %s;" % (component, expression))
+    body.append("    const pops::Real transform_valid_ = %s;" % rendered[-1])
+    for component in range(len(exprs)):
+        body.append(
+            "    if (!Kokkos::isfinite(%sA(i, j, %d))) transform_failed_ = pops::Real(1);"
+            % (state_var, component))
+    body.append(
+        "    if (!Kokkos::isfinite(transform_valid_) || "
+        "!(transform_valid_ != pops::Real(0))) transform_failed_ = pops::Real(1);")
+    for component in range(len(exprs)):
+        body.append(
+            "    if (!Kokkos::isfinite(transformed_%d_)) transform_failed_ = pops::Real(1);"
+            % component)
+        body.append(
+            "    outA(i, j, %d) = transformed_%d_;" % (component, component))
+    body.append("    statusA(i, j, 0) = transform_failed_;")
+    body += _kernel_close()
+    return body
 
 
 def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0) -> list:

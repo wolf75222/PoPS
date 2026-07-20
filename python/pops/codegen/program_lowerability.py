@@ -11,6 +11,7 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
         "rhs",
         "source",
         "apply",
+        "local_transform",
         "solve_local_linear",
         "solve_local_nonlinear",
         "coupled_rate",
@@ -100,7 +101,7 @@ def _check_amr_flux_weights(program: Any) -> None:
     powers: dict[int, object | frozenset[int]] = {}
     alias_first_input = frozenset({
         "synchronize", "solve_fields", "solve_fields_from_blocks", "store_history",
-        "fill_boundary", "project", "solve_outcome", "acceptance_guard",
+        "fill_boundary", "project", "local_transform", "solve_outcome", "acceptance_guard",
     })
 
     def shifted(source: object | frozenset[int], coefficient: Any) -> object | frozenset[int]:

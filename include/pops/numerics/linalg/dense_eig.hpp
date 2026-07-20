@@ -18,13 +18,13 @@
 ///               exceptional shifts after 10 and 20 iterations on a single block.
 ///
 /// ROBUSTNESS CONTRACT: if a block does not converge under the iteration cap, the result is the
-/// Gershgorin FALLBACK over the WHOLE matrix (converged = false): an EXTERNAL bound always valid
-/// for all real parts (sL <= all speeds <= sR, hence a stable HLL flux, just more diffusive). If
+/// Gershgorin diagnostic enclosure over the WHOLE matrix (converged = false): an EXTERNAL bound
+/// on all real parts. It is not a certified spectrum and the HLL/Roe providers reject it. If
 /// the fallback triggers, lmin/lmax are NOT the eigenvalues and max_im is 0 by CONVENTION (nothing
 /// was computed, this is NOT a real-spectrum signal): any bit-match against an eig reference is then
 /// void. converged (or the fallback output parameter) decides: never read lmin/lmax/max_im without
 /// consulting it. The default cap (100) is sized so that the usual near-degenerate companion blocks
-/// converge; the fallback remains the safety net for out-of-envelope cases.
+/// converge; the enclosure remains available for diagnostics of out-of-envelope cases.
 ///
 /// HYPERBOLICITY: max_im returns the largest |Im(lambda)| encountered. A hyperbolic system has a
 /// real spectrum (max_im ~ 0); a model that loses hyperbolicity does not silently receive a
@@ -55,6 +55,13 @@ namespace pops {
 /// later promote it to a DSL knob.
 inline constexpr Real kEigImagTol = Real(1e-5);
 
+/// Strict RELATIVE tolerance used by physical Roe providers.  It only absorbs the bounded
+/// round-off floor of the native QR implementation; it is deliberately distinct from the much
+/// looser diagnostic classifier default above.  Callers that require an exact-zero comparison can
+/// still pass im_tol = 0 explicitly.
+inline constexpr Real kEigStrictImagTol =
+    Real(64) * std::numeric_limits<Real>::epsilon();
+
 /// Result of real_eig_minmax: real-part extremes + diagnostic. The consumer (DSL codegen
 /// wave_speeds_from_jacobian, ADC-87) receives the WHOLE structure: converged and max_im are part
 /// of the safety contract, no overload silently drops them.
@@ -65,6 +72,26 @@ struct EigBounds {
                 ///< meaning ONLY if converged: under fallback it is 0 by CONVENTION (the spectrum
                 ///< is not computed), certainly not a hyperbolicity signal -- read converged first.
   bool converged;  ///< false -> Gershgorin fallback (valid external bound, NOT the spectrum)
+
+  /// True only when the eigensolve converged and every returned spectral diagnostic is finite.
+  /// This is the common gate for consumers that must not turn a diagnostic enclosure or NaN into
+  /// physics. max_im is a magnitude and therefore additionally required to be non-negative.
+  POPS_HD bool valid() const {
+    return converged && std::isfinite(static_cast<double>(lmin)) &&
+           std::isfinite(static_cast<double>(lmax)) &&
+           std::isfinite(static_cast<double>(max_im)) && max_im >= Real(0);
+  }
+
+  /// Tri-state scalar for branchless generated kernels: 1 = certified real at @p im_tol,
+  /// 0 = converged finite complex spectrum, NaN = invalid/non-converged solve. Unlike all_real(),
+  /// this preserves the distinction needed by a fail-closed physical transform.
+  POPS_HD Real real_status(Real im_tol = kEigImagTol) const {
+    if (!valid() || !std::isfinite(static_cast<double>(im_tol)) || im_tol < Real(0))
+      return std::numeric_limits<Real>::quiet_NaN();
+    const Real rho = std::fabs(lmin) > std::fabs(lmax) ? std::fabs(lmin) : std::fabs(lmax);
+    const Real scale = rho > Real(1) ? rho : Real(1);
+    return max_im <= im_tol * scale ? Real(1) : Real(0);
+  }
 
   /// REAL-SPECTRUM PREDICATE (ADC-276). True iff the block CONVERGED and the largest imaginary part is
   /// within a RELATIVE tolerance of zero: max_im <= im_tol * max(|lmin|, |lmax|, 1). The threshold is
@@ -78,19 +105,18 @@ struct EigBounds {
   /// im_tol * scale is reported real BY DESIGN (e.g. 1e8 +- i at the default, or any pair below im_tol
   /// when |Re| < 1 and the floor pins the threshold to im_tol). For an absolute test, read max_im.
   /// NON-CONVERGENCE => false: the Gershgorin fallback sets max_im = 0 by CONVENTION (nothing computed),
-  /// never read as a real spectrum; a non-finite (NaN) max_im likewise makes this false (so a NaN block
-  /// is reported has_complex_pair, NOT kUnknown). POPS_HD, no allocation (only std::fabs and comparisons,
-  /// like the rest of this header).
+  /// never read as a real spectrum. Any non-finite bound, non-finite tolerance, negative imaginary
+  /// magnitude, or negative tolerance also returns false. This matters for partitioned providers: a
+  /// NaN 1x1 block must invalidate the complete spectrum instead of disappearing in min/max comparisons.
+  /// POPS_HD, no allocation (only std::isfinite, std::fabs and comparisons, like the rest of this header).
   POPS_HD bool all_real(Real im_tol = kEigImagTol) const {
-    const Real rho = std::fabs(lmin) > std::fabs(lmax) ? std::fabs(lmin) : std::fabs(lmax);
-    const Real scale = rho > Real(1) ? rho : Real(1);
-    return converged && max_im <= im_tol * scale;
+    return real_status(im_tol) == Real(1);
   }
   /// Complement of all_real RESTRICTED to converged blocks: true iff the spectrum was computed AND
   /// carries a complex conjugate pair beyond @p im_tol. NON-CONVERGENCE => false (NOT a complex signal:
   /// nothing was computed -- tell it apart via converged, or via pops::real_spectrum's kUnknown).
   POPS_HD bool has_complex_pair(Real im_tol = kEigImagTol) const {
-    return converged && !all_real(im_tol);
+    return valid() && !all_real(im_tol);
   }
 };
 
@@ -360,15 +386,36 @@ POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per
   if constexpr (N == 1) {
     b.lmin = b.lmax = A[0][0];
   } else if constexpr (N == 2) {  // closed form: trace / determinant
-    const Real tr2 = Real(0.5) * (A[0][0] + A[1][1]);
-    const Real disc = Real(0.25) * (A[0][0] - A[1][1]) * (A[0][0] - A[1][1]) + A[0][1] * A[1][0];
-    if (disc >= Real(0)) {
-      const Real z = std::sqrt(disc);
-      b.lmin = tr2 - z;
-      b.lmax = tr2 + z;
+    // Scale before the discriminant: the eigenvalues of a representable matrix can be finite even
+    // when (a-d)^2 or b*c overflows (and conversely can remain representable in the subnormal range).
+    Real scale = std::fabs(A[0][0]);
+    const Real abs01 = std::fabs(A[0][1]);
+    const Real abs10 = std::fabs(A[1][0]);
+    const Real abs11 = std::fabs(A[1][1]);
+    if (abs01 > scale)
+      scale = abs01;
+    if (abs10 > scale)
+      scale = abs10;
+    if (abs11 > scale)
+      scale = abs11;
+    if (scale == Real(0)) {
+      b.lmin = b.lmax = Real(0);
+    } else if (!std::isfinite(static_cast<double>(scale))) {
+      b.lmin = b.lmax = b.max_im = std::numeric_limits<Real>::quiet_NaN();
     } else {
-      b.lmin = b.lmax = tr2;
-      b.max_im = std::sqrt(-disc);
+      const Real a = A[0][0] / scale;
+      const Real d = A[1][1] / scale;
+      const Real tr2 = Real(0.5) * a + Real(0.5) * d;
+      const Real half_diff = Real(0.5) * a - Real(0.5) * d;
+      const Real disc = half_diff * half_diff + (A[0][1] / scale) * (A[1][0] / scale);
+      if (disc >= Real(0)) {
+        const Real z = std::sqrt(disc);
+        b.lmin = (tr2 - z) * scale;
+        b.lmax = (tr2 + z) * scale;
+      } else {
+        b.lmin = b.lmax = tr2 * scale;
+        b.max_im = std::sqrt(-disc) * scale;
+      }
     }
   } else {
     Real H[N][N];  // working copy (A is not modified)
@@ -401,15 +448,15 @@ POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per
 /// relative-tolerance asymmetry). NON-CONVERGENCE under @p max_iter_per_eig returns kUnknown BEFORE any
 /// max_im read, so the Gershgorin fallback's max_im = 0 convention can never be mistaken for a real
 /// spectrum. Intended consumer: a native realizability / hyperbolicity check on small Jacobian or
-/// moment blocks (e.g. a 3x3 HyQMOM15 sub-block) with no NumPy and no host callback; the core stays
-/// free of any model specifics. Need the extremes too? Call real_eig_minmax and use the EigBounds
+/// small dense moment blocks with no NumPy and no host callback; the core stays free of any model
+/// specifics. Need the extremes too? Call real_eig_minmax and use the EigBounds
 /// predicates directly.
 template <int N>
 POPS_HD inline Spectrum real_spectrum(const Real (&A)[N][N], Real im_tol = kEigImagTol,
                                       int max_iter_per_eig = 100) {
   const EigBounds b = real_eig_minmax(A, max_iter_per_eig);
-  if (!b.converged)
-    return Spectrum::kUnknown;  // non-convergence is EXPLICIT, never kReal
+  if (!b.valid() || !std::isfinite(static_cast<double>(im_tol)) || im_tol < Real(0))
+    return Spectrum::kUnknown;  // invalid/non-converged is EXPLICIT, never real or complex
   return b.all_real(im_tol) ? Spectrum::kReal : Spectrum::kComplexPair;
 }
 
@@ -470,15 +517,222 @@ POPS_HD inline bool mat_inverse(const Real (&A)[N][N], Real (&inv)[N][N],
 /// Max absolute row sum (infinity norm) of a dense N x N matrix.
 template <int N>
 POPS_HD inline Real mat_norm_inf(const Real (&A)[N][N]) {
+  const Real real_max = std::numeric_limits<Real>::max();
   Real m = Real(0);
   for (int i = 0; i < N; ++i) {
     Real r = Real(0);
-    for (int j = 0; j < N; ++j)
-      r += std::fabs(A[i][j]);
+    for (int j = 0; j < N; ++j) {
+      const Real v = std::fabs(A[i][j]);
+      // Saturation keeps this scaling norm finite even when the mathematical row sum exceeds the
+      // largest Real.  The Newton balance only needs a positive magnitude estimate; overflowing
+      // to infinity would instead poison sqrt(norm(inv)) / sqrt(norm(S)).
+      r = v <= real_max - r ? r + v : real_max;
+    }
     if (r > m)
       m = r;
   }
   return m;
+}
+
+/// Scaled Newton matrix sign of A + shift I.  The shift is part of the spectral function, not a
+/// diagonal regularisation: callers use it to construct exact spectral projectors.  Returns false
+/// when the shifted matrix is singular or the bounded iteration does not converge.  S is only
+/// meaningful on success.
+template <int N>
+POPS_HD inline bool matrix_sign_shifted(const Real (&A)[N][N], Real shift, Real (&S)[N][N],
+                                        int max_iter, Real tol) {
+  const Real real_max = std::numeric_limits<Real>::max();
+  Real input_scale = std::fabs(shift);
+  if (!(input_scale <= real_max))
+    return false;
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j) {
+      const Real v = std::fabs(A[i][j]);
+      if (!(v <= real_max))
+        return false;
+      if (v > input_scale)
+        input_scale = v;
+    }
+  if (!(input_scale > Real(0)))
+    return false;
+
+  Real Sinv[N][N];
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j)
+      // sign(alpha B) == sign(B) for alpha > 0.  Forming the shifted matrix after this
+      // normalisation avoids overflow in A_ii + shift and makes tiny, otherwise subnormal,
+      // matrices visible to the fixed absolute pivot threshold in mat_inverse.
+      S[i][j] = A[i][j] / input_scale +
+                (i == j ? shift / input_scale : Real(0));
+  bool converged = false;
+  for (int it = 0; it < max_iter; ++it) {
+    if (!mat_inverse(S, Sinv))
+      return false;
+    const Real ns = mat_norm_inf(S), nsi = mat_norm_inf(Sinv);
+    Real mu = Real(1);
+    if (ns > Real(0) && nsi > Real(0)) {
+      // The ratio nsi/ns can overflow (or underflow) even when its square root is representable.
+      mu = std::sqrt(nsi) / std::sqrt(ns);
+      if (!(mu > Real(0)) || !(mu <= real_max))
+        return false;
+    }
+    const Real a = Real(0.5) * mu, b = Real(0.5) / mu;
+    Real diff = Real(0), nrm = Real(0);
+    for (int i = 0; i < N; ++i)
+      for (int j = 0; j < N; ++j) {
+        const Real snext = a * S[i][j] + b * Sinv[i][j];
+        const Real d = snext - S[i][j];
+        const Real abs_next = std::fabs(snext), abs_diff = std::fabs(d);
+        if (!(abs_next <= real_max) || !(abs_diff <= real_max))
+          return false;
+        if (abs_diff > diff)
+          diff = abs_diff;
+        if (abs_next > nrm)
+          nrm = abs_next;
+        S[i][j] = snext;
+      }
+    if (nrm > Real(0) && diff <= tol * nrm) {
+      converged = true;
+      break;
+    }
+  }
+  return converged;
+}
+
+template <int N>
+POPS_HD inline void matvec(const Real (&A)[N][N], const Real (&x)[N], Real (&out)[N]) {
+  for (int i = 0; i < N; ++i) {
+    Real value = Real(0);
+    for (int j = 0; j < N; ++j)
+      value += A[i][j] * x[j];
+    out[i] = value;
+  }
+}
+
+/// Arithmetic mean without first forming a+b (overflow) or a/2 and b/2 (underflow).  The
+/// same-sign branch interpolates from the smaller magnitude; opposite signs can be added safely.
+POPS_HD inline Real safe_average(Real a, Real b) {
+  if ((a > Real(0) && b > Real(0)) || (a < Real(0) && b < Real(0)))
+    return std::fabs(a) < std::fabs(b) ? a + Real(0.5) * (b - a)
+                                      : b + Real(0.5) * (a - b);
+  return Real(0.5) * (a + b);
+}
+
+/// Actions of sign(A + cutoff I) and sign(A - cutoff I) on x.  A representable outward (or, near
+/// max(Real), inward) retry handles the measure-zero case in which an eigenvalue lies exactly on a
+/// cutoff; both Roe spectral functions using this helper are continuous at that boundary.
+template <int N>
+POPS_HD inline bool shifted_sign_actions(const Real (&A)[N][N], const Real (&x)[N], Real cutoff,
+                                         Real (&plus_x)[N], Real (&minus_x)[N], int max_iter,
+                                         Real tol) {
+  Real S[N][N];
+  const Real boundary_step = std::sqrt(std::numeric_limits<Real>::epsilon());
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    Real selected = cutoff;
+    if (attempt != 0) {
+      const Real relative_step = Real(attempt) * boundary_step;
+      const Real relative_increment = cutoff * relative_step;
+      const Real increment = relative_increment > std::numeric_limits<Real>::denorm_min()
+                                 ? relative_increment
+                                 : std::numeric_limits<Real>::denorm_min();
+      // Outward is preferable, but cannot be represented above a cutoff near max(Real).  An
+      // inward retry is equally valid at the boundary because the Harten branches agree there.
+      selected = cutoff <= std::numeric_limits<Real>::max() - increment
+                     ? cutoff + increment
+                     : cutoff - increment;
+    }
+    if (!matrix_sign_shifted(A, selected, S, max_iter, tol))
+      continue;
+    matvec(S, x, plus_x);
+    if (!matrix_sign_shifted(A, -selected, S, max_iter, tol))
+      continue;
+    matvec(S, x, minus_x);
+    return true;
+  }
+  return false;
+}
+
+/// Apply the Roe matrix absolute value after an external provider has certified that A has a real
+/// spectrum.  This helper deliberately performs no eigensolve: a block-triangular provider may
+/// certify the full spectrum from smaller diagonal blocks, while the spectral function must still
+/// act on the complete matrix.  Failure of either bounded matrix-sign path remains explicit; no
+/// alternate Riemann solver or spectral enclosure is selected.
+template <int N>
+POPS_HD inline bool roe_abs_apply_certified_real(const Real (&A)[N][N], const Real (&dU)[N],
+                                                 Real (&out)[N], int max_iter = 80,
+                                                 Real tol = Real(1e-13)) {
+  static_assert(N >= 1 && N <= 16, "roe_abs_apply_certified_real: 1 <= N <= 16");
+  Real S[N][N];
+  Real SdU[N];
+  if (matrix_sign_shifted(A, Real(0), S, max_iter, tol)) {
+    matvec(S, dU, SdU);
+  } else {
+    // sign(0) is undefined, but A sign(A) is not: its zero-mode value is exactly zero.  Build the
+    // positive/negative resolved projector around a scale-relative numerical nullspace.
+    const Real scale = mat_norm_inf(A);
+    if (scale == Real(0)) {
+      for (int i = 0; i < N; ++i)
+        out[i] = Real(0);
+      return true;
+    }
+    const Real cutoff = Real(64) * std::numeric_limits<Real>::epsilon() * scale;
+    if (!(cutoff > Real(0)))
+      return false;
+    Real plus_du[N], minus_du[N];
+    if (!shifted_sign_actions(A, dU, cutoff, plus_du, minus_du, max_iter, tol))
+      return false;
+    for (int i = 0; i < N; ++i)
+      SdU[i] = Real(0.5) * (plus_du[i] + minus_du[i]);
+  }
+  // |A| dU = A sign(A) dU; the regularized zero projector above defines sign(0)=0.
+  for (int i = 0; i < N; ++i) {
+    Real value = Real(0);
+    for (int j = 0; j < N; ++j)
+      value += A[i][j] * SdU[j];
+    out[i] = value;
+  }
+  return true;
+}
+
+/// Apply the Harten entropy-fixed Roe spectral function after external real-spectrum
+/// certification.  As above, the complete matrix is retained and every numerical failure is
+/// returned to the caller; certification is never replaced by a fallback.
+template <int N>
+POPS_HD inline bool roe_entropy_fix_apply_certified_real(
+    const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N], Real delta,
+    int max_iter = 80, Real tol = Real(1e-13)) {
+  static_assert(N >= 1 && N <= 16,
+                "roe_entropy_fix_apply_certified_real: 1 <= N <= 16");
+  if (!(delta > Real(0)) || !(delta <= std::numeric_limits<Real>::max()))
+    return false;
+
+  Real plus_du[N], minus_du[N];
+  if (!shifted_sign_actions(A, dU, delta, plus_du, minus_du, max_iter, tol))
+    return false;
+
+  Real outside_sign_du[N], inside_du[N], A_inside_du[N], scaled_A_inside_du[N];
+  for (int i = 0; i < N; ++i) {
+    outside_sign_du[i] = Real(0.5) * (plus_du[i] + minus_du[i]);
+    inside_du[i] = Real(0.5) * (plus_du[i] - minus_du[i]);
+  }
+  matvec(A, inside_du, A_inside_du);
+  for (int i = 0; i < N; ++i)
+    scaled_A_inside_du[i] = A_inside_du[i] / delta;
+  for (int i = 0; i < N; ++i) {
+    Real outside = Real(0), scaled_inside_quadratic = Real(0);
+    for (int j = 0; j < N; ++j) {
+      outside += A[i][j] * outside_sign_du[j];
+      // Evaluate A^2/delta as A*(A/delta): neither delta^2 nor the intermediate A^2 needs to
+      // exist in Real when the final Harten value itself is finite.
+      scaled_inside_quadratic += A[i][j] * scaled_A_inside_du[j];
+    }
+    // Factor delta only after forming the dimensionless average.  This preserves both
+    // Phi_delta(delta)=delta at denorm_min and finite O(delta) values near max(Real).
+    const Real inside =
+        delta * safe_average(scaled_inside_quadratic / delta, inside_du[i]);
+    out[i] = outside + inside;
+  }
+  return true;
 }
 
 }  // namespace detail
@@ -487,70 +741,58 @@ POPS_HD inline Real mat_norm_inf(const Real (&A)[N][N]) {
 /// value A * sign(A). sign(A) is computed by the determinant-free, infinity-norm-SCALED Newton
 /// matrix-sign iteration S_{k+1} = 1/2 (mu S_k + 1/mu S_k^-1), mu = sqrt(||S^-1||/||S||), which
 /// converges quadratically for a real spectrum off the imaginary axis. For a real-diagonalizable A
-/// this is EXACTLY R |Lambda| R^-1 dU -- the Roe dissipation of the reference flux_ROE_local.m
-/// (whose Harten floor |lambda| < 1e-6 is inactive at O(1) wave speeds, so omitting it here is exact
-/// for the smooth eigenmode / diocotron states this targets).
+/// this is EXACTLY R |Lambda| R^-1 dU.  The configurable Harten function used by
+/// flux_ROE_local.m is implemented separately by roe_entropy_fix_apply below.
 ///
-/// Returns false (out untouched) and leaves the dissipation to the caller (e.g. a spectral-radius
-/// Rusanov bound from real_eig_minmax) when |A| is not a faithful real spectral function:
+/// Returns false (out untouched) when |A| is not a faithful real spectral function:
 ///   - the spectrum is not real (real_spectrum != kReal): A * sign(A) would keep the sign-of-real-part
 ///     of a complex eigenvalue, NOT its modulus, so it would diverge from the reference;
-///   - A is singular / near-singular (a zero eigenvalue is on the imaginary axis: sign undefined) or
-///     the iteration does not converge within @p max_iter.
+///   - the real spectral solve or the bounded matrix-sign iterations do not converge.
+/// A singular REAL A is handled without changing solver: after the exact sign iteration detects the
+/// zero mode, shifted projectors define sign(0)=0 at a relative numerical-rank threshold and return
+/// the same Roe matrix absolute value on every resolved nonzero mode.
 /// POPS_HD, no allocation, N <= 16 (the dense-eig stack-buffer limit).
 template <int N>
 POPS_HD inline bool roe_abs_apply(const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N],
                                   int max_iter = 80, Real tol = Real(1e-13),
-                                  Real im_tol = Real(1e-5), int max_iter_per_eig = 100) {
-  // ADC-645: im_tol / max_iter_per_eig forward to the real-spectrum gate (defaults = the
-  // real_spectrum defaults, so an unconfigured call is bit-identical).
+                                  Real im_tol = kEigStrictImagTol,
+                                  int max_iter_per_eig = 100) {
+  // The physical default accepts only the bounded QR round-off floor.  An explicit zero remains
+  // available to callers that want an exact-zero diagnostic rather than this physical default.
   static_assert(N >= 1 && N <= 16, "roe_abs_apply: 1 <= N <= 16");
   if (real_spectrum(A, im_tol, max_iter_per_eig) != Spectrum::kReal)
-    return false;  // complex/unknown -> caller falls back
-  Real S[N][N], Sinv[N][N];
-  for (int i = 0; i < N; ++i)
-    for (int j = 0; j < N; ++j)
-      S[i][j] = A[i][j];
-  bool converged = false;
-  for (int it = 0; it < max_iter; ++it) {
-    if (!detail::mat_inverse(S, Sinv))
-      return false;  // singular iterate (zero eigenvalue)
-    const Real ns = detail::mat_norm_inf(S), nsi = detail::mat_norm_inf(Sinv);
-    Real mu = Real(1);
-    if (ns > Real(0) && nsi > Real(0))
-      mu = std::sqrt(nsi / ns);
-    const Real a = Real(0.5) * mu, b = Real(0.5) / mu;
-    Real diff = Real(0), nrm = Real(0);
-    for (int i = 0; i < N; ++i)
-      for (int j = 0; j < N; ++j) {
-        const Real snext = a * S[i][j] + b * Sinv[i][j];
-        const Real d = snext - S[i][j];
-        diff += d * d;
-        nrm += snext * snext;
-        S[i][j] = snext;
-      }
-    if (nrm > Real(0) && diff <= tol * tol * nrm) {
-      converged = true;
-      break;
-    }
-  }
-  if (!converged)
     return false;
-  // |A| dU = (A sign(A)) dU = A (S dU)  (S = sign(A) commutes with A)
-  Real SdU[N];
-  for (int i = 0; i < N; ++i) {
-    Real s = Real(0);
-    for (int j = 0; j < N; ++j)
-      s += S[i][j] * dU[j];
-    SdU[i] = s;
-  }
-  for (int i = 0; i < N; ++i) {
-    Real s = Real(0);
-    for (int j = 0; j < N; ++j)
-      s += A[i][j] * SdU[j];
-    out[i] = s;
-  }
-  return true;
+  return detail::roe_abs_apply_certified_real(A, dU, out, max_iter, tol);
+}
+
+/// Harten entropy-fixed Roe spectral function applied to a state jump:
+///
+///   Phi_delta(lambda) = |lambda|                         for |lambda| >= delta
+///                     = (lambda^2 / delta + delta) / 2   for |lambda| < delta.
+///
+/// For a real-diagonalizable A, the two shifted matrix signs construct the three invariant
+/// spectral projectors without eigenvectors:
+///
+///   P_inside = (sign(A + delta I) - sign(A - delta I)) / 2,
+///   P_pos - P_neg = (sign(A + delta I) + sign(A - delta I)) / 2.
+///
+/// Consequently the returned vector is exactly Phi_delta(A) dU.  Unlike roe_abs_apply, a zero
+/// eigenvalue is regular: its dissipation is delta/2.  Complex and non-converged spectra return
+/// false before touching out.  If an eigenvalue lies exactly on +/-delta, the two formula branches
+/// agree to first order; a representable near-boundary retry avoids an undefined shifted sign while
+/// preserving the rounded spectral value.
+template <int N>
+POPS_HD inline bool roe_entropy_fix_apply(const Real (&A)[N][N], const Real (&dU)[N],
+                                          Real (&out)[N], Real delta, int max_iter = 80,
+                                          Real tol = Real(1e-13),
+                                          Real im_tol = kEigStrictImagTol,
+                                          int max_iter_per_eig = 100) {
+  static_assert(N >= 1 && N <= 16, "roe_entropy_fix_apply: 1 <= N <= 16");
+  if (!(delta > Real(0)) || !(delta <= std::numeric_limits<Real>::max()))
+    return false;
+  if (real_spectrum(A, im_tol, max_iter_per_eig) != Spectrum::kReal)
+    return false;
+  return detail::roe_entropy_fix_apply_certified_real(A, dU, out, delta, max_iter, tol);
 }
 
 }  // namespace pops

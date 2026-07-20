@@ -43,7 +43,7 @@ from pops.codegen.krylov_contract import validated_krylov_footprint
 # for. These mirror Program._SCRATCH_OPS; the bucketing is by the produced vtype, not the op name.
 _RHS_OPS = ("rhs", "source", "apply", "coupled_rate")
 _STATE_SCRATCH_OPS = (
-    "linear_combine", "solve_local_linear", "solve_local_nonlinear",
+    "local_transform", "linear_combine", "solve_local_linear", "solve_local_nonlinear",
     "solve_coupled_implicit", "where")
 _SCALAR_FIELD_OPS = ("solve_linear", "scalar_field", "cell_compare")
 # A linear_source is a pure operator DECLARATION node (vtype 'operator', no allocated buffer): it

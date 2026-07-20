@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 from pops._ir import _wrap, diff
 from pops._ir.ops import left, right
 
+from pops._dense_spectral import DENSE_SPECTRAL
+
 from ._scalars import exact_physics_scalar
 
 if TYPE_CHECKING:
@@ -56,6 +58,8 @@ class _FluxMixin(_HyperbolicModel):
                              "(letters/digits/_, no leading digit)" % name)
         if name in self._flux_terms:
             raise ValueError("flux_term('%s'): already declared" % name)
+        if name in self._local_transforms:
+            raise ValueError("flux_term('%s'): name collides with a local_transform" % name)
         self._flux_terms[name] = {"x": x, "y": y}
 
     def set_wave_speeds(self, x: Any, y: Any) -> None:
@@ -85,7 +89,7 @@ class _FluxMixin(_HyperbolicModel):
                                       im_tol: Any = None) -> None:
         """EXACT signed wave speeds: smin/smax = extremes of the flux jacobian's eigenvalues
         A = dF/dU, computed NUMERICALLY per cell (pops::real_eig_minmax, Francis QR
-        on a stack buffer, Gershgorin fallback on non-convergence = safe outer bound). Emits
+        on a bounded stack buffer). Emits
         ``wave_speeds(U, aux, dir, smin, smax)`` (core HLL gate) and, without set_eigenvalues,
         ``max_wave_speed`` = ``max(|smin|, |smax|)`` over the same blocks.
 
@@ -113,10 +117,18 @@ class _FluxMixin(_HyperbolicModel):
         zero). Indices may be omitted (rows/columns carrying no extreme eigenvalue,
         cf. the skipped block of the reference MATLAB).
 
-        Diagnostics: QR non-convergence silently falls back to the block's Gershgorin bound
-        (WIDER, never wrong -- HLL stays stable, only more diffusive); a loss
-        of hyperbolicity (complex eigenvalues) is not reported per cell -- verify it
-        offline (check_model, golden type eigenvalues15_2D)."""
+        The native bounded dense provider accepts at most 16 components per diagonal block. A
+        larger full block is rejected here during authoring; a larger state remains supported when
+        the caller supplies a certified block-triangular partition whose individual blocks fit.
+
+        Fail-closed runtime contract: QR non-convergence or a complex spectrum produces invalid
+        wave bounds, which the native finite-volume residual rejects collectively before publishing
+        an update. The HLL route never substitutes a Gershgorin/Rusanov bound or another solver.
+        ``im_tol=None`` uses the strict native roundoff floor (64 machine eps relative to the
+        spectral scale), preventing a real repeated root from being rejected solely by QR rounding.
+        ``im_tol=0`` requests an exact-zero imaginary-part predicate. A positive explicit value
+        relaxes that gate and is therefore an opt-in numerical classification tolerance.
+        ``check_model`` can still diagnose the same loss of hyperbolicity offline."""
         if self._wave_speeds is not None:
             raise ValueError("set_wave_speeds_from_jacobian : set_wave_speeds already declared -- one "
                              "single wave_speeds provider")
@@ -137,8 +149,9 @@ class _FluxMixin(_HyperbolicModel):
         # ADC-645: eig_max_iter caps the per-eigenvalue Francis-QR iterations of the emitted
         # pops::real_eig_minmax (None = the native default 100, emitted with NO 2nd argument --
         # byte-identical); im_tol is the imaginary-part tolerance of the Roe |A| real-spectrum gate
-        # (None = the native default 1e-5). Both are numerical-robustness knobs of the compiled
-        # kernels; the check_model numpy oracle uses exact np.linalg.eigvals, unaffected.
+        # (None = the native machine-roundoff floor; explicit zero = exact-zero predicate). A
+        # positive im_tol is an explicit relaxation for a caller that accepts the associated
+        # numerical classification uncertainty. The check_model numpy oracle uses np.linalg.eigvals.
         if eig_max_iter is not None:
             if isinstance(eig_max_iter, bool) or not isinstance(eig_max_iter, int) \
                     or eig_max_iter <= 0:
@@ -148,27 +161,16 @@ class _FluxMixin(_HyperbolicModel):
             im_tol = exact_physics_scalar(
                 im_tol,
                 where="set_wave_speeds_from_jacobian.im_tol",
-                positive=True,
             )
+            if im_tol < 0:
+                raise ValueError("set_wave_speeds_from_jacobian.im_tol must be non-negative "
+                                 "(got %r)" % (im_tol,))
         nv = self.n_vars
         if (x is None) != (y is None):
             raise ValueError("set_wave_speeds_from_jacobian : provide x AND y, or neither (autodiff)")
         if eig == "fd" and x is not None:
             raise ValueError("set_wave_speeds_from_jacobian : eig='fd' builds the jacobian from "
                              "finite differences of the compiled flux -- x/y make no sense here")
-        rows = {}
-        if eig == "numeric":
-            if x is None:
-                if not self._flux:
-                    raise ValueError("set_wave_speeds_from_jacobian : call set_flux(...) first "
-                                     "(jacobian autodiff)")
-                rows = {"x": self.flux_jacobian(0), "y": self.flux_jacobian(1)}
-            else:
-                for key, mat in (("x", x), ("y", y)):
-                    if len(mat) != nv or any(len(r) != nv for r in mat):
-                        raise ValueError("set_wave_speeds_from_jacobian : jacobian %s expected "
-                                         "%d x %d" % (key, nv, nv))
-                    rows[key] = [[_wrap(e) for e in r] for r in mat]
         def norm_blocks(blk: Any, label: str) -> list:
             blk = [list(int(i) for i in b) for b in blk]
             seen = set()
@@ -200,13 +202,44 @@ class _FluxMixin(_HyperbolicModel):
         else:
             shared = norm_blocks(blocks, "x and y")
             per_dir = {"x": shared, "y": [list(b) for b in shared]}
+        for key in ("x", "y"):
+            for block_index, block in enumerate(per_dir[key]):
+                DENSE_SPECTRAL.require(
+                    len(block),
+                    operation=(
+                        "set_wave_speeds_from_jacobian block %s[%d]" % (key, block_index)
+                    ),
+                    alternative=(
+                        "Provide blocks= with a certified block-triangular partition whose "
+                        "blocks each contain at most %d components, or use "
+                        "model.wave_speeds(...) with an explicit bound provider."
+                        % DENSE_SPECTRAL.max_components
+                    ),
+                )
+
+        # Build the symbolic Jacobian only after the selected native provider capacity is known to
+        # be valid.  A rejected large full block therefore fails during authoring rather than after
+        # constructing O(n_vars^2) expressions and eventually reaching a C++ static_assert.
+        rows = {}
+        if eig == "numeric":
+            if x is None:
+                if not self._flux:
+                    raise ValueError("set_wave_speeds_from_jacobian : call set_flux(...) first "
+                                     "(jacobian autodiff)")
+                rows = {"x": self.flux_jacobian(0), "y": self.flux_jacobian(1)}
+            else:
+                for key, mat in (("x", x), ("y", y)):
+                    if len(mat) != nv or any(len(r) != nv for r in mat):
+                        raise ValueError("set_wave_speeds_from_jacobian : jacobian %s expected "
+                                         "%d x %d" % (key, nv, nv))
+                    rows[key] = [[_wrap(e) for e in r] for r in mat]
         self._ws_jacobian = {"rows": rows or None, "eig": eig, "blocks": per_dir,
                              "explicit": x is not None,
                              # ADC-617: None -> the historical 1e-6 literal, emitted verbatim (byte-
                              # identical). Enters model_hash's ws_jac part so a change busts the cache.
                              "fd_eps": fd_eps,
-                             # ADC-645: eig knobs, None -> the native defaults emitted with NO extra
-                             # argument (byte-identical); enter model_hash ONLY when set (fd_eps rule).
+                             # None selects the native roundoff floor; every explicit non-negative
+                             # tolerance participates in identity because it changes classification.
                              "eig_max_iter": (None if eig_max_iter is None else int(eig_max_iter)),
                              "im_tol": im_tol}
 

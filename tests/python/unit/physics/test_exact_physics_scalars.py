@@ -46,6 +46,17 @@ def _fd_model(fd_eps, im_tol=None):
     return model
 
 
+def _entropy_fixed_roe_model(entropy_fix):
+    model = Model("exact_roe_entropy")
+    q1, q2 = model.conservative_vars("q1", "q2")
+    model.flux(x=[q1, q2], y=[q2, q1])
+    model.wave_speeds_from_jacobian()
+    model.roe_from_jacobian(entropy_fix=entropy_fix)
+    model.primitive_vars(q1, q2)
+    model.conservative_from([q1, q2])
+    return model
+
+
 def test_coupled_constants_retain_domain_and_json_shape():
     decimal = Decimal("0.333333333333333333333333333333333333333333333333")
     compiled = _constant_source(Fraction(1, 3), Fraction(1, 3), decimal).frequency(
@@ -136,6 +147,36 @@ def test_wave_speed_knobs_emit_and_hash_exact_literals():
     assert model_hash(model._m) != model_hash(decimal_domain._m)
 
 
+def test_roe_entropy_fix_emits_and_hashes_exact_positive_literal():
+    ratio = Fraction(1, 1_000_000)
+    model = _entropy_fixed_roe_model(ratio)
+    assert model._m._roe_jacobian["entropy_fix"] == ratio
+    source = model._m.emit_cpp_brick()
+    assert "roe_entropy_fix_apply" in source
+    assert "pops::Real(1) / pops::Real(1000000)" in source
+    assert "quiet_NaN" in source
+    assert "rho_ * dU" not in source
+
+    same = _entropy_fixed_roe_model(ratio)
+    other_value = _entropy_fixed_roe_model(Fraction(2, 1_000_000))
+    other_domain = _entropy_fixed_roe_model(Decimal("0.000001"))
+    assert model_hash(model._m) == model_hash(same._m)
+    assert model_hash(model._m) != model_hash(other_value._m)
+    assert model_hash(model._m) != model_hash(other_domain._m)
+
+    plain = _entropy_fixed_roe_model(None)
+    plain_source = plain._m.emit_cpp_brick()
+    assert "roe_abs_apply" in plain_source
+    assert "quiet_NaN" in plain_source
+    assert "rho_ * dU" not in plain_source
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf"), Decimal("1e-10000")])
+def test_roe_entropy_fix_rejects_invalid_or_native_underflowing_values(value):
+    with pytest.raises((TypeError, ValueError, OverflowError), match="entropy_fix"):
+        _entropy_fixed_roe_model(value)
+
+
 def test_gamma_and_native_lowering_helpers_preserve_exact_scalars():
     gamma = Decimal("1.4000000000000000000000000000000000001")
     model = Model("exact_gamma")
@@ -187,18 +228,29 @@ def test_units_targets_and_unsupported_algebraic_values_are_never_erased():
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf")])
-def test_positive_wave_speed_knobs_reject_bool_zero_negative_and_nonfinite(value):
+def test_positive_fd_step_rejects_bool_zero_negative_and_nonfinite(value):
     model = Model("invalid_wave_speed")
     q = model.conservative_vars("q")[0]
     model.flux(x=[q], y=[q])
     with pytest.raises((TypeError, ValueError), match="fd_eps"):
         model.wave_speeds_from_jacobian(eig="fd", fd_eps=value)
 
+
+@pytest.mark.parametrize("value", [True, -1, float("nan"), float("inf")])
+def test_spectral_tolerance_rejects_bool_negative_and_nonfinite(value):
     model2 = Model("invalid_im_tol")
     q2 = model2.conservative_vars("q")[0]
     model2.flux(x=[q2], y=[q2])
     with pytest.raises((TypeError, ValueError), match="im_tol"):
         model2.wave_speeds_from_jacobian(im_tol=value)
+
+
+def test_zero_spectral_tolerance_is_the_explicit_strict_gate():
+    model = Model("strict_im_tol")
+    q = model.conservative_vars("q")[0]
+    model.flux(x=[q], y=[q])
+    model.wave_speeds_from_jacobian(im_tol=0)
+    assert model._m._ws_jacobian["im_tol"] == 0
 
 
 def test_positive_wave_speed_knobs_reject_annotations_and_algebraic_values():

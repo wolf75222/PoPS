@@ -23,6 +23,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -38,6 +39,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace pops;
 
@@ -55,6 +57,14 @@ struct Advect {
   }
   POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+};
+
+// Device-side Roe providers cannot throw.  This model is the exact failure carrier emitted by a
+// dense-Jacobian Roe provider when its eigensolve reports a complex or unresolved spectrum.
+struct FailedRoeAdvect : Advect {
+  POPS_HD State roe_dissipation(const State&, const Aux&, const State&, const Aux&, int) const {
+    return State{std::numeric_limits<Real>::quiet_NaN()};
+  }
 };
 
 static_assert(PhysicalModel<Advect>, "Advect est un PhysicalModel");
@@ -210,4 +220,24 @@ TEST_F(DiscDomainMask, DiscMaskConservesActiveMassAndZeroesInactiveResidual) {
     EXPECT_TRUE(max_dev > 1e-3)
         << "le transport a effectivement avance l'etat (la conservation n'est pas triviale)";
   }
+}
+
+TEST_F(DiscDomainMask, NonFiniteRoeCannotReachMaskedStateOrAmrFaceLedger) {
+  MultiFab mask(ba, dm, 1, 1);
+  mask.set_val(Real(1));
+  fill_ghosts(U, geom.domain, bc);
+  FailedRoeAdvect failed_roe;
+  failed_roe.vx = 0.7;
+  failed_roe.vy = -0.4;
+
+  MultiFab residual(ba, dm, 1, 0);
+  EXPECT_THROW(
+      (assemble_rhs_masked<NoSlope, RoeFlux>(failed_roe, U, aux, mask, geom, residual)),
+      std::runtime_error);
+
+  MultiFab flux_x(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 1, 0);
+  MultiFab flux_y(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 1, 0);
+  compute_face_fluxes<NoSlope, RoeFlux>(failed_roe, U, aux, flux_x, flux_y, geom.dx(), geom.dy());
+  EXPECT_THROW(mf_eval_rhs(failed_roe, U, aux, flux_x, flux_y, geom.dx(), geom.dy(), residual),
+               std::runtime_error);
 }

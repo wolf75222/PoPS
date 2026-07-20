@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._modelpkg import model as _model
 from .aux import AUX_CANONICAL, roles_for
+from pops._ir.visitors import _dependencies
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -29,7 +30,7 @@ class _OperatorViewMixin(_HyperbolicModel):
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
         aux_set = self._aux_name_set()
-        read = sorted({d for e in exprs for d in (e.deps() & aux_set)})
+        read = sorted(_dependencies(exprs) & aux_set)
         return {"aux": read} if read else {}
 
     def state_space(self, name: str = "U") -> Any:
@@ -87,7 +88,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         aux_set = self._aux_name_set()
 
         def reads_fields(exprs: Any) -> bool:
-            return any(e.deps() & aux_set for e in exprs)
+            return bool(_dependencies(exprs) & aux_set)
 
         # Flux divergence (grid_operator: State -> Rate(State)).
         if self._flux:
@@ -146,6 +147,22 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "matrix_available": True, "supports_device": True},
                 requirements=self._aux_requirements(coeffs),
                 source=None))
+
+        # Explicit local State -> State transforms.  These are ordinary named operators, not
+        # projections: Program placement defines exactly when and how often they run.
+        for nm in sorted(self._local_transforms):
+            transform = self._local_transforms[nm]
+            exprs = list(transform["expressions"])
+            valid_if = transform["valid_if"]
+            rf = reads_fields(exprs + [valid_if])
+            reg.register(_model.Operator(
+                nm, "local_transform",
+                _model.Signature([state, fields] if rf else [state], state),
+                capabilities={"local": True, "supports_device": True,
+                              "fail_closed": True},
+                requirements=self._aux_requirements(exprs + [valid_if]),
+                source=None,
+                body={"expressions": tuple(exprs), "valid_if": valid_if}))
 
         # Field operators (field_operator: State -> FieldSpace).
         if self._elliptic is not None:

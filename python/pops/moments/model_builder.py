@@ -30,6 +30,29 @@ def moment_names(order: Any) -> list:
     return ["M%d%d" % pq for pq in moment_indices(order)]
 
 
+def moment_transport_blocks(order: Any) -> dict[str, list[list[int]]]:
+    """Directional Jacobian blocks of a total-order Cartesian moment hierarchy.
+
+    The canonical state ordering is ``q`` outer / ``p`` inner.  Transport in ``x`` advances
+    ``p`` and therefore forms one chain for each fixed ``q``; transport in ``y`` advances ``q``
+    and forms one chain for each fixed ``p``.  The returned component indices are suitable for
+    ``Model.wave_speeds_from_jacobian(blocks=...)`` when the selected closure preserves that
+    block-triangular structure.
+
+    This helper describes the hierarchy only.  It does not certify an arbitrary closure, so
+    callers must opt in when their closure is known to preserve these directional chains.
+    """
+    indices = moment_indices(order)
+
+    def group_by(component: int) -> list[list[int]]:
+        groups: dict[int, list[int]] = {}
+        for index, moment in enumerate(indices):
+            groups.setdefault(moment[component], []).append(index)
+        return list(groups.values())
+
+    return {"x": group_by(1), "y": group_by(0)}
+
+
 def _pow(e: Any, k: Any) -> Any:
     """e**k by repeated multiplication (k >= 0; e a DSL Expr or a number)."""
     if k == 0:
@@ -169,8 +192,9 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
        m.source; M = dict (p, q) -> conservative variable. See lorentz_sources.
     @p roe: True = also emit the generic Roe dissipation (m.roe_from_jacobian): the FULL flux
        Jacobian at the arithmetic-mean interface state is eigendecomposed (|A| via the matrix-sign
-       kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
-       for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
+       kernel pops::roe_abs_apply with a real-singular zero-mode projector), making riemann='roe'
+       available for the moment system (no fluid roles / pressure needed). Complex/non-converged
+       spectra are refused; no other Riemann solver is substituted. Additive to exact_speeds (which
        still provides max_wave_speed for the CFL dt). Emitted by the production backend.
     @p frame: a typed Cartesian frame exposing the ``x`` and ``y`` axes; ``None`` selects
        :class:`Cartesian2D`.
@@ -216,5 +240,5 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
 
 __all__ = [
     "MomentFluxExpressions", "build_moment_model", "moment_flux_expressions",
-    "moment_indices", "moment_names",
+    "moment_indices", "moment_names", "moment_transport_blocks",
 ]

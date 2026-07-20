@@ -9,11 +9,11 @@ et les donnees initiales dans l'ordre ou ils sont utilises.
 |---|---|
 | `01_openmp_diocotron_hll.py` | diocotron periodique avec Poisson FFT et source cyclotron |
 | `02_openmp_constant_hll.py` | etat Maxwellien constant |
-| `03_openmp_fluid_wave_hll.py` | onde fluide lineaire |
+| `03_openmp_fluid_wave_hll.py` | onde fluide lineaire avec flux HLL |
 | `04_openmp_electrostatic_wave_hll.py` | onde electrostatique avec Poisson FFT |
 | `05_openmp_magnetic_wave_hll.py` | onde magnetique avec Poisson FFT et source cyclotron |
-| `06_openmp_shock_tube_hll.py` | tube a choc 2D |
-| `07_openmp_crossing_jets_hll.py` | jets croises 2D |
+| `06_openmp_shock_tube_hll.py` | tube a choc 2D avec relaxation15 |
+| `07_openmp_crossing_jets_hll.py` | jets croises 2D avec relaxation15 |
 
 Le cas diocotron conserve le systeme physique, les parametres et les choix numeriques effectivement
 utilises par `main.m` :
@@ -116,6 +116,9 @@ vitesse et multipliee par $\rho$.
 PoPS execute le flux HLL, l'evaluation du Jacobien $15\times15$, les sources electrique et
 cyclotron, la FFT periodique, le programme Euler, la borne de pas et les mises a jour avec le
 backend C++ natif. Kokkos execute les kernels de cellules.
+
+Dans le tube a choc et les jets croises, `HyQMOM15Relaxation` declare la transformation symbolique.
+Le programme l'applique une fois apres Euler dans un kernel C++/Kokkos, avant le commit de l'etat.
 
 La neutralisation du second membre reste explicite pendant toute l'evolution. Le modele soustrait
 le `RuntimeParam("neutralizing_density")`, lie a la moyenne discrete de la densite initiale. Le flux

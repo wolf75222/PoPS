@@ -95,10 +95,24 @@ def test_hyqmom15_closure_descriptor_contract():
         moments.HyQMOM15Closure(variant="custom")
 
 
+def test_hyqmom15_relaxation_descriptor_contract():
+    transform = moments.HyQMOM15Relaxation()
+    assert isinstance(transform, (Descriptor, DescriptorProtocol))
+    assert transform.name == "HyQMOM15Relaxation"
+    assert transform.category == "moment_transform"
+    assert transform.options()["small"] == 1.0e-6
+    assert transform.capabilities().to_dict() == {
+        "execution": "native_pointwise",
+        "state": "hyqmom15",
+    }
+    assert transform.validate() is True
+
+
 def test_route_choosers_available_is_explainable():
     # Every moments descriptor answers available() with an Availability, never a bare bool.
     for descriptor in (moments.ExactSpeeds(), moments.RealizabilityProjection(),
-                       moments.MagneticMomentSource(), moments.HyQMOM15Closure()):
+                       moments.MagneticMomentSource(), moments.HyQMOM15Closure(),
+                       moments.HyQMOM15Relaxation()):
         status = descriptor.available()
         assert isinstance(status, Availability)
         assert not isinstance(status, bool)
@@ -126,6 +140,30 @@ def test_handles_are_not_descriptors():
 def test_moment_model_has_no_transport_noop_surface():
     specification = moments.CartesianVelocityMoments(order=2)
     assert not hasattr(specification, "add_transport")
+
+
+def test_moment_transport_blocks_follow_the_canonical_directional_chains():
+    indices = moments.moment_indices(4)
+    blocks = moments.moment_transport_blocks(4)
+
+    for direction, fixed_component in (("x", 1), ("y", 0)):
+        flattened = [index for block in blocks[direction] for index in block]
+        assert sorted(flattened) == list(range(len(indices)))
+        assert len(flattened) == len(set(flattened))
+        for block in blocks[direction]:
+            assert len({indices[index][fixed_component] for index in block}) == 1
+
+
+def test_gaussian_exact_speeds_use_the_generic_moment_partition():
+    from pops.lib.models.moments import Gaussian
+
+    model = Gaussian.transport(order=2, name="gaussian_partition_contract", roe=True)
+    provider = model._dsl._m._ws_jacobian
+    assert provider["blocks"] == moments.moment_transport_blocks(2)
+    assert provider["im_tol"] == 0
+    source = model._dsl._m.emit_cpp_brick()
+    assert "pops::detail::roe_abs_apply_certified_real" in source
+    assert "pops::real_spectrum(roe_block_" in source
 
 
 def test_hierarchy_snapshot_exposes_inspectable_descriptors():

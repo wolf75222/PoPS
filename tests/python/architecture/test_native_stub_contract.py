@@ -32,11 +32,13 @@ PUBLIC_CALLABLES = {
 }
 INTERNAL_BOOTSTRAP_TYPES = {"SystemConfig", "AmrSystemConfig", "ModelSpec", "System", "AmrSystem"}
 SYSTEM_CONFIG_FIELDS = {
-    "n": "int", "L": "float", "periodic": "bool", "geometry": "str", "nr": "int",
+    "n": "int", "L": "float", "xlo": "float", "ylo": "float",
+    "periodic": "bool", "geometry": "str", "nr": "int",
     "ntheta": "int", "r_min": "float", "r_max": "float", "theta_boxes": "int",
 }
 AMR_CONFIG_FIELDS = {
-    "n": "int", "L": "float", "regrid_every": "int", "level_count": "int",
+    "n": "int", "L": "float", "xlo": "float", "ylo": "float",
+    "regrid_every": "int", "level_count": "int",
     "regrid_grow": "int", "regrid_margin": "int", "explicit_bootstrap": "bool",
     "periodic": "bool", "distribute_coarse": "bool", "coarse_max_grid": "int",
     "cluster_min_efficiency": "float", "cluster_min_box_size": "int", "cluster_max_box_size": "int",

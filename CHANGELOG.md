@@ -16,6 +16,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Changed
+
+- Dense Jacobian spectral providers now fail closed and expose their real capacity at authoring:
+  `wave_speeds_from_jacobian()` and `roe_from_jacobian()` accept at most 16 components per native
+  dense matrix, with certified block-triangular partitions available only for the HLL wave-speed
+  route. Complex spectra and QR non-convergence reject the step instead of selecting a Gershgorin
+  bound or a Rusanov flux. The Roe DSL route is documented as an arithmetic-midpoint-Jacobian
+  Roe-type dissipation, without claiming the exact Roe secant identity for every nonlinear flux.
+- Generated dense spectral witnesses now distinguish a converged complex spectrum from an invalid
+  eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
+  real-spectrum witness propagates the same failure into native pointwise transforms before commit.
+
 ## [1.0.0] - 2026-07-16
 
 ### Added

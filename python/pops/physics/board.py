@@ -59,7 +59,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate",
-        "field_provider", "projection", "wave_speeds", "wave_speeds_from_jacobian",
+        "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
         "roe_from_jacobian",
     })
 
@@ -761,6 +761,54 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """Install one native pointwise state projection expression per component."""
         self._dsl.projection(expressions)
 
+    def local_transform(
+        self, name: Any, expressions: Any, *, on: Any = None, valid_if: Any = 1.0,
+    ) -> Any:
+        """Declare a named pointwise state transformation called explicitly by a Program.
+
+        ``on=`` is optional only while the model owns one unambiguous state.  Multi-state models
+        require the exact registry-issued :class:`StateHandle`; strings never select a block.
+        """
+        if on is None:
+            if len(self._states) != 1:
+                raise ValueError(
+                    "local_transform(%r) requires on=<StateHandle> when the model does not own "
+                    "exactly one state" % (name,))
+            on = next(iter(self._states.values()))
+        else:
+            on = self._require_state_handle(on, "local_transform")
+        if self._multi_module is not None:
+            return self._register_multispecies_local_transform(
+                name, on=on, expressions=expressions, valid_if=valid_if)
+        handle = self._dsl.local_transform(name, expressions, valid_if=valid_if)
+        self._invalidate_authoring_views()
+        if self._species:
+            # The first species deliberately keeps the compact single-state backend until a second
+            # block is declared.  Its derived backend signature is therefore ``U -> U`` today and
+            # the species-qualified StateSpace tomorrow.  Keep the immutable declaration identity
+            # promotion-safe and let the bound authoritative registry provide the exact signature
+            # at each call; manufacturing either transient signature here would make the same
+            # handle unusable on the other side of promotion.
+            from pops.model import OperatorHandle
+
+            return OperatorHandle(
+                handle.name,
+                kind=handle.kind,
+                owner=handle.owner_path,
+                registered_operator_name=handle.registered_operator_name,
+            )
+        return handle
+
+    def local_transform_value(
+        self, name: Any, state: Any, aux: Any = None,
+    ) -> Any:
+        """Apply one declared local transform once through the host oracle."""
+        if self._multi_module is not None:
+            raise ValueError(
+                "local_transform_value does not select a multi-state transform by name; "
+                "call the typed transform handle from a Program")
+        return self._dsl.local_transform_value(name, state, aux)
+
     def projection_value(self, state: Any, aux: Any = None) -> Any:
         """Evaluate the installed pointwise projection through its public host oracle."""
         return self._dsl.projection_value(state, aux)
@@ -841,9 +889,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         )
         self._invalidate_authoring_views()
 
-    def roe_from_jacobian(self) -> None:
-        """Install the generic matrix-sign Roe provider from the flux Jacobian."""
-        self._dsl.roe_from_jacobian()
+    def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
+        """Install the generic dense-Jacobian Roe provider, with an optional Harten fix."""
+        self._dsl.roe_from_jacobian(entropy_fix=entropy_fix)
+        self._invalidate_authoring_views()
 
     def source(self, name: Any, on: Any = None, value: Any = None, *, fields: Any = None) -> Any:
         """Declare a named local source term; returns a :class:`SourceHandle`."""

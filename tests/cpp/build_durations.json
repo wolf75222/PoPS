@@ -2,9 +2,14 @@
   "_meta": {
     "captured_utc": "2026-07-14",
     "default_parallel_share_seconds": 2.0,
+    "estimated_targets": [
+      "test_analytic_expression",
+      "test_analytic_level_set"
+    ],
+    "estimate_policy": "new unmeasured targets use the catalog median until the next cold-CI timing refresh",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 189,
+    "target_count": 191,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -44,6 +49,8 @@
   "test_amr_tensor_fac_provider": 2.0,
   "test_amr_transfer_properties": 300.68,
   "test_amr_weno5_native": 2.0,
+  "test_analytic_expression": 2.0,
+  "test_analytic_level_set": 2.0,
   "test_anisotropic_epsilon": 2.0,
   "test_ap_limit": 2.0,
   "test_assembler_driver": 2.0,

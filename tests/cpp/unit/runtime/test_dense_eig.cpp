@@ -14,6 +14,7 @@
 #include "test_harness.hpp"  // close_rel partage (comparaison relative+absolue, atol defaut 1e-12)
 
 #include <cmath>
+#include <limits>
 
 using pops::Real;
 using pops::EigBounds;
@@ -416,7 +417,7 @@ TEST(DenseEig, RealComplexSpectrumPredicate) {
     const EigBounds b = real_eig_minmax(A, /*max_iter_per_eig=*/0);
     EXPECT_TRUE(!b.converged &&
                 real_spectrum(A, /*im_tol=*/1e-7, /*max_iter_per_eig=*/0) == Spectrum::kUnknown &&
-                !b.all_real() && !b.has_complex_pair())
+                !b.all_real() && !b.has_complex_pair() && std::isnan(b.real_status()))
         << "non-convergence : kUnknown, all_real ET has_complex_pair faux (max_im=0 jamais lu "
            "reel)";
   }
@@ -435,6 +436,17 @@ TEST(DenseEig, RealComplexSpectrumPredicate) {
     const EigBounds b = real_eig_minmax(Z);
     EXPECT_TRUE(real_spectrum(Z) == Spectrum::kReal && b.all_real() && classify_action(Z) == 0)
         << "matrice nulle : kReal (max_im = 0, plancher gere l'echelle nulle)";
+  }
+  {
+    // Une partition HLL peut contenir un bloc 1x1. NaN/Inf ne sont jamais un spectre reel : sinon
+    // leurs comparaisons min/max seraient toutes fausses et un bloc voisin pourrait masquer l'erreur.
+    const Real nan_block[1][1] = {{std::numeric_limits<Real>::quiet_NaN()}};
+    const Real inf_block[1][1] = {{std::numeric_limits<Real>::infinity()}};
+    const EigBounds nan_bounds = real_eig_minmax(nan_block);
+    const EigBounds inf_bounds = real_eig_minmax(inf_block);
+    EXPECT_TRUE(!nan_bounds.all_real(Real(0)) && !inf_bounds.all_real(Real(0)) &&
+                std::isnan(nan_bounds.real_status(Real(0))) &&
+                std::isnan(inf_bounds.real_status(Real(0))));
   }
   {
     // (g) BOUTON de tolerance, valeurs EXACTES (chemin ferme N=2) : [[1,-1e-6],[1e-6,1]] a pour VP
@@ -514,16 +526,212 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
     EXPECT_TRUE(roe_abs_sym_err(lam5) < 1e-9) << "roe_abs spectre positif : |A| = A";
   }
   {
-    // Spectre COMPLEXE (rotation pure, VP +-i) : false (repli appelant), out intact.
-    const Real A[2][2] = {{Real(0), Real(-1)}, {Real(1), Real(0)}}, dU[2] = {Real(1), Real(0)};
+    // Spectre COMPLEXE meme tres proche de l'axe reel : le defaut Roe strict refuse, out intact.
+    const Real A[2][2] = {{Real(1), Real(-1e-6)}, {Real(1e-6), Real(1)}};
+    const Real dU[2] = {Real(1), Real(0)};
     Real out[2] = {Real(7), Real(7)};
     EXPECT_TRUE(!pops::roe_abs_apply(A, dU, out) && out[0] == Real(7) && out[1] == Real(7))
-        << "roe_abs spectre complexe -> false, out inchange (repli)";
+        << "roe_abs spectre complexe -> false, out inchange";
   }
   {
-    // A singuliere (VP nulle, sign indefini sur l'axe imaginaire) : false.
+    // A singuliere REELLE : le projecteur du noyau definit |0|=0 et conserve la branche Roe.
     const Real A[2][2] = {{Real(0), Real(0)}, {Real(0), Real(3)}}, dU[2] = {Real(1), Real(1)};
     Real out[2];
-    EXPECT_TRUE(!pops::roe_abs_apply(A, dU, out)) << "roe_abs A singuliere (VP nulle) -> false";
+    EXPECT_TRUE(pops::roe_abs_apply(A, dU, out) && close_rel(out[0], Real(0), 1e-12) &&
+                close_rel(out[1], Real(3), 1e-12))
+        << "roe_abs A singuliere reelle -> |A| dU, aucun repli de schema";
+  }
+  {
+    // Jacobienne x de la fermeture gaussienne 2D d'ordre 2 au Maxwellien centre. Son spectre
+    // {-sqrt(3), -1, 0, 0, 1, sqrt(3)} est reel avec un noyau double : le fournisseur Roe dense
+    // doit conserver les deux modes nuls sans confondre multiplicite reelle et paire complexe.
+    const Real A[6][6] = {{0, 1, 0, 0, 0, 0},
+                          {0, 0, 1, 0, 0, 0},
+                          {0, 3, 0, 0, 0, 0},
+                          {0, 0, 0, 0, 1, 0},
+                          {0, 0, 0, 1, 0, 0},
+                          {0, 1, 0, 0, 0, 0}};
+    const Real dU[6] = {1, 0, 1, 0, 0, 1};
+    Real out[6] = {};
+    ASSERT_TRUE(pops::roe_abs_apply(A, dU, out));
+    EXPECT_TRUE(close_rel(out[0], Real(1) / std::sqrt(Real(3)), 1e-11));
+    EXPECT_TRUE(close_rel(out[1], Real(0), 1e-11));
+    EXPECT_TRUE(close_rel(out[2], std::sqrt(Real(3)), 1e-11));
+    EXPECT_TRUE(close_rel(out[3], Real(0), 1e-11));
+    EXPECT_TRUE(close_rel(out[4], Real(0), 1e-11));
+    EXPECT_TRUE(close_rel(out[5], Real(1) / std::sqrt(Real(3)), 1e-11));
+  }
+  {
+    // Vrai Jacobien y d'une face gaussienne apres un pas. Son spectre est l'union des blocs
+    // triangulaires [0,3,5], [1,4], [2] et reste reel. Le QR du bloc plein porte toutefois un
+    // residu imaginaire ~7.6e-19 sur la valeur propre convective double : le test exact-zero doit
+    // pouvoir le montrer sans empecher un fournisseur qui a certifie les trois blocs d'appliquer
+    // la fonction spectrale au Jacobien COMPLET.
+    const Real A[6][6] = {
+        {0, 0, 0, 1, 0, 0},
+        {0, 0, 0, 0, 1, 0},
+        {Real(1.4152909052530569e-05), Real(-3.5510220040414111e-09),
+         Real(-1.4152367117191054e-05), Real(1.000038300781064),
+         Real(-0.00012545682198025873), 0},
+        {0, 0, 0, 0, 0, 1},
+        {Real(6.2728348106356945e-05), Real(0.99999899792384794), 0,
+         Real(-3.5510220040414111e-09), Real(-2.8304734234382107e-05),
+         Real(-6.2728410990129367e-05)},
+        {Real(4.2457058811993561e-05), 0, 0, Real(2.9999969937715441), 0,
+         Real(-4.2457101351573168e-05)}};
+    const Real dU[6] = {Real(0.0013283911625738831), Real(-2.5848588284373079e-05),
+                        Real(0.0013441770644624373), Real(1.7405713276659193e-06), 0,
+                        Real(0.0013245323044106527)};
+
+    const pops::EigBounds full = pops::real_eig_minmax(A);
+    ASSERT_TRUE(full.valid());
+    EXPECT_GT(full.max_im, Real(0));
+    EXPECT_NEAR(full.max_im, Real(7.6193875783721477e-19), Real(1e-18));
+    EXPECT_FALSE(full.all_real(Real(0)));
+    EXPECT_TRUE(full.all_real(pops::kEigStrictImagTol));
+
+    Real exact_zero_out[6] = {7, 7, 7, 7, 7, 7};
+    EXPECT_FALSE(pops::roe_abs_apply(
+        A, dU, exact_zero_out, 80, Real(1e-13), Real(0)));
+    for (const Real value : exact_zero_out)
+      EXPECT_EQ(value, Real(7));
+
+    constexpr int block0_indices[3] = {0, 3, 5};
+    constexpr int block1_indices[2] = {1, 4};
+    Real block0[3][3], block1[2][2];
+    for (int row = 0; row < 3; ++row)
+      for (int col = 0; col < 3; ++col)
+        block0[row][col] = A[block0_indices[row]][block0_indices[col]];
+    for (int row = 0; row < 2; ++row)
+      for (int col = 0; col < 2; ++col)
+        block1[row][col] = A[block1_indices[row]][block1_indices[col]];
+    const Real block2[1][1] = {{A[2][2]}};
+    EXPECT_TRUE(pops::real_eig_minmax(block0).all_real(Real(0)));
+    EXPECT_TRUE(pops::real_eig_minmax(block1).all_real(Real(0)));
+    EXPECT_TRUE(pops::real_eig_minmax(block2).all_real(Real(0)));
+
+    Real certified_out[6] = {};
+    ASSERT_TRUE(pops::detail::roe_abs_apply_certified_real(A, dU, certified_out));
+    for (const Real value : certified_out)
+      EXPECT_TRUE(std::isfinite(value));
+
+    Real default_out[6] = {};
+    ASSERT_TRUE(pops::roe_abs_apply(A, dU, default_out));
+    for (int component = 0; component < 6; ++component)
+      EXPECT_EQ(default_out[component], certified_out[component]);
+  }
+}
+
+// Fonction spectrale de Harten du Roe dense : meme formule que flux_ROE_local.m, mais appliquee
+// sans vecteurs propres via les projecteurs de matrix-sign decales.
+TEST(DenseEig, RoeEntropyFixApplyMatchesHartenFunction) {
+  const Real delta = Real(1e-3);
+  {
+    // Les cinq branches : negative/positive exterieures, deux interieures et VP exactement nulle.
+    const Real A[5][5] = {{-Real(2) * delta, 0, 0, 0, 0},
+                          {0, -Real(0.5) * delta, 0, 0, 0},
+                          {0, 0, 0, 0, 0},
+                          {0, 0, 0, Real(0.5) * delta, 0},
+                          {0, 0, 0, 0, Real(2) * delta}};
+    const Real dU[5] = {Real(1), Real(2), Real(3), Real(4), Real(5)};
+    Real out[5] = {};
+    ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, delta));
+    const Real phi_half = Real(0.5) * (Real(0.25) * delta + delta);
+    EXPECT_TRUE(close_rel(out[0], Real(2) * delta * dU[0], 1e-12));
+    EXPECT_TRUE(close_rel(out[1], phi_half * dU[1], 1e-12));
+    EXPECT_TRUE(close_rel(out[2], Real(0.5) * delta * dU[2], 1e-12));
+    EXPECT_TRUE(close_rel(out[3], phi_half * dU[3], 1e-12));
+    EXPECT_TRUE(close_rel(out[4], Real(2) * delta * dU[4], 1e-12));
+  }
+  {
+    // Similarite non orthogonale : A triangulaire, VP {0, 2 delta}. Le terme hors-diagonale de
+    // Phi(A) vaut 3 delta / 4 par la difference divisee de Phi entre ces deux VP.
+    const Real A[2][2] = {{Real(0), delta}, {Real(0), Real(2) * delta}};
+    const Real dU[2] = {Real(1), Real(1)};
+    Real out[2] = {};
+    ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, delta));
+    EXPECT_TRUE(close_rel(out[0], Real(1.25) * delta, 1e-12));
+    EXPECT_TRUE(close_rel(out[1], Real(2) * delta, 1e-12));
+  }
+  {
+    // A la frontiere |lambda| == delta les branches MATLAB coincident. Le retry decale doit
+    // produire delta, pas refuser la matrice decalee singuliere.
+    const Real A[2][2] = {{-delta, 0}, {0, delta}};
+    const Real dU[2] = {Real(2), Real(3)};
+    Real out[2] = {};
+    ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, delta));
+    EXPECT_TRUE(close_rel(out[0], delta * dU[0], 1e-12));
+    EXPECT_TRUE(close_rel(out[1], delta * dU[1], 1e-12));
+  }
+  {
+    // delta^2 deborde ici, alors que Phi_delta(0.9 delta) reste representable. La matrice
+    // A + delta I deborderait elle aussi si elle etait formee avant la normalisation.
+    const Real large_delta = Real(1e308);
+    const Real A[1][1] = {{Real(0.9) * large_delta}};
+    const Real dU[1] = {Real(1)};
+    Real out[1] = {};
+    ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, large_delta));
+    EXPECT_TRUE(std::isfinite(out[0]));
+    EXPECT_NEAR(out[0] / large_delta, Real(0.905), Real(2e-12));
+  }
+  {
+    // Le retry de la valeur propre exactement sur le cutoff reste representable aux deux bornes
+    // de Real. En particulier, delta/2 + delta/2 ne doit pas disparaitre par sous-debordement.
+    const Real cutoffs[2] = {std::numeric_limits<Real>::denorm_min(),
+                             std::numeric_limits<Real>::max()};
+    for (const Real cutoff : cutoffs) {
+      const Real A[1][1] = {{cutoff}};
+      const Real dU[1] = {Real(1)};
+      Real out[1] = {};
+      ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, cutoff)) << "cutoff=" << cutoff;
+      EXPECT_EQ(out[0], cutoff);
+    }
+  }
+  {
+    // Meme fonction spectrale sur des echelles reciproques : le calcul ne doit ni former
+    // delta^2, ni evaluer sqrt(norm(inv) / norm(S)) avant la racine.
+    const Real scales[2] = {Real(1e200), Real(1e-200)};
+    for (const Real scale : scales) {
+      const Real A[3][3] = {{-Real(0.5) * scale, 0, 0},
+                            {0, 0, 0},
+                            {0, 0, Real(2) * scale}};
+      const Real dU[3] = {Real(2), Real(3), Real(5)};
+      Real out[3] = {};
+      ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, scale)) << "scale=" << scale;
+      EXPECT_NEAR(out[0] / scale, Real(1.25), Real(2e-11));
+      EXPECT_NEAR(out[1] / scale, Real(1.5), Real(2e-11));
+      EXPECT_NEAR(out[2] / scale, Real(10), Real(2e-11));
+    }
+  }
+  {
+    // Similarite non orthogonale a tres grande/petite echelle. Toutes les valeurs propres sont
+    // hors de la fenetre entropique : Phi_delta(A) = |A|, independamment de l'echelle physique.
+    const Real scales[2] = {Real(1e250), Real(1e-250)};
+    for (const Real scale : scales) {
+      const Real A[2][2] = {{scale, scale}, {0, -Real(2) * scale}};
+      const Real dU[2] = {Real(1), Real(1)};
+      Real out[2] = {};
+      ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, Real(0.1) * scale))
+          << "scale=" << scale;
+      EXPECT_NEAR(out[0] / scale, Real(2) / Real(3), Real(2e-11));
+      EXPECT_NEAR(out[1] / scale, Real(2), Real(2e-11));
+    }
+  }
+  {
+    // Spectre complexe et non-convergence restent des refus explicites, sans toucher la sortie.
+    const Real complex_A[2][2] = {{Real(1), Real(-1e-6)}, {Real(1e-6), Real(1)}};
+    const Real dU2[2] = {Real(1), Real(0)};
+    Real out2[2] = {Real(7), Real(9)};
+    EXPECT_TRUE(!pops::roe_entropy_fix_apply(complex_A, dU2, out2, delta));
+    EXPECT_TRUE(out2[0] == Real(7) && out2[1] == Real(9));
+
+    const Real roots[3] = {Real(-1), Real(0), Real(2)};
+    Real unresolved_A[3][3];
+    companion(roots, unresolved_A);
+    const Real dU3[3] = {Real(1), Real(1), Real(1)};
+    Real out3[3] = {Real(4), Real(5), Real(6)};
+    EXPECT_TRUE(!pops::roe_entropy_fix_apply(
+        unresolved_A, dU3, out3, delta, 80, Real(1e-13), Real(1e-5), 0));
+    EXPECT_TRUE(out3[0] == Real(4) && out3[1] == Real(5) && out3[2] == Real(6));
   }
 }

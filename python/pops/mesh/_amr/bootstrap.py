@@ -2,9 +2,8 @@
 # ruff: noqa: F405
 from __future__ import annotations
 
-from typing import Any
-
-from pops.initial import InitialConditionPlan
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from .._layout_plan_contracts import LayoutPlan
 from .hierarchy import LevelTransition
@@ -16,6 +15,45 @@ from .transfer import (
 )
 from ._bootstrap_contracts import *  # noqa: F403
 from ._bootstrap_contracts import _action
+
+
+class _InitialConditionPlanContract(Protocol):
+    """Minimal detached initialization authority consumed by AMR bootstrap."""
+
+    layout_plan_id: str
+    bindings: tuple[Any, ...]
+
+    def canonical_identity(self) -> dict[str, Any]: ...
+
+
+def _initial_condition_plan(value: Any) -> _InitialConditionPlanContract:
+    """Authenticate initialization data without importing its authoring implementation."""
+
+    layout_plan_id = getattr(value, "layout_plan_id", None)
+    bindings = getattr(value, "bindings", None)
+    canonical_identity = getattr(value, "canonical_identity", None)
+    if not isinstance(layout_plan_id, str) or not layout_plan_id \
+            or not isinstance(bindings, tuple) or not bindings \
+            or not callable(canonical_identity):
+        raise TypeError(
+            "resolve_bootstrap initial_conditions requires an immutable initial-condition "
+            "plan exposing layout_plan_id, tuple bindings, and canonical_identity()"
+        )
+    if any(not callable(getattr(binding, "to_data", None)) for binding in bindings):
+        raise TypeError(
+            "resolve_bootstrap initial-condition bindings must expose canonical to_data()"
+        )
+    binding_data = [binding.to_data() for binding in bindings]
+    identity = canonical_identity()
+    if not isinstance(identity, Mapping) \
+            or set(identity) != {"schema_version", "layout_plan_id", "bindings"} \
+            or identity.get("schema_version") != 1 \
+            or identity.get("layout_plan_id") != layout_plan_id \
+            or identity.get("bindings") != binding_data:
+        raise ValueError(
+            "AMR bootstrap initial-condition plan has an unauthenticated canonical identity"
+        )
+    return value
 
 
 def _physical_initial_subjects(transfers: ResolvedAMRTransfer) -> tuple[Any, ...]:
@@ -45,7 +83,7 @@ def resolve_bootstrap(
     layout_plan: LayoutPlan,
     hierarchy: ResolvedHierarchy,
     transfers: ResolvedAMRTransfer,
-    initial_conditions: InitialConditionPlan,
+    initial_conditions: _InitialConditionPlanContract,
     tagging: ResolvedTaggingGraph,
     selections: Any,
     ordering: BootstrapOrdering,
@@ -58,8 +96,7 @@ def resolve_bootstrap(
         raise TypeError("resolve_bootstrap hierarchy must be ResolvedHierarchy")
     if type(transfers) is not ResolvedAMRTransfer:
         raise TypeError("resolve_bootstrap transfers must be AMRTransfer")
-    if type(initial_conditions) is not InitialConditionPlan:
-        raise TypeError("resolve_bootstrap initial_conditions must be InitialConditionPlan")
+    initial_conditions = _initial_condition_plan(initial_conditions)
     if type(tagging) is not ResolvedTaggingGraph:
         raise TypeError("resolve_bootstrap tagging must be ResolvedTaggingGraph")
     if type(ordering) is not BootstrapOrdering:

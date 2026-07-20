@@ -21,7 +21,7 @@ Internal operator nodes and helpers (board + DSL)
   grad, dx, dy, div, laplacian, ddt, rate, unknown, integral,
   sqrt (flux-DSL canonical), board_sqrt (board delegate to pops.dsl.sqrt),
   abs_, sign,
-  eig_max_im, eig_lmin, eig_lmax, eig_all_real,
+  eig_max_im, eig_lmin, eig_lmax, eig_all_real, eig_real_status,
   left, right
 
 Pure-symbolic helpers
@@ -32,7 +32,7 @@ Pure-symbolic helpers
 # -- node classes ---------------------------------------------------------
 from .expr import (
     Expr, _wrap,
-    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Compare,
+    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Minimum, Maximum, Compare,
     BooleanAnd, BooleanOr, BooleanNot, Neg, Sqrt, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
@@ -54,8 +54,8 @@ from .values import (
 # -- free-function ops ----------------------------------------------------
 from .ops import (
     # flux-DSL
-    sqrt, abs_, sign,
-    eig_max_im, eig_lmin, eig_lmax, eig_all_real,
+    sqrt, abs_, sign, minimum, maximum,
+    eig_max_im, eig_lmin, eig_lmax, eig_all_real, eig_real_status,
     left, right,
     # board
     grad, norm, dx, dy, laplacian, div, ddt, rate, unknown, integral,
@@ -63,7 +63,9 @@ from .ops import (
 )
 
 # -- pure-symbolic helpers ------------------------------------------------
-from .visitors import _children, _expr_uses_cons_or_prim, _key
+from .visitors import (
+    _children, _dag_key_data, _dag_key_ids, _dependencies, _expr_uses_cons_or_prim, _key,
+)
 from .lowering import (
     _is_const, _s_add, _s_neg, _s_sub, _s_mul, _s_div, _s_pow,
     diff,
@@ -71,7 +73,7 @@ from .lowering import (
 
 __all__ = [
     # node classes
-    "Expr", "Const", "Var", "ValueExpr", "parameter_value", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
+    "Expr", "Const", "Var", "ValueExpr", "parameter_value", "Add", "Sub", "Mul", "Div", "Pow", "Minimum", "Maximum", "Compare",
     "BooleanAnd", "BooleanOr", "BooleanNot",
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
@@ -82,8 +84,8 @@ __all__ = [
     # values
     "EigWitness", "StateRef", "RuntimeParamRef",
     # ops
-    "sqrt", "abs_", "sign",
-    "eig_max_im", "eig_lmin", "eig_lmax", "eig_all_real",
+    "sqrt", "abs_", "sign", "minimum", "maximum",
+    "eig_max_im", "eig_lmin", "eig_lmax", "eig_all_real", "eig_real_status",
     "left", "right",
     "grad", "norm", "dx", "dy", "laplacian", "div", "ddt", "rate", "unknown", "integral",
     "board_sqrt",

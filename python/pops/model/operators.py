@@ -1,6 +1,6 @@
 """Operator-valued types and the named, typed :class:`Operator` (Spec 2).
 
-Defines the ten :data:`OPERATOR_KINDS`, the operator-valued types
+Defines the public :data:`OPERATOR_KINDS`, the operator-valued types
 ``LocalLinearOperator`` / ``MatrixFreeOperator`` (a ``Space -> Space`` map usable
 by a local-linear or Krylov solve), and the named :class:`Operator` that pairs a
 kind with a :class:`pops.model.signatures.Signature`. Carries no numerics; the body
@@ -25,6 +25,7 @@ OPERATOR_KINDS = (
     "local_linear_operator",
     "field_operator",
     "grid_operator",
+    "local_transform",
     "projection",
     "diagnostic",
     "matrix_free_operator",
@@ -46,6 +47,7 @@ OPERATOR_FAMILIES = {
     "field_operator": "field_solve",
     "local_linear_operator": "local_linear_map",
     "matrix_free_operator": "matrix_free_map",
+    "local_transform": "transform",
     "projection": "projection",
     "diagnostic": "diagnostic",
     "local_nonlinear_residual": "residual",
@@ -266,6 +268,17 @@ def _projection_signature(signature: Signature) -> None:
              "projection output must equal its StateSpace input")
 
 
+def _local_transform_signature(signature: Signature) -> None:
+    inputs = signature.inputs
+    _require(
+        len(inputs) in (1, 2) and isinstance(inputs[0], StateSpace)
+        and (len(inputs) == 1 or isinstance(inputs[1], FieldSpace)),
+        "expected (StateSpace[, FieldSpace]) -> the same StateSpace",
+    )
+    _require(signature.output == inputs[0],
+             "local transform output must equal its StateSpace input")
+
+
 def _coupled_rate_signature(signature: Signature) -> None:
     from .bundles import RateBundle
 
@@ -315,6 +328,8 @@ OPERATOR_SIGNATURE_CONTRACTS = MappingProxyType({
         "(State, ...) -> Fields", _field_signature),
     "local_linear_operator": SignatureContract(
         "(Fields?) -> LocalLinearOperator(State, State)", _local_linear_signature),
+    "local_transform": SignatureContract(
+        "(State[, Fields]) -> State", _local_transform_signature),
     "projection": SignatureContract(
         "(State,) -> State", _projection_signature),
     "coupled_rate": SignatureContract(

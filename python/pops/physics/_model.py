@@ -45,7 +45,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         "set_primitive_state", "set_conservative_from", "set_flux", "set_eigenvalues",
         "flux_term", "set_wave_speeds", "set_wave_speeds_from_jacobian", "set_gamma",
         "set_source", "set_elliptic_rhs", "elliptic_field", "source_term", "linear_source",
-        "rate_operator", "stability_speed", "stability_dt", "source_frequency", "projection",
+        "rate_operator", "stability_speed", "stability_dt", "source_frequency", "local_transform",
+        "projection",
         "source_jacobian", "enable_hllc", "set_riemann_hooks", "enable_roe",
         "roe_dissipation", "roe_from_jacobian", "operator_alias",
     })
@@ -132,6 +133,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
                                   # keys enter _model_hash ONLY when non-empty (cache key preserved).
         self._linear_sources = {}  # NAMED local linear operators (linear_source): name -> [[Expr]]
                                    # (n_cons x n_cons), coefficients linear in U (no cons/prim dependency).
+        self._local_transforms = {}  # NAMED pointwise State -> State maps, called explicitly by Program.
         self._elliptic = None   # Expr (contribution to the elliptic right-hand side) or None
         self._elliptic_fields = {}  # NAMED elliptic fields: name -> {rhs, operator, aux,
                                     # gradient_sign}. The unnamed default
@@ -151,8 +153,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
                                    # None leaves the role-derived default. Folded into _model_hash.
         self._roe = False        # True: emit the ROE capability (roe_dissipation from the roles)
         self._roe_rows = None    # {"x": [Expr], "y": [Expr]}: roe_dissipation PROVIDED (outside roles)
-        self._roe_jacobian = None  # {"x"/"y": [[Expr]]}: roe_dissipation from the FLUX JACOBIAN
-                                   # (roe_from_jacobian, generic moment Roe via pops::roe_abs_apply)
+        self._roe_jacobian = None  # {"x"/"y": [[Expr]], "entropy_fix": exact scalar | None}:
+                                   # generic dense-Jacobian Roe provider.
         self.prim_state = []    # ordered names of the primitive state (Prim layout); for the codegen
         self.cons_from = None   # list of Expr: conservative in terms of the primitives (to_conservative)
         self.cons_roles = None  # explicit override of the conservative roles (otherwise canonical mapping)
