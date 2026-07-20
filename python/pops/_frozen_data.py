@@ -28,7 +28,7 @@ def thaw_data(value: Any) -> Any:
     """Return plain mutable containers for one frozen semantic payload."""
     if isinstance(value, Mapping):
         return {key: thaw_data(item) for key, item in value.items()}
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [thaw_data(item) for item in value]
     return value
 

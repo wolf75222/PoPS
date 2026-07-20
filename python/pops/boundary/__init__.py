@@ -9,8 +9,11 @@ from .transport import (
     BoundaryStencilRequirement,
     TransportBoundarySet,
 )
+from .embedded import EmbeddedBoundaryFlux, ZeroFlux
 
 __all__ = [
     "BoundaryStencilRequirement",
+    "EmbeddedBoundaryFlux",
     "TransportBoundarySet",
+    "ZeroFlux",
 ]

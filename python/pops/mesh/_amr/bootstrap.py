@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.initial import InitialConditionPlan
+
 from .._layout_plan_contracts import LayoutPlan
 from .hierarchy import LevelTransition
 from .hierarchy_resolution import ResolvedHierarchy
@@ -11,10 +13,31 @@ from .tagging_resolution import ResolvedTaggingGraph
 from .transfer import (
     ResolvedAMRTransfer, CACHE, CELL_SPACE, DERIVED_FIELD,
     NativeAMRMaterializationKind, PHYSICAL, PROLONGATION, RESTRICTION,
-    TEMPORAL_INTERPOLATION,
 )
 from ._bootstrap_contracts import *  # noqa: F403
-from ._bootstrap_contracts import _action, _handle
+from ._bootstrap_contracts import _action
+
+
+def _physical_initial_subjects(transfers: ResolvedAMRTransfer) -> tuple[Any, ...]:
+    """Return the unique physical subjects authenticated by an AMR transfer plan."""
+    if type(transfers) is not ResolvedAMRTransfer:
+        raise TypeError("physical initial subjects require an exact ResolvedAMRTransfer")
+    subjects = {}
+    for entry in transfers.entries:
+        for requirement in entry.requirements:
+            subject = requirement.subject
+            if requirement.materialization != PHYSICAL \
+                    or subject.kind not in {"state", "particle"}:
+                continue
+            previous = subjects.get(subject.qualified_id)
+            if previous is not None \
+                    and previous.canonical_identity() != subject.canonical_identity():
+                raise ValueError(
+                    "AMR transfer requirements contain conflicting physical subject identities")
+            subjects[subject.qualified_id] = subject
+    if not subjects:
+        raise ValueError("AMR bootstrap requires physical transfer subjects")
+    return tuple(subjects[key] for key in sorted(subjects))
 
 
 def resolve_bootstrap(
@@ -44,8 +67,6 @@ def resolve_bootstrap(
     if transfers.layout_plan_id != layout_plan.qualified_id or \
             initial_conditions.layout_plan_id != layout_plan.qualified_id:
         raise ValueError("bootstrap authorities belong to different LayoutPlan identities")
-    if initial_conditions.transfer_identity != transfers.identity:
-        raise ValueError("initial-condition manifest belongs to a different AMRTransfer")
     if transfers.nesting_requirement != hierarchy.plan.nesting.transfer:
         raise ValueError(
             "ResolvedHierarchy transfer nesting must be derived from the AMRTransfer registry"
@@ -54,7 +75,24 @@ def resolve_bootstrap(
     if any(type(row) is not BootstrapSelection for row in selection_rows):
         raise TypeError("resolve_bootstrap selections must contain BootstrapSelection values")
     selection_map = {row.subject.qualified_id: row for row in selection_rows}
-    initial_ids = {row.subject.qualified_id for row in initial_conditions.bindings}
+    initial_subjects = {
+        row.subject.qualified_id: row.subject for row in initial_conditions.bindings
+    }
+    physical_subjects = {
+        row.qualified_id: row for row in _physical_initial_subjects(transfers)
+    }
+    initial_ids = set(initial_subjects)
+    if initial_ids != set(physical_subjects):
+        missing = sorted(set(physical_subjects) - initial_ids)
+        extra = sorted(initial_ids - set(physical_subjects))
+        raise ValueError(
+            "initial-condition subjects must exactly cover physical AMR transfer subjects; "
+            "missing=%s extra=%s" % (missing, extra)
+        )
+    for subject_id, subject in initial_subjects.items():
+        if subject.canonical_identity() != physical_subjects[subject_id].canonical_identity():
+            raise ValueError(
+                "initial-condition subject identity disagrees with the AMR transfer authority")
     if len(selection_map) != len(selection_rows):
         raise ValueError("duplicate bootstrap selection")
     if set(selection_map) != initial_ids:
@@ -289,8 +327,5 @@ def resolve_bootstrap(
 
 __all__ = [
     "AnalyticReprojection", "BootstrapAction", "BootstrapOrdering", "BootstrapPlan",
-    "BootstrapSelection", "InitialConditionBinding", "InitialConditionPlan",
-    "ConstraintProvider",
-    "InitialConditionPlanBuilder", "InitialConditionSource", "ProlongFromParent",
-    "resolve_bootstrap",
+    "BootstrapSelection", "ConstraintProvider", "ProlongFromParent", "resolve_bootstrap",
 ]

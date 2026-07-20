@@ -68,6 +68,26 @@ struct CutFraction {
   Real kappa;     ///< volume fraction of the cell (share in the active domain), in (0, 1]
 };
 
+/// Computes cut geometry from five already sampled cell-centred level-set values. This is the
+/// canonical arithmetic used both by callable level sets and by runtime-prepared static EB metrics;
+/// pre-sampling therefore removes expression evaluation from time stepping without changing a bit
+/// of the cut-distance or volume-fraction scheme.
+POPS_HD inline CutFraction cut_fraction_from_samples(
+    Real lc, Real lxm, Real lxp, Real lym, Real lyp, Real dx, Real dy,
+    Real theta_min = kEbCutFractionFloor) {
+  const Real axm = cut_distance(lc, lxm, dx, theta_min);
+  const Real axp = cut_distance(lc, lxp, dx, theta_min);
+  const Real aym = cut_distance(lc, lym, dy, theta_min);
+  const Real ayp = cut_distance(lc, lyp, dy, theta_min);
+  const Real alpha_xm = axm / dx;
+  const Real alpha_xp = axp / dx;
+  const Real alpha_ym = aym / dy;
+  const Real alpha_yp = ayp / dy;
+  const Real kappa =
+      Real(0.5) * (alpha_xm + alpha_xp) * Real(0.5) * (alpha_ym + alpha_yp);
+  return CutFraction{axm, axp, aym, ayp, alpha_xm, alpha_xp, alpha_ym, alpha_yp, kappa};
+}
+
 /// Computes the cut geometry of an ACTIVE cell (center (xc, yc) with ls < 0) from a
 /// level-set @p ls evaluated at the center and at the 4 cardinal neighbors at distance @p dx / @p dy.
 ///
@@ -83,18 +103,8 @@ template <class LevelSet>
 POPS_HD inline CutFraction cut_fraction(const LevelSet& ls, Real xc, Real yc, Real dx, Real dy,
                                         Real theta_min = kEbCutFractionFloor) {
   const Real lc = ls(xc, yc);
-  const Real axm = cut_distance(lc, ls(xc - dx, yc), dx, theta_min);
-  const Real axp = cut_distance(lc, ls(xc + dx, yc), dx, theta_min);
-  const Real aym = cut_distance(lc, ls(xc, yc - dy), dy, theta_min);
-  const Real ayp = cut_distance(lc, ls(xc, yc + dy), dy, theta_min);
-  const Real alpha_xm = axm / dx;
-  const Real alpha_xp = axp / dx;
-  const Real alpha_ym = aym / dy;
-  const Real alpha_yp = ayp / dy;
-  // Volume fraction: average of the half-faces per axis (mean extent of the cell along each
-  // direction, normalized), product of the two axes. Far from the boundary -> 1; cut cell -> < 1.
-  const Real kappa = Real(0.5) * (alpha_xm + alpha_xp) * Real(0.5) * (alpha_ym + alpha_yp);
-  return CutFraction{axm, axp, aym, ayp, alpha_xm, alpha_xp, alpha_ym, alpha_yp, kappa};
+  return cut_fraction_from_samples(lc, ls(xc - dx, yc), ls(xc + dx, yc), ls(xc, yc - dy),
+                                   ls(xc, yc + dy), dx, dy, theta_min);
 }
 
 /// Shortley-Weller weights (5-point cut-cell stencil) from the 4 cut distances. Returns

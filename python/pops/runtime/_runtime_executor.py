@@ -47,6 +47,37 @@ def _native_runtime_facts() -> dict[str, Any]:
     return runtime_environment_report()
 
 
+def _uniform_initial_sources(plan: Any) -> dict[str, dict[str, Any]]:
+    initial_plan = plan.initial_condition_plan
+    if initial_plan is None:
+        return {}
+    by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
+    result: dict[str, dict[str, Any]] = {}
+    for binding in initial_plan.bindings:
+        subject = binding.subject
+        if subject.kind != "state" or subject.block_ref is None:
+            raise NotImplementedError(
+                "uniform native initials currently accept block-qualified state Handles only")
+        block = subject.block_ref.local_id
+        if block in result:
+            raise ValueError("uniform native initials contain multiple states for block %r" % block)
+        declaration = getattr(subject, "declaration_ref", None)
+        space = getattr(declaration, "space", None)
+        route = binding.source.options.to_data()
+        value = by_id.get(subject.qualified_id)
+        if route.get("native_route") == "bound_level_zero" and value is None:
+            raise ValueError("uniform BindArray initial source has no authenticated value")
+        if route.get("native_route") != "bound_level_zero" and value is not None:
+            raise ValueError("uniform analytic initial source cannot be overridden at bind")
+        result[block] = {
+            "source": route,
+            "value": value,
+            "space": getattr(space, "layout", None),
+            "centering": getattr(space, "centering", None),
+        }
+    return result
+
+
 def _require_supported_execution_context(plan: Any) -> None:
     """Refuse every resource the native engines cannot consume before constructing one."""
     from pops._platform_contracts import ExecutionContext
@@ -119,7 +150,10 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             return install_multi_layout_uniform(plan, runtime_plan)
 
         _require_native_geometry(plan)
-        from pops.runtime._runtime_mesh_lowering import system_config_from_layout
+        from pops.runtime._runtime_mesh_lowering import (
+            install_uniform_embedded_boundary,
+            system_config_from_layout,
+        )
         from pops.runtime._system import System
 
         config = system_config_from_layout(plan.layout)
@@ -129,6 +163,8 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             config.periodic = False
         engine = System(config)
         cast(Any, engine)._execution_context = plan.execution_context
+        normalized_layout, = plan.artifact.layout_plan.layouts
+        install_uniform_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)
@@ -142,6 +178,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             aux=plan.aux,
             field_plans=artifact.plan.field_plans,
             install_plan=plan,
+            initial_sources=_uniform_initial_sources(plan),
         )
         return engine
 

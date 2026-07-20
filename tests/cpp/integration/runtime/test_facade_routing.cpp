@@ -34,6 +34,13 @@ using namespace pops;
 
 namespace {
 
+#if defined(POPS_HAS_KOKKOS)
+Kokkos::ScopeGuard& kokkos_scope() {
+  static Kokkos::ScopeGuard guard;
+  return guard;
+}
+#endif
+
 // Densite initiale : anneau lisse (recouvre le disque interieur), perturbe en azimut pour casser la
 // symetrie -> grad phi non trivial -> vitesse ExB non nulle. n*n row-major (j lent, i rapide).
 std::vector<double> ring_density(int n, double L) {
@@ -52,6 +59,30 @@ std::vector<double> ring_density(int n, double L) {
   return rho;
 }
 
+std::vector<double> periodic_seam_density(int n) {
+  std::vector<double> rho(static_cast<std::size_t>(n) * n);
+  const double two_pi = 2.0 * std::acos(-1.0);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const double x = (i + 0.5) / n;
+      const double y = (j + 0.5) / n;
+      rho[static_cast<std::size_t>(j) * n + i] =
+          1.0 + 0.15 * std::cos(two_pi * x) * std::sin(two_pi * y);
+    }
+  return rho;
+}
+
+ModelSpec periodic_exb_model() {
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "background";
+  spec.B0 = 1.0;
+  spec.alpha = 1.0;
+  spec.n0 = 1.0;
+  return spec;
+}
+
 // Construit un System scalaire ExB diocotron pret a stepper. Le disque/mode est pose par l'appelant.
 void build_exb(System& s, double R_wall) {
   ModelSpec spec;
@@ -60,9 +91,11 @@ void build_exb(System& s, double R_wall) {
   spec.elliptic = "charge";
   spec.q = 1.0;
   spec.B0 = 1.0;
-  // minmod + rusanov + SSPRK2 explicite : meme schema spatial dans tous les modes (seul le residu de
-  // transport est aiguille par le mode -- c'est ce qu'on veut isoler).
-  s.add_block("n", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+  // First-order reconstruction is the native embedded-boundary provider supported by this facade.
+  // Higher-order stencils require geometry-aware neighbor reconstruction and are rejected rather
+  // than reading inactive cells. The same provider is used in every mode so this test isolates only
+  // residual routing.
+  s.add_block("n", spec, "none", "rusanov", "conservative", "explicit", 1, true);
   // Poisson sur la densite de charge, mur conducteur circulaire concentrique (comme le diocotron) :
   // donne un phi non trivial -> vitesse ExB. Le mur elliptique et le disque de transport partagent le
   // meme centre (L/2, L/2) et la meme convention de level set.
@@ -88,7 +121,7 @@ bool all_finite(const std::vector<double>& a) {
 
 TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplittings) {
 #if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
+  (void)kokkos_scope();
 #endif
   const int n = 48;
   const double L = 1.0;
@@ -227,4 +260,88 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
                                        "alpha=1 partout) : max|diff| = "
                                     << d_enclosing << " (attendu 0)";
   }
+}
+
+TEST(FacadeRouting, GenericAnalyticLevelSetMatchesDiscSugarAfterBlockConstruction) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  const int n = 24;
+  const double L = 1.0;
+  const double cx = 0.5;
+  const double cy = 0.5;
+  const double radius = 0.31;
+  const double wall_radius = 0.45;
+  const std::vector<double> rho0 = ring_density(n, L);
+
+  // Both transport closures are deliberately built before their geometry is installed. The stable
+  // native program owner must therefore make authoring order irrelevant.
+  System disc(SystemConfig{n, L, false});
+  build_exb(disc, wall_radius);
+  disc.set_density("n", rho0);
+  disc.set_disc_domain(cx, cy, radius, "cutcell");
+
+  System analytic(SystemConfig{n, L, false});
+  build_exb(analytic, wall_radius);
+  analytic.set_density("n", rho0);
+  analytic.set_analytic_level_set(
+      {"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
+      {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}, "cutcell");
+
+  EXPECT_EQ(disc.disc_mask(), analytic.disc_mask());
+  disc.step(2e-4);
+  analytic.step(2e-4);
+  EXPECT_EQ(disc.get_state("n"), analytic.get_state("n"));
+}
+
+TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  System system(SystemConfig{20, 1.0, false});
+  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0},
+                                "staircase", 0.2, 1e-5, 0.1);
+  const std::vector<double> original = system.disc_mask();
+
+  // (x - x) / 0 is structurally valid but non-finite at every sampled cell. Rejection must happen
+  // before publishing either the new program, the new mask, the thresholds, or the routing mode.
+  const std::vector<std::string> invalid_ops{"x", "x", "sub", "constant", "div"};
+  const std::vector<double> invalid_literals{0.0, 0.0, 0.0, 0.0, 0.0};
+  EXPECT_THROW(system.set_analytic_level_set(invalid_ops, invalid_literals, "cutcell", 0.3,
+                                             2e-5, 0.2),
+               std::domain_error);
+  EXPECT_EQ(original, system.disc_mask());
+}
+
+TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  const int n = 24;
+  const std::vector<double> rho0 = periodic_seam_density(n);
+
+  // The valid-cell expression x - 1/4 describes the same non-circular half-plane in both systems.
+  // The reference spells out the low-side periodic extension only to make this regression observable:
+  // a correct topology fill replaces that extension with the opposite valid cells and both prepared
+  // metric fields become bit-identical. Direct evaluation at the fictitious x<0 ghost does not.
+  System topology(SystemConfig{n, 1.0, true});
+  topology.add_block("n", periodic_exb_model(), "none");
+  topology.set_density("n", rho0);
+  topology.set_analytic_level_set({"x", "constant", "sub"},
+                                  {0.0, 0.25, 0.0}, "cutcell");
+
+  System explicit_wrap(SystemConfig{n, 1.0, true});
+  explicit_wrap.add_block("n", periodic_exb_model(), "none");
+  explicit_wrap.set_density("n", rho0);
+  explicit_wrap.set_analytic_level_set(
+      {"x", "constant", "lt", "x", "constant", "add", "constant", "sub",
+       "x", "constant", "sub", "where"},
+      {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0},
+      "cutcell");
+
+  ASSERT_EQ(topology.disc_mask(), explicit_wrap.disc_mask());
+  topology.step(2e-4);
+  explicit_wrap.step(2e-4);
+  EXPECT_EQ(topology.get_state("n"), explicit_wrap.get_state("n"));
+  EXPECT_GT(max_abs_diff(topology.get_state("n"), rho0), 0.0);
 }

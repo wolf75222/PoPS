@@ -429,6 +429,25 @@ struct BackwardEulerSourceKernel {
   }
 };
 
+template <class Model>
+struct BackwardEulerSourceActiveKernel {
+  Model m;
+  ConstArray4 uc, ax, active_cells;
+  Array4 u;
+  Real dt;
+  NewtonOptions opts;
+  ImplicitMask<Model::n_vars> mask;
+  POPS_HD void operator()(int i, int j) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const typename Model::State Un = load_state<Model>(uc, i, j);
+    const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
+    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, nullptr);
+    for (int c = 0; c < Model::n_vars; ++c)
+      u(i, j, c) = W[c];
+  }
+};
+
 // INSTRUMENTED variant: same Newton, but writes the exit statistic of EACH cell into
 // the scratch st (comp 0 = ||F||_inf, 1 = iterations, 2 = failure 0/1, 3 = ENCODED OFFENDING CELL).
 // Encoding comp 3: -1 if the cell did not fail; otherwise (j*2^20 + i)*16 + (offending_comp + 1) --
@@ -445,6 +464,37 @@ struct BackwardEulerSourceStatKernel {
   NewtonOptions opts;
   ImplicitMask<Model::n_vars> mask;
   POPS_HD void operator()(int i, int j) const {
+    const typename Model::State Un = load_state<Model>(uc, i, j);
+    const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
+    NewtonCellStat s{};
+    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, &s);
+    for (int c = 0; c < Model::n_vars; ++c)
+      u(i, j, c) = W[c];
+    st(i, j, 0) = s.res;
+    st(i, j, 1) = s.iters;
+    st(i, j, 2) = s.failed;
+    st(i, j, 3) = s.failed > Real(0)
+                      ? (Real(j) * Real(1048576) + Real(i)) * Real(16) + (s.comp + Real(1))
+                      : Real(-1);
+  }
+};
+
+template <class Model>
+struct BackwardEulerSourceActiveStatKernel {
+  Model m;
+  ConstArray4 uc, ax, active_cells;
+  Array4 u, st;
+  Real dt;
+  NewtonOptions opts;
+  ImplicitMask<Model::n_vars> mask;
+  POPS_HD void operator()(int i, int j) const {
+    if (active_cells(i, j, 0) < Real(0.5)) {
+      st(i, j, 0) = Real(0);
+      st(i, j, 1) = Real(0);
+      st(i, j, 2) = Real(0);
+      st(i, j, 3) = Real(-1);
+      return;
+    }
     const typename Model::State Un = load_state<Model>(uc, i, j);
     const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
     NewtonCellStat s{};
@@ -489,7 +539,12 @@ struct NewtonStatSumKernel {
 template <class Model>
 void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
                            const NewtonOptions& opts, const ImplicitMask<Model::n_vars>& mask = {},
-                           NewtonReport* report = nullptr) {
+                           NewtonReport* report = nullptr,
+                           const MultiFab* active_cells = nullptr) {
+  if (active_cells != nullptr &&
+      (active_cells->ncomp() != 1 || active_cells->local_size() != U.local_size()))
+    throw std::invalid_argument(
+        "Implicit source active-cell mask must have one component and match the state layout");
   // FAST path (historical): neither a report requested nor an active fail_policy -> no scratch, no
   // reduction, historical kernel bit-identical. A fail_policy != kFailNone REQUIRES the detection,
   // hence the instrumented path (which remains a PURE OBSERVER of W).
@@ -499,7 +554,13 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
       const ConstArray4 uc = U.fab(li).const_array();
       const ConstArray4 ax = aux.fab(li).const_array();
       const Box2D b = U.box(li);
-      for_each_cell(b, detail::BackwardEulerSourceKernel<Model>{model, uc, ax, u, dt, opts, mask});
+      if (active_cells != nullptr)
+        for_each_cell(
+            b, detail::BackwardEulerSourceActiveKernel<Model>{
+                   model, uc, ax, active_cells->fab(li).const_array(), u, dt, opts, mask});
+      else
+        for_each_cell(b,
+                      detail::BackwardEulerSourceKernel<Model>{model, uc, ax, u, dt, opts, mask});
     }
     return;
   }
@@ -512,8 +573,13 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
     const ConstArray4 uc = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     const Box2D b = U.box(li);
-    for_each_cell(
-        b, detail::BackwardEulerSourceStatKernel<Model>{model, uc, ax, u, st, dt, opts, mask});
+    if (active_cells != nullptr)
+      for_each_cell(
+          b, detail::BackwardEulerSourceActiveStatKernel<Model>{
+                 model, uc, ax, active_cells->fab(li).const_array(), u, st, dt, opts, mask});
+    else
+      for_each_cell(
+          b, detail::BackwardEulerSourceStatKernel<Model>{model, uc, ax, u, st, dt, opts, mask});
   }
   Real rmax = Real(0), imax = Real(0), nfail = Real(0), enc = Real(-1);
   for (int li = 0; li < stats.local_size(); ++li) {

@@ -384,6 +384,8 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 set(POPS_CPP_STANDARD_TESTS
+  test_analytic_expression
+  test_analytic_level_set
   test_profiler
   test_cache_manager
   test_checkpoint_cache
@@ -746,6 +748,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_field_nullspace_preflight 2)
   set(POPS_MPI_RANKS_test_krylov_collective_contract 2)
@@ -782,6 +785,7 @@ if(POPS_HAS_MPI)
     test_amr_regrid_mpi_parity
     test_mpi_system_solve_fields
     test_mpi_system_fft
+    test_mpi_system_analytic_level_set
     test_mpi_coupled_source
     test_mpi_field_nullspace_preflight
     test_krylov_collective_contract
@@ -817,6 +821,8 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs pops_runtime_output)
     elseif(_test STREQUAL "test_mpi_field_plan_consensus")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test STREQUAL "test_mpi_system_analytic_level_set")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
@@ -836,6 +842,9 @@ if(POPS_HAS_MPI)
     endif()
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  set_tests_properties(test_mpi_system_analytic_level_set_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
   set_tests_properties(test_mpi_field_nullspace_preflight_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)

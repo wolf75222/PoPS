@@ -213,10 +213,10 @@ def test_reductions_lower_to_adc_reductions(t):
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("reductions_next", U + P.dt * R, at=endpoint.point))
     src = emit_cpp_program(P)
-    for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
+    for frag in ("ctx.sum_component(", "ctx.max_component(", "ctx.min_component("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
-    assert "pops::reduce_sum(r" in src and ", 0)" in src, (
-        "sum/sum_component reduce over a component"
+    assert "ctx.sum_component(0," in src and ", 0)" in src, (
+        "sum/sum_component must carry an explicit owner and component"
     )
 
 

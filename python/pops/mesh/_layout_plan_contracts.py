@@ -246,6 +246,7 @@ class NormalizedGeometry:
     lower: tuple[float, ...]
     upper: tuple[float, ...]
     cells: tuple[int, ...]
+    frame_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "coordinate_system", _geometry_uri(
@@ -253,6 +254,9 @@ class NormalizedGeometry:
         object.__setattr__(self, "cell_measure", _geometry_uri(
             self.cell_measure, where="NormalizedGeometry.cell_measure"))
         object.__setattr__(self, "axis_names", _geometry_axis_names(self.axis_names))
+        if self.frame_id is not None \
+                and (not isinstance(self.frame_id, str) or not self.frame_id):
+            raise TypeError("NormalizedGeometry.frame_id must be non-empty text or None")
         lower = _geometry_points(self.lower, where="NormalizedGeometry.lower")
         upper = _geometry_points(self.upper, where="NormalizedGeometry.upper")
         cells = _geometry_cells(self.cells)
@@ -283,13 +287,14 @@ class NormalizedGeometry:
             "lower": [item.hex() for item in self.lower],
             "upper": [item.hex() for item in self.upper],
             "cells": list(self.cells),
+            "frame_id": self.frame_id,
         }
 
     @classmethod
     def from_data(cls, data: Any) -> NormalizedGeometry:
         required = {
             "schema_version", "coordinate_system", "cell_measure", "axis_names",
-            "lower", "upper", "cells",
+            "lower", "upper", "cells", "frame_id",
         }
         if not isinstance(data, Mapping) or set(data) != required:
             raise TypeError("NormalizedGeometry data has an unsupported shape")
@@ -308,7 +313,7 @@ class NormalizedGeometry:
             raise ValueError("NormalizedGeometry bounds contain an invalid float.hex value") from None
         result = cls(
             data["coordinate_system"], data["cell_measure"], tuple(data["axis_names"]),
-            lower, upper, tuple(data["cells"]),
+            lower, upper, tuple(data["cells"]), data["frame_id"],
         )
         if result.to_data() != dict(data):
             raise ValueError("NormalizedGeometry data is not canonical")

@@ -262,6 +262,9 @@ def test_fft_is_a_real_solver_with_route_constraints():
     assert any("periodic" in m for m in status.missing)
     assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
     assert f.inspect()["available"] == "partial"
+    # ``partial`` is not a fake or unavailable implementation: authoring validation accepts the
+    # route, then prepared-field resolution proves its concrete mesh/boundary constraints.
+    assert f.validate()
     # spectral=True selects the fft_spectral token.
     spectral = elliptic.FFT(spectral=True)
     assert spectral.scheme == "fft_spectral"
@@ -280,6 +283,8 @@ def test_fft_rejects_amr_layout_with_precise_message():
     assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
     # the context may BE the layout descriptor, not only wrap it under a "layout" key.
     assert elliptic.FFT().available(amr).status == "no"
+    with pytest.raises(ValueError, match="FFT requires Uniform"):
+        elliptic.FFT().validate({"layout": amr})
     # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
     assert elliptic.FFT().available({"layout": Uniform(cartesian_grid(n=64))}).status == "partial"
     assert elliptic.FFT().available().status == "partial"

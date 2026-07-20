@@ -14,25 +14,25 @@ from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
 
 # Native-only tokens consumed by the C++ runtime. They are deliberately not exported.
-_DISC_MODE_TOKENS = ("none", "staircase", "cutcell")
+_TRANSPORT_MODE_TOKENS = ("none", "staircase", "cutcell")
 
 
 class TransportMask(MeshDescriptor):
-    """Extensible typed interface for a disc-transport policy.
+    """Extensible typed interface for an embedded-domain transport policy.
 
     Implementations provide a native token through :meth:`lower`; callers select the policy with
     the descriptor itself, never with that token.
     """
 
     category = "transport_mask"
-    #: The native ``set_disc_domain`` / ``set_geometry_mode`` token this mask selects.
+    #: The native embedded-domain transport token selected by this policy.
     mode_token = ""
 
     def options(self) -> dict:
         return {"mode": self.mode_token}
 
     def lower(self, context: Any = None) -> Any:
-        """Return the private native disc-transport token."""
+        """Return the private native embedded-boundary transport token."""
         return self.mode_token
 
 
@@ -46,16 +46,21 @@ class NoMask(TransportMask):
 
 
 class Staircase(TransportMask):
-    """Staircase masking: cells fully inside the wall are excluded (mode='staircase')."""
+    """Conservative active-cell masking with binary closed faces (mode='staircase')."""
 
     mode_token = "staircase"
 
     def capabilities(self) -> Any:
-        return CapabilitySet({"masked_transport": True, "conservative": False})
+        return CapabilitySet({"masked_transport": True, "conservative": True})
 
 
 class CutCell(TransportMask):
-    """Cut-cell masking: conservative masked transport on cut cells (mode='cutcell').
+    """Disc-specific center-sampled cut-distance transport (mode='cutcell').
+
+    The present native route is retained for the historical :class:`~pops.mesh.geometry.Disc`
+    problem.  It is not accepted for arbitrary ``LevelSet`` or CSG geometry: those require true
+    face apertures, intersection volumes and a typed wall-flux policy.  Use :class:`Staircase` for
+    generic implicit geometry until that complete route exists; PoPS never silently substitutes it.
 
     ADC-615 exposes the cut-cell numeric thresholds, previously hardcoded native constants:
 
@@ -111,7 +116,7 @@ class CutCell(TransportMask):
         return CapabilitySet({"masked_transport": True, "conservative": True})
 
 
-def lower_disc_mode(mode: Any) -> str:
+def lower_transport_mask(mode: Any) -> str:
     """Lower a typed transport mask to its native token.
 
     This function is an implementation seam, not a coercion layer: strings are rejected even when
@@ -122,23 +127,48 @@ def lower_disc_mode(mode: Any) -> str:
             "transport mode must be a pops.mesh.masks.TransportMask descriptor "
             "(NoMask / Staircase / CutCell), got %s" % type(mode).__name__)
     token = mode.lower()
-    if not isinstance(token, str) or token not in _DISC_MODE_TOKENS:
+    if not isinstance(token, str) or token not in _TRANSPORT_MODE_TOKENS:
         raise ValueError(
             "%s.lower() returned unsupported native transport token %r"
             % (type(mode).__name__, token))
     return token
 
 
-def disc_mode_thresholds(mode: Any) -> dict:
-    """Return numeric thresholds carried by a validated typed transport mask."""
-    lower_disc_mode(mode)
+def transport_mask_thresholds(mode: Any) -> dict:
+    """Return finite normalized thresholds carried by a typed transport mask.
+
+    Extension policies may implement ``thresholds()`` but cannot weaken the native safety domain:
+    every published value is an exact real scalar in ``[0, 1]`` (zero selects the native default).
+    """
+    lower_transport_mask(mode)
     thresholds = getattr(mode, "thresholds", None)
-    if callable(thresholds):
-        resolved = thresholds()
-        if isinstance(resolved, dict):
-            return resolved
-    return {}
+    if not callable(thresholds):
+        return {}
+    resolved = thresholds()
+    if type(resolved) is not dict:
+        raise TypeError("TransportMask.thresholds() must return an exact dict")
+    supported = {"kappa_min", "face_open_eps", "cut_theta_min"}
+    if not set(resolved).issubset(supported):
+        raise ValueError(
+            "TransportMask.thresholds() uses unsupported keys %s"
+            % sorted(set(resolved) - supported)
+        )
+    normalized = {}
+    for name, value in resolved.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("TransportMask threshold %s must be a real scalar" % name)
+        checked = float(value)
+        if not math.isfinite(checked) or checked < 0.0 or checked > 1.0:
+            raise ValueError("TransportMask threshold %s must be finite and in [0, 1]" % name)
+        normalized[name] = checked
+    return normalized
 
 
-__all__ = ["TransportMask", "NoMask", "Staircase", "CutCell", "lower_disc_mode",
-           "disc_mode_thresholds"]
+__all__ = [
+    "TransportMask",
+    "NoMask",
+    "Staircase",
+    "CutCell",
+    "lower_transport_mask",
+    "transport_mask_thresholds",
+]

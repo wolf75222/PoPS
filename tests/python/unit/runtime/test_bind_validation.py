@@ -48,6 +48,13 @@ class _Uniform:
         self.mesh = _Mesh(n)
 
 
+class _FramedUniform:
+    """Stand-in for the public CartesianGrid, whose extent is carried by ``cells``."""
+
+    def __init__(self, n):
+        self.mesh = SimpleNamespace(cells=(n, n))
+
+
 class _MultiLayout:
     """Minimal exact multi-layout authority used by the pure bind gate."""
 
@@ -137,6 +144,14 @@ def test_typed_amr_initial_value_requires_complete_state():
         manifest, args, layout, {subject: _Array((64, 64))})
     assert len(lines) == 1
     assert "BindArray requires the complete state" in lines[0]
+
+
+def test_typed_uniform_bind_array_uses_cartesian_grid_cells():
+    manifest, args, layout = _Manifest(), _one_block_args(2), _FramedUniform(32)
+    subject = _BoundSubject("ne")
+    assert bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((2, 32, 32))},
+    ) == []
 
 
 def test_wrong_shape_is_refused():

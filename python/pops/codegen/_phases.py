@@ -66,13 +66,6 @@ def resolve(
             message="heterogeneous AMR layouts have no proved common regrid/transfer runtime",
         )
     target = "amr_system" if adaptive else "system"
-    if target == "system" and len(problem.initials):
-        raise ValueError(
-            "Uniform resolution does not consume Case initial conditions; "
-            "supply the complete block state through pops.bind(initial_state=...). "
-            "Case initials and initial_values are the single typed initialization authority "
-            "for AMR artifacts only."
-        )
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -135,6 +128,7 @@ def resolve(
     compile_values = bind_schema.resolve_compile()
 
     resolved_blocks = []
+    initial_subjects = []
     block_handles = problem.blocks()
     for name, spec in problem._blocks.items():
         state_spaces = tuple(state.local_id for state in spec["states"])
@@ -151,10 +145,10 @@ def resolve(
                 raise ValueError("block %r has competing spatial and DiscretizationPlan authorities" % name)
             spatial = numerics.primary_spatial()
         block = block_handles[name]
-        state_identities = tuple(
-            problem.resolve(state, block=block).qualified_id
-            for state in spec["states"]
-        )
+        state_handles = tuple(
+            problem.resolve(state, block=block) for state in spec["states"])
+        state_identities = tuple(state.qualified_id for state in state_handles)
+        initial_subjects.extend(state_handles)
         resolved_blocks.append(ResolvedBlock(
             name=name,
             model=_resolve_problem_model(spec["model"]),
@@ -177,6 +171,11 @@ def resolve(
     bootstrap_plan = None
     amr_execution = None
     amr_providers = {}
+    if target == "system" and len(problem.initials):
+        initial_condition_plan = problem.initials.resolve_plan(
+            layout_plan=layout_plan,
+            expected_subjects=tuple(initial_subjects),
+        )
     if target == "amr_system":
         from pops.amr._resolution import (
             AMRLayoutResolver,
@@ -435,18 +434,26 @@ def bind(artifact: Any, inputs: Any) -> Any:
     else:
         if inputs.initial_state:
             raise ValueError(
-                "AMR InitialConditionPlan is the single authority; initial_state cannot duplicate it"
+                "InitialConditionPlan is the single layout initialization authority; "
+                "initial_state cannot duplicate it"
             )
         expected_initial = {
             row.subject.qualified_id: row.subject
             for row in plan.initial_condition_plan.bindings
         }
-        from pops.mesh._amr import AnalyticReprojection
-        analytic = {
-            row.subject.qualified_id
-            for row in plan.bootstrap_plan.selections
-            if type(row.method) is AnalyticReprojection
-        }
+        if plan.bootstrap_plan is None:
+            analytic = {
+                row.subject.qualified_id
+                for row in plan.initial_condition_plan.bindings
+                if row.source.options.to_data().get("native_route") != "bound_level_zero"
+            }
+        else:
+            from pops.mesh._amr import AnalyticReprojection
+            analytic = {
+                row.subject.qualified_id
+                for row in plan.bootstrap_plan.selections
+                if type(row.method) is AnalyticReprojection
+            }
         expected_initial = {
             key: value for key, value in expected_initial.items() if key not in analytic
         }

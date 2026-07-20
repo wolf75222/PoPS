@@ -101,9 +101,9 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     data = _runtime_data(layout)
     cells, lower, upper, periodic = _native_amr_grid_values(data["grid"])
     lengths = (upper[0] - lower[0], upper[1] - lower[1])
-    if cells[0] != cells[1] or lower != (0.0, 0.0) or lengths[0] != lengths[1]:
+    if cells[0] != cells[1] or lengths[0] != lengths[1]:
         raise NotImplementedError(
-            "the installed native AMR provider currently requires a square [0,L]^2 grid; "
+            "the installed native AMR provider currently requires a square Cartesian grid; "
             "the full rectangular grid remains authenticated and is never collapsed"
         )
     if type(hierarchy) is not ResolvedHierarchy:
@@ -115,6 +115,8 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     cfg = AmrSystemConfig()
     cfg.n = cells[0]
     cfg.L = lengths[0]
+    cfg.xlo = lower[0]
+    cfg.ylo = lower[1]
     cfg.periodic = periodic
     cfg.level_count = native_hierarchy.level_count
     cfg.regrid_margin = native_hierarchy.nesting_buffer

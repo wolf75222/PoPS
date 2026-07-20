@@ -21,10 +21,37 @@
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux, DiffusiveModel
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>    // fill_wave_speed_cache
+#include <pops/parallel/comm.hpp>
+
+#include <stdexcept>
+#include <string>
 
 namespace pops {
 
 namespace detail {
+struct NonFiniteComponentKernel {
+  ConstArray4 values;
+  int ncomp;
+  POPS_HD Real operator()(int i, int j) const {
+    Real failed = Real(0);
+    for (int c = 0; c < ncomp; ++c)
+      failed += Kokkos::isfinite(values(i, j, c)) ? Real(0) : Real(1);
+    return failed;
+  }
+};
+
+inline void reject_nonfinite_residual(const MultiFab& R, const char* where) {
+  double local = 0.0;
+  for (int li = 0; li < R.local_size(); ++li)
+    local += static_cast<double>(for_each_cell_reduce_sum(
+        R.box(li), NonFiniteComponentKernel{R.fab(li).const_array(), R.ncomp()}));
+  const double global = all_reduce_sum(local);
+  if (global != 0.0)
+    throw std::runtime_error(std::string(where) +
+                             " rejected a non-finite residual; a flux evaluation failed or the "
+                             "dense HLL Jacobian lost hyperbolicity");
+}
+
 /// AssembleRhsKernel<Limiter,NumericalFlux,Model>: device kernel of the central residual of
 /// assemble_rhs.
 ///
@@ -138,6 +165,7 @@ void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux, co
     for_each_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
                          model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
+  detail::reject_nonfinite_residual(R, "assemble_rhs");
 }
 
 namespace detail {
@@ -263,6 +291,7 @@ void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiF
     for_each_cell(v, detail::AssembleRhsHllCachedKernel<Limiter, Model>{
                          model, u, ax, ws, r, dx, dy, lim, recon_prim, pos_floor, pos_comp});
   }
+  detail::reject_nonfinite_residual(R, "assemble_rhs_hll_cached");
 }
 
 }  // namespace pops

@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import pops
+from pops.analytic import param as analytic_param, x as analytic_x
 from pops.amr import (
     AMRExecution,
     AMRHierarchy,
@@ -39,7 +40,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR, Uniform
 from pops.lib.amr import EllipticRecompute, StateTransfer
-from pops.lib.initial import Gaussian
+from pops.lib.initial import Analytic, Gaussian
 from pops.lib.time import ForwardEuler
 from pops.math import ValueExpr, ddt, div, laplacian, unknown
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -119,6 +120,92 @@ def _resolved_runtime_parameter_case():
         compile_options={"include": str(ROOT / "include")},
     )
     return resolved, bound_parameter
+
+
+def _resolved_analytic_initial_parameter_case(*, target: str):
+    if target not in {"system", "amr_system"}:
+        raise ValueError("target must be 'system' or 'amr_system'")
+    frame = Rectangle(
+        "analytic-initial-parameter-%s-domain" % target,
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("analytic-initial-parameter-%s-model" % target, frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "zero-transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    rate = model.rate("zero-rate", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("analytic-initial-parameter-%s-case" % target)
+    block = case.block("scalar", model)
+    block_state = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block_state, rate=rate)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+
+    amplitude = case.param(RuntimeParam("initial_amplitude", default=1.0))
+    density = analytic_param(amplitude) * (1.0 + analytic_x(frame))
+    case.initials.add(InitialCondition(
+        state=block_state,
+        value=Analytic(frame=frame, components=(density,)),
+        projection=ConservativeCellAverage(),
+    ))
+    grid = CartesianGrid(
+        frame=frame,
+        cells=(N, N),
+        periodic=PeriodicAxes(frame.axes),
+    )
+    if target == "system":
+        layout = Uniform(grid)
+    else:
+        refine_threshold = case.param(
+            RuntimeParam("analytic_initial_refine_threshold", default=0.5))
+        transfer = AMRTransfer()
+        transfer.state(block_state, StateTransfer())
+        layout = AMR(
+            grid=grid,
+            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            tagging=AMRTagging(
+                rules=(
+                    Tag(ValueExpr(block_state) > case.value(refine_threshold)),
+                    Buffer(cells=1),
+                ),
+                hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+                conflict_policy=ConflictPolicy.REFINE_WINS,
+            ),
+            regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
+            transfer=transfer,
+            execution=AMRExecution.synchronous(),
+        )
+    validated = pops.validate(case)
+    bound_parameter = validated.resolve(amplitude)
+    return (
+        pops.resolve(
+            validated,
+            layout=layout,
+            backend=Production(),
+            compile_options={"include": str(ROOT / "include")},
+        ),
+        bound_parameter,
+    )
 
 
 def _initial_field_state() -> np.ndarray:
@@ -300,6 +387,48 @@ def test_runtime_parameter_bind_values_drive_native_execution_without_recompile(
     first = np.asarray(instances[0].get_state("scalar"), dtype=np.float64)
     second = np.asarray(instances[1].get_state("scalar"), dtype=np.float64)
     assert not np.array_equal(first, second)
+    assert _binary_fingerprints(paths) == before
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("system", "amr_system"),
+    ids=("uniform-analytic-initial", "amr-analytic-initial"),
+)
+def test_analytic_initial_parameter_materializes_two_native_states_without_recompile(
+    target, isolated_native_cache, native_cxx, kokkos_root,
+):
+    del isolated_native_cache, native_cxx, kokkos_root
+    resolved, amplitude = _resolved_analytic_initial_parameter_case(target=target)
+    artifact = pops.compile(resolved)
+    paths = _binary_paths(artifact)
+    before = _binary_fingerprints(paths)
+
+    simulations = tuple(
+        pops.bind(artifact, params={amplitude: value}) for value in (1.0, 2.0)
+    )
+    if target == "system":
+        states = tuple(
+            np.asarray(simulation.get_state("scalar"), dtype=np.float64)
+            for simulation in simulations
+        )
+    else:
+        states = tuple(
+            np.asarray(
+                simulation.block_level_state_global("scalar", 0),
+                dtype=np.float64,
+            )
+            for simulation in simulations
+        )
+    assert states[0].size == states[1].size > 0
+    np.testing.assert_allclose(states[1], 2.0 * states[0], rtol=0.0, atol=4.0e-15)
+    assert not np.array_equal(states[0], states[1])
+    assert (
+        simulations[0].bound_snapshot.artifact_identity
+        == simulations[1].bound_snapshot.artifact_identity
+        == artifact.artifact_identity
+    )
+    assert simulations[0].bind_identity != simulations[1].bind_identity
     assert _binary_fingerprints(paths) == before
 
 

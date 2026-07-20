@@ -156,15 +156,29 @@ class MomentModel:
         self._magnetic: Any = None       # omega_c name
         self._extra_sources: Any = None  # an advanced pre-built (m, M) -> list
         # Recorded Poisson coupling (applied to the built model):
-        self._poisson: Any = None        # (phi, eps)
+        self._poisson: Any = None        # (phi, eps, optional uniform background)
 
     # --- chainable recorders -----------------------------------------------
-    def add_poisson_coupling(self, phi: Any = "phi", eps: Any = 1.0) -> Any:
-        """Record a Poisson coupling: the elliptic RHS is the charge density (``eps * M00``) and
-        the model reads the field gradient aux (``grad_x`` / ``grad_y``). Applied to the built model."""
+    def add_poisson_coupling(
+        self,
+        phi: Any = "phi",
+        eps: Any = 1.0,
+        *,
+        background: Any = None,
+    ) -> Any:
+        """Record a Poisson coupling with an optional explicit uniform background.
+
+        The elliptic RHS is ``eps * M00`` when ``background`` is omitted and
+        ``eps * (M00 - background)`` otherwise.  The background is a typed physical
+        coefficient (literal, ``ConstParam`` or ``RuntimeParam``); it is never inferred or
+        silently projected by the field solver.
+        """
         self._poisson = (
             _identifier(phi, name="Poisson field"),
             _coefficient(eps, name="eps"),
+            None if background is None else _coefficient(
+                background, name="Poisson background"
+            ),
         )
         return self
 
@@ -278,15 +292,22 @@ class MomentModel:
         from pops.fields import FieldOutput, GradientOutput
         from pops.math import laplacian
 
-        phi_name, eps_declaration = self._poisson
+        phi_name, eps_declaration, background_declaration = self._poisson
         eps = _parameter_value(m, eps_declaration, registered)
         state = m.states["U"]
         density = state[moment_names(self._order)[0]]
+        source_density = density
+        if background_declaration is not None:
+            background = _parameter_value(m, background_declaration, registered)
+            source_density = density - background
         phi = m.field(phi_name)
+        # Sources that call ``m.aux('grad_x')`` / ``m.aux('grad_y')`` are bound to the
+        # model's canonical FieldSpace named ``fields``. The provider must materialize that
+        # exact space rather than an isomorphic FieldSpace under another local name.
         m.field_operator(
-            "poisson",
+            "fields",
             unknown=phi,
-            equation=-laplacian(phi) == eps * density,
+            equation=-laplacian(phi) == eps * source_density,
             outputs=(
                 FieldOutput(phi_name, phi),
                 GradientOutput("grad", phi),

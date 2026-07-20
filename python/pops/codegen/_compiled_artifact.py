@@ -185,19 +185,24 @@ class CompiledPlanRecord:
         if not blocks or any(type(block) is not CompiledPlanBlock for block in blocks):
             raise TypeError("CompiledPlanRecord blocks must be exact CompiledPlanBlock values")
         object.__setattr__(self, "blocks", blocks)
-        authorities = (
+        from pops.initial import InitialConditionPlan
+        if self.initial_condition_plan is not None \
+                and type(self.initial_condition_plan) is not InitialConditionPlan:
+            raise TypeError(
+                "CompiledPlanRecord contains a non-exact InitialConditionPlan authority")
+        amr_authorities = (
             self.resolved_hierarchy,
             self.amr_transfer,
-            self.initial_condition_plan,
             self.bootstrap_plan,
             self.amr_execution,
         )
-        if any(value is not None for value in authorities):
-            if self.target != "amr_system" or any(value is None for value in authorities):
+        if any(value is not None for value in amr_authorities):
+            if self.target != "amr_system" \
+                    or self.initial_condition_plan is None \
+                    or any(value is None for value in amr_authorities):
                 raise ValueError("CompiledPlanRecord has a partial AMR authority set")
             from pops.mesh._amr import (
                 BootstrapPlan,
-                InitialConditionPlan,
                 ResolvedHierarchy,
             )
             from pops.mesh._amr.transfer import ResolvedAMRTransfer
@@ -205,15 +210,16 @@ class CompiledPlanRecord:
             expected = (
                 ResolvedHierarchy,
                 ResolvedAMRTransfer,
-                InitialConditionPlan,
                 BootstrapPlan,
                 AMRExecution,
             )
             if any(
                 type(value) is not kind
-                for value, kind in zip(authorities, expected, strict=True)
+                for value, kind in zip(amr_authorities, expected, strict=True)
             ):
                 raise TypeError("CompiledPlanRecord contains a non-exact AMR authority")
+        elif self.target == "amr_system":
+            raise ValueError("CompiledPlanRecord AMR target has no complete AMR authority set")
         object.__setattr__(
             self, "contract_identity", make_identity("compiled-plan", self._payload()))
 

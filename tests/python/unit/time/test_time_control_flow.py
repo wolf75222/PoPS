@@ -135,7 +135,7 @@ def test_state_bool_still_loud(t):
 def test_while_codegen(t):
     P = _convergence_program(t)
     src = emit_cpp_program(P)
-    for frag in ("pops::dot", "std::sqrt", "for (;;)", "if (!(", "break;"):
+    for frag in ("ctx.norm2(0,", "for (;;)", "if (!(", "break;"):
         assert frag in src, "the generated while loop must contain %r\n%s" % (frag, src)
 
 

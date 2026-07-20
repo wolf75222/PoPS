@@ -588,19 +588,20 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
-      // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
-      // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
-      // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
-      // 'staircase' (assemble_rhs_masked, 0/1 face gate), 'cutcell' (assemble_rhs_eb, cut-cell EB,
-      // apertures + kappa). cf. System::set_disc_domain.
+      // Runtime-private lowering seam for every public analytic LevelSet.  The native System owns,
+      // validates and materializes the scalar postfix program; no Python callback reaches a cell
+      // kernel.  Active is the strict convention phi < 0.
+      .def("_set_analytic_level_set", &System::set_analytic_level_set, py::arg("opcodes"),
+           py::arg("literals"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
+           py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
+      // Disc convenience constructor: lowers to the same generic analytic program and EB path.
       .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
            py::arg("mode") = "none", py::arg("kappa_min") = 0.0, py::arg("face_open_eps") = 0.0,
            py::arg("cut_theta_min") = 0.0)
-      // Toggles ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
-      // disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise.
+      // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      // Domain 0/1 mask (ny, nx) row-major (diagnostic / contract verification). All 1.0 without
-      // set_disc_domain.
+      // Domain 0/1 mask (ny, nx) row-major. Historical name retained for compatibility; it reports
+      // the mask of any analytic level set and is all 1.0 when none is installed.
       .def("disc_mask", [](const System& s) { return to_2d(s.disc_mask(), s.ny(), s.nx()); })
       .def(
           "set_epsilon_field",
@@ -754,7 +755,16 @@ void bind_system_stepping(py::class_<System>& cls) {
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             s.set_state(name, flat(arr));
           },
-          py::arg("name"), py::arg("u"));
+          py::arg("name"), py::arg("u"))
+      .def("_set_analytic_expression_state", &System::set_analytic_expression_state,
+           py::arg("name"), py::arg("space"), py::arg("centering"), py::arg("projection"),
+           py::arg("opcodes"), py::arg("literals"))
+      .def("_set_analytic_mapped_state", &System::set_analytic_mapped_state,
+           py::arg("name"), py::arg("opcodes"), py::arg("literals"),
+           py::arg("input_sources"))
+      .def("_set_analytic_gaussian_state", &System::set_analytic_gaussian_state,
+           py::arg("name"), py::arg("center_x"), py::arg("center_y"),
+           py::arg("background"), py::arg("amplitude"), py::arg("inverse_width"));
 }
 
 // Data + IO accessors: shape/introspection, mass/density/potential, MPI-safe globals, local hyperslabs.

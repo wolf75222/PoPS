@@ -89,24 +89,25 @@ class _SystemAuxState(_System):
         - 'none' (default): the mask is materialized (queryable via disc_mask()) but the transport
           stays FULL Cartesian (assemble_rhs) -> step() BIT-IDENTICAL even with the disc set;
         - 'staircase': conservative masked transport (assemble_rhs_masked, 0/1 face gate);
-        - 'cutcell': cut-cell / embedded-boundary transport (assemble_rhs_eb, apertures alpha_f +
-          volume fraction kappa, smooth boundary, order 2 inside the disc).
+        - 'cutcell': the current disc-specific embedded-boundary route (binary open faces between
+          active centres and a clamped approximate volume fraction). It requires the explicit
+          first-order reconstruction provider; PoPS does not claim smooth-boundary order 2 here.
 
         The mode is honored under Lie AND Strang (cf. Split / Strang). R > 0; Cartesian only (the
         polar one already bounds the ring by its radial walls -> explicit error)."""
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.geometry import DiscDomain
-        from pops.mesh.masks import disc_mode_thresholds, lower_disc_mode
+        from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
         if not isinstance(domain, DiscDomain):
             raise TypeError(
                 "set_disc_domain requires a pops.mesh.geometry.DiscDomain descriptor, got %s"
                 % type(domain).__name__)
         cx, cy, radius, mode = domain.lower()
-        lower_disc_mode(domain.mode)
+        lower_transport_mask(domain.mode)
         # ADC-615: forward the typed CutCell numeric thresholds (kappa_min / face_open_eps /
         # cut_theta_min). 0.0 keeps the native default.
-        th = disc_mode_thresholds(domain.mode)
+        th = transport_mask_thresholds(domain.mode)
         self._s.set_disc_domain(cx, cy, radius, mode, kappa_min=th.get("kappa_min", 0.0),
                                 face_open_eps=th.get("face_open_eps", 0.0),
                                 cut_theta_min=th.get("cut_theta_min", 0.0))
@@ -119,13 +120,17 @@ class _SystemAuxState(_System):
         ``mode`` must be a typed :class:`pops.mesh.masks.TransportMask`; strings are rejected."""
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "set_geometry_mode")  # frozen once pops.bind completes (ADC-592)
-        from pops.mesh.masks import lower_disc_mode
-        self._s.set_geometry_mode(lower_disc_mode(mode))
+        from pops.mesh.masks import lower_transport_mask
+        self._s.set_geometry_mode(lower_transport_mask(mode))
 
     def disc_mask(self) -> Any:
         """0/1 cell-centered domain mask, array (ny, nx) (diagnostic / contract
         verification). All 1.0 as long as set_disc_domain has not been called (subdomain = whole
         domain, default path)."""
+        return self._s.disc_mask()
+
+    def embedded_boundary_mask(self) -> Any:
+        """Return the active-cell mask for any installed embedded LevelSet geometry."""
         return self._s.disc_mask()
 
     def set_primitive_state(self, name: Any, **prims: Any) -> Any:

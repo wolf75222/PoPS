@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
-def _uniform_system_values(mesh: Any) -> tuple[int, float, bool]:
+def _uniform_system_values(mesh: Any) -> tuple[int, float, bool, float, float]:
     """Project exactly the uniform mesh shapes representable by native ``SystemConfig``."""
     from pops.mesh.grid import CartesianGrid
 
@@ -21,9 +22,6 @@ def _uniform_system_values(mesh: Any) -> tuple[int, float, bool]:
     if mesh.cells[0] != mesh.cells[1]:
         raise NotImplementedError(
             "native SystemConfig has one n and cannot represent a rectangular CartesianGrid")
-    if mesh.frame.lower != (0.0, 0.0):
-        raise NotImplementedError(
-            "native SystemConfig has no origin and requires CartesianGrid lower=(0, 0)")
     lengths = mesh.frame.lengths
     if lengths[0] != lengths[1]:
         raise NotImplementedError(
@@ -33,19 +31,78 @@ def _uniform_system_values(mesh: Any) -> tuple[int, float, bool]:
         raise NotImplementedError(
             "native SystemConfig has one global periodic flag and cannot represent a partially "
             "periodic CartesianGrid topology")
-    return int(mesh.cells[0]), float(lengths[0]), bool(periodic_axes)
+    return (
+        int(mesh.cells[0]),
+        float(lengths[0]),
+        bool(periodic_axes),
+        float(mesh.frame.lower[0]),
+        float(mesh.frame.lower[1]),
+    )
 
 
 def system_config_from_layout(layout: Any) -> Any:
     """Build the native uniform config from an authenticated layout descriptor."""
     from pops._bootstrap import SystemConfig
 
-    n, extent, periodic = _uniform_system_values(layout.mesh)
+    n, extent, periodic, xlo, ylo = _uniform_system_values(layout.mesh)
     cfg = SystemConfig()
     cfg.n = n
     cfg.L = extent
     cfg.periodic = periodic
+    cfg.xlo = xlo
+    cfg.ylo = ylo
     return cfg
+
+
+def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
+    """Install one signed implicit geometry in the native analytic level-set provider.
+
+    Geometry authoring remains open through the small ``level_set(frame)`` protocol, but that
+    protocol is resolved while building the LayoutPlan.  Bind consumes only its authenticated
+    canonical data and never calls a user provider.
+    """
+    projection = getattr(normalized_layout, "to_data", None)
+    if not callable(projection):
+        raise TypeError("embedded-boundary installation requires a normalized layout")
+    normalized_data = projection()
+    options = normalized_data.get("options") if isinstance(normalized_data, dict) else None
+    embedded = options.get("embedded_boundary") if isinstance(options, dict) else None
+    if embedded is None:
+        return
+    if not hasattr(embedded, "get") or embedded.get("schema_version") != 1 \
+            or set(embedded) != {"schema_version", "level_set", "boundary", "transport"}:
+        raise TypeError("normalized embedded-boundary data has an unsupported shape")
+    if embedded["boundary"] != {"provider": "zero_flux"}:
+        raise NotImplementedError(
+            "the installed embedded-boundary runtime provides only pops.boundary.ZeroFlux()"
+        )
+    frame_id = getattr(getattr(normalized_layout, "geometry", None), "frame_id", None)
+    if not isinstance(frame_id, str) or not frame_id:
+        raise TypeError("normalized embedded geometry requires a canonical frame identity")
+    from pops.mesh.geometry import LevelSet
+
+    level_set = LevelSet.from_data(embedded["level_set"])
+    if level_set.frame_id not in (None, frame_id):
+        raise ValueError("signed embedded LevelSet differs from the normalized layout frame")
+
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    ((opcodes, literals),) = lower_analytic_components(
+        (level_set.expression.to_data(),), frame_id=frame_id,
+    )
+    transport = embedded["transport"]
+    if not hasattr(transport, "get") or set(transport) != {
+        "mode", "kappa_min", "face_open_eps", "cut_theta_min",
+    }:
+        raise TypeError("normalized embedded transport data has an unsupported shape")
+    sim._s._set_analytic_level_set(
+        list(opcodes),
+        list(literals),
+        transport["mode"],
+        transport["kappa_min"],
+        transport["face_open_eps"],
+        transport["cut_theta_min"],
+    )
 
 
 def flow_amr_layout(
@@ -214,8 +271,6 @@ def flow_bootstrap_tagging(
 
 # The opcode table is generated from the versioned component catalog and shared with the C ABI.
 # The compiler dispatches only through this data; no Python class-name switch reaches the hot loop.
-from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
-
 _TAG_LEAF_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
 _TAG_LOGICAL_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
 

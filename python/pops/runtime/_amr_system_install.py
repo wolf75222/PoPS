@@ -12,7 +12,7 @@ the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pops.runtime._bind_validation import validate_install_arguments
 
@@ -242,13 +242,18 @@ class _AmrSystemInstall(_AmrSystem):
         seen_initial = set()
         for subject_id, name, initial, space, centering, method, source in initial_rows:
             if method == "analytic":
-                route = source.get("native_route")
+                from pops.runtime._initial_source_lowering import (
+                    native_binary64,
+                    validate_initial_source,
+                )
+
+                route = validate_initial_source(source, where="AMR initial source")
                 if route == "constant_field":
                     components = [
-                        float.fromhex(value["binary64"])
-                        if isinstance(value, Mapping) and "binary64" in value
-                        else float(cast(Any, value))
-                        for value in source.get("components", ())
+                        native_binary64(
+                            value, where="AMR initial source.components[%d]" % index,
+                        )
+                        for index, value in enumerate(source["components"])
                     ]
                     self._s._register_analytic_constant(
                         subject_id, name or "", space, centering, components
@@ -259,16 +264,41 @@ class _AmrSystemInstall(_AmrSystem):
                         raise ValueError(
                             "pops.bind: gaussian_field requires one cell state and x/y center"
                         )
-                    def native_float(value: Any) -> float:
-                        return float.fromhex(value["binary64"]) \
-                            if isinstance(value, Mapping) and "binary64" in value \
-                            else float(cast(Any, value))
-
                     self._s._register_analytic_gaussian(
-                        subject_id, name or "", native_float(center["x"]),
-                        native_float(center["y"]), native_float(source["background"]),
-                        native_float(source["amplitude"]),
-                        native_float(source["inverse_width"]),
+                        subject_id, name or "",
+                        native_binary64(center["x"], where="AMR Gaussian center.x"),
+                        native_binary64(center["y"], where="AMR Gaussian center.y"),
+                        native_binary64(
+                            source["background"], where="AMR Gaussian background"),
+                        native_binary64(
+                            source["amplitude"], where="AMR Gaussian amplitude"),
+                        native_binary64(
+                            source["inverse_width"], where="AMR Gaussian inverse_width"),
+                    )
+                elif route == "analytic_expression":
+                    projection = source.get("projection", {})
+                    if space != "cell" or centering != "cell" \
+                            or not isinstance(projection, Mapping) \
+                            or projection.get("projection") != "conservative_cell_average":
+                        raise ValueError(
+                            "pops.bind: analytic_expression requires the cell-centred "
+                            "ConservativeCellAverage projection")
+                    from pops.runtime._analytic_expression_lowering import (
+                        lower_analytic_components,
+                    )
+
+                    lowered = lower_analytic_components(
+                        source.get("components"),
+                        frame_id=source.get("frame_id"),
+                        bindings=params,
+                    )
+                    self._s._register_analytic_expression(
+                        subject_id,
+                        name or "",
+                        space,
+                        centering,
+                        [list(opcodes) for opcodes, _ in lowered],
+                        [list(literals) for _, literals in lowered],
                     )
                 else:
                     raise NotImplementedError(

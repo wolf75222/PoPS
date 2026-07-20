@@ -6,7 +6,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
-#include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
 #include <pops/parallel/execution_lane.hpp>
 
 #include <cstddef>
@@ -26,35 +25,47 @@
 
 namespace pops {
 
-/// TRANSPORT GEOMETRY MODE of the macro-step (T5-PR3 effort, disc wiring in System::step).
+struct EbThresholds;
+
+/// TRANSPORT GEOMETRY MODE of the macro-step.
 ///  - None: full Cartesian domain (default). Transport uses assemble_rhs (historical
-///                path). BIT-IDENTICAL to history as long as no disc is set.
-///  - Staircase: disc approximated by a cell-centered 0/1 MASK (active/inactive face gate,
-///                staircase boundary). Transport uses assemble_rhs_masked (T2 effort).
-///  - CutCell: disc as cut-cell / embedded-boundary (continuous alpha_f apertures plus volume
-///                fraction kappa). Transport uses assemble_rhs_eb (T5-PR1/PR2 efforts).
-/// The mode is held by the System (set_disc_domain mode= / set_geometry_mode) and read by the stepper
-/// to DISPATCH each block transport advance. None stays the untouched production path.
+///                path). BIT-IDENTICAL while no embedded-boundary policy is active.
+///  - Staircase: a generic signed level set sampled into a cell-centered 0/1 mask. Transport uses
+///                assemble_rhs_masked.
+///  - CutCell: the legacy centre-sampled EB policy with binary face gates and an approximate,
+///                clamped volume factor. Transport uses assemble_rhs_eb.
+/// The mode is held by the System and dispatches both native advances and compiled-Program
+/// residuals. None stays the untouched production path.
 enum class GeometryMode { None, Staircase, CutCell };
+
+constexpr std::uint8_t geometry_mode_flag(GeometryMode mode) {
+  return static_cast<std::uint8_t>(1U << static_cast<unsigned>(mode));
+}
+constexpr std::uint8_t kCartesianGeometrySupport = geometry_mode_flag(GeometryMode::None);
+constexpr std::uint8_t kAllGeometrySupport =
+    geometry_mode_flag(GeometryMode::None) | geometry_mode_flag(GeometryMode::Staircase) |
+    geometry_mode_flag(GeometryMode::CutCell);
+constexpr bool supports_geometry_mode(std::uint8_t supported_modes, GeometryMode mode) {
+  return (supported_modes & geometry_mode_flag(mode)) != 0;
+}
 
 /// Mesh + transport BC + aux shared by a block closures. @c aux is NOT owned:
 /// it points to the System aux (lifetime longer than the block, stable address).
 ///
-/// EMBEDDED BOUNDARY / LEVEL-SET DOMAIN (T5-PR3 effort): @c domain_mask and @c eb_domain point (NOT
-/// owned) to the 0/1 mask and the level-set domain descriptor of the System (members with STABLE
-/// address). They are used ONLY to build the optional embedded-boundary transport advances
-/// (build_block); read BY POINTER at the step, the order add_block / set_disc_domain does not matter.
-/// nullptr -> no embedded-boundary advance (stepper on advance, bit-identical). The mask is
-/// materialized / the descriptor is set by set_disc_domain (the disc is one instance of the contract,
-/// cf. numerics/embedded_boundary.hpp).
+/// EMBEDDED BOUNDARY / LEVEL-SET DOMAIN: @c domain_mask and @c eb_inverse_volume_fraction point
+/// (not owned) to static metrics prepared from the signed level set by System (members with stable
+/// address). They are used only to build the optional embedded-boundary transport advances
+/// (build_block); read by pointer at the step, so block and level-set authoring order does not matter.
+/// nullptr -> no embedded-boundary advance (stepper on advance, bit-identical). The metrics are
+/// installed before the first embedded-boundary step.
 struct GridContext {
   Box2D dom;                              ///< domain (without ghost)
   BCRec bc;                               ///< transport BC
   Geometry geom;                          ///< geometry (dx, dy, bounds)
   MultiFab* aux = nullptr;                ///< System aux (phi, grad phi); NOT owned
   const MultiFab* domain_mask = nullptr;  ///< 0/1 domain mask (Impl::domain_mask_); NOT owned
-  const detail::DiscDomain* eb_domain =
-      nullptr;  ///< level-set domain descriptor (Impl::eb_domain_); NOT owned
+  const MultiFab* eb_inverse_volume_fraction =
+      nullptr;  ///< prepared 1/kappa field (Impl::eb_inverse_volume_fraction_); NOT owned
   // ADC-615: cut-cell / EB thresholds (kappa_min, face_open_eps, cut_theta_min), by value so this
   // header stays light. Defaults are the historical constants (kEbKappaMin / kEbFaceOpenEps /
   // kEbCutFractionFloor), so an unconfigured context builds the bit-identical EB advance. Set from
@@ -65,6 +76,10 @@ struct GridContext {
   /// Exact per-block ghost-production authority. Empty only for legacy low-level construction;
   /// resolved Case installation always supplies one before closures are built.
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan{};
+  /// Optional stable System-owned threshold set. Runtime closures prefer this pointer so threshold
+  /// installation may follow block construction; the scalar values above remain the standalone
+  /// GridContext fallback used by low-level callers.
+  const EbThresholds* eb_thresholds = nullptr;
   /// Open N-ary storage-binding protocol.  A runtime that owns several states/fields/outputs binds
   /// their exact qualified identities here; the boundary executor remains independent of System,
   /// AMR, field registries and storage classes.  Empty selects the ordinary one-state/one-aux
@@ -76,6 +91,10 @@ struct GridContext {
   /// Optional hierarchy producer that runs before same-level/physical filling. Uniform contexts
   /// leave it empty; an AMR block/level context binds its exact prepared coarse/fine authority.
   std::function<void(MultiFab&)> coarse_fine_fill{};
+  /// Stable System-owned routing state used by off-RHS reductions (CFL/source bounds/hotspots).
+  /// Standalone contexts leave these null and retain the Cartesian behavior.
+  const bool* embedded_boundary_set = nullptr;
+  const GeometryMode* geometry_mode = nullptr;
 };
 
 /// Ephemeral, allocation-free read view over one boundary-session binding epoch.
@@ -444,16 +463,41 @@ inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, 
   session.apply_jvp(state, direction, output, point);
 }
 
+/// Complete point-qualified residual family for one spatial-geometry policy.
+///
+/// Cartesian closures retain their historical named fields in BlockClosures/BlockState for source
+/// and low-level test compatibility. Staircase and cut-cell policies use this small protocol: the
+/// BlockStore selects a family once per Program RHS evaluation, while every numerical operation
+/// remains statically compiled in the closure produced by build_block.
+struct PointQualifiedResidualClosures {
+  using AtPoint =
+      std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>;
+  using PreparedAtPoint = std::function<void(
+      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+      const PreparedGridBoundarySession&)>;
+
+  AtPoint full;
+  AtPoint flux_only;
+  AtPoint without_prepared_interfaces;
+  AtPoint flux_only_without_prepared_interfaces;
+  AtPoint core;
+  AtPoint flux_only_core;
+  PreparedAtPoint full_prepared;
+  PreparedAtPoint flux_only_full_prepared;
+  PreparedAtPoint core_prepared;
+  PreparedAtPoint flux_only_core_prepared;
+};
+
 /// Compiled block closures, frozen at add time.
 ///
 /// advance is the transport advance of the DEFAULT path (assemble_rhs, full Cartesian). The two
-/// optional DISC advances (T5-PR3 effort) mimic advance EXACTLY (same RK / IMEX scheme,
-/// same limiter / flux) but dispatch the transport residual to the disc operator:
+/// optional embedded-boundary advances mimic advance exactly (same RK / IMEX scheme,
+/// same limiter / flux) but dispatch the transport residual to the level-set operator:
 ///   - advance_masked: assemble_rhs_masked (0/1 mask, Staircase mode);
 ///   - advance_eb: assemble_rhs_eb (cut-cell EB, CutCell mode).
 /// They read the System mask / level set BY POINTER at step time (not at
-/// construction), so the order add_block / set_disc_domain does not matter. Empty (default) as long as
-/// the block does not support disc routing: the stepper then falls back to advance (bit-identical).
+/// construction), so block and level-set authoring order does not matter. Empty (default) as long as
+/// the block does not support EB routing: the stepper then falls back to advance (bit-identical).
 struct BlockClosures {
   std::function<void(MultiFab&, Real, int)> advance;  ///< (U, dt, n): n substeps of dt/n
   std::function<void(MultiFab&, Real, int)>
@@ -477,6 +521,11 @@ struct BlockClosures {
   /// -div F base leaking in (spec: rhs flux=False is source-only). OPTIONAL (empty for block paths that
   /// do not build it, e.g. the host .so prototype loader): System::block_source_into fails loud then.
   std::function<void(MultiFab&, MultiFab&)> source_only;
+  /// Embedded-boundary twin of @ref source_only.  It evaluates the same model source on active
+  /// cell centres and writes an exact zero residual on inactive cells.  Staircase and CutCell share
+  /// this policy because the transport operator leaves the physical source unscaled by inverse
+  /// volume fraction; their metric difference belongs to the flux divergence only.
+  std::function<void(MultiFab&, MultiFab&)> source_only_masked;
   /// Point-qualified full/flux-only residuals used by every compiled Program rate.  These are not
   /// optional aliases of the legacy closures: a prepared native boundary component requires the
   /// exact clock/stage/dt carried by BoundaryEvaluationPoint and the legacy unqualified route fails.
@@ -514,6 +563,12 @@ struct BlockClosures {
   std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
                      const MultiFab&, MultiFab&, const PreparedGridBoundarySession&)>
       boundary_jvp_at_point_prepared;
+  /// Point-qualified Program residuals for the two embedded-boundary transport policies.  They are
+  /// built from the same limiter/flux/model/options as the Cartesian family above; only the metric
+  /// policy changes.  Empty means the block genuinely cannot execute that geometry and is rejected
+  /// explicitly by SystemBlockStore rather than silently falling back to Cartesian.
+  PointQualifiedResidualClosures staircase_residuals;
+  PointQualifiedResidualClosures cutcell_residuals;
   /// dt_hotspot diagnostic (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport
   /// CFL and its speed. OPTIONAL (empty = block without diagnostic, e.g. historical
   /// unrewired paths); never called by step/step_cfl (off the hot path).
@@ -522,6 +577,12 @@ struct BlockClosures {
   /// bloc, appliquee par le stepper a la FIN de chaque macro-pas ENTIER (jamais par etage RK).
   /// OPTIONNELLE (vide = bloc sans projection : jamais interrogee, cout nul, bit-identique).
   std::function<void(MultiFab&)> project;
+  /// Embedded-boundary twin of @ref project.  Only active cell centres are projected, preserving
+  /// the caller-owned state outside the physical domain exactly.
+  std::function<void(MultiFab&)> project_masked;
+  /// Explicit provider capability. A mode absent from this bitset is rejected before execution;
+  /// no runtime path may infer support from a non-empty fallback closure.
+  std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
 };
 
 }  // namespace pops

@@ -80,6 +80,10 @@ def test_check_lowerable_no_longer_raises_for_coupled_rate():
 def test_emit_one_multi_state_for_each_cell():
     _mod, P = _two_fluid_program()
     src = emit_cpp_program(P, model=None)
+    assert src.count('ctx.require_cartesian_generated_operator(') == 2
+    assert src.index('ctx.require_cartesian_generated_operator(') < src.index(
+        'ctx.rhs_scratch_like('
+    )
     # ONE shared kernel fills both blocks' rate scratches (not two independent single-block rates).
     assert src.count("pops::for_each_cell") == 1
 

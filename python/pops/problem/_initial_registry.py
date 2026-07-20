@@ -67,8 +67,7 @@ class InitialConditionRegistry(FreezableRegistry):
         for key, initial in sorted(self._conditions.items()):
             try:
                 resolved = initial.resolve_references(self._resolver)
-                resolved.value.validate_for(resolved.state)
-                resolved.projection.validate_for(resolved.state, resolved.value)
+                resolved.canonical_identity()
             except Exception as exc:  # noqa: BLE001 - aggregate exact descriptor refusal
                 report = report.error(
                     self.family,
@@ -80,6 +79,26 @@ class InitialConditionRegistry(FreezableRegistry):
 
     def inspect(self) -> list[dict[str, Any]]:
         return [initial.inspect() for initial in self._conditions.values()]
+
+    def resolve_plan(self, *, layout_plan: Any, expected_subjects: Any) -> Any:
+        """Resolve one exact initialization plan for any uniform or adaptive layout."""
+        if not self._conditions:
+            raise ValueError(
+                "initial-condition resolution requires at least one Case initial condition")
+        from pops.initial import InitialConditionPlanBuilder
+
+        builder = InitialConditionPlanBuilder(layout_plan, expected_subjects)
+        for key in sorted(self._conditions):
+            authored = self._conditions[key]
+            initial = authored.resolve_references(self._resolver)
+            builder.add(
+                initial.state,
+                initial.source(self.owner_path),
+                authoring_alias=(
+                    authored.state if not authored.state.is_resolved else None
+                ),
+            )
+        return builder.resolve()
 
     def resolve_amr(
         self,
@@ -97,9 +116,9 @@ class InitialConditionRegistry(FreezableRegistry):
         from pops.mesh._amr import (
             BootstrapOrdering,
             BootstrapSelection,
-            InitialConditionPlanBuilder,
             resolve_bootstrap,
         )
+        from pops.mesh._amr.bootstrap import _physical_initial_subjects
 
         authored = tuple(
             self._conditions[key] for key in sorted(self._conditions)
@@ -111,20 +130,13 @@ class InitialConditionRegistry(FreezableRegistry):
         if len(phase_orders) != 1:
             raise ValueError(
                 "initial projections require incompatible bootstrap phase orderings")
-        builder = InitialConditionPlanBuilder(layout_plan, transfers)
         selections = []
-        for authored_initial, initial in zip(authored, resolved, strict=True):
-            builder.add(
-                initial.state,
-                initial.source(self.owner_path),
-                authoring_alias=(
-                    authored_initial.state
-                    if not authored_initial.state.is_resolved
-                    else None
-                ),
-            )
+        for initial in resolved:
             selections.append(BootstrapSelection(initial.state, initial.bootstrap_method()))
-        initial_plan = builder.resolve()
+        initial_plan = self.resolve_plan(
+            layout_plan=layout_plan,
+            expected_subjects=_physical_initial_subjects(transfers),
+        )
         bootstrap_plan = resolve_bootstrap(
             layout_plan=layout_plan,
             hierarchy=hierarchy,

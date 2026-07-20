@@ -8,7 +8,7 @@
 #include <pops/mesh/storage/multifab.hpp>         // MultiFab
 #include <pops/mesh/boundary/physical_bc.hpp>     // BCRec, BCType, Periodicity
 #include <pops/mesh/index/box2d.hpp>              // Box2D
-#include <pops/runtime/context/grid_context.hpp>  // GeometryMode, detail::DiscDomain
+#include <pops/runtime/context/grid_context.hpp>  // GeometryMode, analytic::AnalyticProgram
 #include <pops/runtime/system.hpp>  // SystemConfig (the geometry/layout source; system.hpp does NOT include this header, so no cycle)
 
 #include <cstddef>
@@ -21,8 +21,8 @@
 /// Extracted from the geometry + mesh-layout members that lived inline on `System::Impl`: the index
 /// geometry (Cartesian `geom` or polar `pgeom_`), the box array / distribution mapping (`ba` / `dm`),
 /// the transport boundary (`bc_`), the index domain (`dom`), the periodicity (`per_` / `periodic_`),
-/// the SHARED aux channel (`aux` / `aux_ncomp_`), and the embedded-boundary domain (`eb_domain_` /
-/// `eb_set_` / `domain_mask_` / `ws_cache_block_` / `geometry_mode_`). It names one subsystem: "where
+/// the SHARED aux channel (`aux` / `aux_ncomp_`), and the embedded-boundary signed samples, metrics,
+/// mask and routing. It names one subsystem: "where
 /// the System lives and how it is laid out".
 ///
 /// CONSTRUCTED FIRST: the members have an init-order dependency (`dm` sizes from `ba`, `aux` allocates
@@ -67,14 +67,15 @@ struct SystemDomain {
   MultiFab aux;
   int aux_ncomp_ = kAuxBaseComps;  // width of the SHARED aux channel (max over blocks; >= 3)
 
-  // EMBEDDED-BOUNDARY / LEVEL-SET DOMAIN (T2 + T5-PR3, inert by default). eb_set_ == false: the mask
-  // is "all active" and the transport path stays BIT-IDENTICAL. set_disc_domain fills eb_domain_ and
-  // materializes domain_mask_ (0/1 cell-centered, 1 ghost). domain_mask_ / eb_domain_ are
-  // STABLE-address members: the block closures read them by pointer at each step.
-  detail::DiscDomain eb_domain_;
+  // EMBEDDED-BOUNDARY / LEVEL-SET DOMAIN, inert by default. eb_set_ == false: the mask is "all
+  // active" and the transport path stays BIT-IDENTICAL. The stable owner stores samples and metrics
+  // from any validated analytic level set; set_disc_domain is only one generic constructor.
+  // Signed samples and derived metrics are prepared once; no expression interpreter reaches a RHS.
+  MultiFab eb_level_set_values_;  // signed phi at cell centers, same layout, 1 ghost
   bool eb_set_ = false;
   MultiFab
       domain_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty while !eb_set_
+  MultiFab eb_inverse_volume_fraction_;  // prepared 1/max(kappa,kappa_min), valid cells only
   // At least one block requested wave_speed_cache (ADC-199, opt-in HLL cache): locks the switch to an
   // embedded-boundary transport mode (explicit rejection rather than a silently ignored cache).
   bool ws_cache_block_ = false;
@@ -130,7 +131,7 @@ struct SystemDomain {
   /// (eb_* / domain_mask_ / ws_cache_block_ / geometry_mode_) default-construct exactly as before.
   explicit SystemDomain(const SystemConfig& c)
       : cfg(c),
-        geom{Box2D::from_extents(c.n, c.n), 0.0, c.L, 0.0, c.L},
+        geom{Box2D::from_extents(c.n, c.n), c.xlo, c.xlo + c.L, c.ylo, c.ylo + c.L},
         polar_(c.geometry == "polar"),
         pgeom_{index_domain(c), Real(c.r_min), Real(c.r_max)},
         ba(index_boxarray(c)),

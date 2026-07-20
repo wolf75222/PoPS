@@ -113,7 +113,8 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     throw std::runtime_error(
         "build_amr_compiled: SSPRK2/SSPRK3 cannot be combined with the AMR IMEX source split");
   const int nc = Model::n_vars;
-  const Geometry g{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
+  const Geometry g{Box2D::from_extents(bp.mesh.n, bp.mesh.n), bp.mesh.xlo,
+                   bp.mesh.xlo + bp.mesh.L, bp.mesh.ylo, bp.mesh.ylo + bp.mesh.L};
   const double dxc = bp.mesh.L / bp.mesh.n, dxf = dxc / 2;
   // Level 0 (coarse): layout decided by the ownership policy (replicated mono-box by default,
   // distributed multi-box if bp.mesh.distribute_coarse). When replicated, dmap = my_rank() everywhere (the box
@@ -359,7 +360,8 @@ inline SharedAmrLayout make_shared_amr_layout_levels(const AmrBuildParams& bp, i
   if (level_count < 1)
     throw std::runtime_error("make_shared_amr_layout_levels: level_count must be >= 1");
   SharedAmrLayout S;
-  S.geom = Geometry{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
+  S.geom = Geometry{Box2D::from_extents(bp.mesh.n, bp.mesh.n), bp.mesh.xlo,
+                    bp.mesh.xlo + bp.mesh.L, bp.mesh.ylo, bp.mesh.ylo + bp.mesh.L};
   S.n = bp.mesh.n;
   S.replicated_coarse = !bp.mesh.distribute_coarse;
   S.poisson_bc = bp.poisson.bc;

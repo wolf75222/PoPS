@@ -150,6 +150,15 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return MappingProxyType(self._fields)
 
     @property
+    def params(self) -> Mapping[str, Any]:
+        """Immutable view of the model's registry-issued parameter handles."""
+        module = self.module
+        return MappingProxyType({
+            name: module.param_handle(declaration)
+            for name, declaration in module.params().items()
+        })
+
+    @property
     def field_operators(self) -> Mapping[str, Any]:
         """Immutable, live view of physics-only field-operator descriptors."""
         return MappingProxyType(self._field_operators)

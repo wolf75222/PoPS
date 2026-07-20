@@ -33,6 +33,7 @@
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
 #include <pops/parallel/solve_report_consensus.hpp>
@@ -523,24 +524,6 @@ struct BootstrapConstantKernel {
   int component;
   Real value;
   POPS_HD void operator()(int i, int j) const { values(i, j, component) = value; }
-};
-
-struct BootstrapGaussianKernel {
-  Array4 values;
-  Real xlo, ylo, dx, dy, center_x, center_y, background, amplitude, inverse_width;
-  POPS_HD void operator()(int i, int j) const {
-    const Real root = ::sqrt(inverse_width);
-    const Real ax = root * (xlo + static_cast<Real>(i) * dx - center_x);
-    const Real bx = root * (xlo + static_cast<Real>(i + 1) * dx - center_x);
-    const Real ay = root * (ylo + static_cast<Real>(j) * dy - center_y);
-    const Real by = root * (ylo + static_cast<Real>(j + 1) * dy - center_y);
-    const Real scale_x =
-        ::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dx);
-    const Real scale_y =
-        ::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dy);
-    values(i, j, 0) = background + amplitude * scale_x * (::erf(bx) - ::erf(ax)) * scale_y *
-                                       (::erf(by) - ::erf(ay));
-  }
 };
 
 struct BootstrapFloorKernel {
@@ -1448,12 +1431,23 @@ class AmrRuntime {
     const Box2D domain = dom_.refine(level_refinement(level));
     const Real dx = static_cast<Real>(geom_.xhi - geom_.xlo) / domain.nx();
     const Real dy = static_cast<Real>(geom_.yhi - geom_.ylo) / domain.ny();
-    for (int li = 0; li < values.local_size(); ++li)
-      for_each_cell(values.box(li), detail::BootstrapGaussianKernel{
-                                        values.fab(li).array(), static_cast<Real>(geom_.xlo),
-                                        static_cast<Real>(geom_.ylo), dx, dy, center_x, center_y,
-                                        background, amplitude, inverse_width});
-    return values.box_array().num_cells();
+    return analytic::materialize_gaussian_cell_average(
+        values, static_cast<Real>(geom_.xlo), static_cast<Real>(geom_.ylo), dx, dy, center_x,
+        center_y, background, amplitude, inverse_width);
+  }
+
+  std::int64_t fill_bootstrap_block_analytic(
+      std::size_t block, int level,
+      const std::vector<analytic::AnalyticProgram>& programs) {
+    if (!bootstrap_pending_ || block >= blocks_.size() || level < 0 || level >= nlev_ ||
+        programs.size() != static_cast<std::size_t>(blocks_[block].ncomp))
+      throw std::runtime_error("AmrRuntime::fill_bootstrap_block_analytic invalid target/profile");
+    MultiFab& values = (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+    const Box2D domain = dom_.refine(level_refinement(level));
+    const Real dx = static_cast<Real>(geom_.xhi - geom_.xlo) / domain.nx();
+    const Real dy = static_cast<Real>(geom_.yhi - geom_.ylo) / domain.ny();
+    return analytic::materialize_cell_average(
+        values, static_cast<Real>(geom_.xlo), static_cast<Real>(geom_.ylo), dx, dy, programs);
   }
 
   void synchronize_bootstrap_block(std::size_t block, int fine_level,
@@ -1760,6 +1754,13 @@ class AmrRuntime {
     if (saved.block_levels.size() != blocks_.size())
       throw std::runtime_error(
           "AmrRuntime::restore_step_snapshot: snapshot/runtime composition mismatch");
+
+    // A rejected step can still have Kokkos kernels in flight.  The snapshot
+    // restore below replaces MultiFab storage (and can therefore release the
+    // buffers those kernels borrowed), so this is the rollback ownership
+    // boundary: complete device work before the first copy or destruction.
+    device_fence();
+
     const bool rematerialize_boundary_sessions =
         std::any_of(blocks_.begin(), blocks_.end(),
                     [](const AmrRuntimeBlock& block) { return !block.boundary_sessions.empty(); });

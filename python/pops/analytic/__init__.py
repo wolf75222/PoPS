@@ -1,0 +1,73 @@
+"""Generic, data-only analytic scalar fields and predicates.
+
+The package authors immutable expression trees only.  It stores no Python callback and
+performs no mesh computation; native consumers may validate and lower its canonical data.
+"""
+
+from ._functions import (
+    abs,
+    angle,
+    atan2,
+    between,
+    clamp,
+    constant,
+    coordinate,
+    coordinates,
+    cos,
+    exp,
+    hypot,
+    input,
+    log,
+    maximum,
+    minimum,
+    param,
+    radius,
+    sin,
+    sqrt,
+    where,
+    x,
+    y,
+)
+from ._model import (
+    AnalyticTruthValueError,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_MAX_NODES,
+    DEFAULT_MAX_STACK,
+    ExpressionStats,
+    PredicateExpr,
+    SCHEMA_VERSION,
+    ScalarExpr,
+)
+
+__all__ = [
+    "AnalyticTruthValueError",
+    "DEFAULT_MAX_DEPTH",
+    "DEFAULT_MAX_NODES",
+    "DEFAULT_MAX_STACK",
+    "ExpressionStats",
+    "PredicateExpr",
+    "SCHEMA_VERSION",
+    "ScalarExpr",
+    "abs",
+    "angle",
+    "atan2",
+    "between",
+    "clamp",
+    "constant",
+    "coordinate",
+    "coordinates",
+    "cos",
+    "exp",
+    "hypot",
+    "input",
+    "log",
+    "maximum",
+    "minimum",
+    "param",
+    "radius",
+    "sin",
+    "sqrt",
+    "where",
+    "x",
+    "y",
+]

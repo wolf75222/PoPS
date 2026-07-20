@@ -50,6 +50,12 @@ struct ForwardEuler {
     saxpy(U, dt, s.R);
   }
   template <class RhsEval>
+  void take_step_active(RhsEval&& rhs, MultiFab& U, Real dt, Scratch& s,
+                        const MultiFab& active_cells) const {
+    rhs(U, s.R);
+    saxpy_active(U, dt, s.R, active_cells);
+  }
+  template <class RhsEval>
   void take_step(RhsEval&& rhs, MultiFab& U, Real dt) const {
     Scratch s(U);
     take_step(std::forward<RhsEval>(rhs), U, dt, s);
@@ -77,6 +83,16 @@ struct SSPRK2Step {
     rhs(s.U1, s.R);
     saxpy(s.U1, dt, s.R);
     lincomb(U, Real(0.5), U, Real(0.5), s.U1);
+  }
+  template <class RhsEval>
+  void take_step_active(RhsEval&& rhs, MultiFab& U, Real dt, Scratch& s,
+                        const MultiFab& active_cells) const {
+    rhs(U, s.R);
+    lincomb_active(s.U1, Real(1), U, Real(0), U, active_cells);
+    saxpy_active(s.U1, dt, s.R, active_cells);
+    rhs(s.U1, s.R);
+    saxpy_active(s.U1, dt, s.R, active_cells);
+    lincomb_active(U, Real(0.5), U, Real(0.5), s.U1, active_cells);
   }
   template <class RhsEval>
   void take_step(RhsEval&& rhs, MultiFab& U, Real dt) const {
@@ -117,6 +133,23 @@ struct SSPRK3Step {
     lincomb(U, Real(1) / 3, U, Real(2) / 3, s.U3);
   }
   template <class RhsEval>
+  void take_step_active(RhsEval&& rhs, MultiFab& U, Real dt, Scratch& s,
+                        const MultiFab& active_cells) const {
+    rhs(U, s.R);
+    lincomb_active(s.U1, Real(1), U, Real(0), U, active_cells);
+    saxpy_active(s.U1, dt, s.R, active_cells);
+
+    rhs(s.U1, s.R);
+    lincomb_active(s.U2, Real(1), s.U1, Real(0), s.U1, active_cells);
+    saxpy_active(s.U2, dt, s.R, active_cells);
+    lincomb_active(s.U2, Real(3) / 4, U, Real(1) / 4, s.U2, active_cells);
+
+    rhs(s.U2, s.R);
+    lincomb_active(s.U3, Real(1), s.U2, Real(0), s.U2, active_cells);
+    saxpy_active(s.U3, dt, s.R, active_cells);
+    lincomb_active(U, Real(1) / 3, U, Real(2) / 3, s.U3, active_cells);
+  }
+  template <class RhsEval>
   void take_step(RhsEval&& rhs, MultiFab& U, Real dt) const {
     Scratch s(U);
     take_step(std::forward<RhsEval>(rhs), U, dt, s);
@@ -143,6 +176,17 @@ inline void run_explicit_substeps(RhsEval&& rhs, MultiFab& U, Real h, int n) {
     for (int s = 0; s < n; ++s)
       Stepper{}.take_step(rhs, U, h);
   }
+}
+
+/// Active-domain counterpart of run_explicit_substeps. Built-in steppers must expose an explicit
+/// masked algebra implementation; absence is a compile-time error instead of a silent full-grid
+/// fallback that could alter inactive storage.
+template <class Stepper, class RhsEval>
+inline void run_explicit_substeps_active(RhsEval&& rhs, MultiFab& U, Real h, int n,
+                                         const MultiFab& active_cells) {
+  typename Stepper::Scratch scratch(U);
+  for (int s = 0; s < n; ++s)
+    Stepper{}.take_step_active(rhs, U, h, scratch, active_cells);
 }
 
 }  // namespace pops

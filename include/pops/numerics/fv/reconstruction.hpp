@@ -16,6 +16,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
+#include <type_traits>
 
 namespace pops {
 
@@ -28,6 +29,22 @@ struct NoSlope {
   static constexpr int n_ghost = 1;
   POPS_HD Real operator()(Real, Real) const { return Real(0); }
 };
+
+/// Explicit embedded-boundary reconstruction capability.
+///
+/// A stencil radius is not a geometry contract: a future one-ghost policy may still inspect an
+/// inactive neighbour.  New reconstruction policies therefore opt in deliberately after proving
+/// that their face states are defined using only the two active cells selected by the EB operator.
+/// The default stays fail-closed.
+template <class Reconstruction>
+struct EmbeddedBoundaryReconstructionSupport : std::false_type {};
+
+template <>
+struct EmbeddedBoundaryReconstructionSupport<NoSlope> : std::true_type {};
+
+template <class Reconstruction>
+inline constexpr bool supports_embedded_boundary_reconstruction_v =
+    EmbeddedBoundaryReconstructionSupport<Reconstruction>::value;
 
 /// minmod limiter: TVD (Total Variation Diminishing), 2 ghosts, order 2 in smooth regions.
 ///

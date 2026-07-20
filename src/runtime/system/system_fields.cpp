@@ -4,7 +4,10 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
+
+#include <tuple>
 
 namespace pops {
 
@@ -263,7 +266,7 @@ void System::set_field_potential(const std::string& provider_slot,
 std::vector<double> System::eval_rhs(const std::string& name) {
   Impl::Species& s = p_->find(name);
   MultiFab R(p_->ba, p_->dm, s.ncomp, 0);
-  s.rhs_into(s.U, R);
+  block_rhs_into(p_->index(name), s.U, R);
   return p_->copy_state(R, s.ncomp);
 }
 
@@ -276,38 +279,48 @@ double System::reduce_component(const std::string& block, const std::string& kin
   const Impl::Species& s = p_->find(block);
   const MultiFab& u = s.U;
   const int nc = s.ncomp;
+  if (comp < 0 || comp >= nc)
+    throw std::out_of_range("System::reduce_component: component " + std::to_string(comp) +
+                            " is outside block '" + block + "' with " +
+                            std::to_string(nc) + " components");
+  RelativeCellMeasure measure;
+  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
+    measure.active_cells = &p_->domain_mask_;
+    if (p_->geometry_mode_ == GeometryMode::CutCell)
+      measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
+  }
   if (kind == "sum")
-    return static_cast<double>(pops::reduce_sum(u, comp));
+    return static_cast<double>(pops::reduce_sum(u, comp, measure));
   if (kind == "min")
-    return static_cast<double>(pops::reduce_min(u, comp));
+    return static_cast<double>(pops::reduce_min(u, comp, measure));
   if (kind == "max")
-    return static_cast<double>(pops::reduce_max(u, comp));
+    return static_cast<double>(pops::reduce_max(u, comp, measure));
   if (kind == "abs_sum")
-    return static_cast<double>(pops::reduce_abs_sum(u, comp));
+    return static_cast<double>(pops::reduce_abs_sum(u, comp, measure));
   if (kind == "sum_sq")  // L2 squared: dot(u, u, comp); the driver takes sqrt
-    return static_cast<double>(pops::dot(u, u, comp));
+    return static_cast<double>(pops::dot(u, u, comp, measure));
   if (kind == "abs_max")  // LInf: collective max |u(.,.,comp)|
-    return all_reduce_max(static_cast<double>(pops::norm_inf(u, comp)));
+    return static_cast<double>(pops::reduce_norm_inf(u, comp, measure));
   // Full-state (unscoped) folds over ALL components -- host O(ncomp) composition of the native
   // per-component collectives (no field leaves the ranks; only ncomp scalars).
   if (kind == "sum_all") {
     double acc = 0.0;
     for (int c = 0; c < nc; ++c)
-      acc += static_cast<double>(pops::reduce_sum(u, c));
+      acc += static_cast<double>(pops::reduce_sum(u, c, measure));
     return acc;
   }
   if (kind == "abs_sum_all") {
     double acc = 0.0;
     for (int c = 0; c < nc; ++c)
-      acc += static_cast<double>(pops::reduce_abs_sum(u, c));
+      acc += static_cast<double>(pops::reduce_abs_sum(u, c, measure));
     return acc;
   }
   if (kind == "sum_sq_all")
-    return static_cast<double>(pops::dot_all(u, u));
+    return static_cast<double>(pops::dot_all(u, u, measure));
   if (kind == "abs_max_all") {
     double m = 0.0;
     for (int c = 0; c < nc; ++c)
-      m = std::max(m, all_reduce_max(static_cast<double>(pops::norm_inf(u, c))));
+      m = std::max(m, static_cast<double>(pops::reduce_norm_inf(u, c, measure)));
     return m;
   }
   throw std::runtime_error(
@@ -444,6 +457,116 @@ void System::set_state(const std::string& name, const std::vector<double>& u) {
   Impl::Species& s = p_->find(name);
   p_->write_state(s.U, s.ncomp, u);
 }
+std::int64_t System::set_analytic_expression_state(
+    const std::string& name, const std::string& space, const std::string& centering,
+    const std::string& projection, const std::vector<std::vector<std::string>>& opcodes,
+    const std::vector<std::vector<double>>& literals) {
+  auto prepared = analytic::collectively_prepare_analytic_request(
+      "System::set_analytic_expression_state",
+      {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}},
+      {}, opcodes, literals, [&]() {
+        require_assembling(p_->lifecycle_, "set_analytic_expression_state");
+        if (p_->polar_)
+          throw std::runtime_error(
+              "System::set_analytic_expression_state requires a Cartesian frame");
+        if (space != "cell" || centering != "cell" ||
+            projection != "conservative_cell_average")
+          throw std::runtime_error(
+              "System::set_analytic_expression_state requires cell-centred "
+              "conservative_cell_average projection");
+        Impl::Species& state = p_->find(name);
+        std::vector<analytic::AnalyticProgram> programs =
+            analytic::compile_component_programs(opcodes, literals);
+        if (programs.size() != static_cast<std::size_t>(state.ncomp))
+          throw std::runtime_error(
+              "System::set_analytic_expression_state component count differs from target state");
+        return std::pair<Impl::Species*, std::vector<analytic::AnalyticProgram>>{
+            &state, std::move(programs)};
+      });
+  return analytic::materialize_cell_average(
+      prepared.first->U, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
+      prepared.second);
+}
+std::int64_t System::set_analytic_mapped_state(
+    const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
+    const std::vector<std::vector<double>>& literals,
+    const std::vector<std::string>& input_sources) {
+  auto prepared = analytic::collectively_prepare_analytic_request(
+      "System::set_analytic_mapped_state",
+      {{"name", name}}, {}, opcodes, literals, [&]() {
+        require_assembling(p_->lifecycle_, "set_analytic_mapped_state");
+        if (p_->polar_)
+          throw std::runtime_error("System::set_analytic_mapped_state requires a Cartesian frame");
+        Impl::Species& state = p_->find(name);
+        std::vector<analytic::AnalyticProgram> programs =
+            analytic::compile_component_programs(opcodes, literals);
+        if (programs.size() != static_cast<std::size_t>(state.ncomp))
+          throw std::runtime_error(
+              "System::set_analytic_mapped_state component count differs from target state");
+        if (input_sources.empty() || input_sources.size() > analytic::kAnalyticMaxStack)
+          throw std::runtime_error(
+              "System::set_analytic_mapped_state requires one bounded input table");
+        std::vector<analytic::detail::AnalyticInputBinding> bindings;
+        bindings.reserve(input_sources.size());
+        for (const auto& source : input_sources) {
+          const auto sep = source.find(':');
+          if (sep == std::string::npos)
+            throw std::runtime_error(
+                "System::set_analytic_mapped_state input source must be 'state:N' or 'aux:N'");
+          const std::string kind = source.substr(0, sep);
+          int component = -1;
+          try {
+            component = std::stoi(source.substr(sep + 1));
+          } catch (...) {
+            throw std::runtime_error(
+                "System::set_analytic_mapped_state input component is not an integer");
+          }
+          if (component < 0)
+            throw std::runtime_error(
+                "System::set_analytic_mapped_state input component must be non-negative");
+          if (kind == "state")
+            bindings.push_back({0, component});
+          else if (kind == "aux")
+            bindings.push_back({1, component});
+          else
+            throw std::runtime_error(
+                "System::set_analytic_mapped_state input source must be 'state' or 'aux'");
+        }
+        return std::tuple<Impl::Species*, std::vector<analytic::AnalyticProgram>,
+                          std::vector<analytic::detail::AnalyticInputBinding>>{
+            &state, std::move(programs), std::move(bindings)};
+      });
+  Impl::Species* state = std::get<0>(prepared);
+  const auto& programs = std::get<1>(prepared);
+  const auto& bindings = std::get<2>(prepared);
+  MultiFab seed(state->U.box_array(), state->U.dmap(), state->U.ncomp(), state->U.n_grow());
+  for (int local = 0; local < state->U.local_size(); ++local) {
+    const ConstArray4 src = state->U.fab(local).const_array();
+    Array4 dst = seed.fab(local).array();
+    const Box2D valid = state->U.box(local);
+    for (int c = 0; c < state->U.ncomp(); ++c)
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          dst(i, j, c) = src(i, j, c);
+  }
+  device_fence();
+  return analytic::materialize_discrete_mapped_state(
+      state->U, seed, p_->aux, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
+      programs, bindings);
+}
+std::int64_t System::set_analytic_gaussian_state(
+    const std::string& name, double center_x, double center_y, double background,
+    double amplitude, double inverse_width) {
+  require_assembling(p_->lifecycle_, "set_analytic_gaussian_state");
+  if (p_->polar_)
+    throw std::runtime_error("System::set_analytic_gaussian_state requires a Cartesian frame");
+  Impl::Species& state = p_->find(name);
+  return analytic::materialize_gaussian_cell_average(
+      state.U, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
+      static_cast<Real>(center_x), static_cast<Real>(center_y),
+      static_cast<Real>(background), static_cast<Real>(amplitude),
+      static_cast<Real>(inverse_width));
+}
 int System::n_vars(const std::string& name) const {
   return p_->find(name).ncomp;
 }
@@ -480,8 +603,15 @@ double System::block_gamma(const std::string& name) const {
 
 double System::mass(const std::string& name) const {
   const Impl::Species& s = p_->find(name);
-  if (!p_->polar_)
-    return sum(s.U, 0);  // Cartesian: bare sum of the cells (bit-identical)
+  if (!p_->polar_) {
+    RelativeCellMeasure measure;
+    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
+      measure.active_cells = &p_->domain_mask_;
+      if (p_->geometry_mode_ == GeometryMode::CutCell)
+        measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
+    }
+    return static_cast<double>(pops::reduce_sum(s.U, 0, measure));
+  }
   // POLAR: FV mass = Sum_ij n_ij r_i dr dtheta (annular cell volume r dr dtheta). This is the
   // quantity CONSERVED by assemble_rhs_polar (cf. test_polar_transport_mms). Host loop over the valid
   // cells (mono-rank: a single local fab), reduced over the ranks by symmetry (n_ranks==1).

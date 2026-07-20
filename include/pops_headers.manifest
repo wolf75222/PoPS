@@ -155,6 +155,10 @@ sdk-support pops/runtime/amr/composite_reduction.hpp
 sdk-support pops/runtime/amr/field_solver_options.hpp
 sdk-support pops/runtime/amr/prepared_component_providers.hpp
 api pops/runtime/amr_system.hpp
+sdk-support pops/runtime/analytic/collective_preflight.hpp
+sdk-support pops/runtime/analytic/expression.hpp
+sdk-support pops/runtime/analytic/initial_materialization.hpp
+sdk-support pops/runtime/analytic/level_set.hpp
 sdk-support pops/runtime/builders/block/amr_block_seam.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
 sdk-support pops/runtime/builders/block/block_builder_polar.hpp

@@ -788,7 +788,10 @@ class _MultiLayoutUniformExecutor:
 
 def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     from pops.codegen._layout_resolution import ResolvedRuntimeLayouts
-    from pops.runtime._runtime_mesh_lowering import system_config_from_layout
+    from pops.runtime._runtime_mesh_lowering import (
+        install_uniform_embedded_boundary,
+        system_config_from_layout,
+    )
     from pops.runtime._system import System
     from pops.time._step.strategy import FixedDt
 
@@ -851,17 +854,25 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
                 "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
             )
 
+    from pops.runtime._runtime_executor import _uniform_initial_sources
+
+    initial_sources = _uniform_initial_sources(plan)
     engines = {}
     for row in layouts.rows:
         layout_id = row.handle.qualified_id
         engine = System(configs[layout_id])
         cast(Any, engine)._execution_context = plan.execution_context
+        install_uniform_embedded_boundary(engine, layouts.plan.normalized(row.handle))
         selected = {
             name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
         }
+        selected_initials = {
+            name: source for name, source in initial_sources.items() if name in selected
+        }
         view = _LayoutCompiledView(plan.artifact, programs[layout_id])
         engine._install_compiled(
-            view, instances=selected, params=plan.params, aux={}, field_plans={}
+            view, instances=selected, params=plan.params, aux={}, field_plans={},
+            initial_sources=selected_initials,
         )
         engines[layout_id] = engine
     return _MultiLayoutUniformExecutor(plan, runtime_plan, engines, blocks)

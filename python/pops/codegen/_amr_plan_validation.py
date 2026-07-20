@@ -28,18 +28,30 @@ def _validated_native_materialization(entry: Any) -> Any:
 
 
 def validate_amr_authorities(plan: Any) -> None:
-    authorities = (
+    from pops.initial import InitialConditionPlan
+
+    initial_plan = plan.initial_condition_plan
+    if initial_plan is not None:
+        if type(initial_plan) is not InitialConditionPlan:
+            raise TypeError(
+                "ResolvedSimulationPlan contains a non-exact InitialConditionPlan")
+        if initial_plan.layout_plan_id != plan.layout_plan.qualified_id:
+            raise ValueError(
+                "ResolvedSimulationPlan initial conditions reference another LayoutPlan")
+
+    amr_authorities = (
         plan.resolved_hierarchy,
         plan.amr_transfer,
-        plan.initial_condition_plan,
         plan.bootstrap_plan,
         plan.amr_execution,
     )
-    if not any(value is not None for value in authorities):
+    if not any(value is not None for value in amr_authorities):
         if plan.amr_providers:
             raise ValueError("non-AMR plan cannot carry AMR provider bindings")
         return
-    if plan.target != "amr_system" or any(value is None for value in authorities):
+    if plan.target != "amr_system" \
+            or any(value is None for value in amr_authorities) \
+            or initial_plan is None:
         raise ValueError(
             "AMR hierarchy, transfer, initial-condition, bootstrap, and execution authorities "
             "must be supplied together on an AMR target"
@@ -47,20 +59,18 @@ def validate_amr_authorities(plan: Any) -> None:
     from pops.mesh._amr import (
         AnalyticReprojection,
         BootstrapPlan,
-        InitialConditionPlan,
         ResolvedHierarchy,
     )
     from pops.mesh._amr.transfer import ResolvedAMRTransfer
 
     from pops.amr import AMRExecution
+    authorities = (*amr_authorities[:2], initial_plan, *amr_authorities[2:])
     expected = (
-        ResolvedHierarchy,
-        ResolvedAMRTransfer,
-        InitialConditionPlan,
-        BootstrapPlan,
-        AMRExecution,
+        ResolvedHierarchy, ResolvedAMRTransfer, InitialConditionPlan,
+        BootstrapPlan, AMRExecution,
     )
-    if any(type(value) is not kind for value, kind in zip(authorities, expected, strict=True)):
+    if any(type(value) is not kind
+           for value, kind in zip(authorities, expected, strict=True)):
         raise TypeError("ResolvedSimulationPlan contains a non-exact AMR authority")
     if plan.amr_transfer.layout_plan_id != plan.layout_plan.qualified_id \
             or plan.initial_condition_plan.layout_plan_id != plan.layout_plan.qualified_id \
@@ -70,8 +80,6 @@ def validate_amr_authorities(plan: Any) -> None:
             or plan.bootstrap_plan.transfer_identity != plan.amr_transfer.identity \
             or plan.bootstrap_plan.initial_identity != plan.initial_condition_plan.identity:
         raise ValueError("ResolvedSimulationPlan bootstrap does not authenticate AMR authorities")
-    if plan.initial_condition_plan.transfer_identity != plan.amr_transfer.identity:
-        raise ValueError("ResolvedSimulationPlan initial conditions authenticate another transfer")
     providers = plan.amr_providers
     if tuple(providers) != ("clustering", "tagger"):
         raise ValueError("AMR plan requires exact clustering and tagger provider bindings")

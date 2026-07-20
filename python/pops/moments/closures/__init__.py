@@ -5,7 +5,7 @@ Public surface:
                       ``N+1`` standardized-moment keys (mirrors the engine ``want`` check).
   Closure          -- the closure typing.Protocol.
   gaussian_closure -- the generic Gaussian / Levermore closure (provided).
-  HyQMOM15Closure  -- the order-4 HyQMOM closure (Levermore variant) for vlasov_poisson.
+  HyQMOM15Closure  -- the polynomial order-4 HyQMOM closure for Vlasov-Poisson.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def closure(order: Any) -> Any:
     return decorate
 
 
-# HyQMOM15Closure imports gaussian_closure, so import it after gaussian is bound.
+# Import after the generic closure protocol is bound.
 from .hyqmom15 import HyQMOM15Closure  # noqa: E402
 
 __all__ = [

@@ -62,6 +62,27 @@ def _jacobian_model(name: str, *, eig: str = "numeric", blocks=None) -> Model:
     return model
 
 
+def _nonhyperbolic_jacobian_model(name: str) -> Model:
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("q1", "q2"))
+    q1, q2 = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            # Constant Jacobian [[0, -1], [1, 0]], eigenvalues +i and -i.
+            x_axis: (-q2, q1),
+            y_axis: (-q2, q1),
+        },
+    )
+    model.wave_speeds_from_jacobian(eig="numeric")
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
+
+
 def _compile_public(
     model: Model,
     *,
@@ -237,3 +258,25 @@ def test_compiled_jacobian_speeds_cover_eigensolve_blocks_fd_and_directions(
     np.testing.assert_allclose(
         partitioned_rhs, expected_partitioned, rtol=0.0, atol=1.0e-12)
     np.testing.assert_allclose(fd_rhs, numeric_rhs, rtol=1.0e-5, atol=1.0e-8)
+
+
+def test_hll_from_dense_jacobian_rejects_non_real_spectrum(
+    isolated_native_cache: Path,
+    native_cxx: str,
+    kokkos_root: Path,
+) -> None:
+    del isolated_native_cache, kokkos_root
+
+    model = _nonhyperbolic_jacobian_model("jacobian_nonhyperbolic")
+    artifact = _compile_public(
+        model,
+        case_name="jacobian_nonhyperbolic_case",
+        waves=FromJacobian(eig="numeric"),
+        cxx=native_cxx,
+    )
+    state = np.zeros((2, N, N), dtype=np.float64)
+    state[0, :, :] = 1.0
+    state[1, :, :] = 0.25
+    simulation = pops.bind(artifact, initial_state={"toy": state})
+    with pytest.raises(RuntimeError, match="dense HLL Jacobian lost hyperbolicity"):
+        pops.run(simulation, t_end=DT, max_steps=1)

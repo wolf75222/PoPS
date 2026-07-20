@@ -9,6 +9,15 @@
 
 namespace pops {
 
+namespace {
+void require_cartesian_boundary_linearization(bool embedded_boundary_set, GeometryMode mode) {
+  if (embedded_boundary_set && mode != GeometryMode::None)
+    throw std::runtime_error(
+        "System embedded-boundary Program operators cannot execute an additive boundary "
+        "residual/JVP: that component pair has no signed-mask or cut-cell metric contract");
+}
+}  // namespace
+
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
 // body and reaches per-block storage through these accessors (Impl is private to this TU).
 void System::install_program_step(std::function<void(double)> step) {
@@ -39,6 +48,12 @@ MultiFab& System::block_state(int b) {
   return p_->sp[static_cast<std::size_t>(b)].U;
 }
 void System::block_rhs_into(int b, MultiFab& U, MultiFab& R) {
+  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System::block_rhs_into block index is out of range");
+  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::block_rhs_into: the unqualified residual entry point has no stage/clock "
+        "authority for embedded-boundary execution; use block_rhs_into_at or a compiled Program");
   p_->sp[static_cast<std::size_t>(b)].rhs_into(U, R);
 }
 void System::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
@@ -89,7 +104,8 @@ void System::block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint&
     p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, &states, -1, nullptr});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
-  p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only);
+  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
+  p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only, geometry_mode);
 }
 
 bool System::block_has_boundary_linearization(int b) const {
@@ -97,7 +113,13 @@ bool System::block_has_boundary_linearization(int b) const {
     throw std::out_of_range("System boundary linearization block index is out of range");
   const auto& block = p_->sp[static_cast<std::size_t>(b)];
   const auto plan = p_->boundary_plans_.find(block.name);
-  return plan != p_->boundary_plans_.end() && plan->second->has_boundary_linearization();
+  const bool has_pair =
+      plan != p_->boundary_plans_.end() && plan->second->has_boundary_linearization();
+  if (has_pair && p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System embedded-boundary Program operators cannot linearize an additive boundary "
+        "component: its residual/JVP pair has no signed-mask or cut-cell metric contract");
+  return has_pair;
 }
 
 void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -121,7 +143,8 @@ void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluatio
     p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, nullptr, b, &U});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
-  p_->blocks_.evaluate_rhs_core(point, block, U, R, flux_only);
+  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
+  p_->blocks_.evaluate_rhs_core(point, block, U, R, flux_only, geometry_mode);
 }
 
 void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -139,11 +162,13 @@ void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluatio
   // closure boundary. Its boundary registry therefore binds U directly for the exact owner and the
   // accepted live state for every other dependency; it must not mutate the System-wide grouped-RHS
   // staging slot, which would couple otherwise independent Krylov execution lanes.
-  p_->blocks_.evaluate_rhs_core_prepared(point, block, U, R, flux_only, boundary);
+  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
+  p_->blocks_.evaluate_rhs_core_prepared(point, block, U, R, flux_only, boundary, geometry_mode);
 }
 
 void System::block_boundary_residual_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C) {
+  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   auto& block = p_->sp[static_cast<std::size_t>(b)];
@@ -162,6 +187,7 @@ void System::block_boundary_residual_into_at(
 void System::block_boundary_residual_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
     const PreparedGridBoundarySession& boundary) {
+  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   const auto& block = p_->sp[static_cast<std::size_t>(b)];
@@ -177,6 +203,7 @@ void System::block_boundary_residual_into_at(
 
 void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                         int b, MultiFab& U, const MultiFab& V, MultiFab& J) {
+  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   auto& block = p_->sp[static_cast<std::size_t>(b)];
@@ -194,6 +221,7 @@ void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvalu
 void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                         int b, MultiFab& U, const MultiFab& V, MultiFab& J,
                                         const PreparedGridBoundarySession& boundary) {
+  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   const auto& block = p_->sp[static_cast<std::size_t>(b)];
@@ -228,12 +256,30 @@ void System::block_neg_div_flux_into_at(const runtime::multiblock::BoundaryEvalu
 // flux.
 void System::block_source_into(int b, MultiFab& U, MultiFab& R) {
   Impl::Species& s = p_->sp[static_cast<std::size_t>(b)];
+  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
+    if (!s.source_only_masked)
+      throw std::runtime_error("System::block_source_into: embedded-boundary block '" + s.name +
+                               "' was installed without an active-cell source closure");
+    s.source_only_masked(U, R);
+    return;
+  }
   if (!s.source_only)
     throw std::runtime_error(
         "System::block_source_into: block '" + s.name +
         "' was installed without a source-only residual closure; a source-only RHS "
         "requires add_block or a Production compiled block");
   s.source_only(U, R);
+}
+
+void System::require_cartesian_generated_operator(int b, const std::string& operation) const {
+  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System generated Program operator block index is out of range");
+  if (!p_->eb_set_ || p_->geometry_mode_ == GeometryMode::None)
+    return;
+  const auto& block = p_->sp[static_cast<std::size_t>(b)];
+  throw std::runtime_error("System embedded-boundary Program cannot execute generated operator '" +
+                           operation + "' for block '" + block.name +
+                           "': the provider has no active-cell or cut-cell metric contract");
 }
 // Max |wave speed| of block b on U: the SAME BlockState::max_speed closure step_cfl reads (set at
 // add_block time -- HasStabilitySpeed / max_wave_speed of the model). REUSES it, does not recompute.
@@ -283,10 +329,19 @@ bool System::program_owns_operator_authority(
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure and rejects an absent capability.
 void System::block_project(int b, MultiFab& u) {
-  std::function<void(MultiFab&)>& proj = p_->sp[static_cast<std::size_t>(b)].project;
+  auto& block = p_->sp[static_cast<std::size_t>(b)];
+  std::function<void(MultiFab&)>& proj = block.project;
   if (!proj)
     throw std::runtime_error(
         "System::block_project: owning block declares no pointwise projection");
+  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
+    if (!block.project_masked)
+      throw std::runtime_error(
+          "System::block_project: embedded-boundary block was installed without an active-cell "
+          "projection closure");
+    block.project_masked(u);
+    return;
+  }
   proj(u);
 }
 // Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars

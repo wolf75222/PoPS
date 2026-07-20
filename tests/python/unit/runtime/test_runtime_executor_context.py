@@ -127,14 +127,14 @@ def test_cartesian_grid_lowering_is_exact_and_refuses_unrepresentable_geometry()
         frame=Rectangle("square", (0.0, 0.0), (2.0, 2.0)).frame(Cartesian2D()),
         cells=(16, 16),
     )
-    assert _uniform_system_values(square) == (16, 2.0, False)
+    assert _uniform_system_values(square) == (16, 2.0, False, 0.0, 0.0)
 
     periodic = CartesianGrid(
         frame=square.frame,
         cells=(16, 16),
         periodic=PeriodicAxes(square.frame.axes),
     )
-    assert _uniform_system_values(periodic) == (16, 2.0, True)
+    assert _uniform_system_values(periodic) == (16, 2.0, True, 0.0, 0.0)
 
     partial = CartesianGrid(
         frame=square.frame,
@@ -151,8 +151,7 @@ def test_cartesian_grid_lowering_is_exact_and_refuses_unrepresentable_geometry()
         frame=Rectangle("shifted", (1.0, 0.0), (3.0, 2.0)).frame(Cartesian2D()),
         cells=(16, 16),
     )
-    with pytest.raises(NotImplementedError, match="no origin"):
-        _uniform_system_values(shifted)
+    assert _uniform_system_values(shifted) == (16, 2.0, False, 1.0, 0.0)
 
 
 def test_conservative_multi_layout_average_requires_one_physical_domain():

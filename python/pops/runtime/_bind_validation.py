@@ -180,11 +180,6 @@ def validate_bound_initial_values(
         return lines
     if not isinstance(initial_values, Mapping):
         return ["typed initial values are not a Handle-keyed mapping"]
-    if _layout_kind(layout) != "amr":
-        return ["typed InitialCondition values require an AMR layout"]
-    mesh = _layout_mesh(layout)
-    if mesh is None:
-        return ["typed InitialCondition values require an explicit square coarse-grid extent"]
     instances = dict(getattr(arguments, "instances", {}) or {})
     accepted_dtypes = _precision_dtype_names(getattr(manifest, "precision", None))
     for subject, array in initial_values.items():
@@ -200,6 +195,12 @@ def validate_bound_initial_values(
             lines.append(
                 "typed initial value targets unknown block %r; artifact blocks are %s"
                 % (name, sorted(instances) or "(none)")
+            )
+            continue
+        mesh = _layout_mesh(_layout_for_block(layout, name))
+        if mesh is None:
+            lines.append(
+                "typed initial value for block %r requires an explicit square grid extent" % name
             )
             continue
         components = int(spec.get("components", 0) or 0)
@@ -255,6 +256,11 @@ def _layout_mesh(layout: Any) -> Any:
             return None
         return int(cells[0])
     mesh = getattr(layout, "mesh", None)
+    cells = getattr(mesh, "cells", None)
+    if isinstance(cells, (tuple, list)):
+        if len(cells) != 2 or cells[0] != cells[1]:
+            return None
+        return int(cells[0])
     n = getattr(mesh, "n", None)
     if n is None:
         return None

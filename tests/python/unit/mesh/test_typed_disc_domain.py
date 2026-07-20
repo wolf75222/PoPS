@@ -4,7 +4,7 @@
 import pytest
 
 from pops.mesh.geometry import Disc, NoWall, DiscDomain, HalfPlane
-from pops.mesh.masks import TransportMask, NoMask, Staircase, CutCell, lower_disc_mode
+from pops.mesh.masks import CutCell, NoMask, Staircase, TransportMask, lower_transport_mask
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
@@ -24,12 +24,12 @@ def test_disc_mode_lowers_only_typed_descriptors():
     assert NoMask().lower() == "none"
     assert Staircase().lower() == "staircase"
     assert CutCell().lower() == "cutcell"
-    assert lower_disc_mode(NoMask()) == "none"
-    assert lower_disc_mode(Staircase()) == "staircase"
-    assert lower_disc_mode(CutCell()) == "cutcell"
+    assert lower_transport_mask(NoMask()) == "none"
+    assert lower_transport_mask(Staircase()) == "staircase"
+    assert lower_transport_mask(CutCell()) == "cutcell"
     for token in ("none", "staircase", "cutcell", "bogus"):
         with pytest.raises(TypeError, match="TransportMask"):
-            lower_disc_mode(token)
+            lower_transport_mask(token)
 
 
 def test_transport_mask_extension_uses_the_small_typed_interface():
@@ -39,9 +39,9 @@ def test_transport_mask_extension_uses_the_small_typed_interface():
     class UnsupportedMask(TransportMask):
         mode_token = "unsupported"
 
-    assert lower_disc_mode(CustomStaircase()) == "staircase"
+    assert lower_transport_mask(CustomStaircase()) == "staircase"
     with pytest.raises(ValueError, match="unsupported native transport token"):
-        lower_disc_mode(UnsupportedMask())
+        lower_transport_mask(UnsupportedMask())
 
 
 def test_disc_domain_lowers_to_set_disc_domain_args():
@@ -55,7 +55,7 @@ def test_disc_domain_lowers_to_set_disc_domain_args():
 
 def test_lowering_rejects_bad_inputs():
     with pytest.raises(TypeError):
-        lower_disc_mode(42)
+        lower_transport_mask(42)
     with pytest.raises(TypeError):
         HalfPlane().lower_wall()           # a half-plane is not a Poisson wall
     with pytest.raises(ValueError):

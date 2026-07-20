@@ -2,7 +2,8 @@
 
 Companion to :mod:`pops.runtime._system_contract`. The concrete
 :class:`pops.runtime._amr_system.AmrSystem` composes the ``_amr_system_*`` mixins; each reads the
-native facade ``self._s``, a few instance attributes (``self._L`` / ``self._regrid_every`` /
+native facade ``self._s``, a few instance attributes (``self._L`` / ``self._xlo`` / ``self._ylo`` /
+``self._regrid_every`` /
 ``self._aux_field_index`` / typed step-transaction state) and sibling methods defined across the
 other AMR mixins and the concrete ``AmrSystem`` body. Declared once here as a ``TYPE_CHECKING``-only
 base; at runtime it collapses to ``object`` (never imported, instantiated or introspected outside a
@@ -19,6 +20,8 @@ class _AmrSystem:
 
     _s: Any
     _L: float
+    _xlo: float
+    _ylo: float
     _regrid_every: int
     _aux_field_index: dict
     _step_strategy: Any

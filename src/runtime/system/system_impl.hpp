@@ -185,11 +185,13 @@ struct System::Impl {
   bool& periodic_ = domain_.periodic_;
   MultiFab& aux = domain_.aux;
   int& aux_ncomp_ = domain_.aux_ncomp_;
-  detail::DiscDomain& eb_domain_ = domain_.eb_domain_;
+  MultiFab& eb_level_set_values_ = domain_.eb_level_set_values_;
   bool& eb_set_ = domain_.eb_set_;
   MultiFab& domain_mask_ = domain_.domain_mask_;
+  MultiFab& eb_inverse_volume_fraction_ = domain_.eb_inverse_volume_fraction_;
   // ADC-615: the cut-cell / EB thresholds (kappa_min, face_open_eps, cut_theta_min) resolved by
-  // set_disc_domain. Defaults are the kEb* constants, so an unconfigured EB run is bit-identical AND
+  // level-set installation. Defaults are the kEb* constants, so an unconfigured EB run is
+  // bit-identical AND
   // the cut_theta_min is passed to BOTH the EB transport (assemble_rhs_eb) and the elliptic wall.
   EbThresholds eb_thresholds_;
   bool& ws_cache_block_ = domain_.ws_cache_block_;
@@ -390,10 +392,9 @@ struct System::Impl {
   // (pops/runtime/block_builder.hpp: make_block / make_max_speed / make_poisson_rhs) so that the
   // production template path is instantiable outside this unit (AOT compilation of a
   // generated model). Here we only provide the grid context to pass to them.
-  // GridContext: mesh + BC + aux + EMBEDDED-BOUNDARY geometry (project T5-PR3). domain_mask_ /
-  // eb_domain_ are STABLE-address MEMBERS -> the block closures (build_block) read them by pointer at
-  // each step, so the add_block / set_disc_domain order is irrelevant (the mask is materialized / the
-  // descriptor set before the 1st step; as long as !eb_set_ the stepper does not select the
+  // GridContext: mesh + BC + aux + prepared embedded-boundary metrics. The metric owners are
+  // STABLE-address MEMBERS -> the block closures read them by pointer at each step, so closure
+  // construction may precede level-set installation (as long as !eb_set_ the stepper does not select the
   // embedded-boundary advance).
   GridContext grid_ctx(const std::string& block_name = {}) {
     // ADC-615: carry the resolved cut-cell / EB thresholds into the context so the EB transport
@@ -409,11 +410,14 @@ struct System::Impl {
                         geom,
                         &aux,
                         &domain_mask_,
-                        &eb_domain_,
+                        &eb_inverse_volume_fraction_,
                         eb_thresholds_.kappa_min,
                         eb_thresholds_.face_open_eps,
                         eb_thresholds_.cut_theta_min,
                         boundary_plan};
+    context.eb_thresholds = &eb_thresholds_;
+    context.embedded_boundary_set = &eb_set_;
+    context.geometry_mode = &geometry_mode_;
     if (boundary_plan && !boundary_plan->state_identity().empty()) {
       struct BoundaryRegistryRoutes {
         std::once_flag once;
@@ -735,8 +739,13 @@ inline void validate_system_config(const SystemConfig& c) {
     throw std::runtime_error("System : n >= 1 required (cells per direction) ; got n = " +
                              std::to_string(c.n));
   if (!(c.L > 0.0))
-    throw std::runtime_error("System : L > 0 required (square domain [0,L]^2) ; got L = " +
+    throw std::runtime_error("System : L > 0 required (square Cartesian extent) ; got L = " +
                              std::to_string(c.L));
+  if (!std::isfinite(c.xlo) || !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) ||
+      !std::isfinite(c.ylo + c.L))
+    throw std::runtime_error(
+        "System : finite Cartesian origin and upper bounds required; got xlo = " +
+        std::to_string(c.xlo) + ", ylo = " + std::to_string(c.ylo));
   check_geometry(c);  // geometry token + polar ring (r_max>r_min>=0, nr>=3, theta_boxes) invariants
 }
 

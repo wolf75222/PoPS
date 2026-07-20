@@ -213,6 +213,7 @@ class CartesianGrid:
             lower=self.frame.lower,
             upper=self.frame.upper,
             cells=self.cells,
+            frame_id=self.frame.canonical_id,
         )
 
     def validate(self, context: Any = None) -> bool:

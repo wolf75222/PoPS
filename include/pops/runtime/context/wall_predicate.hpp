@@ -23,34 +23,36 @@ namespace detail {
 
 struct CircleWallActiveRegionSource2D {
   Real radius = Real(0);
-  Real extent = Real(0);
+  Real center_x = Real(0);
+  Real center_y = Real(0);
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.active-region.circle", 1};
   }
 
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(radius).scalar(extent);
+    contract.scalar(radius).scalar(center_x).scalar(center_y);
   }
 
   [[nodiscard]] bool operator()(Real x, Real y) const {
-    const Real center = Real(0.5) * extent;
-    return std::hypot(x - center, y - center) < radius;
+    return std::hypot(x - center_x, y - center_y) < radius;
   }
 };
 
 /// Builds the "inside the conductor" predicate (embedded wall for the Poisson solver)
-/// from the wall mode @p wall, the radius @p wall_radius and the domain size @p L.
+/// from the wall mode @p wall, the radius @p wall_radius, and the Cartesian domain bounds.
 ///   - "none": no wall -> empty predicate.
-///   - "circle": disc centered at (L/2, L/2) with radius @p wall_radius.
+///   - "circle": disc centered in [xlo,xlo+L] x [ylo,ylo+L] with radius @p wall_radius.
 ///   - other: error, prefixed by @p err_context (e.g. "System::set_poisson").
 /// Body reused identically from the System / AmrSystem runtimes (bit-identical).
 inline ActiveRegionProvider2D wall_predicate(const std::string& wall, double wall_radius, double L,
-                                             const std::string& err_context) {
+                                             const std::string& err_context, double xlo = 0.0,
+                                             double ylo = 0.0) {
   if (wall == "none")
     return {};
   if (wall == "circle")
-    return ActiveRegionProvider2D(CircleWallActiveRegionSource2D{Real(wall_radius), Real(L)});
+    return ActiveRegionProvider2D(CircleWallActiveRegionSource2D{
+        Real(wall_radius), Real(xlo + 0.5 * L), Real(ylo + 0.5 * L)});
   throw std::runtime_error(err_context + ": unknown wall '" + wall + "'");
 }
 

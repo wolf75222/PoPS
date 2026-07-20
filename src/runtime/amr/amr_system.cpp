@@ -9,6 +9,7 @@
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
@@ -292,6 +293,8 @@ struct AmrSystem::Impl {
     double center_x, center_y, background, amplitude, inverse_width;
   };
   std::unordered_map<std::string, BootstrapGaussian> bootstrap_analytic_gaussians;
+  std::unordered_map<std::string, std::vector<analytic::AnalyticProgram>>
+      bootstrap_analytic_expressions;
   runtime::amr::TransferRouteRegistry bootstrap_transfer_routes{bootstrap_transfer_kernels()};
   std::map<std::pair<std::string, std::string>, std::string> bootstrap_subject_routes;
   std::unordered_map<std::string, std::string> bootstrap_block_subjects;
@@ -589,7 +592,8 @@ struct AmrSystem::Impl {
     throw std::runtime_error("AmrSystem::set_poisson : unknown bc '" + mode + "'");
   }
   ActiveRegionProvider2D wall_active() {
-    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson");
+    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson", cfg.xlo,
+                                  cfg.ylo);
   }
 
   // Materializes only hierarchy/system-owned parameters.  Multi-block construction must never select
@@ -599,6 +603,8 @@ struct AmrSystem::Impl {
     // MESH group: coarse geometry + ownership policy.
     bp.mesh.n = cfg.n;
     bp.mesh.L = cfg.L;
+    bp.mesh.xlo = cfg.xlo;
+    bp.mesh.ylo = cfg.ylo;
     bp.mesh.regrid_every = cfg.regrid_every;
     bp.mesh.distribute_coarse = cfg.distribute_coarse;
     bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
@@ -1012,8 +1018,13 @@ void validate_amr_system_config(const AmrSystemConfig& c) {
     throw std::runtime_error("AmrSystem : n >= 1 required (coarse cells per direction) ; got n = " +
                              std::to_string(c.n));
   if (!(c.L > 0.0))
-    throw std::runtime_error("AmrSystem : L > 0 required (square domain [0,L]^2) ; got L = " +
+    throw std::runtime_error("AmrSystem : L > 0 required (square Cartesian extent) ; got L = " +
                              std::to_string(c.L));
+  if (!std::isfinite(c.xlo) || !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) ||
+      !std::isfinite(c.ylo + c.L))
+    throw std::runtime_error(
+        "AmrSystem : finite Cartesian origin and upper bounds required; got xlo = " +
+        std::to_string(c.xlo) + ", ylo = " + std::to_string(c.ylo));
   if (c.regrid_every < 0)
     throw std::runtime_error(
         "AmrSystem : regrid_every >= 0 required (0 = never regrid after init) ; "
@@ -2510,7 +2521,9 @@ void AmrSystem::register_analytic_constant(const std::string& subject, const std
                                            const std::vector<double>& components) {
   require_assembling_amr(p_->bound_, "register_analytic_constant");
   if (p_->built || subject.empty() || components.empty() ||
-      p_->bootstrap_analytic_constants.count(subject) != 0)
+      p_->bootstrap_analytic_constants.count(subject) != 0 ||
+      p_->bootstrap_analytic_gaussians.count(subject) != 0 ||
+      p_->bootstrap_analytic_expressions.count(subject) != 0)
     throw std::runtime_error(
         "AmrSystem::register_analytic_constant requires non-empty unique components");
   const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
@@ -2547,7 +2560,8 @@ void AmrSystem::register_analytic_gaussian(const std::string& subject, const std
                       std::isfinite(inverse_width);
   if (p_->built || subject.empty() || block.empty() || !finite || inverse_width <= 0.0 ||
       p_->bootstrap_analytic_gaussians.count(subject) != 0 ||
-      p_->bootstrap_analytic_constants.count(subject) != 0)
+      p_->bootstrap_analytic_constants.count(subject) != 0 ||
+      p_->bootstrap_analytic_expressions.count(subject) != 0)
     throw std::runtime_error(
         "AmrSystem::register_analytic_gaussian requires one finite unique scalar profile");
   const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
@@ -2562,16 +2576,72 @@ void AmrSystem::register_analytic_gaussian(const std::string& subject, const std
       subject, Impl::BootstrapGaussian{center_x, center_y, background, amplitude, inverse_width});
 }
 
+void AmrSystem::register_analytic_expression(
+    const std::string& subject, const std::string& block, const std::string& space,
+    const std::string& centering, const std::vector<std::vector<std::string>>& opcodes,
+    const std::vector<std::vector<double>>& literals) {
+  using BlockSubjectMap = decltype(p_->bootstrap_block_subjects);
+  using ExpressionMap = decltype(p_->bootstrap_analytic_expressions);
+  struct PreparedRegistration {
+    BlockSubjectMap block_subject;
+    ExpressionMap expression;
+  };
+
+  PreparedRegistration prepared = analytic::collectively_prepare_analytic_request(
+      "AmrSystem::register_analytic_expression",
+      {{"block", block}, {"centering", centering}, {"space", space}, {"subject", subject}}, {},
+      opcodes, literals, [&]() {
+        require_assembling_amr(p_->bound_, "register_analytic_expression");
+        if (p_->built || subject.empty() || block.empty() || space != "cell" ||
+            centering != "cell" || p_->bootstrap_analytic_constants.count(subject) != 0 ||
+            p_->bootstrap_analytic_gaussians.count(subject) != 0 ||
+            p_->bootstrap_analytic_expressions.count(subject) != 0 ||
+            p_->bootstrap_block_subjects.count(subject) != 0)
+          throw std::runtime_error(
+              "AmrSystem::register_analytic_expression requires one unique cell-centred state "
+              "profile");
+        const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
+        if (route_found == p_->bootstrap_subject_routes.end())
+          throw std::runtime_error(
+              "AmrSystem::register_analytic_expression requires an exact registered route");
+        const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+        if (route.descriptor.space != space || route.descriptor.centering != centering)
+          throw std::runtime_error(
+              "analytic expression bootstrap source differs from its transfer route");
+        if (p_->block_index(block) < 0)
+          throw std::runtime_error("analytic expression targets an unknown block");
+
+        std::vector<analytic::AnalyticProgram> programs =
+            analytic::compile_component_programs(opcodes, literals);
+        // Allocate both destination bucket arrays and both nodes before consensus. Publication below
+        // is then a pair of allocation-free node transfers after every rank accepted the request.
+        p_->bootstrap_block_subjects.reserve(p_->bootstrap_block_subjects.size() + 1u);
+        p_->bootstrap_analytic_expressions.reserve(p_->bootstrap_analytic_expressions.size() + 1u);
+        PreparedRegistration staged;
+        staged.block_subject.emplace(subject, block);
+        staged.expression.emplace(subject, std::move(programs));
+        return staged;
+      });
+
+  p_->bootstrap_block_subjects.merge(prepared.block_subject);
+  p_->bootstrap_analytic_expressions.merge(prepared.expression);
+  if (!prepared.block_subject.empty() || !prepared.expression.empty())
+    throw std::logic_error("analytic expression collective publication lost registry uniqueness");
+}
+
 std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject, int level) {
   if (!p_->runtime || level < 0 || level >= p_->runtime->nlev())
     throw std::runtime_error(
         "AmrSystem::bootstrap_analytic_reproject requires a pending hierarchy level");
   const auto constants = p_->bootstrap_analytic_constants.find(subject);
   const auto gaussian = p_->bootstrap_analytic_gaussians.find(subject);
+  const auto expression = p_->bootstrap_analytic_expressions.find(subject);
   const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
-  if ((constants == p_->bootstrap_analytic_constants.end()) ==
-          (gaussian == p_->bootstrap_analytic_gaussians.end()) ||
-      route_found == p_->bootstrap_subject_routes.end())
+  const int provider_count =
+      (constants != p_->bootstrap_analytic_constants.end() ? 1 : 0) +
+      (gaussian != p_->bootstrap_analytic_gaussians.end() ? 1 : 0) +
+      (expression != p_->bootstrap_analytic_expressions.end() ? 1 : 0);
+  if (provider_count != 1 || route_found == p_->bootstrap_subject_routes.end())
     throw std::runtime_error("analytic bootstrap source/route is not registered");
   const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
   if (route.descriptor.space == "cell") {
@@ -2586,6 +2656,8 @@ std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject,
           static_cast<Real>(gaussian->second.background),
           static_cast<Real>(gaussian->second.amplitude),
           static_cast<Real>(gaussian->second.inverse_width));
+    if (expression != p_->bootstrap_analytic_expressions.end())
+      return p_->runtime->fill_bootstrap_block_analytic(index, level, expression->second);
     return p_->runtime->fill_bootstrap_block_constant(index, level, constants->second);
   }
   if (p_->bootstrap_arrays.count(subject) == 0)

@@ -1940,7 +1940,8 @@ class SystemFieldSolver {
   /// "Conductor interior" predicate from p_wall / p_wall_radius / cfg.L (cf. wall_predicate);
   /// empty if no wall.
   ActiveRegionProvider2D wall_active() {
-    return detail::wall_predicate(p_wall, p_wall_radius, owner_->cfg.L, "System::set_poisson");
+    return detail::wall_predicate(p_wall, p_wall_radius, owner_->cfg.L, "System::set_poisson",
+                                  owner_->cfg.xlo, owner_->cfg.ylo);
   }
   [[nodiscard]] MultiFab materialize_system_coefficient_(const std::vector<double>& values) const {
     const std::size_t expected = static_cast<std::size_t>(owner_->cfg.n) * owner_->cfg.n;

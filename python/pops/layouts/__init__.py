@@ -18,6 +18,15 @@ from pops.amr import IgnoreAMRCriteria, PatchLayout
 _LAYOUT_REPORT_SCHEMA_VERSION = 1
 
 
+def _detached_json(value: Any) -> Any:
+    """Detach canonical data even when providers expose immutable Mapping/tuple containers."""
+    from pops._frozen_data import thaw_data
+
+    return json.loads(json.dumps(
+        thaw_data(value), sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ))
+
+
 def _availability_dict(status: Any) -> dict[str, Any]:
     return {
         "status": status.status,
@@ -100,21 +109,86 @@ class Uniform(MeshDescriptor):
         self.embedded_boundary = embedded_boundary
         self.refine = refine
         self.ignore_amr = ignore_amr
+        self._embedded_boundary_plan = (
+            None if embedded_boundary is None else self._resolve_embedded_boundary()
+        )
 
     def options(self) -> dict[str, Any]:
         options = {"mesh": self.mesh.name}
-        if self.embedded_boundary is not None:
-            options["embedded_boundary"] = self.embedded_boundary.name
+        if self._embedded_boundary_plan is not None:
+            options["embedded_boundary"] = self._normalized_embedded_boundary()
         if self.refine is not None:
             options["refine"] = self.refine.name
             options["ignore_amr"] = self.ignore_amr is not None
         return options
 
+    def _normalized_embedded_boundary(self) -> dict[str, Any]:
+        """Return detached signed runtime data captured when this layout was authored."""
+        if self._embedded_boundary_plan is None:
+            raise ValueError("Uniform layout has no embedded boundary")
+        return _detached_json(self._embedded_boundary_plan)
+
+    def _resolve_embedded_boundary(self) -> dict[str, Any]:
+        """Resolve an extension geometry exactly once into deterministic signed data."""
+        from pops.mesh.geometry import Disc, EmbeddedBoundary
+        from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
+
+        embedded = self.embedded_boundary
+        if not isinstance(embedded, EmbeddedBoundary):
+            raise TypeError(
+                "Uniform.embedded_boundary must be a pops.mesh.geometry.EmbeddedBoundary"
+            )
+        frame = getattr(self.mesh, "frame", None)
+
+        def project() -> dict[str, Any]:
+            from pops.boundary.embedded import lower_embedded_boundary_flux
+
+            level_set = embedded.level_set(frame)
+            mode = lower_transport_mask(embedded.transport)
+            if mode == "cutcell" and type(embedded.domain) is not Disc:
+                raise NotImplementedError(
+                    "CutCell is not a generic LevelSet route: arbitrary analytic/CSG geometry "
+                    "requires true face apertures, cell-intersection volumes and a typed wall-flux "
+                    "provider. Use Staircase for generic embedded geometry until that complete "
+                    "native route exists."
+                )
+            thresholds = transport_mask_thresholds(embedded.transport)
+            if not isinstance(thresholds, dict) or any(
+                key not in {"kappa_min", "face_open_eps", "cut_theta_min"}
+                for key in thresholds
+            ):
+                raise TypeError(
+                    "embedded transport thresholds must use only kappa_min, "
+                    "face_open_eps and cut_theta_min"
+                )
+            return {
+                "schema_version": 1,
+                "level_set": level_set.to_data(),
+                "boundary": {"provider": lower_embedded_boundary_flux(embedded.boundary)},
+                "transport": {
+                    "mode": mode,
+                    "kappa_min": thresholds.get("kappa_min", 0.0),
+                    "face_open_eps": thresholds.get("face_open_eps", 0.0),
+                    "cut_theta_min": thresholds.get("cut_theta_min", 0.0),
+                },
+            }
+
+        first = project()
+        second = project()
+        if first != second:
+            raise ValueError(
+                "embedded geometry and transport providers must lower deterministically"
+            )
+        return _detached_json(first)
+
     def semantic_data(self) -> dict[str, Any]:
         return {
             "kind": "uniform",
             "mesh": self.mesh,
-            "embedded_boundary": self.embedded_boundary,
+            "embedded_boundary": (
+                None if self._embedded_boundary_plan is None
+                else self._normalized_embedded_boundary()
+            ),
             "refinement": self.refine,
             "ignore_amr": self.ignore_amr is not None,
         }
@@ -139,14 +213,55 @@ class Uniform(MeshDescriptor):
             if not callable(protocol):
                 raise TypeError("Uniform.refine must implement resolve_references(resolver)")
             refine = protocol(resolver)
-        return type(self)(
+        return type(self)._from_captured_plan(
             mesh=self.mesh,
-            embedded_boundary=self.embedded_boundary,
+            embedded_boundary_plan=self._embedded_boundary_plan,
             refine=refine,
             ignore_amr=self.ignore_amr,
         )
 
+    @classmethod
+    def _from_captured_plan(
+        cls,
+        *,
+        mesh: Any,
+        embedded_boundary_plan: Any,
+        refine: Any,
+        ignore_amr: Any,
+    ) -> Uniform:
+        """Build a resolved layout without consulting the authoring EB provider again."""
+
+        result = object.__new__(cls)
+        object.__setattr__(result, "mesh", mesh)
+        # The resolved descriptor owns only the detached signed plan.  Keeping the live provider
+        # here would make a later validation or copy capable of re-entering mutable Python code.
+        object.__setattr__(result, "embedded_boundary", None)
+        object.__setattr__(result, "refine", refine)
+        object.__setattr__(result, "ignore_amr", ignore_amr)
+        captured = None
+        if embedded_boundary_plan is not None:
+            captured = _detached_json(embedded_boundary_plan)
+        object.__setattr__(result, "_embedded_boundary_plan", captured)
+        return result
+
     def validate(self, context: Any = None) -> bool:
+        if self._embedded_boundary_plan is not None:
+            # Reparse the detached data rather than recalling Geometry.level_set() or any
+            # TransportMask extension.  Bind performs the same strict schema authentication.
+            from pops.mesh.geometry import LevelSet
+
+            captured = self._normalized_embedded_boundary()
+            if set(captured) != {"schema_version", "level_set", "boundary", "transport"} \
+                    or captured.get("schema_version") != 1:
+                raise TypeError("captured Uniform embedded-boundary plan is malformed")
+            LevelSet.from_data(captured["level_set"])
+            if captured["boundary"] != {"provider": "zero_flux"}:
+                raise TypeError("captured Uniform embedded boundary flux is unsupported")
+            transport = captured["transport"]
+            if not isinstance(transport, dict) or set(transport) != {
+                "mode", "kappa_min", "face_open_eps", "cut_theta_min",
+            }:
+                raise TypeError("captured Uniform embedded transport plan is malformed")
         if self.refine is not None and self.ignore_amr is None:
             raise ValueError(
                 "Uniform layout cannot consume AMR refinement criteria; remove the criterion, "

@@ -48,6 +48,33 @@ struct MaxWaveSpeedKernel {
       acc = w;
   }
 };
+
+template <class Kernel>
+struct ActiveCellReductionKernel {
+  Kernel kernel;
+  ConstArray4 active_cells;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) >= Real(0.5))
+      kernel(i, j, acc);
+  }
+};
+
+template <class Model>
+struct CutCellWaveSpeedKernel {
+  Model model;
+  ConstArray4 u, a, active_cells, inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const auto state = load_state<Model>(u, i, j);
+    const Aux aux = load_aux<aux_comps<Model>()>(a, i, j);
+    const Real wx = model.max_wave_speed(state, aux, 0);
+    const Real wy = model.max_wave_speed(state, aux, 1);
+    const Real wave = (wx > wy ? wx : wy) * inverse_volume_fraction(i, j, 0);
+    if (wave > acc)
+      acc = wave;
+  }
+};
 }  // namespace detail
 
 /// max_wave_speed_mf: global max of the wave speed over the whole MultiFab (CFL).
@@ -73,6 +100,43 @@ inline Real max_wave_speed_mf(const Model& model, const MultiFab& U, const Multi
   return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
 }
 
+/// Same collective reduction restricted to a prepared active-cell set.  The mask is a generic
+/// geometry-provider result, independent of the analytic shape that produced it.
+template <class Model>
+inline Real max_wave_speed_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                              const MultiFab& active_cells) {
+  Real m = 0;
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 a = aux.fab(li).const_array();
+    m = std::max(
+        m, reduce_max_cell(U.box(li),
+                           detail::ActiveCellReductionKernel<detail::MaxWaveSpeedKernel<Model>>{
+                               detail::MaxWaveSpeedKernel<Model>{model, u, a},
+                               active_cells.fab(li).const_array()}));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
+}
+
+/// Cut-cell transport bound. The prepared operator multiplies flux divergence by 1/kappa, so the
+/// stable effective speed is bounded by lambda/kappa on each active cell. This conservative bound
+/// deliberately uses the same frozen inverse-volume metric as the residual.
+template <class Model>
+inline Real max_wave_speed_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                              const MultiFab& active_cells,
+                              const MultiFab& inverse_volume_fraction) {
+  Real maximum = 0;
+  for (int local = 0; local < U.local_size(); ++local)
+    maximum = std::max(
+        maximum,
+        reduce_max_cell(U.box(local),
+                        detail::CutCellWaveSpeedKernel<Model>{
+                            model, U.fab(local).const_array(), aux.fab(local).const_array(),
+                            active_cells.fab(local).const_array(),
+                            inverse_volume_fraction.fab(local).const_array()}));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(maximum)));
+}
+
 namespace detail {
 /// Locates the cell DOMINATING the CFL (dt_hotspot diagnostic, ADC-182): EQUALITY scan
 /// of the recomputed w -- same functor and same data as MaxWaveSpeedKernel, hence bit-equal
@@ -95,6 +159,38 @@ struct WaveSpeedMatchKernel {
       const Real idx = static_cast<Real>(j) * nx + static_cast<Real>(i);
       if (idx < acc)
         acc = idx;
+    }
+  }
+};
+
+template <class Model>
+struct ActiveWaveSpeedMatchKernel {
+  WaveSpeedMatchKernel<Model> match;
+  ConstArray4 active_cells;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) >= Real(0.5))
+      match(i, j, acc);
+  }
+};
+
+template <class Model>
+struct CutCellWaveSpeedMatchKernel {
+  Model model;
+  ConstArray4 u, a, active_cells, inverse_volume_fraction;
+  Real target;
+  Real nx;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const auto state = load_state<Model>(u, i, j);
+    const Aux aux = load_aux<aux_comps<Model>()>(a, i, j);
+    const Real wx = model.max_wave_speed(state, aux, 0);
+    const Real wy = model.max_wave_speed(state, aux, 1);
+    const Real wave = (wx > wy ? wx : wy) * inverse_volume_fraction(i, j, 0);
+    if (wave == target) {
+      const Real index = static_cast<Real>(j) * nx + static_cast<Real>(i);
+      if (index < acc)
+        acc = index;
     }
   }
 };
@@ -130,6 +226,59 @@ inline void max_wave_speed_hotspot_mf(const Model& model, const MultiFab& U, con
   }
 }
 
+template <class Model>
+inline void max_wave_speed_hotspot_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                      const MultiFab& active_cells, int nx, Real& w_out, int& i_out,
+                                      int& j_out) {
+  const Real w = max_wave_speed_mf(model, U, aux, active_cells);
+  Real best = std::numeric_limits<Real>::infinity();
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 a = aux.fab(li).const_array();
+    best = std::min(best, reduce_min_cell(U.box(li), detail::ActiveWaveSpeedMatchKernel<Model>{
+                                                         detail::WaveSpeedMatchKernel<Model>{
+                                                             model, u, a, w, static_cast<Real>(nx)},
+                                                         active_cells.fab(li).const_array()}));
+  }
+  best = static_cast<Real>(all_reduce_min(static_cast<double>(best)));
+  w_out = w;
+  if (best >= Real(0) && best < std::numeric_limits<Real>::max() * Real(0.5)) {
+    const long long index = static_cast<long long>(best);
+    i_out = static_cast<int>(index % nx);
+    j_out = static_cast<int>(index / nx);
+  } else {
+    i_out = -1;
+    j_out = -1;
+  }
+}
+
+template <class Model>
+inline void max_wave_speed_hotspot_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                      const MultiFab& active_cells,
+                                      const MultiFab& inverse_volume_fraction, int nx, Real& w_out,
+                                      int& i_out, int& j_out) {
+  const Real wave = max_wave_speed_mf(model, U, aux, active_cells, inverse_volume_fraction);
+  Real best = std::numeric_limits<Real>::infinity();
+  for (int local = 0; local < U.local_size(); ++local)
+    best = std::min(
+        best, reduce_min_cell(U.box(local),
+                              detail::CutCellWaveSpeedMatchKernel<Model>{
+                                  model, U.fab(local).const_array(), aux.fab(local).const_array(),
+                                  active_cells.fab(local).const_array(),
+                                  inverse_volume_fraction.fab(local).const_array(), wave,
+                                  static_cast<Real>(nx)}));
+  best = static_cast<Real>(all_reduce_min(static_cast<double>(best)));
+  w_out = wave;
+  if (best >= Real(0) && best < std::numeric_limits<Real>::max() * Real(0.5)) {
+    const long long index = static_cast<long long>(best);
+    i_out = static_cast<int>(index % nx);
+    j_out = static_cast<int>(index / nx);
+  } else {
+    i_out = -1;
+    j_out = -1;
+  }
+}
+
 // ============================================================================
 // OPTIONAL STEP-BOUND REDUCTIONS (audit 2026-06, step_cfl effort).
 // Counterparts of max_wave_speed_mf for the HasStabilitySpeed / HasSourceFrequency /
@@ -154,6 +303,23 @@ struct StabilitySpeedKernel {
     const Real w = wx > wy ? wx : wy;
     if (w > acc)
       acc = w;
+  }
+};
+
+template <class Model>
+struct CutCellStabilitySpeedKernel {
+  Model model;
+  ConstArray4 u, a, active_cells, inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const auto state = load_state<Model>(u, i, j);
+    const Aux aux = load_aux<aux_comps<Model>()>(a, i, j);
+    const Real wx = model.stability_speed(state, aux, 0);
+    const Real wy = model.stability_speed(state, aux, 1);
+    const Real wave = (wx > wy ? wx : wy) * inverse_volume_fraction(i, j, 0);
+    if (wave > acc)
+      acc = wave;
   }
 };
 
@@ -204,6 +370,38 @@ inline Real max_stability_speed_mf(const Model& model, const MultiFab& U, const 
   return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
 }
 
+template <class Model>
+inline Real max_stability_speed_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                   const MultiFab& active_cells) {
+  Real m = 0;
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 a = aux.fab(li).const_array();
+    m = std::max(
+        m, reduce_max_cell(U.box(li),
+                           detail::ActiveCellReductionKernel<detail::StabilitySpeedKernel<Model>>{
+                               detail::StabilitySpeedKernel<Model>{model, u, a},
+                               active_cells.fab(li).const_array()}));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
+}
+
+template <class Model>
+inline Real max_stability_speed_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                   const MultiFab& active_cells,
+                                   const MultiFab& inverse_volume_fraction) {
+  Real maximum = 0;
+  for (int local = 0; local < U.local_size(); ++local)
+    maximum = std::max(
+        maximum,
+        reduce_max_cell(U.box(local),
+                        detail::CutCellStabilitySpeedKernel<Model>{
+                            model, U.fab(local).const_array(), aux.fab(local).const_array(),
+                            active_cells.fab(local).const_array(),
+                            inverse_volume_fraction.fab(local).const_array()}));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(maximum)));
+}
+
 /// Global max of the source frequency (HasSourceFrequency trait). 0 if the source does not constrain.
 template <class Model>
 inline Real max_source_frequency_mf(const Model& model, const MultiFab& U, const MultiFab& aux) {
@@ -212,6 +410,22 @@ inline Real max_source_frequency_mf(const Model& model, const MultiFab& U, const
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 a = aux.fab(li).const_array();
     m = std::max(m, reduce_max_cell(U.box(li), detail::SourceFrequencyKernel<Model>{model, u, a}));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
+}
+
+template <class Model>
+inline Real max_source_frequency_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                    const MultiFab& active_cells) {
+  Real m = 0;
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 a = aux.fab(li).const_array();
+    m = std::max(
+        m, reduce_max_cell(U.box(li),
+                           detail::ActiveCellReductionKernel<detail::SourceFrequencyKernel<Model>>{
+                               detail::SourceFrequencyKernel<Model>{model, u, a},
+                               active_cells.fab(li).const_array()}));
   }
   return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
 }
@@ -226,6 +440,23 @@ inline Real min_stability_dt_mf(const Model& model, const MultiFab& U, const Mul
     const ConstArray4 a = aux.fab(li).const_array();
     inv =
         std::max(inv, reduce_max_cell(U.box(li), detail::InvStabilityDtKernel<Model>{model, u, a}));
+  }
+  inv = static_cast<Real>(all_reduce_max(static_cast<double>(inv)));
+  return inv > Real(0) ? Real(1) / inv : Real(0);
+}
+
+template <class Model>
+inline Real min_stability_dt_mf(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                const MultiFab& active_cells) {
+  Real inv = 0;
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 a = aux.fab(li).const_array();
+    inv = std::max(
+        inv, reduce_max_cell(U.box(li),
+                             detail::ActiveCellReductionKernel<detail::InvStabilityDtKernel<Model>>{
+                                 detail::InvStabilityDtKernel<Model>{model, u, a},
+                                 active_cells.fab(li).const_array()}));
   }
   inv = static_cast<Real>(all_reduce_max(static_cast<double>(inv)));
   return inv > Real(0) ? Real(1) / inv : Real(0);

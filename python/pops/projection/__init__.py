@@ -20,10 +20,13 @@ def _state_space(state: Any) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class ConservativeCellAverage:
-    """Second-order conservative projection onto cell averages.
+    """Conservative projection onto cell averages, second-order for smooth profiles.
 
-    Formal order, centering and bootstrap phase ordering belong to this brick.  They are not public
-    constructor arguments and therefore cannot disagree with AMR transfer or stencil planning.
+    The generic analytic provider uses deterministic tensor Gauss--Legendre quadrature; specialised
+    providers may supply an exact integral.  As usual for discontinuous data, the smooth-profile
+    formal order does not claim exact integration of an unresolved interface.  Formal order,
+    centering and bootstrap phase ordering belong to this brick.  They are not public constructor
+    arguments and therefore cannot disagree with AMR transfer or stencil planning.
     """
 
     native_route: ClassVar[str] = "conservative_cell_average"

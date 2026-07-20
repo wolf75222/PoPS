@@ -86,7 +86,12 @@ def test_patch_box_and_layout():
 
 
 def test_uniform_layout():
-    u = Uniform(cartesian_grid(), embedded_boundary=EmbeddedBoundary(Disc(), CutCell()))
+    from pops.boundary import ZeroFlux
+
+    u = Uniform(
+        cartesian_grid(),
+        embedded_boundary=EmbeddedBoundary(Disc(), CutCell(), ZeroFlux()),
+    )
     assert u.capabilities().supports("amr") is False
     assert "embedded_boundary" in u.options()
 
@@ -152,7 +157,7 @@ def test_boundaries_and_masks():
         FaceBC("x", Periodic())
     assert CutCell().capabilities().to_dict()["conservative"] is True
     assert NoMask().capabilities().to_dict()["masked_transport"] is False
-    assert Staircase().capabilities().to_dict()["conservative"] is False
+    assert Staircase().capabilities().to_dict()["conservative"] is True
 
 
 def test_amr_policies():

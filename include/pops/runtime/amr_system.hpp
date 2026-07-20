@@ -133,6 +133,9 @@ struct AmrSystemConfig {
   double cluster_min_efficiency = 0.0;
   int cluster_min_box_size = 0;
   int cluster_max_box_size = 0;
+  // Cartesian physical origin. Appended so historical aggregate initialization keeps its meaning.
+  double xlo = 0.0;
+  double ylo = 0.0;
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
@@ -152,7 +155,9 @@ struct AmrBuildParams {
   /// Coarse mesh geometry + coarse ownership policy (AMR strong-scaling).
   struct Mesh {
     int n = 128;                     ///< coarse cells per direction
-    double L = 1.0;                  ///< size of the square domain [0, L]^2
+    double L = 1.0;                  ///< size of the square Cartesian domain
+    double xlo = 0.0;                ///< physical lower x coordinate
+    double ylo = 0.0;                ///< physical lower y coordinate
     int regrid_every = 20;           ///< re-refinement cadence (0 = never after init)
     bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
     int coarse_max_grid = 0;         ///< tile size of the distributed coarse (0 => n/2)
@@ -676,6 +681,10 @@ class AmrSystem {
   void register_analytic_gaussian(const std::string& subject, const std::string& block,
                                   double center_x, double center_y, double background,
                                   double amplitude, double inverse_width);
+  void register_analytic_expression(
+      const std::string& subject, const std::string& block, const std::string& space,
+      const std::string& centering, const std::vector<std::vector<std::string>>& opcodes,
+      const std::vector<std::vector<double>>& literals);
   std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
   int apply_bootstrap_component_floor(const std::string& subject, int level, int component,
                                       double floor);

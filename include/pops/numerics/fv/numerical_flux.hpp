@@ -10,6 +10,8 @@
 
 #include <pops/numerics/fv/flux_interfaces.hpp>
 
+#include <Kokkos_MathematicalFunctions.hpp>
+
 #include <cmath>
 #include <concepts>
 
@@ -85,6 +87,8 @@ POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
   const auto right_density = physical.evaluate(right, face);
   const auto bound = detail::max_bound<typename Physical::State>(physical.stability(left, face),
                                                                  physical.stability(right, face));
+  if (!Kokkos::isfinite(lower) || !Kokkos::isfinite(upper) || lower > upper)
+    return FluxEvaluation<typename Physical::State>::reject(0x484c4c01u);
   if (lower >= Real(0))
     return FluxEvaluation<typename Physical::State>::ok(left_density.value, bound);
   if (upper <= Real(0))

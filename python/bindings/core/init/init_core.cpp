@@ -595,7 +595,9 @@ void init_core(py::module_& m) {
       .def_readwrite("ntheta", &SystemConfig::ntheta)
       .def_readwrite("r_min", &SystemConfig::r_min)
       .def_readwrite("r_max", &SystemConfig::r_max)
-      .def_readwrite("theta_boxes", &SystemConfig::theta_boxes);
+      .def_readwrite("theta_boxes", &SystemConfig::theta_boxes)
+      .def_readwrite("xlo", &SystemConfig::xlo)
+      .def_readwrite("ylo", &SystemConfig::ylo);
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
   // No named scenario; the private Python ModelSpec composer fills these engine fields.

@@ -19,6 +19,9 @@ complets de l'architecture.
   IMEX local, puis operateur global matrix-free lorsque la diffusion couple les cellules.
 - [Source condensee et FAC composite](condensed_fac/README.md) : cas AMR avance avec
   condensation tensorielle et solve elliptique natif sur toute la hierarchie.
+- [HyQMOM a 15 moments](hyqmom/README.md) : cas constant, ondes fluide/electrostatique/magnetique,
+  diocotron, tube a choc et jets croises, avec fermeture HyQMOM polynomiale, HLL, Euler, Poisson
+  FFT periodique lorsque le cas le demande, et sources de Lorentz natives.
 
 Les cas plus longs se trouvent dans
 [l'exemple d'advection scalaire](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)

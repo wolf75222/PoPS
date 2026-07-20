@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from pops.mesh import LayoutPlanBuilder
+from pops.initial import InitialConditionPlanBuilder, InitialConditionSource
 from pops.mesh._amr import (
     AnalyticReprojection,
     Above,
@@ -17,8 +18,6 @@ from pops.mesh._amr import (
     HierarchyPlan,
     HierarchyProviderCapabilities,
     HierarchyResolutionContext,
-    InitialConditionPlanBuilder,
-    InitialConditionSource,
     LevelTransition,
     LoadBalancePolicy,
     NestingRequirementSource,
@@ -416,7 +415,7 @@ def test_cell_face_node_states_use_distinct_providers_and_exact_initial_sources(
         transfer.for_subject(state, PROLONGATION).action.provider.provider.local_id
         for state in states
     } == {"cell_transfer", "face_transfer", "node_transfer"}
-    initial_builder = InitialConditionPlanBuilder(plan, transfer)
+    initial_builder = InitialConditionPlanBuilder(plan, states)
     for name, state in zip(("cell", "face", "node"), states, strict=True):
         initial_builder.add(
             state,
@@ -494,7 +493,7 @@ def test_derived_fields_recompute_and_caches_invalidate_then_rebuild():
 
 def test_initial_condition_manifest_exactly_covers_physical_subjects():
     plan, layout, state, field, _, transfer = _resolved_transfer()
-    builder = InitialConditionPlanBuilder(plan, transfer)
+    builder = InitialConditionPlanBuilder(plan, (state,))
     with pytest.raises(ValueError, match="physical state/particle"):
         builder.add(field, InitialConditionSource(_handle("field_ic", "initial_condition_provider")))
     with pytest.raises(ValueError, match="missing physical subjects"):
@@ -505,12 +504,13 @@ def test_initial_condition_manifest_exactly_covers_physical_subjects():
         layout=layout,
     )
     initial = builder.resolve()
-    assert initial.transfer_identity == transfer.identity
+    assert initial.identity.domain == "initial-condition-plan"
+    assert not hasattr(initial, "transfer_identity")
 
 
 def test_bootstrap_orders_level_zero_and_recursive_materialization_explicitly():
     plan, layout, state, field, cache, transfer = _resolved_transfer()
-    initial_builder = InitialConditionPlanBuilder(plan, transfer)
+    initial_builder = InitialConditionPlanBuilder(plan, (state,))
     initial_builder.add(
         state,
         InitialConditionSource(_handle("state_ic", "initial_condition_provider")),
@@ -585,7 +585,7 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
         ),
         HierarchyResolutionContext(Clock("t3", owner=OWNER)),
     )
-    initial_builder = InitialConditionPlanBuilder(layout_plan, transfer)
+    initial_builder = InitialConditionPlanBuilder(layout_plan, (state,))
     initial_builder.add(
         state, InitialConditionSource(_handle("state3_ic", "initial_condition_provider")),
         layout=layout,
@@ -645,7 +645,7 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
 
 def test_runtime_executor_consumes_every_transfer_projection_and_cache_action():
     plan, layout, state, field, cache, transfer = _resolved_transfer()
-    initial_builder = InitialConditionPlanBuilder(plan, transfer)
+    initial_builder = InitialConditionPlanBuilder(plan, (state,))
     initial_builder.add(
         state,
         InitialConditionSource(_handle("state_ic", "initial_condition_provider")),
@@ -698,7 +698,7 @@ def test_runtime_executor_consumes_every_transfer_projection_and_cache_action():
 
 def test_bootstrap_rejects_hierarchy_not_derived_from_transfer_registry():
     plan, layout, state, _, _, transfer = _resolved_transfer()
-    initial_builder = InitialConditionPlanBuilder(plan, transfer)
+    initial_builder = InitialConditionPlanBuilder(plan, (state,))
     initial_builder.add(
         state,
         InitialConditionSource(_handle("state_ic", "initial_condition_provider")),

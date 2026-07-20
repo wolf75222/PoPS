@@ -5,7 +5,8 @@
 #include <pops/core/state/variables.hpp>   // VariableSet (role descriptor carried by each block)
 #include <pops/mesh/index/box2d.hpp>       // Box2D
 #include <pops/mesh/execution/for_each.hpp>  // device_fence (marshaling synchronizes the device before reading the host)
-#include <pops/mesh/storage/multifab.hpp>  // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/multifab.hpp>         // MultiFab, Array4, ConstArray4
+#include <pops/runtime/context/grid_context.hpp>  // GeometryMode + point-qualified geometry residuals
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
 #include <functional>
@@ -98,14 +99,14 @@ class SystemBlockStore {
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
     CellConvert prim_to_cons, cons_to_prim;
-    // --- MASKED / DISK TRANSPORT (opt-in; empty default -> Cartesian path, bit-identical) ---
-    // DISK TRANSPORT ADVANCES (work T5-PR3, OPT-IN). Empty (default) -> no disk routing:
+    // --- EMBEDDED-BOUNDARY TRANSPORT (opt-in; empty default -> Cartesian path) ---
+    // GEOMETRY-AWARE TRANSPORT ADVANCES. Empty (default) -> no embedded-boundary routing:
     // the stepper advances via `advance` (full Cartesian path, BIT-IDENTICAL). Non empty, they MIMIC
     // `advance` (same RK / IMEX scheme, same limiter / flux) but dispatch the transport residual
-    // to the disk operator, and are SELECTED only if the System is in Staircase mode (resp.
-    // CutCell) AND a disk is set (set_disc_domain). Built at block add time (build_block)
+    // to the selected metric operator, and are SELECTED only if the System is in Staircase mode
+    // (resp. CutCell) AND a signed embedded boundary is installed. Built at block add time
     // AT THE SAME TIME as `advance`, they read the System mask / level set by pointer at step time
-    // (stable address): the order add_block / set_disc_domain is irrelevant. Trailing + empty default:
+    // (stable address): block/geometry authoring order is irrelevant. Trailing + empty default:
     // the positional aggregate init of the other members stays unchanged.
     std::function<void(MultiFab&, Real, int)>
         advance_masked;  // residual via assemble_rhs_masked (Staircase)
@@ -128,6 +129,10 @@ class SystemBlockStore {
     // couplages ; jamais par etage RK). VIDE (defaut) -> jamais interrogee (cout nul, chemin
     // bit-identique). Trailing + defaut vide : l'init par agregat positionnel reste inchangee.
     std::function<void(MultiFab&)> project;
+    // Geometry-aware projection: same pointwise model projection, restricted to the prepared
+    // active-cell mask.  Empty is an unsupported provider, never permission to project inactive
+    // storage when an embedded boundary is active.
+    std::function<void(MultiFab&)> project_masked;
     // FLUX-ONLY residual R <- -div F(U) (NO default/composite source), Poisson frozen (ADC-425). The
     // SAME transport assembly as rhs_into evaluated on SourceFreeModel<Model> (zero source), so the
     // flux / ghost / geometry handling is bit-identical -- only the source is dropped (with
@@ -157,6 +162,9 @@ class SystemBlockStore {
     // loud then. Trailing + empty default: the positional aggregate init of the other members stays
     // unchanged.
     std::function<void(MultiFab&, MultiFab&)> source_only;
+    // Geometry-aware source-only twin.  It writes S(U, aux) on active cells and exact zero on
+    // inactive cells for both Staircase and CutCell Program splits.
+    std::function<void(MultiFab&, MultiFab&)> source_only_masked;
     // Point-qualified residuals are the sole compiled-Program route once a prepared boundary
     // component exists.  They retain the exact StagePoint instead of reconstructing time in a
     // closure or calling the legacy unqualified RHS.
@@ -193,6 +201,11 @@ class SystemBlockStore {
     std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
                        const MultiFab&, MultiFab&, const PreparedGridBoundarySession&)>
         boundary_jvp_at_point_prepared;
+    PointQualifiedResidualClosures staircase_residuals;
+    PointQualifiedResidualClosures cutcell_residuals;
+    // Frozen numerical-provider capability. Kept at the aggregate tail so the positional head used
+    // by install_block remains ABI/source compatible.
+    std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
     /// Sequential runtime session materialized once at bind, after block layouts and qualified
     /// storage routes are frozen. Prepared Krylov workspaces own distinct lane-private sessions.
     std::shared_ptr<ExecutionLane> boundary_lane;
@@ -269,10 +282,22 @@ class SystemBlockStore {
   void evaluate_rhs_with_interfaces(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                     const std::vector<MultiFab*>& states,
                                     const std::vector<MultiFab*>& rhs,
-                                    const std::vector<int>& flux_only = {}) {
+                                    const std::vector<int>& flux_only = {},
+                                    GeometryMode geometry_mode = GeometryMode::None) {
+    if (geometry_mode != GeometryMode::None && interface_scheduler_.has_interfaces(point.level))
+      throw std::runtime_error(
+          "SystemBlockStore embedded-boundary Program RHS cannot use a shared interface: "
+          "the pair scheduler has no signed-mask/volume-metric contract");
     if (states.size() != blocks.size() || rhs.size() != blocks.size() ||
         (!flux_only.empty() && flux_only.size() != blocks.size()))
       throw std::invalid_argument("SystemBlockStore multi-block RHS vector size mismatch");
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      if ((states[block] == nullptr) != (rhs[block] == nullptr))
+        throw std::invalid_argument(
+            "SystemBlockStore sparse RHS group has only one state/output pointer");
+      if (states[block] != nullptr)
+        require_geometry_provider(blocks[block], geometry_mode);
+    }
     for (std::size_t block = 0; block < blocks.size(); ++block) {
       if ((states[block] == nullptr) != (rhs[block] == nullptr))
         throw std::invalid_argument(
@@ -281,6 +306,14 @@ class SystemBlockStore {
         continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
       if (blocks[block].boundary_session) {
+        if (geometry_mode != GeometryMode::None) {
+          auto& prepared = select_prepared_full(blocks[block], geometry_mode, flux);
+          if (!prepared)
+            throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                            "prepared full Program RHS");
+          prepared(point, *states[block], *rhs[block], *blocks[block].boundary_session);
+          continue;
+        }
         auto& core = flux ? blocks[block].rhs_flux_only_core_at_point_prepared
                           : blocks[block].rhs_core_at_point_prepared;
         if (!core || !blocks[block].boundary_residual_at_point_prepared)
@@ -292,16 +325,18 @@ class SystemBlockStore {
         continue;
       }
       if (interface_scheduler_.participates(block, point.level)) {
-        auto& closure = flux ? blocks[block].rhs_flux_only_without_prepared_interfaces
-                             : blocks[block].rhs_without_prepared_interfaces;
+        auto& closure = select_full(blocks[block], geometry_mode, flux,
+                                    /*omit_prepared_interfaces=*/true);
         if (!closure)
-          throw std::runtime_error("SystemBlockStore lost its interface-omitting residual closure");
+          throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                          "interface-omitting Program RHS");
         closure(point, *states[block], *rhs[block]);
       } else {
-        auto& closure = flux ? blocks[block].rhs_flux_only_at_point : blocks[block].rhs_at_point;
+        auto& closure = select_full(blocks[block], geometry_mode, flux,
+                                    /*omit_prepared_interfaces=*/false);
         if (!closure)
-          throw std::runtime_error(
-              "SystemBlockStore block lacks a point-qualified residual closure");
+          throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                          "point-qualified Program RHS");
         closure(point, *states[block], *rhs[block]);
       }
     }
@@ -313,10 +348,22 @@ class SystemBlockStore {
   void evaluate_rhs_core_with_interfaces(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                          const std::vector<MultiFab*>& states,
                                          const std::vector<MultiFab*>& rhs,
-                                         const std::vector<int>& flux_only = {}) {
+                                         const std::vector<int>& flux_only = {},
+                                         GeometryMode geometry_mode = GeometryMode::None) {
+    if (geometry_mode != GeometryMode::None && interface_scheduler_.has_interfaces(point.level))
+      throw std::runtime_error(
+          "SystemBlockStore embedded-boundary core Program RHS cannot use a shared interface: "
+          "the pair scheduler has no signed-mask/volume-metric contract");
     if (states.size() != blocks.size() || rhs.size() != blocks.size() ||
         (!flux_only.empty() && flux_only.size() != blocks.size()))
       throw std::invalid_argument("SystemBlockStore core RHS vector size mismatch");
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      if ((states[block] == nullptr) != (rhs[block] == nullptr))
+        throw std::invalid_argument(
+            "SystemBlockStore sparse core RHS has only one state/output pointer");
+      if (states[block] != nullptr)
+        require_geometry_provider(blocks[block], geometry_mode);
+    }
     for (std::size_t block = 0; block < blocks.size(); ++block) {
       if ((states[block] == nullptr) != (rhs[block] == nullptr))
         throw std::invalid_argument(
@@ -325,19 +372,17 @@ class SystemBlockStore {
         continue;
       const bool flux = !flux_only.empty() && flux_only[block] != 0;
       if (blocks[block].boundary_session) {
-        auto& prepared = flux ? blocks[block].rhs_flux_only_core_at_point_prepared
-                              : blocks[block].rhs_core_at_point_prepared;
+        auto& prepared = select_prepared_core(blocks[block], geometry_mode, flux);
         if (!prepared)
-          throw std::runtime_error(
-              "SystemBlockStore block lacks its persistent prepared core residual closure");
+          throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                          "prepared core Program RHS");
         prepared(point, *states[block], *rhs[block], *blocks[block].boundary_session);
         continue;
       }
-      auto& closure =
-          flux ? blocks[block].rhs_flux_only_core_at_point : blocks[block].rhs_core_at_point;
+      auto& closure = select_core(blocks[block], geometry_mode, flux);
       if (!closure)
-        throw std::runtime_error(
-            "SystemBlockStore block lacks a point-qualified core residual closure");
+        throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                        "point-qualified core Program RHS");
       closure(point, *states[block], *rhs[block]);
     }
     interface_scheduler_.apply(point, states, rhs);
@@ -348,47 +393,50 @@ class SystemBlockStore {
   /// participating state/output together, so this seam refuses instead of constructing a sparse
   /// temporary vector and evaluating an incomplete interface batch.
   void evaluate_rhs_core(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                         std::size_t block, MultiFab& state, MultiFab& rhs, bool flux_only) {
+                         std::size_t block, MultiFab& state, MultiFab& rhs, bool flux_only,
+                         GeometryMode geometry_mode = GeometryMode::None) {
     if (block >= blocks.size())
       throw std::out_of_range("SystemBlockStore core RHS block index is out of range");
+    require_geometry_provider(blocks[block], geometry_mode);
     if (interface_scheduler_.participates(block, point.level))
       throw std::runtime_error(
           "System implicit core RHS requires a coupled shared-interface solve");
-    auto& closure =
-        flux_only ? blocks[block].rhs_flux_only_core_at_point : blocks[block].rhs_core_at_point;
+    auto& closure = select_core(blocks[block], geometry_mode, flux_only);
     if (blocks[block].boundary_session) {
-      auto& prepared = flux_only ? blocks[block].rhs_flux_only_core_at_point_prepared
-                                 : blocks[block].rhs_core_at_point_prepared;
+      auto& prepared = select_prepared_core(blocks[block], geometry_mode, flux_only);
       if (!prepared)
-        throw std::runtime_error(
-            "SystemBlockStore block lacks its persistent prepared core residual closure");
+        throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                        "persistent prepared core Program RHS");
       prepared(point, state, rhs, *blocks[block].boundary_session);
       return;
     }
     if (!closure)
-      throw std::runtime_error(
-          "SystemBlockStore block lacks a point-qualified core residual closure");
+      throw_missing_geometry_residual(blocks[block], geometry_mode,
+                                      "point-qualified core Program RHS");
     closure(point, state, rhs);
   }
 
   void evaluate_rhs_core_prepared(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                   std::size_t block, MultiFab& state, MultiFab& rhs, bool flux_only,
-                                  const PreparedGridBoundarySession& boundary) {
+                                  const PreparedGridBoundarySession& boundary,
+                                  GeometryMode geometry_mode = GeometryMode::None) {
     if (block >= blocks.size())
       throw std::out_of_range("SystemBlockStore prepared core RHS block index is out of range");
+    require_geometry_provider(blocks[block], geometry_mode);
     if (interface_scheduler_.participates(block, point.level))
       throw std::runtime_error(
           "System implicit core RHS requires a coupled shared-interface solve");
-    auto& closure = flux_only ? blocks[block].rhs_flux_only_core_at_point_prepared
-                              : blocks[block].rhs_core_at_point_prepared;
+    auto& closure = select_prepared_core(blocks[block], geometry_mode, flux_only);
     if (!closure)
-      throw std::runtime_error("SystemBlockStore block lacks a prepared core residual closure");
+      throw_missing_geometry_residual(blocks[block], geometry_mode, "prepared core Program RHS");
     closure(point, state, rhs, boundary);
   }
 
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_scheduler_.evaluation_count(identity, level);
   }
+
+  bool has_interfaces(int level) const { return interface_scheduler_.has_interfaces(level); }
 
   void discard_interface_fluxes() { interface_scheduler_.clear(); }
   /// Block names, in insertion order (UNIQUE source: all add paths appear here).
@@ -460,6 +508,90 @@ class SystemBlockStore {
   }
 
  private:
+  static void require_geometry_provider(const BlockState& block, GeometryMode mode) {
+    if (!supports_geometry_mode(block.supported_geometry_modes, mode))
+      throw std::runtime_error("SystemBlockStore block '" + block.name +
+                               "' has no numerical provider for geometry policy '" +
+                               geometry_token(mode) + "'");
+    if (mode == GeometryMode::None || !block.boundary_session)
+      return;
+    const PreparedBoundaryPlan* plan = block.boundary_session->resolved_plan();
+    if (plan != nullptr && plan->has_component_boundaries())
+      throw std::runtime_error(
+          "SystemBlockStore embedded-boundary block '" + block.name +
+          "' cannot execute a native boundary component without an active-cell or cut-cell "
+          "metric provider");
+  }
+
+  static PointQualifiedResidualClosures& embedded_residuals(BlockState& block, GeometryMode mode) {
+    return mode == GeometryMode::Staircase ? block.staircase_residuals : block.cutcell_residuals;
+  }
+
+  static PointQualifiedResidualClosures::AtPoint& select_full(BlockState& block, GeometryMode mode,
+                                                              bool flux_only,
+                                                              bool omit_prepared_interfaces) {
+    if (mode == GeometryMode::None) {
+      if (omit_prepared_interfaces)
+        return flux_only ? block.rhs_flux_only_without_prepared_interfaces
+                         : block.rhs_without_prepared_interfaces;
+      return flux_only ? block.rhs_flux_only_at_point : block.rhs_at_point;
+    }
+    auto& family = embedded_residuals(block, mode);
+    if (omit_prepared_interfaces)
+      return flux_only ? family.flux_only_without_prepared_interfaces
+                       : family.without_prepared_interfaces;
+    return flux_only ? family.flux_only : family.full;
+  }
+
+  static PointQualifiedResidualClosures::AtPoint& select_core(BlockState& block, GeometryMode mode,
+                                                              bool flux_only) {
+    if (mode == GeometryMode::None)
+      return flux_only ? block.rhs_flux_only_core_at_point : block.rhs_core_at_point;
+    auto& family = embedded_residuals(block, mode);
+    return flux_only ? family.flux_only_core : family.core;
+  }
+
+  static PointQualifiedResidualClosures::PreparedAtPoint& select_prepared_full(BlockState& block,
+                                                                               GeometryMode mode,
+                                                                               bool flux_only) {
+    if (mode == GeometryMode::None) {
+      // The Cartesian prepared full route is deliberately composed from its core and additive
+      // boundary closures by evaluate_rhs_with_interfaces, as it was before geometry routing.
+      static PointQualifiedResidualClosures::PreparedAtPoint empty;
+      return empty;
+    }
+    auto& family = embedded_residuals(block, mode);
+    return flux_only ? family.flux_only_full_prepared : family.full_prepared;
+  }
+
+  static PointQualifiedResidualClosures::PreparedAtPoint& select_prepared_core(BlockState& block,
+                                                                               GeometryMode mode,
+                                                                               bool flux_only) {
+    if (mode == GeometryMode::None)
+      return flux_only ? block.rhs_flux_only_core_at_point_prepared
+                       : block.rhs_core_at_point_prepared;
+    auto& family = embedded_residuals(block, mode);
+    return flux_only ? family.flux_only_core_prepared : family.core_prepared;
+  }
+
+  static const char* geometry_token(GeometryMode mode) {
+    switch (mode) {
+      case GeometryMode::None:
+        return "cartesian";
+      case GeometryMode::Staircase:
+        return "staircase";
+      case GeometryMode::CutCell:
+        return "cutcell";
+    }
+    return "unknown";
+  }
+
+  [[noreturn]] static void throw_missing_geometry_residual(const BlockState& block,
+                                                           GeometryMode mode, const char* route) {
+    throw std::runtime_error("SystemBlockStore block '" + block.name + "' lacks " + route +
+                             " for geometry policy '" + geometry_token(mode) + "'");
+  }
+
   runtime::multiblock::InterfaceFluxScheduler interface_scheduler_;
 };
 

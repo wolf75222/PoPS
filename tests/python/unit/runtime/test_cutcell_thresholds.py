@@ -8,7 +8,7 @@ out-of-domain values structurally. Kokkos-gated for the runtime tier; the descri
 import pytest
 
 from pops.mesh.geometry import DiscDomain
-from pops.mesh.masks import CutCell, disc_mode_thresholds
+from pops.mesh.masks import CutCell, transport_mask_thresholds
 
 
 # --- descriptor tier (pure Python) -------------------------------------------
@@ -44,12 +44,12 @@ def test_cutcell_refuses_out_of_domain():
         CutCell(kappa_min=True)
 
 
-def test_disc_mode_thresholds_require_typed_mask():
+def test_transport_mask_thresholds_require_typed_mask():
     from pops.mesh.masks import NoMask, Staircase
     with pytest.raises(TypeError, match="TransportMask"):
-        disc_mode_thresholds("cutcell")
-    assert disc_mode_thresholds(NoMask()) == {}
-    assert disc_mode_thresholds(Staircase()) == {}
+        transport_mask_thresholds("cutcell")
+    assert transport_mask_thresholds(NoMask()) == {}
+    assert transport_mask_thresholds(Staircase()) == {}
 
 
 # --- runtime tier (needs _pops) ----------------------------------------------
@@ -65,7 +65,10 @@ def _sim():
     sim = System(n=16, L=1.0, periodic=False)
     sim.add_block("ion", Model(FluidState.isothermal(cs2=0.7), IsothermalFlux(),
                                NoSource(), ChargeDensity(charge=1.0)),
-                  spatial=Spatial())
+                  # The native embedded-boundary facade currently provides a geometry-aware
+                  # first-order reconstruction. Higher-order neighbor stencils are rejected
+                  # instead of reading inactive cells.
+                  spatial=Spatial(none=True))
     return sim
 
 
@@ -107,7 +110,7 @@ def main():
     test_cutcell_default_thresholds_are_zero_native_default()
     test_cutcell_thresholds_carry_configured_values()
     test_cutcell_refuses_out_of_domain()
-    test_disc_mode_thresholds_require_typed_mask()
+    test_transport_mask_thresholds_require_typed_mask()
     test_default_eb_report_is_native_defaults()
     test_typed_cutcell_thresholds_reach_the_report()
     test_native_set_disc_domain_refuses_out_of_domain()

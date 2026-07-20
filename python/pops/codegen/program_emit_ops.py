@@ -199,6 +199,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
         components = _coupled_rate_components(program, v, model)
         by_block = {s.block: s for s in v.inputs}
+        if target == "system":
+            for block in components:
+                index = _required_block_index(
+                    block_idx, block, "preflight coupled rate %r" % v.name)
+                lines.append(
+                    "ctx.require_cartesian_generated_operator(%d, %s);"
+                    % (index, json.dumps("coupled_rate")))
         scratch = {}
         for blk in components:                       # bundle / expr block order
             scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
@@ -218,6 +225,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_coupled_implicit":
         components = _coupled_rate_components(program, v, model)
         by_block = {state.block: state for state in v.inputs}
+        if target == "system":
+            for block in components:
+                index = _required_block_index(
+                    block_idx, block, "preflight coupled implicit solve %r" % v.name)
+                lines.append(
+                    "ctx.require_cartesian_generated_operator(%d, %s);"
+                    % (index, json.dumps("solve_coupled_implicit")))
         scratch = {}
         for block in components:
             scratch[block] = "ci%d_%s" % (v.id, block_name(block))
@@ -322,10 +336,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
-        lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                     % (var[v.id], var[state_in.id]))
         named_fluxes = _named_fluxes(v)
         requested = v.attrs.get("sources")
+        named = [s for s in (requested or []) if s != "default"]
+        if target == "system" and (named_fluxes is not None or named):
+            operation = "named_flux" if named_fluxes is not None else "named_source"
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps(operation)))
+        lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                     % (var[v.id], var[state_in.id]))
         want_flux = v.attrs.get("flux", True)
         # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
         # caller did NOT exclude it -- i.e. sources is None (the legacy default) OR "default" is in
@@ -382,7 +402,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fy, var[state_in.id]))
             lines += _emit_flux_kernel(node_model, named_fluxes, var[state_in.id], fx, fy, bidx)
             lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (var[v.id], fx, fy))
-        named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
         for s in named:
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
             # the standalone 'source' op) and axpy it onto R.
@@ -394,6 +413,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("named_source")))
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
         lines += _emit_source_kernel(
@@ -401,6 +424,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("linear_source_apply")))
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
@@ -408,6 +435,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("solve_local_linear")))
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_linear_kernel(
@@ -418,6 +449,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # uses. The output is a fresh scratch state; the guess input seeds the iterate.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_nonlinear_kernel(
@@ -488,29 +523,36 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             var[v.id] = var[source.id]
     elif v.op == "reduce":
-        # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
-        # sum/max/min (over a component) via the matching pops reduction. All MUST run on every rank
-        # (the reductions are collective all_reduce); they sit at the top of the loop body.
+        # A collective physical-domain reduction -> a C++ scalar.  Route every operation through
+        # ProgramContext with the exact Program block owner: the runtime then selects its prepared
+        # full-grid/staircase/cut-cell measure without the generated code knowing a geometry shape.
+        # All ranks execute the same context call, including ranks that own no box.
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
+        owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
         if kind == "norm2":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = std::sqrt(pops::dot(%s, %s));"
-                         % (var[v.id], var[u.id], var[u.id]))
+            lines.append("const pops::Real %s = ctx.norm2(%d, %s);"
+                         % (var[v.id], owner, var[u.id]))
         elif kind == "norm_inf":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = pops::norm_inf(%s);" % (var[v.id], var[u.id]))
+            lines.append("const pops::Real %s = ctx.norm_inf(%d, %s);"
+                         % (var[v.id], owner, var[u.id]))
         elif kind in ("sum", "max", "min", "abs_sum"):
-            # abs_sum -> pops::reduce_abs_sum (the L1 reduction; P.norm1 / Norm(L1)); the reduce_<kind>
-            # naming matches the free-function name exactly, like sum/max/min.
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
-            lines.append("const pops::Real %s = pops::reduce_%s(%s, %d);"
-                         % (var[v.id], kind, var[u.id], comp))
+            context_op = {
+                "sum": "sum_component",
+                "max": "max_component",
+                "min": "min_component",
+                "abs_sum": "abs_sum_component",
+            }[kind]
+            lines.append("const pops::Real %s = ctx.%s(%d, %s, %d);"
+                         % (var[v.id], context_op, owner, var[u.id], comp))
         else:  # dot
             a, b = v.inputs
-            lines.append("const pops::Real %s = pops::dot(%s, %s);"
-                         % (var[v.id], var[a.id], var[b.id]))
+            lines.append("const pops::Real %s = ctx.dot(%d, %s, %s);"
+                         % (var[v.id], owner, var[a.id], var[b.id]))
     elif v.op == "cfl":
         # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).

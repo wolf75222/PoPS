@@ -5,6 +5,10 @@
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
+#include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/numerics/elliptic/eb/cut_fraction.hpp>
+#include <pops/runtime/analytic/collective_preflight.hpp>
+#include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
@@ -113,10 +117,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         time + "')");
 
   // ADC-645: the WENO-Z regulariser. Only meaningful with limiter='weno5'; on any other limiter a
-  // non-default value would be silently ignored -> refuse loud. The POLAR path keeps the default
-  // Weno5 (its builder is not threaded); refuse a non-default eps there too rather than drop it.
-  if (weno_epsilon <= 0.0)
-    throw std::runtime_error("System::add_block : weno_epsilon > 0 required");
+  // non-default value would be silently ignored -> refuse loud. Cartesian, staircase and cut-cell
+  // paths all carry the same value. The polar builder is still separate and therefore rejects it.
+  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
+    throw std::runtime_error("System::add_block : finite weno_epsilon > 0 required");
   if (weno_epsilon != static_cast<double>(kWenoEpsilon)) {
     if (limiter != "weno5")
       throw std::runtime_error(
@@ -126,14 +130,6 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
       throw std::runtime_error(
           "System::add_block : weno_epsilon is wired on the cartesian path only (the polar "
           "builder keeps the default kWenoEpsilon; wiring it is a follow-up)");
-    // The masked/EB advances keep the default-constructed Weno5 (mirror of the wave_speed_cache
-    // guard above): requesting a non-default eps with an active disc transport mode would be
-    // WITHOUT EFFECT on those closures -> explicit rejection, never a silent drop.
-    if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
-      throw std::runtime_error(
-          "System::add_block : weno_epsilon incompatible with an active embedded-boundary "
-          "transport mode (staircase/cutcell) ; it is only wired on the full Cartesian advance "
-          "(leave weno_epsilon default or mode='none')");
   }
 
   int ncomp = 1;
@@ -429,6 +425,10 @@ POPS_EXPORT void System::install_ghost_boundary_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_ghost_boundary_component");
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::install_ghost_boundary_component: embedded-boundary transport has no "
+        "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
     throw std::runtime_error(
@@ -441,6 +441,10 @@ POPS_EXPORT void System::install_field_boundary_residual_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_residual_component");
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::install_field_boundary_residual_component: embedded-boundary transport has no "
+        "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
     throw std::runtime_error(
@@ -453,6 +457,10 @@ POPS_EXPORT void System::install_field_boundary_jvp_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_jvp_component");
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::install_field_boundary_jvp_component: embedded-boundary transport has no "
+        "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
     throw std::runtime_error("System field boundary JVP requires an installed block boundary plan");
@@ -465,6 +473,10 @@ POPS_EXPORT void System::install_interface_flux_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_interface_flux_component");
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::install_interface_flux_component: embedded-boundary transport has no "
+        "signed-mask or cut-cell shared-interface provider");
   if (route.identity.empty() || spec.interface_identity != route.identity)
     throw std::invalid_argument("System shared-interface route/spec identity mismatch");
   if (!spec.execution)
@@ -509,6 +521,18 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   if (stride < 1)
     throw std::runtime_error("System::install_block : stride >= 1");
   Impl* P = p_.get();
+  if (P->eb_set_ && !supports_geometry_mode(closures.supported_geometry_modes,
+                                            P->geometry_mode_))
+    throw std::runtime_error(
+        "System::install_block: block '" + name +
+        "' has no numerical provider for the active embedded-boundary geometry");
+  const auto boundary_plan = P->boundary_plans_.find(name);
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None &&
+      boundary_plan != P->boundary_plans_.end() &&
+      boundary_plan->second->has_component_boundaries())
+    throw std::runtime_error(
+        "System::install_block: embedded-boundary block '" + name +
+        "' has a native boundary component without a geometry-aware provider");
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
                                 stride, gamma, std::move(closures.advance),
                                 std::move(closures.rhs_into), std::move(max_speed),
@@ -522,10 +546,12 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
     P->sp.back().state_identity = state_route->second;
   }
   P->sp.back().U.set_val(Real(0));
+  P->sp.back().supported_geometry_modes = closures.supported_geometry_modes;
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
   // EMBEDDED-BOUNDARY transport advances (project T5-PR3): empty unless build_block built them
-  // (Cartesian block with domain_mask_/eb_domain_ provided). Empty -> the stepper falls back on advance
+  // (Cartesian block with prepared mask/inverse-kappa owners provided). Empty -> the stepper falls
+  // back on advance
   // (bit-identical).
   P->sp.back().advance_masked = std::move(closures.advance_masked);
   P->sp.back().advance_eb = std::move(closures.advance_eb);
@@ -533,6 +559,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // Projection ponctuelle post-pas (ADC-177) : vide sauf si le modele declare le trait
   // HasPointwiseProjection (make_block). Vide -> le stepper ne l'interroge pas (bit-identique).
   P->sp.back().project = std::move(closures.project);
+  P->sp.back().project_masked = std::move(closures.project_masked);
   // FLUX-ONLY residual -div F(U) (ADC-425): set for native blocks (build_block builds it via
   // SourceFreeModel<Model>); empty only for an incomplete internal closure provider ->
   // block_neg_div_flux_into fails loud rather than silently leaking the default source.
@@ -541,6 +568,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // SourceInto<Model>); empty only for an incomplete internal closure provider ->
   // block_source_into fails loud rather than silently leaking the flux.
   P->sp.back().source_only = std::move(closures.source_only);
+  P->sp.back().source_only_masked = std::move(closures.source_only_masked);
   P->sp.back().rhs_at_point = std::move(closures.rhs_at_point);
   P->sp.back().rhs_flux_only_at_point = std::move(closures.rhs_flux_only_at_point);
   P->sp.back().rhs_without_prepared_interfaces =
@@ -557,6 +585,8 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().boundary_residual_at_point_prepared =
       std::move(closures.boundary_residual_at_point_prepared);
   P->sp.back().boundary_jvp_at_point_prepared = std::move(closures.boundary_jvp_at_point_prepared);
+  P->sp.back().staircase_residuals = std::move(closures.staircase_residuals);
+  P->sp.back().cutcell_residuals = std::move(closures.cutcell_residuals);
   EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
   opt.name = name;
   if (opt.route.empty())
@@ -1023,7 +1053,7 @@ void System::set_field_nullspace(const std::string& provider_slot,
 }
 
 namespace {
-// Translates the Python disc transport mode ("none"|"staircase"|"cutcell") into a GeometryMode. EXPLICIT
+// Translates the level-set transport mode ("none"|"staircase"|"cutcell") into a GeometryMode. EXPLICIT
 // error on an unknown mode (never a silent fallback). Single source of the name table.
 GeometryMode parse_geometry_mode(const std::string& mode, const char* err_context) {
   if (mode == "none")
@@ -1035,68 +1065,239 @@ GeometryMode parse_geometry_mode(const std::string& mode, const char* err_contex
   throw std::runtime_error(std::string(err_context) + " : unknown geometry mode '" + mode +
                            "' (none|staircase|cutcell)");
 }
+
+struct AnalyticLevelSetValueKernel {
+  analytic::AnalyticProgramView program;
+  Geometry geometry;
+  Array4 values;
+
+  POPS_HD void operator()(int i, int j) const {
+    values(i, j, 0) = program.eval(geometry.x_cell(i), geometry.y_cell(j));
+  }
+};
+
+struct AnalyticLevelSetPhysicalGhostKernel {
+  analytic::AnalyticProgramView program;
+  Geometry geometry;
+  Box2D domain;
+  Periodicity periodicity;
+  Array4 values;
+
+  POPS_HD static int periodic_index(int index, int lower, int extent) {
+    int offset = (index - lower) % extent;
+    if (offset < 0)
+      offset += extent;
+    return lower + offset;
+  }
+
+  POPS_HD void operator()(int i, int j) const {
+    const bool physical_x =
+        !periodicity.x && (i < domain.lo[0] || i > domain.hi[0]);
+    const bool physical_y =
+        !periodicity.y && (j < domain.lo[1] || j > domain.hi[1]);
+    if (!physical_x && !physical_y)
+      return;
+
+    // A mixed topology can reach a physical corner with the other coordinate outside through a
+    // periodic direction.  Evaluate that corner at the wrapped physical point as well.
+    const int sampled_i = periodicity.x ? periodic_index(i, domain.lo[0], domain.nx()) : i;
+    const int sampled_j = periodicity.y ? periodic_index(j, domain.lo[1], domain.ny()) : j;
+    values(i, j, 0) = program.eval(geometry.x_cell(sampled_i), geometry.y_cell(sampled_j));
+  }
+};
+
+struct AnalyticLevelSetFiniteIndicator {
+  ConstArray4 values;
+
+  POPS_HD Real operator()(int i, int j) const {
+    return Kokkos::isfinite(values(i, j, 0)) ? Real(0) : Real(1);
+  }
+};
+
+struct AnalyticLevelSetMaskKernel {
+  ConstArray4 level_set_values;
+  Array4 active_mask;
+
+  POPS_HD void operator()(int i, int j) const {
+    active_mask(i, j, 0) =
+        level_set_values(i, j, 0) < Real(0) ? Real(1) : Real(0);
+  }
+};
+
+struct AnalyticInverseVolumeFractionKernel {
+  ConstArray4 level_set_values;
+  Array4 inverse_volume_fraction;
+  Real dx, dy, kappa_min, cut_theta_min;
+
+  POPS_HD void operator()(int i, int j) const {
+    const Real center = level_set_values(i, j, 0);
+    if (center >= Real(0)) {
+      inverse_volume_fraction(i, j, 0) = Real(0);
+      return;
+    }
+    const detail::CutFraction fraction = detail::cut_fraction_from_samples(
+        center, level_set_values(i - 1, j, 0), level_set_values(i + 1, j, 0),
+        level_set_values(i, j - 1, 0), level_set_values(i, j + 1, 0), dx, dy,
+        cut_theta_min);
+    const Real effective = fraction.kappa > kappa_min ? fraction.kappa : kappa_min;
+    inverse_volume_fraction(i, j, 0) = Real(1) / effective;
+  }
+};
 }  // namespace
+
+void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
+                                    const std::vector<double>& literals,
+                                    const std::string& mode, double kappa_min,
+                                    double face_open_eps, double cut_theta_min) {
+  Impl* P = p_.get();
+  struct PreparedAnalyticLevelSet {
+    GeometryMode geometry_mode = GeometryMode::None;
+    EbThresholds thresholds;
+    analytic::AnalyticProgram program;
+  };
+  auto prepared = analytic::collectively_prepare_analytic_request(
+      "System::set_analytic_level_set", {{"mode", mode}},
+      {{"cut_theta_min", cut_theta_min},
+       {"face_open_eps", face_open_eps},
+       {"kappa_min", kappa_min}},
+      {opcodes}, {literals}, [&]() {
+        require_assembling(P->lifecycle_, "set_analytic_level_set");
+        if (!std::isfinite(kappa_min) || !std::isfinite(face_open_eps) ||
+            !std::isfinite(cut_theta_min) || kappa_min < 0.0 || face_open_eps < 0.0 ||
+            cut_theta_min < 0.0)
+          throw std::runtime_error(
+              "System::set_analytic_level_set : kappa_min / face_open_eps / cut_theta_min must "
+              "be finite and >= 0 (0 = keep the current value)");
+        if (kappa_min > 1.0 || face_open_eps > 1.0 || cut_theta_min > 1.0)
+          throw std::runtime_error(
+              "System::set_analytic_level_set : kappa_min / face_open_eps / "
+              "cut_theta_min must be <= 1");
+        if (P->polar_)
+          throw std::runtime_error(
+              "System::set_analytic_level_set : Cartesian geometry required");
+        const GeometryMode geometry_mode =
+            parse_geometry_mode(mode, "System::set_analytic_level_set");
+        if (geometry_mode != GeometryMode::None && P->ws_cache_block_)
+          throw std::runtime_error(
+              "System::set_analytic_level_set : mode '" + mode +
+              "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
+              "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
+              "or use mode='none')");
+        if (geometry_mode != GeometryMode::None && P->blocks_.has_interfaces(0))
+          throw std::runtime_error(
+              "System::set_analytic_level_set: embedded-boundary transport has no signed-mask or "
+              "cut-cell shared-interface provider");
+        for (const auto& block : P->sp)
+          if (!supports_geometry_mode(block.supported_geometry_modes, geometry_mode))
+            throw std::runtime_error(
+                "System::set_analytic_level_set: block '" + block.name +
+                "' has no numerical provider for embedded-boundary mode '" + mode + "'");
+        if (geometry_mode != GeometryMode::None)
+          for (const auto& [name, plan] : P->boundary_plans_)
+            if (plan->has_component_boundaries())
+              throw std::runtime_error(
+                  "System::set_analytic_level_set: block '" + name +
+                  "' has a native boundary component without an embedded-boundary metric provider");
+
+        std::vector<analytic::AnalyticProgram> compiled =
+            analytic::compile_component_programs({opcodes}, {literals});
+        EbThresholds thresholds = P->eb_thresholds_;
+        if (kappa_min > 0.0)
+          thresholds.kappa_min = static_cast<Real>(kappa_min);
+        if (face_open_eps > 0.0)
+          thresholds.face_open_eps = static_cast<Real>(face_open_eps);
+        if (cut_theta_min > 0.0)
+          thresholds.cut_theta_min = static_cast<Real>(cut_theta_min);
+        return PreparedAnalyticLevelSet{
+            geometry_mode, thresholds, std::move(compiled.front())};
+      });
+
+  const GeometryMode gmode = prepared.geometry_mode;
+  EbThresholds staged_thresholds = prepared.thresholds;
+  analytic::AnalyticProgram staged_program = std::move(prepared.program);
+  MultiFab staged_level_set_values(P->ba, P->dm, 1, 1);
+  MultiFab staged_mask(P->ba, P->dm, 1, 1);
+  MultiFab staged_inverse_volume_fraction(P->ba, P->dm, 1, 0);
+  const analytic::AnalyticProgramView view = staged_program.view();
+  // Sample each owned valid cell exactly once, then obtain internal and periodic ghosts from the
+  // native halo topology.  In particular, a periodic seam must copy the opposite valid value rather
+  // than evaluate the expression at a fictitious coordinate outside the domain.
+  for (int li = 0; li < staged_level_set_values.local_size(); ++li)
+    for_each_cell(staged_level_set_values.box(li),
+                  AnalyticLevelSetValueKernel{
+                      view, P->geom, staged_level_set_values.fab(li).array()});
+  fill_boundary(staged_level_set_values, P->dom, P->per_);
+
+  // Non-periodic physical ghosts have no halo source.  They retain the analytic extension needed by
+  // the centered cut-fraction stencil; mixed-periodic corners wrap only their periodic coordinate.
+  for (int li = 0; li < staged_level_set_values.local_size(); ++li)
+    for_each_cell(staged_level_set_values.fab(li).grown_box(),
+                  AnalyticLevelSetPhysicalGhostKernel{
+                      view, P->geom, P->dom, P->per_,
+                      staged_level_set_values.fab(li).array()});
+
+  Real local_non_finite = Real(0);
+  for (int li = 0; li < staged_level_set_values.local_size(); ++li) {
+    const Box2D sampled = staged_level_set_values.fab(li).grown_box();
+    local_non_finite = std::max(
+        local_non_finite,
+        for_each_cell_reduce_max(
+            sampled,
+            AnalyticLevelSetFiniteIndicator{
+                staged_level_set_values.fab(li).const_array()}));
+  }
+  if (all_reduce_max(static_cast<double>(local_non_finite)) != 0.0)
+    throw std::domain_error(
+        "System::set_analytic_level_set : expression produced a non-finite value on the "
+        "distributed mesh or mask ghost layer");
+
+  const Real dx = P->geom.dx(), dy = P->geom.dy();
+  for (int li = 0; li < staged_mask.local_size(); ++li) {
+    const ConstArray4 phi = staged_level_set_values.fab(li).const_array();
+    for_each_cell(staged_mask.fab(li).grown_box(),
+                  AnalyticLevelSetMaskKernel{phi, staged_mask.fab(li).array()});
+    for_each_cell(
+        staged_inverse_volume_fraction.box(li),
+        AnalyticInverseVolumeFractionKernel{
+            phi, staged_inverse_volume_fraction.fab(li).array(), dx, dy,
+            staged_thresholds.kappa_min, staged_thresholds.cut_theta_min});
+  }
+  if (gmode != GeometryMode::None && sum(staged_mask, 0) <= Real(0))
+    throw std::domain_error(
+        "System::set_analytic_level_set : active embedded-boundary geometry contains no cells");
+
+  // Strong publication boundary: the old signed samples, metrics, thresholds and routing remain
+  // untouched if
+  // compilation, allocation, sampling, or the collective finite preflight fails.
+  P->eb_level_set_values_ = std::move(staged_level_set_values);
+  P->domain_mask_ = std::move(staged_mask);
+  P->eb_inverse_volume_fraction_ = std::move(staged_inverse_volume_fraction);
+  P->eb_thresholds_ = staged_thresholds;
+  P->eb_set_ = true;
+  P->geometry_mode_ = gmode;
+}
 
 void System::set_disc_domain(double cx, double cy, double R, const std::string& mode,
                              double kappa_min, double face_open_eps, double cut_theta_min) {
-  Impl* P = p_.get();
-  require_assembling(P->lifecycle_,
-                     "set_disc_domain");  // frozen once pops.bind completes (ADC-592)
-  // ADC-615: resolve the cut-cell thresholds (each <= 0 keeps the kEb* default). Refuse out-of-domain
-  // values STRUCTURALLY -- a degenerate clamp is a structural error, never a silent fallback.
-  if (kappa_min < 0.0 || face_open_eps < 0.0 || cut_theta_min < 0.0)
-    throw std::runtime_error(
-        "System::set_disc_domain : kappa_min / face_open_eps / cut_theta_min "
-        ">= 0 required (0 = keep the default)");
-  if (kappa_min > 1.0 || cut_theta_min > 1.0)
-    throw std::runtime_error(
-        "System::set_disc_domain : kappa_min / cut_theta_min must be in (0, 1]");
-  // CARTESIAN only: polar already bounds the ring by its radial walls (r_min / r_max,
-  // zero radial flux) -> a Cartesian disc mask makes no sense on the (r, theta) grid.
-  if (P->polar_)
-    throw std::runtime_error(
-        "System::set_disc_domain : polar geometry (the ring is already bounded by its radial "
-        "walls r_min/r_max ; the Cartesian disc mask does not apply)");
-  if (!(R > 0.0))
-    throw std::runtime_error("System::set_disc_domain : radius R > 0 required");
-  // Validate the mode BEFORE any mutation (an unknown mode must not leave the disc half-set).
-  const GeometryMode gmode = parse_geometry_mode(mode, "System::set_disc_domain");
-  // wave_speed_cache (ADC-199) is only wired on the full Cartesian advance: a disc mode
-  // (staircase/cutcell) borrows advance_masked / advance_eb which ignore the cache -> explicit rejection.
-  if (gmode != GeometryMode::None && P->ws_cache_block_)
-    throw std::runtime_error(
-        "System::set_disc_domain : mode '" + mode +
-        "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
-        "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
-        "or use mode='none')");
-  P->eb_domain_ = detail::DiscDomain{cx, cy, R};
-  P->eb_set_ = true;
-  // ADC-615: store the resolved thresholds (0 -> keep the kEb* default). Consumed by the EB transport
-  // (assemble_rhs_eb) and the elliptic Shortley-Weller wall (cut_theta_min), single source of truth.
-  if (kappa_min > 0.0)
-    P->eb_thresholds_.kappa_min = static_cast<Real>(kappa_min);
-  if (face_open_eps > 0.0)
-    P->eb_thresholds_.face_open_eps = static_cast<Real>(face_open_eps);
-  if (cut_theta_min > 0.0)
-    P->eb_thresholds_.cut_theta_min = static_cast<Real>(cut_theta_min);
-  // Materializes the 0/1 cell-centered mask (1 ghost, so the mask-aware transport reads the
-  // i-1/i+1/j-1/j+1 neighbors up to the edge). Same layout as the blocks (ba/dm). Cell active when
-  // its CENTER is inside the disc (level set < 0, SAME convention as the conducting wall).
-  P->domain_mask_ = MultiFab(P->ba, P->dm, 1, 1);
-  const detail::DiscDomain disc = P->eb_domain_;
-  const Geometry geom = P->geom;
-  for (int li = 0; li < P->domain_mask_.local_size(); ++li) {
-    Array4 m = P->domain_mask_.fab(li).array();
-    // box WITH ghosts: we also classify the ghosts (the mask-aware transport reads the edge neighbors).
-    const Box2D g = P->domain_mask_.fab(li).grown_box();
-    for_each_cell(g, [=] POPS_HD(int i, int j) {
-      m(i, j, 0) = disc.cell_active(geom.x_cell(i), geom.y_cell(j)) ? Real(1) : Real(0);
-    });
-  }
-  // TRANSPORT ROUTING (project T5-PR3). mode == "none": the mask is materialized (queryable
-  // via disc_mask()) but the transport stays FULL Cartesian -> bit-identical. mode != "none": the
-  // stepper routes the advance to assemble_rhs_masked (staircase) / assemble_rhs_eb (cutcell).
-  P->geometry_mode_ = gmode;
+  const std::vector<std::string> opcodes{
+      "x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"};
+  const std::vector<double> literals{0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, R, 0.0};
+  (void)analytic::collectively_prepare_analytic_request(
+      "System::set_disc_domain", {{"mode", mode}},
+      {{"center_x", cx},
+       {"center_y", cy},
+       {"cut_theta_min", cut_theta_min},
+       {"face_open_eps", face_open_eps},
+       {"kappa_min", kappa_min},
+       {"radius", R}},
+      {opcodes}, {literals}, [&]() {
+        require_assembling(p_->lifecycle_, "set_disc_domain");
+        if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(R) || !(R > 0.0))
+          throw std::runtime_error(
+              "System::set_disc_domain : finite cx/cy and finite radius R > 0 required");
+        return true;
+      });
+  set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
 }
 
 void System::set_geometry_mode(const std::string& mode) {
@@ -1110,15 +1311,30 @@ void System::set_geometry_mode(const std::string& mode) {
   if (gmode != GeometryMode::None && !P->eb_set_)
     throw std::runtime_error(
         "System::set_geometry_mode : embedded-boundary mode '" + mode +
-        "' requested without a fixed level-set domain ; call set_disc_domain(cx, cy, R) first");
-  // wave_speed_cache (ADC-199) is not carried by the disc advances -> explicit rejection (cf.
-  // set_disc_domain) rather than a cache silently ignored in staircase/cutcell mode.
+        "' requested without a fixed level-set domain ; install a level set first");
+  // wave_speed_cache (ADC-199) is not carried by the embedded-boundary advances -> explicit
+  // rejection rather than a cache silently ignored in staircase/cutcell mode.
   if (gmode != GeometryMode::None && P->ws_cache_block_)
     throw std::runtime_error(
         "System::set_geometry_mode : mode '" + mode +
         "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
         "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
         "or use mode='none')");
+  if (gmode != GeometryMode::None && P->blocks_.has_interfaces(0))
+    throw std::runtime_error(
+        "System::set_geometry_mode: embedded-boundary transport has no signed-mask or cut-cell "
+        "shared-interface provider");
+  for (const auto& block : P->sp)
+    if (!supports_geometry_mode(block.supported_geometry_modes, gmode))
+      throw std::runtime_error(
+          "System::set_geometry_mode: block '" + block.name +
+          "' has no numerical provider for embedded-boundary mode '" + mode + "'");
+  if (gmode != GeometryMode::None)
+    for (const auto& [name, plan] : P->boundary_plans_)
+      if (plan->has_component_boundaries())
+        throw std::runtime_error(
+            "System::set_geometry_mode: block '" + name +
+            "' has a native boundary component without an embedded-boundary metric provider");
   P->geometry_mode_ = gmode;
 }
 
@@ -1133,11 +1349,7 @@ std::vector<double> System::disc_mask() const {
     out.assign(static_cast<std::size_t>(v.nx()) * v.ny(), 1.0);
     return out;
   }
-  const ConstArray4 m = P->domain_mask_.fab(0).const_array();
-  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-      out.push_back(static_cast<double>(m(i, j, 0)));
-  return out;
+  return gather_global(P->domain_mask_, 1, v.nx(), v.ny());
 }
 
 void System::set_epsilon_field(const std::vector<double>& eps) {

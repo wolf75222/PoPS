@@ -106,7 +106,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # has no more effect after this point.
         _threading._first_system_built = True
         self._s = _AmrSystem(config)
-        self._L = float(config.L)  # side of [0, L]^2 (for patch_rectangles : index -> physical)
+        self._L = float(config.L)
+        self._xlo = float(config.xlo)
+        self._ylo = float(config.ylo)
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
         # (otherwise the post-restart regrid would re-diverge the hierarchy). Memorized for the restart guard.
         self._regrid_every = int(config.regrid_every)
@@ -228,13 +230,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         return _AmrProfileSession(self, profile)
 
     def patch_rectangles(self) -> Any:
-        """Physical rectangles (x0, y0, width, height) of the current fine patches, in [0, L]^2.
+        """Physical rectangles ``(x0, y0, width, height)`` of the current fine patches.
 
         Converts patch_boxes() (index space, inclusive corners) into physical coordinates. The level
         spacing is dx = L / (n << level) (ratio 2 per level) ; a patch [ilo..ihi] x [jlo..jhi]
-        covers (ihi - ilo + 1) cells in x from x0 = ilo * dx (and likewise in y). Grid convention
+        covers ``ihi - ilo + 1`` cells from ``xlo + ilo*dx`` (and likewise in y). Grid convention
         ne[j, i] -> index 0 = x (i), index 1 = y (j), consistent with density() and an imshow
-        with extent [0, L, 0, L]. Convenient to plot the REAL patches (e.g. matplotlib Rectangle) without
+        with the authored frame extent. Convenient to plot the real patches without
         rebuilding a density proxy. Returns a list of (x0, y0, w, h), one per fine patch (all
         fine levels combined). Query (between steps) : triggers the lazy build like
         n_patches(), no cost on the hot path.
@@ -243,7 +245,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         rects = []
         for level, ilo, jlo, ihi, jhi in self._s.patch_boxes():
             dx = L / (n << level)
-            rects.append((ilo * dx, jlo * dx, (ihi - ilo + 1) * dx, (jhi - jlo + 1) * dx))
+            rects.append((
+                self._xlo + ilo * dx,
+                self._ylo + jlo * dx,
+                (ihi - ilo + 1) * dx,
+                (jhi - jlo + 1) * dx,
+            ))
         return rects
 
     def coarse_local_boxes(self) -> Any:

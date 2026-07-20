@@ -20,8 +20,22 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace pops {
+
+/// Prepared relative measure for reductions over a physical cell domain.
+///
+/// `active_cells == nullptr` denotes the full valid-cell domain.  Otherwise only cells whose mask
+/// is at least 0.5 participate.  `inverse_volume_fraction` is optional: when present, an active
+/// cell contributes with relative volume `1 / inverse_volume_fraction`; when absent every selected
+/// cell has unit relative volume.  This one data contract covers a full grid, a staircase mask and
+/// cut-cell metrics without exposing a geometry/shape type to the reduction kernels.
+struct RelativeCellMeasure {
+  const MultiFab* active_cells = nullptr;
+  const MultiFab* inverse_volume_fraction = nullptr;
+};
 
 namespace detail {
 // NAMED FUNCTORS (not POPS_HD lambdas) for the MultiFab arithmetic kernels. Same recipe as
@@ -37,6 +51,17 @@ struct SaxpyKernel {
   POPS_HD void operator()(int i, int j) const { Y(i, j, c) += a * X(i, j, c); }
 };
 
+struct ActiveSaxpyKernel {
+  Array4 Y;
+  ConstArray4 X, active_cells;
+  Real a;
+  int c;
+  POPS_HD void operator()(int i, int j) const {
+    if (active_cells(i, j, 0) >= Real(0.5))
+      Y(i, j, c) += a * X(i, j, c);
+  }
+};
+
 struct ScaleKernel {
   Array4 values;
   Real factor;
@@ -50,6 +75,17 @@ struct LincombKernel {
   Real a, b;
   int c;
   POPS_HD void operator()(int i, int j) const { Z(i, j, c) = a * X(i, j, c) + b * Y(i, j, c); }
+};
+
+struct ActiveLincombKernel {
+  Array4 Z;
+  ConstArray4 X, Y, active_cells;
+  Real a, b;
+  int c;
+  POPS_HD void operator()(int i, int j) const {
+    if (active_cells(i, j, 0) >= Real(0.5))
+      Z(i, j, c) = a * X(i, j, c) + b * Y(i, j, c);
+  }
 };
 
 // Reducer |f(i,j,comp)| -> max, passed DIRECTLY to reduce_max_cell (no wrapping extended
@@ -123,6 +159,109 @@ struct AbsSumKernel {
     acc += v < 0 ? -v : v;
   }
 };
+
+struct RelativeCellSumKernel {
+  ConstArray4 values, active_cells, inverse_volume_fraction;
+  int comp;
+  bool has_inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real value = values(i, j, comp);
+    acc += has_inverse_volume_fraction ? value / inverse_volume_fraction(i, j, 0) : value;
+  }
+};
+
+struct RelativeCellAbsSumKernel {
+  ConstArray4 values, active_cells, inverse_volume_fraction;
+  int comp;
+  bool has_inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real value = values(i, j, comp);
+    const Real magnitude = value < Real(0) ? -value : value;
+    acc += has_inverse_volume_fraction
+               ? magnitude / inverse_volume_fraction(i, j, 0)
+               : magnitude;
+  }
+};
+
+struct RelativeCellDotKernel {
+  ConstArray4 left, right, active_cells, inverse_volume_fraction;
+  int comp;
+  bool has_inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real product = left(i, j, comp) * right(i, j, comp);
+    acc += has_inverse_volume_fraction
+               ? product / inverse_volume_fraction(i, j, 0)
+               : product;
+  }
+};
+
+struct RelativeCellMaxKernel {
+  ConstArray4 values, active_cells;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real value = values(i, j, comp);
+    if (value > acc)
+      acc = value;
+  }
+};
+
+struct RelativeCellMinKernel {
+  ConstArray4 values, active_cells;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real value = values(i, j, comp);
+    if (value < acc)
+      acc = value;
+  }
+};
+
+struct RelativeCellNormInfKernel {
+  ConstArray4 values, active_cells;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real value = values(i, j, comp);
+    const Real magnitude = value < Real(0) ? -value : value;
+    if (!(magnitude <= std::numeric_limits<Real>::max())) {
+      acc = std::numeric_limits<Real>::infinity();
+      return;
+    }
+    if (magnitude > acc)
+      acc = magnitude;
+  }
+};
+
+inline void validate_relative_cell_measure(const MultiFab& field,
+                                           const RelativeCellMeasure& measure,
+                                           const char* operation) {
+  if (measure.active_cells == nullptr) {
+    if (measure.inverse_volume_fraction != nullptr)
+      throw std::invalid_argument(std::string(operation) +
+                                  ": an inverse volume fraction requires an active-cell mask");
+    return;
+  }
+  const auto require_same_layout = [&](const MultiFab& metric, const char* metric_name) {
+    if (metric.ncomp() != 1 || metric.box_array().boxes() != field.box_array().boxes() ||
+        metric.dmap().ranks() != field.dmap().ranks() ||
+        metric.local_size() != field.local_size())
+      throw std::invalid_argument(std::string(operation) + ": " + metric_name +
+                                  " must be a one-component metric on the field layout");
+  };
+  require_same_layout(*measure.active_cells, "active-cell mask");
+  if (measure.inverse_volume_fraction != nullptr)
+    require_same_layout(*measure.inverse_volume_fraction, "inverse volume fraction");
+}
 }  // namespace detail
 
 /// y <- y + a x over ALL components of the valid cells. Identical layouts required.
@@ -134,6 +273,21 @@ inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
     const Box2D b = y.fab(li).box();
     for (int c = 0; c < nc; ++c)
       for_each_cell(b, detail::SaxpyKernel{Y, X, a, c});
+  }
+}
+
+/// Active-domain twin of saxpy. Inactive target cells are not loaded or written, so their bit
+/// pattern survives every RK stage even when a mathematically neutral floating recombination would
+/// round differently.
+inline void saxpy_active(MultiFab& y, Real a, const MultiFab& x, const MultiFab& active_cells) {
+  const int nc = y.ncomp();
+  for (int li = 0; li < y.local_size(); ++li) {
+    Array4 Y = y.fab(li).array();
+    const ConstArray4 X = x.fab(li).const_array();
+    const ConstArray4 active = active_cells.fab(li).const_array();
+    const Box2D b = y.fab(li).box();
+    for (int c = 0; c < nc; ++c)
+      for_each_cell(b, detail::ActiveSaxpyKernel{Y, X, active, a, c});
   }
 }
 
@@ -182,6 +336,21 @@ inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiF
     const Box2D bb = z.fab(li).box();
     for (int c = 0; c < nc; ++c)
       for_each_cell(bb, detail::LincombKernel{Z, X, Y, a, b, c});
+  }
+}
+
+/// Active-domain twin of lincomb. Inactive target cells remain exactly untouched.
+inline void lincomb_active(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y,
+                           const MultiFab& active_cells) {
+  const int nc = z.ncomp();
+  for (int li = 0; li < z.local_size(); ++li) {
+    Array4 Z = z.fab(li).array();
+    const ConstArray4 X = x.fab(li).const_array();
+    const ConstArray4 Y = y.fab(li).const_array();
+    const ConstArray4 active = active_cells.fab(li).const_array();
+    const Box2D bb = z.fab(li).box();
+    for (int c = 0; c < nc; ++c)
+      for_each_cell(bb, detail::ActiveLincombKernel{Z, X, Y, active, a, b, c});
   }
 }
 
@@ -298,6 +467,138 @@ inline Real reduce_abs_sum(const MultiFab& mf, int comp = 0) {
     s += reduce_sum_cell(mf.box(li), detail::AbsSumKernel{a, comp});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+}
+
+/// Measure-aware variants used by physical-domain diagnostics and compiled Programs.  The empty
+/// measure delegates to the historical full-grid kernels, preserving their exact no-EB path.
+inline Real reduce_sum(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(field, measure, "reduce_sum(measure)");
+  if (measure.active_cells == nullptr)
+    return reduce_sum(field, comp);
+  Real local = 0;
+  for (int li = 0; li < field.local_size(); ++li) {
+    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
+                                    ? ConstArray4{}
+                                    : measure.inverse_volume_fraction->fab(li).const_array();
+    local += reduce_sum_cell(
+        field.box(li),
+        detail::RelativeCellSumKernel{field.fab(li).const_array(),
+                                      measure.active_cells->fab(li).const_array(), inverse, comp,
+                                      measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
+inline Real reduce_abs_sum(const MultiFab& field, int comp,
+                           const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(field, measure, "reduce_abs_sum(measure)");
+  if (measure.active_cells == nullptr)
+    return reduce_abs_sum(field, comp);
+  Real local = 0;
+  for (int li = 0; li < field.local_size(); ++li) {
+    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
+                                    ? ConstArray4{}
+                                    : measure.inverse_volume_fraction->fab(li).const_array();
+    local += reduce_sum_cell(
+        field.box(li),
+        detail::RelativeCellAbsSumKernel{field.fab(li).const_array(),
+                                         measure.active_cells->fab(li).const_array(), inverse, comp,
+                                         measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
+inline Real dot(const MultiFab& left, const MultiFab& right, int comp,
+                const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(left, measure, "dot(measure)");
+  if (left.box_array().boxes() != right.box_array().boxes() ||
+      left.dmap().ranks() != right.dmap().ranks() || left.local_size() != right.local_size())
+    throw std::invalid_argument("dot(measure): left and right fields must have the same layout");
+  if (measure.active_cells == nullptr)
+    return dot(left, right, comp);
+  Real local = 0;
+  for (int li = 0; li < left.local_size(); ++li) {
+    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
+                                    ? ConstArray4{}
+                                    : measure.inverse_volume_fraction->fab(li).const_array();
+    local += reduce_sum_cell(
+        left.box(li),
+        detail::RelativeCellDotKernel{left.fab(li).const_array(), right.fab(li).const_array(),
+                                      measure.active_cells->fab(li).const_array(), inverse, comp,
+                                      measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
+inline Real dot_all(const MultiFab& left, const MultiFab& right,
+                    const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(left, measure, "dot_all(measure)");
+  if (left.ncomp() != right.ncomp() ||
+      left.box_array().boxes() != right.box_array().boxes() ||
+      left.dmap().ranks() != right.dmap().ranks() || left.local_size() != right.local_size())
+    throw std::invalid_argument(
+        "dot_all(measure): left and right fields must have the same component layout");
+  if (measure.active_cells == nullptr)
+    return dot_all(left, right);
+  Real local = 0;
+  for (int li = 0; li < left.local_size(); ++li) {
+    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
+                                    ? ConstArray4{}
+                                    : measure.inverse_volume_fraction->fab(li).const_array();
+    for (int comp = 0; comp < left.ncomp(); ++comp)
+      local += reduce_sum_cell(
+          left.box(li),
+          detail::RelativeCellDotKernel{left.fab(li).const_array(), right.fab(li).const_array(),
+                                        measure.active_cells->fab(li).const_array(), inverse, comp,
+                                        measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
+inline Real reduce_max(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(field, measure, "reduce_max(measure)");
+  if (measure.active_cells == nullptr)
+    return reduce_max(field, comp);
+  Real local = -std::numeric_limits<Real>::infinity();
+  for (int li = 0; li < field.local_size(); ++li)
+    local = std::max(
+        local,
+        reduce_max_cell(field.box(li),
+                        detail::RelativeCellMaxKernel{field.fab(li).const_array(),
+                                                      measure.active_cells->fab(li).const_array(),
+                                                      comp}));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
+}
+
+inline Real reduce_min(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(field, measure, "reduce_min(measure)");
+  if (measure.active_cells == nullptr)
+    return reduce_min(field, comp);
+  Real local = std::numeric_limits<Real>::infinity();
+  for (int li = 0; li < field.local_size(); ++li)
+    local = std::min(
+        local,
+        reduce_min_cell(field.box(li),
+                        detail::RelativeCellMinKernel{field.fab(li).const_array(),
+                                                      measure.active_cells->fab(li).const_array(),
+                                                      comp}));
+  return static_cast<Real>(all_reduce_min(static_cast<double>(local)));
+}
+
+inline Real reduce_norm_inf(const MultiFab& field, int comp,
+                            const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(field, measure, "reduce_norm_inf(measure)");
+  if (measure.active_cells == nullptr)
+    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field, comp))));
+  Real local = 0;
+  for (int li = 0; li < field.local_size(); ++li)
+    local = std::max(
+        local,
+        reduce_max_cell(field.box(li),
+                        detail::RelativeCellNormInfKernel{
+                            field.fab(li).const_array(),
+                            measure.active_cells->fab(li).const_array(), comp}));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
 }
 
 }  // namespace pops

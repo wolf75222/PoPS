@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pops
 import pytest
+from pops.analytic import coordinates
 from pops.amr import (
     AMRClockRelation,
     AMRExecution,
@@ -30,7 +31,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Gaussian
+from pops.lib.initial import Analytic, Gaussian
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -118,12 +119,22 @@ def _resolved(native_cxx, block_count):
     ))
     case.program(program)
     x_axis, y_axis = frame.axes
-    for _name, _block, instance, _state, _flux, _rate, center in block_specs:
+    x_coord, y_coord = coordinates(frame)
+    for name, _block, instance, _state, _flux, _rate, center in block_specs:
+        profile = Gaussian(
+            frame=frame, center={x_axis: center[0], y_axis: center[1]},
+            background=0.0, amplitude=1.0, inverse_width=120.0,
+        )
+        if name == "reference":
+            profile = Analytic(
+                frame=frame,
+                components=(
+                    0.25 + x_coord * x_coord + 2.0 * y_coord + x_coord * y_coord,
+                ),
+            )
         case.initials.add(InitialCondition(
             state=instance,
-            value=Gaussian(
-                frame=frame, center={x_axis: center[0], y_axis: center[1]},
-                background=0.0, amplitude=1.0, inverse_width=120.0),
+            value=profile,
             projection=ConservativeCellAverage(),
         ))
     threshold = case.param(RuntimeParam("patch_refine_threshold", default=0.2))
@@ -174,6 +185,20 @@ def test_public_amr_patch_boxes_are_parallel_to_rectangles_and_read_only(
     del isolated_native_cache, kokkos_root
     for block_count in (1, 2):
         simulation = pops.bind(pops.compile(_resolved(native_cxx, block_count)))
+        if block_count == 2:
+            centers = (np.arange(N, dtype=np.float64) + 0.5) / N
+            x_coord, y_coord = np.meshgrid(centers, centers, indexing="xy")
+            dx = 1.0 / N
+            expected_reference = (
+                0.25 + x_coord * x_coord + dx * dx / 12.0
+                + 2.0 * y_coord + x_coord * y_coord
+            )
+            initial_reference = np.asarray(
+                simulation.block_level_state_global("reference", 0), dtype=np.float64,
+            ).reshape((1, N, N))[0]
+            np.testing.assert_allclose(
+                initial_reference, expected_reference, rtol=0.0, atol=2.0e-14,
+            )
         report = pops.run(simulation, t_end=2.0 * DT, max_steps=2)
         expected_names = ("tracer",) if block_count == 1 else ("tracer", "reference")
         assert simulation.block_names() == expected_names

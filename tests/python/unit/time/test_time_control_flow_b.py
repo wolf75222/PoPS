@@ -101,7 +101,7 @@ def test_branch_emits_if_else(t):
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("branch_next", Uf, at=endpoint.point))
     src = emit_cpp_program(P)
-    assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
+    assert "ctx.norm_inf(0," in src, "norm_inf must carry its explicit block owner\n%s" % src
     assert "if (" in src and "} else {" in src, "branch must emit C++ if/else\n%s" % src
     assert "for (" not in src, "branch alone emits no loop\n%s" % src
 

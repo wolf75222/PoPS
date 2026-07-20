@@ -134,6 +134,38 @@ def _input_evidence(values: Any, *, where: str) -> dict[str, Any]:
     }
 
 
+def _resolved_initial_evidence(install_plan: Any) -> dict[str, Any]:
+    """Expose the signed provider/projection and content evidence without embedding arrays."""
+    legacy = _input_evidence(
+        install_plan.bind_inputs.initial_state, where="initial_state")
+    initial_plan = install_plan.initial_condition_plan
+    if initial_plan is None:
+        return {"legacy_state": legacy, "resolved_plan": None}
+    bound_values = {
+        handle.qualified_id: value for handle, value in install_plan.initial_values.items()
+    }
+    bindings = {}
+    for binding in initial_plan.bindings:
+        subject_id = binding.subject.qualified_id
+        row = {
+            "subject": binding.subject.canonical_identity(),
+            "layout": binding.layout.canonical_identity(),
+            "source": binding.source.canonical_identity(),
+            "bound_value": None,
+        }
+        if subject_id in bound_values:
+            row["bound_value"] = _array_evidence(
+                bound_values[subject_id], where="initial_values[%r]" % subject_id)
+        bindings[subject_id] = row
+    return {
+        "legacy_state": legacy,
+        "resolved_plan": {
+            "identity": initial_plan.identity.token,
+            "bindings": bindings,
+        },
+    }
+
+
 class BoundSnapshot:
     """Deeply immutable, exact bind manifest with a domain-``bind`` identity."""
 
@@ -258,7 +290,7 @@ class MultiLayoutBoundSnapshot:
         object.__setattr__(self, "aux_evidence", _freeze(
             _input_evidence(install_plan.aux, where="aux"), where="aux_evidence"))
         object.__setattr__(self, "initial_evidence", _freeze(
-            _input_evidence(install_plan.bind_inputs.initial_state, where="initial_state"),
+            _resolved_initial_evidence(install_plan),
             where="initial_evidence"))
         object.__setattr__(
             self, "bind_schema_identity", make_identity(
@@ -400,9 +432,13 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any
         step_transaction=_transaction_data(compiled),
         params=rows,
         aux_evidence=_input_evidence(aux or {}, where="aux"),
-        initial_evidence=_input_evidence(
-            {name: spec["initial"] for name, spec in (instances or {}).items()
-             if "initial" in spec}, where="initial_state"),
+        initial_evidence=(
+            _resolved_initial_evidence(plan)
+            if plan is not None
+            else _input_evidence(
+                {name: spec["initial"] for name, spec in (instances or {}).items()
+                 if "initial" in spec}, where="initial_state")
+        ),
         bind_schema_identity=_schema_identity(params),
         execution_context=(
             plan.execution_context if plan is not None

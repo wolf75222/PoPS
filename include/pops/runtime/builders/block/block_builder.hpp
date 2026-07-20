@@ -17,7 +17,7 @@
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann, limiter_n_ghost)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
-#include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>  // std::sqrt (ARS(2,2,2) coefficients: gamma = 1 - 1/sqrt(2), host)
 #include <functional>
@@ -48,6 +48,25 @@ namespace pops {
 // included by system.hpp to expose grid_context() / install_block() without pulling in the numerics).
 
 namespace detail {
+inline bool embedded_boundary_active(const GridContext& context) {
+  return context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
+         context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None;
+}
+
+inline bool cutcell_geometry_active(const GridContext& context) {
+  return embedded_boundary_active(context) && *context.geometry_mode == GeometryMode::CutCell;
+}
+
+inline void require_geometry_aware_boundary_provider(const GridContext& context,
+                                                     const char* operation) {
+  if (embedded_boundary_active(context) && context.boundary_plan &&
+      context.boundary_plan->has_component_boundaries())
+    throw std::runtime_error(
+        std::string(operation) +
+        ": embedded-boundary transport cannot execute a native boundary component because "
+        "that provider has no active-cell or cut-cell metric contract");
+}
+
 struct ZeroPreparedInterfaceFace {
   Array4 flux;
   int axis = 0;
@@ -83,6 +102,26 @@ inline void zero_prepared_interface_fluxes(MultiFab& fx, MultiFab& fy, const Gri
                                                      context.dom.hi[1] + 1, fy.ncomp()});
   }
 }
+
+inline BoundaryFaceOmission prepared_boundary_face_omission(const GridContext& context) {
+  BoundaryFaceOmission omission;
+  omission.domain = context.dom;
+  if (context.boundary_plan) {
+    omission.xlo = context.boundary_plan->omits_face(0, -1);
+    omission.xhi = context.boundary_plan->omits_face(0, +1);
+    omission.ylo = context.boundary_plan->omits_face(1, -1);
+    omission.yhi = context.boundary_plan->omits_face(1, +1);
+  }
+  return omission;
+}
+
+struct PreparedInterfaceFluxFilter {
+  const GridContext* context = nullptr;
+  void operator()(MultiFab& fx, MultiFab& fy) const {
+    if (context != nullptr)
+      zero_prepared_interface_fluxes(fx, fy, *context);
+  }
+};
 
 template <class Limiter, class Flux, class Model>
 inline void assemble_rhs_without_prepared_interfaces(const Model& model, MultiFab& state,
@@ -363,7 +402,13 @@ struct HotspotFn {
   Model m;
   GridContext ctx;
   void operator()(const MultiFab& U, Real& w, int& i, int& j) const {
-    max_wave_speed_hotspot_mf(m, U, *ctx.aux, ctx.dom.nx(), w, i, j);
+    if (cutcell_geometry_active(ctx))
+      max_wave_speed_hotspot_mf(m, U, *ctx.aux, *ctx.domain_mask, *ctx.eb_inverse_volume_fraction,
+                                ctx.dom.nx(), w, i, j);
+    else if (embedded_boundary_active(ctx))
+      max_wave_speed_hotspot_mf(m, U, *ctx.aux, *ctx.domain_mask, ctx.dom.nx(), w, i, j);
+    else
+      max_wave_speed_hotspot_mf(m, U, *ctx.aux, ctx.dom.nx(), w, i, j);
   }
 };
 
@@ -385,6 +430,23 @@ struct ProjectCellKernel {
   }
 };
 
+template <class Model>
+struct ProjectActiveCellKernel {
+  Model m;
+  Array4 u;
+  ConstArray4 uc;
+  ConstArray4 a;
+  ConstArray4 mask;
+  POPS_HD void operator()(int i, int j) const {
+    if (!mask_active(mask, i, j))
+      return;
+    const typename Model::State p =
+        m.project(load_state<Model>(uc, i, j), load_aux<aux_comps<Model>()>(a, i, j));
+    for (int c = 0; c < Model::n_vars; ++c)
+      u(i, j, c) = p[c];
+  }
+};
+
 /// Foncteur HOTE de la projection ponctuelle : for_each_cell du kernel sur les cellules VALIDES de
 /// chaque fab local. Les GHOSTS ne sont pas projetes : tout consommateur de ghosts (residu de
 /// transport) refait fill_ghosts en tete d'evaluation (cf. BlockRhsEval), donc l'etat fantome est
@@ -398,6 +460,21 @@ struct PointwiseProject {
       for_each_cell(U.box(li),
                     ProjectCellKernel<Model>{m, U.fab(li).array(), U.fab(li).const_array(),
                                              ctx.aux->fab(li).const_array()});
+  }
+};
+
+/// Embedded-boundary projection.  The prepared domain mask is a geometry-provider output rather
+/// than a shape-specific contract; both Staircase and CutCell use it to preserve inactive storage.
+template <class Model>
+struct PointwiseProjectMasked {
+  Model m;
+  GridContext ctx;
+  const MultiFab* mask;
+  void operator()(MultiFab& U) const {
+    for (int li = 0; li < U.local_size(); ++li)
+      for_each_cell(U.box(li), ProjectActiveCellKernel<Model>{
+                                   m, U.fab(li).array(), U.fab(li).const_array(),
+                                   ctx.aux->fab(li).const_array(), mask->fab(li).const_array()});
   }
 };
 
@@ -438,6 +515,25 @@ struct SourceOnlyKernel {
   }
 };
 
+template <class Model>
+struct SourceOnlyActiveKernel {
+  Model m;
+  ConstArray4 u;
+  ConstArray4 a;
+  ConstArray4 mask;
+  Array4 r;
+  POPS_HD void operator()(int i, int j) const {
+    if (!mask_active(mask, i, j)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        r(i, j, c) = Real(0);
+      return;
+    }
+    const auto S = m.source(load_state<Model>(u, i, j), load_aux<aux_comps<Model>()>(a, i, j));
+    for (int c = 0; c < Model::n_vars; ++c)
+      r(i, j, c) = S[c];
+  }
+};
+
 /// SOURCE-ONLY residual R <- S(U, aux) installed as the block's source_only closure (ADC-430). The exact
 /// MIRROR of RhsInto on SourceFreeModel (which is flux without source): SourceInto is source without flux.
 /// Together they split the rhs_into residual -div F + S into its two halves. Bit-identical to the source
@@ -458,13 +554,29 @@ struct SourceInto {
   }
 };
 
+/// Embedded-boundary source-only residual.  This is deliberately a mask policy, not a Disc or CSG
+/// branch.  The CutCell transport operator applies inverse volume fraction only to flux divergence,
+/// so its source half is identical to Staircase on the same prepared active-cell set.
+template <class Model>
+struct SourceIntoMasked {
+  Model m;
+  GridContext ctx;
+  const MultiFab* mask;
+  void operator()(MultiFab& U, MultiFab& R) const {
+    for (int li = 0; li < U.local_size(); ++li)
+      for_each_cell(R.box(li), SourceOnlyActiveKernel<Model>{
+                                   m, U.fab(li).const_array(), ctx.aux->fab(li).const_array(),
+                                   mask->fab(li).const_array(), R.fab(li).array()});
+  }
+};
+
 // ============================================================================
-// DISC ROUTING (T5-PR3 work): DISC residual evaluators + the advances that carry them.
+// EMBEDDED-BOUNDARY ROUTING: generic level-set residual evaluators and their advances.
 // ============================================================================
 // The transport residual of a block goes through BlockRhsEval (assemble_rhs, full cartesian). The two
-// evaluators below SUBSTITUTE the disc operator for assemble_rhs, reading the System geometry BY
-// POINTER (stable address of an Impl member) at step time -- so the add_block / set_disc_domain order
-// is indifferent. NAMED functors (same device contract as BlockRhsEval).
+// evaluators below substitute an EB operator for assemble_rhs, reading the System geometry by
+// pointer (stable address of an Impl member) at step time -- so block and geometry authoring order
+// is indifferent. Named functors keep the same device contract as BlockRhsEval.
 
 /// MASKED transport residual (Staircase mode): fill_ghosts then assemble_rhs_masked on the
 /// cell-centered 0/1 mask of the System (read via @c mask, pointer to Impl::domain_mask_, stable
@@ -474,38 +586,141 @@ struct SourceInto {
 template <class Limiter, class Flux, class Model>
 struct BlockRhsEvalMasked {
   Model model;
-  const GridContext* ctx;
+  GridContext ctx;
   const MultiFab* mask;  // Impl::domain_mask_ (NOT owned; stable address)
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_grid_ghosts(U, *ctx);
-    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx->aux, *mask, ctx->geom, R, recon_prim,
-                                       pos_floor);
+    require_geometry_aware_boundary_provider(ctx, "masked transport residual");
+    fill_grid_ghosts(U, ctx);
+    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx.aux, *mask, ctx.geom, R, recon_prim,
+                                       pos_floor, weno_eps);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    require_geometry_aware_boundary_provider(ctx, "masked Program residual");
+    eval_core(point, U, R);
+    add_grid_boundary_residual(U, R, ctx, point);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    require_geometry_aware_boundary_provider(ctx, "prepared masked Program residual");
+    eval_core(point, U, R, boundary);
+    add_grid_boundary_residual(U, R, boundary, point);
+  }
+
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R) const {
+    require_geometry_aware_boundary_provider(ctx, "masked Program core residual");
+    fill_grid_ghosts(U, ctx, point);
+    eval_core_filled(U, R);
+  }
+
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    require_geometry_aware_boundary_provider(ctx, "prepared masked Program core residual");
+    fill_grid_ghosts(U, boundary, point);
+    eval_core_filled(U, R);
+  }
+
+ private:
+  void eval_core_filled(MultiFab& U, MultiFab& R) const {
+    const BoundaryFaceOmission omission = prepared_boundary_face_omission(ctx);
+    assemble_rhs_masked_impl<Limiter, Flux>(model, U, *ctx.aux, *mask, ctx.geom, R, recon_prim,
+                                            pos_floor, weno_eps, omission);
   }
 };
 
-/// CUT-CELL / EB transport residual (CutCell mode): fill_ghosts then assemble_rhs_eb on the level
-/// set of the System embedded boundary (read via @c eb_domain, pointer to Impl::eb_domain_, stable
-/// address). The device-callable level set is built HERE on the HOST (detail::disc_level_set(*eb_domain)
-/// -> DiscLevelSet, a NAMED FUNCTOR capturing three doubles BY VALUE) and passed BY VALUE to
-/// assemble_rhs_eb: the device kernel therefore receives NO std::function, it stays device-clean
-/// (cf. spatial_operator_eb.hpp). The descriptor is a DiscDomain (the built-in instance of the
-/// level-set contract, numerics/embedded_boundary.hpp).
+/// CUT-CELL / EB transport residual (CutCell mode): fill ghosts then use the static mask and inverse
+/// volume fraction prepared once from the signed level set at System installation. Stable owner
+/// pointers make block/geometry authoring order irrelevant. No expression interpreter,
+/// shape-specific branch, std::function, or Python callback enters the RHS hot path.
 template <class Limiter, class Flux, class Model>
 struct BlockRhsEvalEb {
   Model model;
-  const GridContext* ctx;
-  const DiscDomain* eb_domain;  // Impl::eb_domain_ (NOT owned; stable address)
+  GridContext ctx;
+  const MultiFab* inverse_volume_fraction;  // NOT owned; stable System owner
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_grid_ghosts(U, *ctx);
-    // ADC-615: the cut-cell thresholds flow from the GridContext (resolved by set_disc_domain);
-    // defaults = kEb* so an unconfigured EB run is bit-identical, and cut_theta_min matches the wall.
-    assemble_rhs_eb<Limiter, Flux>(model, U, *ctx->aux, disc_level_set(*eb_domain), ctx->geom, R,
-                                   recon_prim, ctx->eb_kappa_min, pos_floor, ctx->eb_face_open_eps,
-                                   ctx->eb_cut_theta_min);
+    require_geometry_aware_boundary_provider(ctx, "cut-cell transport residual");
+    fill_grid_ghosts(U, ctx);
+    const Real face_open_eps =
+        ctx.eb_thresholds ? ctx.eb_thresholds->face_open_eps : ctx.eb_face_open_eps;
+    assemble_rhs_eb_prepared<Limiter, Flux>(model, U, *ctx.aux, *ctx.domain_mask,
+                                            *inverse_volume_fraction, ctx.geom, R, recon_prim,
+                                            pos_floor, face_open_eps, weno_eps);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    require_geometry_aware_boundary_provider(ctx, "cut-cell Program residual");
+    eval_core(point, U, R);
+    add_grid_boundary_residual(U, R, ctx, point);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    require_geometry_aware_boundary_provider(ctx, "prepared cut-cell Program residual");
+    eval_core(point, U, R, boundary);
+    add_grid_boundary_residual(U, R, boundary, point);
+  }
+
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R) const {
+    require_geometry_aware_boundary_provider(ctx, "cut-cell Program core residual");
+    fill_grid_ghosts(U, ctx, point);
+    eval_core_filled(U, R);
+  }
+
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    require_geometry_aware_boundary_provider(ctx, "prepared cut-cell Program core residual");
+    fill_grid_ghosts(U, boundary, point);
+    eval_core_filled(U, R);
+  }
+
+ private:
+  void eval_core_filled(MultiFab& U, MultiFab& R) const {
+    const Real face_open_eps =
+        ctx.eb_thresholds ? ctx.eb_thresholds->face_open_eps : ctx.eb_face_open_eps;
+    const PreparedEbMetricsProvider provider{ctx.domain_mask, inverse_volume_fraction};
+    assemble_rhs_eb_with_metrics<Limiter, Flux>(model, U, *ctx.aux, provider, ctx.geom, R,
+                                                recon_prim, pos_floor, face_open_eps, weno_eps,
+                                                PreparedInterfaceFluxFilter{&ctx});
+  }
+};
+
+/// Type-erased Program closures are built from this one policy adaptor.  `Eval` is either the
+/// staircase or cut-cell evaluator above; limiter, Riemann solver, reconstruction and WENO options
+/// remain compile-time/frozen members of Eval.
+template <class Eval>
+struct PointQualifiedGeometryRhs {
+  Eval eval;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    eval(point, U, R);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    eval(point, U, R, boundary);
+  }
+};
+
+template <class Eval>
+struct PointQualifiedGeometryCoreRhs {
+  Eval eval;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    eval.eval_core(point, U, R);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    eval.eval_core(point, U, R, boundary);
   }
 };
 
@@ -518,10 +733,12 @@ struct AdvanceExplicitMasked {
   const MultiFab* mask;
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m, &ctx, mask, recon_prim, pos_floor};
-    run_explicit_substeps<Stepper>(rhs, U, h, n);
+    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m,          ctx,       mask,
+                                                       recon_prim, pos_floor, weno_eps};
+    run_explicit_substeps_active<Stepper>(rhs, U, h, n, *mask);
   }
 };
 
@@ -531,21 +748,22 @@ template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
 struct AdvanceExplicitEb {
   Model m;
   GridContext ctx;
-  const DiscDomain* eb_domain;
+  const MultiFab* inverse_volume_fraction;
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m, &ctx, eb_domain, recon_prim, pos_floor};
-    run_explicit_substeps<Stepper>(rhs, U, h, n);
+    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m,          ctx,       inverse_volume_fraction,
+                                                   recon_prim, pos_floor, weno_eps};
+    run_explicit_substeps_active<Stepper>(rhs, U, h, n, *ctx.domain_mask);
   }
 };
 
 /// MASKED IMEX advance: MASKED EXPLICIT half-step (source-free transport) + stiff IMPLICIT source.
 /// Mimics AdvanceImex: the transport (forward-Euler) reads the MASKED source-free residual; the
-/// implicit source (backward_euler_source) is UNCHANGED (per-cell local, off the disc boundary). An
-/// inactive cell has a zero transport residual then undergoes the local source -- like T2 / EB, only
-/// the transport BOUNDARY is closed, the source stays cell-local.
+/// implicit source uses the same prepared active-cell policy.  Inactive storage therefore remains
+/// unchanged through both halves of the IMEX step.
 template <class Limiter, class Flux, class Model>
 struct AdvanceImexMasked {
   Model m;
@@ -556,40 +774,45 @@ struct AdvanceImexMasked {
   NewtonOptions nopts{};
   NewtonReport* nreport = nullptr;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, &ctx, mask, recon_prim, pos_floor};
+        SourceFreeModel<Model>{m}, ctx, mask, recon_prim, pos_floor, weno_eps};
     if (nreport)
       nreport->reset();
+    ForwardEuler::Scratch scratch(U);
     for (int s = 0; s < n; ++s) {
-      ForwardEuler{}.take_step(rhs, U, h);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport);
+      ForwardEuler{}.take_step_active(rhs, U, h, scratch, *mask);
+      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, mask);
     }
   }
 };
 
 /// CUT-CELL / EB IMEX advance: EB EXPLICIT half-step (source-free transport) + stiff IMPLICIT source.
-/// Mimics AdvanceImex: transport via assemble_rhs_eb, implicit source unchanged (cell-local).
+/// Mimics AdvanceImex: transport via assemble_rhs_eb and implicit source restricted to the same
+/// prepared active-cell set.
 template <class Limiter, class Flux, class Model>
 struct AdvanceImexEb {
   Model m;
   GridContext ctx;
-  const DiscDomain* eb_domain;
+  const MultiFab* inverse_volume_fraction;
   bool recon_prim;
   ImplicitMask<Model::n_vars> mask_impl{};
   NewtonOptions nopts{};
   NewtonReport* nreport = nullptr;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive)
+  Real weno_eps = kWenoEpsilon;
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const BlockRhsEvalEb<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, &ctx, eb_domain, recon_prim, pos_floor};
+        SourceFreeModel<Model>{m}, ctx, inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
     if (nreport)
       nreport->reset();
+    ForwardEuler::Scratch scratch(U);
     for (int s = 0; s < n; ++s) {
-      ForwardEuler{}.take_step(rhs, U, h);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport);
+      ForwardEuler{}.take_step_active(rhs, U, h, scratch, *ctx.domain_mask);
+      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, ctx.domain_mask);
     }
   }
 };
@@ -625,9 +848,10 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// (mask CARRIED BY THE BLOCK, overrides the model default). EMPTY (default) -> inactive mask -> model
 /// default is_implicit -> bit-identical. No effect outside IMEX (the explicit has no implicit step).
 /// The optional EMBEDDED-BOUNDARY transport advances (advance_masked / advance_eb) are built when @p ctx
-/// carries the System level-set domain (ctx.domain_mask / ctx.eb_domain, T5-PR3 work); otherwise they
+/// carries the System prepared geometry (ctx.domain_mask / ctx.eb_inverse_volume_fraction);
+/// otherwise they
 /// stay empty and the stepper falls back on advance (bit-identical). STABLE addresses of Impl members,
-/// read BY POINTER at step time -> the add_block / set_disc_domain order is indifferent. The
+/// read by pointer at step time -> block and level-set installation order is indifferent. The
 /// embedded-boundary advances MIMIC advance (same RK / IMEX, same limiter / flux); only the transport
 /// residual is dispatched (assemble_rhs_masked / _eb).
 template <class Limiter, class Flux, class Model>
@@ -639,13 +863,19 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
                                        Real pos_floor = Real(0), bool wave_speed_cache = false,
                                        Real weno_eps = kWenoEpsilon) {
   const MultiFab* domain_mask = ctx.domain_mask;
-  const detail::DiscDomain* eb_domain = ctx.eb_domain;
-  // ADC-645: the per-block WENO-Z regulariser (weno_eps) is threaded through the FULL-cartesian
-  // closures (advance / rhs_into) only; the masked (disc staircase) and EB (cutcell) advances keep
-  // the default-constructed Weno5. System::add_block refuses a non-default eps when an
-  // embedded-boundary transport mode is active (mirror of the wave_speed_cache guard), so the eps
-  // can never be silently dropped by those closures.
+  const MultiFab* eb_inverse_volume_fraction = ctx.eb_inverse_volume_fraction;
+  // The per-block WENO-Z regulariser belongs to the reconstruction policy, independently of domain
+  // geometry. Thread the same value through full Cartesian, masked and cut-cell residuals so changing
+  // geometry never changes or silently discards the authored numerical scheme.
   BlockClosures bc;
+  // The current EB operators own only first-order hyperbolic transport. Higher-order
+  // reconstructions can cross the inactive set, and DiffusiveModel needs a conservative embedded
+  // diffusive flux that is not implemented here. Advertise only capabilities that are physically
+  // executable; System validates this bitset before publishing a geometry.
+  constexpr bool supports_embedded_boundary =
+      supports_embedded_boundary_reconstruction_v<Limiter> && !DiffusiveModel<Model>;
+  if constexpr (supports_embedded_boundary)
+    bc.supported_geometry_modes = kAllGeometrySupport;
   const ImplicitMask<Model::n_vars> impl_mask =
       make_implicit_mask<Model::n_vars>(implicit_components);
   // SHARED scratch of the HLL wave speed cache (opt-in): a single MultiFab for the explicit advance and
@@ -658,6 +888,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // old method=="..." string ladder. The canonical "explicit" route decodes to SSPRK2; legacy
   // scheme aliases are rejected by parse_time_route rather than silently normalized.
   const TimeRouteId time_route = parse_time_route(method, "System");
+  if (time_route == TimeRouteId::kImexRkArs222)
+    bc.supported_geometry_modes = kCartesianGeometrySupport;
   if (imex) {
     if (time_route == TimeRouteId::kImexRkArs222) {
       // IMEX-RK FAMILY, ARS(2,2,2) scheme (order 2): advance PARALLEL to AdvanceImex, FULLY implicit
@@ -671,40 +903,48 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       // Historical IMEX (local backward-Euler, order 1): UNTOUCHED, bit-identical.
       bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{
           m, ctx, recon_prim, impl_mask, newton_opts, newton_report, pos_floor, weno_eps};
-      if (domain_mask)
+      if (supports_embedded_boundary && domain_mask)
         bc.advance_masked = detail::AdvanceImexMasked<Limiter, Flux, Model>{
-            m, ctx, domain_mask, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
-      if (eb_domain)
-        bc.advance_eb = detail::AdvanceImexEb<Limiter, Flux, Model>{
-            m, ctx, eb_domain, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
+            m,           ctx,           domain_mask, recon_prim, impl_mask,
+            newton_opts, newton_report, pos_floor,   weno_eps};
+      if (supports_embedded_boundary && eb_inverse_volume_fraction)
+        bc.advance_eb = detail::AdvanceImexEb<Limiter, Flux, Model>{m,
+                                                                    ctx,
+                                                                    eb_inverse_volume_fraction,
+                                                                    recon_prim,
+                                                                    impl_mask,
+                                                                    newton_opts,
+                                                                    newton_report,
+                                                                    pos_floor,
+                                                                    weno_eps};
     }
   } else if (time_route == TimeRouteId::kForwardEuler) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, ForwardEuler>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (domain_mask)
+    if (supports_embedded_boundary && domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, ForwardEuler>{
-          m, ctx, domain_mask, recon_prim, pos_floor};
-    if (eb_domain)
+          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
+    if (supports_embedded_boundary && eb_inverse_volume_fraction)
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, ForwardEuler>{
-          m, ctx, eb_domain, recon_prim, pos_floor};
+          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
   } else if (time_route == TimeRouteId::kSsprk3) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (domain_mask)
+    if (supports_embedded_boundary && domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, domain_mask, recon_prim, pos_floor};
-    if (eb_domain)
+          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
+    if (supports_embedded_boundary && eb_inverse_volume_fraction)
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, eb_domain, recon_prim, pos_floor};
+          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
   } else if (time_route == TimeRouteId::kExplicitSsprk2) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (domain_mask)
+    if (supports_embedded_boundary && domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, domain_mask, recon_prim, pos_floor};
-    if (eb_domain)
+          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
+    if (supports_embedded_boundary && eb_inverse_volume_fraction)
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, eb_domain, recon_prim, pos_floor};
+          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
   } else {
     // kImex reaches here only when imex==false (a compiled Program's hyperbolic stage never asks for the
     // implicit source); every other explicit route was handled above.
@@ -743,6 +983,64 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
           SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
   bc.boundary_residual_at_point_prepared = detail::BoundaryResidualInto{ctx};
   bc.boundary_jvp_at_point_prepared = detail::BoundaryJvpInto{ctx};
+
+  // The compiled Program uses the same geometry-aware residual family as the legacy time
+  // integrator.  Each family freezes the exact limiter, Riemann flux, reconstruction, positivity
+  // floor and WENO regulariser selected above; only its metric provider differs.  No shape name or
+  // analytic expression is inspected in this hot path.
+  if (supports_embedded_boundary && domain_mask) {
+    using FullEval = detail::BlockRhsEvalMasked<Limiter, Flux, Model>;
+    using FluxEval = detail::BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>>;
+    const FullEval full_eval{m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
+    const FluxEval flux_eval{
+        SourceFreeModel<Model>{m}, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
+    bc.staircase_residuals.full = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+    bc.staircase_residuals.flux_only = detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    bc.staircase_residuals.core = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
+    bc.staircase_residuals.flux_only_core =
+        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
+    bc.staircase_residuals.full_prepared = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+    bc.staircase_residuals.flux_only_full_prepared =
+        detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    bc.staircase_residuals.core_prepared =
+        detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
+    bc.staircase_residuals.flux_only_core_prepared =
+        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
+    if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
+      bc.staircase_residuals.without_prepared_interfaces =
+          detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+      bc.staircase_residuals.flux_only_without_prepared_interfaces =
+          detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    }
+  }
+  if (supports_embedded_boundary && eb_inverse_volume_fraction) {
+    using FullEval = detail::BlockRhsEvalEb<Limiter, Flux, Model>;
+    using FluxEval = detail::BlockRhsEvalEb<Limiter, Flux, SourceFreeModel<Model>>;
+    const FullEval full_eval{m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
+    const FluxEval flux_eval{SourceFreeModel<Model>{m},
+                             ctx,
+                             eb_inverse_volume_fraction,
+                             recon_prim,
+                             pos_floor,
+                             weno_eps};
+    bc.cutcell_residuals.full = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+    bc.cutcell_residuals.flux_only = detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    bc.cutcell_residuals.core = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
+    bc.cutcell_residuals.flux_only_core =
+        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
+    bc.cutcell_residuals.full_prepared = detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+    bc.cutcell_residuals.flux_only_full_prepared =
+        detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    bc.cutcell_residuals.core_prepared = detail::PointQualifiedGeometryCoreRhs<FullEval>{full_eval};
+    bc.cutcell_residuals.flux_only_core_prepared =
+        detail::PointQualifiedGeometryCoreRhs<FluxEval>{flux_eval};
+    if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
+      bc.cutcell_residuals.without_prepared_interfaces =
+          detail::PointQualifiedGeometryRhs<FullEval>{full_eval};
+      bc.cutcell_residuals.flux_only_without_prepared_interfaces =
+          detail::PointQualifiedGeometryRhs<FluxEval>{flux_eval};
+    }
+  }
   if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
     bc.rhs_without_prepared_interfaces =
         detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
@@ -758,14 +1056,19 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // without the -div F base leaking in (spec: rhs flux=False is source-only). No Limiter/Flux: the
   // source is cell-local, independent of the spatial scheme.
   bc.source_only = detail::SourceInto<Model>{m, ctx};
+  if (domain_mask)
+    bc.source_only_masked = detail::SourceIntoMasked<Model>{m, ctx, domain_mask};
   bc.hotspot =
       detail::HotspotFn<Model>{m, ctx};  // dt_hotspot diagnostic (ADC-182), off the hot path
   // PROJECTION PONCTUELLE post-pas (ADC-177) : fabriquee SEULEMENT si le modele declare le trait
   // (HasPointwiseProjection, cf. core/physical_model.hpp) ; vide sinon -> le stepper ne l'interroge
   // jamais (chemin historique bit-identique). Partagee par add_block ET add_compiled_model (les deux
   // passent par make_block) : un .so 'production' la transporte donc nativement.
-  if constexpr (HasPointwiseProjection<Model>)
+  if constexpr (HasPointwiseProjection<Model>) {
     bc.project = detail::PointwiseProject<Model>{m, ctx};
+    if (domain_mask)
+      bc.project_masked = detail::PointwiseProjectMasked<Model>{m, ctx, domain_mask};
+  }
   return bc;
 }
 
@@ -1017,7 +1320,13 @@ template <class Model>
 struct MaxSpeed {
   Model m;
   GridContext ctx;
-  Real operator()(const MultiFab& U) const { return max_wave_speed_mf(m, U, *ctx.aux); }
+  Real operator()(const MultiFab& U) const {
+    if (cutcell_geometry_active(ctx))
+      return max_wave_speed_mf(m, U, *ctx.aux, *ctx.domain_mask, *ctx.eb_inverse_volume_fraction);
+    if (embedded_boundary_active(ctx))
+      return max_wave_speed_mf(m, U, *ctx.aux, *ctx.domain_mask);
+    return max_wave_speed_mf(m, U, *ctx.aux);
+  }
 };
 
 /// Block max STABILITY speed functor (HasStabilitySpeed trait): replaces MaxSpeed in the CFL when the
@@ -1026,7 +1335,14 @@ template <class Model>
 struct MaxStabilitySpeed {
   Model m;
   GridContext ctx;
-  Real operator()(const MultiFab& U) const { return max_stability_speed_mf(m, U, *ctx.aux); }
+  Real operator()(const MultiFab& U) const {
+    if (cutcell_geometry_active(ctx))
+      return max_stability_speed_mf(m, U, *ctx.aux, *ctx.domain_mask,
+                                    *ctx.eb_inverse_volume_fraction);
+    if (embedded_boundary_active(ctx))
+      return max_stability_speed_mf(m, U, *ctx.aux, *ctx.domain_mask);
+    return max_stability_speed_mf(m, U, *ctx.aux);
+  }
 };
 
 /// Block max source frequency functor (HasSourceFrequency trait, bound dt <= cfl/mu without h).
@@ -1034,7 +1350,10 @@ template <class Model>
 struct MaxSourceFreq {
   Model m;
   GridContext ctx;
-  Real operator()(const MultiFab& U) const { return max_source_frequency_mf(m, U, *ctx.aux); }
+  Real operator()(const MultiFab& U) const {
+    return embedded_boundary_active(ctx) ? max_source_frequency_mf(m, U, *ctx.aux, *ctx.domain_mask)
+                                         : max_source_frequency_mf(m, U, *ctx.aux);
+  }
 };
 
 /// Block min admissible step functor (HasStabilityDt trait; 0 = no cell constrains it).
@@ -1042,7 +1361,10 @@ template <class Model>
 struct MinStabilityDt {
   Model m;
   GridContext ctx;
-  Real operator()(const MultiFab& U) const { return min_stability_dt_mf(m, U, *ctx.aux); }
+  Real operator()(const MultiFab& U) const {
+    return embedded_boundary_active(ctx) ? min_stability_dt_mf(m, U, *ctx.aux, *ctx.domain_mask)
+                                         : min_stability_dt_mf(m, U, *ctx.aux);
+  }
 };
 
 /// Poisson contribution functor: rhs += elliptic_rhs(U) (pure HOST loop, no device kernel).

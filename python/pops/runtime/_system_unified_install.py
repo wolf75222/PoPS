@@ -169,8 +169,109 @@ class _PreparedSystemFieldNullspaceInstall:
 class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
+    def _install_initial_source(
+        self, name: str, row: Mapping[str, Any], *, params: Any,
+    ) -> None:
+        source = row.get("source")
+        from pops.runtime._initial_source_lowering import (
+            native_binary64,
+            validate_initial_source,
+        )
+
+        route = validate_initial_source(source, where="uniform initial source")
+        if route == "bound_level_zero":
+            value = row.get("value")
+            if value is None:
+                raise ValueError("uniform BindArray initial source has no bound value")
+            self.set_state(name, value)
+            return
+        projection = source.get("projection", {})
+        if not isinstance(projection, Mapping) \
+                or projection.get("projection") != "conservative_cell_average" \
+                or row.get("space") != "cell" or row.get("centering") != "cell":
+            raise ValueError(
+                "uniform analytic initials require the cell-centred "
+                "ConservativeCellAverage projection")
+        if route == "constant_field":
+            components = tuple(source.get("components", ()))
+            if not components:
+                raise ValueError("uniform constant initial source has no components")
+            opcodes = [["constant"] for _ in components]
+            literals = [[native_binary64(
+                value, where="uniform initial source.components[%d]" % index,
+            )] for index, value in enumerate(components)]
+            self._s._set_analytic_expression_state(
+                name, "cell", "cell", "conservative_cell_average", opcodes, literals)
+            return
+        if route == "gaussian_field":
+            center = source.get("center", {})
+            if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
+                raise ValueError("uniform Gaussian initial source requires x/y center")
+            self._s._set_analytic_gaussian_state(
+                name,
+                native_binary64(center["x"], where="uniform Gaussian center.x"),
+                native_binary64(center["y"], where="uniform Gaussian center.y"),
+                native_binary64(source["background"], where="uniform Gaussian background"),
+                native_binary64(source["amplitude"], where="uniform Gaussian amplitude"),
+                native_binary64(
+                    source["inverse_width"], where="uniform Gaussian inverse_width"),
+            )
+            return
+        if route == "analytic_expression":
+            from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+            lowered = lower_analytic_components(
+                source.get("components"),
+                frame_id=source.get("frame_id"),
+                bindings=params,
+            )
+            self._s._set_analytic_expression_state(
+                name,
+                "cell",
+                "cell",
+                "conservative_cell_average",
+                [list(opcodes) for opcodes, _ in lowered],
+                [list(literals) for _, literals in lowered],
+            )
+            return
+        if route == "field_mapped_analytic_expression":
+            from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+            seed = lower_analytic_components(
+                source.get("seed_components"),
+                frame_id=source.get("frame_id"),
+                bindings=params,
+            )
+            self._s._set_analytic_expression_state(
+                name,
+                "cell",
+                "cell",
+                "conservative_cell_average",
+                [list(opcodes) for opcodes, _ in seed],
+                [list(literals) for _, literals in seed],
+            )
+            self._s.solve_fields()
+            mapped = lower_analytic_components(
+                source.get("components"),
+                frame_id=source.get("frame_id"),
+                bindings=params,
+            )
+            inputs = sorted(source.get("inputs"), key=lambda row: row["value_id"])
+            input_sources = [
+                "%s:%d" % (row["source"], int(row["component"]))
+                for row in inputs
+            ]
+            self._s._set_analytic_mapped_state(
+                name,
+                [list(opcodes) for opcodes, _ in mapped],
+                [list(literals) for _, literals in mapped],
+                input_sources,
+            )
+            return
+        raise NotImplementedError("uniform initial source route %r is not native" % route)
+
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          field_plans=None, install_plan=None):
+                          field_plans=None, install_plan=None, initial_sources=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + resolved field plans in one call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(artifact,
@@ -281,14 +382,17 @@ class _SystemUnifiedInstall(_System):
         else:
             per_block_params = {}
 
+        pending_initials = []
         for name, (spec, model, spatial, time) in lowered_instances.items():
             self.add_equation(
                 name, model, spatial=spatial, time=time,
                 _bind_params=per_block_params.get(name, []),
             )
             initial = spec.get("initial")
-            if initial is not None:
-                self.set_state(name, initial)
+            source = None if initial_sources is None else initial_sources.get(name)
+            if initial is not None and source is not None:
+                raise ValueError("uniform block has competing initial_state and InitialCondition")
+            pending_initials.append((name, initial, source))
 
         # The final FieldOperator owns the solve name while its provider operators own only RHS
         # closures. Attach the resolved solve to the exact FieldSpace storage route after block
@@ -304,6 +408,15 @@ class _SystemUnifiedInstall(_System):
         # the package ABI during block installation above.
         for field_plan in field_plans.values():
             self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
+
+        # Initial conditions run after field/aux/boundary providers exist, because coupled analytic
+        # profiles may materialize a seed state, solve a field, then map state+aux into the final
+        # conservative vector. Still before install_program/mark_bound, so this remains bind-time data.
+        for name, initial, source in pending_initials:
+            if source is not None:
+                self._install_initial_source(name, source, params=params)
+            elif initial is not None:
+                self.set_state(name, initial)
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In

@@ -63,7 +63,8 @@ struct PreparedInterfaceFluxSpec;
 /// Geometry reaches the native runtime only through this internal config. CartesianGrid authoring
 /// is validated and lowered before construction; the advanced pops.mesh.PolarMesh descriptor uses
 /// the private config-lowering protocol. Geometry is NOT a numerical-scheme choice. Default
-/// "cartesian": square domain [0,L]^2, behavior and numerics STRICTLY UNCHANGED (bit-identical).
+/// "cartesian": square domain [xlo,xlo+L] x [ylo,ylo+L]. The default origin is (0,0), preserving
+/// the historical behavior and numerics bit-for-bit.
 /// "polar" describes a global ring r in [r_min, r_max] x theta in [0, 2pi) (cf. PolarGeometry); it is
 /// wired through System transport and polar field routes. Polar-only config fields are ignored while
 /// geometry == "cartesian".
@@ -88,6 +89,10 @@ struct SystemConfig {
   // SCOPE: multi-box transport OK; DIRECT polar Poisson mono-box only (clear UPSTREAM rejection if
   // theta_boxes > 1, cf. ensure_elliptic_polar); polar tensor Schur stage multi-box.
   int theta_boxes = 1;  ///< boxes of the theta split of polar transport (1 = mono-box)
+  // Cartesian physical origin. Appended to preserve positional aggregate initialization of the
+  // historical {n, L, periodic} prefix. Ignored while geometry == "polar".
+  double xlo = 0.0;
+  double ylo = 0.0;
 };
 
 /// Coupled multi-species system, composed at runtime from generic bricks.
@@ -414,6 +419,17 @@ class System {
   /// rejected at install when the configured solver does not match) and exposed for introspection.
   std::string poisson_solver() const;
 
+  /// Runtime-private native seam for a generic Cartesian level set. @p opcodes / @p literals are
+  /// one validated postfix scalar program using the analytic VM. The System revalidates it, samples
+  /// signed phi once, preflights finiteness collectively over every local patch plus the mask ghost
+  /// layer, then publishes phi, mask, and static cut-cell metrics as one transaction. No analytic
+  /// interpreter reaches a RHS or time stage. Active means phi < 0.
+  /// Python authoring reaches this only through its canonical analytic-expression lowering.
+  void set_analytic_level_set(const std::vector<std::string>& opcodes,
+                              const std::vector<double>& literals, const std::string& mode = "none",
+                              double kappa_min = 0.0, double face_open_eps = 0.0,
+                              double cut_theta_min = 0.0);
+
   /// Sets the TRANSPORT DOMAIN as a DISC centered at (@p cx, @p cy) with radius @p R
   /// (T2 work, CONTRACT inert by default). Materializes a 0/1 cell-centered mask (cell
   /// active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
@@ -426,29 +442,30 @@ class System {
   /// the corresponding disc operator. Default "none" -> full cartesian path (assemble_rhs), BIT-
   /// IDENTICAL to history even after set_disc_domain (the mask is materialized but transport
   /// ignores it while the mode is "none"). "staircase" -> conservative masked transport (assemble_rhs_
-  /// masked, 0/1 face gate, jagged boundary). "cutcell" -> cut-cell / embedded-boundary transport
-  /// (assemble_rhs_eb, alpha_f apertures + kappa volume fraction, smooth boundary, order 2 interior).
+  /// masked, 0/1 face gate, jagged boundary). "cutcell" -> the current embedded-boundary transport
+  /// (binary open faces between active centres and a clamped approximate volume fraction prepared
+  /// from signed samples). Both EB policies currently require an explicitly capable first-order
+  /// reconstruction and reject diffusion, native boundary components and shared interfaces.
   /// The mode is honored by the native transport step. A mode != "none" without a transportable
   /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
   /// -> error. R > 0 required; cartesian only (polar already bounds the ring by its radial
   /// walls -> explicit error).
   ///
-  /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (closed-face aperture
-  /// threshold) and @p cut_theta_min (cut-fraction clamp shared with the elliptic wall) tune the
-  /// cut-cell scheme. Each <= 0 keeps the kEb* default (bit-identical). cut_theta_min flows to BOTH
-  /// the EB transport and the elliptic Shortley-Weller wall so the aperture geometry stays consistent.
+  /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (binary face-open
+  /// threshold) and @p cut_theta_min (signed-sample fraction clamp) tune the transport metrics. Each
+  /// <= 0 keeps the kEb* default. This API does not claim an elliptic cut-cell consumer.
   void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none",
                        double kappa_min = 0.0, double face_open_eps = 0.0,
                        double cut_theta_min = 0.0);
 
-  /// Sets ONLY the disc transport mode (without (re)defining the disc): "none" | "staircase" |
-  /// "cutcell". Useful to toggle the mode after set_disc_domain, or to reset it to "none"
-  /// (back to the full cartesian path, bit-identical). Requesting a mode != "none" without a defined disc
-  /// (set_disc_domain) raises an EXPLICIT error (the mode alone has no geometry to apply).
+  /// Sets ONLY the level-set transport mode: "none" | "staircase" | "cutcell". Useful to toggle
+  /// the mode after installing either a generic analytic level set or a disc, or to reset it to "none"
+  /// (back to the full cartesian path, bit-identical). Requesting a mode != "none" without a prepared
+  /// signed level set raises an explicit error (the mode alone has no geometry to apply).
   void set_geometry_mode(const std::string& mode);
 
   /// @return the 0/1 cell-centered domain mask, ny*nx row-major (j slow, i fast). Without
-  /// set_disc_domain, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
+  /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> disc_mask() const;
 
@@ -728,6 +745,18 @@ class System {
   std::vector<double> eval_rhs(const std::string& name);   ///< -div F + S, size ncomp*n*n
   std::vector<double> get_state(const std::string& name);  ///< U, ncomp*n*n (component-major)
   void set_state(const std::string& name, const std::vector<double>& u);
+  std::int64_t set_analytic_expression_state(const std::string& name, const std::string& space,
+                                              const std::string& centering,
+                                              const std::string& projection,
+                                              const std::vector<std::vector<std::string>>& opcodes,
+                                              const std::vector<std::vector<double>>& literals);
+  std::int64_t set_analytic_mapped_state(
+      const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
+      const std::vector<std::vector<double>>& literals,
+      const std::vector<std::string>& input_sources);
+  std::int64_t set_analytic_gaussian_state(const std::string& name, double center_x,
+                                           double center_y, double background, double amplitude,
+                                           double inverse_width);
   int n_vars(const std::string& name) const;
   /// Variable names of a block (introspection): kind = "conservative" | "primitive".
   std::vector<std::string> variable_names(const std::string& name,
@@ -849,6 +878,12 @@ class System {
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_neg_div_flux_into.
   POPS_EXPORT void block_source_into(int b, MultiFab& U, MultiFab& R);
+  /// Preflight one generated pointwise Program operator. Such kernels currently own only a
+  /// Cartesian storage contract: evaluating them everywhere and zeroing inactive outputs afterwards
+  /// is not valid because primitive conversion, local Newton or user expressions may already have
+  /// consumed inactive data. The generated step calls this before allocating or launching the
+  /// operator and an active embedded boundary is rejected without mutation.
+  POPS_EXPORT void require_cartesian_generated_operator(int b, const std::string& operation) const;
   /// The maximum |wave speed| of block @p b evaluated on @p U -- the SAME per-block reduction
   /// step_cfl reads (BlockState::max_speed, the HasStabilitySpeed / max_wave_speed closure set at
   /// add_block time): a collective reduction over the block's cells. A compiled time Program reads it

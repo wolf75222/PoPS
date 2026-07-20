@@ -528,6 +528,13 @@ class ProgramContext {
     sys_->block_source_into(sys_block(b), u, r);
   }
 
+  /// Fail before a generated pointwise operator touches storage when an embedded boundary is active.
+  /// Default-source and transport residuals have native geometry-aware providers; arbitrary generated
+  /// expressions and local solves do not yet, and cannot be repaired by post-zeroing their outputs.
+  void require_cartesian_generated_operator(int b, const std::string& operation) const {
+    sys_->require_cartesian_generated_operator(sys_block(b), operation);
+  }
+
   /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) -- the
   /// SAME hmin the native CFL uses. Forwards to System::cfl_min_dx. A compiled time Program's dt bound
   /// (epic ADC-399 / ADC-417, spec s18) reads it to express e.g. cfl * hmin / max_wave_speed.
@@ -988,7 +995,10 @@ class ProgramContext {
   /// u <- u + a r over the valid cells (linear combine; forwards to pops::saxpy).
   void axpy(MultiFab& u, Real a, const MultiFab& r) const {
     count_kernel();
-    pops::saxpy(u, a, r);
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::saxpy_active(u, a, r, *active_cells);
+    else
+      pops::saxpy(u, a, r);
   }
   void axpy(MultiFab& u, Real a, const MultiFab& r, Real /*dt*/,
             std::initializer_list<ExactCoefficientTerm> /*exact*/) const {
@@ -1000,7 +1010,10 @@ class ProgramContext {
   /// z = c_base * z + 1 * acc, where acc holds the non-base terms (self-alias z==x is safe).
   void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
     count_kernel();
-    pops::lincomb(z, a, x, b, y);
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::lincomb_active(z, a, x, b, y, *active_cells);
+    else
+      pops::lincomb(z, a, x, b, y);
   }
   void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real /*dt*/,
                std::initializer_list<ExactCoefficientTerm> /*exact_a*/,
@@ -1108,22 +1121,62 @@ class ProgramContext {
   }
 
   /// @name Reductions (spec op 16)
-  /// COLLECTIVE all_reduce over one component of a field (sum / signed max / signed min). The codegen
-  /// lowers P.sum / P.sum_component / P.max / P.min DIRECTLY to the pops:: free functions (like norm2 ->
-  /// pops::dot), but these wrappers expose them on the context for hand-rolled C++ stages and mirror
-  /// norm2 / dot above. MANDATORY UNDER MPI: called on EVERY rank (empty ranks included), like dot.
+  /// COLLECTIVE reductions over one explicitly owned Program block.  The block owner selects the
+  /// runtime's prepared physical-cell measure: full valid cells on a Cartesian grid, the 0/1 active
+  /// mask for staircase geometry, and active cells weighted by kappa for cut-cell geometry.  Integral
+  /// reductions (sum/L1/L2/dot) use that relative volume; extrema ignore inactive storage and are not
+  /// volume-scaled.  The generated Program always uses these owner-qualified overloads.
   /// @{
-  Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
-  Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
-  Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
-  /// L1 (absolute-sum) reduction Sum_cells |u(.,.,comp)| over one component -- P.norm1 / Norm(L1).
+  Real sum_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_sum(u, comp, relative_cell_measure_(owner));
+  }
+  Real max_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_max(u, comp, relative_cell_measure_(owner));
+  }
+  Real min_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_min(u, comp, relative_cell_measure_(owner));
+  }
+  Real abs_sum_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_abs_sum(u, comp, relative_cell_measure_(owner));
+  }
+  Real norm2(int owner, const MultiFab& u) const {
+    return std::sqrt(pops::dot(u, u, 0, relative_cell_measure_(owner)));
+  }
+  Real norm_inf(int owner, const MultiFab& u) const {
+    return pops::reduce_norm_inf(u, 0, relative_cell_measure_(owner));
+  }
+  Real dot(int owner, const MultiFab& left, const MultiFab& right) const {
+    return pops::dot(left, right, 0, relative_cell_measure_(owner));
+  }
+
+  Real sum(int owner, const MultiFab& u) const { return sum_component(owner, u, 0); }
+  Real max(int owner, const MultiFab& u) const { return max_component(owner, u, 0); }
+  Real min(int owner, const MultiFab& u) const { return min_component(owner, u, 0); }
+  Real abs_sum(int owner, const MultiFab& u) const { return abs_sum_component(owner, u, 0); }
+
+  /// Legacy hand-written Cartesian stages may omit the owner.  Under an embedded boundary these
+  /// overloads refuse before launching a kernel: silently assuming block 0 would bypass the exact
+  /// Program-to-System block map and make a multi-block Program's measure ambiguous.
+  Real sum_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_sum(u, comp);
+  }
+  Real max_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_max(u, comp);
+  }
+  Real min_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_min(u, comp);
+  }
   Real abs_sum_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
     return pops::reduce_abs_sum(u, comp);
   }
-  Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
-  Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
-  Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
-  Real abs_sum(const MultiFab& u) const { return pops::reduce_abs_sum(u, 0); }
+  Real sum(const MultiFab& u) const { return sum_component(u, 0); }
+  Real max(const MultiFab& u) const { return max_component(u, 0); }
+  Real min(const MultiFab& u) const { return min_component(u, 0); }
+  Real abs_sum(const MultiFab& u) const { return abs_sum_component(u, 0); }
   /// @}
 
   /// Fill the ghost cells (halos) of @p x in place: the transport BC (periodic by default), the SAME
@@ -1300,6 +1353,43 @@ class ProgramContext {
   /// @}
 
  private:
+  RelativeCellMeasure relative_cell_measure_(int owner) const {
+    const GridContext context = sys_->grid_context(sys_block(owner));
+    if (context.embedded_boundary_set == nullptr || !*context.embedded_boundary_set ||
+        context.geometry_mode == nullptr || *context.geometry_mode == GeometryMode::None)
+      return {};
+    if (context.domain_mask == nullptr)
+      throw std::runtime_error(
+          "ProgramContext physical reduction has no prepared active-cell mask");
+    if (*context.geometry_mode == GeometryMode::CutCell) {
+      if (context.eb_inverse_volume_fraction == nullptr)
+        throw std::runtime_error(
+            "ProgramContext cut-cell reduction has no prepared inverse volume fraction");
+      return {context.domain_mask, context.eb_inverse_volume_fraction};
+    }
+    return {context.domain_mask, nullptr};
+  }
+
+  void require_unqualified_reduction_safe_() const {
+    const GridContext context = sys_->grid_context();
+    if (context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
+        context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None)
+      throw std::runtime_error(
+          "ProgramContext embedded-boundary reduction requires an explicit Program block owner");
+  }
+
+  const MultiFab* active_domain_mask_() const {
+    const GridContext context = sys_->grid_context();
+    if (context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
+        context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None) {
+      if (context.domain_mask == nullptr)
+        throw std::runtime_error(
+            "ProgramContext embedded-boundary algebra has no prepared active-cell mask");
+      return context.domain_mask;
+    }
+    return nullptr;
+  }
+
   static void require_rate_identity_(int rate_id) {
     if (rate_id < 0)
       throw std::invalid_argument(

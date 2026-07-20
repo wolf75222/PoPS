@@ -144,23 +144,35 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
 def test_moment_coefficients_preserve_typed_storage_and_numeric_values():
     eps = RuntimeParam("eps_runtime", default=2.5)
     q_over_m = RuntimeParam("q_over_m_runtime", default=-3.0)
+    background = RuntimeParam("neutralizing_background")
     specification = (moments.CartesianVelocityMoments(order=2)
-                     .add_poisson_coupling(eps=eps)
+                     .add_poisson_coupling(eps=eps, background=background)
                      .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
                      .add_magnetic_source(-0.25))
     first = specification.build("typed_moment_coefficients_a").module.params()
-    second = specification.build("typed_moment_coefficients_b").module.params()
+    second_model = specification.build("typed_moment_coefficients_b")
+    second = second_model.module.params()
 
-    assert eps.is_owned is False and q_over_m.is_owned is False
+    assert eps.is_owned is False and q_over_m.is_owned is False and background.is_owned is False
     for parameters in (first, second):
         assert parameters["eps_runtime"] == eps
         assert parameters["q_over_m_runtime"] == q_over_m
+        assert parameters["neutralizing_background"] == background
         assert parameters["eps_runtime"] is not eps
         assert parameters["q_over_m_runtime"] is not q_over_m
+        assert parameters["neutralizing_background"] is not background
         assert isinstance(parameters["omega_c"], ConstParam)
         assert parameters["omega_c"].value == -0.25
     assert first["eps_runtime"] is not second["eps_runtime"]
     assert first["eps_runtime"].owner_identity != second["eps_runtime"].owner_identity
+    assert tuple(second_model.field_operators) == ("fields",)
+    assert (
+        second_model.params["neutralizing_background"].local_id
+        == "neutralizing_background"
+    )
+    field_operator = second_model.field_operators["fields"]
+    assert field_operator.name == "fields"
+    assert tuple(output.name for output in field_operator.outputs) == ("phi", "grad")
 
 
 def test_moment_coefficients_refuse_implicit_string_and_bool_coercions():
@@ -169,6 +181,8 @@ def test_moment_coefficients_refuse_implicit_string_and_bool_coercions():
             "grad_x", "grad_y", "q_over_m")
     with pytest.raises(TypeError, match="eps"):
         moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=True)
+    with pytest.raises(TypeError, match="Poisson background"):
+        moments.CartesianVelocityMoments(2).add_poisson_coupling(background=True)
     with pytest.raises(TypeError, match="robust"):
         moments.CartesianVelocityMoments(2, robust=1)
 

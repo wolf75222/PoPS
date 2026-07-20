@@ -216,7 +216,11 @@ class Descriptor:
             evidence={"descriptor": self.name, "category": self.category},
         )
         status = self.available(context)
-        if not status.ok:
+        # ``partial`` is a real route whose remaining, context-dependent constraints are
+        # proved by its resolver/provider once the layout is known.  It must stay inspectably
+        # non-``ok`` without being confused with the terminal ``no`` state during authoring
+        # validation.  Concrete provider resolution remains fail-closed.
+        if status.status == "no":
             report = report.error(self.category, "unavailable", str(status),
                                   alternatives=status.alternatives)
         return report

@@ -9,7 +9,13 @@ import numpy as np
 import pytest
 
 from pops.lib.models.moments import HyQMOM15
-from pops.moments import LocalClosure, RealizabilityProjection, closure, moment_names
+from pops.moments import (
+    HyQMOM15Closure,
+    LocalClosure,
+    RealizabilityProjection,
+    closure,
+    moment_names,
+)
 from pops.domain import RectangleFrame
 from pops.frames import Cartesian2D
 from pops.physics import Model
@@ -67,6 +73,37 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
     with pytest.raises(ValueError, match="declares order 2"):
         HyQMOM15.vlasov_lorentz(
             closure=wrong_order, exact_speeds=False)
+
+
+def test_hyqmom15_closure_matches_closure_s5_matlab_oracle() -> None:
+    """Pin the six non-Gaussian polynomial relations used by closureS5.m."""
+
+    standardized = {
+        "S03": -0.2,
+        "S04": 2.8,
+        "S11": 0.15,
+        "S12": -0.35,
+        "S13": 0.42,
+        "S20": 1.0,
+        "S21": 0.25,
+        "S22": 1.2,
+        "S30": 0.3,
+        "S31": -0.1,
+        "S40": 3.1,
+        "S02": 1.0,
+    }
+
+    closed = HyQMOM15Closure()(standardized)
+
+    assert closed == pytest.approx({
+        "S50": 2.1345,
+        "S41": 1.1932375,
+        "S32": -0.64775,
+        "S23": 0.425,
+        "S14": -1.9052,
+        "S05": -1.288,
+    })
+    assert any(value != 0.0 for value in closed.values())
 
 
 def test_board_model_exposes_generic_native_hooks_without_a_private_preset_seam() -> None:

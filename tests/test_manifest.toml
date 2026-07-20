@@ -310,6 +310,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_system_analytic_level_set"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_analytic_level_set.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_system_fft"
 sources = ["tests/cpp/integration/mpi/test_mpi_system_fft.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -1042,6 +1048,16 @@ sources = ["tests/cpp/unit/runtime/test_embedded_boundary_generic.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_analytic_expression"
+sources = ["tests/cpp/unit/runtime/test_analytic_expression.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_analytic_level_set"
+sources = ["tests/cpp/unit/runtime/test_analytic_level_set.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_program_context_schur_free"
 sources = ["tests/cpp/unit/runtime/test_program_context_schur_free.cpp"]
 labels = ["unit", "runtime", "fast"]
@@ -1171,6 +1187,11 @@ labels = ["integration", "python", "native_loader", "compiler", "medium"]
 name = "pops_python_integration_runtime"
 path = "tests/python/integration/runtime"
 labels = ["integration", "python", "runtime", "medium"]
+
+[[python.suite]]
+name = "pops_python_unit_analytic"
+path = "tests/python/unit/analytic"
+labels = ["unit", "python", "analytic", "runtime", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_amr"

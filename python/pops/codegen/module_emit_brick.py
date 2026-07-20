@@ -121,7 +121,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             fill.setdefault(bi, []).append((r, c, "pops::Real(0)"))
         return tl, fill
 
-    def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any = "x", fill: Any = None) -> list:
+    def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any = "x", fill: Any = None,
+                    invalid_return: Any = "return;") -> list:
         # body of the jacobian computation -> extremes (@p lo/@p hi : destination names).
         # eig='fd' : column-wise jacobian by central finite differences of the COMPILED flux ;
         # eig='numeric' : fill of the sub-blocks from @p fill. @p key : direction
@@ -166,6 +167,18 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
                          % (ind, int(ws["eig_max_iter"])))
             else:
                 L.append("%s  const pops::EigBounds eb_ = pops::real_eig_minmax(Jb_);" % ind)
+            im_tol = ws.get("im_tol")
+            if im_tol is not None:
+                L.append("%s  if (!eb_.all_real(static_cast<pops::Real>(%s))) {"
+                         % (ind, scalar_cpp(im_tol)))
+            else:
+                L.append("%s  if (!eb_.all_real()) {" % ind)
+            L.append("%s    %s = std::numeric_limits<pops::Real>::quiet_NaN();"
+                     % (ind, lo))
+            L.append("%s    %s = std::numeric_limits<pops::Real>::quiet_NaN();"
+                     % (ind, hi))
+            L.append("%s    %s" % (ind, invalid_return))
+            L.append("%s  }" % ind)
             if bi == 0:
                 L.append("%s  %s = eb_.lmin; %s = eb_.lmax;" % (ind, lo, hi))
             else:
@@ -191,6 +204,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S = [
         "#include <array>",
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
+        "#include <limits>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
@@ -296,21 +310,31 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("    pops::Real lo_ = pops::Real(0), hi_ = pops::Real(0);")
         jac_same_blocks = ws_jac["blocks"]["x"] == ws_jac["blocks"]["y"]
         if ws_jac["eig"] == "fd" and jac_same_blocks:
-            S += ws_jac_body("    ", "lo_", "hi_")
+            S += ws_jac_body(
+                "    ", "lo_", "hi_",
+                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
         elif ws_jac["eig"] == "fd":
             S.append("    if (dir == 0) {")
-            S += ws_jac_body("      ", "lo_", "hi_", "x")
+            S += ws_jac_body(
+                "      ", "lo_", "hi_", "x",
+                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
             S.append("    } else {")
-            S += ws_jac_body("      ", "lo_", "hi_", "y")
+            S += ws_jac_body(
+                "      ", "lo_", "hi_", "y",
+                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
             S.append("    }")
         else:
             ptx, pty = ws_jac_pieces("x"), ws_jac_pieces("y")
             S.append("    if (dir == 0) {")
             S += ptx[0]
-            S += ws_jac_body("      ", "lo_", "hi_", "x", ptx[1])
+            S += ws_jac_body(
+                "      ", "lo_", "hi_", "x", ptx[1],
+                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
             S.append("    } else {")
             S += pty[0]
-            S += ws_jac_body("      ", "lo_", "hi_", "y", pty[1])
+            S += ws_jac_body(
+                "      ", "lo_", "hi_", "y", pty[1],
+                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
             S.append("    }")
         S.append("    const pops::Real alo_ = lo_ < 0 ? -lo_ : lo_;")
         S.append("    const pops::Real ahi_ = hi_ < 0 ? -hi_ : hi_;")

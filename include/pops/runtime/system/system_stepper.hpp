@@ -187,8 +187,17 @@ class SystemStepper {
     for (auto& s : owner_->sp) {
       if (!s.evolve)
         continue;  // bloc gele : fond fixe jamais modifie, rien a projeter
-      if (s.project)
+      if (!s.project)
+        continue;
+      if (owner_->eb_set_ && owner_->geometry_mode_ != GeometryMode::None) {
+        if (!s.project_masked)
+          throw std::runtime_error(
+              "System embedded-boundary step cannot apply a projection without an active-cell "
+              "projection closure");
+        s.project_masked(s.U);
+      } else {
         s.project(s.U);
+      }
     }
   }
 

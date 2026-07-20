@@ -120,14 +120,17 @@ def test_typed_diagnostics_execute_as_native_accepted_output(
         assert recorded[key] == _scalar(row)
 
 
-def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
+def _periodic_conservation_target(
+    output_mode, *, declare_case_initial=False, declare_analytic_initial=False,
+    declare_analytic_embedded_boundary=False,
+):
     """Build one evolving closed system whose integral is a genuine invariant."""
     from pops.diagnostics import ConservationCheck, Integral
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
     from pops.initial import InitialCondition
     from pops.layouts import Uniform
-    from pops.lib.initial import Gaussian
+    from pops.lib.initial import Analytic, Gaussian
     from pops.lib.time import ForwardEuler
     from pops.math import ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
@@ -176,6 +179,8 @@ def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
     dt = 2.5e-3
     program.step_strategy(FixedDt(dt))
     case.program(program)
+    if declare_case_initial and declare_analytic_initial:
+        raise ValueError("select exactly one Case initial profile")
     if declare_case_initial:
         case.initials.add(InitialCondition(
             state=block_state,
@@ -186,6 +191,16 @@ def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
                 amplitude=0.8,
                 inverse_width=80.0,
             ),
+            projection=ConservativeCellAverage(),
+        ))
+    if declare_analytic_initial:
+        from pops.analytic import coordinates
+
+        x_coord, y_coord = coordinates(frame)
+        density = 0.25 + x_coord * x_coord + 2.0 * y_coord + x_coord * y_coord
+        case.initials.add(InitialCondition(
+            state=block_state,
+            value=Analytic(frame=frame, components=(density,)),
             projection=ConservativeCellAverage(),
         ))
     schedule = every(1, clock=program.clock)
@@ -205,11 +220,27 @@ def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
             bit_identical=True,
         ),
     )))
-    layout = Uniform(CartesianGrid(
-        frame=frame,
-        cells=(16, 16),
-        periodic=PeriodicAxes(frame.axes),
-    ))
+    embedded_boundary = None
+    if declare_analytic_embedded_boundary:
+        from pops.boundary import ZeroFlux
+        from pops.mesh.geometry import Disc, EmbeddedBoundary
+        from pops.mesh.masks import Staircase
+
+        outer = Disc(center=(0.5, 0.5), radius=0.4)
+        inner = Disc(center=(0.5, 0.5), radius=0.2)
+        embedded_boundary = EmbeddedBoundary(
+            outer - inner,
+            Staircase(),
+            ZeroFlux(),
+        )
+    layout = Uniform(
+        CartesianGrid(
+            frame=frame,
+            cells=(16, 16),
+            periodic=PeriodicAxes(frame.axes),
+        ),
+        embedded_boundary=embedded_boundary,
+    )
     coordinates = (np.arange(16, dtype=np.float64) + 0.5) / 16.0
     x, y = np.meshgrid(coordinates, coordinates, indexing="ij")
     initial_state = np.ascontiguousarray(
@@ -220,13 +251,104 @@ def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
     return case, layout, dt, initial_state
 
 
-def test_uniform_case_initials_are_refused_instead_of_silently_ignored():
-    """Uniform data has one authority: bind(initial_state), never an unused Case initial."""
+def test_uniform_case_initials_resolve_as_the_single_layout_authority():
+    """Uniform and AMR layouts consume the same authenticated initial-condition contract."""
     example = _load_example()
     case, layout, _, _ = _periodic_conservation_target(
         example._native_output_mode(), declare_case_initial=True)
-    with pytest.raises(ValueError, match=r"pops\.bind\(initial_state"):
-        pops.resolve(pops.validate(case), layout=layout)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+
+    initial_plan = resolved.initial_condition_plan
+    assert initial_plan is not None
+    binding, = initial_plan.bindings
+    assert binding.subject.block_ref.local_id == "tracer"
+    assert binding.source.options.to_data()["native_route"] == "gaussian_field"
+    assert resolved.bootstrap_plan is None
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_generic_analytic_initial_runs_through_the_uniform_native_pipeline(
+    isolated_native_cache, native_cxx, kokkos_root,
+):
+    """A closed-form cell average crosses Python, codegen and the native Kokkos evaluator."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    example = _load_example()
+    case, layout, _, _ = _periodic_conservation_target(
+        example._native_output_mode(), declare_analytic_initial=True)
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    simulation = _bind_native_artifact(artifact)
+
+    evidence = simulation.bound_snapshot.to_dict()["initial_evidence"]["resolved_plan"]
+    assert evidence is not None
+    binding, = evidence["bindings"].values()
+    assert binding["source"]["options"]["native_route"] == "analytic_expression"
+    assert binding["bound_value"] is None
+
+    centers = (np.arange(16, dtype=np.float64) + 0.5) / 16.0
+    center_x, center_y = np.meshgrid(centers, centers, indexing="xy")
+    dx = 1.0 / 16.0
+    expected = (
+        0.25
+        + center_x * center_x + dx * dx / 12.0
+        + 2.0 * center_y
+        + center_x * center_y
+    )
+    actual = np.asarray(simulation.get_state("tracer"), dtype=np.float64)
+    np.testing.assert_allclose(np.sort(actual), np.sort(expected.ravel()), rtol=0.0, atol=2e-15)
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_public_csg_level_set_binds_one_native_uniform_embedded_boundary(
+    isolated_native_cache, native_cxx, kokkos_root, monkeypatch,
+):
+    """The Python CSG lowers once; native Kokkos owns every mesh-point evaluation."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    example = _load_example()
+    case, layout, _, initial_state = _periodic_conservation_target(
+        example._native_output_mode(),
+        declare_analytic_embedded_boundary=True,
+    )
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+
+    normalized, = resolved.layout_plan.layouts
+    embedded = normalized.to_data()["options"]["embedded_boundary"]
+    root = embedded["level_set"]["expression"]["root"]
+    assert root["op"] == "maximum"
+    assert embedded["transport"]["mode"] == "staircase"
+
+    artifact = pops.compile(resolved)
+    from pops.runtime import _analytic_expression_lowering as expression_lowering
+
+    lowering_calls = 0
+    native_lowering = expression_lowering.lower_analytic_components
+
+    def count_lowering(*args, **kwargs):
+        nonlocal lowering_calls
+        lowering_calls += 1
+        return native_lowering(*args, **kwargs)
+
+    monkeypatch.setattr(
+        expression_lowering,
+        "lower_analytic_components",
+        count_lowering,
+    )
+    simulation = _bind_native_artifact(
+        artifact,
+        initial_state={"tracer": initial_state},
+    )
+
+    assert lowering_calls == 1
+    mask = np.asarray(
+        simulation._executor.embedded_boundary_mask(), dtype=np.float64,
+    ).reshape(16, 16)
+    centers = (np.arange(16, dtype=np.float64) + 0.5) / 16.0
+    center_x, center_y = np.meshgrid(centers, centers, indexing="xy")
+    distance = np.hypot(center_x - 0.5, center_y - 0.5)
+    expected = ((distance < 0.4) & (distance > 0.2)).astype(np.float64)
+    np.testing.assert_array_equal(mask, expected)
+    assert 0 < int(mask.sum()) < mask.size
 
 
 @pytest.mark.compiler

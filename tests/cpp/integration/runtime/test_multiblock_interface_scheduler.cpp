@@ -189,6 +189,16 @@ TEST(test_multiblock_interface_scheduler,
   MultiFab right_rhs = make_field(right_box, 2);
   std::vector<MultiFab*> states{&store.blocks[0].U, &store.blocks[1].U};
   std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
+
+  // The current pair scheduler owns Cartesian shared fluxes only.  An embedded-boundary Program
+  // must fail before either local residual or pair evaluator runs; otherwise the scheduler could
+  // scatter an unmasked flux back into an inactive cell after the local EB residual zeroed it.
+  EXPECT_THROW(
+      store.evaluate_rhs_with_interfaces(point, states, rhs, {}, GeometryMode::Staircase),
+      std::runtime_error);
+  EXPECT_EQ(evaluator_calls, 0);
+  EXPECT_EQ(interface_omitting_rhs_calls, 0);
+
   store.evaluate_rhs_with_interfaces(point, states, rhs);
 
   EXPECT_EQ(evaluator_calls, 1);

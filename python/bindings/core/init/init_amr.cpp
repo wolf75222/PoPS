@@ -589,6 +589,9 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_register_analytic_gaussian", &AmrSystem::register_analytic_gaussian,
            py::arg("subject"), py::arg("block"), py::arg("center_x"), py::arg("center_y"),
            py::arg("background"), py::arg("amplitude"), py::arg("inverse_width"))
+      .def("_register_analytic_expression", &AmrSystem::register_analytic_expression,
+           py::arg("subject"), py::arg("block"), py::arg("space"), py::arg("centering"),
+           py::arg("opcodes"), py::arg("literals"))
       .def("_bootstrap_analytic_reproject", &AmrSystem::bootstrap_analytic_reproject,
            py::arg("subject"), py::arg("level"))
       .def("_apply_bootstrap_component_floor", &AmrSystem::apply_bootstrap_component_floor,
@@ -1104,7 +1107,9 @@ void init_amr(py::module_& m) {
       // ADC-616: Berger-Rigoutsos clustering params (<= 0 = the historical {0.7, 1, 32} default).
       .def_readwrite("cluster_min_efficiency", &AmrSystemConfig::cluster_min_efficiency)
       .def_readwrite("cluster_min_box_size", &AmrSystemConfig::cluster_min_box_size)
-      .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size);
+      .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size)
+      .def_readwrite("xlo", &AmrSystemConfig::xlo)
+      .def_readwrite("ylo", &AmrSystemConfig::ylo);
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystem> cls(m, "AmrSystem");
