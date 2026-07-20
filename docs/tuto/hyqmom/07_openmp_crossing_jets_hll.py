@@ -111,12 +111,23 @@ bottom = np.array(
      RHO_JET * (JET_SPEED**4 + 6.0 * JET_SPEED**2 + 3.0)],
     dtype=np.float64,
 )
+center = np.array(
+    [RHO_JET, 0.0, RHO_JET, 0.0, 3.0 * RHO_JET,
+     0.0, 0.0, 0.0, 0.0, RHO_JET,
+     0.0, RHO_JET, 0.0, 0.0, 3.0 * RHO_JET],
+    dtype=np.float64,
+)
 initial_state = np.empty((15, CELLS, CELLS), dtype=np.float64)
 for component in range(15):
     initial_state[component, :, :] = background[component]
 for i in range((3 * CELLS) // 8, (5 * CELLS) // 8):
     for j in range((3 * CELLS) // 8, (5 * CELLS) // 8):
-        profile = top if i + j > CELLS - 1 else bottom
+        if i + j > CELLS - 1:
+            profile = top
+        elif i + j < CELLS - 1:
+            profile = bottom
+        else:
+            profile = center
         for component in range(15):
             initial_state[component, i, j] = profile[component]
 
