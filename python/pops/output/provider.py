@@ -13,6 +13,7 @@ from pops.identity import canonical_bytes
 
 _REQUIRED = frozenset({"schema_version", "provider_id", "extension", "parallel_mode"})
 _MODES = frozenset({"serial", "root", "collective", "per_rank"})
+_LAYOUT_CARDINALITIES = frozenset({"single", "multiple"})
 
 
 def consumer_format_data(provider: Any, *, where: str = "output format") -> dict[str, Any]:
@@ -44,6 +45,17 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
     if mode not in _MODES:
         raise ValueError(
             "%s parallel_mode must be serial, root, collective, or per_rank" % where)
+    selection_contract = first.get("selection_contract")
+    if selection_contract is not None:
+        if type(selection_contract) is not dict or set(selection_contract) != {
+                "schema_version", "layout_cardinality"}:
+            raise TypeError("%s selection_contract has an unknown schema" % where)
+        if selection_contract["schema_version"] != 1:
+            raise ValueError("%s selection_contract schema_version must be 1" % where)
+        if selection_contract["layout_cardinality"] not in _LAYOUT_CARDINALITIES:
+            raise ValueError(
+                "%s selection_contract layout_cardinality must be single or multiple"
+                % where)
     # The canonical encoder refuses opaque provider state and proves deterministic serialization.
     canonical_bytes(first)
     # Do not instantiate the writer while projecting semantic data.  ``consumer_format_data`` is

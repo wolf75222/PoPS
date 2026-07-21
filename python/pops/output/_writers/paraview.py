@@ -25,7 +25,12 @@ from pops.output._writers.common import (
     writer_execution_capability,
     writer_session_authority,
 )
-from pops.output.data import OutputRequest, OutputSnapshot, array_evidence
+from pops.output.data import (
+    OutputRequest,
+    OutputSnapshot,
+    _field_family_identity,
+    array_evidence,
+)
 
 
 _VTK_TYPES = {
@@ -35,6 +40,38 @@ _VTK_TYPES = {
     "<i4": "Int32",
     "|u1": "UInt8",
 }
+
+_VTK_REFINED_CELL = 8
+
+
+def _field_families(fields: Any) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    """Group exact level payloads without weakening their logical field identity."""
+    grouped: dict[str, list[Any]] = {}
+    for field in fields:
+        family = _field_family_identity(field.key).token
+        grouped.setdefault(family, []).append(field)
+
+    result = []
+    for family in sorted(grouped):
+        members = tuple(sorted(grouped[family], key=lambda item: item.key.level))
+        levels = tuple(item.key.level for item in members)
+        if len(levels) != len(set(levels)):
+            raise ValueError("ParaView logical field family contains a duplicate level")
+        first = members[0]
+        invariants = (
+            ("centering", first.centering),
+            ("units", first.units),
+            ("component_names", first.component_names),
+            ("dtype", first.array_dtype),
+        )
+        for name, expected in invariants:
+            if any(
+                    (item.array_dtype if name == "dtype" else getattr(item, name)) != expected
+                    for item in members[1:]):
+                raise ValueError(
+                    "ParaView logical field family levels disagree on %s" % name)
+        result.append((family, members))
+    return tuple(result)
 
 
 def _vtk_array(value: Any) -> tuple[str, str]:
@@ -161,6 +198,7 @@ class ParaViewWriter:
                 rank=(None if request.parallel_mode is ParallelMode.ROOT else request.rank),
                 size=request.size,
             )
+        families = _field_families(fields)
         if any(field.centering != "cell" for field in fields):
             raise NotImplementedError(
                 "ParaView VTU currently proves cell-centered arrays only; "
@@ -206,6 +244,7 @@ class ParaViewWriter:
         layout_ordinals = np.empty(n_cells, dtype="<i4")
         levels = np.empty(n_cells, dtype="<i4")
         covered = np.empty(n_cells, dtype="u1")
+        ghost_types = np.empty(n_cells, dtype="u1")
         volumes = np.empty(n_cells, dtype="<f8")
         offsets = {}
         cell = 0
@@ -234,6 +273,7 @@ class ParaViewWriter:
             layout_ordinals[start:cell] = ordinal
             levels[start:cell] = geometry.level
             covered[start:cell] = geometry.coverage[rows, columns]
+            ghost_types[start:cell] = covered[start:cell] * _VTK_REFINED_CELL
             volumes[start:cell] = geometry.cell_volumes[rows, columns]
             offsets[geometry.key] = (start, cell, ordinal)
         arrays = {
@@ -244,7 +284,10 @@ class ParaViewWriter:
             "pops_layout": layout_ordinals,
             "pops_level": levels,
             "pops_coverage": covered,
+            "vtkGhostType": ghost_types,
             "pops_cell_volume": volumes,
+            "TimeValue": np.asarray(
+                [float.fromhex(snapshot.clock.time_hex)], dtype="<f8"),
         }
         datasets = {"fields": {}, "geometries": {}}
         for ordinal, geometry in enumerate(geometries):
@@ -252,30 +295,38 @@ class ParaViewWriter:
                 "layout_ordinal": ordinal,
                 "cell_range": list(offsets[geometry.key][:2]),
             }
-        for index, field in enumerate(fields):
+        for index, (_family, members) in enumerate(families):
             name = "field_%04d" % index
-            geometry = snapshot.geometry(field.key)
-            valid = emission_masks[geometry.key]
-            components = len(field.component_names) or 1
-            start, end, ordinal = offsets[geometry.key]
-            values = field_values_on_mask(
-                field,
-                valid,
-                require_piece_subset=True,
-            )
-            if field.component_names:
-                combined = np.zeros((n_cells, components), dtype=values.dtype)
-                combined[start:end, :] = values
-            else:
-                combined = np.zeros(n_cells, dtype=values.dtype)
-                combined[start:end] = values
+            first = members[0]
+            components = len(first.component_names)
+            shape = (n_cells, components) if components else (n_cells,)
+            combined = np.empty(shape, dtype=np.dtype(first.array_dtype))
+            written = np.zeros(n_cells, dtype=np.bool_)
+            for field in members:
+                geometry = snapshot.geometry(field.key)
+                valid = emission_masks[geometry.key]
+                start, end, ordinal = offsets[geometry.key]
+                if np.any(written[start:end]):
+                    raise ValueError(
+                        "ParaView logical field family maps two levels onto one geometry")
+                values = field_values_on_mask(
+                    field,
+                    valid,
+                    require_piece_subset=True,
+                )
+                combined[start:end, ...] = values
+                written[start:end] = True
+                datasets["fields"][field.key.identity.token] = {
+                    "name": name,
+                    "layout_ordinal": ordinal,
+                    "cell_range": [start, end],
+                    "array": array_evidence(values),
+                }
+            if not np.all(written):
+                raise ValueError(
+                    "ParaView logical field family does not cover every emitted geometry")
+            combined.setflags(write=False)
             arrays[name] = combined
-            datasets["fields"][field.key.identity.token] = {
-                "name": name,
-                "layout_ordinal": ordinal,
-                "cell_range": [start, end],
-                "array": array_evidence(values),
-            }
         evidence = {name: array_evidence(value) for name, value in arrays.items()}
         output_manifest, identity = manifest(
             self.format, snapshot, request, evidence, datasets=datasets)
@@ -284,8 +335,9 @@ class ParaViewWriter:
         point_type, point_data = encoded_arrays["Points"]
         cell_arrays = []
         names = (
-            "pops_layout", "pops_level", "pops_coverage", "pops_cell_volume",
-        ) + tuple("field_%04d" % index for index in range(len(fields)))
+            "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
+            "pops_cell_volume",
+        ) + tuple("field_%04d" % index for index in range(len(families)))
         for name in names:
             vtk_type, encoded = encoded_arrays[name]
             components = arrays[name].shape[1] if arrays[name].ndim == 2 else 1
@@ -299,9 +351,10 @@ class ParaViewWriter:
             cells.append(
                 '<DataArray type="%s" Name="%s" format="binary">%s</DataArray>'
                 % (vtk_type, name, encoded))
+        time_type, time_data = encoded_arrays["TimeValue"]
         document = '''<?xml version="1.0"?>
 <VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian" header_type="UInt32">
-  <UnstructuredGrid><Piece NumberOfPoints="{points}" NumberOfCells="{cells_count}">
+  <UnstructuredGrid><FieldData><DataArray type="{time_type}" Name="TimeValue" NumberOfTuples="1" NumberOfComponents="1" format="binary">{time_data}</DataArray></FieldData><Piece NumberOfPoints="{points}" NumberOfCells="{cells_count}">
     <FieldData><DataArray type="String" Name="pops_output_manifest" NumberOfTuples="1" format="ascii">{manifest}</DataArray></FieldData>
     <Points><DataArray type="{point_type}" NumberOfComponents="3" format="binary">{point_data}</DataArray></Points>
     <Cells>{cells}</Cells><CellData>{cell_data}</CellData>
@@ -310,6 +363,8 @@ class ParaViewWriter:
 '''.format(
             points=len(points),
             cells_count=n_cells,
+            time_type=time_type,
+            time_data=time_data,
             manifest=html.escape(json_text(output_manifest)),
             point_type=point_type,
             point_data=point_data,
@@ -358,6 +413,12 @@ def read_paraview(path: Any) -> ReopenedOutput:
     output_manifest, identity = authenticate_manifest(
         json.loads(manifest_node.text or ""), "paraview-vtu")
     arrays = {}
+    for node in root.findall("./UnstructuredGrid/FieldData/DataArray"):
+        name = node.attrib["Name"]
+        evidence = output_manifest["arrays"].get(name)
+        if evidence is None:
+            raise ValueError("ParaView FieldData array %r is unauthenticated" % name)
+        arrays[name] = _decode_vtk_array(node, evidence)
     points = root.find(".//Points/DataArray")
     if points is None:
         raise ValueError("ParaView output has no point geometry")

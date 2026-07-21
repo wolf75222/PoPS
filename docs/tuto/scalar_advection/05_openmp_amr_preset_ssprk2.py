@@ -21,6 +21,7 @@ from pops.amr import (
     AMRTagging,
     AMRTransfer,
     Buffer,
+    Coarsen,
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
@@ -52,6 +53,7 @@ NX = 32
 NY = 32
 AX = 1.0
 AY = 0.25
+FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
 T_END = 0.10
@@ -120,9 +122,9 @@ tracer_U = tracer[U]
 
 boundaries = frame.boundaries
 transport_boundaries = TransportBoundarySet({
-    boundaries.x_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.x_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.x_max: Outflow(state=tracer_U),
-    boundaries.y_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.y_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.y_max: Outflow(state=tracer_U),
 })
 
@@ -142,7 +144,7 @@ case.initials.add(InitialCondition(
     value=Gaussian(
         frame=frame,
         center={x_axis: 0.30, y_axis: 0.35},
-        background=0.05,
+        background=FAR_FIELD,
         amplitude=0.95,
         inverse_width=120.0,
     ),
@@ -150,12 +152,14 @@ case.initials.add(InitialCondition(
 ))
 
 
-# 7. L'AMR raffine les cellules ou u depasse le seuil puis les entoure d'un buffer.
+# 7. Deux seuils font suivre le paquet par l'AMR sans conserver sa trainee raffinee.
 refine_threshold = case.param(RuntimeParam("refine_u", default=0.30))
+coarsen_threshold = case.param(RuntimeParam("coarsen_u", default=0.20))
 
 tagging = AMRTagging(
     rules=(
         Tag(ValueExpr(tracer_U) > case.value(refine_threshold)),
+        Coarsen(ValueExpr(tracer_U) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

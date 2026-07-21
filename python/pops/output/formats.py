@@ -227,6 +227,10 @@ class ParaView(FormatInterface):
             "provider_id": "pops.output.paraview-vtu.v1",
             "extension": self.extension,
             "parallel_mode": self.mode.value,
+            "selection_contract": {
+                "schema_version": 1,
+                "layout_cardinality": "single",
+            },
             "options": {"mode": self.mode.value},
         }
 

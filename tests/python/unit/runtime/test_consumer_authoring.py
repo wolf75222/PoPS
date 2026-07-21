@@ -6,9 +6,9 @@ import pops
 from pops.diagnostics import Integral
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh import normalize_layout_plan
+from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
 from pops.layouts import Uniform
-from pops.output import Checkpoint, ConsumerGraph, HDF5, ScientificOutput
+from pops.output import Checkpoint, ConsumerGraph, HDF5, ParaView, ScientificOutput
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.representations import Conservative
 from pops.spaces import CellState
@@ -143,3 +143,90 @@ def test_embedded_diagnostic_identity_is_qualified_by_its_consumer():
 def test_output_format_options_refuse_python_truthiness_coercion() -> None:
     with pytest.raises(TypeError, match="exact pops.output.ParallelMode"):
         HDF5(mode="serial")
+
+
+def test_paraview_single_layout_contract_fails_during_resolution():
+    domain = Rectangle("unit", (0.0, 0.0), (1.0, 1.0))
+    frame = domain.frame(Cartesian2D())
+    model = pops.Model("transport", frame=frame)
+    state = model.state(
+        "U", components=("u",), representation=Conservative(),
+        space=CellState(frame=frame))
+    case = pops.Case("consumer-two-layouts")
+    first_block = case.block("first", model)
+    second_block = case.block("second", model)
+    first_state = first_block[state]
+    second_state = second_block[state]
+    schedule = every(1, clock=Clock("macro", owner=case.owner_path))
+    paraview = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(first_state, second_state),
+            target="state/two-layouts",
+        ),
+    ))
+    case.consumers(paraview)
+    pops.validate(case)
+
+    first_block = case.resolve(first_block)
+    second_block = case.resolve(second_block)
+    first_state = case.resolve(first_state)
+    second_state = case.resolve(second_state)
+    builder = LayoutPlanBuilder(
+        case.owner_path.canonical(),
+        handle_resolver=case.resolve,
+    )
+    first_layout = builder.layout("first", Uniform(cartesian_grid(n=8)))
+    second_layout = builder.layout("second", Uniform(cartesian_grid(n=8)))
+    builder.assign_block(first_block, first_layout)
+    builder.assign_state(first_state, first_layout)
+    builder.assign_block(second_block, second_layout)
+    builder.assign_state(second_state, second_layout)
+    layout_plan = builder.resolve(
+        states=(first_state, second_state),
+        blocks=(first_block, second_block),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="accepts one exact layout per consumer",
+    ):
+        paraview.resolve(
+            case.resolve,
+            layout_plan,
+            owner=case.owner_path.canonical(),
+        )
+
+    mixed = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(first_state,),
+            diagnostics=(Integral(block=second_block, cadence=schedule),),
+            target="state/mixed-layouts",
+        ),
+    ))
+    with pytest.raises(
+        ValueError,
+        match="accepts one exact layout per consumer",
+    ):
+        mixed.resolve(
+            case.resolve,
+            layout_plan,
+            owner=case.owner_path.canonical(),
+        )
+
+    hdf5 = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=HDF5(),
+            schedule=schedule,
+            fields=(first_state, second_state),
+            target="state/two-layouts",
+        ),
+    ))
+    assert hdf5.resolve(
+        case.resolve,
+        layout_plan,
+        owner=case.owner_path.canonical(),
+    ).is_resolved

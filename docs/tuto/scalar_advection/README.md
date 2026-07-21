@@ -70,9 +70,10 @@ On utilise
 a_x = 1, \qquad a_y = 0.25,
 ```
 
-La condition initiale est une bosse gaussienne. Les deux composantes de la vitesse sont positives.
-Les faces $x_{min}$ et $y_{min}$ sont donc entrantes, tandis que les faces
-$x_{max}$ et $y_{max}$ sont sortantes.
+La condition initiale est une bosse gaussienne sur un fond uniforme $u_\infty=0.05$. Les deux
+composantes de la vitesse sont positives. Les faces $x_{min}$ et $y_{min}$ sont donc entrantes et
+imposent ce meme fond $u_\infty$ ; les faces $x_{max}$ et $y_{max}$ sont sortantes. Les conditions
+aux limites n'ajoutent ainsi aucun front au paquet transporte.
 
 ## Semi-discretisation en volumes finis
 
@@ -303,15 +304,19 @@ Le script MPI reprend cette construction
 
 Les quatre variantes suivantes remplacent le maillage uniforme par une hierarchie AMR a deux
 niveaux. La grille de base contient $32\times32$ cellules. La bosse est projetee
-conservativement sur la hierarchie et les cellules ou $u>0.30$ sont raffinees, avec un buffer de
-deux cellules autour de la zone marquee.
+conservativement sur la hierarchie. Les cellules ou $u>0.30$ sont raffinees, celles ou $u<0.20$
+sont dereffinees, et un buffer de deux cellules entoure la zone marquee. L'intervalle entre les
+deux seuils evite que le maillage oscille et lui permet de suivre le paquet sans conserver toute
+sa trajectoire.
 
 ```python
 refine_threshold = case.param(RuntimeParam("refine_u", default=0.30))
+coarsen_threshold = case.param(RuntimeParam("coarsen_u", default=0.20))
 
 tagging = AMRTagging(
     rules=(
         Tag(ValueExpr(tracer_U) > case.value(refine_threshold)),
+        Coarsen(ValueExpr(tracer_U) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -438,6 +443,10 @@ python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 
 Les fichiers sont ecrits sous
 `docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`.
+
+Dans ParaView, l'etat `field_0000` rassemble les valeurs des deux niveaux. Les cellules du niveau
+grossier recouvertes par le niveau fin sont marquees comme cellules raffinees et ne sont pas
+affichees deux fois. Le temps physique du fichier est aussi expose directement dans la timeline.
 
 ## Checkpoint et restart exact
 

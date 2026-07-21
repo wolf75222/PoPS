@@ -240,6 +240,14 @@ class ConsumerAuthoringNode:
                 "layout": layout.canonical_identity(),
                 "levels": list(levels),
             })
+        format_data = None
+        if self.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
+            from pops.output.provider import consumer_format_data
+
+            format_data = consumer_format_data(
+                self.output_format,
+                where="ConsumerAuthoringNode.output_format",
+            )
         resolved_diagnostics = tuple(
             _protocol(value, "resolve_references", where="consumer diagnostic")(
                 resolver)
@@ -288,6 +296,19 @@ class ConsumerAuthoringNode:
                 levels,
                 execution,
             ))
+        if format_data is not None:
+            selection_contract = format_data.get("selection_contract")
+            selected_layouts = {
+                quantity.layout_id
+                for quantity in (*quantities, *diagnostic_quantities)
+            }
+            if selection_contract is not None \
+                    and selection_contract["layout_cardinality"] == "single" \
+                    and len(selected_layouts) > 1:
+                raise ValueError(
+                    "scientific output format %s accepts one exact layout per consumer; "
+                    "declare one ScientificOutput per layout"
+                    % format_data["provider_id"])
         return ConsumerManifest(
             handle=handle,
             kind=self.kind,

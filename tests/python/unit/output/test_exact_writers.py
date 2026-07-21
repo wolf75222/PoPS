@@ -825,6 +825,15 @@ def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path
     assert foreign.identity.token not in reopened.manifest["datasets"]["fields"]
     assert np.array_equal(reopened.arrays["pops_level"], [0, 0, 0, 0] + [1] * 4)
     assert int(np.sum(reopened.arrays["pops_coverage"])) == 1
+    assert np.array_equal(reopened.arrays["vtkGhostType"], [0, 8, 0, 0] + [0] * 4)
+    assert np.array_equal(reopened.arrays["TimeValue"], [0.125])
+    coarse = next(item for item in request.selection if item.level == 0)
+    fine = next(item for item in request.selection if item.level == 1)
+    coarse_record = reopened.manifest["datasets"]["fields"][coarse.identity.token]
+    fine_record = reopened.manifest["datasets"]["fields"][fine.identity.token]
+    assert coarse_record["name"] == fine_record["name"] == "field_0000"
+    assert np.array_equal(
+        reopened.arrays["field_0000"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0])
     assert np.array_equal(reopened.arrays["connectivity"], np.arange(32))
     assert np.array_equal(reopened.arrays["offsets"], np.arange(4, 33, 4))
     assert np.array_equal(
@@ -835,6 +844,76 @@ def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path
         ]),
     )
     prepared.abort_prepare()
+
+
+def test_paraview_per_rank_keeps_one_multilevel_family_and_empty_local_level(tmp_path):
+    snapshot, request, _ = _snapshot()
+    selected = snapshot.select(request)
+    coarse = next(item for item in selected if item.key.level == 0)
+    fine = next(item for item in selected if item.key.level == 1)
+    cases = (
+        (
+            0,
+            coarse,
+            replace(fine, pieces=()),
+            [0] * 4,
+            [0, 8, 0, 0],
+            [1.0] * 4,
+            (0, 4),
+            (4, 4),
+        ),
+        (
+            1,
+            replace(coarse, pieces=()),
+            replace(
+                fine,
+                pieces=(replace(fine.pieces[0], owner_rank=1),),
+            ),
+            [1] * 4,
+            [0] * 4,
+            [2.0] * 4,
+            (0, 0),
+            (0, 4),
+        ),
+    )
+
+    for (
+        rank,
+        local_coarse,
+        local_fine,
+        levels,
+        ghosts,
+        values,
+        coarse_range,
+        fine_range,
+    ) in cases:
+        local_snapshot = replace(snapshot, fields=(local_coarse, local_fine))
+        local_request = replace(
+            request,
+            parallel_mode=ParallelMode.PER_RANK,
+            rank=rank,
+            size=2,
+            diagnostics=(),
+        )
+        prepared = _stage_writer(
+            ParaViewWriter(ParallelMode.PER_RANK),
+            local_snapshot,
+            local_request,
+            tmp_path / ("rank-%d.vtu" % rank),
+            communicator=object(),
+        )
+        reopened = read_paraview(prepared.temporary).require_selection(local_request)
+        coarse_record = reopened.manifest["datasets"]["fields"][coarse.key.identity.token]
+        fine_record = reopened.manifest["datasets"]["fields"][fine.key.identity.token]
+
+        assert coarse_record["name"] == fine_record["name"] == "field_0000"
+        assert tuple(coarse_record["cell_range"]) == coarse_range
+        assert tuple(fine_record["cell_range"]) == fine_range
+        assert np.array_equal(reopened.arrays["pops_level"], levels)
+        assert np.array_equal(reopened.arrays["vtkGhostType"], ghosts)
+        assert np.array_equal(reopened.arrays["TimeValue"], [0.125])
+        assert np.array_equal(reopened.arrays["field_0000"], values)
+        prepared.abort_prepare()
 
 
 def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_path):
@@ -851,15 +930,61 @@ def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_pa
     vtk = pytest.importorskip("vtkmodules.vtkIOXML")
     reader = vtk.vtkXMLUnstructuredGridReader()
     reader.SetFileName(str(prepared.temporary))
+    reader.UpdateInformation()
+    pipeline = pytest.importorskip("vtkmodules.vtkCommonExecutionModel")
+    time_steps = pipeline.vtkStreamingDemandDrivenPipeline.TIME_STEPS()
+    information = reader.GetOutputInformation(0)
+    assert information.Has(time_steps)
+    assert information.Length(time_steps) == 1
+    assert information.Get(time_steps, 0) == 0.125
     reader.Update()
     grid = reader.GetOutput()
     assert grid.GetNumberOfCells() == 8 and grid.GetNumberOfPoints() == 32
     assert grid.GetPoint(16) == (10.25, 20.25, 0.0)
     assert {grid.GetCellData().GetArrayName(index)
             for index in range(grid.GetCellData().GetNumberOfArrays())} >= {
-        "pops_layout", "pops_level", "pops_coverage", "field_0000", "field_0001"}
+                "pops_layout", "pops_level", "pops_coverage", "vtkGhostType", "field_0000"}
+    assert grid.GetCellData().GetArray("field_0001") is None
+    assert [grid.GetCellData().GetArray("field_0000").GetTuple1(index)
+            for index in range(8)] == [1.0] * 4 + [2.0] * 4
+    assert [grid.GetCellData().GetArray("vtkGhostType").GetTuple1(index)
+            for index in range(8)] == [0.0, 8.0, 0.0, 0.0] + [0.0] * 4
+    assert grid.GetFieldData().GetArray("TimeValue").GetTuple1(0) == 0.125
     prepared.publish()
     assert read_paraview(target).output_identity == reopened.output_identity
+
+
+def test_paraview_rejects_inconsistent_logical_field_family_levels(tmp_path):
+    snapshot, request, _ = _snapshot()
+    selected_fields = snapshot.select(request)
+    coarse = next(item for item in selected_fields if item.key.level == 0)
+    fine = next(item for item in selected_fields if item.key.level == 1)
+    fine_piece = fine.pieces[0]
+    variants = {
+        "units": replace(fine, units="different-units"),
+        "component_names": replace(
+            fine,
+            component_names=("rho",),
+            pieces=(_piece(np.full((1, 2, 2), 2.0), lower=(1, 1)),),
+        ),
+        "dtype": replace(
+            fine,
+            pieces=(replace(
+                fine_piece,
+                values=np.full((2, 2), 2.0, dtype=np.float32),
+            ),),
+            dtype="<f4",
+        ),
+        "centering": replace(fine, centering="face_x", global_shape=(4, 5)),
+    }
+    for attribute, incompatible in variants.items():
+        selected = replace(snapshot, fields=(coarse, incompatible))
+        target = tmp_path / ("inconsistent-%s.vtu" % attribute)
+        with pytest.raises(
+                ValueError,
+                match="logical field family levels disagree on %s" % attribute):
+            _stage_writer(ParaViewWriter(), selected, request, target)
+        assert not target.exists()
 
 
 def test_paraview_preserves_supported_field_dtype(tmp_path):
@@ -1339,6 +1464,46 @@ def test_provider_missing_required_key_is_rejected_even_with_extra_state():
             return object()
 
     with pytest.raises(ValueError, match=r"lacks required keys \['extension'\]"):
+        consumer_format_data(Provider())
+
+
+@pytest.mark.parametrize(
+    ("selection_contract", "error_type", "message"),
+    (
+        ({"schema_version": 1}, TypeError, "selection_contract has an unknown schema"),
+        (
+            {"schema_version": 2, "layout_cardinality": "single"},
+            ValueError,
+            "selection_contract schema_version must be 1",
+        ),
+        (
+            {"schema_version": 1, "layout_cardinality": "sometimes"},
+            ValueError,
+            "layout_cardinality must be single or multiple",
+        ),
+    ),
+)
+def test_format_selection_contract_is_closed_and_typed(
+    selection_contract, error_type, message,
+):
+    class Provider:
+        __pops_ir_immutable__ = True
+
+        @staticmethod
+        def consumer_data():
+            return {
+                "schema_version": 1,
+                "provider_id": "pops.test.selection-contract.v1",
+                "extension": ".test",
+                "parallel_mode": "serial",
+                "selection_contract": selection_contract,
+            }
+
+        @staticmethod
+        def writer():
+            return object()
+
+    with pytest.raises(error_type, match=message):
         consumer_format_data(Provider())
 
 

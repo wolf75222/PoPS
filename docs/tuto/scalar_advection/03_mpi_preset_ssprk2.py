@@ -6,6 +6,8 @@ operateurs en C++/Kokkos et distribue le domaine avec le MPI natif de PoPS. Il n
 Python sur les cellules ou les pas de temps et aucun recours a mpi4py.
 """
 
+# ruff: noqa: E402
+
 import time
 
 import numpy as np
@@ -36,6 +38,7 @@ NX = 64
 NY = 64
 AX = 1.0
 AY = 0.25
+FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
 T_END = 0.20
@@ -105,9 +108,9 @@ tracer_U = tracer[U]
 # 5. Conditions aux limites. AX et AY sont positifs : les faces min sont entrantes.
 boundaries = frame.boundaries
 transport_boundaries = TransportBoundarySet({
-    boundaries.x_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.x_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.x_max: Outflow(state=tracer_U),
-    boundaries.y_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.y_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.y_max: Outflow(state=tracer_U),
 })
 
@@ -126,7 +129,7 @@ x = (np.arange(NX, dtype=np.float64) + 0.5) / NX
 y = (np.arange(NY, dtype=np.float64) + 0.5) / NY
 xx, yy = np.meshgrid(x, y, indexing="xy")
 
-initial_u = 0.05 + 0.95 * np.exp(
+initial_u = FAR_FIELD + 0.95 * np.exp(
     -120.0 * ((xx - 0.30) ** 2 + (yy - 0.35) ** 2)
 )
 initial_state = np.ascontiguousarray(initial_u[np.newaxis, :, :], dtype=np.float64)

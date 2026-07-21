@@ -53,6 +53,7 @@ NX = 32
 NY = 32
 AX = 1.0
 AY = 0.25
+FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
 T_END = 0.10
@@ -117,9 +118,9 @@ tracer_U = tracer[U]
 
 boundaries = frame.boundaries
 numerics.boundaries.add(TransportBoundarySet({
-    boundaries.x_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.x_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.x_max: Outflow(state=tracer_U),
-    boundaries.y_min: Inflow(state=tracer_U, value=0.0),
+    boundaries.y_min: Inflow(state=tracer_U, value=FAR_FIELD),
     boundaries.y_max: Outflow(state=tracer_U),
 }))
 case.numerics(numerics, block=tracer)
@@ -135,7 +136,7 @@ case.initials.add(InitialCondition(
     value=Gaussian(
         frame=frame,
         center={x_axis: 0.30, y_axis: 0.35},
-        background=0.05,
+        background=FAR_FIELD,
         amplitude=0.95,
         inverse_width=120.0,
     ),
