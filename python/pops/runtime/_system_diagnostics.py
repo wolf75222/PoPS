@@ -37,9 +37,20 @@ class _SystemDiagnostics(_System):
         if not np.all(np.isfinite(U)):
             failures.append("state U not finite")
         self._s.solve_fields()  # aux up to date: the residual reads phi / grad phi
-        R = np.asarray(self._s.eval_rhs(block), dtype=float)
-        if not np.all(np.isfinite(R)):
-            failures.append("residual -div F + S not finite (flux/source/reconstruction)")
+        try:
+            R = np.asarray(self._s.eval_rhs(block), dtype=float)
+        except RuntimeError as ex:
+            # Native execution is deliberately fail-closed: a non-finite residual is rejected
+            # before it can cross the binding.  The diagnostic API still reports that rejection
+            # alongside the role/conversion failures it can inspect on the original state.
+            if not str(ex).startswith(
+                "assemble_rhs produced non-finite finite-volume data;"
+            ):
+                raise
+            failures.append("residual -div F + S evaluation failed (%s)" % ex)
+        else:
+            if not np.all(np.isfinite(R)):
+                failures.append("residual -div F + S not finite (flux/source/reconstruction)")
         ncell = U.size // max(nv, 1)
         Uc = U.reshape(nv, ncell)
         roles = [r.lower() for r in self._s.variable_roles(block, "conservative")]

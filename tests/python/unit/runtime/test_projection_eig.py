@@ -138,7 +138,12 @@ def test_codegen():
         "static POPS_HD pops::Real pops_eig_max_im_2x2(" in src,
         "foncteur nomme pops_eig_max_im_2x2 declare",
     )
-    chk("pops::real_eig_minmax(M).max_im" in src, "le foncteur appelle real_eig_minmax(M).max_im")
+    chk(
+        "const pops::EigBounds bounds = pops::real_eig_minmax(M);" in src
+        and "if (!bounds.valid())" in src
+        and "return bounds.max_im;" in src,
+        "le foncteur exige une borne spectrale valide avant de retourner max_im",
+    )
     chk("[&]" not in src and "[=]" not in src, "aucune lambda etendue (device-clean)")
     chk("pops_eig_max_im_2x2(" in src.split("State project")[1], "project() appelle le foncteur")
 

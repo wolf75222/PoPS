@@ -18,7 +18,6 @@ import sys
 import numpy as np
 import pytest
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
-from tests.python.support.layout_plan import resolved_layout_contract
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
@@ -285,10 +284,8 @@ def test_compiled_model_has_no_competing_layout_inspector():
 def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     # The artifact retains the exact resolved layout; the sole public inspector reports its tags.
     from pops.codegen.loader import CompiledModel
-    from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
     from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
-    from pops.model.bind_schema import BindSchema
-    from pops.problem._snapshot import AuthoringSnapshot
+    from tests.python.support.resolved_amr_plan import resolved_amr_plan
 
     cm = CompiledModel(
         so_path="<stub>", backend="production", cons_names=["rho"],
@@ -297,37 +294,16 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     from pops.codegen._compiled_model_identity import compiled_model_identity
     cm.definition_identity = compiled_model_identity(model_hash="h")
     from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
-    carried = final_amr_layout(cartesian_grid(n=64))
-    snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
-    schema = BindSchema()
-    layout_plan, layout_coverage = resolved_layout_contract(
-        carried, target="amr_system", block_names=("ne",))
-    resolved = ResolvedSimulationPlan(
-        snapshot=snapshot,
-        target="amr_system",
-        backend="production",
-        layout=carried,
-        layout_plan=layout_plan,
-        layout_targets={
-            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
-        },
-        time=None,
-        blocks=(ResolvedBlock(
-            "ne", {"kind": "amr-runtime-inspect-stub"}, {"ghost_depth": 1},
-            "production", ("U",), ("test::ne::state::U",)),),
-        bind_schema=schema,
-        compile_values=schema.resolve_compile(),
-        field_plans={},
-        libraries=(),
-        requirements={"amr": True},
-        capabilities={"amr": True},
-        lowering_coverage=layout_coverage,
+    resolved = resolved_amr_plan(
+        block_names=("ne",),
+        cells=64,
+        name="amr-runtime-inspect",
     )
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
         blocks=(CompiledBlockArtifact(
-            "ne", cm, {"ghost_depth": 1}, ("U",)),),
+            "ne", cm, resolved.blocks[0].spatial, ("U",)),),
     )
 
     assert not hasattr(artifact, "inspect_amr")

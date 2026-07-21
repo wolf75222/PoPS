@@ -6,6 +6,7 @@ from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimul
 from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from tests.python.support.resolved_amr_plan import resolved_amr_plan
 from tests.python.support.layout_plan import resolved_layout_contract
 
 
@@ -64,7 +65,29 @@ class CompiledComponent:
 
 
 def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=None,
-                     amr_program=False):
+                     amr_program=False, parameters=(), tag_parameter=None):
+    if target == "amr_system":
+        if bind_schema is not None:
+            raise TypeError(
+                "AMR phase-record fixtures author their BindSchema through parameters"
+            )
+        plan = resolved_amr_plan(
+            block_names=block_names,
+            parameters=parameters,
+            tag_parameter=tag_parameter,
+            name="typed-artifact",
+        )
+        components = tuple(CompiledComponent(name, target=target) for name in block_names)
+        blocks = tuple(
+            CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
+            for name, component, resolved in zip(
+                block_names, components, plan.blocks, strict=True)
+        )
+        program = CompiledComponent("program", target=target) if amr_program else None
+        if program is not None:
+            program.program_block_routes = tuple(enumerate(block_names))
+        return CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)
+
     source_models = tuple(CanonicalValue("source-" + name) for name in block_names)
     spatial = tuple(
         {"mesh": {"block": name}, "ghost_depth": 2}

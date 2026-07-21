@@ -387,10 +387,16 @@ def test_derived_foreign_cycle_phase_and_invalidation_fail_loudly():
 
 
 def test_compiled_arguments_and_manifest_are_derived_from_attached_schema():
-    schema, _, _, _, _ = _two_instance_schema(default=1.5)
     compiled = artifact_fixture(
-        target="amr_system", block_names=("left", "right"), bind_schema=schema,
+        target="amr_system",
+        block_names=("left", "right"),
+        parameters=(
+            RuntimeParam("speed", dtype=Real, default=1.5, domain=Positive()),
+            ConstParam("order", 2, dtype=Integer),
+        ),
+        tag_parameter="speed",
     )
+    schema = compiled.bind_schema
 
     arguments = compiled.arguments()
     assert set(arguments.params) == {slot.qid for slot in schema.slots}

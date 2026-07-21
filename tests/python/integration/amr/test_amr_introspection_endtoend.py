@@ -26,22 +26,17 @@ from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._plans import (  # noqa: E402
-    BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan,
+    BindInputs, InstallPlan,
 )
 from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledBlockArtifact, CompiledSimulationArtifact,
 )
-from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.codegen._compiled_model_identity import compiled_model_identity  # noqa: E402
 from pops.layouts import Uniform  # noqa: E402
-from pops.model import Module  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
-from pops.problem import Case  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
-from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
-from tests.python.support.layout_plan import (  # noqa: E402
-    cartesian_grid, final_amr_layout, resolved_layout_contract,
-)
+from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
+from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
 
 
 def _amr_metadata_fixture():
@@ -59,47 +54,25 @@ def _amr_metadata_fixture():
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
-    layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
-    snapshot = AuthoringSnapshot({"kind": "amr-introspection-metadata-fixture"})
-    module = Module("amr-introspection-model")
-    module.param(alpha)
-    case = Case("amr-introspection-case")
-    case.block("ne", module)
-    schema = BindSchema.from_problem(case)
-    layout_plan, layout_coverage = resolved_layout_contract(
-        layout, target="amr_system", block_names=("ne",))
-    resolved = ResolvedSimulationPlan(
-        snapshot=snapshot,
-        target="amr_system",
-        backend="production",
-        layout=layout,
-        layout_plan=layout_plan,
-        layout_targets={
-            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
-        },
-        time=None,
-        blocks=(ResolvedBlock(
-            "ne", module, {"ghost_depth": 1}, "production", ("U",),
-            ("test::ne::state::U",)),),
-        bind_schema=schema,
-        compile_values=schema.resolve_compile(),
-        field_plans={},
-        libraries=(),
-        requirements={"amr": True},
-        capabilities={"cpu": True, "amr": True, "mpi": True},
-        lowering_coverage=layout_coverage,
+    resolved = resolved_amr_plan(
+        block_names=("ne",),
+        parameters=(alpha,),
+        tag_parameter="alpha",
+        cells=64,
+        name="amr-introspection-metadata",
     )
+    schema = resolved.bind_schema
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
         blocks=(CompiledBlockArtifact(
-            "ne", handle, {"ghost_depth": 1}, ("U",)),),
+            "ne", handle, resolved.blocks[0].spatial, ("U",)),),
     )
     inputs = BindInputs()
     install = InstallPlan(
         artifact=artifact,
         bind_inputs=inputs,
-        instances={"ne": {"model": handle, "spatial": {"ghost_depth": 1}}},
+        instances={"ne": {"model": handle, "spatial": resolved.blocks[0].spatial}},
         params=schema.resolve_bind({}, compile_values=resolved.compile_values),
         aux={},
     )

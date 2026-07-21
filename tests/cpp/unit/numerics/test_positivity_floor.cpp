@@ -175,12 +175,18 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
   // (2) NO-DEFAULT-CHANGE : pos_floor = 0 -> residu make_block BIT-IDENTIQUE a l'historique.
   // ----------------------------------------------------------------------------------------------
   {
+    // This oracle checks the opt-in boundary, not the rejection path exercised below.  Use the
+    // admissible monotone contact: the oscillating spike intentionally reconstructs a non-physical
+    // Euler trace and is now rejected before a NaN residual can make a false dmax==0 comparison.
+    MultiFab U_admissible(ba, dm, EulerNoSrc::n_vars, ng);
+    init_tophat(U_admissible, dom, model, /*spike=*/false);
+    fill_ghosts(U_admissible, dom, bc);
     MultiFab R0(ba, dm, EulerNoSrc::n_vars, 0), R1(ba, dm, EulerNoSrc::n_vars, 0);
     BlockClosures c0 = make_block(model, "weno5", "rusanov", ctx, false, false);
     BlockClosures c1 = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
                                   nullptr, Real(0));
-    c0.rhs_into(U, R0);
-    c1.rhs_into(U, R1);
+    c0.rhs_into(U_admissible, R0);
+    c1.rhs_into(U_admissible, R1);
     sync_host();
     double dmax = 0;
     for (int li = 0; li < R0.local_size(); ++li) {

@@ -532,6 +532,10 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
     Real out[2] = {Real(7), Real(7)};
     EXPECT_TRUE(!pops::roe_abs_apply(A, dU, out) && out[0] == Real(7) && out[1] == Real(7))
         << "roe_abs spectre complexe -> false, out inchange";
+    Real exact_zero_out[2] = {Real(9), Real(9)};
+    EXPECT_TRUE(!pops::roe_abs_apply(A, dU, exact_zero_out, 80, Real(1e-13), Real(0)) &&
+                exact_zero_out[0] == Real(9) && exact_zero_out[1] == Real(9))
+        << "roe_abs tolerance imaginaire nulle : une vraie paire complexe reste refusee";
   }
   {
     // A singuliere REELLE : le projecteur du noyau definit |0|=0 et conserve la branche Roe.
@@ -563,10 +567,10 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
   }
   {
     // Vrai Jacobien y d'une face gaussienne apres un pas. Son spectre est l'union des blocs
-    // triangulaires [0,3,5], [1,4], [2] et reste reel. Le QR du bloc plein porte toutefois un
-    // residu imaginaire ~7.6e-19 sur la valeur propre convective double : le test exact-zero doit
-    // pouvoir le montrer sans empecher un fournisseur qui a certifie les trois blocs d'appliquer
-    // la fonction spectrale au Jacobien COMPLET.
+    // triangulaires [0,3,5], [1,4], [2] et reste reel. Selon le compilateur, le QR du bloc plein
+    // rapporte exactement zero ou un residu imaginaire de l'ordre de l'arrondi sur la valeur propre
+    // convective double. Le contrat physique porte donc sur la tolerance stricte, jamais sur ce
+    // residu d'implementation, puis la fonction spectrale agit sur le Jacobien COMPLET.
     const Real A[6][6] = {
         {0, 0, 0, 1, 0, 0},
         {0, 0, 0, 0, 1, 0},
@@ -585,16 +589,7 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
 
     const pops::EigBounds full = pops::real_eig_minmax(A);
     ASSERT_TRUE(full.valid());
-    EXPECT_GT(full.max_im, Real(0));
-    EXPECT_NEAR(full.max_im, Real(7.6193875783721477e-19), Real(1e-18));
-    EXPECT_FALSE(full.all_real(Real(0)));
     EXPECT_TRUE(full.all_real(pops::kEigStrictImagTol));
-
-    Real exact_zero_out[6] = {7, 7, 7, 7, 7, 7};
-    EXPECT_FALSE(pops::roe_abs_apply(
-        A, dU, exact_zero_out, 80, Real(1e-13), Real(0)));
-    for (const Real value : exact_zero_out)
-      EXPECT_EQ(value, Real(7));
 
     constexpr int block0_indices[3] = {0, 3, 5};
     constexpr int block1_indices[2] = {1, 4};

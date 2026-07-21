@@ -50,6 +50,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -147,6 +148,10 @@ bool all_finite(const std::vector<double>& a) {
     if (!std::isfinite(v))
       return false;
   return true;
+}
+bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
+  return std::string(error.what()).find("produced non-finite finite-volume data") !=
+         std::string::npos;
 }
 
 // Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"), DEUX modeles
@@ -347,17 +352,23 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       // The final runtime is fail-closed: once the unstable explicit state becomes non-finite, the
       // next field solve rejects it before NaNs can be published as a completed step.
       explicit_rejected_nonfinite = true;
+    } catch (const std::runtime_error& error) {
+      if (!is_nonfinite_fv_rejection(error))
+        throw;
+      explicit_rejected_nonfinite = true;
     }
     chk(all_finite(B_imex.density) && maxabs(B_imex.density) < 1e3,
         "[B] IMEX stable sur source raide (fini, borne)");
-    chk(explicit_rejected_nonfinite || !all_finite(B_expl.density) || maxabs(B_expl.density) > 1e3,
-        "[B] explicite EXPLOSE sur source raide (non fini ou >> borne)");
+    chk(explicit_rejected_nonfinite ||
+            (all_finite(B_expl.density) && maxabs(B_expl.density) > 1e3),
+        "[B] explicite refuse avant publication ou diverge en restant fini");
     std::printf(
         "OK  [B] source raide (eps=%.0e, dt=%.0e) : IMEX max=%.3e (stable) | explicite %s\n", eps,
         dtB, maxabs(B_imex.density),
         explicit_rejected_nonfinite
             ? "REJETE NON FINI (fail-closed)"
-            : (all_finite(B_expl.density) ? "borne >> 1" : "NON FINI (explose)"));
+            : (all_finite(B_expl.density) ? "borne >> 1"
+                                          : "ETAT NON FINI PUBLIE (ECHEC)"));
   }
 
   // (B2) PARITE add_compiled_model == add_block sous IMEX en regime NON explosif (eps modere) :

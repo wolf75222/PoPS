@@ -178,6 +178,11 @@ static bool raises(F&& f) {
   return false;
 }
 
+static bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
+  return std::string(error.what()).find("produced non-finite finite-volume data") !=
+         std::string::npos;
+}
+
 static double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   const std::size_t nn = a.size() < b.size() ? a.size() : b.size();
@@ -473,12 +478,24 @@ TEST(test_amr_multiblock_compiled, Runs) {
     EXPECT_TRUE(imex_res.second < 1e-10)
         << "F1_compiled_imex_mass_conserved";  // source ne touche pas rho
 
-    const auto expl_res = run_stiff_compiled(/*imex=*/false, /*stride=*/1, {});
-    const bool expl_blew_up = !all_finite(expl_res.first) || maxabs(expl_res.first) > 1e3;
+    std::pair<std::vector<double>, double> expl_res;
+    bool explicit_rejected = false;
+    try {
+      expl_res = run_stiff_compiled(/*imex=*/false, /*stride=*/1, {});
+    } catch (const std::runtime_error& error) {
+      if (!is_nonfinite_fv_rejection(error))
+        throw;
+      explicit_rejected = true;
+    }
+    const bool expl_blew_up =
+        explicit_rejected || (all_finite(expl_res.first) && maxabs(expl_res.first) > 1e3);
     EXPECT_TRUE(expl_blew_up)
         << "F1_compiled_explicit_block_BLOWS_UP (disable-and-fail : IMEX requis)";
-    std::printf("      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
-                all_finite(expl_res.first) ? "borne >> 1" : "NON FINI (explose)");
+    std::printf(
+        "      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
+        explicit_rejected ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
+                          : (all_finite(expl_res.first) ? "borne >> 1"
+                                                       : "ETAT NON FINI PUBLIE (ECHEC)"));
 
     // (F2) stride=2 DIFFERE de stride=1 (memes eps/dt/macro-pas) : la cadence est effective.
     const auto imex_s2 = run_stiff_compiled(/*imex=*/true, /*stride=*/2, {});
@@ -501,9 +518,18 @@ TEST(test_amr_multiblock_compiled, Runs) {
     //          {momentum_x} SEUL laisse my en EXPLICITE -> my (raide) EXPLOSE et contamine rho. Si le
     //          masque etait ignore (tout implicite) le run resterait borne ; l'explosion PROUVE que la
     //          selection par composante est reellement honoree (mirroir de l'esprit disable-and-fail).
-    const auto imex_mask_mx = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x"});
+    std::pair<std::vector<double>, double> imex_mask_mx;
+    bool partial_rejected = false;
+    try {
+      imex_mask_mx = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x"});
+    } catch (const std::runtime_error& error) {
+      if (!is_nonfinite_fv_rejection(error))
+        throw;
+      partial_rejected = true;
+    }
     const bool partial_blew_up =
-        !all_finite(imex_mask_mx.first) || maxabs(imex_mask_mx.first) > 1e3;
+        partial_rejected ||
+        (all_finite(imex_mask_mx.first) && maxabs(imex_mask_mx.first) > 1e3);
     EXPECT_TRUE(partial_blew_up)
         << "F3_compiled_partial_mask_mx_only_leaves_my_EXPLICIT_and_blows_up (masque honore par "
            "composante)";

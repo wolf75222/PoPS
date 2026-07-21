@@ -67,6 +67,10 @@ def _nonhyperbolic_roe_model() -> Model:
         state=state,
         components={x_axis: (-q2, q1), y_axis: (-q2, q1)},
     )
+    # Roe supplies the interface dissipation, while the time-step authority still needs the
+    # exact signed spectrum of the same flux Jacobian.  Register both explicitly: neither
+    # provider is allowed to stand in for the other or fall back to a scalar radius.
+    model.wave_speeds_from_jacobian()
     model.roe_from_jacobian(entropy_fix=1.0e-6)
     model.rate("transport", equation=ddt(state) == -div(flux))
     return model

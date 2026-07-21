@@ -133,6 +133,10 @@ bool all_finite(const std::vector<double>& v) {
       return false;
   return true;
 }
+bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
+  return std::string(error.what()).find("produced non-finite finite-volume data") !=
+         std::string::npos;
+}
 double maxabs(const std::vector<double>& v) {
   double m = 0;
   for (double x : v)
@@ -297,22 +301,33 @@ TEST(test_amr_multiblock_imex, Runs) {
   //     STIFFENE (mx/my/E directement, comp 1/2/3), la ou la source agit, pas seulement sur la densite.
   {
     AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/false, rho);
-    for (int s = 0; s < K; ++s)
-      rt.step(static_cast<Real>(dt));
-    const std::vector<double> dStiff = rt.density(0);
+    bool explicit_rejected = false;
+    try {
+      for (int s = 0; s < K; ++s)
+        rt.step(static_cast<Real>(dt));
+    } catch (const std::runtime_error& error) {
+      if (!is_nonfinite_fv_rejection(error))
+        throw;
+      explicit_rejected = true;
+    }
+    const std::vector<double> dStiff = explicit_rejected ? std::vector<double>{} : rt.density(0);
     bool me_finite = false;
-    const double me_max = max_momentum_energy_coarse(rt, 0, me_finite);
+    const double me_max = explicit_rejected ? 0.0 : max_momentum_energy_coarse(rt, 0, me_finite);
     // L'explosion DOIT etre visible sur mx/my/E (le champ que la raideur attaque) ; on garde aussi le
     // critere densite (contamination par le transport) pour la lisibilite du diagnostic.
-    const bool me_blew_up = !me_finite || me_max > 1e3;
-    const bool rho_blew_up = !all_finite(dStiff) || maxabs(dStiff) > 1e3;
+    const bool me_blew_up = explicit_rejected || (me_finite && me_max > 1e3);
+    const bool rho_blew_up =
+        explicit_rejected || (all_finite(dStiff) && maxabs(dStiff) > 1e3);
     EXPECT_TRUE(me_blew_up)
         << "explicit_stiff_momentum_energy_BLOWS_UP_DIRECT (disable-and-fail sur mx/my/E)";
     EXPECT_TRUE(rho_blew_up)
         << "explicit_stiff_BLOWS_UP (disable-and-fail : IMEX genuinement requis)";
-    std::printf("      EXPLICITE : mx/my/E %s, rho %s (la stabilite vient bien du pas implicite)\n",
-                me_finite ? "borne >> 1" : "NON FINI (explose)",
-                all_finite(dStiff) ? "borne >> 1" : "NON FINI (explose)");
+    std::printf(
+        "      EXPLICITE : %s (la stabilite vient bien du pas implicite)\n",
+        explicit_rejected
+            ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
+            : (me_finite && all_finite(dStiff) ? "borne >> 1"
+                                               : "ETAT NON FINI PUBLIE (ECHEC)"));
   }
 
   // ============================================================================================

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pops")
+pops = pytest.importorskip("pops")
 
 from pops.codegen._compiled_artifact import CompiledSimulationArtifact  # noqa: E402
 
@@ -16,7 +16,7 @@ def test_amr_artifact_without_whole_system_program_is_explicit_and_multiblock():
     assert type(artifact) is CompiledSimulationArtifact
     assert artifact.program is None
     assert artifact.target == "amr_system"
-    assert artifact.layout["kind"] == "amr"
+    assert pops.inspect(artifact.layout)["amr_report"]["layout"] == "amr"
     assert tuple(block.name for block in artifact.blocks) == ("ions", "electrons")
     assert tuple(block.model.name for block in artifact.blocks) == ("ions", "electrons")
     artifact.verify()

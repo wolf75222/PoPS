@@ -48,6 +48,7 @@ CPP_BROAD_FILES = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "scripts/ci_include_graph.py",
+    "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
@@ -72,6 +73,7 @@ PYTHON_BROAD_FILES = {
     "pyproject.toml",
     "python/CMakeLists.txt",
     "scripts/ci_import_closure.py",
+    "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
@@ -402,6 +404,33 @@ def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
 def cpp_mpi_ctest_count(manifest: dict) -> int:
     """Return the number of exact manifest-owned MPI CTest launches."""
     return len(cpp_mpi_ctest_plan(manifest))
+
+
+def cpp_mpi_ctest_groups(manifest: dict) -> list[dict]:
+    """Partition MPI launches by processor reservation, exactly once.
+
+    CTest schedules ``PROCESSORS`` reservations in inventory order.  A stuck np=2
+    launch can therefore sit immediately ahead of an np=4 launch, consume half of a
+    four-slot runner, and prevent every later launch from starting.  Grouping equal
+    reservations removes that head-of-line coupling while retaining CTest's native
+    per-test timeout and failure reporting.
+    """
+    plan = cpp_mpi_ctest_plan(manifest)
+    by_processors: dict[int, list[str]] = {}
+    for name, processors in plan.items():
+        by_processors.setdefault(processors, []).append(name)
+    groups = [
+        {
+            "processors": processors,
+            "names": tuple(sorted(names)),
+            "regex": "^(" + "|".join(re.escape(name) for name in sorted(names)) + ")$",
+        }
+        for processors, names in sorted(by_processors.items())
+    ]
+    flattened = [name for group in groups for name in group["names"]]
+    if sorted(flattened) != sorted(plan) or len(flattened) != len(set(flattened)):
+        raise SystemExit("MPI CTest processor groups are not an exact disjoint launch cover")
+    return groups
 
 
 def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
@@ -826,6 +855,25 @@ def _ctest_processors(test: dict) -> int:
     )
 
 
+def _ctest_timeout(test: dict) -> float:
+    values = [
+        prop.get("value")
+        for prop in test.get("properties", [])
+        if isinstance(prop, dict) and prop.get("name") == "TIMEOUT"
+    ] if isinstance(test.get("properties", []), list) else []
+    name = test.get("name")
+    if len(values) != 1 or type(values[0]) not in (int, float):
+        raise SystemExit(
+            f"CTest MPI contract failed; test {name!r} must expose one numeric TIMEOUT"
+        )
+    timeout = float(values[0])
+    if not 0.0 < timeout <= 600.0:
+        raise SystemExit(
+            f"CTest MPI contract failed; test {name!r} has unbounded TIMEOUT={timeout:g}"
+        )
+    return timeout
+
+
 def verify_cpp_target_labels(args: argparse.Namespace) -> int:
     """Fail unless every selected build target owns discovered CTest cases.
 
@@ -887,6 +935,7 @@ def verify_cpp_mpi_ctests(args: argparse.Namespace) -> int:
         if name in actual:
             raise SystemExit(f"CTest MPI contract failed; duplicate test name {name!r}")
         actual[name] = _ctest_processors(test)
+        _ctest_timeout(test)
 
     missing = sorted(set(expected) - set(actual))
     unexpected = sorted(set(actual) - set(expected))
@@ -1221,6 +1270,20 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
     summary = f"label {args.label}: {len(targets)} C++ targets"
     if args.label == "mpi":
         summary += f", {mpi_ctest_count} CTest launches"
+        if not args.ctest_groups_file:
+            raise SystemExit("the MPI C++ label projection requires --ctest-groups-file")
+        groups = cpp_mpi_ctest_groups(manifest)
+        groups_path = Path(args.ctest_groups_file)
+        groups_path.parent.mkdir(parents=True, exist_ok=True)
+        groups_path.write_text(
+            "".join(
+                f"{group['processors']}\t{len(group['names'])}\t{group['regex']}\n"
+                for group in groups
+            ),
+            encoding="utf-8",
+        )
+    else:
+        groups = []
     print(summary)
     for target in targets:
         print(target)
@@ -1231,6 +1294,7 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "cpp_label_targets": " ".join(targets),
             "cpp_label_count": str(len(targets)),
             "cpp_label_ctest_count": str(mpi_ctest_count),
+            "cpp_label_ctest_group_count": str(len(groups)),
             "cpp_label_summary": summary,
         },
     )
@@ -1242,6 +1306,7 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "selected_count": len(targets),
             "ctest_count": mpi_ctest_count,
             "ctest_names": list(mpi_ctest_plan),
+            "ctest_groups": groups,
             "selected": targets,
         },
     )
@@ -1543,6 +1608,7 @@ def main() -> int:
 
     cpp_label = sub.add_parser("cpp-label")
     cpp_label.add_argument("--label", required=True)
+    cpp_label.add_argument("--ctest-groups-file")
     cpp_label.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     cpp_label.add_argument("--explain-file")
     cpp_label.set_defaults(func=plan_cpp_label)

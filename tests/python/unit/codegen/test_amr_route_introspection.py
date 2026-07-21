@@ -15,8 +15,6 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.codegen._plans import (  # noqa: E402
     BindInputs,
     InstallPlan,
-    ResolvedBlock,
-    ResolvedSimulationPlan,
 )
 from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledBlockArtifact,
@@ -25,14 +23,10 @@ from pops.codegen._compiled_artifact import (  # noqa: E402
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 from pops.codegen._phases import bind as bind_phase  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
-from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 from pops.model import Module  # noqa: E402
-from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
-from pops.problem import Case  # noqa: E402
-from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
-from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
+from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
 
 
 def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
@@ -45,6 +39,10 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
     params["gamma"] = ConstParam("gamma", 1.4)
     for declaration in params.values():
         source.param(declaration)
+    resolved_params = {}
+    if runtime_param:
+        resolved_params["alpha"] = RuntimeParam("alpha", default=1.0)
+    resolved_params["gamma"] = ConstParam("gamma", 1.4)
     aux = ["B_z", "phi_bg"][:n_aux]
     component = CompiledModel(
         so_path="<stub-amr>", backend="production",
@@ -55,39 +53,19 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
-    layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
-    schema_problem = Case(name="amr-introspection-case")
-    schema_problem.block("block", source)
-    schema = BindSchema.from_problem(schema_problem)
-    layout_plan, layout_coverage = resolved_layout_contract(
-        layout, target="amr_system", block_names=("block",))
-    plan = ResolvedSimulationPlan(
-        snapshot=AuthoringSnapshot({"kind": "amr-route-introspection-stub"}),
-        target="amr_system",
-        backend="production",
-        layout=layout,
-        layout_plan=layout_plan,
-        layout_targets={
-            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
-        },
-        time=None,
-        blocks=(ResolvedBlock(
-            "block", source, {"ghost_depth": 1}, "production", ("U",),
-            ("test::block::state::U",)),),
-        bind_schema=schema,
-        compile_values=schema.resolve_compile(),
-        field_plans={},
-        libraries=(),
-        requirements={"amr": True},
-        capabilities={"cpu": True, "amr": True, "mpi": mpi},
-        lowering_coverage=layout_coverage,
+    plan = resolved_amr_plan(
+        block_names=("block",),
+        parameters=tuple(resolved_params.values()),
+        tag_parameter="alpha" if runtime_param else None,
+        cells=64,
+        name="amr-route-introspection",
     )
     artifact = CompiledSimulationArtifact(
         plan=plan,
         program=None,
         blocks=(
             CompiledBlockArtifact(
-                "block", component, {"ghost_depth": 1}, ("U",)
+                "block", component, plan.blocks[0].spatial, ("U",)
             ),
         ),
     )
@@ -153,7 +131,7 @@ def test_bind_creates_exact_install_plan_without_mutating_compiled_components():
 
 def test_public_amr_bind_refuses_the_retired_initial_state_compatibility_route():
     artifact = _amr_artifact(runtime_param=False)
-    with pytest.raises(ValueError, match="requires a resolved InitialConditionPlan"):
+    with pytest.raises(ValueError, match="single layout initialization authority"):
         bind_phase(
             artifact,
             BindInputs(initial_state={"block": np.ones((3, 8, 8), dtype=np.float64)}),

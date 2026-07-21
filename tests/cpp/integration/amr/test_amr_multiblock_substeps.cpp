@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -146,7 +147,8 @@ struct TemporalContractModel {
   }
   POPS_HD Real stability_dt(const State& u, const Aux&) const {
     const Real magnitude = u[0] < Real(0) ? -u[0] : u[0];
-    return mode == 3 && magnitude > Real(0) ? Real(1) / magnitude : Real(0);
+    return mode == 3 && magnitude > Real(0) ? Real(1) / magnitude
+                                            : std::numeric_limits<Real>::infinity();
   }
   static VariableSet conservative_vars() {
     return {VariableKind::Conservative, {"u"}, 1, {VariableRole::Scalar}};

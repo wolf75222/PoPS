@@ -145,6 +145,7 @@ jobs:
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
               - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_python_module_objects.py'
               - 'scripts/ci_route_mode.py'
               - '.github/actions/setup-kokkos/**'
               - '.github/workflows/ci.yml'
@@ -158,6 +159,7 @@ jobs:
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
               - 'scripts/ci_import_closure.py'
+              - 'scripts/ci_python_module_objects.py'
               - 'scripts/ci_route_mode.py'
               - '.github/actions/setup-kokkos/**'
               - '.github/workflows/ci.yml'
@@ -181,6 +183,7 @@ jobs:
               - 'scripts/check_packaging_manifest.py'
               - 'scripts/ci_import_closure.py'
               - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_python_module_objects.py'
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
               - 'scripts/ci_route_mode.py'
@@ -592,6 +595,95 @@ jobs:
       - name: Pyright
         run: pyright
 
+  # PREWARM PYTHON NATIF : trois runners compilent des ensembles d'objets O3 disjoints du MEME
+  # graphe Ninja (System/core, AMR block, AMR compiled). Ils ne publient aucun binaire : seulement
+  # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
+  # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
+  # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
+  gate-python-prewarm:
+    name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    needs: [changes, set-mode]
+    if: needs.set-mode.outputs.python_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [system, amr-block, amr-compiled]
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold
+
+      - id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # Lookup only: an exact authenticated module makes object prewarming unnecessary. The final
+      # job restores the same cache entry and still owns source sync plus all validation.
+      - name: Probe exact Python module cache
+        id: module-cache-probe
+        uses: actions/cache/restore@v6
+        with:
+          path: build-kokkos-py/python/pops
+          lookup-only: true
+          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+
+      - name: Configure identical production module graph
+        if: steps.module-cache-probe.outputs.cache-hit != 'true'
+        run: |
+          pip install --upgrade pip numpy pytest
+          cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          python3 scripts/ci_python_module_objects.py \
+            --build-dir build-kokkos-py --verify
+
+      - name: Prewarm production objects (${{ matrix.lane }})
+        if: steps.module-cache-probe.outputs.cache-hit != 'true'
+        run: |
+          ccache --zero-stats
+          mapfile -t object_targets < <(
+            python3 scripts/ci_python_module_objects.py \
+              --build-dir build-kokkos-py \
+              --lane "${{ matrix.lane }}" \
+              --contract-file "$RUNNER_TEMP/python-prewarm-contract-${{ matrix.lane }}.json"
+          )
+          test "${#object_targets[@]}" -gt 0
+          cmake --build --preset ci-kokkos-python --target "${object_targets[@]}"
+          ccache -s
+          # ccache already compresses its payload. A tar keeps the content-addressed directory and
+          # lets the final job merge lane stores deterministically without publishing object files.
+          tar -C "$CCACHE_DIR" -cf "$RUNNER_TEMP/python-prewarm-ccache-${{ matrix.lane }}.tar" .
+
+      - name: Upload prewarm cache and compile contract
+        if: steps.module-cache-probe.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-python-prewarm-${{ matrix.lane }}
+          path: |
+            ${{ runner.temp }}/python-prewarm-ccache-${{ matrix.lane }}.tar
+            ${{ runner.temp }}/python-prewarm-contract-${{ matrix.lane }}.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   # GATE PYTHON BUILD : construit UNE SEULE FOIS le module _pops partage par les shards de tests.
   # Les tests DSL compilent encore leurs loaders/.so a runtime dans chaque shard, mais le gros build
   # pybind11 n'est plus multiplie par le nombre de shards.
@@ -602,7 +694,7 @@ jobs:
     # genuinely cold build rather than relying on partial ccache state from an
     # earlier failed attempt; the exact-module cache still makes warm PRs fast.
     timeout-minutes: 45
-    needs: [changes, set-mode]
+    needs: [changes, set-mode, gate-python-prewarm]
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
     # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
@@ -635,7 +727,8 @@ jobs:
         with:
           extra-apt: mold
 
-      - uses: actions/setup-python@v6
+      - id: python
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -676,14 +769,37 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json') }}-kokkos4.4.01-15dc143e
+          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
 
-      # Fast path: on an EXACT module-cache hit AND no C++/build path changed on this PR, the cached
-      # .so is authoritative. Re-sync the PR's pure-Python sources over the cached copies (the .py are
-      # not part of the key) and SKIP the cmake configure+build entirely.
+      - name: Download parallel prewarm caches
+        if: steps.modcache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gate-python-prewarm-*
+          path: ${{ github.workspace }}/.pops-ci/python-prewarm
+
+      - name: Merge parallel prewarm caches
+        if: steps.modcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          mapfile -t cache_archives < <(
+            find "${{ github.workspace }}/.pops-ci/python-prewarm" \
+              -name 'python-prewarm-ccache-*.tar' -type f | sort
+          )
+          test "${#cache_archives[@]}" -eq 3
+          for cache_archive in "${cache_archives[@]}"; do
+            tar -C "$CCACHE_DIR" -xf "$cache_archive"
+          done
+          # Lane archives include their own statistics shards; reset after the deterministic merge
+          # so the final report measures only hits/misses of the authoritative complete build.
+          ccache --zero-stats
+
+      # Fast path: an EXACT module-cache hit is authoritative on every event. The key includes every
+      # native/build input, exact Python version, compiler platform and Kokkos revision. Re-sync the
+      # unkeyed pure-Python sources, then skip only the redundant native rebuild.
       - name: Fast path -- reuse cached module, sync python sources
         id: fastpath
-        if: ${{ github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true' }}
+        if: steps.modcache.outputs.cache-hit == 'true'
         run: |
           pip install --upgrade pip numpy pytest
           # Overwrite the (unkeyed, possibly stale) copied Python/type sources with THIS checkout.
@@ -698,19 +814,17 @@ jobs:
           {
             echo "### gate-python-build (module _pops, Kokkos Serial)"
             echo ""
-            echo "FAST PATH: exact module-cache hit and cpp unchanged -> reused the cached _pops.so,"
+            echo "FAST PATH: exact authenticated module-cache hit -> reused the cached _pops.so,"
             echo "re-synced the pure-python sources, skipped the cmake build."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Les bindings de la lib (module `pops` : System + facades) vivent ICI. On construit l'extension
       # _pops AVEC Kokkos (preset ci-kokkos-python, jobs: 4 ; CMAKE_LINKER_TYPE=MOLD en -D ici uniquement).
-      # Saute UNIQUEMENT sur le fast-path : PR + hit module-cache EXACT + cpp inchange (le .so cache
-      # fait autorite). Tout push master / nightly / dispatch reconstruit inconditionnellement (le
-      # fast-path est borne a pull_request : le filet post-merge reste intact). La condition est la
-      # NEGATION EXACTE du fast-path (les deux `if:` couvrent tous les cas sans chevauchement), donc
-      # exactement l'un des deux tourne et le module existe toujours pour l'artefact.
+      # Saute uniquement sur le cache module exact authentifie ci-dessus. Sur un miss, les caches
+      # d'objets paralleles sont des accelerateurs : ce build final officiel revoit tout le graphe,
+      # obtient des hits ccache, compile tout objet restant puis effectue lui-meme le link.
       - name: Build module Python `pops` (Kokkos Serial)
-        if: ${{ !(github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true') }}
+        if: steps.modcache.outputs.cache-hit != 'true'
         # The inner watchdog covers the measured cold-build floor while leaving
         # bounded room inside the job for configure, reporting, and ccache save.
         timeout-minutes: 42
@@ -730,6 +844,16 @@ jobs:
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          mapfile -t compile_contracts < <(
+            find "${{ github.workspace }}/.pops-ci/python-prewarm" \
+              -name 'python-prewarm-contract-*.json' -type f | sort
+          )
+          test "${#compile_contracts[@]}" -eq 3
+          # Refuse prewarmed entries unless the final official graph proves the same compiler,
+          # complete command flags, Git revision and source content for every runtime object.
+          python3 scripts/ci_python_module_objects.py \
+            --build-dir build-kokkos-py \
+            --verify-contracts "${compile_contracts[@]}"
           set +e
           timeout --signal=TERM --kill-after=30s 40m \
             cmake --build --preset ci-kokkos-python
@@ -1176,9 +1300,9 @@ jobs:
     # Fixed distro release: OpenMPI and parallel HDF5 C libraries come from one
     # ABI-compatible Ubuntu package set. Python never owns an MPI communicator.
     runs-on: ubuntu-24.04
-    # The native build, the 4-minute CTest watchdog, and the 35-minute Python
-    # MPI contract fence run sequentially.  Keep the job envelope larger than
-    # those fail-fast fences so GitHub never kills a healthy final test step.
+    # The native build, processor-grouped CTest plan, and Python MPI contract
+    # fence run sequentially. Each C++ launch retains its configured bounded
+    # TIMEOUT; grouping removes PROCESSORS head-of-line blocking without skips.
     timeout-minutes: 70
     needs: [set-mode, changes]
     # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
@@ -1270,6 +1394,7 @@ jobs:
           mkdir -p build-mpi
           python3 scripts/ci_select_tests.py cpp-label \
             --label mpi \
+            --ctest-groups-file build-mpi/mpi-ctest-groups.tsv \
             --github-output "$GITHUB_OUTPUT" \
             --explain-file build-mpi/mpi-test-plan.json
           python3 scripts/ci_select_tests.py python-mpi \
@@ -1277,6 +1402,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --explain-file build-mpi/python-mpi-plan.json
           test -s build-mpi/python-mpi-plan.tsv
+          test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
@@ -1329,29 +1455,52 @@ jobs:
             -P tests/cmake/run_installed_package_smoke.cmake
 
       - name: Test (bit-identique np=1/2/4)
-        timeout-minutes: 5
+        timeout-minutes: 35
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
         # OMPI_MCA_* couvre OpenMPI 4.x, PRTE_MCA_* couvre OpenMPI 5.x.
         # Les filtres sont ancres et conjoints : `mpi` seul inclurait aussi les smokes CMake/package
         # sans PROCESSORS, tandis que `backend` + `mpi` identifie exactement les lancements de rangs.
         # La suite Python marquee `mpi` est exclue de ce fence C++ car son launcher pytest ordinaire
         # n'ouvre aucun monde MPI ; ses vrais entrypoints sont lances sous mpiexec dans l'etape
-        # suivante. Le manifeste reste l'autorite exacte des noms, labels et rangs C++ MPI.
+        # suivante. Le manifeste reste l'autorite exacte des noms, labels et rangs C++ MPI. Chaque
+        # groupe contient une seule reservation PROCESSORS : un np=2 bloque ne peut plus rester
+        # devant un np=4 et empecher les tests suivants de demarrer. CTest conserve le TIMEOUT borne
+        # de chaque test. Tous les groupes tournent meme si l'un echoue, puis l'etape echoue aussi.
         run: |
           mpi_inventory="$RUNNER_TEMP/ctest-mpi-plan.json"
           ctest --preset ci-mpi -N --show-only=json-v1 > "$mpi_inventory"
           python3 scripts/ci_select_tests.py verify-cpp-mpi-ctests \
             --ctest-json "$mpi_inventory"
-          set +e
-          timeout --signal=TERM --kill-after=30s 4m \
-            ctest --preset ci-mpi --output-on-failure \
-              -L '^backend$' -L '^mpi$' -LE '^python$'
-          ctest_status=$?
-          set -e
-          if [ "$ctest_status" -eq 124 ]; then
-            echo "::error::C++ MPI CTest exceeded its 4-minute watchdog"
-          fi
-          exit "$ctest_status"
+          mpi_status=0
+          mpi_count=0
+          while IFS=$'\t' read -r processors expected regex; do
+            test -n "$processors" && test "$expected" -gt 0 && test -n "$regex"
+            echo "::notice::MPI CTest group processors=${processors}, launches=${expected}"
+            group_inventory="$RUNNER_TEMP/ctest-mpi-group-${processors}.json"
+            ctest --preset ci-mpi -N --show-only=json-v1 \
+              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex" > "$group_inventory"
+            selected_count=$(python3 -c \
+              'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["tests"]))' \
+              "$group_inventory")
+            if [ "$selected_count" -ne "$expected" ]; then
+              echo "::error::MPI CTest processor group ${processors} selected ${selected_count}/${expected} launches"
+              mpi_status=1
+              mpi_count=$((mpi_count + expected))
+              continue
+            fi
+            set +e
+            ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error \
+              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex"
+            group_status=$?
+            set -e
+            if [ "$group_status" -ne 0 ]; then
+              echo "::error::MPI CTest processor group ${processors} failed (status=${group_status})"
+              mpi_status=1
+            fi
+            mpi_count=$((mpi_count + expected))
+          done < build-mpi/mpi-ctest-groups.tsv
+          test "$mpi_count" -eq "${{ steps.mpi-test-plan.outputs.cpp_label_ctest_count }}"
+          exit "$mpi_status"
 
       - name: Test Python MPI contracts + native lifecycle
         timeout-minutes: 35

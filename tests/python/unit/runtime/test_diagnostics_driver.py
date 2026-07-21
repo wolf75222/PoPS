@@ -295,7 +295,10 @@ def test_generic_analytic_initial_runs_through_the_uniform_native_pipeline(
         + center_x * center_y
     )
     actual = np.asarray(simulation.get_state("tracer"), dtype=np.float64)
-    np.testing.assert_allclose(np.sort(actual), np.sort(expected.ravel()), rtol=0.0, atol=2e-15)
+    assert actual.shape == (1, 16, 16)
+    np.testing.assert_allclose(
+        np.sort(actual[0], axis=None), np.sort(expected, axis=None), rtol=0.0, atol=2e-15
+    )
 
 
 @pytest.mark.compiler

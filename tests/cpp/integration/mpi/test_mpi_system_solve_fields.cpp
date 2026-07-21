@@ -8,7 +8,8 @@
 // l'appel TOURNE (pas de crash) sur tous les rangs et donne un resultat sense. Le solve elliptique
 // est COLLECTIF (tous les rangs y participent) ; seul le post-traitement par cellule est local au
 // rang proprietaire. Les I/O par cellule (set_density / density / get_state) ne touchent QUE le rang
-// proprietaire ; mass() est une reduction collective (sum -> all_reduce) appelee par tous les rangs.
+// proprietaire ; eval_rhs() et mass() terminent par des reductions collectives et sont appeles par
+// tous les rangs.
 //
 // AVANT le fix : segfault a np=2/4 sur le(s) rang(s) sans box locale. APRES : np=1/2/4 verts, et le
 // resultat (potentiel, masse) est invariant au nombre de rangs (la box unique vit toujours sur rang 0).
@@ -125,8 +126,11 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   sys.solve_fields();
   sys.solve_fields();
 
-  // Resultat sense : potentiel + masse, lus sur le rang proprietaire (par cellule). mass() est une
-  // reduction COLLECTIVE : tous les rangs l'appellent (sinon interblocage de l'all_reduce).
+  // Resultat sense : potentiel + masse, lus sur le rang proprietaire (par cellule). eval_rhs() se
+  // termine par le preflight natif COLLECTIF de finitude : tous les rangs doivent donc l'appeler,
+  // meme si le rang sans box renvoie naturellement un buffer local vide. mass() est egalement une
+  // reduction COLLECTIVE appelee par tous les rangs.
+  const std::vector<double> R = sys.eval_rhs("probe");
   if (owns) {
     const std::vector<double> phi = sys.potential();
     chk(phi.size() == nn, "potential_size");
@@ -144,7 +148,6 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
     // solve_fields() a peuple le canal aux (phi, grad phi, T_e) : eval_rhs(probe) = -div F + S lit
     // ce canal sans crash et reste fini (la derivation par cellule a bien tourne sur le rang
     // proprietaire ; la correction T_e exacte est verifiee a part par test_aux_te en serie).
-    const std::vector<double> R = sys.eval_rhs("probe");
     bool rfin = !R.empty();
     for (double r : R)
       rfin = rfin && std::isfinite(r);

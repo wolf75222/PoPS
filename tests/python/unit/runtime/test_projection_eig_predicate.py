@@ -24,8 +24,9 @@ On verifie :
  (2) contrat de tolerance RELATIVE + parametre im_tol : une vraie paire complexe sous im_tol*scale est
      rendue reelle PAR DESIGN (asymetrie documentee de all_real), et im_tol fait basculer le verdict ;
  (3) codegen : la brique #include dense_eig.hpp, declare le foncteur pops_eig_all_real_KxK abaisse sur
-     ``pops::Real(pops::real_eig_minmax(M).all_real(<im_tol>))`` (verrou de surete : PAS un comparatif
-     ``.max_im``), passe im_tol en argument, pas de lambda ; project() appelle le foncteur ;
+     un ``pops::EigBounds`` local produit par ``pops::real_eig_minmax(M)``, puis sur
+     ``bounds.all_real(<im_tol>)`` (verrou de surete : PAS un comparatif ``.max_im``), passe im_tol en
+     argument, pas de lambda ; project() appelle le foncteur ;
  (4) [compilateur] non-convergence CONSERVATRICE : ``real_eig_minmax(companion3x3, /*max_iter=*/0)``
      -> converged == false, max_im == 0 (le piege), all_real() == false (0.0, JAMAIS reel) ;
  (5) [compilateur] coherence DSL vs C++ : la brique GENEREE project(U) sur un champ de matrices
@@ -196,8 +197,9 @@ def test_codegen():
         "foncteur nomme pops_eig_all_real_2x2 declare",
     )
     chk(
-        "pops::real_eig_minmax(M).all_real(" in src,
-        "le foncteur abaisse sur EigBounds::all_real (verrou de surete : converged)",
+        "const pops::EigBounds bounds = pops::real_eig_minmax(M);" in src
+        and "bounds.all_real(" in src,
+        "le foncteur conserve EigBounds puis appelle all_real (verrou de surete : converged)",
     )
     chk(
         ".max_im" not in src,

@@ -43,6 +43,11 @@
 
 using namespace pops;
 
+static bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
+  return std::string(error.what()).find("produced non-finite finite-volume data") !=
+         std::string::npos;
+}
+
 // Euler WITHOUT source (parity with test_positivity_floor.cpp): forwards flux / wave speed and the
 // Density-role introspection (conservative_vars, role Density at component 0). advance_amr only needs
 // flux / max_wave_speed / source / conservative_vars on the model.
@@ -285,13 +290,23 @@ TEST(test_amr_positivity_floor, Runs) {
     const double m0 = coarse_mass(U0);
     MultiFab Uon = U0, Uoff = U0;
     amr_step(Uon, aux, dt, floor);
-    amr_step(Uoff, aux, dt, Real(0));
+    bool unfloored_rejected = false;
+    try {
+      amr_step(Uoff, aux, dt, Real(0));
+    } catch (const std::runtime_error& error) {
+      if (!is_nonfinite_fv_rejection(error))
+        throw;
+      unfloored_rejected = true;
+    }
     bool finite_on = true;
     finite_min_rho(Uon, finite_on);
     const double m1 = coarse_mass(Uon);
-    // "active": the floored and unfloored trajectories differ on a valid cell (NaN counts as differ).
+    // "active": the floored and unfloored trajectories differ on a valid cell.  A future
+    // unfloored reconstruction may remain finite; that is valid provided the floor still changes
+    // this deliberately difficult trajectory.  Returning a non-finite state normally is not valid.
     sync_host();
-    bool differs = false;
+    bool differs = unfloored_rejected;
+    bool finite_off = true;
     for (int li = 0; li < Uon.local_size(); ++li) {
       const ConstArray4 a = Uon.fab(li).const_array(), b = Uoff.fab(li).const_array();
       const Box2D v = Uon.box(li);
@@ -299,16 +314,23 @@ TEST(test_amr_positivity_floor, Runs) {
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
           for (int cc = 0; cc < EulerNoSrc::n_vars; ++cc) {
             const double da = a(i, j, cc), db = b(i, j, cc);
+            finite_off = finite_off && std::isfinite(db);
             if (!(da == db))
-              differs = true;  // NaN != NaN -> differ
+              differs = true;
           }
     }
     differs = all_reduce_max(differs ? 1.0 : 0.0) > 0.0;
+    finite_off = all_reduce_max(finite_off ? 0.0 : 1.0) == 0.0;
     if (me == 0)
-      std::printf("(3) spike + floor : finite = %d, mass drift = %.3e, trajectory differs = %d\n",
-                  finite_on ? 1 : 0, m1 - m0, differs ? 1 : 0);
+      std::printf(
+          "(3) spike + floor : finite = %d, mass drift = %.3e, unfloored rejected = %d, "
+          "unfloored finite = %d, trajectory differs = %d\n",
+          finite_on ? 1 : 0, m1 - m0, unfloored_rejected ? 1 : 0, finite_off ? 1 : 0,
+          differs ? 1 : 0);
     EXPECT_TRUE(finite_on) << "3_floored_spike_finite";
     EXPECT_TRUE(std::abs(m1 - m0) < 1e-10) << "3_floored_spike_mass_conserved";
+    EXPECT_TRUE(unfloored_rejected || finite_off)
+        << "3_unfloored_spike_never_publishes_nonfinite_state";
     EXPECT_TRUE(differs) << "3_floor_active_on_spike";
   }
 

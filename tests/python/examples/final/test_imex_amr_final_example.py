@@ -17,7 +17,6 @@ EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py"
 def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> None:
     environment = dict(os.environ)
     environment["POPS_INCLUDE"] = str(ROOT / "include")
-    environment["POPS_KOKKOS_ROOT"] = sys.prefix
     completed = subprocess.run(
         [sys.executable, str(EXAMPLE), "--output-dir", str(tmp_path / "published")],
         cwd=tmp_path,

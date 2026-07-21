@@ -360,6 +360,7 @@ def _write_mpi_ctest_inventory(path, plan):
                 "name": name,
                 "properties": [
                     {"name": "LABELS", "value": ["backend", "mpi", "medium"]},
+                    {"name": "TIMEOUT", "value": 600.0},
                 ] + (
                     [] if nproc == 1
                     else [{"name": "PROCESSORS", "value": nproc}]
@@ -400,6 +401,34 @@ def test_cpp_mpi_ctest_fence_rejects_processors_drift(tmp_path):
     _write_mpi_ctest_inventory(inventory, plan)
 
     with pytest.raises(SystemExit, match="PROCESSORS=.*manifest=2:ctest=4"):
+        sel.verify_cpp_mpi_ctests(SimpleNamespace(ctest_json=str(inventory)))
+
+
+def test_cpp_mpi_processor_groups_are_an_exact_disjoint_cover():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    plan = sel.cpp_mpi_ctest_plan(manifest)
+    groups = sel.cpp_mpi_ctest_groups(manifest)
+    assert [group["processors"] for group in groups] == sorted(set(plan.values()))
+    flattened = [name for group in groups for name in group["names"]]
+    assert sorted(flattened) == sorted(plan)
+    assert len(flattened) == len(set(flattened))
+    for group in groups:
+        assert all(plan[name] == group["processors"] for name in group["names"])
+
+
+def test_cpp_mpi_ctest_fence_rejects_missing_per_test_timeout(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "mpi-ctest-unbounded.json"
+    plan = sel.cpp_mpi_ctest_plan(sel.load_manifest())
+    _write_mpi_ctest_inventory(inventory, plan)
+    payload = json.loads(inventory.read_text())
+    payload["tests"][0]["properties"] = [
+        prop for prop in payload["tests"][0]["properties"]
+        if prop["name"] != "TIMEOUT"
+    ]
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="must expose one numeric TIMEOUT"):
         sel.verify_cpp_mpi_ctests(SimpleNamespace(ctest_json=str(inventory)))
 
 
@@ -638,6 +667,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "scripts/ci_include_graph.py",
+        "scripts/ci_python_module_objects.py",
         "scripts/ci_route_mode.py",
         ".github/actions/setup-kokkos/**",
         ".github/workflows/ci.yml",
@@ -650,6 +680,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "scripts/ci_import_closure.py",
+        "scripts/ci_python_module_objects.py",
         "scripts/ci_route_mode.py",
         ".github/actions/setup-kokkos/**",
         ".github/workflows/ci.yml",
@@ -695,15 +726,17 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
     assert "--label mpi" in mpi_block
+    assert "--ctest-groups-file build-mpi/mpi-ctest-groups.tsv" in mpi_block
     assert "scripts/ci_select_tests.py python-mpi" in mpi_block
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert '--target _pops "${mpi_targets[@]}"' in mpi_block
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
-    assert "cpp_label_ctest_count" not in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
     assert "mpi_expected=" not in mpi_block
-    assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 1
-    assert mpi_block.count("-L '^backend$'") == 1
+    # One filtered dry-run authenticates the exact group size; the second invocation executes it.
+    assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 2
+    assert mpi_block.count("-L '^backend$'") == 2
     assert "ctest --preset ci-mpi --output-on-failure" in mpi_block
     assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
     assert "MPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1" in mpi_block
@@ -712,7 +745,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
     assert 'run_mpi "collective HDF5 writer"' not in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
-    assert "timeout --signal=TERM --kill-after=30s 4m" in mpi_block
+    assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block
+    assert "done < build-mpi/mpi-ctest-groups.tsv" in mpi_block
+    assert "MPI CTest processor group ${processors} failed" in mpi_block
+    assert "selected_count=$(python3 -c" in mpi_block
+    assert "selected ${selected_count}/${expected} launches" in mpi_block
+    assert "ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error" in mpi_block
     assert "timeout-minutes: 70" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
     assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
@@ -844,10 +882,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
 
     architecture_block = workflow.split(
         "\n  gate-python-architecture:\n", 1)[1].split(
-            "\n  gate-python-build:\n", 1)[0]
+            "\n  gate-python-prewarm:\n", 1)[0]
     assert "if: needs.set-mode.outputs.architecture_required == 'true'" in architecture_block
     assert "python3 scripts/generate_component_catalog.py --check" in architecture_block
 
+    python_prewarm_block = workflow.split(
+        "\n  gate-python-prewarm:\n", 1)[1].split("\n  gate-python-build:\n", 1)[0]
     python_build_block = workflow.split(
         "\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
     python_shards_block = workflow.split(
@@ -865,6 +905,44 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "uses: actions/cache/save@v6" in python_build_block
     assert "always() && steps.kokkos.outcome == 'success'" in python_build_block
     assert "github.run_attempt" in python_build_block
+    assert "needs: [changes, set-mode, gate-python-prewarm]" in python_build_block
+    assert "steps.modcache.outputs.cache-hit == 'true'" in python_build_block
+    assert "github.event_name == 'pull_request'" not in python_build_block
+    assert "-py${{ steps.python.outputs.python-version }}-" in python_build_block
+    prewarm_module_key = next(
+        line for line in python_prewarm_block.splitlines()
+        if "key: pops-module-" in line
+    )
+    build_module_key = next(
+        line for line in python_build_block.splitlines()
+        if "key: pops-module-" in line
+    )
+    for cache_input in (
+        "pyproject.toml",
+        ".github/workflows/ci.yml",
+        ".github/actions/setup-kokkos/**",
+        "scripts/ci_python_module_objects.py",
+    ):
+        assert repr(cache_input) in prewarm_module_key
+        assert repr(cache_input) in build_module_key
+    assert "actions/download-artifact@v8" in python_build_block
+    assert "--verify-contracts" in python_build_block
+    assert "test \"${#cache_archives[@]}\" -eq 3" in python_build_block
+    assert "test \"${#compile_contracts[@]}\" -eq 3" in python_build_block
+    assert "matrix.lane: [system, amr-block, amr-compiled]" not in python_prewarm_block
+    assert "lane: [system, amr-block, amr-compiled]" in python_prewarm_block
+    assert "timeout-minutes: 22" in python_prewarm_block
+    assert "lookup-only: true" in python_prewarm_block
+    assert "scripts/ci_python_module_objects.py" in python_prewarm_block
+    assert "--contract-file" in python_prewarm_block
+    assert "compression-level: 0" in python_prewarm_block
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
+    assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
+    # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
+    # three would upload its payload three times and erase the cold-build wall-time gain.
+    assert "Restore prewarm ccache" not in python_prewarm_block
+    assert "Save prewarm ccache" not in python_prewarm_block
+    assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 40" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
@@ -914,6 +992,7 @@ def test_ci_control_plane_inputs_force_full_functional_selection():
         "scripts/ci_route_mode.py",
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
+        "scripts/ci_python_module_objects.py",
         "tests/test_manifest.toml",
     ):
         assert path in selector.CPP_BROAD_FILES
