@@ -1473,12 +1473,15 @@ jobs:
             --ctest-json "$mpi_inventory"
           mpi_status=0
           mpi_count=0
-          while IFS=$'\t' read -r processors expected regex; do
+          # Keep the manifest on fd 3: CTest may read stdin and must never consume the remaining
+          # processor groups.  Its own stdin is closed explicitly for the same reason.
+          while IFS=$'\t' read -r processors expected regex <&3; do
             test -n "$processors" && test "$expected" -gt 0 && test -n "$regex"
             echo "::notice::MPI CTest group processors=${processors}, launches=${expected}"
             group_inventory="$RUNNER_TEMP/ctest-mpi-group-${processors}.json"
             ctest --preset ci-mpi -N --show-only=json-v1 \
-              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex" > "$group_inventory"
+              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex" \
+              </dev/null > "$group_inventory"
             selected_count=$(python3 -c \
               'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["tests"]))' \
               "$group_inventory")
@@ -1490,7 +1493,7 @@ jobs:
             fi
             set +e
             ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error \
-              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex"
+              -L '^backend$' -L '^mpi$' -LE '^python$' -R "$regex" </dev/null
             group_status=$?
             set -e
             if [ "$group_status" -ne 0 ]; then
@@ -1498,7 +1501,7 @@ jobs:
               mpi_status=1
             fi
             mpi_count=$((mpi_count + expected))
-          done < build-mpi/mpi-ctest-groups.tsv
+          done 3< build-mpi/mpi-ctest-groups.tsv
           test "$mpi_count" -eq "${{ steps.mpi-test-plan.outputs.cpp_label_ctest_count }}"
           exit "$mpi_status"
 

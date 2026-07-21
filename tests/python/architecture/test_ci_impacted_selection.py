@@ -746,7 +746,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_mpi "collective HDF5 writer"' not in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block
-    assert "done < build-mpi/mpi-ctest-groups.tsv" in mpi_block
+    assert "read -r processors expected regex <&3" in mpi_block
+    assert "done 3< build-mpi/mpi-ctest-groups.tsv" in mpi_block
+    assert mpi_block.count("</dev/null") == 2
     assert "MPI CTest processor group ${processors} failed" in mpi_block
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
