@@ -658,6 +658,39 @@ jobs:
       - name: Prewarm production objects (${{ matrix.lane }})
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
         run: |
+          SECONDS=0
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           ccache --zero-stats
           mapfile -t object_targets < <(
             python3 scripts/ci_python_module_objects.py \
@@ -666,7 +699,8 @@ jobs:
               --contract-file "$RUNNER_TEMP/python-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          cmake --build --preset ci-kokkos-python --target "${object_targets[@]}"
+          run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m \
+            cmake --build --preset ci-kokkos-python --target "${object_targets[@]}"
           ccache -s
           # ccache already compresses its payload. A tar keeps the content-addressed directory and
           # lets the final job merge lane stores deterministically without publishing object files.

@@ -940,6 +940,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "compression-level: 0" in python_prewarm_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
     assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
+    assert python_prewarm_block.count("run_with_heartbeat() {") == 1
+    assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
+        in python_prewarm_block
+    assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
     # three would upload its payload three times and erase the cold-build wall-time gain.
     assert "Restore prewarm ccache" not in python_prewarm_block
