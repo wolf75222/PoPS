@@ -180,6 +180,7 @@
   "tests/python/unit/descriptors/test_solvers_descriptors.py": 0.5,
   "tests/python/unit/descriptors/test_validation_report.py": 0.5,
   "tests/python/unit/domain/test_cartesian_domain_grid.py": 60.0,
+  "tests/python/unit/domain/test_domain_preview.py": 1.1,
   "tests/python/unit/fields/test_external_field_solver_provider.py": 1.0,
   "tests/python/unit/fields/test_field_context_contract.py": 1.0,
   "tests/python/unit/fields/test_field_discretization_contract.py": 1.0,
@@ -601,6 +602,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 379
+    "total_files": 380
   }
 }
