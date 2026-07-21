@@ -929,10 +929,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert repr(cache_input) in build_module_key
     assert "actions/download-artifact@v8" in python_build_block
     assert "--verify-contracts" in python_build_block
-    assert "test \"${#cache_archives[@]}\" -eq 3" in python_build_block
-    assert "test \"${#compile_contracts[@]}\" -eq 3" in python_build_block
-    assert "matrix.lane: [system, amr-block, amr-compiled]" not in python_prewarm_block
-    assert "lane: [system, amr-block, amr-compiled]" in python_prewarm_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in python_build_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in python_build_block
+    assert "matrix.lane: [system, amr-base, amr-compressible, amr-compiled]" \
+        not in python_prewarm_block
+    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" \
+        in python_prewarm_block
     assert "timeout-minutes: 22" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
     assert "scripts/ci_python_module_objects.py" in python_prewarm_block
@@ -944,11 +946,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
         in python_prewarm_block
     assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
-    assert 'if [ "${{ matrix.lane }}" = "amr-block" ]; then' in python_prewarm_block
+    assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in python_prewarm_block
     assert 'lane_parallelism=2' in python_prewarm_block
     assert '--parallel "$lane_parallelism"' in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
-    # three would upload its payload three times and erase the cold-build wall-time gain.
+    # four would upload its payload four times and erase the cold-build wall-time gain.
     assert "Restore prewarm ccache" not in python_prewarm_block
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block

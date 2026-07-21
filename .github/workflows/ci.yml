@@ -595,10 +595,11 @@ jobs:
       - name: Pyright
         run: pyright
 
-  # PREWARM PYTHON NATIF : trois runners compilent des ensembles d'objets O3 disjoints du MEME
-  # graphe Ninja (System/core, AMR block, AMR compiled). Ils ne publient aucun binaire : seulement
+  # PREWARM PYTHON NATIF : quatre runners compilent des ensembles d'objets O3 disjoints du MEME
+  # graphe Ninja (System/core, AMR base, AMR compressible, AMR compiled). Ils ne publient aucun
+  # binaire : seulement
   # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
-  # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
+  # final ci-dessous reconfigure officiellement tout le module, authentifie les quatre contrats,
   # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
   gate-python-prewarm:
     name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
@@ -609,7 +610,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-block, amr-compiled]
+        lane: [system, amr-base, amr-compressible, amr-compiled]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -699,14 +700,14 @@ jobs:
               --contract-file "$RUNNER_TEMP/python-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          # The AMR block seams are the only lane whose four simultaneous GCC frontends exhaust a
-          # 16 GiB hosted runner (observed MemAvailable: 9.3 GiB -> 16 MiB before SIGTERM). Keep the
-          # three independent lanes concurrent and all objects at O3, but cap this lane's internal
-          # compiler fan-out. Other lanes retain all four runner cores.
+          # Four simultaneous GCC frontends for the heavy AMR block seams exhaust a 16 GiB hosted
+          # runner. Two semantic, disjoint lanes keep their independently measured critical paths
+          # below the watchdog; each uses two frontends and preserves O3. The lighter System and
+          # compiled-AMR lanes retain all four runner cores.
           lane_parallelism=4
-          if [ "${{ matrix.lane }}" = "amr-block" ]; then
-            lane_parallelism=2
-          fi
+          case "${{ matrix.lane }}" in
+            amr-base|amr-compressible) lane_parallelism=2 ;;
+          esac
           run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m \
             cmake --build --preset ci-kokkos-python --parallel "$lane_parallelism" \
               --target "${object_targets[@]}"
@@ -829,7 +830,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -891,7 +892,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           # Refuse prewarmed entries unless the final official graph proves the same compiler,
           # complete command flags, Git revision and source content for every runtime object.
           python3 scripts/ci_python_module_objects.py \

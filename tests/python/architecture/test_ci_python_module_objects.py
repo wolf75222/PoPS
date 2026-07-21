@@ -31,6 +31,10 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
                 "pops_runtime_amr",
             ),
             _target(
+                "generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
+                "pops_runtime_amr",
+            ),
+            _target(
                 "generated_seams/amr/compiled/base/amr_compiled_exb.cpp.o",
                 "pops_runtime_amr",
             ),
@@ -44,9 +48,12 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
             "src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
             "src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
         ],
-        "amr-block": [
+        "amr-base": [
             "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/block/base/amr_block_exb.cpp.o",
             "src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+        ],
+        "amr-compressible": [
+            "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
         ],
         "amr-compiled": [
             "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/compiled/base/amr_compiled_exb.cpp.o",
