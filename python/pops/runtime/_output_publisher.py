@@ -523,14 +523,18 @@ class PreparedConsumerOutput(PreparedPublication):
             result = error = None
             if self._request.rank == 0:
                 try:
+                    series_publication = self._series_publication
+                    if series_publication is None:
+                        raise RuntimeError(
+                            "scientific output series has no prepared publication")
                     if self._series_authority is not None \
-                            and self._series_publication.authority != self._series_authority:
+                            and series_publication.authority != self._series_authority:
                         raise RuntimeError(
                             "scientific output series publication authority changed")
                     if self._artifact_authority is None:
                         raise RuntimeError(
                             "scientific output series has no published artifact authority")
-                    result = self._series_publication.publish(self._artifact_authority)
+                    result = series_publication.publish(self._artifact_authority)
                     if result is not None:
                         raise TypeError(
                             "scientific output series publication publish() must return None")
@@ -641,6 +645,9 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             series_catalog, catalog_authority = _resolved_series_catalog(
                 preparation.format, dict(target_format))
             if series_catalog is not None:
+                if catalog_authority is None:
+                    raise RuntimeError(
+                        "scientific output series catalogue has no authenticated authority")
                 series_publication = series_catalog.prepare(
                     preparation.target,
                     preparation.snapshot,

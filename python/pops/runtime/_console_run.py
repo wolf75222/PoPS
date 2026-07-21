@@ -78,7 +78,8 @@ def _consumer_text(graph: Any) -> str:
         if format_name:
             label += " %s" % format_name
         schedule = getattr(node, "schedule", None)
-        schedule_data = schedule.to_data() if callable(getattr(schedule, "to_data", None)) else {}
+        schedule_projector = getattr(schedule, "to_data", None)
+        schedule_data = schedule_projector() if callable(schedule_projector) else {}
         trigger = schedule_data.get("trigger", {}) if isinstance(schedule_data, dict) else {}
         if isinstance(trigger, dict) and isinstance(trigger.get("type"), str):
             cadence = trigger["type"]

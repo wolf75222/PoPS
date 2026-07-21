@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from importlib import import_module
 from os import PathLike
 from pathlib import Path
 from typing import Any, Protocol
@@ -291,9 +292,9 @@ def _show_matplotlib(
 ) -> Path | None:
     output_path = None if path is None else _checked_output_path(path)
     try:
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import ListedColormap
-        from matplotlib.patches import Rectangle as RectanglePatch
+        plt = import_module("matplotlib.pyplot")
+        ListedColormap = import_module("matplotlib.colors").ListedColormap
+        RectanglePatch = import_module("matplotlib.patches").Rectangle
     except ModuleNotFoundError:
         raise ModuleNotFoundError(
             "Rectangle.show requires Matplotlib; install it with 'python -m pip install matplotlib'"

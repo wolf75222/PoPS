@@ -1136,11 +1136,15 @@ class SeriesSample:
         selection = snapshot.get("selection")
         if not isinstance(provenance, dict) or not isinstance(selection, dict):
             raise ValueError("scientific output series member has no exact family evidence")
+        run_identity = provenance.get("run_identity")
+        if not isinstance(run_identity, str) or not run_identity \
+                or run_identity.strip() != run_identity:
+            raise ValueError("scientific output series member has no exact family evidence")
         family = output_series_family_identity(
             self._format_data,
             format_name=self.format,
             selection=selection,
-            run_identity=provenance.get("run_identity"),
+            run_identity=run_identity,
         )
         if family.hexdigest != self.family_scope:
             raise ValueError("scientific output series member belongs to another family")
@@ -1403,11 +1407,15 @@ def _authenticated_series_member(
     selection = snapshot.get("selection")
     if not isinstance(provenance, Mapping) or not isinstance(selection, Mapping):
         raise ValueError("scientific output series member has no exact family evidence")
+    run_identity = provenance.get("run_identity")
+    if not isinstance(run_identity, str) or not run_identity \
+            or run_identity.strip() != run_identity:
+        raise ValueError("scientific output series member has no exact family evidence")
     family = output_series_family_identity(
         format_data,
         format_name=format_name,
         selection=selection,
-        run_identity=provenance.get("run_identity"),
+        run_identity=run_identity,
     )
     if family.hexdigest != family_scope:
         raise ValueError("scientific output series mixes different format/selection/run families")
