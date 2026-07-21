@@ -8,8 +8,6 @@ execute le calcul adaptatif distribue en C++/Kokkos sous MPI_COMM_WORLD.
 # ruff: noqa: E402
 
 from fractions import Fraction
-import time
-
 import pops
 
 pops.set_threads(1)
@@ -45,7 +43,6 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
-from pops.runtime_environment import runtime_environment_report
 from pops.spaces import CellState
 from pops.time import AdaptiveCFL, StagePoint, TimePoint, every
 
@@ -227,31 +224,23 @@ resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 
 execution_context = pops.ExecutionContext.mpi_world(artifact)
-communicator = execution_context.communicator.identity
 rank = int(execution_context.communicator.handle.rank)
-backend = str(runtime_environment_report()["kokkos_backend"])
 simulation = pops.bind(
     artifact,
     resources={"execution_context": execution_context},
 )
 
-start = time.perf_counter()
-report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
-elapsed_seconds = time.perf_counter() - start
+pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
 
 
-# 9. Chaque rang lit les memes rapports collectifs, sans branche ni ecriture concurrente.
+# 9. Le rang racine affiche les metriques propres a l'AMR.
 patches = simulation.amr.patch_table()
 regrid = simulation.amr.explain_regrid()
 
-print("PoPS MPI AMR scalar-advection tutorial finished on rank %d" % rank)
-print("  program          : explicit pops.Program SSPRK2")
-print("  Kokkos backend   : %s" % backend)
-print("  communicator     : %s" % communicator)
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
-print("  AMR levels       : %d" % simulation.n_levels())
-print("  fine patches     : %d" % patches.n_patches)
-print("  completed regrids: %d" % regrid.regrid_count)
-print("  topology epoch   : %d" % regrid.topology_epoch)
-print("  elapsed          : %.6f s" % elapsed_seconds)
+if rank == 0:
+    print("PoPS MPI AMR scalar-advection tutorial finished")
+    print("  program          : explicit pops.Program SSPRK2")
+    print("  AMR levels       : %d" % simulation.n_levels())
+    print("  fine patches     : %d" % patches.n_patches)
+    print("  completed regrids: %d" % regrid.regrid_count)
+    print("  topology epoch   : %d" % regrid.topology_epoch)

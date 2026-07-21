@@ -487,6 +487,9 @@ periodic_grid = CartesianGrid(
     cells=(128, 128),
     periodic=PeriodicAxes(frame.axes),
 )
+
+# Présentation pure : sauvegarde le rectangle et ses frontières.
+domain.show(path="unit_square.svg")
 ```
 
 Les frontières sont des handles topologiques issus du frame (`frame.boundaries.x_min`, etc.). Les
@@ -500,6 +503,15 @@ concurrent, ni raccourci entier/tuple dans les APIs qui demandent une grille. Le
 les cellules et la topologie restent donc visibles et authentifiables. `pops.mesh.PolarMesh` demeure
 un descripteur avancé supporté pour l'anneau natif ; il ne constitue pas une seconde route
 cartésienne et n'est pas réexporté à la racine `pops`.
+
+`Rectangle.preview(geometry=...)` et son raccourci `Rectangle.show(...)` constituent la surface de
+présentation du domaine. Sans géométrie, le renderer montre les bornes et les labels des quatre
+frontières. Avec une géométrie, il passe exclusivement par le protocole
+`Geometry.level_set(frame) -> LevelSet` : `Disc`, `HalfPlane`, un `LevelSet` analytique ou toute
+composition CSG utilisent donc le même échantillonneur, sans branche par forme. Le sampling NumPy et
+le renderer Matplotlib sont hors du runtime numérique ; ils ne créent aucun layout et n'entrent dans
+aucun kernel. Matplotlib est importé seulement par `show()`. Fournir `path="domain.svg"` enregistre
+sans ouvrir de fenêtre ; omettre `path` ouvre la vue interactive.
 
 Le `SystemConfig` uniforme livré ne possède encore qu'un scalaire `n`, un scalaire `L` et aucune
 origine. Son lowering accepte donc un `CartesianGrid` seulement si `lower == (0, 0)`, si les deux
@@ -1182,6 +1194,17 @@ faits réellement matérialisés y apparaissent.
 Le rapport n'a pas de vérité booléenne implicite : le code utilisateur choisit explicitement le
 champ observé (`accepted_steps`, `stop_reason`, etc.).
 
+Au début de chaque `pops.run`, le rang zéro affiche un court bandeau PoPS puis la configuration
+effectivement installée : cas, target, backend C++/Kokkos, concurrence native active, précision,
+communicateur et nombre de rangs, blocs, layouts, stratégie temporelle, intervalle, consommateurs et
+identités du run et de l'artefact. Le bilan final rapporte les pas acceptés/rejetés, l'horloge et le
+temps écoulé. Ce renderer est une projection Python de faits déjà authentifiés ; il ne choisit aucun
+paramètre numérique, ne lit aucun champ et ne prétend pas être un kernel natif. Les rangs MPI non
+racine restent silencieux pour éviter un bandeau dupliqué. `console=False` désactive uniquement cette
+présentation : cette valeur ne rejoint ni le manifeste ni l'identité numérique du run. Une erreur de
+terminal est signalée sur `stderr`, mais ne peut ni masquer une exception numérique, ni empêcher un
+rollback, ni convertir un run réussi en échec.
+
 Les seules options de compilation sont celles acceptées par `pops.resolve(..., compile_options=...)` :
 `so_path`, `force`, `cxx`, `include`, `std` et `debug`. Le backend est une autorité séparée. Il n'existe
 pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldManifest`.
@@ -1259,6 +1282,19 @@ Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés 
 La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
 l'existence du fichier seule n'est pas une preuve. La route NPZ est exercée par l'exemple IMEX-AMR et
 ses tests de format, sans être présentée comme une réouverture supplémentaire de la gate groupée.
+La cible d'un `ScientificOutput` est toujours un chemin logique sans suffixe ; le provider possède
+seul l'extension. `schedule=every(100, clock=program.clock)` publie donc un artefact distinct après
+chaque centième pas accepté, visible pendant la poursuite du run. Une petite capability de catalogue,
+indépendante du writer concret, maintient un fichier
+`series__f<identité-de-famille><extension>.series` remplacé atomiquement après le commit ; un pas
+rejeté n'y entre jamais. Le même objet typé expose `reopen(path)` et `reopen_series(path)` ; la série
+reste paresseuse pour ne pas matérialiser tous les champs historiques, tandis que `latest` et
+`verify()` déclenchent les authentifications exactes nécessaires. La famille inclut le provider, la
+sélection complète et l'identité du run : des sorties différentes ne sont jamais agrégées par leur
+seule extension. Cela permet de remplacer
+`ParaView()` par `HDF5()` ou `NPZ()` sans branche sur l'extension. Une sortie
+`PER_RANK` ne fabrique pas une fausse timeline à partir des morceaux de rang : une collection
+parallèle explicite reste nécessaire.
 
 Un writer externe se sélectionne sur le consommateur, jamais par unicité globale :
 

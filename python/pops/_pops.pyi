@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 
 # This extension is an implementation detail of ``pops``.  ``__all__`` is the
 # complete supported direct surface; the config/model/engine declarations below
@@ -68,6 +70,37 @@ __aux_canonical__: dict[str, int]
 
 
 class StepAttemptRejected(RuntimeError): ...
+
+
+class _RuntimeEnvironmentReport(TypedDict):
+    dimension: int
+    amr_refinement_ratio: int
+    precision: str
+    real_bytes: int
+    supports_single_precision: bool
+    supports_mixed_precision: bool
+    has_kokkos: bool
+    kokkos_initialized: bool
+    kokkos_finalized: bool
+    kokkos_initialized_by_pops: bool
+    kokkos_atexit_finalize_registered: bool
+    kokkos_backend: str
+    kokkos_concurrency: int
+    kokkos_ownership: str
+    kokkos_lifecycle: str
+    mpi_compiled: bool
+    mpi_active: bool
+    mpi_rank: int
+    mpi_ranks: int
+    communicator: str
+    supports_custom_communicator: bool
+    mpi_initialized_by_pops: bool
+    mpi_atexit_finalize_registered: bool
+    mpi_thread_level: int
+    mpi_ownership: str
+    allocator_mode: str
+    comm_allocator_mode: str
+    allocator_lifetime: str
 
 
 class _NativeMpiDatatype:
@@ -219,7 +252,7 @@ def n_ranks() -> int: ...
 def mpi_world() -> _NativeWorldCommunicator: ...
 def module_capabilities(target: str = "module") -> dict[str, object]: ...
 def capability_report(target: str = "module") -> dict[str, object]: ...
-def runtime_environment_report() -> dict[str, object]: ...
+def runtime_environment_report() -> _RuntimeEnvironmentReport: ...
 def runtime_backend_manifest(
     backend: str, target: str, communicator: str
 ) -> dict[str, object]: ...

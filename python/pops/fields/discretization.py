@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import copy
 from typing import Any, Protocol, runtime_checkable
 
 from pops.descriptors import BrickDescriptor, Descriptor, reject_string_selector
@@ -312,7 +311,9 @@ class FieldDiscretization(Descriptor):
         )
 
     def resolve_references(self, resolver: Any) -> FieldDiscretization:
-        resolved = copy(self)
+        from copy import copy as shallow_copy
+
+        resolved = shallow_copy(self)
         resolved.method = resolve_value(self.method, resolver, where="FieldDiscretization method")
         resolved.boundaries = tuple(
             resolve_value(self.boundaries, resolver, where="FieldDiscretization boundaries")

@@ -38,6 +38,7 @@ struct RuntimeEnvironmentReport {
   bool kokkos_initialized_by_pops = false;
   bool kokkos_atexit_finalize_registered = false;
   std::string kokkos_backend = "none";
+  int kokkos_concurrency = 0;
   std::string kokkos_ownership = "not-built";
   std::string kokkos_lifecycle = "not-built";
 
@@ -66,6 +67,9 @@ inline RuntimeEnvironmentReport runtime_environment_report() {
   report.kokkos_initialized_by_pops = kokkos_initialized_by_pops();
   report.kokkos_atexit_finalize_registered = kokkos_atexit_finalize_registered();
   report.kokkos_backend = Kokkos::DefaultExecutionSpace::name();
+  if (report.kokkos_initialized) {
+    report.kokkos_concurrency = Kokkos::DefaultExecutionSpace::concurrency();
+  }
   if (report.kokkos_initialized_by_pops) {
     report.kokkos_ownership = "pops-owned-lazy";
     report.kokkos_lifecycle =

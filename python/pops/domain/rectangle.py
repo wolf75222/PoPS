@@ -5,11 +5,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import Any
+from os import PathLike
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pops.frames import Cartesian2D, CartesianAxis, X_AXIS, Y_AXIS
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
+
+if TYPE_CHECKING:
+    from .preview import DomainPreview, GeometryPreviewProvider
 
 
 _SCHEMA_VERSION = 1
@@ -276,7 +281,7 @@ class Rectangle:
         checked_name = _name(name, where="Rectangle.name")
         checked_lower = _point(lower, where="Rectangle.lower")
         checked_upper = _point(upper, where="Rectangle.upper")
-        if any(hi <= lo for lo, hi in zip(checked_lower, checked_upper)):
+        if any(hi <= lo for lo, hi in zip(checked_lower, checked_upper, strict=True)):
             raise ValueError("Rectangle.upper must be strictly greater than lower on every axis")
         if boundaries is None:
             checked_boundaries = RectangleBoundaryNames()
@@ -351,6 +356,29 @@ class Rectangle:
             raise TypeError("Rectangle.frame requires Cartesian2D, never a string or runtime route")
         return RectangleFrame(self, coordinates)
 
+    def preview(
+        self,
+        *,
+        geometry: GeometryPreviewProvider | None = None,
+        resolution: int | tuple[int, int] = (256, 256),
+    ) -> DomainPreview:
+        """Sample this domain and an optional generic implicit geometry for presentation."""
+
+        from .preview import preview_rectangle
+
+        return preview_rectangle(self, geometry=geometry, resolution=resolution)
+
+    def show(
+        self,
+        *,
+        geometry: GeometryPreviewProvider | None = None,
+        resolution: int | tuple[int, int] = (256, 256),
+        path: str | PathLike[str] | None = None,
+    ) -> Path | None:
+        """Show this domain interactively, or save it when ``path`` is provided."""
+
+        return self.preview(geometry=geometry, resolution=resolution).show(path=path)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
@@ -387,7 +415,7 @@ class Rectangle:
             RectangleBoundaryNames.from_dict(data["boundary_names"]),
             tuple(DomainTag.from_dict(tag) for tag in raw_tags),
         )
-        if any(hi <= lo for lo, hi in zip(result.lower, result.upper)):
+        if any(hi <= lo for lo, hi in zip(result.lower, result.upper, strict=True)):
             raise ValueError("Rectangle.upper must be strictly greater than lower on every axis")
         if tuple(sorted(set(result.tags), key=lambda item: item.name)) != result.tags \
                 or result.to_dict() != dict(data):
@@ -469,3 +497,8 @@ __all__ = [
     "BoundaryPair", "BoundarySide", "DomainBoundary", "DomainTag", "Rectangle",
     "RectangleBoundaries", "RectangleBoundaryNames", "RectangleFrame",
 ]
+
+
+# The annotations are public and must resolve under typing.get_type_hints(). Importing after the
+# rectangle definitions avoids a cycle while keeping the preview layer independent from mesh.
+from .preview import DomainPreview, GeometryPreviewProvider  # noqa: E402

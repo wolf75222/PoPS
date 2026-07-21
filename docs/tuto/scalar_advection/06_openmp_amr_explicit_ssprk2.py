@@ -8,8 +8,6 @@ le preset ; le calcul adaptatif est compile puis execute en C++/Kokkos OpenMP.
 # ruff: noqa: E402
 
 from fractions import Fraction
-import time
-
 import pops
 
 pops.set_threads(7)
@@ -44,7 +42,6 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
-from pops.runtime_environment import runtime_environment_report
 from pops.spaces import CellState
 from pops.time import AdaptiveCFL, StagePoint, TimePoint, every
 
@@ -220,16 +217,9 @@ layout = AMR(
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-
-communicator = artifact.platform_manifest.communicator.require(
-    "OpenMP AMR scalar-advection tutorial communicator"
-)
-backend = str(runtime_environment_report()["kokkos_backend"])
 simulation = pops.bind(artifact)
 
-start = time.perf_counter()
-report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
-elapsed_seconds = time.perf_counter() - start
+pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
 
 
 # 9. Inspection legere de la hierarchie native.
@@ -238,13 +228,7 @@ regrid = simulation.amr.explain_regrid()
 
 print("PoPS OpenMP AMR scalar-advection tutorial finished")
 print("  program          : explicit pops.Program SSPRK2")
-print("  Kokkos backend   : %s" % backend)
-print("  requested threads: 7 via pops.set_threads")
-print("  communicator     : %s" % communicator)
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
 print("  AMR levels       : %d" % simulation.n_levels())
 print("  fine patches     : %d" % patches.n_patches)
 print("  completed regrids: %d" % regrid.regrid_count)
 print("  topology epoch   : %d" % regrid.topology_epoch)
-print("  elapsed          : %.6f s" % elapsed_seconds)

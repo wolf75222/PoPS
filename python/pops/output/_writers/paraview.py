@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import json
 import os
+import re
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -42,6 +44,12 @@ _VTK_TYPES = {
 }
 
 _VTK_REFINED_CELL = 8
+_VTK_FIELD_NAME = re.compile(r"[^A-Za-z0-9_]+")
+_VTK_RESERVED_NAMES = frozenset({
+    "Points", "TimeValue", "connectivity", "offsets", "types",
+    "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
+    "pops_cell_volume",
+})
 
 
 def _field_families(fields: Any) -> tuple[tuple[str, tuple[Any, ...]], ...]:
@@ -72,6 +80,30 @@ def _field_families(fields: Any) -> tuple[tuple[str, tuple[Any, ...]], ...]:
                     "ParaView logical field family levels disagree on %s" % name)
         result.append((family, members))
     return tuple(result)
+
+
+def _field_array_names(
+    families: tuple[tuple[str, tuple[Any, ...]], ...],
+) -> tuple[str, ...]:
+    """Use readable block/handle names while retaining collision-proof identities."""
+    bases = []
+    for _family, members in families:
+        reference = members[0].key.reference
+        block = getattr(reference, "block_ref", None)
+        parts = [getattr(block, "local_id", None), reference.local_id]
+        readable = "__".join(str(part) for part in parts if part)
+        readable = _VTK_FIELD_NAME.sub("_", readable).strip("_") or "field"
+        if readable in _VTK_RESERVED_NAMES:
+            readable = "field__" + readable
+        bases.append(readable)
+    counts = {base: bases.count(base) for base in set(bases)}
+    return tuple(
+        base if counts[base] == 1 else "%s__%s" % (
+            base,
+            hashlib.sha256(family.encode("utf-8")).hexdigest()[:8],
+        )
+        for base, (family, _members) in zip(bases, families, strict=True)
+    )
 
 
 def _vtk_array(value: Any) -> tuple[str, str]:
@@ -199,6 +231,7 @@ class ParaViewWriter:
                 size=request.size,
             )
         families = _field_families(fields)
+        field_array_names = _field_array_names(families)
         if any(field.centering != "cell" for field in fields):
             raise NotImplementedError(
                 "ParaView VTU currently proves cell-centered arrays only; "
@@ -295,9 +328,10 @@ class ParaViewWriter:
                 "layout_ordinal": ordinal,
                 "cell_range": list(offsets[geometry.key][:2]),
             }
-        for index, (_family, members) in enumerate(families):
-            name = "field_%04d" % index
+        component_labels = {}
+        for name, (_family, members) in zip(field_array_names, families, strict=True):
             first = members[0]
+            component_labels[name] = first.component_names
             components = len(first.component_names)
             shape = (n_cells, components) if components else (n_cells,)
             combined = np.empty(shape, dtype=np.dtype(first.array_dtype))
@@ -337,14 +371,19 @@ class ParaViewWriter:
         names = (
             "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
             "pops_cell_volume",
-        ) + tuple("field_%04d" % index for index in range(len(families)))
+        ) + field_array_names
         for name in names:
             vtk_type, encoded = encoded_arrays[name]
             components = arrays[name].shape[1] if arrays[name].ndim == 2 else 1
+            labels = component_labels.get(name, ())
+            component_attributes = "".join(
+                ' ComponentName%d="%s"' % (index, html.escape(label, quote=True))
+                for index, label in enumerate(labels)
+            )
             cell_arrays.append(
                 '<DataArray type="%s" Name="%s" NumberOfComponents="%d" '
-                'format="binary">%s</DataArray>'
-                % (vtk_type, name, components, encoded))
+                '%s format="binary">%s</DataArray>'
+                % (vtk_type, name, components, component_attributes, encoded))
         cells = []
         for name in ("connectivity", "offsets", "types"):
             vtk_type, encoded = encoded_arrays[name]

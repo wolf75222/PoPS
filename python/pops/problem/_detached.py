@@ -18,7 +18,6 @@ the pickle reconstruction protocol used by ``deepcopy``.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import copy
 from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
@@ -81,7 +80,9 @@ def _detach(value: Any, memo: dict[int, Any], active: set[int]) -> Any:
         return result
 
     try:
-        clone = copy(value)
+        from copy import copy as shallow_copy
+
+        clone = shallow_copy(value)
     except Exception as exc:
         raise TypeError(
             "cannot detach %s.%s for AuthoringSnapshot; provide an immutable value object "

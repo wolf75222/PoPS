@@ -10,8 +10,9 @@ from .rectangle import (
     RectangleBoundaryNames,
     RectangleFrame,
 )
+from .preview import DomainPreview
 
 __all__ = [
     "BoundaryPair", "BoundarySide", "DomainBoundary", "DomainTag", "Rectangle",
-    "RectangleBoundaries", "RectangleBoundaryNames", "RectangleFrame",
+    "RectangleBoundaries", "RectangleBoundaryNames", "RectangleFrame", "DomainPreview",
 ]

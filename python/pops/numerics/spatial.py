@@ -7,7 +7,6 @@ created only by :meth:`FiniteVolume.runtime_spatial` after the compile/bind boun
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import copy
 from typing import Any
 
 from pops.descriptors import Descriptor
@@ -38,7 +37,9 @@ def _resolved_brick(value: Any, resolver: Any) -> Any:
     options = getattr(value, "options", None)
     if not isinstance(options, Mapping) or not options:
         return value
-    result = copy(value)
+    from copy import copy as shallow_copy
+
+    result = shallow_copy(value)
     if hasattr(result, "_frozen"):
         object.__setattr__(result, "_frozen", False)
     object.__setattr__(result, "options", _resolved_value(dict(options), resolver))

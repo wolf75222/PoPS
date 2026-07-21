@@ -68,6 +68,100 @@ def test_public_run_returns_exact_immutable_report():
         bool(report)
 
 
+def test_public_run_prints_one_truthful_rank_zero_launch_summary(capsys):
+    plan, _engine, simulation = _runtime()
+
+    pops.run(simulation, t_end=1.0, max_steps=1)
+
+    output = capsys.readouterr().out
+    assert "____  ____" in output
+    assert "resolved simulation launch" in output
+    assert "native C++" in output
+    assert "target / backend" in output
+    assert plan.artifact.artifact_identity.hexdigest[:16] in output
+    assert "accepted / rejected : 1 / 0" in output
+
+
+def test_public_run_console_is_silent_off_rank_zero(monkeypatch, capsys):
+    import pops.runtime._console_run as console
+
+    monkeypatch.setattr(console, "_rank_size", lambda _instance: ("MPI_COMM_WORLD", 1, 2))
+    _plan, _engine, simulation = _runtime()
+
+    pops.run(simulation, t_end=1.0, max_steps=1)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_public_run_console_can_be_disabled_without_changing_run_identity(capsys):
+    _plan, _engine, verbose = _runtime()
+    _plan, _engine, quiet = _runtime()
+
+    verbose_report = pops.run(verbose, t_end=1.0, max_steps=1)
+    assert "resolved simulation launch" in capsys.readouterr().out
+    quiet_report = pops.run(quiet, t_end=1.0, max_steps=1, console=False)
+
+    assert capsys.readouterr().out == ""
+    assert quiet_report.run_identity == verbose_report.run_identity
+
+
+def test_console_startup_failure_never_changes_numerical_execution(monkeypatch, capsys):
+    import pops.runtime._console_run as console
+
+    def broken_console(*_args, **_kwargs):
+        raise RuntimeError("terminal unavailable")
+
+    monkeypatch.setattr(console, "begin_console_run", broken_console)
+    _plan, _engine, simulation = _runtime()
+
+    report = pops.run(simulation, t_end=1.0, max_steps=1)
+
+    assert report.accepted_steps == 1
+    assert "PoPS console startup disabled" in capsys.readouterr().err
+
+
+def test_console_completion_failure_never_converts_success_to_failure(monkeypatch, capsys):
+    import pops.runtime._console_run as console
+
+    def broken_completion(self, report):
+        del self, report
+        raise RuntimeError("terminal closed")
+
+    monkeypatch.setattr(console.ConsoleRunSession, "completed", broken_completion)
+    _plan, _engine, simulation = _runtime()
+
+    report = pops.run(simulation, t_end=1.0, max_steps=1)
+
+    assert report.accepted_steps == 1
+    assert "PoPS console completion disabled" in capsys.readouterr().err
+
+
+def test_console_failure_callback_never_masks_the_run_error(monkeypatch, capsys):
+    import pops.runtime._console_run as console
+
+    def broken_failure(self, error, *, accepted_steps, final_time):
+        del self, error, accepted_steps, final_time
+        raise RuntimeError("terminal closed")
+
+    monkeypatch.setattr(console.ConsoleRunSession, "failed", broken_failure)
+    _plan, _engine, simulation = _runtime()
+
+    with pytest.raises(RuntimeError, match="max_steps exhausted"):
+        pops.run(simulation, t_end=2.0, max_steps=1)
+
+    assert simulation.time() == 1.0
+    assert "PoPS console failure disabled" in capsys.readouterr().err
+
+
+def test_public_run_rejects_non_boolean_console_before_advancing():
+    _plan, _engine, simulation = _runtime()
+
+    with pytest.raises(TypeError, match="console=.*exact bool"):
+        pops.run(simulation, t_end=1.0, max_steps=1, console=1)
+
+    assert simulation.time() == 0.0
+
+
 def test_run_at_reached_target_reports_zero_local_steps_without_faking_progress():
     _plan, _engine, simulation = _runtime()
     first = pops.run(simulation, t_end=1.0, max_steps=1)

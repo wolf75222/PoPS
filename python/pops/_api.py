@@ -81,7 +81,8 @@ def run(instance: Any, **controls: Any) -> RunReport:
     ``run`` is the final lifecycle transition, not an authoring shortcut. It accepts only the
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
     are recorded by the runtime's run identity. Success returns an immutable :class:`RunReport`;
-    terminal failures raise and never manufacture a success report.
+    terminal failures raise and never manufacture a success report. ``console=False`` disables
+    only the rank-zero presentation banner and never enters the numerical run identity.
     """
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(

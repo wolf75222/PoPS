@@ -178,7 +178,7 @@ validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 simulation = pops.bind(artifact)
-first_report = pops.run(
+pops.run(
     simulation,
     t_end=SPLIT_TIME,
     max_steps=MAX_STEPS,
@@ -192,12 +192,12 @@ resumed.restart(checkpoint_path)
 
 
 # 7. Les trajectoires continue et restauree avancent jusqu'au meme temps final.
-continuous_report = pops.run(
+pops.run(
     simulation,
     t_end=FINAL_TIME,
     max_steps=MAX_STEPS,
 )
-restarted_report = pops.run(
+pops.run(
     resumed,
     t_end=FINAL_TIME,
     max_steps=MAX_STEPS,
@@ -227,10 +227,6 @@ np.testing.assert_equal(simulation.time(), resumed.time())
 np.testing.assert_equal(simulation.macro_step(), resumed.macro_step())
 
 print("PoPS AMR checkpoint/restart tutorial finished")
-print("  first run steps  : %d" % first_report.accepted_steps)
-print("  continuous steps : %d" % continuous_report.accepted_steps)
-print("  restarted steps  : %d" % restarted_report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
 print("  AMR levels       : %d" % simulation.n_levels())
 print("  fine patches     : %d" % simulation.amr.patch_table().n_patches)
 print("  restart identity : %s" % resumed.last_restart_identity.hexdigest[:12])

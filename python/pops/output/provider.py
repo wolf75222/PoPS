@@ -11,7 +11,9 @@ from typing import Any
 from pops.identity import canonical_bytes
 
 
-_REQUIRED = frozenset({"schema_version", "provider_id", "extension", "parallel_mode"})
+_REQUIRED = frozenset({
+    "schema_version", "provider_id", "format_name", "extension", "parallel_mode",
+})
 _MODES = frozenset({"serial", "root", "collective", "per_rank"})
 _LAYOUT_CARDINALITIES = frozenset({"single", "multiple"})
 
@@ -35,12 +37,18 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
         )
     if first["schema_version"] != 1:
         raise ValueError("%s consumer_data schema_version must be 1" % where)
-    provider_id, extension, mode = (
-        first["provider_id"], first["extension"], first["parallel_mode"])
+    provider_id, format_name, extension, mode = (
+        first["provider_id"], first["format_name"], first["extension"],
+        first["parallel_mode"],
+    )
     if not isinstance(provider_id, str) or not provider_id or provider_id.strip() != provider_id:
         raise TypeError("%s provider_id must be canonical text" % where)
+    if not isinstance(format_name, str) or not format_name \
+            or format_name.strip() != format_name:
+        raise TypeError("%s format_name must be canonical text" % where)
     if not isinstance(extension, str) or not extension.startswith(".") \
-            or extension.strip() != extension or "/" in extension:
+            or extension.strip() != extension or "/" in extension or "\\" in extension \
+            or extension.endswith(".series"):
         raise TypeError("%s extension must be a canonical file suffix" % where)
     if mode not in _MODES:
         raise ValueError(

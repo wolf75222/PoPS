@@ -7,7 +7,7 @@ apparait au moment ou il devient utile, jusqu'au cycle d'execution :
 Case -> validate -> resolve -> compile -> bind -> run
 ```
 
-Les treize scripts se lisent de haut en bas. Python construit le graphe type et prepare la
+Les scripts se lisent de haut en bas. Python construit le graphe type et prepare la
 condition initiale. Le C++/Kokkos execute les flux, les reconstructions, les stages temporels et
 les mises a jour des cellules. Chaque fichier traite un seul choix numerique ou d'execution et
 contient la declaration complete du cas.
@@ -22,11 +22,27 @@ bash scripts/build_python.sh
 conda activate pops
 ```
 
-Le script de visualisation utilise Matplotlib :
+L'apercu du domaine utilise Matplotlib :
 
 ```bash
 python -m pip install matplotlib
 ```
+
+Le petit script [`00_domain_preview.py`](00_domain_preview.py) cree le meme rectangle que les cas
+d'advection, puis l'enregistre immediatement :
+
+```python
+domain.show(path=HERE / "results" / "00_domain_preview.svg")
+```
+
+Changer seulement le suffixe en `.png` ou `.pdf` choisit un autre format pris en charge par
+Matplotlib. Toute geometrie analytique concrete, y compris une composition CSG, se passe avec
+`geometry=...` sans changer l'appel.
+
+Quand `pops.run(...)` demarre, PoPS affiche le backend Kokkos reellement charge, sa concurrence
+native (les threads configures avec OpenMP), le communicateur MPI, le maillage, la methode
+numerique, le schema de temps et les sorties prevues. Le rang MPI 0 est le seul a ecrire ce resume.
+`console=False` le masque sans changer le calcul ni son identite.
 
 Les commandes OpenMP et MPI sont regroupees dans
 [`platforms.md`](platforms.md).
@@ -44,10 +60,11 @@ Les autres scripts traitent chacun un point precis :
 
 | Sujet | Script |
 |---|---|
+| Apercu du domaine | [`00_domain_preview.py`](00_domain_preview.py) |
 | Tagging AMR sur $\|\nabla u\|$ | [`09_openmp_amr_gradient_ssprk2.py`](09_openmp_amr_gradient_ssprk2.py) |
 | Horloges AMR synchrones | [`10_openmp_amr_synchronous_ssprk2.py`](10_openmp_amr_synchronous_ssprk2.py) |
 | Deux binds, une seule compilation | [`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) |
-| HDF5 et ParaView | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
+| Sorties scientifiques periodiques | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
 
 Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
@@ -431,22 +448,35 @@ Les cles sont les handles owner-qualifies obtenus apres validation.
 python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 ```
 
-## Sorties HDF5 et ParaView
+## Sorties scientifiques periodiques
 
-[`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie les sorties HDF5 et ParaView a un
-`ConsumerGraph`. Les deux fichiers sont publies a la fin du run, puis rouverts avec leurs lecteurs
-publics. Le script affiche leur identite.
+[`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie une sortie periodique au
+`ConsumerGraph`. Deux constantes, placees en tete du fichier, suffisent pour choisir le format et
+la frequence :
+
+```python
+OUTPUT_FORMAT = output.ParaView()
+OUTPUT_EVERY_STEPS = 2
+```
+
+Remplacer seulement `ParaView` par `HDF5` ou `NPZ` change le format sans toucher au reste du cas. La
+frequence compte les pas acceptes : une longue simulation pourra par exemple utiliser
+`OUTPUT_EVERY_STEPS = 100`.
 
 ```bash
 python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 ```
 
-Les fichiers sont ecrits sous
-`docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`.
+Les instantanes sont ecrits au fil du calcul sous
+`docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`. Le format choisi rouvre ensuite la
+serie, son dernier instantane et leurs identites, sans branche conditionnelle sur l'extension.
 
-Dans ParaView, l'etat `field_0000` rassemble les valeurs des deux niveaux. Les cellules du niveau
-grossier recouvertes par le niveau fin sont marquees comme cellules raffinees et ne sont pas
-affichees deux fois. Le temps physique du fichier est aussi expose directement dans la timeline.
+Avec `ParaView`, le script affiche une ligne `time series`. Ouvrir la valeur exacte affichee sur
+cette ligne charge tous les instantanes dans la timeline ; son nom ressemble a
+`series__f….vtu.series`. Le champ `tracer__U`
+rassemble les valeurs des deux niveaux ; les cellules
+grossieres recouvertes par le niveau fin sont marquees comme raffinees et ne sont pas affichees deux
+fois.
 
 ## Checkpoint et restart exact
 

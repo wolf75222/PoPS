@@ -136,6 +136,7 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["kokkos_initialized_by_pops"] = r.kokkos_initialized_by_pops;
   d["kokkos_atexit_finalize_registered"] = r.kokkos_atexit_finalize_registered;
   d["kokkos_backend"] = r.kokkos_backend;
+  d["kokkos_concurrency"] = r.kokkos_concurrency;
   d["kokkos_ownership"] = r.kokkos_ownership;
   d["kokkos_lifecycle"] = r.kokkos_lifecycle;
   d["mpi_compiled"] = r.mpi_compiled;
@@ -530,7 +531,9 @@ void init_core(py::module_& m) {
       "runtime_environment_report",
       []() { return runtime_environment_to_dict(pops::runtime_environment_report()); },
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
-      "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
+      "allocator lifetime. kokkos_concurrency is DefaultExecutionSpace::concurrency() only while "
+      "Kokkos is initialized, and zero otherwise. Reading the report does not initialize Kokkos "
+      "or MPI.");
 
   m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
         py::arg("target"), py::arg("communicator"),

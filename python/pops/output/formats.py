@@ -18,6 +18,18 @@ def _mode(value: Any, *, where: str, supported: frozenset[ParallelMode]) -> Para
     return value
 
 
+def _series(value: Any, *, mode: ParallelMode, where: str) -> bool:
+    if value is None:
+        return mode is not ParallelMode.PER_RANK
+    if type(value) is not bool:
+        raise TypeError("%s must be an exact bool or None" % where)
+    if value and mode is ParallelMode.PER_RANK:
+        raise ValueError(
+            "%s requires one shared artifact per sample; select SERIAL, ROOT, or COLLECTIVE"
+            % where.rsplit(".", 1)[0])
+    return value
+
+
 class FormatInterface(Descriptor):
     """Typed scientific-format protocol; concrete descriptors select one exact writer."""
 
@@ -25,12 +37,23 @@ class FormatInterface(Descriptor):
     __pops_ir_immutable__ = True
     format_name = ""
     extension = ""
+    series = False
 
     def writer(self) -> Any:
         raise NotImplementedError("output format does not provide a writer")
 
     def consumer_data(self) -> dict[str, Any]:
         raise NotImplementedError("output format does not provide canonical consumer data")
+
+    def reopen(self, path: Any) -> Any:
+        raise NotImplementedError("output format does not provide an authenticated reader")
+
+    def reopen_series(self, path: Any) -> Any:
+        raise NotImplementedError("output format does not provide a time-series catalogue")
+
+    def series_catalog(self) -> Any:
+        """Optional structural publication capability; formats without one return ``None``."""
+        return None
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("scientific output providers are immutable")
@@ -125,6 +148,7 @@ class ExternalWriter(FormatInterface):
         return {
             "schema_version": 1,
             "provider_id": "pops.output.external-writer.v1",
+            "format_name": self.format_name,
             "extension": self.extension,
             "parallel_mode": self.mode.value,
             "options": {},
@@ -141,16 +165,25 @@ class HDF5(FormatInterface):
     format_name = "hdf5"
     extension = ".h5"
     mode: ParallelMode
+    series: bool
 
-    def __init__(self, mode: ParallelMode = ParallelMode.SERIAL) -> None:
-        object.__setattr__(self, "mode", _mode(
+    def __init__(
+        self,
+        mode: ParallelMode = ParallelMode.SERIAL,
+        *,
+        series: Any = None,
+    ) -> None:
+        selected_mode = _mode(
             mode,
             where="HDF5.mode",
             supported=frozenset(ParallelMode),
-        ))
+        )
+        object.__setattr__(self, "mode", selected_mode)
+        object.__setattr__(self, "series", _series(
+            series, mode=selected_mode, where="HDF5.series"))
 
     def options(self) -> dict:
-        return {"mode": self.mode.value}
+        return {"mode": self.mode.value, "series": self.series}
 
     def requirements(self) -> Any:
         return RequirementSet(
@@ -161,13 +194,31 @@ class HDF5(FormatInterface):
         from ._writers.hdf5 import HDF5Writer
         return HDF5Writer(self.mode)
 
+    def reopen(self, path: Any) -> Any:
+        from ._writers.hdf5 import read_hdf5
+        return read_hdf5(path)
+
+    def reopen_series(self, path: Any) -> Any:
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen
+        ).reopen(path)
+
+    def series_catalog(self) -> Any:
+        if not self.series:
+            return None
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen)
+
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "provider_id": "pops.output.hdf5.v1",
+            "format_name": self.format_name,
             "extension": self.extension,
             "parallel_mode": self.mode.value,
-            "options": {"mode": self.mode.value},
+            "options": {"mode": self.mode.value, "series": self.series},
         }
 
 
@@ -177,27 +228,54 @@ class NPZ(FormatInterface):
     format_name = "npz"
     extension = ".npz"
     mode: ParallelMode
+    series: bool
 
-    def __init__(self, mode: ParallelMode = ParallelMode.SERIAL) -> None:
-        object.__setattr__(self, "mode", _mode(
+    def __init__(
+        self,
+        mode: ParallelMode = ParallelMode.SERIAL,
+        *,
+        series: Any = None,
+    ) -> None:
+        selected_mode = _mode(
             mode,
             where="NPZ.mode",
             supported=frozenset({
                 ParallelMode.SERIAL, ParallelMode.ROOT, ParallelMode.PER_RANK,
             }),
-        ))
+        )
+        object.__setattr__(self, "mode", selected_mode)
+        object.__setattr__(self, "series", _series(
+            series, mode=selected_mode, where="NPZ.series"))
 
     def writer(self) -> Any:
         from ._writers.npz import NPZWriter
         return NPZWriter(self.mode)
 
+    def reopen(self, path: Any) -> Any:
+        from ._writers.npz import read_npz
+        return read_npz(path)
+
+    def reopen_series(self, path: Any) -> Any:
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen
+        ).reopen(path)
+
+    def series_catalog(self) -> Any:
+        if not self.series:
+            return None
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen)
+
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "provider_id": "pops.output.npz.v1",
+            "format_name": self.format_name,
             "extension": self.extension,
             "parallel_mode": self.mode.value,
-            "options": {"mode": self.mode.value},
+            "options": {"mode": self.mode.value, "series": self.series},
         }
 
 
@@ -207,31 +285,58 @@ class ParaView(FormatInterface):
     format_name = "paraview-vtu"
     extension = ".vtu"
     mode: ParallelMode
+    series: bool
 
-    def __init__(self, mode: ParallelMode = ParallelMode.SERIAL) -> None:
-        object.__setattr__(self, "mode", _mode(
+    def __init__(
+        self,
+        mode: ParallelMode = ParallelMode.SERIAL,
+        *,
+        series: Any = None,
+    ) -> None:
+        selected_mode = _mode(
             mode,
             where="ParaView.mode",
             supported=frozenset({
                 ParallelMode.SERIAL, ParallelMode.ROOT, ParallelMode.PER_RANK,
             }),
-        ))
+        )
+        object.__setattr__(self, "mode", selected_mode)
+        object.__setattr__(self, "series", _series(
+            series, mode=selected_mode, where="ParaView.series"))
 
     def writer(self) -> Any:
         from ._writers.paraview import ParaViewWriter
         return ParaViewWriter(self.mode)
 
+    def reopen(self, path: Any) -> Any:
+        from ._writers.paraview import read_paraview
+        return read_paraview(path)
+
+    def reopen_series(self, path: Any) -> Any:
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen
+        ).reopen(path)
+
+    def series_catalog(self) -> Any:
+        if not self.series:
+            return None
+        from ._writers.common import FileSeriesCatalog
+        return FileSeriesCatalog(
+            self.consumer_data(), format_name=self.format_name, reopen=self.reopen)
+
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "provider_id": "pops.output.paraview-vtu.v1",
+            "format_name": self.format_name,
             "extension": self.extension,
             "parallel_mode": self.mode.value,
             "selection_contract": {
                 "schema_version": 1,
                 "layout_cardinality": "single",
             },
-            "options": {"mode": self.mode.value},
+            "options": {"mode": self.mode.value, "series": self.series},
         }
 
 

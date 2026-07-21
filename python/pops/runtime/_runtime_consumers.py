@@ -124,21 +124,22 @@ _NATIVE_CELL_MEASURES = frozenset({
 })
 
 
-def _target(uri: str, format_data: Mapping[str, Any], snapshot: OutputSnapshot,
+def _target(uri: str, format_data: Mapping[str, Any], format_name: str,
+            snapshot: OutputSnapshot,
             request: OutputRequest,
             consumer_name: str, output_root: Any) -> Path:
     path = Path(uri)
     if output_root is not None:
-        path = Path(output_root) / path.name
-    if path.suffix:
-        if path.suffix != format_data["extension"]:
-            raise ValueError("consumer target suffix does not match its exact format")
-        if request.parallel_mode is ParallelMode.PER_RANK:
-            path = path.with_name(
-                "%s.rank%06d%s" % (path.stem, request.rank, path.suffix))
-        return path
+        path = Path(output_root) / path
     return deterministic_target(
-        path, consumer_name, request, snapshot, format_data["extension"])
+        path,
+        consumer_name,
+        request,
+        snapshot,
+        format_data["extension"],
+        format_data=format_data,
+        format_name=format_name,
+    )
 
 
 def _execution_topology(owner: Any) -> tuple[int, int, Any]:
@@ -995,7 +996,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             retain_recoveries=owner._retain_output_recoveries,
         )
         self._external_writers: dict[str, Any] = {}
-        exact_targets: dict[str, str] = {}
+        logical_targets: dict[str, str] = {}
         self._validate_diagnostic_providers()
         from pops import interfaces
         for manifest in owner._consumer_graph.nodes:
@@ -1014,6 +1015,13 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             if data["parallel_mode"] != mode.value:
                 raise ValueError(
                     "ScientificOutput format and resolved parallel mode disagree at install")
+            logical_target = Path(manifest.target_uri).as_posix()
+            previous = logical_targets.get(logical_target)
+            if previous is not None:
+                raise ValueError(
+                    "two ScientificOutput consumers select the same logical target: %s and %s"
+                    % (previous, manifest.qualified_id))
+            logical_targets[logical_target] = manifest.qualified_id
             writer = manifest.output_format.writer()
             requirement_provider = getattr(
                 writer, "installed_component_requirement", None)
@@ -1044,15 +1052,6 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 raise ValueError("ScientificOutput component does not implement exact Writer v1")
             if installed.native_handle is None:
                 raise ValueError("ScientificOutput native Writer was installed but not loaded")
-            target = Path(manifest.target_uri)
-            canonical_target = target if target.suffix else target.with_suffix(data["extension"])
-            collision_key = canonical_target.as_posix()
-            previous = exact_targets.get(collision_key)
-            if previous is not None:
-                raise ValueError(
-                    "two qualified native Writers select the same exact output target: %s "
-                    "and %s" % (previous, manifest.qualified_id))
-            exact_targets[collision_key] = manifest.qualified_id
             self._external_writers[manifest.qualified_id] = installed
 
     @property
@@ -1432,8 +1431,13 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         snapshot, request = self._owner._output_snapshot(
             manifest, self._pending.get(effect.identity.token, ()))
         fmt = manifest.output_format
+        format_name = manifest.output_format_data["format_name"]
         target = _target(
-            effect.target.uri, manifest.output_format_data, snapshot, request,
+            effect.target.uri,
+            manifest.output_format_data,
+            format_name,
+            snapshot,
+            request,
             manifest.handle.local_id, self._owner._output_root)
         _rank, _size, communicator = _execution_topology(self._owner)
         if effect.target.parallel_mode is ParallelMode.SERIAL:

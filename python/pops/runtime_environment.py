@@ -3,7 +3,8 @@
 This module is metadata-only at import time. It centralizes the current native runtime facts:
 2D mesh core, AMR refinement ratio 2, double precision, and no custom communicator route.
 When the compiled extension is available, :func:`runtime_environment_report` delegates to the
-C++ report; otherwise it returns the same conservative static facts with unknown lifecycle fields.
+C++ report; otherwise it returns the same conservative static facts with unknown lifecycle fields
+and zero active Kokkos concurrency.
 """
 from __future__ import annotations
 
@@ -58,6 +59,7 @@ def _static_report() -> dict:
         "kokkos_initialized_by_pops": None,
         "kokkos_atexit_finalize_registered": None,
         "kokkos_backend": "unknown",
+        "kokkos_concurrency": 0,
         "kokkos_ownership": "unknown",
         "kokkos_lifecycle": "unknown until _pops.runtime_environment_report() is available",
         "mpi_compiled": None,
@@ -76,8 +78,8 @@ def runtime_environment_report() -> dict:
     """Return runtime facts for reports and validators.
 
     The preferred source is ``_pops.runtime_environment_report()``. The fallback is static and
-    conservative: it never claims custom communicators, non-2D, non-ratio-2 AMR, or non-double
-    precision support.
+    conservative: it never claims custom communicators, non-2D, non-ratio-2 AMR, non-double
+    precision support, or an active Kokkos execution-space concurrency.
     """
     if find_spec("pops._pops") is None:
         return _static_report()

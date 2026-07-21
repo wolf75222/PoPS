@@ -10,7 +10,6 @@ threads.
 
 from fractions import Fraction
 from pathlib import Path
-import time
 
 import numpy as np
 
@@ -30,7 +29,6 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.representations import Conservative
-from pops.runtime_environment import runtime_environment_report
 from pops.spaces import CellState
 from pops.time import AdaptiveCFL, StagePoint, TimePoint
 
@@ -178,24 +176,16 @@ layout = Uniform(grid)
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-
-communicator = artifact.platform_manifest.communicator.require(
-    "OpenMP scalar-advection tutorial communicator"
-)
-environment = runtime_environment_report()
-backend = str(environment["kokkos_backend"])
 simulation = pops.bind(
     artifact,
     initial_state={"tracer": initial_state},
 )
 
-start = time.perf_counter()
-report = pops.run(
+pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
 )
-elapsed_seconds = time.perf_counter() - start
 
 final_state = np.asarray(
     simulation.state_global("tracer"),
@@ -213,19 +203,6 @@ np.savez_compressed(
     ay=AY,
     cfl=CFL,
     t_end=T_END,
-    accepted_steps=report.accepted_steps,
-    elapsed_seconds=elapsed_seconds,
-    kokkos_backend=backend,
-    communicator=communicator,
-    threads=7,
 )
 
-print("PoPS OpenMP scalar-advection tutorial finished")
-print("  program          : explicit pops.Program SSPRK2")
-print("  Kokkos backend   : %s" % backend)
-print("  requested threads: 7 via pops.set_threads")
-print("  communicator     : %s" % communicator)
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
-print("  elapsed          : %.6f s" % elapsed_seconds)
 print("  result           : %s" % RESULT_FILE)

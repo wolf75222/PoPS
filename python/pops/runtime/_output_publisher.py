@@ -16,7 +16,11 @@ from pops.identity import Identity, canonical_bytes, make_identity
 from pops.output._consumer_contracts import ParallelMode
 from pops.output.data import OutputRequest, OutputSnapshot
 from pops.output.provider import consumer_format_data
-from pops.output._writers.common import authenticate_writer_session
+from pops.output._writers.common import (
+    authenticate_series_catalog,
+    authenticate_series_publication,
+    authenticate_writer_session,
+)
 
 from ._consumer import (
     AcceptedSideEffect,
@@ -24,6 +28,29 @@ from ._consumer import (
     PreparedPublication,
     PublicationReceipt,
 )
+
+
+def _resolved_series_catalog(
+    provider: Any,
+    format_data: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any] | None]:
+    options = format_data.get("options", {})
+    if not isinstance(options, Mapping):
+        raise TypeError("scientific output format options must be a mapping")
+    series_enabled = options.get("series", False)
+    if type(series_enabled) is not bool:
+        raise TypeError("scientific output format series option must be an exact bool")
+    factory = getattr(provider, "series_catalog", None)
+    if factory is not None and not callable(factory):
+        raise TypeError("scientific output format series_catalog must be callable")
+    catalog = None if factory is None else factory()
+    if series_enabled:
+        if catalog is None:
+            raise TypeError("series-enabled output format provides no catalogue capability")
+        return catalog, authenticate_series_catalog(catalog, format_data)
+    if catalog is not None:
+        raise ValueError("series-disabled output format returned a catalogue capability")
+    return None, None
 
 
 def preflight_consumer_publication(graph: Any, execution_context: Any) -> None:
@@ -83,6 +110,9 @@ def preflight_consumer_publication(graph: Any, execution_context: Any) -> None:
                 raise TypeError("scientific output writer preflight must return an exact dict")
             canonical_bytes(writer_capability)
             capability["writer"] = writer_capability
+            _catalog, catalog_authority = _resolved_series_catalog(
+                manifest.output_format, format_data)
+            capability["series_catalog"] = catalog_authority
             capability_rows.append(capability)
     except BaseException as exc:
         local_error = "%s: %s" % (type(exc).__name__, exc)
@@ -263,15 +293,33 @@ class OutputPreparation:
 class PreparedConsumerOutput(PreparedPublication):
     """Bind all-rank structural sessions to one distributed publication receipt."""
 
-    __slots__ = ("_effect", "_session", "_publisher_id", "_request", "_communicator")
+    __slots__ = (
+        "_effect", "_session", "_publisher_id", "_request", "_communicator",
+        "_target_path", "_format_name", "_series_publication", "_series_authority",
+        "_series_finalized", "_writer_finalized", "_artifact_authority",
+    )
 
     def __init__(self, effect: AcceptedSideEffect, session: Any,
-                 publisher_id: str, request: OutputRequest, communicator: Any) -> None:
+                 publisher_id: str, request: OutputRequest, communicator: Any,
+                 *, target: Any, format_name: str,
+                 series_publication: Any = None,
+                 series_publication_authority: dict[str, Any] | None = None) -> None:
         self._effect = effect
         self._session = session
         self._publisher_id = publisher_id
         self._request = request
         self._communicator = communicator
+        self._target_path = Path(target).expanduser().resolve()
+        self._format_name = format_name
+        if series_publication is None and series_publication_authority is not None:
+            raise ValueError("series authority requires a prepared publication")
+        self._series_publication = series_publication
+        self._series_authority = (
+            None if series_publication_authority is None
+            else dict(series_publication_authority))
+        self._series_finalized = series_publication is None
+        self._writer_finalized = False
+        self._artifact_authority = None
         authenticate_writer_session(session)
 
     @property
@@ -288,11 +336,12 @@ class PreparedConsumerOutput(PreparedPublication):
 
     @property
     def target(self):
-        return getattr(self._session, "target", None)
+        return self._target_path
 
     @property
     def recoveries(self) -> tuple[Any, ...]:
-        recoveries = getattr(self._session, "recoveries", ())
+        recoveries = getattr(self._session, "recoveries", ()) \
+            if self._session is not None else ()
         if type(recoveries) is not tuple:
             raise TypeError("writer session recoveries must be a tuple")
         return recoveries
@@ -306,13 +355,14 @@ class PreparedConsumerOutput(PreparedPublication):
         return rows
 
     @staticmethod
-    def _receipt_data(value: Any) -> dict[str, str] | None:
+    def _receipt_data(value: Any) -> dict[str, Any] | None:
         if value is None:
             return None
         output_identity = getattr(value, "output_identity", None)
         selection_identity = getattr(value, "selection_identity", None)
         path = getattr(value, "path", None)
         format_name = getattr(value, "format", None)
+        file_evidence = getattr(value, "file_evidence", None)
         if type(output_identity) is not Identity or type(selection_identity) is not Identity:
             raise TypeError("output receipt must carry exact output/selection identities")
         if path is None:
@@ -324,11 +374,21 @@ class PreparedConsumerOutput(PreparedPublication):
         if not isinstance(format_name, str) or not format_name \
                 or format_name.strip() != format_name:
             raise TypeError("output receipt format must be canonical text")
+        if file_evidence is not None and (
+            not isinstance(file_evidence, (list, tuple))
+            or len(file_evidence) != 5
+            or any(isinstance(item, bool) or type(item) is not int or item < 0
+                   for item in file_evidence)
+        ):
+            raise TypeError(
+                "output receipt file_evidence must be exact regular-file evidence or None")
         return {
             "output_identity": output_identity.token,
             "selection_identity": selection_identity.token,
             "path": resolved_path,
             "format": format_name,
+            "file_evidence": (
+                None if file_evidence is None else list(file_evidence)),
         }
 
     @staticmethod
@@ -371,7 +431,7 @@ class PreparedConsumerOutput(PreparedPublication):
                 signatures.append(None)
                 continue
             if not isinstance(local, Mapping) or set(local) != {
-                "output_identity", "selection_identity", "path", "format",
+                "output_identity", "selection_identity", "path", "format", "file_evidence",
             }:
                 raise TypeError("rank %d output receipt has an invalid schema" % rank)
             output_identity = Identity.from_token(local["output_identity"])
@@ -383,14 +443,20 @@ class PreparedConsumerOutput(PreparedPublication):
             except TypeError as exc:
                 raise TypeError("output receipt path must be filesystem-bounded") from exc
             format_name = local["format"]
-            if not isinstance(format_name, str) or not format_name \
-                    or format_name.strip() != format_name:
-                raise TypeError("output receipt format must be canonical text")
+            if format_name != self._format_name:
+                raise ValueError("output receipt format differs from its canonical provider")
+            evidence_data = local["file_evidence"]
+            if self._series_publication is not None and evidence_data is None:
+                raise TypeError(
+                    "series-enabled output receipt must carry exact regular-file evidence")
+            file_evidence = (
+                None if evidence_data is None else tuple(evidence_data))
             signatures.append((
                 output_identity.token,
                 selection_identity.token,
                 path.as_posix(),
                 format_name,
+                file_evidence,
             ))
         if mode is ParallelMode.COLLECTIVE:
             if not signatures or any(value != signatures[0] for value in signatures):
@@ -412,6 +478,7 @@ class PreparedConsumerOutput(PreparedPublication):
                 "selection_identity": selection_identity.to_data(),
                 "target": path.as_posix(),
                 "format": local["format"],
+                "file_evidence": local["file_evidence"],
             })
             local_artifacts.append((int(row["rank"]), artifact.token))
         if mode is ParallelMode.PER_RANK:
@@ -430,6 +497,11 @@ class PreparedConsumerOutput(PreparedPublication):
                 raise RuntimeError(
                     "%s output did not produce exactly one shared rank-0 artifact" % mode.name)
             aggregate = local_artifacts[0][1]
+        if self._series_publication is not None:
+            root_artifact = rows[0]["result"]
+            if not isinstance(root_artifact, Mapping):
+                raise RuntimeError("series output has no shared rank-zero artifact authority")
+            self._artifact_authority = dict(root_artifact)
         return PublicationReceipt(
             self.effect_identity,
             self.payload_identity,
@@ -446,7 +518,54 @@ class PreparedConsumerOutput(PreparedPublication):
         self._operate("rollback")
 
     def finalize(self) -> None:
-        self._operate("finalize")
+        failures = []
+        if not self._series_finalized:
+            result = error = None
+            if self._request.rank == 0:
+                try:
+                    if self._series_authority is not None \
+                            and self._series_publication.authority != self._series_authority:
+                        raise RuntimeError(
+                            "scientific output series publication authority changed")
+                    if self._artifact_authority is None:
+                        raise RuntimeError(
+                            "scientific output series has no published artifact authority")
+                    result = self._series_publication.publish(self._artifact_authority)
+                    if result is not None:
+                        raise TypeError(
+                            "scientific output series publication publish() must return None")
+                except BaseException as exc:
+                    error = "%s: %s" % (type(exc).__name__, exc)
+            rows = self._allgather({
+                "mode": self._request.parallel_mode.value,
+                "rank": self._request.rank,
+                "result": result,
+                "error": error,
+            })
+            try:
+                self._failure("series finalization", rows)
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                self._series_finalized = True
+                self._series_publication = None
+                self._series_authority = None
+                self._artifact_authority = None
+        if not self._writer_finalized:
+            try:
+                self._operate("finalize")
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                self._writer_finalized = True
+                self._session = None
+        if failures:
+            primary = failures[0]
+            for secondary in failures[1:]:
+                add_note = getattr(primary, "add_note", None)
+                if callable(add_note):
+                    add_note("additional output finalization failure: %s" % secondary)
+            raise primary
 
 
 class ConsumerOutputPublisher(ConsumerPublisher):
@@ -508,6 +627,10 @@ class ConsumerOutputPublisher(ConsumerPublisher):
         if preparation.request.parallel_mode is not mode:
             raise ValueError("resolved output parallel mode differs from its accepted target")
         writer = None
+        series_catalog = None
+        catalog_authority = None
+        series_publication = None
+        series_publication_authority = None
         writer_error = None
         try:
             writer = preparation.format.writer()
@@ -515,16 +638,35 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                     or not callable(getattr(writer, "prepare_session", None)):
                 raise TypeError(
                     "scientific output writer must implement preflight() and prepare_session()")
+            series_catalog, catalog_authority = _resolved_series_catalog(
+                preparation.format, dict(target_format))
+            if series_catalog is not None:
+                series_publication = series_catalog.prepare(
+                    preparation.target,
+                    preparation.snapshot,
+                    preparation.request,
+                )
+                series_publication_authority = authenticate_series_publication(
+                    series_publication,
+                    catalog_authority,
+                    target=preparation.target,
+                    snapshot=preparation.snapshot,
+                    request=preparation.request,
+                )
         except BaseException as exc:
             writer_error = "%s: %s" % (type(exc).__name__, exc)
         if preparation.communicator is not None:
             writer_rows = allgather_value(preparation.communicator, {
                 "rank": preparation.request.rank,
                 "error": writer_error,
+                "catalog": catalog_authority,
+                "series_publication": series_publication_authority,
             })
             if len(writer_rows) != preparation.request.size or any(
                 not isinstance(row, Mapping)
-                or set(row) != {"rank", "error"}
+                or set(row) != {
+                    "rank", "error", "catalog", "series_publication",
+                }
                 or row["rank"] != rank
                 for rank, row in enumerate(writer_rows)
             ):
@@ -536,6 +678,15 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             if writer_failures:
                 raise RuntimeError(
                     "output writer factory failed across ranks: " + "; ".join(writer_failures))
+            if any(row["catalog"] != writer_rows[0]["catalog"] for row in writer_rows[1:]):
+                raise RuntimeError("output series catalogue authority differs across ranks")
+            if any(
+                row["series_publication"]
+                != writer_rows[0]["series_publication"]
+                for row in writer_rows[1:]
+            ):
+                raise RuntimeError(
+                    "output series publication authority differs across ranks")
         elif writer_error is not None:
             raise RuntimeError("SERIAL output writer factory failed: " + writer_error)
         if writer is None:
@@ -555,6 +706,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             authority = authenticate_writer_session(session)
             expected_target = Path(preparation.target).expanduser().resolve().as_posix()
             expected = {
+                "format": target_format["format_name"],
                 "parallel_mode": mode.value,
                 "rank": preparation.request.rank,
                 "size": preparation.request.size,
@@ -663,7 +815,12 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             raise RuntimeError("%s output staging failed: %s" % (mode.name, detail))
         return PreparedConsumerOutput(
             effect, session, self.publisher_id,
-            preparation.request, preparation.communicator)
+            preparation.request, preparation.communicator,
+            target=preparation.target,
+            format_name=target_format["format_name"],
+            series_publication=series_publication,
+            series_publication_authority=series_publication_authority,
+        )
 
 
 __all__ = [

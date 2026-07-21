@@ -353,13 +353,13 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
             format=ParaView(mode=output_mode),
             schedule=on_start(clock=program.clock),
             fields=(electron_state, ion_state),
-            target="visualization/two_fluid.vtu",
+            target="visualization/two_fluid",
         ),
         ScientificOutput(
             format=HDF5(mode=output_mode),
             schedule=on_end(clock=program.clock),
             fields=(electron_state, ion_state),
-            target="state/two_fluid.h5",
+            target="state/two_fluid",
         ),
         Checkpoint(
             schedule=every(100, clock=program.clock),
@@ -525,7 +525,7 @@ def run_and_restart(
 ) -> ExecutionEvidence:
     """Run, publish, reopen, checkpoint, restore independently and continue bit-identically."""
 
-    from pops.output import read_hdf5, read_paraview
+    from pops.output import HDF5, ParaView
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -544,10 +544,13 @@ def run_and_restart(
     if run_report.accepted_steps != 1:
         raise RuntimeError("the accepted segment did not execute exactly one macro-step")
 
-    hdf5_path = root / "accepted" / "two_fluid.h5"
-    paraview_path = root / "accepted" / "two_fluid.vtu"
-    hdf5 = read_hdf5(hdf5_path)
-    paraview = read_paraview(paraview_path)
+    hdf5_series = HDF5().reopen_series(root / "accepted" / "state" / "two_fluid")
+    paraview_series = ParaView().reopen_series(
+        root / "accepted" / "visualization" / "two_fluid")
+    hdf5_path = hdf5_series.files[-1]
+    paraview_path = paraview_series.files[-1]
+    hdf5 = hdf5_series.latest
+    paraview = paraview_series.latest
     checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
     accepted = _snapshot(simulation)
 

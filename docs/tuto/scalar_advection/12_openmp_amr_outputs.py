@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""AMR OpenMP avec sorties scientifiques HDF5 et ParaView.
+"""AMR OpenMP avec une sortie scientifique periodique.
 
-Cette variante ajoute uniquement les publications scientifiques. Le ConsumerGraph ecrit les deux
-formats a la fin acceptee du run, puis leurs lecteurs publics rouvrent les artefacts produits.
+Le format et la frequence se choisissent avec deux constantes. Le ConsumerGraph ecrit ensuite un
+instantane au fil du calcul et le meme format rouvre le dernier artefact produit.
 """
 
 # ruff: noqa: E402
@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 
 import pops
+import pops.output as output
 
 pops.set_threads(7)
 
@@ -44,18 +45,13 @@ from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.output import (
     ConsumerGraph,
-    HDF5,
-    ParaView,
-    ParallelMode,
     ScientificOutput,
-    read_hdf5,
-    read_paraview,
 )
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import AdaptiveCFL, every, on_end
+from pops.time import AdaptiveCFL, every
 
 
 NX = 32
@@ -67,6 +63,10 @@ CFL = 0.45
 MAX_DT = 1.0e-2
 T_END = 0.10
 MAX_STEPS = 10_000
+
+# Pour changer de format, remplacer seulement ParaView par HDF5 ou NPZ.
+OUTPUT_FORMAT = output.ParaView()
+OUTPUT_EVERY_STEPS = 2
 
 HERE = Path(__file__).resolve().parent
 OUTPUT_ROOT = HERE / "results" / "12_openmp_amr_outputs"
@@ -153,18 +153,12 @@ case.initials.add(InitialCondition(
 ))
 
 
-# 4. Une seule autorite publie HDF5 et ParaView a la fin acceptee du run.
-end_schedule = on_end(clock=program.clock)
+# 4. Un instantane est publie tous les OUTPUT_EVERY_STEPS pas acceptes.
+output_schedule = every(OUTPUT_EVERY_STEPS, clock=program.clock)
 case.consumers(ConsumerGraph.from_consumers((
     ScientificOutput(
-        format=HDF5(mode=ParallelMode.SERIAL),
-        schedule=end_schedule,
-        fields=(tracer_U,),
-        target="state/tracer",
-    ),
-    ScientificOutput(
-        format=ParaView(mode=ParallelMode.SERIAL),
-        schedule=end_schedule,
+        format=OUTPUT_FORMAT,
+        schedule=output_schedule,
         fields=(tracer_U,),
         target="solution/tracer",
     ),
@@ -198,12 +192,12 @@ layout = AMR(
 )
 
 
-# 6. Cycle public final et publication des deux formats.
+# 6. Cycle public final et publication periodique.
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 simulation = pops.bind(artifact)
-report = pops.run(
+pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
@@ -211,18 +205,15 @@ report = pops.run(
 )
 
 
-# 7. Les lecteurs publics authentifient les fichiers juste produits.
-(hdf5_path,) = tuple(sorted(OUTPUT_ROOT.rglob("*.h5")))
-(paraview_path,) = tuple(sorted(OUTPUT_ROOT.rglob("*.vtu")))
-hdf5_output = read_hdf5(hdf5_path)
-paraview_output = read_paraview(paraview_path)
+# 7. Le format choisi authentifie la serie et rouvre son dernier instantane.
+output_series = OUTPUT_FORMAT.reopen_series(OUTPUT_ROOT / "solution" / "tracer")
+last_output = output_series.latest
 
-print("PoPS AMR scientific-output tutorial finished")
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
+print("PoPS AMR periodic-output tutorial finished")
 print("  AMR levels       : %d" % simulation.n_levels())
-print("  HDF5 arrays      : %d" % len(hdf5_output.arrays))
-print("  ParaView arrays  : %d" % len(paraview_output.arrays))
-print("  HDF5 identity    : %s" % hdf5_output.output_identity.hexdigest[:12])
-print("  ParaView identity: %s" % paraview_output.output_identity.hexdigest[:12])
+print("  snapshots        : %d" % len(output_series.samples))
+print("  arrays in latest : %d" % len(last_output.arrays))
+print("  latest identity  : %s" % last_output.output_identity.hexdigest[:12])
+print("  latest artifact  : %s" % output_series.files[-1])
+print("  time series      : %s" % output_series.path)
 print("  output root      : %s" % OUTPUT_ROOT)

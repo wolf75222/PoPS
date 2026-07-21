@@ -1,6 +1,7 @@
 """Final direct scientific-output and checkpoint consumer descriptors."""
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any
 
 from pops.descriptors import Descriptor
@@ -16,9 +17,15 @@ _WRITABLE_KINDS = frozenset({"state", "field", "aux"})
 def _target(value: Any, *, where: str) -> str:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise TypeError("%s must be non-empty canonical text" % where)
+    if "\\" in value:
+        raise ValueError("%s must use '/' as its logical path separator" % where)
     pieces = value.split("/")
     if any(piece in {"", ".", ".."} for piece in pieces):
         raise ValueError("%s must be a canonical relative output target" % where)
+    if PurePosixPath(value).suffix:
+        raise ValueError(
+            "%s is a logical target and must not contain a file suffix; "
+            "the selected provider owns its extension" % where)
     return value
 
 

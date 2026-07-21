@@ -10,8 +10,9 @@ from .data import (
 )
 from .diagnostics import BalanceTerms, composite_integrals
 from ._writers.common import (
-    OutputPublicationReceipt, ScientificWriter, WriterSession,
-    deterministic_target, writer_session_authority,
+    FileSeriesCatalog, OutputPublicationReceipt, ReopenedOutput, ReopenedSeries,
+    ScientificSeriesCatalog, ScientificWriter, SeriesSample, WriterSession,
+    deterministic_target, output_series_path, writer_session_authority,
 )
 from ._writers.hdf5 import HDF5Writer, read_hdf5
 from ._writers.npz import NPZWriter, read_npz
@@ -28,6 +29,8 @@ __all__ = [
     "OutputProvenance", "OutputRequest", "OutputSnapshot", "BalanceTerms",
     "composite_integrals", "HDF5Writer", "NPZWriter", "ParaViewWriter",
     "ScientificWriter", "WriterSession", "OutputPublicationReceipt",
-    "deterministic_target", "writer_session_authority",
+    "ScientificSeriesCatalog", "FileSeriesCatalog",
+    "ReopenedOutput", "ReopenedSeries", "SeriesSample",
+    "deterministic_target", "output_series_path", "writer_session_authority",
     "read_hdf5", "read_npz", "read_paraview", "formats",
 ]

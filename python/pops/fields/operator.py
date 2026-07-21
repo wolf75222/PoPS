@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import copy
 from dataclasses import dataclass
 import math
 from typing import Any
@@ -268,7 +267,12 @@ class FieldOperator(Descriptor):
              self.equation, self.outputs))
 
     def resolve_references(self, resolver: Any) -> FieldOperator:
-        resolved = copy(self)
+        # Keep the stdlib copy implementation local. A module-global ``copy`` function exposes the
+        # process-wide copyreg dispatch table to AuthoringSnapshot's callable projection, so merely
+        # importing a plugin such as VTK could otherwise change this operator's semantic identity.
+        from copy import copy as shallow_copy
+
+        resolved = shallow_copy(self)
         resolved.unknown = resolve_handle(self.unknown, resolver, where="FieldOperator unknown")
         resolved.providers = FieldProviderPack(
             FieldProviderContribution(

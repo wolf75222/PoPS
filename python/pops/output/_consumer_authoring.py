@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from copy import copy
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,7 +46,9 @@ def _references(value: Any, *, where: str) -> tuple[Handle, ...]:
 def _frozen_descriptor(value: Any, *, where: str) -> Any:
     if isinstance(value, (str, bytes)):
         raise TypeError("%s must be a typed descriptor, not text" % where)
-    clone = copy(value)
+    from copy import copy as shallow_copy
+
+    clone = shallow_copy(value)
     freeze = _protocol(clone, "freeze", where=where)
     if freeze() is not clone:
         raise TypeError("%s.freeze() must return self" % where)

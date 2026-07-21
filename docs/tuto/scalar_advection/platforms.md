@@ -50,8 +50,10 @@ Les deux premiers scripts ecrivent les champs utilises par les figures :
 - `results/01_openmp_preset_ssprk2.npz` ;
 - `results/02_openmp_explicit_ssprk2.npz`.
 
-Le script 12 publie HDF5 et ParaView sous `results/12_openmp_amr_outputs/`. Le script 13 ecrit son
-checkpoint sous `results/13_openmp_amr_restart/`.
+Le script 12 publie un instantane tous les `OUTPUT_EVERY_STEPS` pas acceptes sous
+`results/12_openmp_amr_outputs/`. Son format tient sur une ligne : `output.ParaView()`,
+`output.HDF5()` ou `output.NPZ()`. Le script 13 ecrit son checkpoint sous
+`results/13_openmp_amr_restart/`.
 
 Les figures comparent ces deux executions OpenMP :
 

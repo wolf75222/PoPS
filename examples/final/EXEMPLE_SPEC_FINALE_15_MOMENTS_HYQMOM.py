@@ -286,10 +286,10 @@ def build_authoring(
     case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
             format=HDF5(mode=output_mode), schedule=schedule,
-            fields=(state_instance, field_instance), target="state/hyqmom15.h5"),
+            fields=(state_instance, field_instance), target="state/hyqmom15"),
         ScientificOutput(
             format=ParaView(mode=output_mode), schedule=schedule,
-            fields=(state_instance, field_instance), target="visualization/hyqmom15.vtu"),
+            fields=(state_instance, field_instance), target="visualization/hyqmom15"),
         Checkpoint(
             schedule=schedule, target="checkpoints/hyqmom15", bit_identical=True),
     )))

@@ -139,7 +139,7 @@ slow = pops.bind(
     params={a_x_param: 0.50, a_y_param: 0.10},
     initial_state={"tracer": initial_state.copy()},
 )
-slow_report = pops.run(slow, t_end=T_END, max_steps=MAX_STEPS)
+pops.run(slow, t_end=T_END, max_steps=MAX_STEPS)
 slow_state = np.asarray(slow.state_global("tracer"), dtype=np.float64).copy()
 
 
@@ -149,7 +149,7 @@ fast = pops.bind(
     params={a_x_param: 1.00, a_y_param: 0.25},
     initial_state={"tracer": initial_state.copy()},
 )
-fast_report = pops.run(fast, t_end=T_END, max_steps=MAX_STEPS)
+pops.run(fast, t_end=T_END, max_steps=MAX_STEPS)
 fast_state = np.asarray(fast.state_global("tracer"), dtype=np.float64).copy()
 
 difference = float(np.max(np.abs(fast_state - slow_state)))
@@ -158,6 +158,4 @@ print("PoPS RuntimeParam tutorial finished")
 print("  artifact identity: %s" % artifact.artifact_identity.hexdigest[:12])
 print("  slow bind identity: %s" % slow.bind_identity.hexdigest[:12])
 print("  fast bind identity: %s" % fast.bind_identity.hexdigest[:12])
-print("  slow steps        : %d" % slow_report.accepted_steps)
-print("  fast steps        : %d" % fast_report.accepted_steps)
 print("  max state delta   : %.6e" % difference)

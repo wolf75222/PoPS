@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from fractions import Fraction
 from importlib import import_module
 from copy import deepcopy
 from dataclasses import replace
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops._frozen_data import freeze_data
 from pops._platform_contracts import (
     ExecutionContext,
     ExecutionResource,
@@ -21,14 +23,18 @@ from pops.identity import Identity, make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
 from pops.output import (
     ArrayPiece, BalanceTerms, DiagnosticKey, DiagnosticPayload,
-    FieldKey, FieldPayload,
+    FieldKey, FieldPayload, FileSeriesCatalog,
     HDF5, HDF5Writer, LevelGeometry, NPZ, NPZWriter, OutputClock,
     OutputProvenance, OutputPublicationReceipt, OutputRequest, OutputSnapshot,
     ParaView, ParaViewWriter, composite_integrals, deterministic_target, read_hdf5,
     read_npz, read_paraview, writer_session_authority,
 )
 from pops.output._consumer_contracts import FailRun, ParallelMode, ScheduleCursor
-from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
+from pops.output._writers.common import (
+    _OutputRecoveryRequired,
+    _StagedOutputFile,
+    authenticate_series_catalog,
+)
 from pops.output._writers.hdf5 import _rebuild_parallel_snapshot_data
 from pops.output.provider import consumer_format_data
 from pops.runtime._consumer import (
@@ -128,6 +134,19 @@ def _stage_writer(writer, snapshot, request, target, *, communicator=None):
         snapshot, request, target, communicator=communicator)
     session.stage()
     return session
+
+
+def _publish_series(catalog, target, snapshot, request, receipt):
+    assert receipt.file_evidence is not None
+    publication = catalog.prepare(target, snapshot, request)
+    publication.publish({
+        "output_identity": receipt.output_identity.token,
+        "selection_identity": receipt.selection_identity.token,
+        "path": receipt.path.as_posix(),
+        "format": receipt.format,
+        "file_evidence": list(receipt.file_evidence),
+    })
+    return publication
 
 
 def _recovery_paths(root):
@@ -251,6 +270,25 @@ def test_deterministic_target_is_bounded_and_hashes_full_long_identities(tmp_pat
     assert first != changed
     assert len(first.name.encode("utf-8")) <= 255
     assert first.suffix == ".npz"
+
+
+def test_runtime_target_preserves_the_complete_logical_directory(tmp_path):
+    from pops.runtime._runtime_consumers import _target
+
+    snapshot, request, _ = _snapshot()
+    format = ParaView()
+    target = _target(
+        "solution/tracer",
+        format.consumer_data(),
+        format.format_name,
+        snapshot,
+        request,
+        "state",
+        tmp_path,
+    )
+    assert target.parent == tmp_path / "solution" / "tracer"
+    assert target.suffix == ".vtu"
+    assert tuple(tmp_path.glob("*.vtu")) == ()
 
 
 def test_npz_collision_and_discard_never_publish_partial_content(tmp_path):
@@ -831,9 +869,9 @@ def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path
     fine = next(item for item in request.selection if item.level == 1)
     coarse_record = reopened.manifest["datasets"]["fields"][coarse.identity.token]
     fine_record = reopened.manifest["datasets"]["fields"][fine.identity.token]
-    assert coarse_record["name"] == fine_record["name"] == "field_0000"
+    assert coarse_record["name"] == fine_record["name"] == "rho"
     assert np.array_equal(
-        reopened.arrays["field_0000"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0])
+        reopened.arrays["rho"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0])
     assert np.array_equal(reopened.arrays["connectivity"], np.arange(32))
     assert np.array_equal(reopened.arrays["offsets"], np.arange(4, 33, 4))
     assert np.array_equal(
@@ -844,6 +882,61 @@ def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path
         ]),
     )
     prepared.abort_prepare()
+
+
+def test_paraview_field_names_are_readable_collision_safe_and_reserved_safe():
+    from pops.output._writers.paraview import _field_array_names
+
+    def member(block, state):
+        reference = SimpleNamespace(
+            local_id=state,
+            block_ref=None if block is None else SimpleNamespace(local_id=block),
+        )
+        return SimpleNamespace(key=SimpleNamespace(reference=reference))
+
+    names = _field_array_names((
+        ("family-a", (member("fluid", "rho"),)),
+        ("family-b", (member("fluid", "rho"),)),
+        ("family-c", (member(None, "vtkGhostType"),)),
+        ("family-d", (member("hot jet", "x velocity"),)),
+    ))
+    assert names[0].startswith("fluid__rho__")
+    assert names[1].startswith("fluid__rho__")
+    assert names[0] != names[1]
+    assert names[2] == "field__vtkGhostType"
+    assert names[3] == "hot_jet__x_velocity"
+
+
+def test_paraview_preserves_vector_component_labels(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    snapshot, request, _ = _snapshot()
+    selected = {key.identity.token for key in request.selection}
+    fields = []
+    for field in snapshot.fields:
+        if field.key.identity.token not in selected:
+            fields.append(field)
+            continue
+        pieces = tuple(replace(
+            piece,
+            values=np.stack((piece.values, 2.0 * piece.values)),
+        ) for piece in field.pieces)
+        fields.append(replace(
+            field,
+            component_names=("density", "twice_density"),
+            pieces=pieces,
+        ))
+    vector_snapshot = replace(snapshot, fields=tuple(fields))
+    target = tmp_path / "vector.vtu"
+    session = _stage_writer(ParaViewWriter(), vector_snapshot, request, target)
+    reopened = read_paraview(session.temporary).require_selection(request)
+    assert reopened.arrays["rho"].shape == (8, 2)
+    root = ET.parse(session.temporary).getroot()
+    node = root.find(".//CellData/DataArray[@Name='rho']")
+    assert node is not None
+    assert node.attrib["ComponentName0"] == "density"
+    assert node.attrib["ComponentName1"] == "twice_density"
+    session.abort_prepare()
 
 
 def test_paraview_per_rank_keeps_one_multilevel_family_and_empty_local_level(tmp_path):
@@ -906,13 +999,13 @@ def test_paraview_per_rank_keeps_one_multilevel_family_and_empty_local_level(tmp
         coarse_record = reopened.manifest["datasets"]["fields"][coarse.key.identity.token]
         fine_record = reopened.manifest["datasets"]["fields"][fine.key.identity.token]
 
-        assert coarse_record["name"] == fine_record["name"] == "field_0000"
+        assert coarse_record["name"] == fine_record["name"] == "rho"
         assert tuple(coarse_record["cell_range"]) == coarse_range
         assert tuple(fine_record["cell_range"]) == fine_range
         assert np.array_equal(reopened.arrays["pops_level"], levels)
         assert np.array_equal(reopened.arrays["vtkGhostType"], ghosts)
         assert np.array_equal(reopened.arrays["TimeValue"], [0.125])
-        assert np.array_equal(reopened.arrays["field_0000"], values)
+        assert np.array_equal(reopened.arrays["rho"], values)
         prepared.abort_prepare()
 
 
@@ -943,9 +1036,9 @@ def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_pa
     assert grid.GetPoint(16) == (10.25, 20.25, 0.0)
     assert {grid.GetCellData().GetArrayName(index)
             for index in range(grid.GetCellData().GetNumberOfArrays())} >= {
-                "pops_layout", "pops_level", "pops_coverage", "vtkGhostType", "field_0000"}
-    assert grid.GetCellData().GetArray("field_0001") is None
-    assert [grid.GetCellData().GetArray("field_0000").GetTuple1(index)
+                "pops_layout", "pops_level", "pops_coverage", "vtkGhostType", "rho"}
+    assert grid.GetCellData().GetArray("energy") is None
+    assert [grid.GetCellData().GetArray("rho").GetTuple1(index)
             for index in range(8)] == [1.0] * 4 + [2.0] * 4
     assert [grid.GetCellData().GetArray("vtkGhostType").GetTuple1(index)
             for index in range(8)] == [0.0, 8.0, 0.0, 0.0] + [0.0] * 4
@@ -1186,10 +1279,19 @@ def test_balance_terms_keep_the_explicit_open_domain_sign_convention():
 
 def test_consumer_publisher_adapter_prepares_only_a_resolved_effect(tmp_path):
     snapshot, request, _ = _snapshot()
-    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    format = NPZ()
+    target = deterministic_target(
+        tmp_path,
+        "fields",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format.consumer_data(),
+        format_name=format.format_name,
+    )
     effect = _accepted_output_effect(request, target)
     publisher = ConsumerOutputPublisher(lambda accepted: OutputPreparation(
-        NPZ(), snapshot, request, target) if accepted is effect else None)
+        format, snapshot, request, target) if accepted is effect else None)
     prepared = publisher.prepare(effect)
     assert isinstance(prepared, PreparedPublication)
     assert prepared.effect_identity == effect.identity
@@ -1204,6 +1306,113 @@ def test_consumer_publisher_adapter_prepares_only_a_resolved_effect(tmp_path):
     prepared.discard()
     with pytest.raises(TypeError, match="AcceptedSideEffect"):
         publisher.prepare(object())
+
+
+def test_consumer_publisher_series_retry_releases_writer_authority(tmp_path):
+    snapshot, request, _ = _snapshot()
+    target = tmp_path / "series-finalizer.npz"
+    effect = _accepted_output_effect(request, target)
+    authority = writer_session_authority("npz", request, target)
+
+    class Session:
+        def __init__(self):
+            self.identity = Identity.from_token(authority["session_identity"])
+            self.finalize_calls = 0
+
+        @property
+        def authority(self):
+            return dict(authority)
+
+        def stage(self):
+            return None
+
+        def abort_prepare(self):
+            return None
+
+        def publish(self):
+            target.write_bytes(b"accepted-output")
+            value = target.lstat()
+            return OutputPublicationReceipt(
+                target,
+                "npz",
+                make_identity("scientific-output", {"bytes": "accepted-output"}),
+                request.publication_identity,
+                (
+                    int(value.st_dev), int(value.st_ino), int(value.st_size),
+                    int(value.st_mtime_ns), int(value.st_ctime_ns),
+                ),
+            )
+
+        def rollback(self):
+            return None
+
+        def finalize(self):
+            self.finalize_calls += 1
+            return None
+
+    class Publication:
+        def __init__(self):
+            self.calls = 0
+
+        @property
+        def authority(self):
+            return {"publication": "series-finalizer"}
+
+        def publish(self, artifact):
+            assert Path(artifact["path"]) == target
+            assert artifact["format"] == "npz"
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("catalogue busy")
+
+    session = Session()
+    publication = Publication()
+    prepared = PreparedConsumerOutput(
+        effect,
+        session,
+        "pops.test.series-finalizer",
+        request,
+        None,
+        target=target,
+        format_name="npz",
+        series_publication=publication,
+        series_publication_authority=publication.authority,
+    )
+    prepared.publish()
+    with pytest.raises(RuntimeError, match="catalogue busy"):
+        prepared.finalize()
+    assert session.finalize_calls == 1
+    assert prepared._session is None
+    assert not hasattr(prepared, "_snapshot")
+    prepared.finalize()
+    assert publication.calls == 2
+    assert session.finalize_calls == 1
+
+
+def test_series_false_publishes_only_the_requested_artifact(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ(series=False)
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format.consumer_data(),
+        format_name=format.format_name,
+    )
+    effect = replace(
+        _accepted_output_effect(request, target),
+        target=PublicationTarget(
+            str(target), format.consumer_data(), None, ParallelMode.SERIAL),
+    )
+    prepared = ConsumerOutputPublisher(
+        lambda _accepted: OutputPreparation(format, snapshot, request, target)
+    ).prepare(effect)
+    prepared.publish()
+    prepared.finalize()
+    assert target.is_file()
+    assert tuple(tmp_path.glob("*.series")) == ()
 
 
 def test_rank_local_base_exception_is_consensus_error_before_publish_returns(
@@ -1252,7 +1461,14 @@ def test_rank_local_base_exception_is_consensus_error_before_publish_returns(
 
     monkeypatch.setattr(module, "allgather_value", gather)
     prepared = PreparedConsumerOutput(
-        effect, Session(), "pops.test.rank-cancelled", request, object())
+        effect,
+        Session(),
+        "pops.test.rank-cancelled",
+        request,
+        object(),
+        target=target,
+        format_name="rank-cancelled",
+    )
 
     with pytest.raises(RuntimeError, match="RankLocalCancellation"):
         prepared.publish()
@@ -1393,6 +1609,376 @@ def test_format_interface_selects_exact_writer():
     assert type(HDF5().writer()) is HDF5Writer
 
 
+@pytest.mark.parametrize("format", [NPZ(), HDF5(), ParaView()], ids=["npz", "hdf5", "vtu"])
+def test_format_provider_publishes_and_reopens_one_authenticated_series(tmp_path, format):
+    snapshot, request, _ = _snapshot()
+    format_data = freeze_data(format.consumer_data(), "test format data")
+    catalog = format.series_catalog()
+    root = tmp_path / "timeline"
+
+    first_target = deterministic_target(
+        root,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format_data,
+        format_name=format.format_name,
+    )
+    first = _stage_writer(format.writer(), snapshot, request, first_target)
+    first_receipt = first.publish()
+    _publish_series(catalog, first_target, snapshot, request, first_receipt)
+    first.finalize()
+
+    second_snapshot = replace(
+        snapshot,
+        clock=OutputClock.at("macro", 0.25, 8, stage="accepted"),
+    )
+    second_target = deterministic_target(
+        root,
+        "state",
+        request,
+        second_snapshot,
+        format.extension,
+        format_data=format_data,
+        format_name=format.format_name,
+    )
+    second = _stage_writer(format.writer(), second_snapshot, request, second_target)
+    second_receipt = second.publish()
+    _publish_series(catalog, second_target, second_snapshot, request, second_receipt)
+    second.finalize()
+
+    series = format.reopen_series(root)
+    assert series.path == root / (
+        "series__f%s%s.series" % (series.family_scope, format.extension))
+    assert series.times == (0.125, 0.25)
+    assert tuple(sample.macro_step for sample in series.samples) == (7, 8)
+    assert series.files == (first_target, second_target)
+    assert series.latest.output_identity == format.reopen(second_target).output_identity
+    assert json.loads(series.path.read_text(encoding="utf-8")) == {
+        "file-series-version": "1.0",
+        "files": [
+            {"name": first_target.name, "time": 0.125},
+            {"name": second_target.name, "time": 0.25},
+        ],
+    }
+
+
+def test_series_scopes_distinct_runs_and_requires_an_exact_index_when_ambiguous(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = format.consumer_data()
+    catalog = format.series_catalog()
+    root = tmp_path / "timeline"
+
+    targets = []
+    for run_name in ("run-a", "run-b"):
+        current = replace(snapshot, provenance=replace(
+            snapshot.provenance, run_identity=_identity("run", run_name)))
+        target = deterministic_target(
+            root,
+            "state",
+            request,
+            current,
+            format.extension,
+            format_data=format_data,
+            format_name=format.format_name,
+        )
+        session = _stage_writer(format.writer(), current, request, target)
+        receipt = session.publish()
+        _publish_series(catalog, target, current, request, receipt)
+        session.finalize()
+        targets.append(target)
+
+    indexes = tuple(sorted(root.glob("series__f*.npz.series")))
+    assert len(indexes) == 2
+    with pytest.raises(ValueError, match="multiple .npz time series"):
+        format.reopen_series(root)
+    reopened = tuple(format.reopen_series(path) for path in indexes)
+    assert {series.files[0] for series in reopened} == set(targets)
+    assert len({series.family_scope for series in reopened}) == 2
+
+
+def test_series_accepts_distinct_substeps_at_the_same_macro_time(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = format.consumer_data()
+    catalog = format.series_catalog()
+    root = tmp_path / "multirate"
+    clocks = (
+        OutputClock.at(
+            "macro", 0.125, 7, stage="substep", tick=7, level=1, substep=0,
+            stage_index=0, fraction=(1, 2)),
+        OutputClock.at(
+            "macro", 0.125, 7, stage="substep", tick=7, level=1, substep=1,
+            stage_index=1, fraction=(1, 1)),
+    )
+    for clock in clocks:
+        current = replace(snapshot, clock=clock)
+        target = deterministic_target(
+            root,
+            "state",
+            request,
+            current,
+            format.extension,
+            format_data=format_data,
+            format_name=format.format_name,
+        )
+        session = _stage_writer(format.writer(), current, request, target)
+        receipt = session.publish()
+        _publish_series(catalog, target, current, request, receipt)
+        session.finalize()
+
+    series = format.reopen_series(root)
+    assert series.times == (0.125, 0.125)
+    assert tuple(sample.macro_step for sample in series.samples) == (7, 7)
+    assert series.verify() is series
+
+
+def test_series_recovery_orders_large_multirate_fractions_exactly(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = format.consumer_data()
+    catalog = format.series_catalog()
+    root = tmp_path / "exact-multirate"
+    lower_fraction = (2**53, 2**53 + 1)
+    upper_fraction = (2**53 + 1, 2**53 + 2)
+    assert float(Fraction(*lower_fraction)) == float(Fraction(*upper_fraction))
+
+    targets = {}
+    receipts = {}
+    for label, fraction in (
+        ("upper", upper_fraction),
+        ("lower", lower_fraction),
+    ):
+        current = replace(snapshot, clock=OutputClock.at(
+            "macro", 0.125, 7, stage="substep", tick=7, level=1,
+            substep=0, stage_index=0, fraction=fraction,
+        ))
+        target = deterministic_target(
+            root,
+            "state",
+            request,
+            current,
+            format.extension,
+            format_data=format_data,
+            format_name=format.format_name,
+        )
+        session = _stage_writer(format.writer(), current, request, target)
+        targets[label] = target
+        receipts[label] = (session, current, session.publish())
+
+    lower_session, lower_snapshot, lower_receipt = receipts["lower"]
+    _publish_series(
+        catalog, targets["lower"], lower_snapshot, request, lower_receipt)
+    lower_session.finalize()
+    receipts["upper"][0].finalize()
+
+    series = format.reopen_series(root)
+    assert series.files == (targets["lower"], targets["upper"])
+
+
+def test_series_supports_a_multi_suffix_extension(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = dict(format.consumer_data(), extension=".state.npz")
+    catalog = FileSeriesCatalog(
+        format_data,
+        format_name=format.format_name,
+        reopen=format.reopen,
+    )
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format_data["extension"],
+        format_data=format_data,
+        format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    _publish_series(catalog, target, snapshot, request, receipt)
+    session.finalize()
+
+    series = catalog.reopen(tmp_path)
+    assert series.files == (target,)
+    assert series.path.name.endswith(".state.npz.series")
+    assert series.latest.output_identity == format.reopen(target).output_identity
+
+
+def test_series_reopens_an_unbounded_macro_step(tmp_path):
+    snapshot, request, _ = _snapshot()
+    snapshot = replace(
+        snapshot,
+        clock=OutputClock.at("macro", 0.25, 1_000_000_000, stage="accepted"),
+    )
+    format = NPZ()
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format.consumer_data(),
+        format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    _publish_series(format.series_catalog(), target, snapshot, request, receipt)
+    session.finalize()
+
+    series = format.reopen_series(tmp_path)
+    assert series.samples[0].macro_step == 1_000_000_000
+
+
+def test_series_refuses_symlinked_index_and_members(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format.consumer_data(),
+        format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    _publish_series(format.series_catalog(), target, snapshot, request, receipt)
+    session.finalize()
+    series_path = format.reopen_series(tmp_path).path
+
+    real_index = series_path.with_name("real-index.json")
+    series_path.rename(real_index)
+    series_path.symlink_to(real_index.name)
+    with pytest.raises(ValueError, match="symbolic link"):
+        format.reopen_series(series_path)
+    series_path.unlink()
+    real_index.rename(series_path)
+
+    real_member = target.with_name("real-member.npz")
+    target.rename(real_member)
+    target.symlink_to(real_member.name)
+    with pytest.raises(ValueError, match="symbolic link"):
+        format.reopen_series(series_path)
+
+
+def test_series_rejects_a_changed_artifact_before_indexing(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format.consumer_data(),
+        format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    original = target.read_bytes()
+    target.write_bytes(b"x" * len(original))
+    os.utime(target, ns=(receipt.file_evidence[3], receipt.file_evidence[3]))
+
+    with pytest.raises(RuntimeError, match="changed before series indexing"):
+        _publish_series(format.series_catalog(), target, snapshot, request, receipt)
+    session.finalize()
+
+
+def test_series_catalog_format_must_match_its_provider():
+    format = NPZ()
+    catalog = FileSeriesCatalog(
+        format.consumer_data(),
+        format_name="not-npz",
+        reopen=format.reopen,
+    )
+    with pytest.raises(ValueError, match="format differs"):
+        authenticate_series_catalog(catalog, format.consumer_data())
+
+
+def test_series_fast_path_does_not_reread_the_just_committed_arrays(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = format.consumer_data()
+    reopen_calls = []
+
+    def reopen(path):
+        reopen_calls.append(Path(path))
+        return format.reopen(path)
+
+    catalog = FileSeriesCatalog(
+        format_data, format_name=format.format_name, reopen=reopen)
+    for clock in (
+        snapshot.clock,
+        OutputClock.at("macro", 0.25, 8, stage="accepted"),
+    ):
+        current = replace(snapshot, clock=clock)
+        target = deterministic_target(
+            tmp_path,
+            "state",
+            request,
+            current,
+            format.extension,
+            format_data=format_data,
+            format_name=format.format_name,
+        )
+        session = _stage_writer(format.writer(), current, request, target)
+        receipt = session.publish()
+        _publish_series(catalog, target, current, request, receipt)
+        session.finalize()
+
+    assert reopen_calls == []
+    assert catalog.reopen(tmp_path).latest.output_identity
+    assert len(reopen_calls) == 1
+
+
+def test_series_lock_contention_fails_explicitly_and_is_retryable(tmp_path, monkeypatch):
+    import fcntl
+
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    format_data = format.consumer_data()
+    catalog = format.series_catalog()
+    target = deterministic_target(
+        tmp_path,
+        "state",
+        request,
+        snapshot,
+        format.extension,
+        format_data=format_data,
+        format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    real_flock = fcntl.flock
+    busy = True
+
+    def flock(descriptor, operation):
+        if busy and operation & fcntl.LOCK_NB:
+            raise BlockingIOError("busy")
+        return real_flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", flock)
+    with pytest.raises(RuntimeError, match="another runtime"):
+        _publish_series(catalog, target, snapshot, request, receipt)
+    busy = False
+    _publish_series(catalog, target, snapshot, request, receipt)
+    session.finalize()
+    assert format.reopen_series(tmp_path).files == (target,)
+
+
+def test_builtin_series_policy_is_explicit_for_rank_local_outputs():
+    assert HDF5().series is True
+    assert NPZ().series is True
+    assert ParaView().series is True
+    assert ParaView(mode=ParallelMode.PER_RANK).series is False
+    with pytest.raises(ValueError, match="one shared artifact"):
+        ParaView(mode=ParallelMode.PER_RANK, series=True)
+
+
 def test_format_writers_publish_structural_preflight_capabilities():
     context = ExecutionContext(
         backend=proven_serial_manifest(
@@ -1424,6 +2010,7 @@ def test_custom_format_writer_must_implement_structural_preflight():
             return {
                 "schema_version": 1,
                 "provider_id": "pops.test.output.v1",
+                "format_name": "test",
                 "extension": ".test",
                 "parallel_mode": "serial",
             }
@@ -1455,6 +2042,7 @@ def test_provider_missing_required_key_is_rejected_even_with_extra_state():
             return {
                 "schema_version": 1,
                 "provider_id": "pops.test.missing-extension.v1",
+                "format_name": "test",
                 "parallel_mode": "serial",
                 "extra": "cannot-mask-a-missing-required-key",
             }
@@ -1494,6 +2082,7 @@ def test_format_selection_contract_is_closed_and_typed(
             return {
                 "schema_version": 1,
                 "provider_id": "pops.test.selection-contract.v1",
+                "format_name": "test",
                 "extension": ".test",
                 "parallel_mode": "serial",
                 "selection_contract": selection_contract,
@@ -1571,6 +2160,7 @@ def test_custom_writer_session_uses_only_the_public_structural_protocol(tmp_path
             return {
                 "schema_version": 1,
                 "provider_id": "pops.test.public-session.v1",
+                "format_name": "custom-test",
                 "extension": ".test",
                 "parallel_mode": "serial",
             }
@@ -1667,6 +2257,7 @@ def test_stage_abort_recovery_is_registered_on_runtime_instance(tmp_path):
             return {
                 "schema_version": 1,
                 "provider_id": "pops.test.stage-recovery.v1",
+                "format_name": "stage-recovery",
                 "extension": ".test",
                 "parallel_mode": "serial",
             }

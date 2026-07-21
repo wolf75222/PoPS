@@ -38,12 +38,13 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     assert "hyqmom15_realizability_density" in report["rejection_reason"]
     assert report["runtime_steps"] == 2
 
-    from pops.output import read_hdf5, read_paraview
+    from pops.output import HDF5, ParaView
 
-    hdf5_path = output / "accepted" / "hyqmom15.h5"
-    paraview_path = output / "accepted" / "hyqmom15.vtu"
-    assert read_hdf5(hdf5_path).arrays
-    assert read_paraview(paraview_path).arrays
+    hdf5 = HDF5().reopen_series(output / "accepted" / "state" / "hyqmom15").latest
+    paraview = ParaView().reopen_series(
+        output / "accepted" / "visualization" / "hyqmom15").latest
+    assert hdf5.arrays
+    assert paraview.arrays
     assert (output / "manual_restart.npz").is_file()
     scheduled = tuple((output / "accepted").rglob("*.npz"))
     assert len(scheduled) == 1

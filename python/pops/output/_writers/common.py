@@ -9,12 +9,14 @@ import re
 import stat
 import sys
 import tempfile
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field as dataclass_field
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Protocol
 
 from pops.identity import Identity, make_identity
+from pops._frozen_data import freeze_data, thaw_data
 
 from pops.output.data import OutputRequest, OutputSnapshot, array_evidence
 from pops._native_collectives import (
@@ -28,6 +30,31 @@ from pops._native_collectives import (
 
 OUTPUT_SCHEMA_VERSION = 1
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
+_FILE_EVIDENCE_SIZE = 5
+
+
+def _file_evidence(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return immutable evidence that detects replacement and ordinary in-place mutation."""
+    if not stat.S_ISREG(value.st_mode):
+        raise ValueError("scientific output entry must be a regular file")
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+def _validated_file_evidence(value: Any, *, where: str) -> tuple[int, int, int, int, int]:
+    if not isinstance(value, (list, tuple)) or len(value) != _FILE_EVIDENCE_SIZE \
+            or any(isinstance(item, bool) or type(item) is not int or item < 0 for item in value):
+        raise TypeError("%s must be exact regular-file evidence" % where)
+    return tuple(value)  # type: ignore[return-value]
+
+
+def _path_file_evidence(path: Path) -> tuple[int, int, int, int, int]:
+    return _file_evidence(path.lstat())
 
 
 def _exception_text(error: BaseException) -> str:
@@ -154,12 +181,66 @@ def identity_from_token(token: Any, domain: str, where: str) -> Identity:
     return result
 
 
+def _series_representation_data(format_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return artifact-representation evidence without the catalogue toggle itself."""
+    data = thaw_data(format_data)
+    if type(data) is not dict:
+        raise TypeError("scientific output representation must be canonical mapping data")
+    options = data.get("options")
+    if isinstance(options, Mapping):
+        options = dict(options)
+        options.pop("series", None)
+        data["options"] = options
+    return data
+
+
+def output_series_family_identity(
+    format_data: Mapping[str, Any],
+    *,
+    format_name: str,
+    selection: Mapping[str, Any],
+    run_identity: str,
+) -> Identity:
+    """Identify one format/selection/run timeline independently of its sample clock."""
+    if not isinstance(format_name, str) or not format_name \
+            or format_name.strip() != format_name:
+        raise TypeError("scientific output series format must be canonical text")
+    if not isinstance(selection, Mapping):
+        raise TypeError("scientific output series selection must be canonical data")
+    if not isinstance(run_identity, str) or not run_identity \
+            or run_identity.strip() != run_identity:
+        raise TypeError("scientific output series run identity must be canonical text")
+    return make_identity("scientific-output-series-family", {
+        "format": format_name,
+        "representation": _series_representation_data(format_data),
+        "selection": thaw_data(selection),
+        "run_identity": run_identity,
+    })
+
+
+def _snapshot_series_family_identity(
+    format_data: Mapping[str, Any],
+    format_name: str,
+    snapshot: OutputSnapshot,
+    request: OutputRequest,
+) -> Identity:
+    return output_series_family_identity(
+        format_data,
+        format_name=format_name,
+        selection=request.publication_data(),
+        run_identity=snapshot.provenance.run_identity.token,
+    )
+
+
 def deterministic_target(
     directory: Any,
     prefix: Any,
     request: OutputRequest,
     snapshot: OutputSnapshot,
     extension: str,
+    *,
+    format_data: Mapping[str, Any] | None = None,
+    format_name: str | None = None,
 ) -> Path:
     """Return the sole deterministic, filesystem-bounded output filename.
 
@@ -180,18 +261,32 @@ def deterministic_target(
         "prefix": str(prefix),
         "consumer_id": request.consumer_id,
         "clock": snapshot.clock.to_data(),
+        "provenance": snapshot.provenance.to_data(),
         "publication_selection": request.publication_data(),
         "extension": extension,
     })
+    if format_data is None:
+        format_data = {
+            "schema_version": 1,
+            "provider_id": "pops.output.unspecified-representation.v1",
+            "extension": extension,
+            "parallel_mode": request.parallel_mode.value,
+            "options": {},
+        }
+    if format_name is None:
+        format_name = "extension:%s" % extension
+    family = _snapshot_series_family_identity(
+        format_data, format_name, snapshot, request)
     from pops.output._consumer_contracts import ParallelMode
 
     rank_part = (
         "__r%06d" % request.rank
         if request.parallel_mode is ParallelMode.PER_RANK else ""
     )
-    name = "%s__%s__s%09d%s__%s%s" % (
-        clean_prefix[:40],
-        clean_consumer[:40],
+    name = "%s__%s__f%s__s%09d%s__%s%s" % (
+        clean_prefix[:24],
+        clean_consumer[:24],
+        family.hexdigest,
         snapshot.clock.macro_step,
         rank_part,
         target_identity.hexdigest,
@@ -248,6 +343,12 @@ class OutputPublicationReceipt:
     format: str
     output_identity: Identity
     selection_identity: Identity
+    file_evidence: tuple[int, int, int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.file_evidence is not None:
+            object.__setattr__(self, "file_evidence", _validated_file_evidence(
+                self.file_evidence, where="output publication file_evidence"))
 
 
 class WriterSession(Protocol):
@@ -287,6 +388,30 @@ class ScientificWriter(Protocol):
         *,
         communicator: Any = None,
     ) -> WriterSession: ...
+
+
+class ScientificSeriesCatalog(Protocol):
+    """Small structural extension for publishing and reopening one output timeline."""
+
+    def catalog_data(self) -> dict[str, Any]: ...
+
+    def prepare(
+        self,
+        target: Any,
+        snapshot: OutputSnapshot,
+        request: OutputRequest,
+    ) -> ScientificSeriesPublication: ...
+
+    def reopen(self, path: Any) -> ReopenedSeries: ...
+
+
+class ScientificSeriesPublication(Protocol):
+    """Lightweight retry owner detached from field arrays and writer rollback state."""
+
+    @property
+    def authority(self) -> dict[str, Any]: ...
+
+    def publish(self, artifact: Mapping[str, Any]) -> None: ...
 
 
 _SESSION_AUTHORITY_KEYS = frozenset({
@@ -545,7 +670,7 @@ class _StagedOutputFile:
     __slots__ = (
         "temporary", "target", "format", "output_identity", "selection_identity",
         "_verify", "_published", "_discarded", "_created_target", "_target_owner",
-        "_staging", "_temporary_owner", "_communicator", "_recoveries",
+        "_target_evidence", "_staging", "_temporary_owner", "_communicator", "_recoveries",
     )
 
     def __init__(
@@ -569,6 +694,7 @@ class _StagedOutputFile:
         self._published = self._discarded = False
         self._created_target = False
         self._target_owner: tuple[int, int] | None = None
+        self._target_evidence: tuple[int, int, int, int, int] | None = None
         self._temporary_owner = temporary.owner
         self._recoveries: list[Any] = []
         if communicator is None and not temporary.is_open:
@@ -770,9 +896,11 @@ class _StagedOutputFile:
             raise RuntimeError("discarded output cannot be published")
         if self._published:
             return OutputPublicationReceipt(
-                self.target, self.format, self.output_identity, self.selection_identity)
+                self.target, self.format, self.output_identity, self.selection_identity,
+                self._target_evidence)
         self._barrier()
         failure = None
+        target_evidence = None
         if self._rank() == 0:
             try:
                 self._verify(self.temporary)
@@ -798,6 +926,8 @@ class _StagedOutputFile:
                             "scientific output collision at deterministic target %s" % self.target
                         ) from None
                 self._remove_temporary_owned()
+                target_evidence = _path_file_evidence(self.target)
+                self._target_owner = target_evidence[:2]
             except BaseException as exc:
                 failure = _exception_text(exc)
         if self._communicator is not None:
@@ -806,10 +936,16 @@ class _StagedOutputFile:
             if self._communicator is None and failure.startswith("FileExistsError:"):
                 raise FileExistsError(failure.split(": ", 1)[1])
             raise RuntimeError("collective output publication failed: %s" % failure)
+        if self._communicator is not None:
+            target_evidence = broadcast_value(
+                self._communicator, target_evidence, root=0)
+        self._target_evidence = _validated_file_evidence(
+            target_evidence, where="published scientific output")
         self._barrier()
         self._published = True
         return OutputPublicationReceipt(
-            self.target, self.format, self.output_identity, self.selection_identity)
+            self.target, self.format, self.output_identity, self.selection_identity,
+            self._target_evidence)
 
     def discard(self) -> None:
         if self._published or self._discarded:
@@ -975,6 +1111,764 @@ class ReopenedOutput:
         if recorded != request.publication_data():
             raise ValueError("reopened output selection differs from the requested selection")
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesSample:
+    """One lazy member; reopening authenticates its content and exact series family."""
+
+    path: Path
+    time: float
+    macro_step: int
+    format: str
+    family_scope: str
+    _format_data: dict[str, Any] = dataclass_field(repr=False, compare=False)
+    _reopen: Callable[[Any], ReopenedOutput] = dataclass_field(repr=False, compare=False)
+
+    def reopen(self) -> ReopenedOutput:
+        output = self._reopen(self.path)
+        if type(output) is not ReopenedOutput or output.manifest.get("format") != self.format:
+            raise TypeError("scientific output series member has the wrong format")
+        snapshot = output.manifest.get("snapshot")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("clock"), dict):
+            raise ValueError("scientific output series member has no exact clock")
+        provenance = snapshot.get("provenance")
+        selection = snapshot.get("selection")
+        if not isinstance(provenance, dict) or not isinstance(selection, dict):
+            raise ValueError("scientific output series member has no exact family evidence")
+        family = output_series_family_identity(
+            self._format_data,
+            format_name=self.format,
+            selection=selection,
+            run_identity=provenance.get("run_identity"),
+        )
+        if family.hexdigest != self.family_scope:
+            raise ValueError("scientific output series member belongs to another family")
+        clock = snapshot["clock"]
+        try:
+            physical_time = float.fromhex(clock["time"])
+            macro_step = clock["macro_step"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("scientific output series member clock is malformed") from exc
+        if physical_time != self.time or macro_step != self.macro_step:
+            raise ValueError("scientific output series member differs from its recorded clock")
+        return output
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenedSeries:
+    """Lazy chronological catalogue; ``latest`` or ``verify`` authenticates members."""
+
+    path: Path
+    format: str
+    samples: tuple[SeriesSample, ...]
+    family_scope: str
+
+    @property
+    def times(self) -> tuple[float, ...]:
+        return tuple(sample.time for sample in self.samples)
+
+    @property
+    def files(self) -> tuple[Path, ...]:
+        return tuple(sample.path for sample in self.samples)
+
+    @property
+    def latest(self) -> ReopenedOutput:
+        if not self.samples:
+            raise RuntimeError("scientific output series has no samples")
+        return self.samples[-1].reopen()
+
+    def verify(self) -> ReopenedSeries:
+        """Reopen every member exactly while retaining no historical field arrays."""
+        for sample in self.samples:
+            sample.reopen()
+        return self
+
+
+def _validate_series_extension(extension: Any) -> str:
+    if not isinstance(extension, str) or not extension.startswith(".") \
+            or "/" in extension or "\\" in extension or extension.endswith(".series"):
+        raise TypeError("output series extension must be a canonical file suffix")
+    return extension
+
+
+def _series_filename(extension: str, family_scope: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{64}", family_scope) is None:
+        raise ValueError("scientific output series family scope must be one full digest")
+    return "series__f%s%s.series" % (family_scope, extension)
+
+
+def _series_scope_from_path(path: Path, extension: str) -> str:
+    match = re.fullmatch(
+        r"series__f([0-9a-f]{64})%s\.series" % re.escape(extension),
+        path.name,
+    )
+    if match is None:
+        raise ValueError("scientific output series filename has no exact family scope")
+    return match.group(1)
+
+
+def output_series_path(
+    directory: Any,
+    extension: str,
+    family: Identity | None = None,
+) -> Path:
+    """Return one scoped companion index, discovering it only when unambiguous."""
+    extension = _validate_series_extension(extension)
+    unresolved_root = Path(directory).expanduser()
+    if unresolved_root.is_symlink():
+        raise ValueError("logical output target must not be a symbolic link")
+    root = unresolved_root.resolve()
+    if family is not None:
+        if type(family) is not Identity or family.domain != "scientific-output-series-family":
+            raise TypeError("output series family must be an exact series-family Identity")
+        return root / _series_filename(extension, family.hexdigest)
+    candidates = tuple(sorted(
+        path for path in root.glob("series__f*%s.series" % extension)
+        if not path.is_symlink()
+        if re.fullmatch(
+            r"series__f[0-9a-f]{64}%s\.series" % re.escape(extension),
+            path.name,
+        ) is not None
+    ))
+    if not candidates:
+        raise FileNotFoundError("logical output target has no %s time series" % extension)
+    if len(candidates) != 1:
+        raise ValueError(
+            "logical output target has multiple %s time series; pass one exact index path"
+            % extension)
+    return candidates[0]
+
+
+def _series_rows(
+    document: Any,
+    *,
+    extension: str,
+    family_scope: str,
+) -> tuple[dict[str, Any], ...]:
+    member_marker = "__f%s__" % family_scope
+    if not isinstance(document, dict) or set(document) != {
+            "file-series-version", "files"}:
+        raise ValueError("scientific output series has an unknown schema")
+    if document["file-series-version"] != "1.0" or not isinstance(document["files"], list):
+        raise ValueError("scientific output series version/files are invalid")
+    rows = []
+    for index, row in enumerate(document["files"]):
+        if not isinstance(row, dict) or set(row) != {"name", "time"}:
+            raise ValueError("scientific output series file %d is malformed" % index)
+        name, time = row["name"], row["time"]
+        member = Path(name) if isinstance(name, str) else Path()
+        if not isinstance(name, str) or not name or member.name != name \
+                or not name.endswith(extension) or member_marker not in name:
+            raise ValueError(
+                "scientific output series file %d is not a local member of its family"
+                % index)
+        if isinstance(time, bool) or not isinstance(time, (int, float)):
+            raise TypeError("scientific output series time %d must be binary64" % index)
+        time = float(time)
+        if not (float("-inf") < time < float("inf")):
+            raise ValueError("scientific output series time %d must be finite" % index)
+        rows.append({"name": name, "time": time})
+    if len({row["name"] for row in rows}) != len(rows):
+        raise ValueError("scientific output series contains duplicate files")
+    if any(right["time"] < left["time"]
+           for left, right in zip(rows, rows[1:], strict=False)):
+        raise ValueError("scientific output series times are not chronological")
+    return tuple(rows)
+
+
+def reopen_output_series(
+    path: Any,
+    *,
+    extension: str,
+    format_name: str,
+    format_data: Mapping[str, Any],
+    reopen: Callable[[Any], ReopenedOutput],
+) -> ReopenedSeries:
+    """Open an ``extension.series`` catalogue without materializing historical arrays."""
+    extension = _validate_series_extension(extension)
+    unresolved = Path(path).expanduser()
+    if unresolved.is_symlink():
+        raise ValueError("scientific output series path must not be a symbolic link")
+    if unresolved.is_dir():
+        series_path = output_series_path(unresolved, extension)
+    else:
+        if unresolved.parent.is_symlink():
+            raise ValueError("scientific output series parent must not be a symbolic link")
+        series_path = unresolved.resolve()
+    family_scope = _series_scope_from_path(series_path, extension)
+    if series_path.is_symlink() or not series_path.is_file():
+        raise ValueError("scientific output series path must be a regular file")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) \
+        | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(series_path.parent, directory_flags)
+    try:
+        owner = os.fstat(directory_fd)
+        visible = series_path.parent.lstat()
+        if (int(owner.st_dev), int(owner.st_ino)) != (
+                int(visible.st_dev), int(visible.st_ino)):
+            raise RuntimeError("scientific output series directory authority changed")
+        rows, _index_evidence = _read_series_at(
+            directory_fd,
+            series_path.name,
+            extension=extension,
+            family_scope=family_scope,
+        )
+        if not rows:
+            raise ValueError("scientific output series contains no samples")
+        samples = []
+        for row in rows:
+            member = series_path.parent / row["name"]
+            try:
+                _entry_evidence_at(directory_fd, row["name"])
+            except ValueError as exc:
+                raise ValueError(
+                    "scientific output series member must not be a symbolic link"
+                ) from exc
+            step_match = re.search(r"__s([0-9]+)(?:__r[0-9]+)?__", member.name)
+            if step_match is None:
+                raise ValueError(
+                    "scientific output series member has no deterministic macro step")
+            macro_step = int(step_match.group(1))
+            physical_time = row["time"]
+            samples.append(SeriesSample(
+                member,
+                physical_time,
+                macro_step,
+                format_name,
+                family_scope,
+                _series_representation_data(format_data),
+                reopen,
+            ))
+    finally:
+        os.close(directory_fd)
+    return ReopenedSeries(series_path, format_name, tuple(samples), family_scope)
+
+
+def _series_clock_data(snapshot: Mapping[str, Any]) -> tuple[float, tuple[Any, ...]]:
+    clock = snapshot.get("clock")
+    if not isinstance(clock, Mapping):
+        raise ValueError("scientific output series member has no exact clock")
+    try:
+        physical_time = float.fromhex(clock["time"])
+        fraction = clock["fraction"]
+        if not isinstance(fraction, list) or len(fraction) != 2 \
+                or any(isinstance(item, bool) or type(item) is not int for item in fraction) \
+                or fraction[0] < 0 or fraction[1] <= 0 or fraction[0] > fraction[1]:
+            raise TypeError
+        integer_clock = tuple(clock[name] for name in (
+            "tick", "macro_step", "level", "substep", "stage_index",
+        ))
+        if any(isinstance(item, bool) or type(item) is not int or item < 0
+               for item in integer_clock):
+            raise TypeError
+        stage = clock["stage"]
+        if not isinstance(stage, str) or not stage:
+            raise TypeError
+        exact_fraction = Fraction(fraction[0], fraction[1])
+        if (exact_fraction.numerator, exact_fraction.denominator) != tuple(fraction):
+            raise TypeError
+        order = (
+            physical_time,
+            integer_clock[0],
+            integer_clock[1],
+            integer_clock[2],
+            integer_clock[3],
+            exact_fraction,
+            integer_clock[4],
+            stage,
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError("scientific output series member clock is malformed") from exc
+    if not (float("-inf") < physical_time < float("inf")):
+        raise ValueError("scientific output series member time must be finite")
+    return physical_time, order
+
+
+def _authenticated_series_member(
+    path: Path,
+    *,
+    family_scope: str,
+    format_name: str,
+    format_data: Mapping[str, Any],
+    reopen: Callable[[Any], ReopenedOutput],
+) -> tuple[float, tuple[Any, ...]]:
+    output = reopen(path)
+    if type(output) is not ReopenedOutput or output.manifest.get("format") != format_name:
+        raise TypeError("scientific output series received an incompatible artifact")
+    snapshot = output.manifest.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("scientific output series member has no exact snapshot")
+    provenance = snapshot.get("provenance")
+    selection = snapshot.get("selection")
+    if not isinstance(provenance, Mapping) or not isinstance(selection, Mapping):
+        raise ValueError("scientific output series member has no exact family evidence")
+    family = output_series_family_identity(
+        format_data,
+        format_name=format_name,
+        selection=selection,
+        run_identity=provenance.get("run_identity"),
+    )
+    if family.hexdigest != family_scope:
+        raise ValueError("scientific output series mixes different format/selection/run families")
+    return _series_clock_data(snapshot)
+
+
+def _regular_entry_at(directory_fd: int, name: str) -> tuple[int, int]:
+    value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    if not stat.S_ISREG(value.st_mode):
+        raise ValueError("scientific output series entry must be a regular file")
+    return int(value.st_dev), int(value.st_ino)
+
+
+def _entry_evidence_at(
+    directory_fd: int, name: str,
+) -> tuple[int, int, int, int, int]:
+    value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    return _file_evidence(value)
+
+
+def _read_series_at(
+    directory_fd: int,
+    name: str,
+    *,
+    extension: str,
+    family_scope: str,
+) -> tuple[tuple[dict[str, Any], ...], tuple[int, int, int, int, int]]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        before = _file_evidence(os.fstat(descriptor))
+        with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as stream:
+            try:
+                document = json.load(stream)
+            except json.JSONDecodeError as exc:
+                raise ValueError("scientific output series is not valid JSON") from exc
+        rows = _series_rows(
+            document, extension=extension, family_scope=family_scope)
+        after = _file_evidence(os.fstat(descriptor))
+        if after != before:
+            raise RuntimeError("scientific output series changed while it was read")
+        return rows, after
+    finally:
+        os.close(descriptor)
+
+
+def _write_series_at(
+    directory_fd: int,
+    series_name: str,
+    document: Mapping[str, Any],
+    previous_evidence: tuple[int, int, int, int, int] | None,
+) -> None:
+    temporary_name = None
+    temporary_owner = None
+    descriptor = None
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        for _ in range(32):
+            candidate = ".%s.%s.tmp" % (series_name, os.urandom(12).hex())
+            try:
+                descriptor = os.open(candidate, flags, 0o600, dir_fd=directory_fd)
+            except FileExistsError:
+                continue
+            temporary_name = candidate
+            info = os.fstat(descriptor)
+            temporary_owner = (int(info.st_dev), int(info.st_ino))
+            break
+        if descriptor is None or temporary_name is None or temporary_owner is None:
+            raise RuntimeError("could not allocate a unique scientific output series staging file")
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            descriptor = None
+            stream.write(json.dumps(document, indent=2, ensure_ascii=True, allow_nan=False))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if _regular_entry_at(directory_fd, temporary_name) != temporary_owner:
+            raise RuntimeError("scientific output series staging inode was replaced")
+        try:
+            current_evidence = _entry_evidence_at(directory_fd, series_name)
+        except FileNotFoundError:
+            current_evidence = None
+        if current_evidence != previous_evidence:
+            raise RuntimeError("scientific output series changed during its atomic update")
+        os.replace(
+            temporary_name,
+            series_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary_name = None
+        os.fsync(directory_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_name is not None and temporary_owner is not None:
+            try:
+                if _regular_entry_at(directory_fd, temporary_name) == temporary_owner:
+                    os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
+def publish_output_series(
+    target: Any,
+    *,
+    extension: str,
+    format_name: str,
+    format_data: Mapping[str, Any],
+    family: Identity,
+    clock_data: Mapping[str, Any],
+    selection_identity: Identity,
+    artifact: Mapping[str, Any],
+    reopen: Callable[[Any], ReopenedOutput],
+) -> None:
+    """Atomically refresh one family-scoped catalogue after accepted publication."""
+    extension = _validate_series_extension(extension)
+    if type(family) is not Identity or family.domain != "scientific-output-series-family":
+        raise TypeError("scientific output series requires its exact family identity")
+    if type(selection_identity) is not Identity \
+            or selection_identity.domain != "output-publication-selection":
+        raise TypeError("scientific output series requires its exact selection identity")
+    required_artifact = {
+        "output_identity", "selection_identity", "path", "format", "file_evidence",
+    }
+    if not isinstance(artifact, Mapping) or set(artifact) != required_artifact:
+        raise TypeError("scientific output series artifact authority has an unknown schema")
+    target = Path(target).expanduser().resolve()
+    marker = "__f%s__" % family.hexdigest
+    if not target.name.endswith(extension) or marker not in target.name:
+        raise ValueError("scientific output target differs from its exact series family")
+    if Path(artifact["path"]).expanduser().resolve() != target \
+            or artifact["format"] != format_name:
+        raise ValueError("scientific output artifact authority differs from its series target")
+    if identity_from_token(
+            artifact["selection_identity"], "output-publication-selection",
+            "series artifact selection") != selection_identity:
+        raise ValueError("scientific output artifact selection differs from its series")
+    identity_from_token(
+        artifact["output_identity"], "scientific-output", "series artifact output")
+    expected_target_evidence = _validated_file_evidence(
+        artifact["file_evidence"], where="series artifact file_evidence")
+    physical_time, current_order = _series_clock_data({"clock": dict(clock_data)})
+    series_path = output_series_path(target.parent, extension, family)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) \
+        | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(target.parent, directory_flags)
+    lock_fd = None
+    try:
+        directory_owner = os.fstat(directory_fd)
+        visible_directory = target.parent.lstat()
+        if (int(visible_directory.st_dev), int(visible_directory.st_ino)) != (
+                int(directory_owner.st_dev), int(directory_owner.st_ino)):
+            raise RuntimeError("scientific output series directory authority changed")
+        if _entry_evidence_at(directory_fd, target.name) != expected_target_evidence:
+            raise RuntimeError(
+                "accepted scientific output artifact changed before series indexing")
+        lock_name = ".%s.lock" % series_path.name
+        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_name, lock_flags, 0o600, dir_fd=directory_fd)
+        lock_info = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_info.st_mode):
+            raise ValueError("scientific output series lock must be a regular file")
+        lock_owner = (int(lock_info.st_dev), int(lock_info.st_ino))
+        try:
+            import fcntl
+
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("another runtime is updating this scientific output series") from exc
+        if _regular_entry_at(directory_fd, lock_name) != lock_owner:
+            raise RuntimeError("scientific output series lock inode was replaced")
+
+        try:
+            rows, previous_evidence = _read_series_at(
+                directory_fd,
+                series_path.name,
+                extension=extension,
+                family_scope=family.hexdigest,
+            )
+        except FileNotFoundError:
+            rows, previous_evidence = (), None
+        indexed = {row["name"]: row["time"] for row in rows}
+        scoped_names = []
+        for name in os.listdir(directory_fd):
+            if marker not in name or not name.endswith(extension):
+                continue
+            _regular_entry_at(directory_fd, name)
+            scoped_names.append(name)
+        scoped_names = sorted(scoped_names)
+        if target.name not in scoped_names:
+            raise RuntimeError("accepted scientific output artifact disappeared before indexing")
+        if not set(indexed).issubset(scoped_names):
+            raise ValueError("scientific output series references a missing family member")
+
+        unexpected = set(scoped_names) - set(indexed) - {target.name}
+        if unexpected:
+            recovered = []
+            for name in scoped_names:
+                member_time, order = _authenticated_series_member(
+                    target.parent / name,
+                    family_scope=family.hexdigest,
+                    format_name=format_name,
+                    format_data=format_data,
+                    reopen=reopen,
+                )
+                recovered.append((order, name, member_time))
+            recovered.sort(key=lambda item: (item[0], item[1]))
+            if len({item[0] for item in recovered}) != len(recovered):
+                raise ValueError("scientific output series contains duplicate exact clocks")
+            ordered_rows = [
+                {"name": name, "time": member_time}
+                for _order, name, member_time in recovered
+            ]
+        else:
+            previous = indexed.get(target.name)
+            if previous is not None and previous != physical_time:
+                raise ValueError("scientific output series file changed its physical time")
+            ordered_rows = list(rows)
+            if previous is None:
+                if ordered_rows and physical_time < ordered_rows[-1]["time"]:
+                    raise ValueError("scientific output series cannot append an earlier clock")
+                ordered_rows.append({"name": target.name, "time": physical_time})
+            del current_order
+        document = {"file-series-version": "1.0", "files": ordered_rows}
+        if _regular_entry_at(directory_fd, lock_name) != lock_owner:
+            raise RuntimeError("scientific output series lock inode changed before commit")
+        _write_series_at(directory_fd, series_path.name, document, previous_evidence)
+        visible_directory = target.parent.lstat()
+        if (int(visible_directory.st_dev), int(visible_directory.st_ino)) != (
+                int(directory_owner.st_dev), int(directory_owner.st_ino)):
+            raise RuntimeError("scientific output series directory changed during commit")
+    finally:
+        if lock_fd is not None:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+        os.close(directory_fd)
+
+
+_SERIES_PUBLICATION_KEYS = frozenset({
+    "schema_version", "catalog_identity", "target", "selection_identity",
+    "family_identity", "clock", "publication_identity",
+})
+
+
+def _catalog_identity(catalog_data: Mapping[str, Any]) -> Identity:
+    return make_identity("scientific-output-series-catalog", dict(catalog_data))
+
+
+def _series_publication_authority(
+    catalog_data: Mapping[str, Any],
+    *,
+    target: Path,
+    request: OutputRequest,
+    family: Identity,
+    clock: Mapping[str, Any],
+) -> dict[str, Any]:
+    base = {
+        "schema_version": 1,
+        "catalog_identity": _catalog_identity(catalog_data).token,
+        "target": target.expanduser().resolve().as_posix(),
+        "selection_identity": request.publication_identity.token,
+        "family_identity": family.token,
+        "clock": dict(clock),
+    }
+    identity = make_identity("scientific-output-series-publication", base)
+    return dict(base, publication_identity=identity.token)
+
+
+class FileSeriesPublication:
+    """Immutable, array-free publication retry for one accepted scientific artifact."""
+
+    __slots__ = (
+        "_authority", "_target", "_extension", "_format_name", "_format_data",
+        "_family", "_clock_data", "_selection_identity", "_reopen",
+    )
+
+    def __init__(
+        self,
+        catalog_data: Mapping[str, Any],
+        format_data: Mapping[str, Any],
+        *,
+        format_name: str,
+        target: Any,
+        snapshot: OutputSnapshot,
+        request: OutputRequest,
+        reopen: Callable[[Any], ReopenedOutput],
+    ) -> None:
+        if type(snapshot) is not OutputSnapshot or type(request) is not OutputRequest:
+            raise TypeError("file series preparation requires exact snapshot/request values")
+        target_path = Path(target).expanduser().resolve()
+        family = _snapshot_series_family_identity(
+            format_data, format_name, snapshot, request)
+        clock_data = snapshot.clock.to_data()
+        object.__setattr__(self, "_authority", freeze_data(_series_publication_authority(
+            catalog_data,
+            target=target_path,
+            request=request,
+            family=family,
+            clock=clock_data,
+        ), "scientific output series publication authority"))
+        object.__setattr__(self, "_target", target_path)
+        object.__setattr__(self, "_extension", format_data["extension"])
+        object.__setattr__(self, "_format_name", format_name)
+        object.__setattr__(self, "_format_data", freeze_data(
+            dict(format_data), "scientific output series representation"))
+        object.__setattr__(self, "_family", family)
+        object.__setattr__(self, "_clock_data", freeze_data(
+            clock_data, "scientific output series clock"))
+        object.__setattr__(self, "_selection_identity", request.publication_identity)
+        object.__setattr__(self, "_reopen", reopen)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        del name, value
+        raise AttributeError("file series publications are immutable")
+
+    @property
+    def authority(self) -> dict[str, Any]:
+        return thaw_data(self._authority)
+
+    def publish(self, artifact: Mapping[str, Any]) -> None:
+        publish_output_series(
+            self._target,
+            extension=self._extension,
+            format_name=self._format_name,
+            format_data=thaw_data(self._format_data),
+            family=self._family,
+            clock_data=thaw_data(self._clock_data),
+            selection_identity=self._selection_identity,
+            artifact=artifact,
+            reopen=self._reopen,
+        )
+
+
+class FileSeriesCatalog:
+    """Built-in structural policy for official extension.series catalogues."""
+
+    __slots__ = ("_format_data", "_format_name", "_reopen")
+
+    def __init__(
+        self,
+        format_data: Mapping[str, Any],
+        *,
+        format_name: str,
+        reopen: Callable[[Any], ReopenedOutput],
+    ) -> None:
+        if not callable(reopen):
+            raise TypeError("file series catalogue requires an exact artifact reader")
+        representation = _series_representation_data(format_data)
+        extension = representation.get("extension")
+        _validate_series_extension(extension)
+        if not isinstance(format_name, str) or not format_name:
+            raise TypeError("file series catalogue format must be canonical text")
+        object.__setattr__(self, "_format_data", freeze_data(
+            dict(format_data), "scientific output series representation"))
+        object.__setattr__(self, "_format_name", format_name)
+        object.__setattr__(self, "_reopen", reopen)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        del name, value
+        raise AttributeError("file series catalogue policies are immutable")
+
+    def catalog_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "catalog_id": "pops.output.file-series.v1",
+            "format": self._format_name,
+            "representation": _series_representation_data(
+                thaw_data(self._format_data)),
+        }
+
+    def prepare(
+        self,
+        target: Any,
+        snapshot: OutputSnapshot,
+        request: OutputRequest,
+    ) -> FileSeriesPublication:
+        return FileSeriesPublication(
+            self.catalog_data(),
+            thaw_data(self._format_data),
+            format_name=self._format_name,
+            target=target,
+            snapshot=snapshot,
+            request=request,
+            reopen=self._reopen,
+        )
+
+    def reopen(self, path: Any) -> ReopenedSeries:
+        return reopen_output_series(
+            path,
+            extension=self._format_data["extension"],
+            format_name=self._format_name,
+            format_data=thaw_data(self._format_data),
+            reopen=self._reopen,
+        )
+
+
+def authenticate_series_catalog(
+    catalog: Any,
+    format_data: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authenticate a small structural catalogue capability without class branching."""
+    for method in ("prepare", "reopen", "catalog_data"):
+        if not callable(getattr(catalog, method, None)):
+            raise TypeError("scientific output series catalogue lacks %s()" % method)
+    first, second = catalog.catalog_data(), catalog.catalog_data()
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("scientific output series catalog_data() must be deterministic")
+    if set(first) != {"schema_version", "catalog_id", "format", "representation"} \
+            or first["schema_version"] != 1:
+        raise ValueError("scientific output series catalogue authority is not exact")
+    if not isinstance(first["catalog_id"], str) or not first["catalog_id"] \
+            or not isinstance(first["format"], str) or not first["format"]:
+        raise TypeError("scientific output series catalogue ids must be canonical text")
+    if first["format"] != format_data.get("format_name"):
+        raise ValueError(
+            "scientific output series catalogue format differs from its format provider")
+    if first["representation"] != _series_representation_data(format_data):
+        raise ValueError("scientific output series catalogue differs from its format provider")
+    json_text(first)
+    return first
+
+
+def authenticate_series_publication(
+    publication: Any,
+    catalog_data: Mapping[str, Any],
+    *,
+    target: Any,
+    snapshot: OutputSnapshot,
+    request: OutputRequest,
+) -> dict[str, Any]:
+    """Authenticate an effect-free, lightweight series retry before writer I/O."""
+    if not callable(getattr(publication, "publish", None)):
+        raise TypeError("scientific output series publication lacks publish()")
+    first, second = getattr(publication, "authority", None), getattr(
+        publication, "authority", None)
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("scientific output series publication authority must be deterministic")
+    if set(first) != _SERIES_PUBLICATION_KEYS or first["schema_version"] != 1:
+        raise ValueError("scientific output series publication authority is not exact")
+    if first["catalog_identity"] != _catalog_identity(catalog_data).token:
+        raise ValueError("scientific output series publication names another catalogue")
+    if first["target"] != Path(target).expanduser().resolve().as_posix() \
+            or first["selection_identity"] != request.publication_identity.token \
+            or first["clock"] != snapshot.clock.to_data():
+        raise ValueError("scientific output series publication differs from its accepted sample")
+    identity_from_token(
+        first["family_identity"], "scientific-output-series-family",
+        "series publication family")
+    supplied = identity_from_token(
+        first["publication_identity"], "scientific-output-series-publication",
+        "series publication identity")
+    base = {key: first[key] for key in _SERIES_PUBLICATION_KEYS - {"publication_identity"}}
+    if supplied != make_identity("scientific-output-series-publication", base):
+        raise ValueError("scientific output series publication identity mismatch")
+    json_text(first)
+    return first
 
 
 def temporary_path(target: Path) -> _StagingAuthority:
@@ -1144,9 +2038,13 @@ def selected_geometries(
 
 
 __all__ = [
-    "OUTPUT_SCHEMA_VERSION", "OutputPublicationReceipt", "OutputWriterSession",
-    "ScientificWriter", "WriterSession", "ReopenedOutput",
+    "OUTPUT_SCHEMA_VERSION", "FileSeriesCatalog", "FileSeriesPublication",
+    "OutputPublicationReceipt", "OutputWriterSession", "ScientificSeriesCatalog",
+    "ScientificSeriesPublication", "ScientificWriter", "WriterSession", "ReopenedOutput",
+    "ReopenedSeries", "SeriesSample",
+    "authenticate_series_catalog", "authenticate_series_publication",
     "authenticate_writer_session",
-    "deterministic_target", "field_values_on_mask", "piece_payload",
+    "deterministic_target", "output_series_family_identity", "output_series_path",
+    "field_values_on_mask", "piece_payload",
     "validate_field_pieces", "writer_execution_capability", "writer_session_authority",
 ]

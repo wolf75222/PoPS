@@ -27,6 +27,19 @@ def test_runtime_environment_report_shape():
     assert report["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")
     assert "allocator_lifetime" in report
     assert "kokkos_lifecycle" in report
+    assert isinstance(report["kokkos_concurrency"], int)
+    if report["kokkos_initialized"]:
+        assert report["kokkos_concurrency"] > 0
+    else:
+        assert report["kokkos_concurrency"] == 0
+
+
+def test_static_runtime_report_does_not_fabricate_kokkos_concurrency(monkeypatch):
+    import pops.runtime_environment as environment
+
+    monkeypatch.setattr(environment, "find_spec", lambda _name: None)
+    report = environment.runtime_environment_report()
+    assert report["kokkos_concurrency"] == 0
 
 
 def test_present_native_runtime_report_failure_is_not_silently_downgraded(monkeypatch):

@@ -303,6 +303,7 @@ class _CustomNPZ:
         return {
             "schema_version": 1,
             "provider_id": "pops.test.custom-npz.v1",
+            "format_name": "npz",
             "extension": ".npz",
             "parallel_mode": self._mode.value,
         }

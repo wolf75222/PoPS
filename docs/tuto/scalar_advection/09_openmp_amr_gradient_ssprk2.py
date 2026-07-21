@@ -7,8 +7,6 @@ sont derives de la methode spatiale puis executes en C++/Kokkos.
 
 # ruff: noqa: E402
 
-import time
-
 import pops
 
 pops.set_threads(7)
@@ -44,7 +42,6 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
-from pops.runtime_environment import runtime_environment_report
 from pops.spaces import CellState
 from pops.time import AdaptiveCFL, every
 
@@ -182,21 +179,14 @@ layout = AMR(
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-backend = str(runtime_environment_report()["kokkos_backend"])
 simulation = pops.bind(artifact)
 
-start = time.perf_counter()
-report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
-elapsed_seconds = time.perf_counter() - start
+pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
 
 patches = simulation.amr.patch_table()
 regrid = simulation.amr.explain_regrid()
 
 print("PoPS gradient-tagged AMR tutorial finished")
-print("  Kokkos backend   : %s" % backend)
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
 print("  AMR levels       : %d" % simulation.n_levels())
 print("  fine patches     : %d" % patches.n_patches)
 print("  completed regrids: %d" % regrid.regrid_count)
-print("  elapsed          : %.6f s" % elapsed_seconds)

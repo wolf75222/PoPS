@@ -1054,7 +1054,10 @@ class RuntimeInstance:
             raise
 
     def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
-             output_dir: Any = None, **controller_controls: Any) -> RunReport:
+             output_dir: Any = None, console: bool = True,
+             **controller_controls: Any) -> RunReport:
+        if type(console) is not bool:
+            raise TypeError("pops.run console= must be an exact bool")
         if "strategy" in controller_controls or "cfl" in controller_controls:
             raise TypeError(
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
@@ -1075,6 +1078,7 @@ class RuntimeInstance:
         previous_root, self._output_root = self._output_root, output_dir
         steps = 0
         rejected_steps = 0
+        console_session = None
         try:
             prepare_step_controller(native, selected, controller_controls)
             temporal = getattr(native, "_temporal_restart_state", None)
@@ -1089,6 +1093,10 @@ class RuntimeInstance:
                 max_steps=max_steps,
                 output_dir=output_dir,
             )
+            if console:
+                from pops.runtime._console_run import safe_begin_console_run
+
+                console_session = safe_begin_console_run(self, manifest, selected)
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
                 def advance() -> tuple[Any, int]:
@@ -1130,10 +1138,19 @@ class RuntimeInstance:
                 add_note = getattr(error, "add_note", None)
                 if restore_error is not None and callable(add_note):
                     add_note("run-entry temporal rollback also failed: %s" % restore_error)
+            if console_session is not None:
+                from pops.runtime._console_run import safe_console_failed
+
+                safe_console_failed(
+                    console_session,
+                    error,
+                    accepted_steps=steps,
+                    final_time=float(native.time()),
+                )
             raise
         finally:
             self._output_root = previous_root
-        return RunReport(
+        report = RunReport(
             accepted_steps=steps,
             rejected_steps=rejected_steps,
             final_time=native.time(),
@@ -1146,6 +1163,11 @@ class RuntimeInstance:
             field_providers=_field_provider_evidence(
                 self._install_plan, self._layout_plan, self._executor),
         )
+        if console_session is not None:
+            from pops.runtime._console_run import safe_console_completed
+
+            safe_console_completed(console_session, report)
+        return report
 
     def _checkpoint_payload(self, path: Any) -> str:
         from pops.output._checkpoint_collective import (

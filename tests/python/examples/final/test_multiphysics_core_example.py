@@ -38,10 +38,11 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
     assert "PoPS final multiphysics acceptance:" in completed.stdout
     assert "bit-identical restart: step 2" in completed.stdout
 
-    from pops.output import read_hdf5, read_paraview
+    from pops.output import HDF5, ParaView
 
-    hdf5 = read_hdf5(output / "accepted" / "two_fluid.h5")
-    paraview = read_paraview(output / "accepted" / "two_fluid.vtu")
+    hdf5 = HDF5().reopen_series(output / "accepted" / "state" / "two_fluid").latest
+    paraview = ParaView().reopen_series(
+        output / "accepted" / "visualization" / "two_fluid").latest
     assert hdf5.output_identity.token in completed.stdout
     assert paraview.output_identity.token in completed.stdout
 

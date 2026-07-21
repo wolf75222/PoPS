@@ -98,6 +98,18 @@ def test_public_native_stub_surface_is_closed_and_backed_by_cpp():
     assert "_AmrSystem" not in STUB.read_text(encoding="utf-8")
 
 
+def test_runtime_environment_stub_exposes_exact_kokkos_concurrency():
+    tree = _tree()
+    report = _classes(tree)["_RuntimeEnvironmentReport"]
+    assert _annotated_fields(report)["kokkos_concurrency"] == "int"
+
+    function = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "runtime_environment_report"
+    )
+    assert ast.unparse(function.returns) == "_RuntimeEnvironmentReport"
+
+
 def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():
     routes = set()
     for path in COMPILE_DRIVERS:

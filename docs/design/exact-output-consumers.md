@@ -22,6 +22,41 @@ HDF5(mode=ParallelMode.PER_RANK)
 ParaView(mode=ParallelMode.ROOT)
 ```
 
+La cible d'un `ScientificOutput` est un nom logique, jamais un nom de fichier :
+
+```python
+OUTPUT_FORMAT = ParaView()  # remplacer seulement ParaView par HDF5 ou NPZ
+
+ScientificOutput(
+    format=OUTPUT_FORMAT,
+    schedule=every(100, clock=program.clock),
+    fields=(tracer_U,),
+    target="solution/tracer",
+)
+```
+
+Le fournisseur possède l'extension. Une cible comme `solution/tracer.vtu` est refusée dès
+l'authoring, avant le bind ; elle empêcherait le changement de format et entrerait en collision au
+deuxième échantillon. Chaque pas accepté dû publie immédiatement un fichier distinct sous le chemin
+logique. Une capability structurelle, distincte du writer, entretient ensuite atomiquement un
+catalogue `series__f<identité-de-famille><extension>.series`. Cette identité couvre le provider, la
+sélection complète et le run ; deux timelines déposées sous le même chemin restent séparées.
+`format.reopen(path)` authentifie un fichier et
+`format.reopen_series(path)` valide le catalogue, ses chemins, ses temps et leur ordre sans charger
+tous les champs historiques. `series.latest` authentifie le dernier fichier ; `series.verify()`
+rouvre toute la série à la demande, un membre à la fois.
+Le répertoire logique suffit tant qu'il ne contient qu'une timeline. Après plusieurs runs ou
+familles, cette recherche devient volontairement ambiguë : l'appelant transmet alors le chemin
+exact `series__f….<extension>.series` affiché lors du run.
+La série est activée pour les modes partagés que le format sait réellement écrire : `SERIAL` et
+`ROOT` pour NPZ et ParaView, plus `COLLECTIVE` pour HDF5. Elle est désactivée pour `PER_RANK`, qui
+exige un provider de collection parallèle au lieu de présenter plusieurs morceaux de rang comme
+plusieurs instants.
+
+Un provider extensible peut exposer la même petite interface `ScientificSeriesCatalog`
+(`catalog_data`, `publish`, `reopen`). Le publisher runtime orchestre cette capability sans branche
+sur HDF5, NPZ ou VTK et conserve l'autorité de l'artefact tant que le catalogue n'est pas publié.
+
 `ParallelMode` is part of the format identity; it is never inferred from process globals, rank
 count, target suffix, or writer availability:
 
@@ -116,7 +151,10 @@ re-emission; a rank-local `KeyboardInterrupt`/`SystemExit` cannot split collecti
 - ParaView is one native VTK XML UnstructuredGrid (`.vtu`) with inline binary arrays. Selected AMR
   levels retain physical geometry, layout ordinal, valid-box mask, coarse coverage and metric volume;
   cells outside the declared AMR boxes are not emitted. `read_paraview()` parses
-  the native XML and authenticates the selected arrays. The currently proved ParaView route is 2D,
+  the native XML and authenticates the selected arrays. Logical fields use readable deterministic
+  block/handle names, and vector components retain their declared labels. The companion
+  `.vtu.series` records every exact physical time while each VTU also remains self-describing through
+  `TimeValue`. The currently proved ParaView route is 2D,
   cell-centered data; node/face data and unsupported VTK scalar dtypes are rejected before any
   temporary is created rather than recentered or converted. Supported selected arrays preserve their
   exact dtype; zero padding outside each array's authenticated layout range is structural VTK storage.

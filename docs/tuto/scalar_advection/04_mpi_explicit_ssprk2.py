@@ -9,7 +9,6 @@ PoPS, sans mpi4py.
 # ruff: noqa: E402
 
 from fractions import Fraction
-import time
 
 import numpy as np
 
@@ -28,7 +27,6 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.representations import Conservative
-from pops.runtime_environment import runtime_environment_report
 from pops.spaces import CellState
 from pops.time import AdaptiveCFL, StagePoint, TimePoint
 
@@ -174,28 +172,14 @@ resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 
 execution_context = pops.ExecutionContext.mpi_world(artifact)
-communicator = execution_context.communicator.identity
-environment = runtime_environment_report()
-backend = str(environment["kokkos_backend"])
-rank = int(execution_context.communicator.handle.rank)
 simulation = pops.bind(
     artifact,
     initial_state={"tracer": initial_state},
     resources={"execution_context": execution_context},
 )
 
-start = time.perf_counter()
-report = pops.run(
+pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
 )
-elapsed_seconds = time.perf_counter() - start
-
-print("PoPS MPI scalar-advection tutorial finished on rank %d" % rank)
-print("  program          : explicit pops.Program SSPRK2")
-print("  Kokkos backend   : %s" % backend)
-print("  communicator     : %s" % communicator)
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
-print("  elapsed          : %.6f s" % elapsed_seconds)

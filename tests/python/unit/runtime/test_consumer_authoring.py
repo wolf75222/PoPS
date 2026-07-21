@@ -143,6 +143,25 @@ def test_embedded_diagnostic_identity_is_qualified_by_its_consumer():
 def test_output_format_options_refuse_python_truthiness_coercion() -> None:
     with pytest.raises(TypeError, match="exact pops.output.ParallelMode"):
         HDF5(mode="serial")
+    with pytest.raises(TypeError, match="exact bool or None"):
+        HDF5(series=1)
+    assert HDF5().consumer_data()["options"] == {"mode": "serial", "series": True}
+    assert ParaView().consumer_data()["options"] == {"mode": "serial", "series": True}
+    assert ParaView(mode=ParallelMode.PER_RANK).consumer_data()["options"] == {
+        "mode": "per_rank", "series": False,
+    }
+
+
+def test_scientific_output_target_is_logical_and_format_independent() -> None:
+    case, _block, state = _case()
+    schedule = every(1, clock=Clock("macro", owner=case.owner_path))
+    with pytest.raises(ValueError, match="must not contain a file suffix"):
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            target="solution/tracer.vtu",
+        )
 
 
 def test_paraview_single_layout_contract_fails_during_resolution():
