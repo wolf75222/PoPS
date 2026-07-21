@@ -944,6 +944,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
         in python_prewarm_block
     assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
+    assert 'if [ "${{ matrix.lane }}" = "amr-block" ]; then' in python_prewarm_block
+    assert 'lane_parallelism=2' in python_prewarm_block
+    assert '--parallel "$lane_parallelism"' in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
     # three would upload its payload three times and erase the cold-build wall-time gain.
     assert "Restore prewarm ccache" not in python_prewarm_block

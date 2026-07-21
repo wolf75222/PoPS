@@ -699,8 +699,17 @@ jobs:
               --contract-file "$RUNNER_TEMP/python-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
+          # The AMR block seams are the only lane whose four simultaneous GCC frontends exhaust a
+          # 16 GiB hosted runner (observed MemAvailable: 9.3 GiB -> 16 MiB before SIGTERM). Keep the
+          # three independent lanes concurrent and all objects at O3, but cap this lane's internal
+          # compiler fan-out. Other lanes retain all four runner cores.
+          lane_parallelism=4
+          if [ "${{ matrix.lane }}" = "amr-block" ]; then
+            lane_parallelism=2
+          fi
           run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m \
-            cmake --build --preset ci-kokkos-python --target "${object_targets[@]}"
+            cmake --build --preset ci-kokkos-python --parallel "$lane_parallelism" \
+              --target "${object_targets[@]}"
           ccache -s
           # ccache already compresses its payload. A tar keeps the content-addressed directory and
           # lets the final job merge lane stores deterministically without publishing object files.
