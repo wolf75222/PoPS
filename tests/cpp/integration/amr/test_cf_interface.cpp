@@ -80,7 +80,7 @@ TEST(test_cf_interface, Runs) {
   // [4..11]x[4..11] et [12..19]x[4..11] -> empreintes [2..5] et [6..9] en x. Le bord droit du
   // premier (I1+1 = 6) est alors couvert par le second.
   BoxArray two(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}, Box2D{{12, 4}, {19, 11}}});
-  CoarseFineInterface cfi2(Box2D{{0, 0}, {15, 7}}, two);
+  CoarseFineInterface cfi2(Box2D{{0, 0}, {15, 7}}, two, Periodicity{false, false});
   EXPECT_TRUE(cfi2.covered(6, 2)) << "cfi2_joint_couvert";
   FluxRegister ref2(Box2D{{1, 1}, {10, 6}}, nc);
   cfi2.route_reflux(g, dx, dy, dt, ref2, nc);  // g = premier patch (empreinte [2..5])
