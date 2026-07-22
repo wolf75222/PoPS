@@ -551,8 +551,14 @@ modules Python Catalyst 2 et Conduit, ainsi que l'implementation Catalyst `parav
 l'environnement qui execute PoPS :
 
 ```bash
-POPS_CATALYST=1 python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
+conda activate pops
+POPS_CATALYST=1 scripts/paraview_python.sh \
+  docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 ```
+
+Cette commande utilise le lanceur neutre requis par le bundle macOS. Sur une installation ou
+`catalyst`, `catalyst_conduit` et `paraview` sont deja importables depuis le Python de PoPS, la
+commande directe `POPS_CATALYST=1 python ...` reste valable.
 
 La declaration du tutoriel utilise la valeur par defaut `implementation="paraview"`. PoPS transmet ce
 choix a `catalyst_load/implementation`; il ne considere donc pas un chargement du stub Catalyst comme
@@ -577,11 +583,40 @@ n'est pas presente comme une version propre a l'implementation.
 La declaration garde priorite sur l'environnement : `CATALYST_IMPLEMENTATION_PREFER_ENV` doit etre
 absent ou vide.
 
-Cette variante OpenMP utilise `LiveVisualization(..., mode=ParallelMode.SERIAL)`. Pour l'instant,
-PoPS ne supporte pas la visualisation live dans un calcul MPI : `ROOT`, `PER_RANK` et `COLLECTIVE`
-sont refuses pendant l'authoring, et une declaration serie ne peut pas etre liee a un contexte MPI.
-PoPS ne transmet donc jamais `catalyst/mpi_comm`. Pour suivre un calcul MPI pendant son execution,
-utiliser les sorties progressives PVTU ou HDF5 avec `AsyncScientificOutput`.
+Cette variante OpenMP utilise `LiveVisualization(..., mode=ParallelMode.SERIAL)`. Dans un calcul
+MPI, le provider integre accepte `ParallelMode.COLLECTIVE` : chaque rang fournit ses domaines locaux
+sur une lane dupliquee et PoPS transmet son handle Fortran par `catalyst/mpi_comm`. `ROOT` et
+`PER_RANK` restent refuses, et une tentative collective ne peut pas etre rejouee
+(`max_attempts=1`). Les sorties progressives PVTU ou HDF5 avec `AsyncScientificOutput` restent une
+voie independante du live.
+
+Le bundle macOS de ParaView lie ses modules Catalyst a son Python prive. Il ne faut donc pas ajouter
+son dossier `Python` au Python Conda. Le lanceur neutre charge ce Python sans demarrer
+`pvpython`/`pvbatch`, puis laisse PoPS initialiser MPI avec `MPI_THREAD_MULTIPLE` avant Catalyst :
+
+```bash
+conda activate pops
+scripts/paraview_python.sh --mpi 2 mon_calcul_catalyst_collectif.py
+```
+
+Le chemin se configure avec `POPS_PARAVIEW_ROOT` ou `--paraview-root`. Le probe reel du depot est
+`tests/python/integration/mpi/probe_catalyst_live_mpi.py`.
+
+Le gate bout-en-bout lance aussi un vrai client ParaView separe, attend deux frames, extrait le
+maillage distribue, verifie les huit cellules et la plage de `U`, applique Viridis avec
+`Surface With Edges`, rend une image, puis exige une fermeture propre :
+
+```bash
+conda activate pops
+scripts/check_catalyst_live_mpi.sh
+```
+
+La pipeline live fournie est deliberement sans `RenderView` local : elle publie la source distribuee
+`mesh` et le champ `U`, puis la vue est creee dans le client ParaView connecte. C'est necessaire avec
+le backend Cocoa du bundle macOS, qui interdit de creer une fenetre depuis le worker asynchrone.
+La presentation reproductible `U`/Viridis/`Surface With Edges` reste celle de `ParaViewPreset` et du
+`.pvsm` materiel de la sortie fichier. Une pipeline Catalyst qui rend elle-meme des images depuis le
+worker exige une distribution ParaView munie d'un backend de rendu hors-ecran compatible threads.
 
 Le worker PoPS est l'unique couche asynchrone : l'async interne Catalyst est force a zero et un
 `CATALYST_ASYNC_ENABLED` actif est refuse, de sorte que le recu suit la fin de

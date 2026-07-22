@@ -182,14 +182,22 @@ def identity_from_token(token: Any, domain: str, where: str) -> Identity:
 
 
 def _series_representation_data(format_data: Mapping[str, Any]) -> dict[str, Any]:
-    """Return artifact-representation evidence without the catalogue toggle itself."""
+    """Return representation evidence without duplicated publication topology.
+
+    The exact parallel mode is already authenticated by the publication selection.  Keeping it a
+    second time in the representation made a series written by an MPI-enabled runtime impossible
+    to reopen through the format's default reader, even though every member records the real mode.
+    """
     data = thaw_data(format_data)
     if type(data) is not dict:
         raise TypeError("scientific output representation must be canonical mapping data")
+    parallel_mode = data.pop("parallel_mode", None)
     options = data.get("options")
     if isinstance(options, Mapping):
         options = dict(options)
         options.pop("series", None)
+        if "mode" in options and options["mode"] == parallel_mode:
+            options.pop("mode")
         data["options"] = options
     return data
 

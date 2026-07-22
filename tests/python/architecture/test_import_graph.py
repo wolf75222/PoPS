@@ -82,6 +82,7 @@ LAYERS = set(ALLOWED)
 NATIVE_IMPORT_PHASE_OWNERS = {
     "pops._bootstrap": "package-bootstrap",
     "pops._native_collectives": "runtime-collective-call",
+    "pops._paraview_python_bootstrap": "paraview-neutral-host-bootstrap",
     "pops._platform_contracts": "platform-contract-resolution",
     "pops.codegen._compiled_artifact": "compiled-artifact-sealing",
     "pops.codegen.toolchain": "runtime-compiler-probe",

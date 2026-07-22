@@ -10,17 +10,17 @@ import math
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
+from pops._geometry_contracts import (
+    CARTESIAN_2D_COORDINATES,
+    CARTESIAN_CELL_AREA,
+    POLAR_ANNULUS_2D_COORDINATES,
+    POLAR_ANNULUS_CELL_AREA,
+)
 from pops.model import Handle, OwnerKind, OwnerPath
 
 
 SCHEMA_VERSION = 1
 SUBJECT_KINDS = frozenset(("state", "field", "block"))
-
-CARTESIAN_2D_COORDINATES = "pops://coordinates/cartesian-2d@1"
-POLAR_ANNULUS_2D_COORDINATES = "pops://coordinates/polar-annulus-2d@1"
-CARTESIAN_CELL_AREA = "pops://cell-measures/cartesian-area@1"
-POLAR_ANNULUS_CELL_AREA = "pops://cell-measures/polar-annulus-area@1"
-
 
 class LayoutRepresentation(Enum):
     """Versioned numerical meaning of a mapping port's stored values."""

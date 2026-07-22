@@ -351,6 +351,9 @@ class PostCommitObserverQueue:
             from pops._native_collectives import require_communicator
 
             require_communicator(worker_communicator, allow_world=False)
+            if not authority["worker_mpi"]:
+                raise ValueError(
+                    "a serial observer session must not receive a worker MPI lane")
             if max_attempts != 1:
                 raise ValueError(
                     "MPI observer queues require max_attempts=1 after a collective call")

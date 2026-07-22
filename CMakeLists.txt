@@ -370,6 +370,11 @@ if(POPS_USE_HDF5)
   # Some parallel-HDF5 package configurations reference MPI::MPI_C from their imported targets.
   # Materialize that component only on the collective HDF5 route; MPI without HDF5 stays CXX-only.
   find_package(MPI REQUIRED COMPONENTS C CXX)
+  # FindHDF5 tries an HDF5Config.cmake before compiler wrappers even when the caller requests
+  # MODULE mode.  A system serial config can therefore shadow the active environment's h5pcc.
+  # This route requires the wrapper-authenticated parallel installation, so skip that inner
+  # config-mode probe and prefer h5pcc over h5cc.
+  set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)
   set(HDF5_PREFER_PARALLEL TRUE)
   find_package(HDF5 MODULE REQUIRED COMPONENTS C)
   # FindHDF5's imported target carries platform-specific compile definitions and transitive

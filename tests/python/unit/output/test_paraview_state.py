@@ -201,12 +201,12 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 log = Path(__file__).with_suffix('.log')
-if sys.argv[1:] == ['--version']:
+if sys.argv[1:] == ['--no-mpi', '--version']:
     log.write_text('version\\n', encoding='utf-8')
     print('ParaView 6.1.1')
-elif len(sys.argv) == 4 and sys.argv[2] == '--save-state':
-    script = Path(sys.argv[1])
-    state = Path(sys.argv[3])
+elif len(sys.argv) == 5 and sys.argv[1] == '--no-mpi' and sys.argv[3] == '--save-state':
+    script = Path(sys.argv[2])
+    state = Path(sys.argv[4])
     assert script.is_file()
     assert script.with_suffix('.json').is_file()
     assert (script.parent / 'solution.pvd').is_file()
@@ -217,8 +217,9 @@ elif len(sys.argv) == 4 and sys.argv[2] == '--save-state':
     )
     with log.open('a', encoding='utf-8') as stream:
         stream.write('materialize\\n')
-elif len(sys.argv) == 5 and sys.argv[1] == '-c' and 'LoadState' in sys.argv[2]:
-    state, data_directory = Path(sys.argv[3]), Path(sys.argv[4])
+elif (len(sys.argv) == 6 and sys.argv[1:3] == ['--no-mpi', '-c']
+      and 'LoadState' in sys.argv[3]):
+    state, data_directory = Path(sys.argv[4]), Path(sys.argv[5])
     assert ET.parse(state).getroot().find('./ServerManagerState') is not None
     assert (data_directory / 'solution.pvd').is_file()
     with log.open('a', encoding='utf-8') as stream:

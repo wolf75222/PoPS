@@ -123,8 +123,10 @@ case "$(uname)" in
       exit 1
     fi
     conda env config vars set -n "$ENV_NAME" \
-      CC=/usr/bin/clang CXX=/usr/bin/clang++ >/dev/null
-    echo "macOS: CC/CXX -> AppleClang pinned in the env (exported on each activation, priority over PATH)."
+      CC=/usr/bin/clang CXX=/usr/bin/clang++ \
+      MPICH_CC=/usr/bin/clang MPICH_CXX=/usr/bin/clang++ >/dev/null
+    echo "macOS: CC/CXX and MPICH wrappers -> AppleClang pinned in the env "\
+         "(exported on each activation, priority over PATH)."
     ;;
   Linux)
     echo "--- conda C++23 toolchain (gcc) ---"
@@ -152,7 +154,8 @@ conda env config vars set -n "$ENV_NAME" \
   CMAKE_PREFIX_PATH="$POPS_PREFIX" \
   POPS_CACHE_DIR="$HERE/.pops_cache" >/dev/null
 mkdir -p "$HERE/.pops_cache"
-echo "env vars pinned: POPS_INCLUDE, POPS_KOKKOS_ROOT, Kokkos_ROOT, CMAKE_PREFIX_PATH, POPS_CACHE_DIR (prefix: $POPS_PREFIX)."
+echo "env vars pinned: PoPS/Kokkos discovery plus platform compiler wrappers "\
+     "(prefix: $POPS_PREFIX)."
 
 # --- final diagnostic --------------------------------------------------------------------------------
 echo ""

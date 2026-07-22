@@ -123,6 +123,12 @@ if [[ $WITH_MPI -eq 1 ]]; then
   # discovery is rejected by CMake; there is no reduced-capability `--mpi` artifact.
   export POPS_USE_MPI=ON
   export POPS_USE_HDF5=ON
+  # Conda's macOS MPICH wrappers retain the compiler triplet from their build host.  Route them to
+  # the already-selected AppleClang explicitly so h5pcc's real compile probe is authoritative.
+  if [[ "$(uname)" == Darwin && -x "$CONDA_PREFIX/bin/mpichversion" ]]; then
+    export MPICH_CC="${MPICH_CC:-${CC:-/usr/bin/clang}}"
+    export MPICH_CXX="${MPICH_CXX:-${CXX:-/usr/bin/clang++}}"
+  fi
   echo "MPI backend: ON; native parallel HDF5: ON"
 fi
 cd "$HERE"
@@ -178,8 +184,8 @@ fi
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
 # output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
 # verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
+PYTHONPATH='' PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
-PYTHONPATH= PYTHONNOUSERSITE=1 \
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
   python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"

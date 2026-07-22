@@ -19,6 +19,12 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
+from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
+    CARTESIAN_2D_COORDINATES,
+    CARTESIAN_3D_COORDINATES,
+    POLAR_ANNULUS_2D_COORDINATES,
+)
 from pops.output._writers.common import (
     OutputPublicationReceipt,
     ReopenedOutput,
@@ -42,10 +48,6 @@ from pops.output.data import (
 )
 from pops.identity import Identity, make_identity
 from pops._native_collectives import allgather_value, gather_bytes
-from pops.mesh._layout_plan_contracts import (
-    CARTESIAN_2D_COORDINATES,
-    POLAR_ANNULUS_2D_COORDINATES,
-)
 
 
 _VTK_TYPES = {
@@ -76,6 +78,33 @@ class ReopenedParaViewIndex:
     manifest: dict[str, Any]
     paths: tuple[Path, ...]
     output_identity: Identity
+
+    @property
+    def files(self) -> tuple[Path, ...]:
+        """Return the collection members using the generic series vocabulary."""
+        return self.paths
+
+    @property
+    def times(self) -> tuple[float, ...]:
+        """Return the authenticated physical-time axis of a PVD collection."""
+        if self.kind != "pvd":
+            raise RuntimeError("only a ParaView PVD index has a temporal axis")
+        return _pvd_time_values(self.manifest.get("entries", ()))
+
+    @property
+    def latest(self) -> ReopenedOutput | ReopenedParaViewIndex:
+        """Reopen the latest authenticated member of a PVD collection."""
+        if self.kind != "pvd":
+            raise RuntimeError("only a ParaView PVD index has a latest sample")
+        if not self.paths:
+            raise RuntimeError("ParaView PVD collection has no samples")
+        return read_paraview(self.paths[-1])
+
+    def verify(self) -> ReopenedParaViewIndex:
+        """Reopen every referenced component while retaining no field arrays."""
+        for path in self.paths:
+            read_paraview(path)
+        return self
 
 
 def _exception_text(error: BaseException) -> str:
@@ -180,7 +209,7 @@ def _pvpython_capability(requested: str | None) -> tuple[str, str]:
         )
     try:
         completed = subprocess.run(
-            [candidate, "--version"],
+            [candidate, "--no-mpi", "--version"],
             check=True,
             capture_output=True,
             text=True,
@@ -293,9 +322,9 @@ def _physical_point_coordinates(
     if len(logical_indices) != dimension:
         raise ValueError("ParaView point indices differ from geometry spatial rank")
     cartesian = {
-        1: "pops://coordinates/cartesian-1d@1",
+        1: CARTESIAN_1D_COORDINATES,
         2: CARTESIAN_2D_COORDINATES,
-        3: "pops://coordinates/cartesian-3d@1",
+        3: CARTESIAN_3D_COORDINATES,
     }
     points = np.zeros((len(logical_indices[0]), 3), dtype="<f8")
     if geometry.coordinate_system == cartesian[dimension]:
@@ -952,7 +981,8 @@ def _stage_pvsm(
         generated = Path(work) / target.name
         try:
             subprocess.run(
-                [pvpython, "-c", _PVSM_SAVE_SCRIPT, str(pvd.target), str(generated),
+                [pvpython, "--no-mpi", "-c", _PVSM_SAVE_SCRIPT,
+                 str(pvd.target), str(generated),
                  json_text(config)],
                 check=True,
                 capture_output=True,
@@ -999,7 +1029,8 @@ def _stage_pvsm(
     )
     try:
         subprocess.run(
-            [pvpython, "-c", _PVSM_LOAD_SCRIPT, str(staged.temporary), str(target.parent)],
+            [pvpython, "--no-mpi", "-c", _PVSM_LOAD_SCRIPT,
+             str(staged.temporary), str(target.parent)],
             check=True,
             capture_output=True,
             text=True,
@@ -1221,7 +1252,11 @@ class _ParaViewWriterSession:
                         authority = authorities[owner]
                         target = root_targets[owner]
                         rank_request = replace(self._request, rank=owner)
-                        reopened = read_paraview(authority.path).require_selection(rank_request)
+                        reopened = read_paraview(authority.path)
+                        if type(reopened) is not ReopenedOutput:
+                            raise TypeError(
+                                "relayed ParaView VTU reopened as a collection index")
+                        reopened.require_selection(rank_request)
                         identity = Identity.from_token(row["output_identity"])
                         if reopened.output_identity != identity:
                             raise ValueError(
@@ -1271,9 +1306,10 @@ class _ParaViewWriterSession:
             or self._request.rank == 0
         if self._communicator is None:
             if active:
-                self._vtu = self._writer._stage_file(
+                staged_vtu: _StagedOutputFile = self._writer._stage_file(
                     self._snapshot, self._request, self._target)
-                self._schema = _vtu_schema(self._vtu.temporary)
+                self._vtu = staged_vtu
+                self._schema = _vtu_schema(staged_vtu.temporary)
             rows = ({
                 "rank": self._request.rank,
                 "artifact": None if self._vtu is None else {
@@ -1290,16 +1326,17 @@ class _ParaViewWriterSession:
             artifact = None
             try:
                 if active:
-                    self._vtu = self._writer._stage_file(
+                    staged_vtu = self._writer._stage_file(
                         self._snapshot, self._request, self._target)
-                    self._schema = _vtu_schema(self._vtu.temporary)
+                    self._vtu = staged_vtu
+                    self._schema = _vtu_schema(staged_vtu.temporary)
                     artifact = {
                         "rank": self._request.rank,
                         "target": str(self._target.expanduser().resolve()),
-                        "output_identity": self._vtu.output_identity.token,
+                        "output_identity": staged_vtu.output_identity.token,
                         "schema": self._schema,
                         "selection_identity": self._request.publication_identity.token,
-                        "byte_size": self._vtu.temporary.stat().st_size,
+                        "byte_size": staged_vtu.temporary.stat().st_size,
                     }
             except BaseException as exc:
                 error = _exception_text(exc)
@@ -1341,10 +1378,14 @@ class _ParaViewWriterSession:
                     pvsm=self._writer._pvsm,
                 )
                 if self._writer._state is not None:
+                    schema = self._schema
+                    if schema is None:
+                        raise RuntimeError(
+                            "ParaView state staging requires an authenticated VTU schema")
                     self._portable_script, self._portable_manifest = _stage_portable_state(
                         self._pvd,
                         self._request,
-                        self._schema,
+                        schema,
                         self._writer._preset,
                     )
             self._root_phase("PVD staging", stage_pvd)
@@ -1511,7 +1552,8 @@ class ParaViewWriter:
         self._placement = resolved_placement
         self._state = state
         self._pvsm = type(state) is MaterializedPVSM
-        self._pvpython_request = state.pvpython if self._pvsm else None
+        self._pvpython_request = (
+            state.pvpython if type(state) is MaterializedPVSM else None)
         self._pvpython: str | None = None
         self._pvpython_version: str | None = None
         if self._pvsm:
@@ -1878,7 +1920,10 @@ class ParaViewWriter:
                 stream.write(document)
                 stream.flush()
                 os.fsync(stream.fileno())
-            read_paraview(temporary.path).require_selection(request)
+            reopened = read_paraview(temporary.path)
+            if type(reopened) is not ReopenedOutput:
+                raise TypeError("staged ParaView VTU reopened as a collection index")
+            reopened.require_selection(request)
             return _StagedOutputFile(
                 temporary,
                 target,
@@ -1976,8 +2021,67 @@ def read_paraview_parallel(path: Any) -> ReopenedParaViewIndex:
     return _read_pvtu(path, verify_components=True)
 
 
+def _resolve_paraview_series_path(path: Any) -> Path:
+    """Resolve one directory to the latest unambiguous authenticated PVD index."""
+    unresolved = Path(path).expanduser()
+    if unresolved.is_symlink():
+        raise ValueError("ParaView series path must not be a symbolic link")
+    if not unresolved.is_dir():
+        if unresolved.parent.is_symlink():
+            raise ValueError("ParaView series parent must not be a symbolic link")
+        return unresolved
+
+    candidates = tuple(sorted(unresolved.glob("*.pvd"), key=lambda item: item.name))
+    if not candidates:
+        raise FileNotFoundError("ParaView output directory has no PVD time series")
+
+    inspected = []
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError("ParaView PVD candidate must be one regular file")
+        reopened = _read_pvd(candidate, verify_components=False)
+        series_token = reopened.manifest.get("series_identity")
+        try:
+            series_identity = Identity.from_token(series_token)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ParaView PVD has no valid series identity") from exc
+        if series_identity.domain != "paraview-series":
+            raise ValueError("ParaView PVD has an invalid series identity domain")
+        inspected.append((candidate, reopened, series_identity))
+
+    series_identities = {identity for _, _, identity in inspected}
+    if len(series_identities) != 1:
+        raise ValueError(
+            "ParaView output directory has multiple PVD time series; "
+            "pass one exact .pvd path"
+        )
+
+    largest_size = max(len(reopened.manifest["entries"])
+                       for _, reopened, _ in inspected)
+    largest = [
+        (candidate, reopened)
+        for candidate, reopened, _ in inspected
+        if len(reopened.manifest["entries"]) == largest_size
+    ]
+    expected_entries = largest[0][1].manifest["entries"]
+    if any(reopened.manifest["entries"] != expected_entries
+           for _, reopened in largest[1:]):
+        raise ValueError(
+            "ParaView output directory has divergent PVD histories; "
+            "pass one exact .pvd path"
+        )
+    for _, reopened, _ in inspected:
+        entries = reopened.manifest["entries"]
+        if entries != expected_entries[:len(entries)]:
+            raise ValueError(
+                "ParaView output directory has divergent PVD histories; "
+                "pass one exact .pvd path"
+            )
+    return largest[0][0]
+
+
 def read_paraview_series(path: Any) -> ReopenedParaViewIndex:
-    return _read_pvd(path, verify_components=True)
+    return _read_pvd(_resolve_paraview_series_path(path), verify_components=True)
 
 
 __all__ = [

@@ -638,10 +638,12 @@ Synchronous HDF5 drains that FIFO before entering its writer. The default PVTU p
 bounded VTU chunks through the lane to rank zero, so the published dataset does not require a shared filesystem;
 `SharedDirectory()` is the explicit direct-publication contract.
 
-`LiveVisualization` and the built-in Catalyst provider are currently single-rank only. Authoring
-rejects `ROOT`, `PER_RANK` and `COLLECTIVE`, runtime binding requires a proved serial execution
-context, and no `catalyst/mpi_comm` is passed. MPI runs remain observable through progressive PVTU
-or HDF5 `AsyncScientificOutput` artifacts.
+`LiveVisualization` and the built-in Catalyst provider accept `SERIAL` and `COLLECTIVE`. The MPI
+route uses the same duplicated observer lane as collective asynchronous output, passes its exact
+Fortran handle through `catalyst/mpi_comm`, and agrees local preparation failures before entering
+each Catalyst collective. `ROOT` and `PER_RANK` remain invalid because the Catalyst lifecycle is
+collective. Progressive PVTU or HDF5 `AsyncScientificOutput` artifacts remain independent of the
+live connection.
 
 The built-in Catalyst provider permits one combined pipeline consumer and one simulation run per
 `RuntimeInstance`. Its one-shot process-global lifecycle reservation is never released; another
@@ -651,7 +653,11 @@ runtime owns a different FIFO and cannot jointly order process-global library st
 
 The PoPS post-commit worker is the sole asynchronous layer: Catalyst internal async is forced off and
 an active inherited `CATALYST_ASYNC_ENABLED` is rejected, so `catalyst.execute` completes before its
-delivery receipt. A `DurableJournal` does not widen this
+delivery receipt. A worker-safe live pipeline may publish sources and filters, but a local render
+view additionally requires a ParaView off-screen backend that supports creation outside the main
+thread. In particular, the macOS Cocoa backend cannot create `RenderView` from this worker; the
+tutorial keeps its live pipeline renderless and carries reproducible presentation in the file-output
+recipe/PVSM instead. A `DurableJournal` does not widen this
 concurrency contract. Its at-least-once delivery guarantee starts only after the frame reaches the
 durable `pending` handoff; that handoff is not atomic with the accepted transaction or a checkpoint.
 Complete `delivered` archives are retained as evidence and require an application-managed storage

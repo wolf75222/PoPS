@@ -216,11 +216,67 @@ def _serial_context():
     return SimpleNamespace(communicator=SimpleNamespace(identity="serial"))
 
 
+def _collective_context(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    world_size: int = 2,
+    lane_size: int = 2,
+    peer_error: str | None = None,
+    divergent_initialize_authority: bool = False,
+):
+    import pops._native_collectives as native_collectives
+
+    world = SimpleNamespace(
+        identity="MPI_COMM_WORLD", active=True, rank=0, size=world_size)
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/catalyst-test",
+        active=True,
+        rank=0,
+        size=lane_size,
+        fortran_handle=73,
+    )
+    agreements = []
+
+    def require_world(communicator):
+        assert communicator is world
+        return communicator
+
+    def require_duplicate(communicator, *, allow_world=True):
+        assert communicator is lane
+        assert allow_world is False
+        return communicator
+
+    def allgather_value(communicator, value):
+        assert communicator is lane
+        agreements.append(dict(value))
+        rows = [dict(value, rank=owner) for owner in range(lane.size)]
+        if peer_error is not None and len(rows) > 1 and "error" in rows[1]:
+            rows[1]["error"] = peer_error
+        if divergent_initialize_authority and len(rows) > 1 \
+                and isinstance(rows[1].get("value"), dict) \
+                and "pipeline_sha256" in rows[1]["value"]:
+            rows[1]["value"] = dict(
+                rows[1]["value"], pipeline_sha256="0" * 64)
+        return tuple(rows)
+
+    monkeypatch.setattr(native_collectives, "require_world", require_world)
+    monkeypatch.setattr(native_collectives, "require_communicator", require_duplicate)
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "allgather_value", allgather_value)
+    return (
+        SimpleNamespace(communicator=SimpleNamespace(
+            identity="MPI_COMM_WORLD", handle=world)),
+        lane,
+        agreements,
+    )
+
+
 @pytest.mark.parametrize(
     "mode",
-    (ParallelMode.ROOT, ParallelMode.PER_RANK, ParallelMode.COLLECTIVE),
+    (ParallelMode.ROOT, ParallelMode.PER_RANK),
 )
-def test_live_visualization_rejects_every_mpi_mode(mode: ParallelMode):
+def test_live_visualization_rejects_noncollective_mpi_modes(mode: ParallelMode):
     class _Provider:
         def consumer_data(self):
             return {
@@ -233,12 +289,45 @@ def test_live_visualization_rejects_every_mpi_mode(mode: ParallelMode):
             raise AssertionError("rejected live declarations must not open a session")
 
     frame = _frame()
-    with pytest.raises(ValueError, match="MPI live visualization is not supported"):
+    with pytest.raises(ValueError, match="supports only SERIAL or COLLECTIVE mode"):
         LiveVisualization(
             observer=_Provider(),
             schedule=Schedule(Every(AcceptedStep(Clock("serial-live")), 1)),
             fields=(frame.snapshot.fields[0].key.reference,),
             mode=mode,
+        )
+
+
+def test_live_visualization_accepts_collective_catalyst_and_rejects_retry(
+    tmp_path: Path,
+):
+    pipeline = tmp_path / "collective_declaration.py"
+    pipeline.write_text("# collective Catalyst declaration\n")
+    frame = _frame()
+    observer = Catalyst(pipeline=str(pipeline))
+    schedule = Schedule(Every(AcceptedStep(Clock("collective-live")), 1))
+
+    declaration = LiveVisualization(
+        observer=observer,
+        schedule=schedule,
+        fields=(frame.snapshot.fields[0].key.reference,),
+        mode=ParallelMode.COLLECTIVE,
+    )
+
+    assert declaration.mode is ParallelMode.COLLECTIVE
+    assert declaration.options()["mode"] == "collective"
+    authoring = declaration.consumer_authoring()
+    assert len(authoring) == 1
+    assert authoring[0].parallel_mode is ParallelMode.COLLECTIVE
+    assert authoring[0].operation.consumer_data()["parallel_mode"] == "collective"
+
+    with pytest.raises(ValueError, match="requires max_attempts=1"):
+        LiveVisualization(
+            observer=observer,
+            schedule=schedule,
+            fields=(frame.snapshot.fields[0].key.reference,),
+            mode=ParallelMode.COLLECTIVE,
+            max_attempts=2,
         )
 
 
@@ -279,15 +368,23 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
         "catalyst/scripts/pops/args"] == ["--extract=volume"]
     execute_node = catalyst_module.operations[1][1]
     paths = execute_node.values
-    field_paths = [path for path in paths if path.endswith("/fields/temperature/values")]
-    assert len(field_paths) == 1
-    assert np.array_equal(paths[field_paths[0]], np.asarray([1.0, 2.0, 3.0, 4.0]))
-    assert any(path.endswith("/fields/vtkGhostType/values") for path in paths)
+    temperature_prefixes = [
+        path.removesuffix("/display_name") for path, value in paths.items()
+        if path.endswith("/display_name") and value == "temperature"
+    ]
+    assert len(temperature_prefixes) == 1
+    assert np.array_equal(
+        paths[temperature_prefixes[0] + "/values"],
+        np.asarray([1.0, 2.0, 3.0, 4.0]),
+    )
+    assert any(
+        path.endswith("/display_name") and value == "vtkGhostType"
+        for path, value in paths.items())
     assert paths["catalyst/channels/mesh/type"] == "multimesh"
     ghost_metadata = [
         value for path, value in paths.items()
-        if path.endswith(
-            "/state/metadata/vtk_fields/vtkGhostType/attribute_type")
+        if "/state/metadata/vtk_fields/" in path
+        and path.endswith("/attribute_type")
     ]
     assert ghost_metadata == ["Ghosts"]
     assert len(conduit_module.blueprint.mesh.verified_domains) == 1
@@ -399,13 +496,13 @@ def test_catalyst_maps_polar_annulus_to_explicit_cartesian_quads(tmp_path: Path)
     paths = catalyst_module.operations[1][1].values
     topology_types = [
         value for path, value in paths.items()
-        if path.endswith("/topologies/mesh/type")
+        if "/topologies/" in path and path.endswith("/type")
     ]
     assert topology_types == ["unstructured"]
     x = next(value for path, value in paths.items()
-             if path.endswith("/coordsets/coords/values/x"))
+             if "/coordsets/" in path and path.endswith("/values/x"))
     y = next(value for path, value in paths.items()
-             if path.endswith("/coordsets/coords/values/y"))
+             if "/coordsets/" in path and path.endswith("/values/y"))
     connectivity = next(value for path, value in paths.items()
                         if path.endswith("/elements/connectivity"))
     assert np.allclose(x[:3], [1.0, 1.5, 2.0])
@@ -470,14 +567,11 @@ def test_catalyst_uses_same_block_disambiguated_names_as_paraview_files(tmp_path
     session.finalize()
 
     paths = catalyst_module.operations[1][1].values
-    scientific = sorted(
-        path for path in paths
-        if "/fields/" in path and path.endswith("/values")
-        and not any(name in path for name in (
-            "pops_coverage", "pops_cell_volume", "vtkGhostType"))
-    )
-    assert any("/fields/fluid.rho/values" in path for path in scientific)
-    assert any("/fields/radiation.rho/values" in path for path in scientific)
+    display_names = {
+        value for path, value in paths.items()
+        if "/fields/" in path and path.endswith("/display_name")
+    }
+    assert {"fluid.rho", "radiation.rho"}.issubset(display_names)
 
 
 class _RetrySession:
@@ -617,13 +711,16 @@ def test_catalyst_rejects_an_mpi_execution_context_before_loading_modules(
     mpi_context = SimpleNamespace(
         communicator=SimpleNamespace(identity="MPI_COMM_WORLD"))
 
-    with pytest.raises(ValueError, match="serial execution only"):
+    with pytest.raises(ValueError, match="exact duplicated MPI_COMM_WORLD observer lane"):
         declaration.open_session(mpi_context)
 
     assert catalyst_module.operations == []
 
 
-def test_catalyst_rejects_a_worker_mpi_lane(tmp_path: Path):
+def test_catalyst_collective_session_authenticates_lane_and_passes_mpi_comm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     pipeline = tmp_path / "collective_pipeline.py"
     pipeline.write_text("# collective Catalyst pipeline\n")
     catalyst_module = _CatalystModule()
@@ -634,21 +731,150 @@ def test_catalyst_rejects_a_worker_mpi_lane(tmp_path: Path):
             conduit_module=_ConduitModule(),
         ),
     )
-    lane = SimpleNamespace(
-        identity="MPI_COMM_WORLD/observer/catalyst-test",
-        active=True,
-        rank=0,
-        size=2,
-        fortran_handle=73,
-    )
-    mpi_context = SimpleNamespace(
-        communicator=SimpleNamespace(identity="MPI_COMM_WORLD"))
+    mpi_context, lane, agreements = _collective_context(monkeypatch)
 
-    with pytest.raises(ValueError, match="serial execution only"):
+    session = declaration.open_runtime_session(
+        {"worker_communicator": lane}, mpi_context)
+    assert session.authority == {
+        "schema_version": 1,
+        "provider_id": "pops.output.catalyst-python.v1",
+        "delivery": "post_commit",
+        "threading": "dedicated_collective",
+        "worker_mpi": True,
+    }
+
+    frame = _frame(mode=ParallelMode.COLLECTIVE)
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    receipt = session.execute(frame)
+    session.finalize()
+
+    assert receipt.frame_identity == frame.identity
+    assert [operation for operation, _node in catalyst_module.operations] == [
+        "initialize", "execute", "finalize"]
+    assert catalyst_module.operations[0][1].values["catalyst/mpi_comm"] == 73
+    assert agreements
+    assert all(
+        row == {"rank": 0, "error": None}
+        or set(row) == {"rank", "value"}
+        for row in agreements)
+
+
+def test_catalyst_rejects_a_worker_lane_with_different_world_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "mismatched_collective_pipeline.py"
+    pipeline.write_text("# mismatched collective Catalyst pipeline\n")
+    catalyst_module = _CatalystModule()
+    declaration = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    )
+    mpi_context, lane, _agreements = _collective_context(
+        monkeypatch, world_size=3, lane_size=2)
+
+    with pytest.raises(ValueError, match="lane topology differs from MPI_COMM_WORLD"):
         declaration.open_runtime_session(
             {"worker_communicator": lane}, mpi_context)
 
     assert catalyst_module.operations == []
+
+
+def test_catalyst_collective_agreement_propagates_a_peer_initialize_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "peer_failure_pipeline.py"
+    pipeline.write_text("# peer failure Catalyst pipeline\n")
+    catalyst_module = _CatalystModule()
+    declaration = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    )
+    mpi_context, lane, agreements = _collective_context(
+        monkeypatch, peer_error="ValueError: rank-one pipeline failure")
+    session = declaration.open_runtime_session(
+        {"worker_communicator": lane}, mpi_context)
+
+    with pytest.raises(
+            RuntimeError,
+            match="Catalyst initialize failed collectively:.*rank 1:.*pipeline failure"):
+        session.initialize(ObserverRun(_identity("run", "peer-initialize-failure")))
+
+    assert agreements == [{"rank": 0, "error": None}]
+    assert catalyst_module.operations == []
+
+
+def test_catalyst_collective_rejects_rank_divergent_initialize_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "divergent_collective_pipeline.py"
+    pipeline.write_text("# divergent collective Catalyst pipeline\n")
+    catalyst_module = _CatalystModule()
+    declaration = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    )
+    mpi_context, lane, _agreements = _collective_context(
+        monkeypatch, divergent_initialize_authority=True)
+    session = declaration.open_runtime_session(
+        {"worker_communicator": lane}, mpi_context)
+
+    with pytest.raises(
+            RuntimeError, match="Catalyst initialize authority differs across ranks: 1"):
+        session.initialize(ObserverRun(_identity("run", "divergent-authority")))
+
+    assert catalyst_module.operations == []
+
+
+def test_catalyst_collective_rejects_a_frame_from_another_lane_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "frame_topology_pipeline.py"
+    pipeline.write_text("# frame topology Catalyst pipeline\n")
+    catalyst_module = _CatalystModule()
+    declaration = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    )
+    mpi_context, lane, _agreements = _collective_context(monkeypatch)
+    session = declaration.open_runtime_session(
+        {"worker_communicator": lane}, mpi_context)
+    frame = _frame(mode=ParallelMode.COLLECTIVE)
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    mismatched = ObserverFrame(
+        frame.snapshot,
+        OutputRequest(
+            frame.request.consumer_id,
+            frame.request.selection,
+            ParallelMode.COLLECTIVE,
+            rank=1,
+            size=2,
+        ),
+    )
+
+    with pytest.raises(
+            RuntimeError,
+            match="Catalyst execute failed collectively:.*exact worker MPI lane topology"):
+        session.execute(mismatched)
+
+    session.finalize()
+    assert [operation for operation, _node in catalyst_module.operations] == [
+        "initialize", "finalize"]
 
 
 def test_catalyst_conduit_import_prefers_paraview_name_then_external_fallback(monkeypatch):
@@ -766,6 +992,34 @@ def test_background_dispatcher_rejects_worker_mpi_without_a_duplicate_lane():
     with pytest.raises(ValueError, match="explicit duplicated worker lane"):
         PostCommitObserverQueue(
             session, ObserverRun(_identity("run", "mpi")), consumer_id="mpi-observer")
+
+
+def test_background_dispatcher_rejects_a_worker_lane_for_a_serial_session(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import pops._native_collectives as native_collectives
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/serial-session",
+        active=True,
+        rank=0,
+        size=2,
+    )
+
+    def require_duplicate(communicator, *, allow_world=True):
+        assert communicator is lane
+        assert allow_world is False
+        return communicator
+
+    monkeypatch.setattr(native_collectives, "require_communicator", require_duplicate)
+
+    with pytest.raises(ValueError, match="serial observer session must not receive"):
+        PostCommitObserverQueue(
+            _RetrySession(),
+            ObserverRun(_identity("run", "serial-session-with-lane")),
+            consumer_id="serial-session-with-lane",
+            worker_communicator=lane,
+        )
 
 
 def test_background_dispatcher_accepts_a_collective_session_with_duplicate_lane(

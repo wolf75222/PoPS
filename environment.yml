@@ -15,7 +15,7 @@
 #   - ONE single Python 3.12 (build AND import of the module -> no more "ModuleNotFoundError: pops._pops"
 #     from a cpython ABI divergence);
 #   - pybind11 present -> no network FetchContent nor deprecation warning;
-#   - Kokkos / OpenMPI / libomp installed -> find_package(Kokkos|MPI|OpenMP) succeeds once the env is
+#   - Kokkos / MPICH 4.1.2 / libomp installed -> find_package(Kokkos|MPI|OpenMP) succeeds once the env is
 #     active (pass -DKokkos_ROOT=$CONDA_PREFIX if needed, cf. the installation doc).
 #
 # COMPILER NOTE: this file does NOT provide the C++ compiler (no per-platform selectors in an
@@ -78,8 +78,12 @@ dependencies:
                          # vs the GPU run), so pinning conda to 4.4.01 buys no runtime parity and would
                          # downgrade working envs. Pin here (e.g. `kokkos=4.4.*`) only if you deliberately
                          # want local==CI Kokkos and have confirmed conda-forge still ships that build.
-  - openmpi              # MPI backend (distributed comm seam); provides mpicxx/mpicc
-  - "hdf5=*=mpi_openmpi_*"  # native parallel HDF5 writer; ABI-aligned with the OpenMPI package
+  # ParaView 6.1.1 embeds MPICH 4.1.2. Keep the local MPI implementation and version aligned so a
+  # future Catalyst MPI path does not mix Open MPI and MPICH ABIs in one process. HDF5 1.14.3 is the
+  # conda-forge parallel build compatible with that MPICH line on every platform listed in pixi.toml.
+  - mpich=4.1.2          # distributed MPI backend; provides mpicxx/mpicc
+  - mpi=1.0=mpich        # conda MPI implementation selector: prevent a transitive Open MPI solve
+  - "hdf5=1.14.3=mpi_mpich_*"  # native parallel HDF5 writer, linked to the same MPICH family
   - llvm-openmp          # libomp + headers: standalone OpenMP (deprecated) + -fopenmp runtime
 
   # --- Optional: uncomment as needed ---

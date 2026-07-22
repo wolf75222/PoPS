@@ -73,7 +73,7 @@
       "name": "mpi",
       "inherits": "conda",
       "displayName": "Coeur + tests C++ (MPI + HDF5 parallele)",
-      "description": "OpenMPI et HDF5 parallele pris dans l'env conda actif (conda activate pops).",
+      "description": "MPICH 4.1.2 et HDF5 parallele pris dans l'env conda actif (conda activate pops).",
       "binaryDir": "${sourceDir}/build-mpi",
       "cacheVariables": {
         "POPS_BUILD_TESTS": "ON",

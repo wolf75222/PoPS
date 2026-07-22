@@ -12,12 +12,15 @@ from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import Any, cast
 
+from pops._geometry_contracts import (
+    CARTESIAN_2D_COORDINATES,
+    CARTESIAN_CELL_AREA as _CARTESIAN_CELL_AREA,
+)
 from pops.identity import Identity, make_identity
 from pops.model import Handle
 
 
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
-_CARTESIAN_CELL_AREA = "pops://cell-measures/cartesian-area@1"
 _NATIVE_GEOMETRY_ARRAYS = object()
 
 
@@ -204,7 +207,7 @@ class LevelGeometry:
     boxes: tuple[tuple[int, ...], ...]
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
-    coordinate_system: str = "pops://coordinates/cartesian-2d@1"
+    coordinate_system: str = CARTESIAN_2D_COORDINATES
     cell_measure: str = _CARTESIAN_CELL_AREA
     axis_names: tuple[str, ...] = ("x", "y")
     valid_cells: Any = field(init=False, repr=False, compare=False)

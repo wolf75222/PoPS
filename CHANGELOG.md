@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Scientific output now publishes readable field names, compressed compact VTU/PVTU datasets,
+  temporal PVD catalogues, physical-time schedules, configurable failure policies, asynchronous
+  serial and MPI consumers, ParaView state recipes, and Catalyst Live. The reproducible local live
+  path uses MPICH 4.1.2 consistently across PoPS and ParaView. The launcher rejects required MPI
+  soname mismatches, while live acceptance authenticates the exact loaded MPI images.
 - Dense Jacobian spectral providers now fail closed and expose their real capacity at authoring:
   `wave_speeds_from_jacobian()` and `roe_from_jacobian()` accept at most 16 components per native
   dense matrix, with certified block-triangular partitions available only for the HLL wave-speed

@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from xml.etree import ElementTree as ET
 
 from pops._manifest_protocol import strict_json_loads
@@ -583,15 +583,16 @@ def materialize_paraview_state(
     selected = _optional_text(selected, "materialize_paraview_state pvpython")
     if isinstance(timeout, bool) or type(timeout) is not int or timeout < 1:
         raise ValueError("materialize_paraview_state timeout must be an integer >= 1")
-    bundle = (
-        recipe if type(recipe) is PortableStateBundle
-        else read_portable_paraview_state(recipe)
-    )
+    if type(recipe) is PortableStateBundle:
+        bundle = cast(PortableStateBundle, recipe)
+    else:
+        bundle = read_portable_paraview_state(
+            cast(os.PathLike[str] | str, recipe))
     if type(bundle) is not PortableStateBundle:
         raise TypeError("recipe must be an exact PortableStateBundle or manifest path")
     executable = _pvpython(selected)
     version = _run(
-        [str(executable), "--version"],
+        [str(executable), "--no-mpi", "--version"],
         timeout=min(timeout, 15),
         phase="pvpython version preflight",
     )
@@ -608,7 +609,10 @@ def materialize_paraview_state(
             prefix=".pops-materialized-pvsm-", dir=output.parent) as work:
         generated = Path(work) / output.name
         _run(
-            [str(executable), str(bundle.script), "--save-state", str(generated)],
+            [
+                str(executable), "--no-mpi", str(bundle.script),
+                "--save-state", str(generated),
+            ],
             timeout=timeout,
             phase="pvpython portable-state materialization",
         )
@@ -617,7 +621,7 @@ def materialize_paraview_state(
         _require_pvsm(generated)
         _run(
             [
-                str(executable), "-c", _LOAD_STATE_SCRIPT,
+                str(executable), "--no-mpi", "-c", _LOAD_STATE_SCRIPT,
                 str(generated), str(bundle.manifest.parent),
             ],
             timeout=timeout,

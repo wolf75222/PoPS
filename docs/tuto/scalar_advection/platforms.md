@@ -55,8 +55,9 @@ Le script 12 publie le format choisi par `OUTPUT_FORMAT` a chaque echeance physi
 VTU compresses, un PVD temporel standard et la recette portable `.view.json`/`.view.py`; HDF5 et NPZ
 restent selectionnables sans changer le graphe du cas. Un vrai PVSM se demande explicitement avec
 `MaterializedPVSM` et un `pvpython` reel. `POPS_CATALYST=1` active en plus la pipeline Catalyst 2
-strictement pour cette execution OpenMP serie. La visualisation live est refusee avec MPI; les
-sorties scientifiques progressives PVTU/HDF5 restent disponibles pour suivre un calcul distribue.
+pour cette execution OpenMP serie. En MPI, le live est disponible en mode `COLLECTIVE` lorsque PoPS
+et ParaView partagent exactement la meme pile MPI; `ROOT` et `PER_RANK` restent refuses. Les sorties
+scientifiques progressives PVTU/HDF5 restent independantes et disponibles sans client live.
 Le script 13 ecrit son checkpoint sous
 `results/13_openmp_amr_restart/`.
 
@@ -68,12 +69,20 @@ python docs/tuto/scalar_advection/plot_openmp_results.py
 
 ## MPI natif : monde explicite
 
-La construction distribuee active MPI et le HDF5 parallele natif. Reconstruire le module avec :
+L'environnement local fixe MPICH 4.1.2, la version embarquee par ParaView 6.1.1, et un HDF5
+parallele construit avec MPICH. Cela supprime le melange direct Open MPI/MPICH. Ce pin de version
+n'est toutefois pas suffisant a lui seul : le lanceur Catalyst verifie les sonames MPI du module
+PoPS et du bundle ParaView, precharge une seule fois le binaire MPICH de l'environnement Conda, puis
+utilise le `mpiexec` de ce meme environnement. Le probe reel verifie ensuite deux rangs,
+`MPI_THREAD_MULTIPLE`, la connexion client, deux frames, le rendu et le cycle complet Catalyst.
+
+Un changement d'implementation MPI invalide les artefacts et caches natifs precedents. Mettre a
+jour l'environnement puis reconstruire proprement le module distribue :
 
 ```bash
 bash scripts/setup_env.sh
-bash scripts/build_python.sh --mpi --clean
 conda activate pops
+bash scripts/build_python.sh --mpi --clean
 ```
 
 Les quatre scripts MPI fixent un thread par rang. Apres `pops.compile`, ils construisent le monde
@@ -109,10 +118,30 @@ run dans un FIFO partage. ParaView relaie par defaut des morceaux VTU bornes ver
 de publier le PVTU, sans filesystem partage; `SharedDirectory()` est l'alternative explicite lorsque
 tous les rangs voient le meme repertoire.
 
-`LiveVisualization` et le backend Catalyst integre restent strictement serie. Leurs modes `ROOT`,
-`PER_RANK` et `COLLECTIVE` sont refuses avant le bind et aucun `catalyst/mpi_comm` n'est transmis.
-Une simulation MPI se suit au fil du calcul avec les PVTU ou HDF5 progressifs produits par
+Le backend Catalyst accepte maintenant `LiveVisualization(..., mode=ParallelMode.COLLECTIVE)`.
+PoPS duplique une lane MPI pour le worker, transmet `lane.fortran_handle` par
+`catalyst/mpi_comm` et synchronise les erreurs de chaque phase. `ROOT` et `PER_RANK` restent refuses.
+Le bundle ParaView doit aussi fournir le Python qui charge ses bindings Catalyst; le Python Conda ne
+peut pas les importer directement. Le lanceur neutre conserve un seul MPI dans le processus :
+
+```bash
+conda activate pops
+scripts/paraview_python.sh --mpi 2 \
+  tests/python/integration/mpi/probe_catalyst_live_mpi.py
+```
+
+Pour prouver aussi la connexion socket et le rendu client, lancer le gate autonome
+`scripts/check_catalyst_live_mpi.sh`. Il demarre un `pvpython --no-mpi` distinct, extrait `mesh` sur
+deux frames, controle `U`, applique la presentation et exige une image non vide avant de reussir.
+
+Une simulation MPI reste observable sans Catalyst avec les PVTU ou HDF5 progressifs produits par
 `AsyncScientificOutput`.
+
+Sur macOS, la pipeline live du tutoriel ne cree pas de `RenderView` local : le backend Cocoa refuse
+la creation d'une fenetre depuis le worker post-commit. Elle expose la source `mesh` et le champ `U`
+au client ParaView; le `.pvsm` des sorties fichier conserve separement la presentation reproductible.
+Le rendu directement dans une pipeline asynchrone demande un ParaView avec backend hors-ecran
+compatible threads.
 
 Le writer VTU generique sait encoder des snapshots cartesiens authentifies 1D, 2D ou 3D, avec les
 champs centres cellules dans `CellData` et les champs nodaux dans `PointData`/`PPointData`. La capture

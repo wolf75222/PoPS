@@ -91,7 +91,7 @@ class DurableJournal:
             raise ValueError(
                 "DurableJournal.recover must be exactly 'automatic' or 'manual'")
         try:
-            root = Path(self.root).expanduser().resolve(strict=False)
+            root = Path(self.root).expanduser().resolve()
         except TypeError as error:
             raise TypeError("DurableJournal.root must be path-like") from error
         object.__setattr__(self, "root", root)

@@ -121,7 +121,9 @@ def test_installed_package_rehydrates_native_backend_dependencies():
     assert "if(@POPS_HAS_HDF5@ AND NOT CMAKE_C_COMPILER_LOADED)" in PACKAGE_CONFIG
     assert "find_dependency(MPI REQUIRED COMPONENTS C CXX)" in PACKAGE_CONFIG
     assert "find_dependency(MPI REQUIRED COMPONENTS CXX)" in PACKAGE_CONFIG
-    assert "find_dependency(HDF5 REQUIRED COMPONENTS C)" in PACKAGE_CONFIG
+    assert "set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)" in ROOT_CMAKE
+    assert "set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)" in PACKAGE_CONFIG
+    assert "find_dependency(HDF5 MODULE REQUIRED COMPONENTS C)" in PACKAGE_CONFIG
     assert "if(NOT HDF5_IS_PARALLEL)" in PACKAGE_CONFIG
     assert "test_installed_package_consumer" in ROOT_CMAKE
     assert "test_hdf5_without_mpi_rejected" in ROOT_CMAKE

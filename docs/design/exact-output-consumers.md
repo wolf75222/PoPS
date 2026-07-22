@@ -263,15 +263,20 @@ retains that implementation/API-version evidence in the delivery receipt as `imp
 `catalyst_api_version`; `catalyst/version` is not presented as an implementation version.
 
 The declaration remains authoritative over the loader. PoPS rejects any non-empty
-`CATALYST_IMPLEMENTATION_PREFER_ENV`. The built-in provider and `LiveVisualization` currently
-support `SERIAL` only. `ROOT`, `PER_RANK` and `COLLECTIVE` are rejected during authoring, and binding
-a serial declaration to an MPI execution context is rejected before the first numerical step. PoPS
-therefore never passes `catalyst/mpi_comm` and makes no distributed-live claim. MPI simulations use
-progressive `AsyncScientificOutput` PVTU/HDF5 artifacts instead.
+`CATALYST_IMPLEMENTATION_PREFER_ENV`. The built-in provider and `LiveVisualization` support
+`SERIAL` and `COLLECTIVE`; `ROOT` and `PER_RANK` are rejected during authoring. The collective route
+requires `max_attempts=1`, authenticates a duplicated worker communicator, and passes its
+`MPI_Comm_c2f` value through `catalyst/mpi_comm`. Local Blueprint construction and backend errors
+are agreed on that lane so a rank cannot enter the next collective alone. Progressive
+`AsyncScientificOutput` PVTU/HDF5 artifacts remain available without Catalyst.
 
 PoPS owns the only asynchronous layer: it forces `catalyst/async/enabled=0` and refuses an active
 inherited `CATALYST_ASYNC_ENABLED`. A delivery receipt therefore follows a completed
-`catalyst.execute`. The built-in Catalyst provider admits one consumer/pipeline and one simulation
+`catalyst.execute`. Pipeline code also runs on that worker: creating a local `RenderView` therefore
+requires an off-screen ParaView backend that is safe outside the main thread. The macOS Cocoa
+backend is not; the tutorial publishes a renderless live source and keeps the reproducible
+presentation in the file-output recipe/PVSM. The built-in Catalyst provider admits one
+consumer/pipeline and one simulation
 run per `RuntimeInstance`; multiple pipeline actions must be combined in that script or behind one
 custom multiplexing provider. Its one-shot process-global lifecycle reservation is never released,
 so even a later `RuntimeInstance` must start in a fresh OS process for another built-in Catalyst
@@ -294,11 +299,26 @@ live = LiveVisualization(
     ),
     schedule=every_dt(0.1, clock=program.clock),
     fields=(tracer_U,),
-    mode=ParallelMode.SERIAL,
+    mode=ParallelMode.COLLECTIVE,  # use SERIAL outside an MPI execution context
     queue_capacity=2,
     on_failure=ReportOnly(),
 )
 ```
+
+The Python modules shipped in a ParaView application can be tied to its private `libpython`, so
+adding them to an unrelated Conda `PYTHONPATH` is not a valid integration. The repository launcher
+starts a neutral interpreter from that exact ParaView runtime, imports PoPS first so it can request
+`MPI_THREAD_MULTIPLE`, and uses the active PoPS Conda environment's `mpiexec`. The launcher
+preloads that same MPICH library once and first verifies that ParaView exposes matching MPI ABI
+sonames; the Catalyst plugin therefore attaches to PoPS's already-loaded MPI implementation:
+
+```bash
+conda activate pops
+scripts/paraview_python.sh --mpi 2 simulation_with_collective_catalyst.py
+```
+
+Set `POPS_PARAVIEW_ROOT` (or pass `--paraview-root`) for a non-default installation. This launcher
+does not start `pvpython`, `pvbatch`, a ParaView server, or a second MPI implementation.
 
 Because live delivery is irreversible, its policies are separate: `RaiseOnFlush()` reports after
 draining at the run boundary, while `ReportOnly()` leaves terminal evidence in

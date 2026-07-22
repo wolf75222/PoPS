@@ -1388,7 +1388,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             "consumer_id": manifest.qualified_id,
             "manifest_identity": manifest.identity.token,
             "target_uri": manifest.target_uri,
-            "resolved_target": target.expanduser().resolve(strict=False).as_posix(),
+            "resolved_target": target.expanduser().resolve().as_posix(),
         })
         self._observer_journals[key] = current
         return current

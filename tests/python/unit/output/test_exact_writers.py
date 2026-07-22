@@ -1320,6 +1320,13 @@ def test_paraview_pvd_is_cumulative_exact_and_transactional(tmp_path):
     assert len(pvd_paths) == 2
     reopened = read_paraview_series(pvd_paths[-1])
     assert ParaView().reopen_series(pvd_paths[-1]).output_identity == reopened.output_identity
+    reopened_from_directory = ParaView().reopen_series(tmp_path)
+    assert reopened_from_directory.output_identity == reopened.output_identity
+    assert reopened_from_directory.files == reopened.paths
+    assert reopened_from_directory.times == (0.125, 0.25)
+    assert reopened_from_directory.latest.output_identity \
+        == read_paraview(second_target).output_identity
+    assert reopened_from_directory.verify() is reopened_from_directory
     assert reopened.kind == "pvd"
     assert [row["macro_step"] for row in reopened.manifest["entries"]] == [7, 8]
     assert [float.fromhex(row["time_hex"]) for row in reopened.manifest["entries"]] \
@@ -1343,6 +1350,51 @@ def test_paraview_pvd_is_cumulative_exact_and_transactional(tmp_path):
     assert not third_target.exists()
     assert len(tuple(tmp_path.glob("density-output__series-*__s*.pvd"))) == 2
     assert read_paraview_series(pvd_paths[-1]).output_identity == reopened.output_identity
+
+
+def test_paraview_directory_resolution_uses_authenticated_history_not_filename_order(
+    tmp_path,
+):
+    first_snapshot, request, _ = _snapshot()
+    second_snapshot = replace(
+        first_snapshot,
+        clock=OutputClock.at("macro", 0.25, 8, stage="accepted"),
+    )
+    writer = ParaViewWriter(collection=True)
+    targets = []
+    for snapshot in (first_snapshot, second_snapshot):
+        target = deterministic_target(tmp_path, "series", request, snapshot, ".vtu")
+        session = _stage_writer(writer, snapshot, request, target)
+        session.publish()
+        session.finalize()
+        targets.append(target)
+
+    stale, latest = sorted(tmp_path.glob("*.pvd"))
+    stale.rename(tmp_path / "zzz-stale.pvd")
+    latest.rename(tmp_path / "aaa-latest.pvd")
+
+    reopened = ParaView().reopen_series(tmp_path)
+    assert [row["macro_step"] for row in reopened.manifest["entries"]] == [7, 8]
+    assert reopened.files == tuple(target.resolve() for target in targets)
+
+
+def test_paraview_directory_resolution_refuses_multiple_series(tmp_path):
+    snapshot, request, _ = _snapshot()
+    writer = ParaViewWriter(collection=True)
+    indexes = []
+    for consumer_id in ("density-output", "velocity-output"):
+        current_request = replace(request, consumer_id=consumer_id)
+        target = deterministic_target(
+            tmp_path, "series", current_request, snapshot, ".vtu")
+        session = _stage_writer(writer, snapshot, current_request, target)
+        receipt = session.publish()
+        session.finalize()
+        assert receipt is not None
+        indexes.append(receipt.path)
+
+    with pytest.raises(ValueError, match="multiple PVD time series"):
+        ParaView().reopen_series(tmp_path)
+    assert all(ParaView().reopen_series(index).kind == "pvd" for index in indexes)
 
 
 def test_paraview_collection_versions_samples_inside_the_logical_target_directory(tmp_path):
@@ -1494,17 +1546,17 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 log = Path(__file__).with_suffix(".log")
-if sys.argv[1:] == ["--version"]:
+if sys.argv[1:] == ["--no-mpi", "--version"]:
     log.write_text("version\\n", encoding="utf-8")
     print("ParaView 6.1.0")
-elif sys.argv[1] == "-c" and "SaveState" in sys.argv[2]:
-    pvd, state, raw = sys.argv[3:6]
+elif sys.argv[1:3] == ["--no-mpi", "-c"] and "SaveState" in sys.argv[3]:
+    pvd, state, raw = sys.argv[4:7]
     config = json.loads(raw)
     assert Path(pvd).is_file()
-    assert "GetAnimationScene" in sys.argv[2]
-    assert "GoToLast" in sys.argv[2]
-    assert "TimestepValues" in sys.argv[2]
-    assert "AnimationTime" in sys.argv[2]
+    assert "GetAnimationScene" in sys.argv[3]
+    assert "GoToLast" in sys.argv[3]
+    assert "TimestepValues" in sys.argv[3]
+    assert "AnimationTime" in sys.argv[3]
     assert config["color_by"] == "rho"
     assert config["representation"] == "Surface With Edges"
     Path(state).write_text(
@@ -1514,8 +1566,8 @@ elif sys.argv[1] == "-c" and "SaveState" in sys.argv[2]:
     )
     with log.open("a", encoding="utf-8") as stream:
         stream.write("save\\n")
-elif sys.argv[1] == "-c" and "LoadState" in sys.argv[2]:
-    state, directory = sys.argv[3:5]
+elif sys.argv[1:3] == ["--no-mpi", "-c"] and "LoadState" in sys.argv[3]:
+    state, directory = sys.argv[4:6]
     assert Path(directory).is_dir()
     assert ET.parse(state).getroot().find("./ServerManagerState") is not None
     with log.open("a", encoding="utf-8") as stream:
@@ -2164,6 +2216,11 @@ def test_format_provider_publishes_and_reopens_one_authenticated_series(tmp_path
     assert tuple(sample.macro_step for sample in series.samples) == (7, 8)
     assert series.files == (first_target, second_target)
     assert series.latest.output_identity == format.reopen(second_target).output_identity
+    alternate_mode = (
+        ParallelMode.COLLECTIVE if format.format_name == "hdf5" else ParallelMode.ROOT
+    )
+    assert type(format)(mode=alternate_mode).reopen_series(root).latest.output_identity \
+        == format.reopen(second_target).output_identity
     assert json.loads(series.path.read_text(encoding="utf-8")) == {
         "file-series-version": "1.0",
         "files": [

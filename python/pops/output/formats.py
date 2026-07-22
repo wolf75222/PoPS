@@ -389,6 +389,11 @@ class ParaView(FormatInterface):
     format_name = "paraview-vtu"
     extension = ".vtu"
     mode: ParallelMode
+    compression: int | None
+    collection: bool
+    preset: ParaViewPreset
+    placement: SharedDirectory | MpiRelayToRoot
+    state: Any
 
     def __init__(
         self,

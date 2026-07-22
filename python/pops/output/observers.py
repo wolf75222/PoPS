@@ -29,6 +29,14 @@ from pops.time import Schedule
 from .levels import AllLevels, LevelSelection
 
 
+def _add_exception_note(error: BaseException, note: str) -> None:
+    """Attach cleanup evidence when the running Python supports exception notes."""
+
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+
+
 def _text(value: Any, where: str) -> str:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise TypeError("%s must be non-empty canonical text" % where)
@@ -479,8 +487,7 @@ class Catalyst:
         configuration = self.consumer_data()
         communicator = runtime_configuration.get("worker_communicator")
         if communicator is not None:
-            raise ValueError(
-                "Catalyst live visualization currently supports serial execution only")
+            configuration["_pops_worker_communicator"] = communicator
         return self._open_session(configuration, execution_context)
 
     def _open_session(
@@ -554,11 +561,15 @@ class _LiveObserverOperation:
         if type(first) is not dict or type(second) is not dict or first != second:
             raise TypeError("live observer consumer_data() must return one deterministic dict")
         canonical_bytes(first)
-        if first.get("observer_kind") != "async_scientific_output" \
+        observer_kind = first.get("observer_kind")
+        if observer_kind == "catalyst":
+            if self.parallel_mode not in (ParallelMode.SERIAL, ParallelMode.COLLECTIVE):
+                raise ValueError(
+                    "Catalyst live visualization supports only SERIAL or COLLECTIVE mode")
+        elif observer_kind != "async_scientific_output" \
                 and self.parallel_mode is not ParallelMode.SERIAL:
             raise ValueError(
-                "LiveVisualization currently supports only ParallelMode.SERIAL; "
-                "MPI live visualization is not supported")
+                "this live observer supports only ParallelMode.SERIAL")
         expected_provider = first.get("provider_id")
         if first.get("observer_kind") == "catalyst":
             provider = first.get("provider")
@@ -893,7 +904,7 @@ class _AsyncScientificWriterSession:
             preparation_error = error
         target_state = (
             "missing" if target is None
-            else target.expanduser().resolve(strict=False).as_posix()
+            else target.expanduser().resolve().as_posix()
         )
         failure, states = self._phase_evidence(
             "session preparation", preparation_error,
@@ -910,7 +921,7 @@ class _AsyncScientificWriterSession:
                 if session.abort_prepare() is not None:
                     raise TypeError("scientific writer abort_prepare() must return None")
             except BaseException as cleanup_error:
-                mismatch.add_note(
+                _add_exception_note(mismatch,
                     "async writer target-mismatch cleanup also failed: %s: %s"
                     % (type(cleanup_error).__name__, cleanup_error))
             raise mismatch
@@ -941,7 +952,7 @@ class _AsyncScientificWriterSession:
                 cleanup_error = RuntimeError(
                     "writer stage state differs across ranks; collective cleanup was not entered")
             if cleanup_error is not None:
-                failure.add_note(
+                _add_exception_note(failure,
                     "async scientific writer cleanup also failed: %s: %s"
                     % (type(cleanup_error).__name__, cleanup_error))
             raise failure
@@ -975,7 +986,7 @@ class _AsyncScientificWriterSession:
             except BaseException as error:
                 cleanup_error = error
             if cleanup_error is not None:
-                failure.add_note(
+                _add_exception_note(failure,
                     "async scientific writer rollback also failed: %s: %s"
                     % (type(cleanup_error).__name__, cleanup_error))
             raise failure
@@ -1140,9 +1151,9 @@ class AsyncScientificOutput(Descriptor):
 class LiveVisualization(Descriptor):
     """Stream selected accepted fields to an irreversible post-commit observer.
 
-    Live delivery is currently a single-rank contract.  MPI simulations must use progressive
-    scientific outputs instead; ``ROOT``, ``PER_RANK`` and ``COLLECTIVE`` are rejected before the
-    descriptor enters a consumer graph.
+    Catalyst supports either single-rank delivery or one collective frame per MPI rank on a
+    duplicated observer communicator.  ``ROOT`` and ``PER_RANK`` are rejected because Catalyst's
+    lifecycle and data handoff are collective.
     """
 
     category = "monitor"
@@ -1188,16 +1199,23 @@ class LiveVisualization(Descriptor):
         selected_mode = ParallelMode.SERIAL if mode is None else mode
         if type(selected_mode) is not ParallelMode:
             raise TypeError("LiveVisualization.mode must be an exact ParallelMode")
-        if selected_mode is not ParallelMode.SERIAL:
+        observer_kind = first.get("observer_kind")
+        if selected_mode in (ParallelMode.ROOT, ParallelMode.PER_RANK):
             raise ValueError(
-                "LiveVisualization currently supports only ParallelMode.SERIAL; "
-                "MPI live visualization is not supported")
+                "LiveVisualization supports only SERIAL or COLLECTIVE mode")
+        if selected_mode is ParallelMode.COLLECTIVE and observer_kind != "catalyst":
+            raise ValueError(
+                "COLLECTIVE LiveVisualization requires the built-in Catalyst observer")
         if isinstance(queue_capacity, bool) or type(queue_capacity) is not int \
                 or queue_capacity < 1:
             raise ValueError("LiveVisualization.queue_capacity must be an integer >= 1")
         if isinstance(max_attempts, bool) or type(max_attempts) is not int \
                 or max_attempts < 1:
             raise ValueError("LiveVisualization.max_attempts must be an integer >= 1")
+        if selected_mode is ParallelMode.COLLECTIVE and max_attempts != 1:
+            raise ValueError(
+                "MPI Catalyst live visualization requires max_attempts=1; retrying an "
+                "entered collective is not safe")
         selected_failure = RaiseOnFlush() if on_failure is None else on_failure
         if type(selected_failure) not in _LIVE_FAILURE_POLICIES:
             raise TypeError(

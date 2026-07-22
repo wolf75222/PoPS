@@ -247,7 +247,8 @@ class PreparedProvider<Result(Args...)> {
   PreparedProvider() = default;
 
   template <class Source>
-    requires PreparedProviderSourceFor<Source, Result, Args...>
+    requires(!std::same_as<std::remove_cvref_t<Source>, PreparedProvider> &&
+             PreparedProviderSourceFor<Source, Result, Args...>)
   explicit PreparedProvider(Source source) {
     using S = std::remove_cvref_t<Source>;
     ExactContractBuilder parameters;
