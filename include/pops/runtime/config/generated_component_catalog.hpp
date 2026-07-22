@@ -96,8 +96,8 @@ inline constexpr RouteInfo kRiemannRoutes[] = {
   {1, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
   {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"},
   {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"},
-  {4, "euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
-  {5, "euler_roe", "pops::EulerRoeFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
+  {4, "euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout,no_hllc_star_state", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
+  {5, "euler_roe", "pops::EulerRoeFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout,no_roe_dissipation", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
 };
 inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe|euler_hllc|euler_roe";
 
@@ -111,7 +111,7 @@ inline constexpr RouteInfo kLimiterRoutes[] = {
   {0, "none", "pops::NoSlope", "", ""},
   {1, "minmod", "pops::Minmod", "", ""},
   {2, "vanleer", "pops::VanLeer", "", ""},
-  {3, "weno5", "pops::Weno5Z", "3-cell halo", ""},
+  {3, "weno5", "pops::Weno5", "3-cell halo", ""},
 };
 inline constexpr const char* kLimiterRouteTokensCsv = "none|minmod|vanleer|weno5";
 
@@ -307,9 +307,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 1;
-inline constexpr const char* kComponentCatalogSha256 = "b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1";
-inline constexpr const char* kRouteRegistrySignature = "v2:2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1";
+inline constexpr const char* kComponentCatalogSha256 = "ef23cc23d5f5fe513612901ece4c020ae72d87678a975eebf6f5fa4729fc5521";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "c0459eeaaa751fde07476321a9d9065d1ac0bfff4797454e590af9e8016247d7";
+inline constexpr const char* kRouteRegistrySignature = "v2:c0459eeaaa751fde07476321a9d9065d1ac0bfff4797454e590af9e8016247d7";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

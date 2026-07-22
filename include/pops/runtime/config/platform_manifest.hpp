@@ -335,7 +335,51 @@ inline PlatformManifest proven_host_platform(const std::string& backend, const s
            {"scalars", prove_text_set({"float64"}, evidence)},
            {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
            {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
-           {"generic_field_view", prove_bool(true, evidence)}}};
+           {"generic_field_view", prove_bool(true, evidence)},
+           {"execution_backend", prove_text("host", evidence)},
+           {"shared_space", prove_text("HostSpace", evidence)},
+           {"stream_identity", prove_text("host::synchronous", evidence)}}};
+}
+
+inline PlatformManifest proven_native_platform(
+    const std::string& backend, const std::string& target, const std::string& abi,
+    const std::string& device, std::vector<std::string> memory_spaces,
+    const std::string& communicator, const std::string& execution_backend,
+    const std::string& shared_space, const std::string& stream_identity,
+    const std::string& evidence) {
+  if (device.empty() || memory_spaces.empty() || execution_backend.empty() ||
+      shared_space.empty() || stream_identity.empty())
+    throw ContractError("native-platform", "native platform facts must be complete");
+  const auto scalar = prove_text("float64", evidence);
+  return {prove_text(backend, evidence),
+          prove_text(target, evidence),
+          prove_text(abi, evidence),
+          {scalar, scalar, scalar, scalar},
+          prove_text(device, evidence),
+          prove_text_set(std::move(memory_spaces), evidence),
+          prove_text(communicator, evidence),
+          {{"dimensions", prove_int_set({2}, evidence)},
+           {"centerings", prove_text_set({"cell"}, evidence)},
+           {"scalars", prove_text_set({"float64"}, evidence)},
+           {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
+           {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
+           {"generic_field_view", prove_bool(true, evidence)},
+           {"execution_backend", prove_text(execution_backend, evidence)},
+           {"shared_space", prove_text(shared_space, evidence)},
+           {"stream_identity", prove_text(stream_identity, evidence)}}};
+}
+
+inline RuntimeBackendManifest proven_native_backend(
+    const std::string& backend, const std::string& target, const std::string& abi,
+    const std::string& device, std::vector<std::string> memory_spaces,
+    const std::string& communicator, const std::string& execution_backend,
+    const std::string& shared_space, const std::string& stream_identity,
+    const std::string& evidence) {
+  const auto platform = proven_native_platform(
+      backend, target, abi, device, std::move(memory_spaces), communicator,
+      execution_backend, shared_space, stream_identity, evidence);
+  return {platform.backend, platform.target,        platform.abi,          platform.precision,
+          platform.device,  platform.memory_spaces, platform.communicator, platform.capabilities};
 }
 
 inline PlatformManifest proven_serial_platform(const std::string& backend,

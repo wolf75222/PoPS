@@ -18,12 +18,15 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 #include <pops/runtime/program/external_riemann_brick.hpp>
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel / Euler / ...
 
 #include "test_harness.hpp"  // pops::test::Checker
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -65,75 +68,20 @@ using Model = pops::CompositeModel<pops::Euler, pops::NoSource, pops::Background
 
 POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
     "my_riemann", UserRusanov, user_brick::Model,
+    "test.euler-rusanov.v1",
     "physical_flux,provider_pack,stability_bound");
 POPS_DEFINE_BRICK_MANIFEST();
 )CPP";
   // clang-format on
 }
 
-// Splices a space-separated list of include dirs into `-I dir` flags (the Kokkos interface include
-// dirs CMake hands us as one space-joined string). Empty input -> "" (the non-Kokkos host path).
-std::string include_flags(const char* dirs) {
-  std::string out;
-  std::string token;
-  const std::string s = (dirs != nullptr) ? dirs : "";
-  for (std::size_t i = 0; i <= s.size(); ++i) {
-    if (i == s.size() || s[i] == ' ') {
-      if (!token.empty())
-        out += " -I " + token;
-      token.clear();
-    } else {
-      token.push_back(s[i]);
-    }
-  }
-  return out;
-}
-
-// Compile the brick to a .so (g++/c++ at run time). Returns true on success. Mirrors
-// test_amr_native_loader.cpp::compile_loader (same SDK / std handling on macOS) AND, under Kokkos,
-// adds this module's Kokkos interface include dirs / defines / options so the brick .so is ABI-
-// compatible with the test binary (for_each.hpp #errors without POPS_HAS_KOKKOS).
-bool compile_brick(const std::string& src, const std::string& so) {
-#if defined(__APPLE__)
-  const std::string cc = "/usr/bin/c++";
-#else
-  const std::string cc = POPS_TEST_CXX;
-#endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
-                    POPS_TEST_INCLUDE + " " + src + " -o " + so;
-#if defined(POPS_HAS_KOKKOS)
-  // Match the module's Kokkos ABI: its interface includes (Kokkos + libomp), defines and options.
-  cmd += include_flags(POPS_TEST_KOKKOS_INC);
-  // INTERFACE_COMPILE_OPTIONS may carry CMake's `SHELL:` escape (e.g. "SHELL:-Xpreprocessor -fopenmp
-  // -I.../libomp/include" for AppleClang OpenMP); strip the literal `SHELL:` token, the rest is a
-  // plain flag list the compiler accepts as-is.
-  {
-    std::string opts = POPS_TEST_KOKKOS_OPTS;
-    for (std::size_t p = opts.find("SHELL:"); p != std::string::npos; p = opts.find("SHELL:"))
-      opts.erase(p, 6);
-    cmd += " " + opts;
-  }
-  // INTERFACE_COMPILE_DEFINITIONS are bare tokens (KOKKOS_DEPENDENCE, ...); prefix each with -D.
-  {
-    const std::string defs = POPS_TEST_KOKKOS_DEFS;
-    std::string token;
-    for (std::size_t i = 0; i <= defs.size(); ++i) {
-      if (i == defs.size() || defs[i] == ' ') {
-        if (!token.empty())
-          cmd += " -D" + token;
-        token.clear();
-      } else {
-        token.push_back(defs[i]);
-      }
-    }
-  }
-  cmd += " -DPOPS_HAS_KOKKOS";
-#endif
-#if defined(__APPLE__)
-  cmd += " -undefined dynamic_lookup";
-#endif
-  cmd += " 2> " + so + ".log";
-  return std::system(cmd.c_str()) == 0;
+std::string legacy_brick_source() {
+  return R"CPP(
+#include <pops/runtime/program/external_brick.hpp>
+POPS_REGISTER_BRICK("legacy_riemann", "riemann", "physical_flux");
+POPS_DEFINE_BRICK_MANIFEST();
+extern "C" void pops_brick_residual() {}
+)CPP";
 }
 
 // A smooth periodic Euler state (rho, mx, my, E) in component-major layout c*n*n + j*n + i.
@@ -143,7 +91,9 @@ std::vector<double> euler_state(int n) {
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
       const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      const double rho = 1.0 + 0.3 * std::exp(-(x * x + y * y) / 0.02);
+      const double pi = std::acos(-1.0);
+      const double rho = 1.0 + 0.3 * std::exp(-(x * x + y * y) / 0.02) +
+                         0.08 * std::sin(2.0 * pi * x) + 0.05 * std::cos(4.0 * pi * y);
       const double u = 0.1, v = -0.05, p = 1.0;
       const std::size_t k = static_cast<std::size_t>(j) * n + i;
       U[0 * nn + k] = rho;
@@ -159,12 +109,6 @@ using RefModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::Backgro
 }  // namespace
 
 static int pops_run_test_external_riemann_dispatch() {
-  const char* cxx = POPS_TEST_CXX;
-  if (cxx == nullptr || cxx[0] == '\0') {
-    std::printf("skip test_external_riemann_dispatch (no C++ compiler known to the build)\n");
-    return 0;
-  }
-
   const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/external_riemann_" +
                           std::to_string(static_cast<long>(std::clock()));
   const std::string src = tmp + ".cpp", so = tmp + ".so";
@@ -172,16 +116,17 @@ static int pops_run_test_external_riemann_dispatch() {
     std::ofstream f(src);
     f << brick_source();
   }
-  if (!compile_brick(src, so)) {
-    std::printf(
-        "skip test_external_riemann_dispatch (brick .so failed to compile -- headers/std?)\n");
-    return 0;  // self-skip on a toolchain that cannot build the brick (cf. test_amr_native_loader)
+  const auto package = pops::test::native_dso::compile_shared(src, so);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_external_riemann_dispatch", package);
+    return 1;
   }
 
   pops::test::Checker chk;
 
   // (1) dlopen + manifest visibility + requirements surface.
-  ExternalBrickHandle handle(so, "my_riemann");
+  ExternalBrickHandle handle(so, "my_riemann", {}, RefModel::n_vars,
+                             pops::aux_comps<RefModel>(), "test.euler-rusanov.v1");
   chk(handle.id() == "my_riemann", "handle_id");
   chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
       "requirements_surface");
@@ -189,6 +134,16 @@ static int pops_run_test_external_riemann_dispatch() {
   // The dlopen registered the manifest in this image's process catalog too.
   const auto* entry = pops::runtime::program::BrickRegistry::instance().lookup("my_riemann");
   chk(entry != nullptr && entry->category == "riemann", "manifest_visible_in_registry");
+  bool identity_threw = false;
+  try {
+    ExternalBrickHandle wrong_model(so, "my_riemann", {}, RefModel::n_vars,
+                                    pops::aux_comps<RefModel>(), "different-model-hash");
+  } catch (const std::runtime_error& e) {
+    identity_threw = true;
+    chk(std::string(e.what()).find("different compiled model identity") != std::string::npos,
+        "model_identity_error_is_actionable");
+  }
+  chk(identity_threw, "same_shape_different_model_rejected");
 
   // (2) BIT-IDENTICAL dispatch: external brick residual == native rusanov residual.
   const int n = 48;
@@ -197,24 +152,36 @@ static int pops_run_test_external_riemann_dispatch() {
   const std::size_t nn = static_cast<std::size_t>(n) * n;
   std::vector<double> Rext(4 * nn, 0.0), Rnat(4 * nn, 0.0);
 
-  // External brick: the resolved entry point dispatches build_block<Minmod, UserRusanov> inside the .so.
-  handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/1, "minmod",
-                    /*recon_prim=*/0, /*pos_floor=*/0.0);
-  // Native reference: the same static leaf with the built-in Rusanov policy.
-  pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
-      U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/true, "minmod",
-      /*recon_prim=*/false, /*pos_floor=*/0.0);
-  double dmax = 0.0, nrm = 0.0;
-  for (std::size_t k = 0; k < Rext.size(); ++k) {
-    const double d = std::fabs(Rext[k] - Rnat[k]);
-    if (d > dmax)
-      dmax = d;
-    const double a = std::fabs(Rnat[k]);
-    if (a > nrm)
-      nrm = a;
+  const std::array<pops::Periodicity, 4> topologies{{
+      {false, false}, {true, false}, {false, true}, {true, true}}};
+  std::vector<double> residual_x_only, residual_y_only;
+  for (const auto periodicity : topologies) {
+    std::fill(Rext.begin(), Rext.end(), 0.0);
+    std::fill(Rnat.begin(), Rnat.end(), 0.0);
+    // External brick: v2 carries x/y independently into the exact same static native leaf.
+    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy,
+                      periodicity.x ? 1 : 0, periodicity.y ? 1 : 0, "minmod",
+                      /*recon_prim=*/0, /*pos_floor=*/0.0);
+    pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
+        U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, periodicity, "minmod",
+        /*recon_prim=*/false, /*pos_floor=*/0.0);
+    double dmax = 0.0, nrm = 0.0;
+    for (std::size_t k = 0; k < Rext.size(); ++k) {
+      dmax = std::max(dmax, std::fabs(Rext[k] - Rnat[k]));
+      nrm = std::max(nrm, std::fabs(Rnat[k]));
+    }
+    chk(nrm > 1e-8, "native_residual_nontrivial");
+    chk(dmax == 0.0, "external_dispatch_bit_identical_to_native_rusanov");
+    if (periodicity.x && !periodicity.y)
+      residual_x_only = Rext;
+    if (!periodicity.x && periodicity.y)
+      residual_y_only = Rext;
   }
-  chk(nrm > 1e-8, "native_residual_nontrivial");
-  chk(dmax == 0.0, "external_dispatch_bit_identical_to_native_rusanov");
+  double mixed_axis_difference = 0.0;
+  for (std::size_t k = 0; k < residual_x_only.size(); ++k)
+    mixed_axis_difference =
+        std::max(mixed_axis_difference, std::fabs(residual_x_only[k] - residual_y_only[k]));
+  chk(mixed_axis_difference > 1e-8, "x_only_and_y_only_are_not_flattened");
 
   // (3) Unknown id -> clear error.
   bool threw = false;
@@ -226,6 +193,28 @@ static int pops_run_test_external_riemann_dispatch() {
     chk(msg.find("no_such_brick") != std::string::npos, "unknown_id_names_id");
   }
   chk(threw, "unknown_id_rejected");
+
+  // (4) A v1/unversioned DSO is rejected before its old residual function can be called.
+  const std::string legacy_src = tmp + "_legacy.cpp", legacy_so = tmp + "_legacy.so";
+  {
+    std::ofstream f(legacy_src);
+    f << legacy_brick_source();
+  }
+  const auto legacy_package = pops::test::native_dso::compile_shared(legacy_src, legacy_so);
+  if (!legacy_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_external_riemann_dispatch_legacy",
+                                                    legacy_package);
+    return 1;
+  }
+  threw = false;
+  try {
+    ExternalBrickHandle legacy(legacy_so, "legacy_riemann");
+  } catch (const std::runtime_error& e) {
+    threw = true;
+    const std::string msg = e.what();
+    chk(msg.find("legacy") != std::string::npos, "legacy_abi_error_is_actionable");
+  }
+  chk(threw, "legacy_unversioned_abi_rejected");
 
   return chk.failed();
 }

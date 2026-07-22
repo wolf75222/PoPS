@@ -171,6 +171,67 @@ static int pops_run_test_fill_boundary_cache(int argc, char** argv) {
     chk(count_wrong(cp) == 0, "copy_correct");
   }
 
+  // A begin handle is bound to one exact destination object. A failed mismatched end does not
+  // consume it; the matching end succeeds once, and a second end is rejected on every rank.
+  {
+    MultiFab a(ba, dm, ncomp, ng), b(ba, dm, ncomp, ng);
+    set_valid(a);
+    set_valid(b);
+    HaloExchange h = fill_boundary_begin(a, dom, per);
+    bool wrong_destination_rejected = false;
+    try {
+      fill_boundary_end(b, h);
+    } catch (const std::invalid_argument&) {
+      wrong_destination_rejected = true;
+    }
+    chk(wrong_destination_rejected, "handle_rejects_wrong_destination");
+    fill_boundary_end(a, h);
+    chk(count_wrong(a) == 0, "matching_handle_completes_exchange");
+    bool second_end_rejected = false;
+    try {
+      fill_boundary_end(a, h);
+    } catch (const std::logic_error&) {
+      second_end_rejected = true;
+    }
+    chk(second_end_rejected, "handle_is_single_consume");
+  }
+
+  // Dropping an active handle must drain local device copies and complete MPI requests before its
+  // destination or pooled buffers can be reused. At one rank, abandonment itself completes the
+  // entire local exchange; at several ranks it deliberately does not publish received data, so the
+  // following full exchange remains the correctness check.
+  {
+    MultiFab mf(ba, dm, ncomp, ng);
+    set_valid(mf);
+    {
+      HaloExchange abandoned = fill_boundary_begin(mf, dom, per);
+      (void)abandoned;
+    }
+    if (np == 1)
+      chk(count_wrong(mf) == 0, "abandoned_serial_handle_drains_device_work");
+    fill_boundary(mf, dom, per);
+    chk(count_wrong(mf) == 0, "abandoned_handle_never_recycles_active_buffers");
+  }
+
+  // Replacing a destination between begin/end is a regrid-style layout mutation. The handle must
+  // fail before unpacking the old schedule into the new allocation; its destructor still drains MPI.
+  {
+    MultiFab mf(ba, dm, ncomp, ng);
+    set_valid(mf);
+    HaloExchange h = fill_boundary_begin(mf, dom, per);
+    device_fence();
+    const BoxArray changed_ba = BoxArray::from_domain(dom, 32);
+    const DistributionMapping changed_dm = make_sfc_distribution(changed_ba, np);
+    mf = MultiFab(changed_ba, changed_dm, ncomp, ng);
+    bool changed_layout_rejected = false;
+    try {
+      fill_boundary_end(mf, h);
+    } catch (const std::invalid_argument&) {
+      changed_layout_rejected = true;
+    }
+    chk(changed_layout_rejected, "handle_rejects_changed_layout");
+  }
+
   const long gfails = all_reduce_sum(fails);
   if (me == 0) {
     if (gfails == 0)

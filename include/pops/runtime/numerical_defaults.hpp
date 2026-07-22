@@ -166,6 +166,7 @@ struct EffectiveBlockOptions {
   EffectiveNewtonOptions newton;
   double positivity_floor = 0.0;
   bool wave_speed_cache = false;
+  double weno_epsilon = static_cast<double>(kWenoEpsilon);
   double gamma = static_cast<double>(kPhysicalDefaultGamma);
   double B0 = static_cast<double>(kPhysicalDefaultB0);
   double cs2 = static_cast<double>(kPhysicalDefaultFluidStateCs2);
@@ -206,13 +207,21 @@ struct EffectivePoissonOptions {
 
 struct EffectiveRefinementOptions {
   double threshold = static_cast<double>(kAmrRefinementDisabledThreshold);
+  bool scalar_threshold_available = true;
   bool disabled = true;
   std::string disabled_policy = "threshold >= amr.refinement_disabled_threshold";
   std::string variable;
   std::string role;
+  std::string tagging_provider_identity;
+  std::string tagging_authority;
+  std::string tagging_execution_provider_identity;
   double phi_grad_threshold = static_cast<double>(kAmrPhiRefinementDisabledThreshold);
   bool phi_refinement_enabled = false;
-  // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden).
+  std::string clustering_provider_identity;
+  std::string clustering_authority;
+  bool clustering_parameters_available = true;
+  // Effective only for the builtin Berger-Rigoutsos authority. External providers expose their
+  // identity but never counterfeit these unrelated controls.
   double cluster_min_efficiency = kAmrClusterMinEfficiency;
   int cluster_min_box_size = kAmrClusterMinBoxSize;
   int cluster_max_box_size = kAmrClusterMaxBoxSize;
@@ -229,11 +238,17 @@ struct EffectiveEbOptions {
   double cut_theta_min = static_cast<double>(kEbCutFractionFloor);
 };
 
+struct EffectiveCartesianTopology {
+  bool periodic_x = false;
+  bool periodic_y = false;
+};
+
 struct EffectiveOptionsReport {
   int schema_version = 1;
   std::string runtime;
   std::vector<EffectiveBlockOptions> blocks;
   EffectivePoissonOptions poisson;
+  EffectiveCartesianTopology topology;
   bool has_amr = false;
   EffectiveRefinementOptions amr_refinement;
   EffectiveEbOptions eb;  ///< ADC-615: effective cut-cell / EB thresholds.

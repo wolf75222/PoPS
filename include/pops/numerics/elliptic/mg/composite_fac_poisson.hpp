@@ -21,6 +21,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 /// @file
@@ -105,6 +106,200 @@ POPS_HD inline Real fac_bilerp_coarse(const ConstArray4& C, int i, int j, int r)
   return (Real(1) - tx) * (Real(1) - ty) * c00 + tx * (Real(1) - ty) * c10 +
          (Real(1) - tx) * ty * c01 + tx * ty * c11;
 }
+
+struct FacLegacyFillCoarseFineGhostKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  int ratio;
+
+  POPS_HD void operator()(int i, int j) const {
+    const bool inside =
+        i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1];
+    if (!inside)
+      fine(i, j, 0) = fac_bilerp_coarse(coarse, i, j, ratio);
+  }
+};
+
+struct FacLegacyMaskedAddKernel {
+  Array4 destination;
+  ConstArray4 correction;
+  CoverageMaskView coverage;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (!coverage.covered(i, j))
+      destination(i, j, 0) += correction(i, j, 0);
+  }
+};
+
+struct FacLegacySorKernel {
+  Array4 phi;
+  ConstArray4 phi_read;
+  ConstArray4 rhs;
+  ConstArray4 eps;
+  ConstArray4 eps_y;
+  ConstArray4 a_xy;
+  ConstArray4 a_yx;
+  Real idx2;
+  Real idy2;
+  Real idx;
+  Real idy;
+  Real omega;
+  Real reaction;
+  int color;
+  bool has_eps;
+  bool has_cross;
+
+  POPS_HD void operator()(int i, int j) const {
+    const int cell_color = has_cross ? (((i & 1) << 1) | (j & 1)) : ((i + j) & 1);
+    if (cell_color != color)
+      return;
+    const Real exm = has_eps ? eps_harmonic(eps(i, j, 0), eps(i - 1, j, 0)) : Real(1);
+    const Real exp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i + 1, j, 0)) : Real(1);
+    const Real eym = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j - 1, 0)) : Real(1);
+    const Real eyp = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j + 1, 0)) : Real(1);
+    const Real diagonal = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
+    const Real neighbours =
+        (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
+        (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
+    const Real cross = has_cross
+                           ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy)
+                           : Real(0);
+    const Real candidate = (neighbours + cross - rhs(i, j, 0)) / diagonal;
+    phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * candidate;
+  }
+};
+
+struct FacLegacyMaskedResidualKernel {
+  Array4 residual;
+  ConstArray4 rhs;
+  ConstArray4 laplacian;
+  CoverageMaskView coverage;
+
+  POPS_HD void operator()(int i, int j) const {
+    residual(i, j, 0) =
+        coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
+  }
+};
+
+struct FacLegacyMaskedNormKernel {
+  ConstArray4 residual;
+  CoverageMaskView coverage;
+
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (coverage.covered(i, j))
+      return;
+    const Real value = residual(i, j, 0);
+    const Real magnitude = value < Real(0) ? -value : value;
+    if (!(magnitude <= std::numeric_limits<Real>::max())) {
+      acc = std::numeric_limits<Real>::infinity();
+      return;
+    }
+    if (magnitude > acc)
+      acc = magnitude;
+  }
+};
+
+struct FacLegacyFluxCorrectionKernel {
+  Array4 residual;
+  ConstArray4 coarse_phi;
+  ConstArray4 coarse_eps;
+  ConstArray4 coarse_eps_y;
+  ConstArray4 fine_phi;
+  ConstArray4 fine_eps;
+  ConstArray4 fine_eps_y;
+  CoverageMaskView coverage;
+  Box2D footprint;
+  Real idx2;
+  Real idy2;
+  int ratio;
+  bool has_eps;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (coverage.covered(i, j))
+      return;
+    const int ilo = footprint.lo[0];
+    const int ihi = footprint.hi[0];
+    const int jlo = footprint.lo[1];
+    const int jhi = footprint.hi[1];
+    if (i == ilo - 1 && j >= jlo && j <= jhi) {
+      const Real coarse_face =
+          (has_eps ? eps_harmonic(coarse_eps(i, j, 0), coarse_eps(i + 1, j, 0)) : Real(1)) *
+          (coarse_phi(i + 1, j, 0) - coarse_phi(i, j, 0)) * idx2;
+      Real fine_sum = Real(0);
+      for (int t = 0; t < ratio; ++t) {
+        const int jf = ratio * j + t;
+        const Real face = has_eps
+                              ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0),
+                                             fine_eps(ratio * ilo, jf, 0))
+                              : Real(1);
+        fine_sum += face *
+                    (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
+      }
+      residual(i, j, 0) += coarse_face - fine_sum * idx2;
+      return;
+    }
+    if (i == ihi + 1 && j >= jlo && j <= jhi) {
+      const Real coarse_face =
+          (has_eps ? eps_harmonic(coarse_eps(i, j, 0), coarse_eps(i - 1, j, 0)) : Real(1)) *
+          (coarse_phi(i - 1, j, 0) - coarse_phi(i, j, 0)) * idx2;
+      Real fine_sum = Real(0);
+      for (int t = 0; t < ratio; ++t) {
+        const int jf = ratio * j + t;
+        const Real face =
+            has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
+                                    fine_eps(ratio * ihi + ratio, jf, 0))
+                    : Real(1);
+        fine_sum += face * (fine_phi(ratio * ihi + ratio - 1, jf, 0) -
+                            fine_phi(ratio * ihi + ratio, jf, 0));
+      }
+      residual(i, j, 0) += coarse_face - fine_sum * idx2;
+      return;
+    }
+    if (j == jlo - 1 && i >= ilo && i <= ihi) {
+      const Real coarse_face =
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0))
+                   : Real(1)) *
+          (coarse_phi(i, j + 1, 0) - coarse_phi(i, j, 0)) * idy2;
+      Real fine_sum = Real(0);
+      for (int t = 0; t < ratio; ++t) {
+        const int fi = ratio * i + t;
+        const Real face = has_eps
+                              ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
+                                             fine_eps_y(fi, ratio * jlo, 0))
+                              : Real(1);
+        fine_sum += face *
+                    (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
+      }
+      residual(i, j, 0) += coarse_face - fine_sum * idy2;
+      return;
+    }
+    if (j == jhi + 1 && i >= ilo && i <= ihi) {
+      const Real coarse_face =
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0))
+                   : Real(1)) *
+          (coarse_phi(i, j - 1, 0) - coarse_phi(i, j, 0)) * idy2;
+      Real fine_sum = Real(0);
+      for (int t = 0; t < ratio; ++t) {
+        const int fi = ratio * i + t;
+        const Real face =
+            has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
+                                    fine_eps_y(fi, ratio * jhi + ratio, 0))
+                    : Real(1);
+        fine_sum += face * (fine_phi(fi, ratio * jhi + ratio - 1, 0) -
+                            fine_phi(fi, ratio * jhi + ratio, 0));
+      }
+      residual(i, j, 0) += coarse_face - fine_sum * idy2;
+    }
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<FacLegacyFillCoarseFineGhostKernel>);
+static_assert(std::is_trivially_copyable_v<FacLegacyMaskedAddKernel>);
+static_assert(std::is_trivially_copyable_v<FacLegacySorKernel>);
+static_assert(std::is_trivially_copyable_v<FacLegacyMaskedResidualKernel>);
+static_assert(std::is_trivially_copyable_v<FacLegacyMaskedNormKernel>);
+static_assert(std::is_trivially_copyable_v<FacLegacyFluxCorrectionKernel>);
 
 }  // namespace detail
 
@@ -678,15 +873,12 @@ class CompositeFacPoisson {
 
   /// phi_c += e_c on the NON covered cells (the correction does not touch the covered = average_down).
   void add_uncovered(MultiFab& phi, const MultiFab& e) {
-    device_fence();
+    const CoverageMaskView coverage = cov_.view();
     for (int li = 0; li < phi.local_size(); ++li) {
       Array4 p = phi.fab(li).array();
       const ConstArray4 ec = e.fab(li).const_array();
       const Box2D b = phi.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          if (!cov_.covered(i, j))
-            p(i, j, 0) += ec(i, j, 0);
+      for_each_cell(b, detail::FacLegacyMaskedAddKernel{p, ec, coverage});
     }
   }
 
@@ -748,17 +940,11 @@ class CompositeFacPoisson {
   /// overlaps the valid cells of another -> read from the coarse only (no fine-fine exchange).
   void fill_cf_ghosts() {
     const ConstArray4 C = phi_c_.fab(0).const_array();  // replicated mono-box coarse
-    const int ng = phi_f_.n_grow();
     for (int li = 0; li < phi_f_.local_size(); ++li) {
       Array4 F = phi_f_.fab(li).array();
       const Box2D vb = phi_f_.box(li);
-      for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-        for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-          const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-          if (inside)
-            continue;  // ghosts only
-          F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-        }
+      for_each_cell(phi_f_.fab(li).grown_box(),
+                    detail::FacLegacyFillCoarseFineGhostKernel{F, C, vb, ratio_});
     }
   }
 
@@ -767,17 +953,11 @@ class CompositeFacPoisson {
   /// interior coeff and the injected coarse coeff). Generic (eps, a_xy, a_yx).
   void fill_cf_coarse_to_fine(const MultiFab& coarse, MultiFab& fine) {
     const ConstArray4 C = coarse.fab(0).const_array();  // replicated mono-box coarse
-    const int ng = fine.n_grow();
     for (int li = 0; li < fine.local_size(); ++li) {
       Array4 F = fine.fab(li).array();
       const Box2D vb = fine.box(li);
-      for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-        for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-          const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-          if (inside)
-            continue;
-          F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-        }
+      for_each_cell(fine.fab(li).grown_box(),
+                    detail::FacLegacyFillCoarseFineGhostKernel{F, C, vb, ratio_});
     }
   }
 
@@ -833,29 +1013,12 @@ class CompositeFacPoisson {
           has_eps_y_ ? eps_y_f_.fab(li).const_array() : eps_f_.fab(li).const_array();
       const ConstArray4 AXY = axy_f_.fab(li).const_array();
       const ConstArray4 AYX = ayx_f_.fab(li).const_array();
+      const int color_count = hc ? 4 : 2;
       for (int s = 0; s < sweeps; ++s)
-        for (int color = 0; color < 2; ++color)
-          for (int j = vb.lo[1]; j <= vb.hi[1]; ++j)
-            for (int i = vb.lo[0]; i <= vb.hi[0]; ++i) {
-              if (((i + j) & 1) != color)
-                continue;
-              // FACE permittivities (harmonic mean of the 2 centers); eps==1 -> faces == 1.
-              const Real exm = he ? eps_harmonic(E(i, j, 0), E(i - 1, j, 0)) : Real(1);
-              const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
-              const Real eym = he ? eps_harmonic(EY(i, j, 0), EY(i, j - 1, 0)) : Real(1);
-              const Real eyp = he ? eps_harmonic(EY(i, j, 0), EY(i, j + 1, 0)) : Real(1);
-              const Real diag =
-                  (exm + exp) * idx2 + (eym + eyp) * idy2 + (has_reaction_ ? reaction_ : Real(0));
-              const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
-                              (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
-              // EXPLICIT cross terms (9 points, read from the current P): div(A grad phi) =
-              // diag_block + cross. We solve diag_block(P) + cross(P) = f -> P = (nb + cross - f)/diag.
-              const Real cross =
-                  hc ? detail::cross_div(Pc, true, AXY, true, AYX, i, j, idx, idy) : Real(0);
-              const Real pgs = (nb + cross - F(i, j, 0)) / diag;
-              P(i, j, 0) = (Real(1) - omega) * P(i, j, 0) +
-                           omega * pgs;  // over-relax (under-relax if strong)
-            }
+        for (int color = 0; color < color_count; ++color)
+          for_each_cell(vb, detail::FacLegacySorKernel{
+                                P, Pc, F, E, EY, AXY, AYX, idx2, idy2, idx, idy, omega,
+                                has_reaction_ ? reaction_ : Real(0), color, he, hc});
     }
   }
 
@@ -875,14 +1038,12 @@ class CompositeFacPoisson {
                     has_cross_ ? &axy_c_ : nullptr, has_cross_ ? &ayx_c_ : nullptr);
     if (has_reaction_)
       apply_constant_reaction_(lap_c_, operator_view);
-    device_fence();
     Array4 R = res_c_.fab(0).array();
     const ConstArray4 LAP = lap_c_.fab(0).const_array();
     const ConstArray4 FC = f_c_.fab(0).const_array();
     const Box2D b = res_c_.box(0);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        R(i, j, 0) = cov_.covered(i, j) ? Real(0) : (FC(i, j, 0) - LAP(i, j, 0));
+    const CoverageMaskView coverage = cov_.view();
+    for_each_cell(b, detail::FacLegacyMaskedResidualKernel{R, FC, LAP, coverage});
 
     // C-F FLUX CORRECTION, PER FINE PATCH. On each coarse cell BORDERING a patch (non covered,
     // covered neighbor), we REPLACE the contribution of the C-F face in div(eps grad phi_c) by the
@@ -905,79 +1066,15 @@ class CompositeFacPoisson {
       const ConstArray4 EF = eps_f_.fab(g).const_array();
       const ConstArray4 EYF =
           has_eps_y_ ? eps_y_f_.fab(g).const_array() : eps_f_.fab(g).const_array();
-      const int Ic0 = patch_coarse_[g].lo[0], Ic1 = patch_coarse_[g].hi[0];
-      const int Jc0 = patch_coarse_[g].lo[1], Jc1 = patch_coarse_[g].hi[1];
-      // Faces NORMAL TO X: bordering columns I = Ic0-1 (covered +x face) and I = Ic1+1 (-x face).
-      for (int J = Jc0; J <= Jc1; ++J) {
-        if (!cov_.covered(Ic0 - 1, J)) {  // left: cell (Ic0-1, J), fine face at i = r*Ic0.
-          const int I = Ic0 - 1;
-          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I + 1, J, 0)) : Real(1);
-          const Real coarse_c = efc * (PC(I + 1, J, 0) - PC(I, J, 0)) * idx2;
-          Real fine_sum = Real(0);
-          for (int t = 0; t < r; ++t) {
-            const int jf = r * J + t;
-            const Real eff =
-                he ? eps_harmonic(EF(r * Ic0 - 1, jf, 0), EF(r * Ic0, jf, 0)) : Real(1);
-            fine_sum += eff * (PF(r * Ic0, jf, 0) - PF(r * Ic0 - 1, jf, 0));  // interior - ghost
-          }
-          R(I, J, 0) += coarse_c - fine_sum * idx2;
-        }
-        if (!cov_.covered(Ic1 + 1, J)) {  // right: cell (Ic1+1, J), fine faces at i = r*Ic1+r.
-          const int I = Ic1 + 1;
-          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I - 1, J, 0)) : Real(1);
-          const Real coarse_c = efc * (PC(I - 1, J, 0) - PC(I, J, 0)) * idx2;
-          Real fine_sum = Real(0);
-          for (int t = 0; t < r; ++t) {
-            const int jf = r * J + t;
-            const Real eff =
-                he ? eps_harmonic(EF(r * Ic1 + r - 1, jf, 0), EF(r * Ic1 + r, jf, 0)) : Real(1);
-            fine_sum += eff * (PF(r * Ic1 + r - 1, jf, 0) - PF(r * Ic1 + r, jf, 0));
-          }
-          R(I, J, 0) += coarse_c - fine_sum * idx2;
-        }
-      }
-      // Faces NORMAL TO Y: bordering rows J = Jc0-1 (+y face) and J = Jc1+1 (-y face).
-      for (int I = Ic0; I <= Ic1; ++I) {
-        if (!cov_.covered(I, Jc0 - 1)) {
-          const int J = Jc0 - 1;
-          const Real efc = he ? eps_harmonic(EYC(I, J, 0), EYC(I, J + 1, 0)) : Real(1);
-          const Real coarse_c = efc * (PC(I, J + 1, 0) - PC(I, J, 0)) * idy2;
-          Real fine_sum = Real(0);
-          for (int t = 0; t < r; ++t) {
-            const int iff = r * I + t;
-            const Real eff =
-                he ? eps_harmonic(EYF(iff, r * Jc0 - 1, 0), EYF(iff, r * Jc0, 0)) : Real(1);
-            fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
-          }
-          R(I, J, 0) += coarse_c - fine_sum * idy2;
-        }
-        if (!cov_.covered(I, Jc1 + 1)) {
-          const int J = Jc1 + 1;
-          const Real efc = he ? eps_harmonic(EYC(I, J, 0), EYC(I, J - 1, 0)) : Real(1);
-          const Real coarse_c = efc * (PC(I, J - 1, 0) - PC(I, J, 0)) * idy2;
-          Real fine_sum = Real(0);
-          for (int t = 0; t < r; ++t) {
-            const int iff = r * I + t;
-            const Real eff =
-                he ? eps_harmonic(EYF(iff, r * Jc1 + r - 1, 0), EYF(iff, r * Jc1 + r, 0)) : Real(1);
-            fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
-          }
-          R(I, J, 0) += coarse_c - fine_sum * idy2;
-        }
-      }
+      for_each_cell(patch_coarse_[g].grow(1),
+                    detail::FacLegacyFluxCorrectionKernel{
+                        R, PC, EC, EYC, PF, EF, EYF, coverage, patch_coarse_[g], idx2, idy2, r,
+                        he});
     }
 
     // inf norm of the residual over the NON covered cells.
-    Real nrm = Real(0);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        if (!cov_.covered(i, j)) {
-          if (!std::isfinite(static_cast<double>(R(i, j, 0))))
-            return std::numeric_limits<Real>::infinity();
-          else
-            nrm = std::max(nrm, std::fabs(R(i, j, 0)));
-        }
-    return nrm;
+    return reduce_max_cell(b, detail::FacLegacyMaskedNormKernel{res_c_.fab(0).const_array(),
+                                                                coverage});
   }
 
   void record_residual(int iteration, Real residual) {

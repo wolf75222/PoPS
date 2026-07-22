@@ -166,6 +166,57 @@ TEST(test_prepared_boundary_plan, materializes_move_only_lane_session_before_exe
   EXPECT_EQ(state.fab(0)(4, 2, 0), Real(5));
 }
 
+TEST(test_prepared_boundary_plan, grid_sessions_apply_robin_with_each_level_geometry) {
+  const Box2D coarse_domain = Box2D::from_extents(2, 2);
+  const Box2D fine_domain = Box2D::from_extents(4, 4);
+  MultiFab coarse = scalar_field(coarse_domain, 1, 1);
+  MultiFab fine = scalar_field(fine_domain, 1, 1);
+  coarse.set_val(Real(2));
+  fine.set_val(Real(2));
+
+  BCRec robin;
+  robin.xlo = BCType::Robin;
+  robin.xhi = BCType::Foextrap;
+  robin.ylo = BCType::Foextrap;
+  robin.yhi = BCType::Foextrap;
+  robin.xlo_alpha = Real(1);
+  robin.xlo_beta = Real(1);
+  robin.xlo_val = Real(0);
+  robin.dx = Real(37);  // Deliberately not either level metric.
+  auto plan = std::make_shared<PreparedBoundaryPlan>("case::block::robin-plan", 1,
+                                                      std::vector<BCRec>{robin});
+
+  // A Box2D has no physical metric.  Keeping the historical overload for metric-independent laws
+  // is harmless, but Robin must never reuse the declaration-time placeholder spacing.
+  EXPECT_THROW(plan->fill_same_level_and_physical(coarse, coarse_domain),
+               std::invalid_argument);
+  const auto metricless_lane = ExecutionLane::world("case::block::robin-metricless-lane");
+  auto metricless_session = plan->make_session(metricless_lane);
+  EXPECT_THROW(metricless_session.fill_same_level_and_physical(coarse, coarse_domain),
+               std::invalid_argument);
+
+  GridContext coarse_context;
+  coarse_context.dom = coarse_domain;
+  coarse_context.geom = Geometry(coarse_domain, Real(0), Real(1), Real(0), Real(1));
+  coarse_context.boundary_plan = plan;
+  GridContext fine_context;
+  fine_context.dom = fine_domain;
+  fine_context.geom = Geometry(fine_domain, Real(0), Real(1), Real(0), Real(1));
+  fine_context.boundary_plan = plan;
+
+  const auto coarse_lane = ExecutionLane::world("case::block::robin-coarse-lane");
+  const auto fine_lane = ExecutionLane::world("case::block::robin-fine-lane");
+  PreparedGridBoundarySession coarse_session(coarse_context, coarse_lane);
+  PreparedGridBoundarySession fine_session(fine_context, fine_lane);
+  coarse_session.fill(coarse);
+  fine_session.fill(fine);
+
+  // alpha=beta=1, value=0 gives u_g=((1/h)-1/2)/((1/h)+1/2) u_i.
+  EXPECT_EQ(plan->component_bc(0).dx, Real(37));  // Execution did not mutate shared authority.
+  EXPECT_NEAR(coarse.fab(0)(-1, 0, 0), Real(1.2), 1e-12);          // h = 1/2
+  EXPECT_NEAR(fine.fab(0)(-1, 0, 0), Real(14) / Real(9), 1e-12);  // h = 1/4
+}
+
 TEST(test_prepared_boundary_plan, rejects_incomplete_periodic_pairs_and_insufficient_ghosts) {
   BCRec mixed = physical_bc();
   mixed.xlo = BCType::Periodic;

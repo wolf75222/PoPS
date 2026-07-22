@@ -287,7 +287,7 @@ TEST(SystemDomain, LayoutReportReflectsCartesianConstruction) {
   pops::SystemConfig c;
   c.n = 16;
   c.L = 1.0;
-  c.periodic = true;
+  c.periodicity = {true, false};
   c.geometry = "cartesian";
   pops::runtime::system::SystemDomain domain(c);
   const auto rep = domain.layout_report();
@@ -295,7 +295,12 @@ TEST(SystemDomain, LayoutReportReflectsCartesianConstruction) {
   EXPECT_EQ(rep.nx, 16);
   EXPECT_EQ(rep.ny, 16);
   EXPECT_EQ(rep.n_boxes, 1) << "Cartesian is a single box";
-  EXPECT_TRUE(rep.periodic);
+  EXPECT_TRUE(rep.periodic_x);
+  EXPECT_FALSE(rep.periodic_y);
+  EXPECT_TRUE(domain.bc_.xlo == pops::BCType::Periodic);
+  EXPECT_TRUE(domain.bc_.xhi == pops::BCType::Periodic);
+  EXPECT_TRUE(domain.bc_.ylo == pops::BCType::Foextrap);
+  EXPECT_TRUE(domain.bc_.yhi == pops::BCType::Foextrap);
   EXPECT_FALSE(rep.eb_active);
   EXPECT_GE(rep.aux_ncomp, 3) << "the shared aux channel is at least 3 wide";
 }

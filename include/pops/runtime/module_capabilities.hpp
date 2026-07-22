@@ -237,9 +237,11 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("reconstruction:muscl", "available",
                        "ghost_depth=2; native limiters minmod/vanleer", kLayoutRouteTokensCsv,
                        "production", "host", mpi, gpu),
-      capability_route("reconstruction:weno5", "available",
-                       "ghost_depth=3; high-order route is native", kLayoutRouteTokensCsv,
-                       "production", "host", mpi, gpu),
+      capability_route(
+          "reconstruction:weno5", "available",
+          "ghost_depth=3; uniform and ratio-2 2D AMR routes are native; AMR selects the "
+          "conservative order-5 coarse/fine provider for cell averages from resolved capabilities",
+          kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("limiter:mc", "unavailable",
                        "catalogued but no native C++ limiter symbol exists", kLayoutRouteTokensCsv,
                        "none", "host", mpi, gpu, "limiter=MC()", "Minmod() or VanLeer()",

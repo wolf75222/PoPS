@@ -8,7 +8,17 @@
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 
+#include <limits>
+
 using namespace pops;
+
+namespace {
+
+struct NoOpCellKernel {
+  POPS_HD void operator()(int, int) const {}
+};
+
+}  // namespace
 
 TEST(test_fab2d, fill_interior_leaves_ghosts_untouched) {
   Box2D valid = Box2D::from_extents(4, 3);  // [0..3] x [0..2]
@@ -35,4 +45,38 @@ TEST(test_fab2d, fill_interior_leaves_ghosts_untouched) {
   // composante-lente : le plan c=1 est un bloc contigu apres c=0,
   // de stride nx_tot * ny_tot = 6 * 5 = 30
   EXPECT_EQ(&fab(0, 0, 1) - &fab(0, 0, 0), 30) << "comp_slowest";
+}
+
+TEST(test_fab2d, set_val_fills_valid_ghosts_components_and_nonzero_origin) {
+  const Box2D valid{{-7, 11}, {-4, 13}};
+  Fab2D fab(valid, /*ncomp=*/3, /*ng=*/2);
+
+  fab.set_val(Real(-3.25));
+
+  const Box2D grown = fab.grown_box();
+  for (int component = 0; component < fab.ncomp(); ++component)
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        EXPECT_DOUBLE_EQ(fab(i, j, component), Real(-3.25));
+}
+
+TEST(test_fab2d, widened_offsets_support_extreme_negative_origins) {
+  constexpr int lo = std::numeric_limits<int>::min();
+  Fab2D fab(Box2D{{lo, lo}, {lo + 1, lo + 1}}, /*ncomp=*/1, /*ng=*/0);
+
+  fab(lo + 1, lo + 1) = Real(4.5);
+  EXPECT_DOUBLE_EQ(fab.const_array()(lo + 1, lo + 1), Real(4.5));
+}
+
+TEST(test_fab2d, rejects_noniterable_bounds_and_oversized_allocation_before_launch) {
+  constexpr int lo = std::numeric_limits<int>::min();
+  constexpr int hi = std::numeric_limits<int>::max();
+
+  EXPECT_THROW((void)Fab2D(Box2D{{hi, 0}, {hi, 0}}, /*ncomp=*/1, /*ng=*/0), ValidationError);
+  EXPECT_THROW((void)Fab2D(Box2D{{lo, 0}, {-1, 0}}, /*ncomp=*/1, /*ng=*/0), ValidationError);
+  EXPECT_THROW((void)Fab2D(Box2D{{0, 0}, {hi - 1, hi - 1}}, /*ncomp=*/3, /*ng=*/0),
+               ValidationError);
+
+  // The generic iteration seam must make the same decision before Kokkos sees hi + 1.
+  EXPECT_THROW(for_each_cell(Box2D{{hi, 0}, {hi, 0}}, NoOpCellKernel{}), std::overflow_error);
 }

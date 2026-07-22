@@ -20,19 +20,21 @@ struct LocalGrid {
   BoxArray ba;
   DistributionMapping dm;
   BCRec bc;
-  bool periodic;
+  Periodicity periodicity;
   MultiFab aux;
 };
 
-inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const double* aux_input,
-                           int naux) {
+inline LocalGrid make_grid(int n, double dx, double dy, Periodicity periodicity,
+                           const double* aux_input, int naux) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, dx * n, 0.0, dy * n};
   BoxArray boxes = BoxArray::from_domain(dom, n);
   DistributionMapping distribution(boxes.size(), 1);
   BCRec bc;
-  if (!periodic)
-    bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Foextrap;
+  if (!periodicity.x)
+    bc.xlo = bc.xhi = BCType::Foextrap;
+  if (!periodicity.y)
+    bc.ylo = bc.yhi = BCType::Foextrap;
   MultiFab aux(boxes, distribution, naux, 1);
   aux.set_val(0.0);
   if (aux_input != nullptr) {
@@ -43,10 +45,7 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const dou
         for (int i = 0; i < n; ++i)
           values(i, j, component) = aux_input[static_cast<std::size_t>(component) * cells +
                                               static_cast<std::size_t>(j) * n + i];
-    if (periodic)
-      fill_boundary(aux, dom, Periodicity{true, true});
-    else
-      fill_ghosts(aux, dom, bc);
+    fill_ghosts(aux, dom, bc);
     const std::size_t tail = static_cast<std::size_t>(naux) * cells;
     for (int component = 0; component < naux; ++component) {
       const std::size_t offset = tail + static_cast<std::size_t>(2) * component;
@@ -59,7 +58,7 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const dou
             component);
     }
   }
-  return LocalGrid{dom, geom, boxes, distribution, bc, periodic, std::move(aux)};
+  return LocalGrid{dom, geom, boxes, distribution, bc, periodicity, std::move(aux)};
 }
 
 inline void fill_interior(MultiFab& field, const double* input, int n, int ncomp) {

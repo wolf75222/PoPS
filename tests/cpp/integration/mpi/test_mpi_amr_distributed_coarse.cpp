@@ -89,7 +89,7 @@ static bool bootstrap_volume_average_replicates_parent() {
                           runtime::amr::IndexTransform{{coarse_domain.lo[0], coarse_domain.lo[1]},
                                                        {fine_domain.lo[0], fine_domain.lo[1]},
                                                        {2, 2}},
-                          true});
+                          coarse_domain, fine_domain, true});
 
   double local_error = 0.0;
   if (coarse.local_size() != 1) {
@@ -130,9 +130,25 @@ static bool regrid_owner_change_preserves_old_fine() {
   parent.set_val(Real(-1));
   old_fine.set_val(Real(7));
 
-  MultiFab remapped = regrid_field_on_layout(
+  const auto prepared = runtime::amr::prepare_conservative_linear();
+  const RegridProlongation prolong = [&prepared](const MultiFab& coarse, MultiFab& fine,
+                                                 int parent_level, int ratio,
+                                                 bool replicated_parent,
+                                                 const CommunicatorView&) {
+    const Box2D coarse_box = coarse.box_array().bounding_box();
+    const Box2D fine_domain = coarse_box.refine(ratio);
+    prepared.spatial(
+        coarse, fine,
+        runtime::amr::SpatialTransferContext{
+            parent_level, parent_level + 1, fine.ncomp(),
+            runtime::amr::IndexTransform{{coarse_box.lo[0], coarse_box.lo[1]},
+                                         {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}},
+            coarse_box, fine_domain, replicated_parent});
+  };
+  MultiFab remapped = regrid_field_on_layout_with_provider(
       BoxArray(std::move(fine_boxes)), DistributionMapping(std::move(new_owners)), parent, old_fine,
-      /*pk=*/0, /*ngf=*/0, /*coarse_replicated=*/true, /*refinement_ratio=*/2);
+      /*pk=*/0, /*ngf=*/0, prolong, world_communicator_view(),
+      /*coarse_replicated=*/true, /*refinement_ratio=*/2);
   device_fence();
 
   double local_error = 0.0;
@@ -257,7 +273,7 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 4;
   cfg.distribute_coarse = distribute;  // <-- le mode scalable cable dans AmrSystem
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2, le moins agressif pour le MG geometrique).

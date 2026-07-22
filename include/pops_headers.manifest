@@ -99,6 +99,7 @@ api pops/numerics/elliptic/poisson/poisson_operator.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 api pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 api pops/numerics/fv/flux_interfaces.hpp
+api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
 api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
@@ -119,6 +120,7 @@ api pops/numerics/time/amr/advance/amr_advance.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp
 api pops/numerics/time/amr/levels/amr_subcycling.hpp
+api pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
 api pops/numerics/time/amr/reflux/amr_flux_helpers.hpp
 api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
@@ -135,7 +137,8 @@ sdk-support pops/parallel/field_distribution_reduction.hpp
 api pops/parallel/prepared_provider_consensus.hpp
 sdk-support pops/parallel/solve_report_consensus.hpp
 sdk-support pops/parallel/world_communicator.hpp
-test-only pops/parallel/load_balance.hpp
+api pops/parallel/load_balance.hpp
+api pops/parallel/prepared_load_balance.hpp
 api pops/physics/bricks/bricks.hpp
 api pops/physics/bricks/elliptic.hpp
 api pops/physics/bricks/hyperbolic.hpp
@@ -155,6 +158,7 @@ sdk-support pops/runtime/amr/bootstrap_transfer_registry.hpp
 sdk-support pops/runtime/amr/composite_reduction.hpp
 sdk-support pops/runtime/amr/field_solver_options.hpp
 sdk-support pops/runtime/amr/prepared_component_providers.hpp
+sdk-support pops/runtime/amr/prepared_tagging_execution.hpp
 api pops/runtime/amr_system.hpp
 sdk-support pops/runtime/analytic/collective_preflight.hpp
 sdk-support pops/runtime/analytic/expression.hpp
@@ -209,7 +213,7 @@ sdk-support pops/runtime/program/clock_schedule.hpp
 sdk-root pops/runtime/program/coeff_elliptic_ops.hpp
 sdk-root pops/runtime/program/component_package.hpp
 sdk-root pops/runtime/program/external_brick.hpp
-test-only pops/runtime/program/external_riemann_brick.hpp
+sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp

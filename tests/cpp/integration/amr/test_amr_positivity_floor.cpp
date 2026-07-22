@@ -175,12 +175,14 @@ TEST(test_amr_positivity_floor, Runs) {
 
     // unclamped (pos_floor = 0): the sub-floor coarse cell propagates to its fine ghosts.
     Uf.set_val(1.0);
-    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, Real(0.5), /*replicated_parent=*/true, Real(0), 0);
+    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, cdom, Real(0.5), /*replicated_parent=*/true,
+                           Real(0), 0, Periodicity{false, false});
     const int n_raw = sub_floor_ghosts(Uf);
 
     // clamped (pos_floor = floor): every C/F fine-ghost density >= floor; momentum unchanged.
     Uf.set_val(1.0);
-    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, Real(0.5), /*replicated_parent=*/true, floor, 0);
+    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, cdom, Real(0.5), /*replicated_parent=*/true, floor, 0,
+                           Periodicity{false, false});
     const int n_pp = sub_floor_ghosts(Uf);
     Real ghost_rho = Real(1), ghost_mom = Real(0);
     if (Uf.local_size() > 0) {

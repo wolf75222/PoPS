@@ -31,15 +31,15 @@
 //       (non fini), l'IMEX (backward Euler, inconditionnellement stable) reste fini et capture
 //       l'equilibre. + parite add_compiled_model == add_native_block (dmax==0) en regime non explosif.
 //
-//   (A) et (B) tournent en DIRECT (sans .so) sous TOUS les backends (hote, Kokkos Serial) : c'est la
-//   parite decisive qui ne casse pas nvcc. Les legs .so (add_native_block) AUTO-SAUTENT sous Kokkos
-//   (loader CPU nu, ABI incompatible) ; la parite CPU reste couverte par le chemin direct.
+//   (A), (B) et le chargeur .so tournent avec le meme contrat de compilation que le binaire hote,
+//   y compris Kokkos. Aucun backend ni echec de compilation n'est accepte silencieusement.
 //
 // CMake injecte POPS_TEST_CXX, POPS_TEST_INCLUDE, POPS_TEST_CXX_STD, POPS_TEST_TMPDIR (meme pattern que
 // test_amr_riemann_native).
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -126,7 +126,7 @@ AmrSystemConfig make_cfg(int n) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 4;
   return cfg;
 }
@@ -192,7 +192,8 @@ extern "C" const char* pops_compiled_param_names() { return ""; }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
                                        double gamma, int substeps, const double*, int,
-                                       double pos_floor) {
+                                       double pos_floor, double weno_epsilon,
+                                       bool wave_speed_cache) {
   pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
   if (std::strncmp(name, "stiff:", 6) == 0) {
     const double eps = std::atof(name + 6);
@@ -202,7 +203,8 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
         *s, name,
         pops_generated::StiffModel{pops::Euler{static_cast<pops::Real>(gamma)}, r,
                                   pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-        limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
+        limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
+        wave_speed_cache);
     return;
   }
   pops::add_compiled_model<pops_generated::PotModel>(
@@ -211,25 +213,11 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
                               pops::PotentialForce{static_cast<pops::Real>()CPP" +
          std::to_string(kQom) + R"CPP()},
                               pops::BackgroundDensity{pops::Real(1), pops::Real(1)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
+      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
+      wave_speed_cache);
 }
 )CPP";
   // clang-format on
-}
-
-bool compile_loader(const std::string& src_path, const std::string& so_path) {
-#if defined(__APPLE__)
-  const std::string cc = "/usr/bin/c++";
-#else
-  const std::string cc = POPS_TEST_CXX;
-#endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
-                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
-#if defined(__APPLE__)
-  cmd += " -undefined dynamic_lookup";
-#endif
-  cmd += " 2> /dev/null";
-  return std::system(cmd.c_str()) == 0;
 }
 
 // --- helpers de run (Part A : potential ; Part B : stiff) ---
@@ -398,74 +386,66 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
 
   // ============================================================================================
   // (C) CHEMIN .so : add_native_block(loader) == add_compiled_model, sous IMEX (A potential + B stiff).
-  //     Le loader est recompile par un g++ nu -> incompatible avec un module Kokkos : SAUTE.
+  // Le DSO rejoue exactement le contrat de compilation Kokkos du binaire de test.
   // ============================================================================================
-#if defined(POPS_HAS_KOKKOS)
-  std::printf("skip (C) loader .so (backend Kokkos : loader CPU nu incompatible)\n");
-#else
-  const char* cxx = POPS_TEST_CXX;
-  if (!cxx || cxx[0] == '\0') {
-    std::printf("skip (C) loader .so (aucun compilateur C++ connu du build)\n");
-  } else {
-    const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_imex_native_" +
-                            std::to_string(static_cast<long>(std::clock()));
-    const std::string src = tmp + ".cpp";
-    const std::string so = tmp + ".so";
-    {
-      std::ofstream f(src);
-      f << loader_source();
-    }
-    if (!compile_loader(src, so)) {
-      std::printf("skip (C) loader .so (echec de compilation du loader -- en-tetes/std ?)\n");
-    } else {
-      // (C-A) potential sous IMEX : add_native_block == add_compiled_model (dmax==0).
-      {
-        AmrSystem A(make_cfg(n));
-        A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-        configure_refined_execution(A);
-        A.set_density("gas", rho);
-        for (int k = 0; k < nsteps; ++k)
-          A.step(dtA);
-
-        AmrSystem B(make_cfg(n));
-        add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
-                           kGamma);
-        configure_refined_execution(B);
-        B.set_density("gas", rho);
-        for (int k = 0; k < nsteps; ++k)
-          B.step(dtA);
-
-        chk(maxdiff(A.density(), B.density()) == 0.0,
-            "[C-A] add_native_block == add_compiled_model sous IMEX (potential, dmax==0)");
-        chk(A.n_patches() == B.n_patches(), "[C-A] n_patches loader == direct");
-      }
-      // (C-B) stiff sous IMEX (regime modere, fini) : add_native_block == add_compiled_model (dmax==0).
-      {
-        const double eps = 1e-3, dtB = 2e-4;
-        const std::string bname = "stiff:" + std::to_string(eps);
-        AmrSystem A(make_cfg(n));
-        A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-        configure_refined_execution(A);
-        A.set_density("gas", rho);
-        for (int k = 0; k < nsteps; ++k)
-          A.step(dtB);
-
-        AmrSystem B(make_cfg(n));
-        add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                           kGamma);
-        configure_refined_execution(B);
-        B.set_density("gas", rho);
-        for (int k = 0; k < nsteps; ++k)
-          B.step(dtB);
-
-        chk(maxdiff(A.density(), B.density()) == 0.0,
-            "[C-B] add_native_block == add_compiled_model sous IMEX (stiff, dmax==0)");
-      }
-      std::printf(
-          "OK (C) add_native_block == add_compiled_model sous IMEX (potential + stiff, dmax==0)\n");
-    }
+  const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_imex_native_" +
+                          std::to_string(static_cast<long>(std::clock()));
+  const std::string src = tmp + ".cpp";
+  const std::string so = tmp + ".so";
+  {
+    std::ofstream f(src);
+    f << loader_source();
   }
-#endif  // POPS_HAS_KOKKOS
+  const auto package = pops::test::native_dso::compile_shared(src, so);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_amr_imex_native", package);
+    return 1;
+  }
+  // (C-A) potential sous IMEX : add_native_block == add_compiled_model (dmax==0).
+  {
+    AmrSystem A(make_cfg(n));
+    A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
+    configure_refined_execution(A);
+    A.set_density("gas", rho);
+    for (int k = 0; k < nsteps; ++k)
+      A.step(dtA);
+
+    AmrSystem B(make_cfg(n));
+    add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
+                       kGamma);
+    configure_refined_execution(B);
+    B.set_density("gas", rho);
+    for (int k = 0; k < nsteps; ++k)
+      B.step(dtA);
+
+    chk(maxdiff(A.density(), B.density()) == 0.0,
+        "[C-A] add_native_block == add_compiled_model sous IMEX (potential, dmax==0)");
+    chk(A.n_patches() == B.n_patches(), "[C-A] n_patches loader == direct");
+  }
+  // (C-B) stiff sous IMEX (regime modere, fini) : add_native_block == add_compiled_model (dmax==0).
+  {
+    const double eps = 1e-3, dtB = 2e-4;
+    const std::string bname = "stiff:" + std::to_string(eps);
+    AmrSystem A(make_cfg(n));
+    A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
+    configure_refined_execution(A);
+    A.set_density("gas", rho);
+    for (int k = 0; k < nsteps; ++k)
+      A.step(dtB);
+
+    AmrSystem B(make_cfg(n));
+    add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
+                       kGamma);
+    configure_refined_execution(B);
+    B.set_density("gas", rho);
+    for (int k = 0; k < nsteps; ++k)
+      B.step(dtB);
+
+    chk(maxdiff(A.density(), B.density()) == 0.0,
+        "[C-B] add_native_block == add_compiled_model sous IMEX (stiff, dmax==0)");
+  }
+  std::printf(
+      "OK (C) add_native_block == add_compiled_model sous IMEX (potential + stiff, dmax==0)\n");
 
   if (fails == 0)
     std::printf(

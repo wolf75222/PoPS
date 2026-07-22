@@ -1,12 +1,13 @@
 /// @file
-/// @brief Dynamic regrid: (re)builds a fine level from the tagging of a coarse level.
+/// @brief Portable tagging primitives shared by the canonical AMR regrid transaction.
 ///
 /// Layer: `include/pops/amr` (AMR geometric primitives).
-/// Role: tags a level, clusters the tagged cells into boxes (Berger-Rigoutsos), refines into the
-/// BoxArray of the next level, rebuilds its MultiFab and fills it (interpolation from the
-/// coarse level, then a copy of the old fine level where it existed to preserve accuracy).
-/// Contract: the tagging criterion is a generic predicate on (ConstArray4, i, j); we stay
-/// agnostic of the physics. For a gradient criterion, the caller fills the ghosts beforehand.
+/// Role: tags a level and provides the low-level bounded tag dilation primitive. Layout consensus,
+/// clustering, proper nesting, load balancing and field publication are a single transaction in
+/// coupling/amr/amr_regrid_coupler.hpp; there is intentionally no second regrid pipeline here.
+/// Contract: the low-level tagging criterion is a trivially-copyable, device-callable predicate on
+/// (ConstArray4, i, j); we stay agnostic of the physics. For a gradient criterion, the caller fills
+/// the ghosts beforehand. Runtime-authored tagging uses PreparedTaggingExecutionPlan instead.
 ///
 /// Invariants:
 /// - conservative regrid = common hierarchy, co-located cells, regrid by union of tags;
@@ -15,39 +16,75 @@
 
 #pragma once
 
-#include <pops/amr/hierarchy/amr_hierarchy.hpp>
-#include <pops/amr/tagging/cluster.hpp>
 #include <pops/amr/tagging/tag_box.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/core/foundation/allocator.hpp>
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/layout/refinement.hpp>
-#include <pops/parallel/comm.hpp>
 
-#include <utility>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace pops {
 
+namespace detail {
+
+template <class Crit>
+struct PortableTagCellsKernel {
+  ConstArray4 values;
+  Crit criterion;
+  char* mask;
+  int nx;
+  int lo_x;
+  int lo_y;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (criterion(values, i, j)) {
+      const std::int64_t row = static_cast<std::int64_t>(j) - lo_y;
+      const std::int64_t column = static_cast<std::int64_t>(i) - lo_x;
+      mask[row * nx + column] = char{1};
+    }
+  }
+};
+
+}  // namespace detail
+
 /// Marks the valid cells where the predicate is true, on a TagBox covering the domain.
-/// @tparam Crit predicate (ConstArray4, i, j) -> bool, evaluated on the valid cells of each fab.
+/// @tparam Crit trivially-copyable device predicate (ConstArray4, i, j) -> bool, evaluated on the
+/// valid cells of each fab. Host-only type erasure such as std::function is deliberately rejected.
 /// @param mf source field (local: only iterates over the rank's local fabs).
 /// @param domain domain covered by the returned TagBox (level index space).
 /// @return TagBox over domain, marked where crit is true.
 template <class Crit>
 TagBox tag_cells(const MultiFab& mf, const Box2D& domain, Crit crit) {
+  static_assert(std::is_trivially_copyable_v<Crit>,
+                "tag_cells requires a trivially-copyable device predicate; use the prepared "
+                "tagging program for runtime-authored criteria");
+  if (domain.empty() || mf.box_array().size() == 0)
+    throw std::invalid_argument("tag_cells requires a non-empty domain and field layout");
+  for (int current = 0; current < mf.box_array().size(); ++current) {
+    const Box2D& box = mf.box_array()[current];
+    if (box.empty() || !domain.contains(box))
+      throw std::invalid_argument("tag_cells field box lies outside the tag domain");
+    for (int previous = 0; previous < current; ++previous)
+      if (!box.intersect(mf.box_array()[previous]).empty())
+        throw std::invalid_argument("tag_cells requires a non-overlapping field layout");
+  }
   TagBox tb(domain);
+  std::vector<char, fab_allocator<char>> device_mask(tb.t.size(), char{0});
   for (int li = 0; li < mf.local_size(); ++li) {
     const Fab2D& f = mf.fab(li);
-    const ConstArray4 a = f.const_array();
     const Box2D v = f.box();
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        if (crit(a, i, j))
-          tb(i, j) = 1;
+    for_each_cell(v, detail::PortableTagCellsKernel<Crit>{
+                         f.const_array(), crit, device_mask.data(), domain.nx(), domain.lo[0],
+                         domain.lo[1]});
   }
+  device_fence();
+  std::copy(device_mask.begin(), device_mask.end(), tb.t.begin());
   return tb;
 }
 
@@ -56,6 +93,10 @@ TagBox tag_cells(const MultiFab& mf, const Box2D& domain, Crit crit) {
 /// @param domain bounds the neighborhood: no tag is placed outside the domain.
 /// @return new TagBox over in.box, marked over the union of the square neighborhoods of the tagged cells.
 inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain) {
+  if (n < 0)
+    throw std::invalid_argument("grow_tags radius must be non-negative");
+  if (in.box != domain)
+    throw std::invalid_argument("grow_tags requires the tag box to match the bounded domain");
   TagBox out(in.box);
   const Box2D& b = in.box;
   for (int j = b.lo[1]; j <= b.hi[1]; ++j)
@@ -68,46 +109,6 @@ inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain) {
               out(ii, jj) = 1;
           }
   return out;
-}
-
-/// Regrid parameters (configuration object).
-struct RegridParams {
-  int n_buffer = 1;         ///< tag dilation radius (grow_tags) before clustering.
-  ClusterParams cluster{};  ///< Berger-Rigoutsos clustering parameters.
-};
-
-/// (Re)builds level coarse_lev+1 from the tagging of level coarse_lev.
-/// @tparam Crit tagging predicate (ConstArray4, i, j) -> bool.
-/// @param h hierarchy modified in place (fine level installed, or finer levels removed if no tag).
-/// @param coarse_lev coarse level source of the tagging; the built fine level is coarse_lev+1.
-/// @param rp parameters (tag buffer, clustering).
-/// Steps: tag -> grow -> Berger-Rigoutsos -> refine(ref_ratio) -> interpolation from the coarse level,
-/// then a copy of the old fine level where it existed to preserve accuracy.
-template <class Crit>
-void regrid_level(AmrHierarchy& h, int coarse_lev, Crit crit, const RegridParams& rp = {}) {
-  const Box2D cdom = h.domain(coarse_lev);
-  TagBox tags = tag_cells(h.data(coarse_lev), cdom, crit);
-  TagBox grown = grow_tags(tags, rp.n_buffer, cdom);
-
-  if (grown.count() == 0) {  // nothing left to refine
-    h.clear_above(coarse_lev);
-    return;
-  }
-
-  // coarse boxes -> fine boxes (index space of level coarse_lev+1)
-  std::vector<Box2D> cboxes = berger_rigoutsos(grown, rp.cluster);
-  std::vector<Box2D> fboxes;
-  fboxes.reserve(cboxes.size());
-  for (const auto& b : cboxes)
-    fboxes.push_back(b.refine(h.ref_ratio()));
-  BoxArray fba(std::move(fboxes));
-
-  MultiFab newfine(fba, DistributionMapping(fba.size(), n_ranks()), h.ncomp(), h.n_grow());
-  interpolate(h.data(coarse_lev), newfine, h.ref_ratio());
-  if (h.num_levels() > coarse_lev + 1)
-    parallel_copy(newfine, h.data(coarse_lev + 1));  // preserve the old fine level
-
-  h.install_level(coarse_lev + 1, fba, std::move(newfine));
 }
 
 }  // namespace pops

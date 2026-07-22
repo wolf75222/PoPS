@@ -67,8 +67,8 @@ inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
   return hierarchy_.dm[static_cast<std::size_t>(k)].ranks();
 }
 
-// FULL shared aux of level k: ALL aux_ncomp_ components of aux_[k], LOCAL valid cells at GLOBAL
-// component-major flat indices c*nf*nf + j*nf + i (zeros outside the patches at a fine level) -- the
+// FULL shared aux of level k: ALL aux_ncomp_ components of aux_[k], LOCAL valid cells at
+// level-domain-relative component-major flat indices (zeros outside the patches at a fine level) -- the
 // exact layout of block_level_state, so the v3 checkpoint reader/writer share one convention. phi
 // (comp 0) is included; the level-0 multigrid WARM START stays a separate phi_<k> payload
 // (level_potential), which reads mg_.phi(), not aux_[0].
@@ -77,8 +77,10 @@ inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
     throw std::runtime_error("AmrRuntime::level_aux_flat : level out of bounds");
   const MultiFab& A = aux_[k];
   const int nc = A.ncomp();
-  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
-  std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
+  const Box2D level_domain = amr_level_index_domain(dom_, k);
+  const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+  const std::size_t cells = nx * static_cast<std::size_t>(level_domain.ny());
+  std::vector<double> out(static_cast<std::size_t>(nc) * cells, 0.0);
   device_fence();
   for (int li = 0; li < A.local_size(); ++li) {
     const ConstArray4 a = A.fab(li).const_array();
@@ -86,8 +88,9 @@ inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
         for (int c = 0; c < nc; ++c)
-          out[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
-              static_cast<std::size_t>(i)] = a(i, j, c);
+          out[static_cast<std::size_t>(c) * cells +
+              static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+              static_cast<std::size_t>(i - level_domain.lo[0])] = a(i, j, c);
   }
   return out;
 }
@@ -98,7 +101,7 @@ inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
 inline std::vector<double> AmrRuntime::level_aux_flat_global(int k) const {
   std::vector<double> out = level_aux_flat(k);
   if (k > 0 || !replicated_coarse_)
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    all_reduce_sum_inplace(out.data(), out.size());
   return out;
 }
 
@@ -110,9 +113,12 @@ inline void AmrRuntime::set_level_aux_flat(int k, const std::vector<double>& v) 
     throw std::runtime_error("AmrRuntime::set_level_aux_flat : level out of bounds");
   MultiFab& A = aux_[k];
   const int nc = A.ncomp();
-  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
-  if (v.size() != static_cast<std::size_t>(nc) * nf * nf)
-    throw std::runtime_error("AmrRuntime::set_level_aux_flat : aux size != ncomp*nf*nf");
+  const Box2D level_domain = amr_level_index_domain(dom_, k);
+  const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+  const std::size_t cells = nx * static_cast<std::size_t>(level_domain.ny());
+  if (v.size() != static_cast<std::size_t>(nc) * cells)
+    throw std::runtime_error(
+        "AmrRuntime::set_level_aux_flat : aux size differs from ncomp*level_cells");
   device_fence();
   for (int li = 0; li < A.local_size(); ++li) {
     Array4 a = A.fab(li).array();
@@ -120,8 +126,9 @@ inline void AmrRuntime::set_level_aux_flat(int k, const std::vector<double>& v) 
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
         for (int c = 0; c < nc; ++c)
-          a(i, j, c) = v[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
-                         static_cast<std::size_t>(i)];
+          a(i, j, c) = v[static_cast<std::size_t>(c) * cells +
+                         static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+                         static_cast<std::size_t>(i - level_domain.lo[0])];
   }
 }
 
@@ -135,65 +142,159 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
   if (level_owner_ranks.size() != level_boxes.size())
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : level_boxes and level_owner_ranks length mismatch");
-  // The level count cannot exceed what the composition allocated (nlev_ set at build from the config
-  // / refinement). A checkpoint replayed against a DIFFERENT max-levels composition is refused verbatim.
-  if (n_levels > nlev_)
+  if (n_levels > max_levels())
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : checkpoint has " + std::to_string(n_levels) +
-        " levels but the replayed composition allocates " + std::to_string(nlev_) +
-        " (a mismatched max-levels replay); replay the SAME composition before restart");
+        " active levels but the replayed composition resolves a maximum of " +
+        std::to_string(max_levels()));
 
-  // For each FINE level k >= 1: build BoxArray fb_k + DistributionMapping dmap_k from the manifest and
-  // reallocate every block's level MultiFab on it (inherited ghost width, the R6 rule), then rebuild
-  // the shared aux and rewire each block's aux pointer (the R7 steps). No prolong: the per-level state
-  // restore overwrites every valid cell afterwards.
-  for (int k = 1; k < n_levels; ++k) {
-    std::vector<Box2D> boxes;
-    boxes.reserve(level_boxes[k].size());
-    for (const PatchBox& pb : level_boxes[k])
-      boxes.push_back(Box2D{{pb.ilo, pb.jlo}, {pb.ihi, pb.jhi}});
-    BoxArray fb(boxes);
-    DistributionMapping dmap(level_owner_ranks[k]);
-    // The hierarchy is the unique topology/ownership authority used by patch inspection, composite
-    // masks, transfer contexts and the next regrid. Reallocating only the block MultiFabs would leave
-    // those consumers on the seed layout even though checkpoint data was written onto the saved one.
-    hierarchy_.ba[static_cast<std::size_t>(k)] = fb;
-    hierarchy_.dm[static_cast<std::size_t>(k)] = dmap;
+  // Validate and materialize the complete target topology before replacing any accepted storage.
+  // Level zero is the composition-owned base layout and is intentionally absent from patch_boxes();
+  // every fine level must be a non-empty contiguous prefix with an explicit owner per patch.
+  std::vector<BoxArray> target_boxes(static_cast<std::size_t>(n_levels));
+  std::vector<DistributionMapping> target_mappings(static_cast<std::size_t>(n_levels));
+  std::vector<Real> target_dx(static_cast<std::size_t>(n_levels));
+  std::vector<Real> target_dy(static_cast<std::size_t>(n_levels));
+  target_boxes[0] = hierarchy_.ba[0];
+  target_mappings[0] = hierarchy_.dm[0];
+  target_dx[0] = hierarchy_.dx[0];
+  target_dy[0] = hierarchy_.dy[0];
+  if (!level_boxes[0].empty() || !level_owner_ranks[0].empty())
+    throw std::runtime_error(
+        "AmrRuntime::rebuild_hierarchy : level zero is owned by the resolved base layout");
+  std::optional<RegridPhysicalGhostSupport> physical_support;
+  if (n_levels > 1)
+    physical_support = regrid_physical_ghost_support_();
 
-    // (R6) reallocate each block's level-k MultiFab on (fb, dmap) with its INHERITED ghost width.
-    for (auto& b : blocks_) {
-      auto& L = *b.levels;
-      const int ngf = L[k].U.n_grow();
-      L[k].U = MultiFab(fb, dmap, L[k].U.ncomp(), ngf);
+  auto checked_refine_domain = [](const Box2D& domain, int ratio) {
+    if (ratio != kAmrRefRatio)
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_hierarchy : native AMR requires spatial refinement ratio 2");
+    Box2D refined;
+    for (int direction = 0; direction < 2; ++direction) {
+      const std::int64_t lo = static_cast<std::int64_t>(domain.lo[direction]) * ratio;
+      const std::int64_t hi = static_cast<std::int64_t>(domain.hi[direction]) * ratio + ratio - 1;
+      if (lo < std::numeric_limits<int>::min() || lo > std::numeric_limits<int>::max() ||
+          hi < std::numeric_limits<int>::min() || hi > std::numeric_limits<int>::max())
+        throw std::runtime_error(
+            "AmrRuntime::rebuild_hierarchy : refined index domain overflows native integers");
+      refined.lo[direction] = static_cast<int>(lo);
+      refined.hi[direction] = static_cast<int>(hi);
     }
-    // (R7) rebuild the shared aux on (fb, dmap) and rewire each block's aux pointer.
-    aux_[k] = MultiFab(fb, dmap, aux_ncomp_, 1);
-    for (auto& b : blocks_)
-      (*b.levels)[k].aux = &aux_[k];
+    return refined;
+  };
 
-    // (R7b, ADC-631) reallocate every history ring's level-k slot on the imposed (fb, dmap) WITHOUT
-    // interpolation: rebuild_hierarchy imposes both layout AND data (the per-slot restore overwrites
-    // every valid cell afterwards). At a v3 restart the rings are registered lazily AFTER this, so
-    // this is a no-op there; it holds the invariant when rings already exist at a rebuild.
-    remap_history_rings_(fb, dmap, k, k - 1, /*prolong=*/false);
+  Box2D parent_domain = dom_;
+  for (int level = 1; level < n_levels; ++level) {
+    const auto index = static_cast<std::size_t>(level);
+    if (level_boxes[index].empty() ||
+        level_boxes[index].size() != level_owner_ranks[index].size())
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_hierarchy : every active fine level requires boxes and owners");
+    const int ratio = maximum_refinement_ratios_[index - 1];
+    const Box2D level_domain = checked_refine_domain(parent_domain, ratio);
+    std::vector<Box2D> boxes;
+    boxes.reserve(level_boxes[index].size());
+    for (std::size_t patch = 0; patch < level_boxes[index].size(); ++patch) {
+      const PatchBox& value = level_boxes[index][patch];
+      const Box2D box{{value.ilo, value.jlo}, {value.ihi, value.jhi}};
+      if (value.level != level || !level_domain.contains(box))
+        throw std::runtime_error(
+            "AmrRuntime::rebuild_hierarchy : checkpoint patch is outside its declared level");
+      for (int direction = 0; direction < 2; ++direction) {
+        const std::int64_t aligned_lo = static_cast<std::int64_t>(box.lo[direction]) -
+                                        level_domain.lo[direction];
+        const std::int64_t aligned_end = static_cast<std::int64_t>(box.hi[direction]) + 1 -
+                                         level_domain.lo[direction];
+        if (aligned_lo % ratio != 0 || aligned_end % ratio != 0)
+          throw std::runtime_error(
+              "AmrRuntime::rebuild_hierarchy : checkpoint patch is not aligned to parent cells");
+      }
+      for (const Box2D& prior : boxes)
+        if (!prior.intersect(box).empty())
+          throw std::runtime_error(
+              "AmrRuntime::rebuild_hierarchy : checkpoint fine patches overlap");
+      const int owner = level_owner_ranks[index][patch];
+      if (owner < 0 || owner >= n_ranks())
+        throw std::runtime_error(
+            "AmrRuntime::rebuild_hierarchy : checkpoint owner rank is out of range");
+      boxes.push_back(box);
+    }
+    target_boxes[index] = BoxArray(std::move(boxes));
+    target_mappings[index] = DistributionMapping(level_owner_ranks[index]);
+    validate_fine_layout_proper_nesting(
+        target_boxes[index], target_boxes[index - 1], parent_domain, ratio, regrid_margin_,
+        RegridPeriodicity{base_per_.x, base_per_.y},
+        physical_support ? &*physical_support : nullptr);
+    target_dx[index] = target_dx[index - 1] / Real(ratio);
+    target_dy[index] = target_dy[index - 1] / Real(ratio);
+    parent_domain = level_domain;
   }
 
-  // (V3) shared-layout invariant: every block on the SAME (boxes, order, rank) after the rebuild.
-  {
-    std::vector<std::vector<AmrLevelMP>> ref;
-    ref.reserve(blocks_.size());
-    for (const auto& b : blocks_)
-      ref.push_back(*b.levels);
-    detail::same_layout_or_throw(ref);
+  const StepSnapshot accepted = step_snapshot();
+  try {
+    device_fence();
+    const int previous_levels = nlev_;
+    if (n_levels < previous_levels)
+      resize_history_levels_for_restore_(n_levels);
+
+    hierarchy_.ba = std::move(target_boxes);
+    hierarchy_.dm = std::move(target_mappings);
+    hierarchy_.dx = std::move(target_dx);
+    hierarchy_.dy = std::move(target_dy);
+    hierarchy_.refinement_ratios.assign(
+        maximum_refinement_ratios_.begin(),
+        maximum_refinement_ratios_.begin() + static_cast<std::ptrdiff_t>(n_levels - 1));
+    nlev_ = n_levels;
+    refresh_active_temporal_plan_();
+
+    // Checkpoint payloads overwrite every valid value. Reallocate the exact active prefix without
+    // prolongation/restriction, retaining only level-zero accepted storage until its payload lands.
+    for (auto& block : blocks_) {
+      auto& levels = *block.levels;
+      const int ncomp = levels.front().U.ncomp();
+      const int ngrow = levels.front().U.n_grow();
+      levels.resize(1);
+      levels.reserve(static_cast<std::size_t>(n_levels));
+      for (int level = 1; level < n_levels; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        MultiFab state(hierarchy_.ba[index], hierarchy_.dm[index], ncomp, ngrow);
+        levels.push_back(
+            AmrLevelMP{std::move(state), nullptr, hierarchy_.dx[index], hierarchy_.dy[index]});
+      }
+    }
+    aux_.resize(1);
+    aux_.reserve(static_cast<std::size_t>(n_levels));
+    for (int level = 1; level < n_levels; ++level) {
+      const auto index = static_cast<std::size_t>(level);
+      aux_.emplace_back(hierarchy_.ba[index], hierarchy_.dm[index], aux_ncomp_, 1);
+    }
+    for (auto& block : blocks_)
+      for (int level = 0; level < n_levels; ++level)
+        (*block.levels)[static_cast<std::size_t>(level)].aux =
+            &aux_[static_cast<std::size_t>(level)];
+
+    // Existing rings may outlive a low-level rebuild. Reallocate every fine slot on the imposed
+    // topology and append missing levels without interpolation; restore writes the authenticated
+    // buffers immediately afterwards.
+    for (int level = 1; level < n_levels; ++level)
+      remap_history_rings_(hierarchy_.ba[static_cast<std::size_t>(level)],
+                           hierarchy_.dm[static_cast<std::size_t>(level)], level, level - 1,
+                           /*prolong=*/false);
+
+    std::vector<std::vector<AmrLevelMP>> shared;
+    shared.reserve(blocks_.size());
+    for (const auto& block : blocks_)
+      shared.push_back(*block.levels);
+    detail::same_layout_or_throw(shared);
+
+    invalidate_named_field_topology();
+    record_topology_replacement_();
+    materialize_boundary_sessions_();
+  } catch (...) {
+    restore_step_snapshot(accepted);
+    throw;
   }
-  for (auto& item : named_fields_) {
-    item.second.solver.reset();
-    item.second.nullspace = {};
-    item.second.level_nullspace.clear();
-    item.second.nullspace_ready = false;
-  }
-  record_topology_replacement_();
-  materialize_boundary_sessions_();
 }
 
 // --- regrid / clustering config setters (declared in amr_runtime.hpp) -----------------------------

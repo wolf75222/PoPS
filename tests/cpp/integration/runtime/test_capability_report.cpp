@@ -24,6 +24,7 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   bool saw_checkpoint_v3 = false;
   bool saw_dynamic_regrid_checkpoint = false;
   bool saw_mpi_world = false;
+  bool saw_weno5 = false;
   for (const auto& row : report.routes) {
     EXPECT_TRUE(!row.route_id.empty()) << "route_id_nonempty";
     EXPECT_TRUE(row.status == "available" || row.status == "partial" || row.status == "unavailable")
@@ -55,6 +56,12 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
           << "mpi_world_status_matches_build";
       EXPECT_TRUE(row.reason.find("ParallelContext") == std::string::npos)
           << "mpi_world_uses_final_execution_context";
+    } else if (row.route_id == "reconstruction:weno5") {
+      saw_weno5 = true;
+      EXPECT_TRUE(row.status == "available") << "weno5_available";
+      EXPECT_TRUE(row.layout == "uniform|amr") << "weno5_public_layout";
+      EXPECT_TRUE(row.reason.find("order-5 coarse/fine provider") != std::string::npos)
+          << "weno5_amr_requirement";
     }
   }
   EXPECT_TRUE(saw_amr_ratio) << "saw_amr_ratio";
@@ -64,4 +71,5 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   EXPECT_TRUE(saw_checkpoint_v3) << "saw_checkpoint_v3";
   EXPECT_TRUE(saw_dynamic_regrid_checkpoint) << "saw_dynamic_regrid_checkpoint";
   EXPECT_TRUE(saw_mpi_world) << "saw_mpi_world";
+  EXPECT_TRUE(saw_weno5) << "saw_weno5";
 }

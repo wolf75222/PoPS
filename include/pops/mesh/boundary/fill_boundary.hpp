@@ -26,7 +26,11 @@
 #include <pops/parallel/execution_lane.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -39,7 +43,37 @@ struct Periodicity {
   bool y = false;
 };
 
+/// Exact topology equality shared by uniform, AMR and prepared-boundary validation.  Keeping this
+/// beside the value type prevents either runtime from depending on an AMR-only implementation
+/// header merely to compare the two independent axes.
+constexpr bool same_periodicity(Periodicity left, Periodicity right) noexcept {
+  return left.x == right.x && left.y == right.y;
+}
+
 namespace detail {
+
+// Execute one rank-local preparation phase, then establish collective success before any peer may
+// post a point-to-point request.  Allocation and other preparation failures are deliberately
+// converted to the same exception class on every rank: otherwise one rank could unwind while its
+// peers continue into MPI_Isend/MPI_Irecv and wait forever.  The callable must not post MPI work.
+template <class Prepare>
+inline void collectively_prepare_before_halo_post(const CommunicatorView& communicator,
+                                                  Prepare&& prepare) {
+  long local_failure = 0;
+  try {
+    std::forward<Prepare>(prepare)();
+  } catch (const std::bad_alloc&) {
+    local_failure = 1;
+  } catch (...) {
+    local_failure = 2;
+  }
+  const long global_failure = all_reduce_max(local_failure, communicator);
+  if (global_failure == 1)
+    throw std::bad_alloc();
+  if (global_failure != 0)
+    throw std::runtime_error(
+        "fill_boundary: one peer failed while preparing halo communication buffers");
+}
 
 // NAMED FUNCTORS (not POPS_HD lambdas) for the halo-exchange kernels. Same reasons as the rest of the
 // elliptic/mesh path (#93, recipe #64): fill_boundary is first instantiated from the MG V-cycle pulled
@@ -97,21 +131,43 @@ struct UnpackKernel {
 inline void build_halo_schedule(const MultiFab& mf, const Box2D& domain, Periodicity per,
                                 const CommunicatorView& communicator, HaloSchedule& sched) {
   halo_schedule_build_counter().fetch_add(1, std::memory_order_relaxed);
+  sched.communicator_size = communicator.size();
+  sched.communicator_rank = communicator.rank();
   const int ng = mf.n_grow();
   const int Lx = domain.nx();
   const int Ly = domain.ny();
   const BoxArray& ba = mf.box_array();
 
-  std::vector<int> sxv = {0};
-  if (per.x) {
-    sxv.push_back(Lx);
-    sxv.push_back(-Lx);
-  }
-  std::vector<int> syv = {0};
-  if (per.y) {
-    syv.push_back(Ly);
-    syv.push_back(-Ly);
-  }
+  // A halo may be deeper than the complete periodic extent (a one-cell axis with a WENO halo is
+  // the smallest useful example).  One +/-L image only fills the first period and leaves the outer
+  // layers untouched.  Enumerate every image that can intersect grow(valid, ng), retaining the old
+  // 0,+L,-L order as the prefix so ordinary ng<=L schedules stay byte-for-byte unchanged.
+  auto periodic_shifts = [ng](bool periodic, int extent, const char* axis) {
+    std::vector<int> values{0};
+    if (!periodic)
+      return values;
+    if (extent <= 0)
+      throw std::runtime_error(std::string("fill_boundary: periodic ") + axis +
+                               " extent must be positive");
+    const std::int64_t images64 =
+        (static_cast<std::int64_t>(ng) + extent - 1) / static_cast<std::int64_t>(extent);
+    if (images64 > (std::numeric_limits<int>::max() - 1) / 2)
+      throw std::overflow_error(std::string("fill_boundary: periodic ") + axis +
+                                " image count exceeds the native schedule range");
+    const int images = static_cast<int>(images64);
+    values.reserve(static_cast<std::size_t>(1 + 2 * images));
+    for (int image = 1; image <= images; ++image) {
+      const std::int64_t shift = static_cast<std::int64_t>(image) * extent;
+      if (shift > std::numeric_limits<int>::max())
+        throw std::overflow_error(std::string("fill_boundary: periodic ") + axis +
+                                  " image shift exceeds the native index range");
+      values.push_back(static_cast<int>(shift));
+      values.push_back(-static_cast<int>(shift));
+    }
+    return values;
+  };
+  const std::vector<int> sxv = periodic_shifts(per.x, Lx, "x");
+  const std::vector<int> syv = periodic_shifts(per.y, Ly, "y");
   std::vector<std::pair<int, int>> shifts;
   for (int sx : sxv)
     for (int sy : syv)
@@ -181,17 +237,33 @@ inline std::shared_ptr<const HaloSchedule> get_halo_schedule(const MultiFab& mf,
                                                              const Box2D& domain, Periodicity per,
                                                              const CommunicatorView& communicator) {
   HaloScheduleCache& cache = mf.halo_cache();
-  if (std::shared_ptr<const HaloSchedule> hit = cache.find(per.x, per.y, domain))
+  if (std::shared_ptr<const HaloSchedule> hit =
+          cache.find(per.x, per.y, domain, communicator.size(), communicator.rank())) {
+    if (hit->boxes != mf.box_array().boxes() || hit->ranks != mf.dmap().ranks() ||
+        hit->ngrow != mf.n_grow())
+      throw std::logic_error("fill_boundary: cached schedule crossed an exact layout");
     return hit;
-  std::shared_ptr<HaloSchedule> s = cache.add();
+  }
+  std::shared_ptr<HaloSchedule> s = std::make_shared<HaloSchedule>();
   s->per_x = per.x;
   s->per_y = per.y;
   s->domain = domain;
+  s->boxes = mf.box_array().boxes();
+  s->ranks = mf.dmap().ranks();
+  s->ngrow = mf.n_grow();
   build_halo_schedule(mf, domain, per, communicator, *s);
+  cache.reserve_for_append();
+  cache.publish_prepared(s);
   return s;
 }
 
 }  // namespace detail
+
+struct HaloExchange;
+namespace detail {
+HaloExchange fill_boundary_begin_on(MultiFab&, const Box2D&, Periodicity,
+                                     const CommunicatorView&, int);
+}
 
 /// Opaque state of an in-flight halo exchange, returned by fill_boundary_begin and consumed by
 /// fill_boundary_end. OWNS the send/receive buffers and the MPI_Request: they stay alive
@@ -213,6 +285,9 @@ struct HaloExchangeStorage {
   // 0, cuIpcOpenMemHandle of the peer's buffer impossible). See core/allocator.hpp (comm_allocator).
   std::vector<std::vector<Real, comm_allocator<Real>>> sbuf, rbuf;  // alive until end
   std::vector<MPI_Request> reqs;
+  // Persistent count scratch: the schedule and component width are part of this lease identity, so
+  // repeated fills recompute exact counts without allocating two O(nranks) vectors on the hot path.
+  std::vector<std::int64_t> send_sizes, recv_sizes;
 #endif
 };
 
@@ -234,28 +309,99 @@ inline std::shared_ptr<HaloExchangeStorage> HaloScheduleCache::acquire_exchange(
 }
 
 struct HaloExchange {
-  std::shared_ptr<HaloExchangeStorage> storage;
-
   HaloExchange() = default;
   HaloExchange(const HaloExchange&) = delete;
   HaloExchange& operator=(const HaloExchange&) = delete;
-  HaloExchange(HaloExchange&& other) noexcept : storage(std::move(other.storage)) {}
+  HaloExchange(HaloExchange&& other) noexcept
+      : storage_(std::move(other.storage_)),
+        destination_(other.destination_),
+        destination_ngrow_(other.destination_ngrow_),
+        destination_ncomp_(other.destination_ncomp_),
+        device_work_pending_(other.device_work_pending_),
+        state_(other.state_) {
+    other.destination_ = nullptr;
+    other.device_work_pending_ = false;
+    other.state_ = State::kInvalid;
+  }
   HaloExchange& operator=(HaloExchange&& other) noexcept {
     if (this != &other) {
-      release();
-      storage = std::move(other.storage);
+      abandon();
+      storage_ = std::move(other.storage_);
+      destination_ = other.destination_;
+      destination_ngrow_ = other.destination_ngrow_;
+      destination_ncomp_ = other.destination_ncomp_;
+      device_work_pending_ = other.device_work_pending_;
+      state_ = other.state_;
+      other.destination_ = nullptr;
+      other.device_work_pending_ = false;
+      other.state_ = State::kInvalid;
     }
     return *this;
   }
-  ~HaloExchange() { release(); }
+  ~HaloExchange() { abandon(); }
 
  private:
-  void release() noexcept {
-    if (storage) {
-      storage->in_use = false;
-      storage.reset();
+  enum class State : std::uint8_t { kInvalid, kActive, kConsumed };
+
+  std::shared_ptr<HaloExchangeStorage> storage_;
+  const MultiFab* destination_ = nullptr;
+  int destination_ngrow_ = 0;
+  int destination_ncomp_ = 0;
+  bool device_work_pending_ = false;
+  State state_ = State::kInvalid;
+
+  explicit HaloExchange(const MultiFab& destination,
+                        std::shared_ptr<HaloExchangeStorage> storage = {})
+      : storage_(std::move(storage)),
+        destination_(&destination),
+        destination_ngrow_(destination.n_grow()),
+        destination_ncomp_(destination.ncomp()),
+        state_(State::kActive) {}
+
+  // Dropping a begin handle is legal RAII abandonment, but its MPI buffers remain owned by active
+  // requests.  Complete those requests before returning the lease to the pool.  If MPI is no longer
+  // callable or reports an error, leave in_use=true permanently: leaking one cached lease is safer
+  // than recycling memory still owned by MPI.
+  void abandon() noexcept {
+    if (state_ != State::kActive) {
+      storage_.reset();
+      return;
     }
+    // Local copies (and the serial/one-rank path in particular) are asynchronous Kokkos work even
+    // when no MPI_Request exists.  The destination must outlive them just as the communication
+    // buffers must outlive MPI.  A device failure at this point is fatal by definition; allowing the
+    // destructor to continue and release live storage would be undefined behaviour.
+    if (device_work_pending_) {
+      device_fence();
+      device_work_pending_ = false;
+    }
+    bool reusable = true;
+#ifdef POPS_HAS_MPI
+    if (storage_ && !storage_->reqs.empty()) {
+      int initialized = 0, finalized = 0;
+      if (MPI_Initialized(&initialized) != MPI_SUCCESS || !initialized ||
+          MPI_Finalized(&finalized) != MPI_SUCCESS || finalized) {
+        reusable = false;
+      } else {
+        const int error = MPI_Waitall(static_cast<int>(storage_->reqs.size()),
+                                      storage_->reqs.data(), MPI_STATUSES_IGNORE);
+        reusable = error == MPI_SUCCESS;
+        if (reusable)
+          storage_->reqs.clear();
+      }
+    }
+#endif
+    if (storage_ && reusable) {
+      storage_->in_use = false;
+    }
+    storage_.reset();
+    destination_ = nullptr;
+    state_ = State::kInvalid;
   }
+
+  friend HaloExchange detail::fill_boundary_begin_on(MultiFab&, const Box2D&, Periodicity,
+                                                     const CommunicatorView&, int);
+  friend void fill_boundary_end(MultiFab&, HaloExchange&);
 };
 
 /// Phase 1 (non-blocking): does the LOCAL halo copies and posts the Isend/Irecv of the distant halos.
@@ -265,67 +411,133 @@ namespace detail {
 
 inline HaloExchange fill_boundary_begin_on(MultiFab& mf, const Box2D& domain, Periodicity per,
                                            const CommunicatorView& communicator, int message_tag) {
-  HaloExchange h;
   const int ng = mf.n_grow();
   if (ng == 0)
-    return h;
+    return HaloExchange(mf);
   const int nc = mf.ncomp();
-  // memoized schedule (BoxHash + enumeration) for this (layout, Periodicity, domain).
-  const std::shared_ptr<const HaloSchedule> sched =
-      get_halo_schedule(mf, domain, per, communicator);
-  h.storage = mf.halo_cache().acquire_exchange(sched, nc);
-  HaloExchangeStorage& storage = *h.storage;
-
-  // --- local copies (local dst AND local src), replayed from the cached plan ---
-  for (const HaloJob& j : sched->local) {
-    Fab2D& dst = mf.fab(mf.local_index_of(j.dst));
-    const Fab2D& src = mf.fab(mf.local_index_of(j.src));
-    detail::copy_shifted(dst, src, j.region, j.sx, j.sy, nc);
-  }
+  std::shared_ptr<const HaloSchedule> sched;
+  std::shared_ptr<HaloExchangeStorage> lease;
+  HaloExchange h;
 
 #ifdef POPS_HAS_MPI
-  if (communicator.size() <= 1)
+  if (communicator.size() > 1) {
+    // Schedule construction allocates rank-local storage once.  It is part of the pre-post
+    // transaction too: no rank may continue to a later collective if a peer failed here.
+    collectively_prepare_before_halo_post(communicator, [&] {
+      sched = get_halo_schedule(mf, domain, per, communicator);
+    });
+    try {
+      collectively_prepare_before_halo_post(
+          communicator, [&] { lease = mf.halo_cache().acquire_exchange(sched, nc); });
+    } catch (...) {
+      // A peer may have failed while this rank successfully acquired a reusable lease.  Return it
+      // before propagating the uniform collective failure.
+      if (lease)
+        lease->in_use = false;
+      throw;
+    }
+    h = HaloExchange(mf, std::move(lease));
+  } else
+#endif
+  {
+    // Serial and MPI-size-one execution has no peer that could be stranded.
+    sched = get_halo_schedule(mf, domain, per, communicator);
+    lease = mf.halo_cache().acquire_exchange(sched, nc);
+    h = HaloExchange(mf, std::move(lease));
+  }
+  HaloExchangeStorage& storage = *h.storage_;
+
+  auto launch_local_copies = [&] {
+    // Local copies are deliberately published only after every distributed request has been posted.
+    // A failed pre-post transaction therefore leaves the destination ghosts untouched.
+    for (const HaloJob& job : sched->local) {
+      Fab2D& dst = mf.fab(mf.local_index_of(job.dst));
+      const Fab2D& src = mf.fab(mf.local_index_of(job.src));
+      h.device_work_pending_ = true;
+      detail::copy_shifted(dst, src, job.region, job.sx, job.sy, nc);
+    }
+  };
+
+#ifdef POPS_HAS_MPI
+  if (communicator.size() <= 1) {
+    launch_local_copies();
     return h;
+  }
   const int np = communicator.size();
+  if (all_reduce_max(np > std::numeric_limits<int>::max() / 2 ? 1L : 0L,
+                     communicator) != 0)
+    throw std::overflow_error(
+        "fill_boundary: execution communicator exceeds the MPI request-count range");
+  bool payload_overflow = false;
   auto buf_size = [&](const std::vector<HaloJob>& js) {
     std::int64_t n = 0;
-    for (const auto& j : js)
-      n += j.region.num_cells() * nc;
+    for (const auto& j : js) {
+      const std::int64_t cells = j.region.num_cells();
+      if (cells < 0 || nc < 0 || (nc != 0 && cells > (std::numeric_limits<int>::max() - n) / nc)) {
+        payload_overflow = true;
+        return std::int64_t{0};
+      }
+      n += cells * nc;
+    }
     return n;
   };
-  storage.sbuf.resize(static_cast<std::size_t>(np));
-  storage.rbuf.resize(static_cast<std::size_t>(np));
-  storage.reqs.clear();
-  storage.reqs.reserve(static_cast<std::size_t>(2 * np));
+  collectively_prepare_before_halo_post(communicator, [&] {
+    storage.send_sizes.assign(static_cast<std::size_t>(np), 0);
+    storage.recv_sizes.assign(static_cast<std::size_t>(np), 0);
+  });
   for (int rank = 0; rank < np; ++rank) {
-    storage.sbuf[static_cast<std::size_t>(rank)].clear();
-    storage.rbuf[static_cast<std::size_t>(rank)].clear();
+    storage.send_sizes[static_cast<std::size_t>(rank)] = buf_size(sched->send[rank]);
+    storage.recv_sizes[static_cast<std::size_t>(rank)] = buf_size(sched->recv[rank]);
   }
-  // device PACK (for_each, parallel under Kokkos) into the pinned host buffers. Per-job layout:
-  // c-major then (jj, ii), IDENTICAL to the old k++ order -> buffer bit-identical to the host path
-  // (the CPU MPI ctests stay bit-identical at np=1/2/4). The peer rank enumerates in the same order,
-  // so sbuf[A->B] and rbuf[B<-A] align without negotiating sizes.
-  for (int r = 0; r < np; ++r) {
-    const std::vector<HaloJob>& send_r = sched->send[r];
-    if (send_r.empty())
-      continue;
-    storage.sbuf[static_cast<std::size_t>(r)].resize(buf_size(send_r));
-    Real* sb = storage.sbuf[static_cast<std::size_t>(r)].data();
-    std::int64_t base = 0;
-    for (const auto& jb : send_r) {
-      const ConstArray4 s = mf.fab(mf.local_index_of(jb.src)).const_array();
-      const int lo0 = jb.region.lo[0], lo1 = jb.region.lo[1], rnx = jb.region.nx();
-      const std::int64_t rsz = static_cast<std::int64_t>(rnx) * jb.region.ny();
-      const int sx = jb.sx, sy = jb.sy, ncl = nc;
-      const std::int64_t b0 = base;
-      for_each_cell(jb.region, detail::PackKernel{sb, s, b0, rsz, lo0, lo1, rnx, sx, sy, ncl});
-      base += rsz * nc;
+  // Every rank reaches this preflight collective before anybody posts a request.  A malformed or
+  // oversized local schedule therefore fails on the complete execution communicator instead of
+  // stranding peers in MPI_Waitall after only one rank throws.
+  if (all_reduce_max(payload_overflow ? 1L : 0L, communicator) != 0)
+    throw std::overflow_error(
+        "fill_boundary: one peer halo payload exceeds the portable MPI int-count limit");
+  // Complete every host/pinned-buffer allocation, including request-vector capacity, before the
+  // collective success witness.  The posting loop below is then allocation-free.
+  collectively_prepare_before_halo_post(communicator, [&] {
+    storage.sbuf.resize(static_cast<std::size_t>(np));
+    storage.rbuf.resize(static_cast<std::size_t>(np));
+    storage.reqs.clear();
+    storage.reqs.reserve(static_cast<std::size_t>(2) * static_cast<std::size_t>(np));
+    for (int rank = 0; rank < np; ++rank) {
+      auto& send = storage.sbuf[static_cast<std::size_t>(rank)];
+      auto& recv = storage.rbuf[static_cast<std::size_t>(rank)];
+      send.clear();
+      recv.clear();
+      if (!sched->send[rank].empty())
+        send.resize(static_cast<std::size_t>(storage.send_sizes[static_cast<std::size_t>(rank)]));
+      if (!sched->recv[rank].empty())
+        recv.resize(static_cast<std::size_t>(storage.recv_sizes[static_cast<std::size_t>(rank)]));
     }
-  }
-  for (int r = 0; r < np; ++r)  // allocate the receive buffers
-    if (!sched->recv[r].empty())
-      storage.rbuf[static_cast<std::size_t>(r)].resize(buf_size(sched->recv[r]));
-  device_fence();  // the pack kernels (and the local copies) must finish before MPI reads sbuf
+  });
+  // Device PACK and its completion fence are the final fallible pre-post phase.  Only a collective
+  // success witness permits any rank to enter the posting loop.
+  collectively_prepare_before_halo_post(communicator, [&] {
+    // Per-job layout: c-major then (jj, ii), IDENTICAL to the old k++ order. The peer rank enumerates
+    // in the same order, so sbuf[A->B] and rbuf[B<-A] align without negotiating sizes.
+    for (int r = 0; r < np; ++r) {
+      const std::vector<HaloJob>& send_r = sched->send[r];
+      if (send_r.empty())
+        continue;
+      Real* sb = storage.sbuf[static_cast<std::size_t>(r)].data();
+      std::int64_t base = 0;
+      for (const auto& jb : send_r) {
+        const ConstArray4 s = mf.fab(mf.local_index_of(jb.src)).const_array();
+        const int lo0 = jb.region.lo[0], lo1 = jb.region.lo[1], rnx = jb.region.nx();
+        const std::int64_t rsz = static_cast<std::int64_t>(rnx) * jb.region.ny();
+        const int sx = jb.sx, sy = jb.sy, ncl = nc;
+        const std::int64_t b0 = base;
+        h.device_work_pending_ = true;
+        for_each_cell(jb.region, detail::PackKernel{sb, s, b0, rsz, lo0, lo1, rnx, sx, sy, ncl});
+        base += rsz * nc;
+      }
+    }
+    device_fence();
+    h.device_work_pending_ = false;
+  });
   for (
       int r = 0; r < np;
       ++r) {  // non-blocking posting; MPI receives PINNED HOST pointers (seen HOST, no GPUDirect/CUDA IPC)
@@ -346,6 +558,9 @@ inline HaloExchange fill_boundary_begin_on(MultiFab& mf, const Box2D& domain, Pe
           "MPI_Irecv(fill_boundary)");
     }
   }
+  launch_local_copies();
+#else
+  launch_local_copies();
 #endif
   return h;
 }
@@ -370,39 +585,66 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
 /// buffers into the ghosts. @p h MUST come from the matching fill_boundary_begin on the same mf. No-op
 /// in serial (no request).
 inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
+  if (h.state_ == HaloExchange::State::kConsumed)
+    throw std::logic_error("fill_boundary_end: halo exchange handle was already consumed");
+  if (h.state_ != HaloExchange::State::kActive || h.destination_ == nullptr)
+    throw std::logic_error("fill_boundary_end: invalid halo exchange handle");
+  if (h.destination_ != &mf)
+    throw std::invalid_argument(
+        "fill_boundary_end: destination differs from the MultiFab passed to fill_boundary_begin");
+  const HaloSchedule* const schedule = h.storage_ ? h.storage_->sched.get() : nullptr;
+  if ((schedule != nullptr &&
+       (schedule->boxes != mf.box_array().boxes() || schedule->ranks != mf.dmap().ranks() ||
+        schedule->ngrow != mf.n_grow())) ||
+      h.destination_ngrow_ != mf.n_grow() || h.destination_ncomp_ != mf.ncomp())
+    throw std::invalid_argument(
+        "fill_boundary_end: destination layout changed after fill_boundary_begin");
 #ifdef POPS_HAS_MPI
-  if (!h.storage || h.storage->reqs.empty())
-    return;
-  HaloExchangeStorage& storage = *h.storage;
-  detail::require_mpi_success(
-      MPI_Waitall(static_cast<int>(storage.reqs.size()), storage.reqs.data(), MPI_STATUSES_IGNORE),
-      "MPI_Waitall(fill_boundary)");
-  // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer is
-  // complete; the kernel launched next reads the pinned host (device-accessible, coherent). Replayed
-  // from the SAME cached recv list begin leased, so base offsets match the sender's layout.
-  const HaloSchedule& sched = *storage.sched;
-  for (std::size_t r = 0; r < sched.recv.size(); ++r) {
-    if (storage.rbuf[r].empty())
-      continue;
-    const Real* rb = storage.rbuf[r].data();
-    std::int64_t base = 0;
-    for (const auto& jb : sched.recv[r]) {
-      Array4 d = mf.fab(mf.local_index_of(jb.dst)).array();
-      const int lo0 = jb.region.lo[0], lo1 = jb.region.lo[1], rnx = jb.region.nx();
-      const std::int64_t rsz = static_cast<std::int64_t>(rnx) * jb.region.ny();
-      const int ncl = storage.ncomp;
-      const std::int64_t b0 = base;
-      for_each_cell(jb.region, detail::UnpackKernel{rb, d, b0, rsz, lo0, lo1, rnx, ncl});
-      base += rsz * ncl;
+  if (h.storage_ && !h.storage_->reqs.empty()) {
+    HaloExchangeStorage& storage = *h.storage_;
+    detail::require_mpi_success(
+        MPI_Waitall(static_cast<int>(storage.reqs.size()), storage.reqs.data(), MPI_STATUSES_IGNORE),
+        "MPI_Waitall(fill_boundary)");
+    storage.reqs.clear();
+    // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer
+    // is complete; the kernel launched next reads the pinned host (device-accessible, coherent).
+    const HaloSchedule& sched = *storage.sched;
+    for (std::size_t r = 0; r < sched.recv.size(); ++r) {
+      if (storage.rbuf[r].empty())
+        continue;
+      const Real* rb = storage.rbuf[r].data();
+      std::int64_t base = 0;
+      for (const auto& jb : sched.recv[r]) {
+        Array4 d = mf.fab(mf.local_index_of(jb.dst)).array();
+        const int lo0 = jb.region.lo[0], lo1 = jb.region.lo[1], rnx = jb.region.nx();
+        const std::int64_t rsz = static_cast<std::int64_t>(rnx) * jb.region.ny();
+        const int ncl = storage.ncomp;
+        const std::int64_t b0 = base;
+        for_each_cell(jb.region, detail::UnpackKernel{rb, d, b0, rsz, lo0, lo1, rnx, ncl});
+        h.device_work_pending_ = true;
+        base += rsz * ncl;
+      }
     }
+    // The unpack kernels above are ASYNC and read persistent pinned buffers. Drain the device before
+    // returning the lease to the pool: a later fill may immediately overwrite the same capacity.
+    device_fence();
+    h.device_work_pending_ = false;
   }
-  // The unpack kernels above are ASYNC and read persistent pinned buffers. Drain the device before
-  // releasing the lease: a later fill may immediately reuse and overwrite the same capacity.
-  device_fence();
 #else
   (void)mf;
-  (void)h;
 #endif
+  // Serial and MPI-size-one exchanges have no requests, but their local copy kernels are still
+  // asynchronous.  `end` is the publication barrier promised by the API.
+  if (h.device_work_pending_) {
+    device_fence();
+    h.device_work_pending_ = false;
+  }
+  if (h.storage_) {
+    h.storage_->in_use = false;
+    h.storage_.reset();
+  }
+  h.destination_ = nullptr;
+  h.state_ = HaloExchange::State::kConsumed;
 }
 
 /// BLOCKING halo exchange: begin then end immediately (no overlap). Fills the intra-level +

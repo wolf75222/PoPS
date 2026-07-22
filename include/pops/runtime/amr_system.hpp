@@ -21,6 +21,7 @@
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
@@ -106,14 +107,14 @@ struct PreparedInterfaceFluxSpec;
 
 /// AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
 struct AmrSystemConfig {
-  int n = 128;                      ///< coarse-level cells per direction
-  double L = 1.0;                   ///< size of the square domain [0,L]^2
+  int n = 128;                      ///< coarse-level cells along x (historical square shorthand)
+  double L = 1.0;                   ///< physical x extent (historical square shorthand)
   int regrid_every = 20;            ///< re-refinement every N steps (0 = never after init)
-  int level_count = 2;              ///< exact materialized hierarchy depth (>= 1)
+  int level_count = 2;              ///< maximum active hierarchy depth (>= 1)
   int regrid_grow = 2;              ///< tag lookahead/dilation from the resolved hierarchy
   int regrid_margin = 2;            ///< proper-nesting buffer from the resolved hierarchy
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
-  bool periodic = true;             ///< periodic domain
+  Periodicity periodicity{true, true};  ///< Cartesian topology, independently on x and y
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
   ///   and the coarse transport are REDUNDANT on each GPU (zero communication,
@@ -124,8 +125,8 @@ struct AmrSystemConfig {
   ///   and enables AMR strong-scaling. The geometric MG then operates on a multi-box coarse
   ///   (cf. geometric_mg.hpp): convergence to be measured (may require more cycles).
   bool distribute_coarse = false;
-  /// Coarse tile size when distribute_coarse=true (BoxArray::from_domain). 0 => n/2
-  /// (minimal 2x2 split, least aggressive for the MG). Ignored if distribute_coarse=false.
+  /// Coarse tile limit when distribute_coarse=true. Zero halves each axis independently
+  /// (a minimal 2x2 split when both axes contain at least two cells). Ignored otherwise.
   int coarse_max_grid = 0;
   /// ADC-616: Berger-Rigoutsos clustering params of the regrid layout. <= 0 (default) keeps the
   /// historical ClusterParams {0.7, 1, 32}, bit-identical. min_efficiency in (0,1], sizes >= 1,
@@ -136,6 +137,16 @@ struct AmrSystemConfig {
   // Cartesian physical origin. Appended so historical aggregate initialization keeps its meaning.
   double xlo = 0.0;
   double ylo = 0.0;
+  /// Prepared ownership provider selected by the resolved adaptive-layout authority.  The semantic
+  /// identity covers the public route, exact provider options and its weight capability.
+  std::string load_balance_route = "space_filling_curve";
+  std::string load_balance_identity = "pops.amr.default.space-filling-curve@1";
+  PreparedProviderOptions load_balance_options{
+      "pops.amr.load-balance.space-filling-curve@1", {}};
+  /// Independent y-axis geometry. Zero means "same as x" solely for the historical direct-C++
+  /// square shorthand; resolved CartesianGrid lowering always writes both values explicitly.
+  int ny = 0;
+  double Ly = 0.0;
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
@@ -154,13 +165,23 @@ struct AmrSystemConfig {
 struct AmrBuildParams {
   /// Coarse mesh geometry + coarse ownership policy (AMR strong-scaling).
   struct Mesh {
-    int n = 128;                     ///< coarse cells per direction
-    double L = 1.0;                  ///< size of the square Cartesian domain
+    int n = 128;                     ///< coarse x cells (historical square shorthand)
+    double L = 1.0;                  ///< physical x extent (historical square shorthand)
+    int ny = 0;                      ///< coarse y cells; zero means n
+    double Ly = 0.0;                 ///< physical y extent; zero means L
     double xlo = 0.0;                ///< physical lower x coordinate
     double ylo = 0.0;                ///< physical lower y coordinate
     int regrid_every = 20;           ///< re-refinement cadence (0 = never after init)
+    Periodicity periodicity{};       ///< explicit Cartesian topology; no implicit periodic axes
     bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
-    int coarse_max_grid = 0;         ///< tile size of the distributed coarse (0 => n/2)
+    int coarse_max_grid = 0;         ///< common tile cap; zero halves each axis independently
+    std::shared_ptr<const PreparedLoadBalanceAuthority>
+        load_balance;  ///< one prepared authority reused by coarse, fine seeds and every regrid
+
+    [[nodiscard]] int cells_x() const noexcept { return n; }
+    [[nodiscard]] int cells_y() const noexcept { return ny == 0 ? n : ny; }
+    [[nodiscard]] double length_x() const noexcept { return L; }
+    [[nodiscard]] double length_y() const noexcept { return Ly == 0.0 ? L : Ly; }
   } mesh;
   /// Physical + temporal treatment of the block (gamma, substeps, recon, IMEX, time method, Newton,
   /// positivity floor). newton_options serves the IMEX source; pos_floor serves the transport.
@@ -179,6 +200,8 @@ struct AmrBuildParams {
     // cpl->step / advance_transport). The COMPILED .so path carries it too (ADC-322): the loader marshals
     // it (pops_install_native_amr) into add_compiled_model -> set_compiled_block, which stores it here.
     double pos_floor = 0.0;
+    double weno_epsilon = static_cast<double>(kWenoEpsilon);
+    bool wave_speed_cache = false;
   } physics;
   /// Refinement criterion frozen at build.
   struct Regrid {
@@ -193,18 +216,18 @@ struct AmrBuildParams {
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
     bool has_density = false;
-    std::vector<double> density;  ///< initial coarse density (component 0), n*n
+    std::vector<double> density;  ///< initial coarse density (component 0), ny*nx
     // FULL initial conservative state (all components), takes priority over `density` when has_state.
     bool has_state = false;
     std::vector<double>
-        state;  ///< ncomp*n*n, component-major c*n*n + j*n + i; ncomp == Model::n_vars
+        state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
   } initial;
   /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
   /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
   /// regrid). Both empty -> bit-identical.
   struct NamedAux {
     std::map<int, std::vector<double>>
-        fields;  ///< component (>= kAuxNamedBase) -> coarse field (n*n)
+        fields;  ///< component (>= kAuxNamedBase) -> coarse field (ny*nx)
     std::map<int, AuxHaloPolicy> halo_policies;  ///< component -> uniform boundary policy
   } named_aux;
 };
@@ -227,8 +250,8 @@ struct AmrCompiledHooks {
     std::function<double()> max_speed;               ///< max wave speed (CFL step)
     std::function<double()> mass;                    ///< coarse mass
     std::function<int()> n_patches;                  ///< number of fine patches
-    std::function<std::vector<double>()> density;    ///< coarse density, n*n row-major
-    std::function<std::vector<double>()> potential;  ///< coarse-level phi, n*n row-major
+    std::function<std::vector<double>()> density;    ///< coarse density, ny*nx row-major
+    std::function<std::vector<double>()> potential;  ///< coarse-level phi, ny*nx row-major
   } base;
   /// STABILITY tier: patch signatures + OPTIONAL step bounds (empty without the HasSourceFrequency /
   /// HasStabilityDt traits, bit-identical). patch_boxes mirrors base.n_patches (count becomes boxes).
@@ -295,12 +318,12 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const std::vector<double>& density, bool has_density, const std::vector<double>& state,
     bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
     const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
-    double pos_floor)>;
+    double pos_floor, double weno_epsilon, bool wave_speed_cache)>;
 
 /// Single block carried on an AMR hierarchy, composed at runtime.
 ///
 /// @code{.cpp}
-/// pops::AmrSystemConfig cfg;                // base level: n x n on [0, L]^2
+/// pops::AmrSystemConfig cfg;                // base level: n x ny on independent x/y bounds
 /// cfg.n = 64;
 /// pops::AmrSystem amr(cfg);
 ///
@@ -341,7 +364,10 @@ class AmrSystem {
   /// @param name    block name: INDEXES the block (set_density(name), mass(name), density(name)). In
   ///                multi-block the name must be unique; mono-block an empty name targets the single block.
   /// @param model   composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts; rusanov)
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts;
+  ///                native low-level stencil route). The resolved Case route derives its
+  ///                coarse/fine order and halo requirements from this spatial descriptor and
+  ///                selects the minimum sufficient conservative provider.
   /// @param riemann "rusanov" | "hll" (generic signed-wave, requires model.wave_speeds) | "hllc"
   ///                | "roe" (generic when the model supplies the Riemann capability
   ///                HasHLLCStructure / HasRoeDissipation; else the canonical Euler 2D layout,
@@ -387,7 +413,9 @@ class AmrSystem {
                  const std::vector<std::string>& implicit_vars = {},
                  const std::vector<std::string>& implicit_roles = {},
                  const NewtonOptions& newton = {}, bool newton_diagnostics = false,
-                 double positivity_floor = 0.0);
+                 double positivity_floor = 0.0,
+                 double weno_epsilon = static_cast<double>(kWenoEpsilon),
+                 bool wave_speed_cache = false);
 
   /// Report of the implicit (IMEX) source Newton of a block, AGGREGATED over the levels and substeps of
   /// the block's LAST advance. Exists only if a native block was added with
@@ -428,7 +456,8 @@ class AmrSystem {
       int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
       const std::string& name = std::string(), bool recon_prim = false, bool imex = false,
       int time_method = 0, int stride = 1, const std::vector<std::string>& implicit_vars = {},
-      const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0);
+      const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
 
   /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
   /// selects the N-level AmrRuntime route, whose Program RHS composes same-level MPI, the authored
@@ -497,8 +526,9 @@ class AmrSystem {
   /// native add_block (ModelSpec) or add_compiled_model(AmrSystem&) DIRECTLY (header), which expose
   /// stride and the mask. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113:
   /// dispatch_amr_compiled accepts them; the Python facade applies a pressure guard for hllc/roe).
-  /// limiter "weno5" (WENO5-Z, 3 ghosts) is WIRED on rusanov (#105: the coupler levels are
-  /// allocated to Limiter::n_ghost and the regrid inherits n_grow(): no out-of-bounds read).
+  /// The low-level loader contains a WENO5-Z stencil route and allocates its three-cell halo. The
+  /// resolved Case route authenticates the matching order-five conservative coarse/fine provider;
+  /// neither the facade nor AmrRuntime substitutes the order-two route.
   /// @throws std::runtime_error if the ABI diverges, if a symbol is missing, or substeps < 1.
   /// @param name block name: cosmetic in mono-block, INDEXES the block in multi-block (set_density/
   ///             mass/density; must be unique and non-empty from the 2nd block on, like add_block).
@@ -512,7 +542,19 @@ class AmrSystem {
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit",
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        const std::vector<double>& params = {}, double positivity_floor = 0.0);
+                        const std::vector<double>& params = {}, double positivity_floor = 0.0,
+                        double weno_epsilon = static_cast<double>(kWenoEpsilon),
+                        bool wave_speed_cache = false);
+
+  /// AMR twin of System::add_external_riemann_block. The external flux is instantiated directly
+  /// in the deferred AmrRuntime builder and therefore retains native reflux/halo execution.
+  void add_external_riemann_block(
+      const std::string& name, const std::string& so_path, const std::string& brick_id,
+      const std::string& sha256, const std::string& limiter, const std::string& recon,
+      const std::string& time, double gamma, int substeps, int stride, int expected_nvars,
+      int expected_naux, const std::string& expected_model_identity,
+      double positivity_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Refines the cells where the SELECTED conserved variable exceeds @p threshold. By default the
   /// variable is component 0 (historically the density), preserving the bit-identical @c 1e30 no-op.
@@ -521,8 +563,9 @@ class AmrSystem {
   /// model whose refinement variable is NOT at component 0 refines correctly (ADC-296). Resolution is
   /// STRICT -- a block lacking the requested name/role raises an explicit error at build, never a silent
   /// fallback to component 0 (mirror of add_coupled_source). At most one of @p variable / @p role may be
-  /// set. The AmrRuntime union-of-tags regrid carries the same per-block predicates for one or many
-  /// blocks. @param threshold refinement threshold (@c 1e30 default elsewhere => no refinement, frozen).
+  /// set. The AmrRuntime carries the selection as leaves in one prepared graph for native/compiled
+  /// and one/many-block layouts. @param threshold refinement threshold (@c 1e30 default elsewhere =>
+  /// no refinement, frozen).
   /// @param variable conserved-variable NAME to threshold; empty (default) => component 0.
   /// @param role conserved-variable physical ROLE to threshold; empty (default) => component 0.
   void set_refinement(double threshold, const std::string& variable = std::string(),
@@ -544,14 +587,10 @@ class AmrSystem {
                               const std::vector<std::int64_t>& denominators,
                               const std::vector<std::string>& remainder_policies);
 
-  /// Adds to the regrid criterion the PHI tag on |grad phi| (D4 of the design
-  /// docs/AMR_REGRID_UNION_TAGS_DESIGN.md): also refines the cells where the norm of the gradient of the
-  /// electrostatic potential |grad phi| (components 1,2 of the shared aux) exceeds @p grad_threshold.
-  /// MULTI-BLOCK only (the AmrRuntime runtime engine carries the union-of-tags regrid; the mono-block
-  /// path AmrCouplerMP has no separate phi predicate). The phi tag is ADDED to the union of the density
-  /// tags per block (set_refinement): the mesh refines where ANY block exceeds its
-  /// density threshold OR |grad phi| exceeds @p grad_threshold. PHYSICAL criterion: a sharp ring/edge
-  /// feature follows the gradient of the potential, not the density alone.
+  /// Adds a shared-potential |grad phi| leaf to the prepared tagging graph. The leaf samples the
+  /// qualified shared aux potential with a resolved centered stencil and executes through the same
+  /// Kokkos/MPI Tagger as state leaves. It is OR-composed with the set_refinement graph for one or
+  /// many blocks; there is no phi-specific runtime predicate or host fallback.
   /// @param grad_threshold threshold of |grad phi|. <= 0 (DEFAULT) -> the phi tag is DISABLED (phi does not
   ///        contribute to the union; bit-identical to before this call). Without regrid_every > 0, no
   ///        effect (the regrid is never called). To be called BEFORE the first step.
@@ -645,13 +684,13 @@ class AmrSystem {
                            const std::string& nullspace_provider_identity,
                            const PreparedProviderOptions& options);
 
-  /// Sets the initial density on the coarse level (component 0), n*n row-major.
+  /// Sets the initial density on the coarse level (component 0), ny*nx row-major.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).
   void set_density(const std::string& name, const std::vector<double>& rho);
 
   /// Sets the FULL INITIAL CONSERVATIVE STATE (all components) on the coarse level, then
   /// prolongs it to the fine levels at build (constant injection, like the density). @p U is flat
-  /// component-major (c*n*n + j*n + i) of size ncomp*n*n; ncomp == n_vars of the model (checked at
+  /// component-major (c*ny*nx + j*nx + i) of size ncomp*ny*nx; ncomp == n_vars of the model (checked at
   /// build, where only Model::n_vars is known). Takes priority over set_density: allows starting the AMR
   /// from a full drift state (rho, rho*u, rho*v) instead of m=0. The conversion
   /// primitive -> conservative (rho_u = rho*u) is done on the Python side (the caller already supplies the
@@ -659,10 +698,10 @@ class AmrSystem {
   /// state is threaded to the deferred concrete builder, seeds the coarse, then is injected to the
   /// fine levels. In multi-block @p name indexes the target block.
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
-  ///         is not a multiple of n*n.
+  ///         is not a multiple of ny*nx.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
   void begin_bootstrap_plan();
-  void bootstrap_next_level(int refinement_ratio);  ///< execute one resolved transition
+  bool bootstrap_next_level(int refinement_ratio);  ///< execute one resolved transition if tagged
   void commit_bootstrap_level();
   void rollback_bootstrap_level();
   void register_bootstrap_transfer_route(
@@ -696,20 +735,20 @@ class AmrSystem {
   std::vector<PatchBox> rebuild_bootstrap_topology_cache(const std::string& subject, int level);
   std::uint64_t bootstrap_cache_epoch(const std::string& subject) const;
 
-  /// Sets the magnetic field B_z(x, y) of the coarse level (n*n row-major), required by the Schur-condensed
+  /// Sets the magnetic field B_z(x, y) of the coarse level (ny*nx row-major), required by the Schur-condensed
   /// source stage (Lorentz term Omega = B_z). AMR counterpart of System::set_magnetic_field.
   /// Available on one- and multi-block AMR. The coarse field is published to every active level and
   /// re-applied after field solves and regrids by the native shared-aux runtime.
-  /// @throws std::runtime_error if the system is already built or if bz is not of size n*n.
+  /// @throws std::runtime_error if the system is already built or if bz is not of size ny*nx.
   void set_magnetic_field(const std::vector<double>& bz);
 
   /// Sets a model-NAMED aux field (ADC-291) at shared-channel component @p comp (>= kAuxNamedBase) from
-  /// a coarse base-level field @p field (n*n row-major). AMR counterpart of
+  /// a coarse base-level field @p field (ny*nx row-major). AMR counterpart of
   /// System::set_aux_field_component: the field is STATIC (re-applied by the engine each update, so it
   /// survives a regrid) and reaches every level via the coarse->fine aux injection. Works on the
   /// single-block (AmrCouplerMP) AND multi-block (AmrRuntime) paths. The Python facade resolves the name
   /// to @p comp and reshapes the array. Mono-rank facade (same as set_density). @throws if the system is
-  /// already built, if @p comp is reserved (< kAuxNamedBase), or if @p field is not of size n*n.
+  /// already built, if @p comp is reserved (< kAuxNamedBase), or if @p field is not of size ny*nx.
   void set_aux_field_component(int comp, const std::vector<double>& field);
 
   /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
@@ -742,7 +781,7 @@ class AmrSystem {
   /// built or the block is unknown.
   POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
                                             std::function<void(const MultiFab&, MultiFab&)> rhs);
-  /// Solved potential of named @p field on the COARSE level, n*n row-major (read-back). Solves the
+  /// Solved potential of named @p field on the COARSE level, ny*nx row-major (read-back). Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
   /// field is unregistered.
@@ -822,6 +861,11 @@ class AmrSystem {
   void commit_step_transaction();
   void finalize_step_transaction();
   void rollback_step_transaction();
+  /// Internal rollback authority used by the installed Program context.  A Program nested in a
+  /// public AmrSystem step borrows the facade's accepted image instead of taking a second full engine
+  /// snapshot; a direct C++ Program context remains autonomous.
+  POPS_EXPORT bool has_active_step_transaction() const noexcept;
+  POPS_EXPORT void restore_active_step_transaction_for_program();
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
@@ -879,6 +923,10 @@ class AmrSystem {
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
+  /// Copy the same authenticated image into caller-owned storage.  The Program attempt transaction
+  /// keeps this storage resident so a stable retry snapshots bytes without allocating a temporary
+  /// vector on every macro-step; the returned-by-value accessor remains the public convenience API.
+  POPS_EXPORT void copy_program_accepted_state_into(std::vector<std::uint8_t>& state) const;
   /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
   /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
   POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
@@ -968,7 +1016,7 @@ class AmrSystem {
   /// @}
 
   int nx() const;
-  int ny() const;  ///< Square AMR domain parity with System::ny().
+  int ny() const;  ///< Coarse y-axis cell count.
   /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
@@ -1007,10 +1055,11 @@ class AmrSystem {
   int n_patches();  ///< number of current fine patches (of the shared hierarchy)
   /// Index-space signatures of the current fine patches: one PatchBox (level, ilo, jlo, ihi, jhi) per
   /// fine box, for ALL fine levels (level >= 1). INCLUSIVE corners in the index space of the
-  /// level (n << level cells/direction, ratio 2). SAME source as n_patches() (the GLOBAL fine
+  /// level (each base-axis count shifted by ``level``, ratio 2). SAME source as n_patches()
+  /// (the GLOBAL fine
   /// BoxArray, all boxes/all ranks -> rank-independent, MPI-safe, zero communication). It is a
   /// QUERY (between steps): read-only of the already-stored boxes, NO hot-path cost. The
-  /// conversion to [0, L]^2 is done on the Python side (which knows n via nx() and L). Forces the lazy
+  /// conversion to exact physical x/y bounds is done on the Python side. Forces the lazy
   /// build (ensure_built) like n_patches()/mass()/density().
   std::vector<PatchBox> patch_boxes();
   /// COARSE-level (base) box counts, MPI ownership diagnostic (ADC-319). coarse_local_boxes() = number
@@ -1033,6 +1082,7 @@ class AmrSystem {
   /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
   int n_levels();  ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
+  int max_levels();  ///< resolved maximum active hierarchy depth
   int n_vars();    ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.
@@ -1115,9 +1165,9 @@ class AmrSystem {
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(
       const std::string& name);   ///< mass of the named block on the coarse (conserved PER BLOCK)
-  std::vector<double> density();  ///< coarse density of the 1st block (component 0), n*n row-major
-  std::vector<double> density(const std::string& name);  ///< coarse density of the named block, n*n
-  /// Electrostatic potential phi of the COARSE LEVEL (base), n*n row-major. Level 0 covers
+  std::vector<double> density();  ///< coarse density of the 1st block, ny*nx row-major
+  std::vector<double> density(const std::string& name);  ///< named-block density, ny*nx row-major
+  /// Electrostatic potential phi of the COARSE LEVEL (base), ny*nx row-major. Level 0 covers
   /// the whole domain: enough to sample a median circle (azimuthal FFT), SAME
   /// observable as System::potential() on a single-level mesh. Solves the coarse Poisson if
   /// needed (cf. System::potential / ensure_elliptic), so current value even before any step.

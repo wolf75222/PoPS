@@ -135,7 +135,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   std::vector<double> U0(4 * nn);
   fill_ic(U0, n, gamma);
@@ -227,7 +227,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
@@ -331,7 +331,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
@@ -400,7 +400,7 @@ TEST(ProgramRuntime, NativeImexSourcePreservesEmbeddedBoundaryInactiveCells) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
@@ -439,7 +439,7 @@ TEST(ProgramRuntime, EmbeddedBoundaryCflReductionIgnoresInactiveCells) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System system(cfg);
   add_gas(system, gamma, "none");
@@ -470,7 +470,7 @@ TEST(ProgramRuntime, CutCellCflIncludesPreparedInverseVolumeFraction) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   std::vector<double> uniform(4 * cells, 0.0);
   for (std::size_t cell = 0; cell < cells; ++cell) {
     uniform[cell] = 1.0;
@@ -504,7 +504,7 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System staircase(cfg);
   add_gas(staircase, gamma, "none");
@@ -576,7 +576,7 @@ TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   for (const std::string mode : {"staircase", "cutcell"}) {
     System system(cfg);
@@ -625,7 +625,7 @@ TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
@@ -679,7 +679,7 @@ TEST(ProgramRuntime, EmbeddedBoundaryCapabilitiesRejectUnsupportedProvidersBefor
   SystemConfig cfg;
   cfg.n = 10;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System reconstructed(cfg);
   add_gas(reconstructed, 1.4, "minmod");
@@ -706,7 +706,7 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
@@ -760,7 +760,7 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
   SystemConfig cfg;
   cfg.n = 8;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   System system(cfg);
   add_gas(system, 1.4, "none");
   system.set_disc_domain(0.5, 0.5, 0.3, "staircase");
@@ -793,7 +793,7 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System sim(cfg);
   add_gas(sim, gamma);

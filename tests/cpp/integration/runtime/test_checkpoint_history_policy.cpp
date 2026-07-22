@@ -173,7 +173,7 @@ SystemConfig make_cfg() {
   SystemConfig cfg;
   cfg.n = 8;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   return cfg;
 }
 

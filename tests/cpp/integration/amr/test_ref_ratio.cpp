@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 
@@ -65,7 +67,7 @@ TEST(test_ref_ratio, Runs) {
   EXPECT_TRUE(throws(
       [&] {
         AmrHierarchy h(dom, /*max_grid_size=*/8, /*ncomp=*/1, /*ngrow=*/0,
-                       /*ref_ratio=*/3);
+                       test::prepare_test_space_filling_curve_load_balance(), /*ref_ratio=*/3);
       },
       msg))
       << "AmrHierarchy with ref_ratio 3 is rejected at construction";

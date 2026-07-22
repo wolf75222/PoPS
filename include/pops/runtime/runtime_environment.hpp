@@ -13,6 +13,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <string>
+#include <type_traits>
 
 #ifdef POPS_HAS_KOKKOS
 #include <Kokkos_Core.hpp>
@@ -38,6 +39,11 @@ struct RuntimeEnvironmentReport {
   bool kokkos_initialized_by_pops = false;
   bool kokkos_atexit_finalize_registered = false;
   std::string kokkos_backend = "none";
+  std::string kokkos_device = "host";
+  std::string kokkos_shared_space = "HostSpace";
+  std::string field_memory_space = "host";
+  std::string kokkos_stream = "host::synchronous";
+  bool kokkos_stream_synchronous = true;
   int kokkos_concurrency = 0;
   std::string kokkos_ownership = "not-built";
   std::string kokkos_lifecycle = "not-built";
@@ -58,6 +64,63 @@ struct RuntimeEnvironmentReport {
   std::string allocator_lifetime = "standard library allocator lifetime";
 };
 
+inline std::string native_device_identity() {
+#ifdef POPS_HAS_KOKKOS
+  using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+#if defined(KOKKOS_ENABLE_CUDA)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>)
+    return "cuda";
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>)
+    return "hip";
+#endif
+#if defined(KOKKOS_ENABLE_SYCL)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::SYCL>)
+    return "sycl";
+#endif
+#if defined(KOKKOS_ENABLE_OPENMPTARGET)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::OpenMPTarget>)
+    return "openmptarget";
+#endif
+  return "cpu";
+#else
+  return "host";
+#endif
+}
+
+inline std::string native_shared_space_identity() {
+#ifdef POPS_HAS_KOKKOS
+  return Kokkos::SharedSpace::name();
+#else
+  return "HostSpace";
+#endif
+}
+
+inline std::string native_field_memory_space_identity() {
+#ifdef POPS_HAS_KOKKOS
+  if constexpr (std::is_same_v<Kokkos::SharedSpace, Kokkos::HostSpace>)
+    return "host";
+  return "managed";
+#else
+  return "host";
+#endif
+}
+
+inline bool native_stream_is_synchronous() {
+  const auto device = native_device_identity();
+  return device == "host" || device == "cpu";
+}
+
+inline std::string native_stream_identity() {
+#ifdef POPS_HAS_KOKKOS
+  return std::string("Kokkos::") + Kokkos::DefaultExecutionSpace::name() +
+         (native_stream_is_synchronous() ? "::synchronous" : "::default-instance");
+#else
+  return "host::synchronous";
+#endif
+}
+
 inline RuntimeEnvironmentReport runtime_environment_report() {
   RuntimeEnvironmentReport report{};
 #ifdef POPS_HAS_KOKKOS
@@ -67,6 +130,11 @@ inline RuntimeEnvironmentReport runtime_environment_report() {
   report.kokkos_initialized_by_pops = kokkos_initialized_by_pops();
   report.kokkos_atexit_finalize_registered = kokkos_atexit_finalize_registered();
   report.kokkos_backend = Kokkos::DefaultExecutionSpace::name();
+  report.kokkos_device = native_device_identity();
+  report.kokkos_shared_space = native_shared_space_identity();
+  report.field_memory_space = native_field_memory_space_identity();
+  report.kokkos_stream = native_stream_identity();
+  report.kokkos_stream_synchronous = native_stream_is_synchronous();
   if (report.kokkos_initialized) {
     report.kokkos_concurrency = Kokkos::DefaultExecutionSpace::concurrency();
   }

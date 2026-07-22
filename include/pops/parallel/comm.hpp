@@ -5,7 +5,7 @@
 ///
 /// Layer: `include/pops/parallel`.
 /// Role: expose my_rank()/n_ranks() and a fixed set of global reductions (sum/min/max on
-/// double and long, in-place sum/max on a double array, in-place OR on a marker array)
+/// double, long and uint64, in-place sum/max on a double array, in-place OR on a marker array)
 /// behind a single facade. Without POPS_HAS_MPI everything compiles to a serial identity.  A few
 /// performance-critical native algorithms use MPI directly; the process contract below therefore
 /// requires full MPI thread support rather than pretending that a header-local lock can serialize
@@ -214,6 +214,18 @@ inline double all_reduce_max(double x) {
   return r;
 }
 
+/// Exact packed-control reduction.  Unlike routing a bit-packed status through binary64 or a
+/// platform-dependent long, this preserves every reason-code bit on LP64 and LLP64 hosts alike.
+inline std::uint64_t all_reduce_max(std::uint64_t x) {
+  if (!detail::comm_active_unlocked())
+    return x;
+  std::uint64_t r = x;
+  detail::require_mpi_success(
+      MPI_Allreduce(&x, &r, 1, MPI_UINT64_T, MPI_MAX, MPI_COMM_WORLD),
+      "MPI_Allreduce(uint64 max)");
+  return r;
+}
+
 // Global min (counterpart of all_reduce_max). Brick for GLOBAL time step bounds
 // (System::add_dt_bound): the host callback is evaluated PER RANK, the global min guarantees a dt
 // IDENTICAL on all ranks (otherwise the collectives of the step -- Krylov, fill_boundary --
@@ -238,6 +250,18 @@ inline void all_reduce_sum_inplace(double* buf, int n) {
       "MPI_Allreduce(double inplace sum)");
 }
 
+// MPI collectives accept an int element count.  Chunk larger native containers instead of
+// narrowing their size or imposing an artificial INT_MAX limit on generic runtime buffers.
+inline void all_reduce_sum_inplace(double* buf, std::size_t n) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (n != 0) {
+    const int chunk = static_cast<int>(std::min(n, max_chunk));
+    all_reduce_sum_inplace(buf, chunk);
+    buf += chunk;
+    n -= static_cast<std::size_t>(chunk);
+  }
+}
+
 /// Element-by-element maximum of an array, in place, on all ranks.  This batches related scalar
 /// convergence witnesses into one collective without changing their individual MPI_MAX semantics.
 inline void all_reduce_max_inplace(double* buf, int n) {
@@ -246,6 +270,16 @@ inline void all_reduce_max_inplace(double* buf, int n) {
   detail::require_mpi_success(
       MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD),
       "MPI_Allreduce(double inplace max)");
+}
+
+inline void all_reduce_max_inplace(double* buf, std::size_t n) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (n != 0) {
+    const int chunk = static_cast<int>(std::min(n, max_chunk));
+    all_reduce_max_inplace(buf, chunk);
+    buf += chunk;
+    n -= static_cast<std::size_t>(chunk);
+  }
 }
 
 inline long all_reduce_sum(long x) {
@@ -389,6 +423,9 @@ inline double all_reduce_sum(double x) {
 inline double all_reduce_max(double x) {
   return x;
 }
+inline std::uint64_t all_reduce_max(std::uint64_t x) {
+  return x;
+}
 inline double all_reduce_min(double x) {
   return x;
 }
@@ -402,7 +439,9 @@ inline long all_reduce_min(long x) {
   return x;
 }
 inline void all_reduce_sum_inplace(double*, int) {}                  // serial: identity
+inline void all_reduce_sum_inplace(double*, std::size_t) {}          // serial: identity
 inline void all_reduce_max_inplace(double*, int) {}                  // serial: identity
+inline void all_reduce_max_inplace(double*, std::size_t) {}          // serial: identity
 inline void all_reduce_or_inplace(char*, std::size_t) {}             // serial: identity
 inline void all_reduce_min_inplace(char*, std::size_t) {}            // serial: identity
 inline void all_reduce_max_inplace(char*, std::size_t) {}            // serial: identity
@@ -514,6 +553,23 @@ inline double all_reduce_max(double value, const CommunicatorView& communicator)
 #endif
 }
 
+inline std::uint64_t all_reduce_max(std::uint64_t value,
+                                    const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  std::uint64_t result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_UINT64_T, MPI_MAX,
+                    communicator.native_handle()),
+      "MPI_Allreduce(uint64 max, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
 inline double all_reduce_min(double value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())
@@ -588,6 +644,17 @@ inline void all_reduce_sum_inplace(double* buffer, int count,
 #endif
 }
 
+inline void all_reduce_sum_inplace(double* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (count != 0) {
+    const int chunk = static_cast<int>(std::min(count, max_chunk));
+    all_reduce_sum_inplace(buffer, chunk, communicator);
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+}
+
 inline void all_reduce_max_inplace(double* buffer, int count,
                                    const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
@@ -600,6 +667,17 @@ inline void all_reduce_max_inplace(double* buffer, int count,
   (void)count;
   (void)communicator;
 #endif
+}
+
+inline void all_reduce_max_inplace(double* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (count != 0) {
+    const int chunk = static_cast<int>(std::min(count, max_chunk));
+    all_reduce_max_inplace(buffer, chunk, communicator);
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
 }
 
 inline void all_reduce_or_inplace(char* buffer, std::size_t count,

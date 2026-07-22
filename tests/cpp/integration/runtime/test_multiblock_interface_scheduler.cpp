@@ -6,6 +6,8 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system/system_block_store.hpp>
 
+#include "amr_transfer_test_authority.hpp"
+
 #include <cmath>
 #include <optional>
 #include <vector>
@@ -169,6 +171,9 @@ TEST(test_multiblock_interface_scheduler,
   }
 
   int evaluator_calls = 0;
+  const Real* prepared_left_trace = nullptr;
+  const Real* prepared_right_trace = nullptr;
+  Real* prepared_shared_flux = nullptr;
   BoundaryEvaluationPoint observed;
   store.install_interface_flux(
       heterogeneous_route(), left_geometry, right_geometry, serial_interface_execution(),
@@ -177,6 +182,15 @@ TEST(test_multiblock_interface_scheduler,
         observed = evaluation;
         ASSERT_EQ(batch.face_count, 3);
         ASSERT_EQ(batch.component_count, 2);
+        if (prepared_left_trace == nullptr) {
+          prepared_left_trace = batch.left_state;
+          prepared_right_trace = batch.right_state;
+          prepared_shared_flux = batch.shared_flux;
+        } else {
+          EXPECT_EQ(batch.left_state, prepared_left_trace);
+          EXPECT_EQ(batch.right_state, prepared_right_trace);
+          EXPECT_EQ(batch.shared_flux, prepared_shared_flux);
+        }
         for (int face = 0; face < batch.face_count; ++face)
           for (int component = 0; component < batch.component_count; ++component) {
             const std::size_t offset = static_cast<std::size_t>(face) * 2 + component;
@@ -224,6 +238,13 @@ TEST(test_multiblock_interface_scheduler,
       EXPECT_NE(lhs, Real(91)) << "the old boundary residual was not replaced";
     }
   }
+
+  // Replaying an exact prepared interface reuses its ABI buffers.  This guards against an
+  // O(face_count*ncomp) allocation/copy returning to every residual stage.
+  store.evaluate_rhs_with_interfaces(point, states, rhs);
+  EXPECT_EQ(evaluator_calls, 2);
+  EXPECT_EQ(store.interface_evaluation_count("left-right.shared_flux", 0), 2u);
+  EXPECT_EQ(interface_omitting_rhs_calls, 4);
 }
 
 TEST(test_multiblock_interface_scheduler,
@@ -417,6 +438,8 @@ TEST(test_multiblock_interface_scheduler,
   ensure_runtime();
   constexpr int cells = 4;
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = cells;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -452,6 +475,7 @@ TEST(test_multiblock_interface_scheduler,
   }
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
 
   AxisAlignedInterface route;
   route.identity = "amr.level0.shared_flux";
@@ -499,6 +523,8 @@ TEST(test_multiblock_interface_scheduler,
 TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProvisionalStageState) {
   ensure_runtime();
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = 3;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -531,6 +557,7 @@ TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProv
                                     const Geometry&, MultiFab& R) { R.set_val(Real(0)); };
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.install_boundary_storage_routes({});
   runtime.level_state(0, 0).set_val(Real(1));
   runtime.level_state(1, 0).set_val(Real(2));
@@ -547,4 +574,18 @@ TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProv
 
   EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(11));
   EXPECT_EQ(runtime.level_state(1, 0).fab(0).const_array()(0, 0, 0), Real(2));
+
+  // The sparse grouped scope is the primitive used by independent reflux captures. It must expose
+  // the sibling's provisional state to prepared boundary reads for the entire group, and an
+  // exception must not leave the process-local registry active.
+  const std::vector<int> requested_blocks{0, 1};
+  rhs_a.set_val(Real(0));
+  runtime.with_boundary_stage_states(point, requested_blocks, states, [&] {
+    runtime.level_rhs_core_into_at(0, 0, point, stage_a, rhs_a, /*flux_only=*/false);
+  });
+  EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(11));
+  EXPECT_THROW(runtime.with_boundary_stage_states(point, requested_blocks, states,
+                                                  [] { throw std::runtime_error("stage abort"); }),
+               std::runtime_error);
+  EXPECT_NO_THROW(runtime.with_boundary_stage_states(point, requested_blocks, states, [] {}));
 }

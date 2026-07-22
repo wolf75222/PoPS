@@ -55,7 +55,7 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System sys(cfg);
   // add_compiled_model elargit le canal aux a aux_comps<MagModel> (=4) via ensure_aux_width.

@@ -253,7 +253,9 @@ class PreparedAffineOperatorSession {
  public:
   PreparedAffineOperatorSession() = default;
 
-  template <PreparedAffineOperatorSessionSource Session>
+  template <class Session>
+    requires(!std::same_as<std::remove_cvref_t<Session>, PreparedAffineOperatorSession> &&
+             PreparedAffineOperatorSessionSource<Session>)
   explicit PreparedAffineOperatorSession(Session session)
       : implementation_(std::make_unique<Model<std::remove_cvref_t<Session>>>(std::move(session))) {
   }
@@ -329,6 +331,10 @@ class PreparedAffineOperatorSession {
   std::unique_ptr<Concept> implementation_;
   mutable PreparedApplyStatus apply_status_ = PreparedApplyStatus::Success;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<PreparedAffineOperatorSession>);
+static_assert(std::is_nothrow_move_assignable_v<PreparedAffineOperatorSession>);
+static_assert(!std::is_copy_constructible_v<PreparedAffineOperatorSession>);
 
 struct PreparedAffineOperatorSessionCallbacks {
   PreparedResourceFn prepare{};
@@ -572,7 +578,10 @@ class PreparedLinearPreconditionerSession {
  public:
   PreparedLinearPreconditionerSession() = default;
 
-  template <PreparedLinearPreconditionerSessionSource Session>
+  template <class Session>
+    requires(!std::same_as<std::remove_cvref_t<Session>,
+                           PreparedLinearPreconditionerSession> &&
+             PreparedLinearPreconditionerSessionSource<Session>)
   explicit PreparedLinearPreconditionerSession(Session session)
       : implementation_(std::make_unique<Model<std::remove_cvref_t<Session>>>(std::move(session))) {
   }
@@ -648,6 +657,10 @@ class PreparedLinearPreconditionerSession {
   std::unique_ptr<Concept> implementation_;
   mutable PreparedApplyStatus apply_status_ = PreparedApplyStatus::Success;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<PreparedLinearPreconditionerSession>);
+static_assert(std::is_nothrow_move_assignable_v<PreparedLinearPreconditionerSession>);
+static_assert(!std::is_copy_constructible_v<PreparedLinearPreconditionerSession>);
 
 struct PreparedLinearPreconditionerSessionCallbacks {
   PreparedResourceFn prepare{};

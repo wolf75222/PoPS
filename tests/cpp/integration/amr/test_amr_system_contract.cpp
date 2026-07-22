@@ -10,10 +10,12 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -45,6 +47,34 @@ static ModelSpec magnetic_fluid_spec() {
   return s;
 }
 
+static void install_regrid_state_authorities(
+    AmrSystem& system, std::initializer_list<const char*> blocks) {
+  for (const char* block : blocks) {
+    const std::string subject =
+        std::string("test://amr-system-contract/block/") + block + "/state/U";
+    const std::string prefix =
+        std::string("test://amr-system-contract/block/") + block + "/transfer/";
+    system.install_block_state_route(block, subject);
+    system.register_bootstrap_transfer_route(
+        prefix + "prolongation", {subject}, "test::amr-system-contract-transfer@1", "cell",
+        "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1},
+        2, kAmrRefRatio);
+    system.register_bootstrap_transfer_route(
+        prefix + "restriction", {subject}, "test::amr-system-contract-transfer@1", "cell",
+        "cell", "conservative", "dense", "restriction", "volume_average", 1, {0}, 2,
+        kAmrRefRatio);
+    system.register_bootstrap_transfer_route(
+        prefix + "coarse-fine", {subject}, "test::amr-system-contract-transfer@1", "cell",
+        "cell", "conservative", "dense", "coarse_fine_fill", "conservative_coarse_fine", 2,
+        {2}, 2, kAmrRefRatio);
+    system.register_bootstrap_transfer_route(
+        prefix + "temporal", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
+        "conservative", "dense", "temporal_interpolation", "linear_time_interpolation", 2,
+        {0}, 2, kAmrRefRatio);
+    system.bind_bootstrap_block_subject(subject, block);
+  }
+}
+
 TEST(test_amr_system_contract, Runs) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
@@ -52,7 +82,90 @@ TEST(test_amr_system_contract, Runs) {
   AmrSystemConfig cfg;
   cfg.n = 16;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
+
+  // The facade topology must reach the native level operator axis by axis. This x-periodic/y-open
+  // run wraps only x and fills y physical ghosts by Foextrap; neither axis may inherit the other.
+  {
+    AmrSystemConfig physical_cfg = cfg;
+    physical_cfg.n = 8;
+    physical_cfg.regrid_every = 0;
+    physical_cfg.periodicity = {true, false};
+    AmrSystem physical(physical_cfg);
+    physical.set_temporal_relations({2}, {1}, {"integral_only"});
+    physical.add_block("left", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    physical.add_block("right", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    (void)physical.mass("left");
+    ASSERT_TRUE(physical.uses_runtime_engine());
+    AmrRuntime* runtime = physical.engine();
+    ASSERT_NE(runtime, nullptr);
+    EXPECT_TRUE(runtime->base_periodicity().x);
+    EXPECT_FALSE(runtime->base_periodicity().y);
+
+    MultiFab& state = runtime->level_state(0, 0);
+    state.set_val(Real(-999));
+    state.sync_host();
+    const Box2D domain = runtime->level_geom(0).domain;
+    for (int local = 0; local < state.local_size(); ++local) {
+      Array4 values = state.fab(local).array();
+      const Box2D valid = state.box(local);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          values(i, j, 0) = Real(i + 10 * j + 1);
+    }
+    state.sync_device();
+    MultiFab rhs = runtime->level_scalar_field(0, state.ncomp(), 0);
+    runtime->level_rhs_into(0, 0, state, rhs);
+    state.sync_host();
+    ASSERT_EQ(state.local_size(), 1);
+    const ConstArray4 values = state.fab(0).const_array();
+    const int sample_j = domain.lo[1] + 2;
+    EXPECT_EQ(values(domain.lo[0] - 1, sample_j, 0),
+              values(domain.hi[0], sample_j, 0));
+    EXPECT_NE(values(domain.lo[0] - 1, sample_j, 0),
+              values(domain.lo[0], sample_j, 0));
+    const int sample_i = domain.lo[0] + 2;
+    EXPECT_EQ(values(sample_i, domain.lo[1] - 1, 0),
+              values(sample_i, domain.lo[1], 0));
+    EXPECT_NE(values(sample_i, domain.lo[1] - 1, 0),
+              values(sample_i, domain.hi[1], 0));
+  }
+
+  // The native hierarchy carries Cartesian axes independently: logical extents, physical bounds,
+  // cell measures and dense row-major buffers must all agree on (ny, nx), not a square proxy.
+  {
+    AmrSystemConfig rectangular_cfg = cfg;
+    rectangular_cfg.n = 12;
+    rectangular_cfg.ny = 8;
+    rectangular_cfg.L = 6.0;
+    rectangular_cfg.Ly = 2.0;
+    rectangular_cfg.xlo = -1.5;
+    rectangular_cfg.ylo = 3.0;
+    rectangular_cfg.regrid_every = 0;
+    rectangular_cfg.periodicity = {true, true};
+    AmrSystem rectangular(rectangular_cfg);
+    rectangular.set_temporal_relations({2}, {1}, {"integral_only"});
+    rectangular.add_block("left", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    rectangular.add_block("right", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    const std::size_t cells = static_cast<std::size_t>(rectangular_cfg.n) * rectangular_cfg.ny;
+    rectangular.set_density("left", std::vector<double>(cells, 1.0));
+    rectangular.set_density("right", std::vector<double>(cells, 0.0));
+
+    EXPECT_DOUBLE_EQ(rectangular.mass("left"), 12.0);
+    EXPECT_EQ(rectangular.nx(), 12);
+    EXPECT_EQ(rectangular.ny(), 8);
+    EXPECT_EQ(rectangular.density("left").size(), cells);
+    ASSERT_TRUE(rectangular.uses_runtime_engine());
+    const Geometry& geometry = rectangular.engine()->level_geom(0);
+    EXPECT_EQ(geometry.domain.nx(), 12);
+    EXPECT_EQ(geometry.domain.ny(), 8);
+    EXPECT_DOUBLE_EQ(geometry.xlo, -1.5);
+    EXPECT_DOUBLE_EQ(geometry.xhi, 4.5);
+    EXPECT_DOUBLE_EQ(geometry.ylo, 3.0);
+    EXPECT_DOUBLE_EQ(geometry.yhi, 5.0);
+    EXPECT_DOUBLE_EQ(geometry.dx(), 0.5);
+    EXPECT_DOUBLE_EQ(geometry.dy(), 0.25);
+  }
 
   // --- set_poisson : refus immediat de solver/rhs hors du domaine cable ---------------------
   EXPECT_THROW(
@@ -154,13 +267,14 @@ TEST(test_amr_system_contract, Runs) {
 
   // --- DEVERROUILLAGE (capstone Phase 2, C.6) : multi-blocs + regrid_every > 0 est ACCEPTE ----
   // L'ancien REFUS (la hierarchie multi-blocs etait FIGEE) est leve : AmrRuntime porte le regrid
-  // d'union des tags (set_regrid + set_block_tag_predicate cables dans build_multi). ensure_built
+  // d'union des tags (set_regrid + graphe prepare cables dans build_multi). ensure_built
   // (1er mass()) construit le moteur avec la cadence active au lieu de lever ; le regrid d'union et
   // le mouvement effectif de la hierarchie sont verrouilles par test_amr_multiblock_regrid_union.
   EXPECT_NO_THROW({
     AmrSystemConfig c2 = cfg;
     c2.regrid_every = 5;  // > 0
     AmrSystem s(c2);
+    install_regrid_state_authorities(s, {"ne", "ni"});
     s.set_temporal_relations({2}, {1}, {"integral_only"});
     s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
     s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -172,6 +286,7 @@ TEST(test_amr_system_contract, Runs) {
     AmrSystemConfig c2 = cfg;
     c2.regrid_every = 5;
     AmrSystem s(c2);
+    install_regrid_state_authorities(s, {"ne"});
     s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
     (void)s.mass();  // ensure_built : mono-bloc avec regrid, pas de refus
   }) << "mono-bloc + regrid_every > 0 reste autorise par le runtime AMR unifie";

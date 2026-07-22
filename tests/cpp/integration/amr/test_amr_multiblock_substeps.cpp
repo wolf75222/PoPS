@@ -29,6 +29,8 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_transfer_test_authority.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -103,6 +105,8 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
                                  const std::string& lim0, const std::string& lim1, int sub0,
                                  int sub1, int stride0, int stride1) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
@@ -121,6 +125,7 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
   });
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;
@@ -162,6 +167,8 @@ static AmrRuntime make_temporal_contract_runtime(int mode,
                                                  const amr::ParentChildClockRelation& relation) {
   constexpr int n = 8;
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = n;
   bp.mesh.L = 1.0;
   bp.mesh.regrid_every = 0;
@@ -174,6 +181,7 @@ static AmrRuntime make_temporal_contract_runtime(int mode,
       /*substeps=*/1, /*recon_prim=*/false, /*imex=*/false));
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations({relation});
   return runtime;
 }
@@ -315,7 +323,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
@@ -332,7 +340,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
@@ -417,5 +425,15 @@ TEST(test_amr_multiblock_substeps, Runs) {
     direct_bound.set_block_level_state(0, 1, fine_state_spike(spike));
     EXPECT_NEAR(direct_bound.cfl_dt(cfl, h), Real(1.5) / spike, 2e-15);
     EXPECT_EQ(direct_bound.last_dt_bound(), "stability_dt:clocked");
+
+    // A coupled frequency is a macro-step authority, but its field expression must still scan every
+    // active AMR level. The coarse state remains one while the fine-only spike sets the global max.
+    AmrRuntime coupled_bound = make_temporal_contract_runtime(/*mode=*/0, ratio_three_halves);
+    coupled_bound.set_block_level_state(0, 1, fine_state_spike(spike));
+    coupled_bound.add_coupled_frequency_expr(
+        "fine_frequency", {"clocked"}, {"scalar"}, {},
+        {static_cast<int>(CsOp::PushReg)}, {0});
+    EXPECT_NEAR(coupled_bound.cfl_dt(cfl, h), cfl / spike, 2e-15);
+    EXPECT_EQ(coupled_bound.last_dt_bound(), "coupled_source:fine_frequency");
   }
 }

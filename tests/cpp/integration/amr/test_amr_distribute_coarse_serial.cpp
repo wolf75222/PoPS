@@ -82,7 +82,7 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 4;
   cfg.distribute_coarse =
       distribute;  // ADC-620: coarse split into tiles, fine seed needs its OWN dmap
@@ -143,7 +143,7 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   AmrSystemConfig probe_cfg;
   probe_cfg.n = n;
   probe_cfg.L = 1.0;
-  probe_cfg.periodic = true;
+  probe_cfg.periodicity = {true, true};
   probe_cfg.regrid_every = 4;
   probe_cfg.distribute_coarse = true;
   AmrSystem probe(probe_cfg);

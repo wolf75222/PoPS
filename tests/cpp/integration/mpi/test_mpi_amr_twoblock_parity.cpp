@@ -166,7 +166,7 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
     AmrSystemConfig cfg;
     cfg.n = n;
     cfg.L = 1.0;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie FIGEE
     cfg.distribute_coarse = distribute_coarse;
     cfg.coarse_max_grid = distribute_coarse ? n / 2 : 0;

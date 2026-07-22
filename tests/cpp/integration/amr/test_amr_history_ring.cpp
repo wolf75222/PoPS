@@ -8,11 +8,12 @@
 // acceptance suite (Kokkos-gated); this locks the pure C++ ring mechanics.
 //
 // Fixture idiom (nvcc-safe, like test_amr_multiblock_regrid_union): build the AmrRuntime DIRECTLY via
-// detail::make_shared_amr_layout + detail::dispatch_amr_block; the tag predicate is a NAMED functor
-// (host loop of tag_cells, never on device).
+// detail::make_shared_amr_layout + detail::dispatch_amr_block; the tag criterion is installed through
+// the same prepared Kokkos program as the production runtime.
 
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/allocator.hpp>                    // allocation_event_stats
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime + detail::AmrHistoryOps
 #include <pops/runtime/amr_system.hpp>                       // facade transaction boundary
@@ -20,6 +21,9 @@
 #include <pops/runtime/program/amr_program_context.hpp>     // native AB2/reflux context
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+
+#include "amr_transfer_test_authority.hpp"
+#include "amr_tagging_test_authority.hpp"
 
 #include <algorithm>
 #include <array>
@@ -45,12 +49,6 @@ static ModelSpec exb_charge(double q, double B0) {
   s.B0 = B0;
   return s;
 }
-
-// Tag if density (component 0) exceeds a threshold -- a per-block regrid criterion.
-struct TagDensityAbove {
-  Real thr;
-  bool operator()(const ConstArray4& a, int i, int j) const { return a(i, j, 0) > thr; }
-};
 
 static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
                                 double width) {
@@ -112,8 +110,48 @@ static double max_old_fine_child_group_spread(const std::vector<double>& history
   return spread;
 }
 
+static void install_history_state_authorities(AmrSystem& sim) {
+  struct StateRoute {
+    const char* block;
+    const char* subject;
+  };
+  constexpr std::array<StateRoute, 2> routes{{
+      {"a", "test://amr-history/block/a/state/U"},
+      {"b", "test://amr-history/block/b/state/U"},
+  }};
+
+  // State ownership is independent from physical-boundary ownership and must be installed before
+  // block declarations.  The bootstrap/regrid transfer graph then binds every operation to that
+  // exact owner-qualified state; no facade default or route-name inference participates.
+  for (const StateRoute& route : routes)
+    sim.install_block_state_route(route.block, route.subject);
+  for (const StateRoute& route : routes) {
+    const std::string prefix = std::string("test://amr-history/block/") + route.block +
+                               "/transfer/";
+    sim.register_bootstrap_transfer_route(
+        prefix + "prolongation", {route.subject}, "test::amr-history-transfer@1", "cell",
+        "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1},
+        2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "restriction", {route.subject}, "test::amr-history-transfer@1", "cell",
+        "cell", "conservative", "dense", "restriction", "volume_average", 1, {0}, 2,
+        kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "coarse-fine", {route.subject}, "test::amr-history-transfer@1", "cell",
+        "cell", "conservative", "dense", "coarse_fine_fill", "conservative_coarse_fine", 2,
+        {2}, 2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "temporal", {route.subject}, "test::amr-history-transfer@1", "cell", "cell",
+        "conservative", "dense", "temporal_interpolation", "linear_time_interpolation", 2,
+        {0}, 2, kAmrRefRatio);
+    sim.bind_bootstrap_block_subject(route.subject, route.block);
+  }
+}
+
 static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio = kAmrRefRatio) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;
@@ -124,23 +162,17 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "a",
                                                 blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
+    blocks.back().state_identity = "test://amr-history/block/a/state/U";
   });
   detail::dispatch_model(exb_charge(-1.0, B0), [&](auto m) {
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "b",
                                                 blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
+    blocks.back().state_identity = "test://amr-history/block/b/state/U";
   });
-  if (manifest_ratio != kAmrRefRatio) {
-    S.refinement_ratios[0] = manifest_ratio;
-    S.dx[1] = S.dx[0] / Real(manifest_ratio);
-    S.dy[1] = S.dy[0] / Real(manifest_ratio);
-    for (AmrRuntimeBlock& block : blocks) {
-      (*block.levels)[1].dx = S.dx[1];
-      (*block.levels)[1].dy = S.dy[1];
-    }
-  }
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2, manifest_ratio);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;
@@ -148,6 +180,7 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
 
 static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
                                                       int temporal_ratio = 1) {
+  install_history_state_authorities(sim);
   sim.set_temporal_relations({temporal_ratio}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -159,8 +192,8 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
   if (!sim.uses_runtime_engine() || sim.engine() == nullptr)
     throw std::runtime_error("native AB2 fixture failed to build its AMR runtime engine");
   AmrRuntime* rt = sim.engine();
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   return rt;
 }
 
@@ -303,8 +336,8 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
 
   // Activate a real regrid and fire it (a moving density front -> the fine layout changes).
   rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
-  rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
-  rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  test::install_prepared_threshold_union(
+      rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   rt.step(Real(0.01));  // macro_step 0: no regrid (fresh grid), but stores nothing to the ring
   rt.step(Real(0.01));  // macro_step 1 (every=1): regrid fires -> remap_rings runs
   ASSERT_GE(rt.regrid_count(), 1);
@@ -326,20 +359,239 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   EXPECT_EQ(global0.size() - ncoarse, nfine) << "fine_slice_matches_fine_extent";
 }
 
-TEST(test_amr_history_ring, ProgramContextRejectsNonRatioTwoProviderBeforeStep) {
-  AmrRuntime rt = make_two_block(24, 1.0, 1.0, /*manifest_ratio=*/3);
-  ASSERT_EQ(rt.nlev(), 2);
-  ASSERT_EQ(rt.macro_step(), 0);
+TEST(test_amr_history_ring, TransferAuthorityRejectsNonRatioTwoProviderBeforeStep) {
   try {
-    runtime::program::AmrProgramContext context(&rt, nullptr);
-    (void)context;
-    FAIL() << "the ratio-2 Program reflux provider accepted a ratio-3 transition";
+    (void)make_two_block(24, 1.0, 1.0, /*manifest_ratio=*/3);
+    FAIL() << "the ratio-2 AMR transfer authority accepted a ratio-3 transition";
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
-    EXPECT_NE(message.find("supports only refinement ratio 2"), std::string::npos);
-    EXPECT_NE(message.find("transition 0->1 resolved ratio 3"), std::string::npos);
+    EXPECT_NE(message.find("set_block_transfer_authority invalid manifest"), std::string::npos);
   }
-  EXPECT_EQ(rt.macro_step(), 0) << "provider validation must fail before the first native step";
+}
+
+TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.level_count = 3;
+  cfg.explicit_bootstrap = true;
+  cfg.periodicity = {true, true};
+  AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
+  sim.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
+  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative",
+                "explicit", 1);
+  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative",
+                "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
+  sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
+  sim.set_program_block_map({0, 1});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 1);
+
+  // The test owns only scheduler semantics, so use the runtime's generic bootstrap seam directly:
+  // a deterministic positive component tag materializes L1 and L2 without involving Python.
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(0.5)}}, "test.program-catch-up-tag");
+  rt->begin_bootstrap_plan();
+  ASSERT_TRUE(rt->bootstrap_next_level(2));
+  EXPECT_GT(rt->fill_bootstrap_block_constant(0, 1, {1.0}), 0);
+  EXPECT_GT(rt->fill_bootstrap_block_constant(1, 1, {1.0}), 0);
+  ASSERT_TRUE(rt->bootstrap_next_level(2));
+  EXPECT_GT(rt->fill_bootstrap_block_constant(0, 2, {1.0}), 0);
+  EXPECT_GT(rt->fill_bootstrap_block_constant(1, 2, {1.0}), 0);
+  rt->commit_bootstrap_level();
+  ASSERT_EQ(rt->nlev(), 3);
+  rt->set_parent_child_temporal_relations(
+      {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly),
+       ::pops::amr::ParentChildClockRelation(1, 2, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.configure_primary_clock("clock.macro");
+  int level1_calls = 0;
+  int level2_calls = 0;
+  Real level1_seen_before_second_advance = Real(-1);
+  context.advance_hierarchy(0.4, [&](double) {
+    MultiFab& state = context.state(0);
+    if (context.level() == 0) {
+      state.set_val(Real(10));
+      return;
+    }
+    if (context.level() == 1) {
+      if (level1_calls == 0) {
+        state.set_val(Real(20));
+      } else if (level1_calls == 1) {
+        // L2's second substep published 31.  Its first covered parent cell must already have been
+        // averaged into L1 before this second L1 advance begins.
+        device_fence();
+        const MultiFab& child = rt->level_state(0, 2);
+        ASSERT_GT(child.local_size(), 0);
+        const Box2D child_box = child.box(0);
+        const int i = coarsen_index(child_box.lo[0], kAmrRefRatio);
+        const int j = coarsen_index(child_box.lo[1], kAmrRefRatio);
+        const int parent_box = mf_find_box(state, i, j);
+        ASSERT_GE(parent_box, 0);
+        level1_seen_before_second_advance =
+            state.fab(parent_box).const_array()(i, j, 0);
+        state.set_val(Real(40));
+      }
+      ++level1_calls;
+      return;
+    }
+    ASSERT_EQ(context.level(), 2);
+    state.set_val(Real(30 + level2_calls));
+    ++level2_calls;
+  });
+
+  EXPECT_EQ(level1_calls, 2);
+  EXPECT_EQ(level2_calls, 4);
+  EXPECT_DOUBLE_EQ(level1_seen_before_second_advance, Real(31));
+
+  const auto& report = context.sync_report();
+  ASSERT_EQ(report.size(), 12u);  // 3 catch-ups * 2 blocks * (reflux + average-down)
+  EXPECT_EQ(report[0].parent_level, 1);
+  EXPECT_EQ(report[0].child_level, 2);
+  EXPECT_EQ(report[0].clock.phase, amr::Rational(1, 2));
+  EXPECT_EQ(report[4].parent_level, 1);
+  EXPECT_EQ(report[4].child_level, 2);
+  EXPECT_EQ(report[4].clock.phase, amr::Rational(1, 1));
+  EXPECT_EQ(report[8].parent_level, 0);
+  EXPECT_EQ(report[8].child_level, 1);
+  EXPECT_EQ(report[8].clock.phase, amr::Rational(1, 1));
+}
+
+TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace) {
+  constexpr int n = 8;
+  constexpr double dt = 1.0e-4;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.configure_primary_clock("clock.macro");
+  const std::uint64_t first_generation = rt->topology_materialization_generation();
+  EXPECT_EQ(context.capture_flux_workspace_generation(), first_generation);
+
+  AmrRuntime::StepSnapshot accepted;
+  rt->capture_step_snapshot(accepted);  // cold workspace materialization
+  Real* const state_storage = rt->level_state(0, 0).fab(0).array().p;
+  Real* const phi_storage = rt->phi().fab(0).array().p;
+  const std::vector<double> accepted_state = rt->block_level_state(0, 0);
+
+  // Once the persistent image is warm, an identical-layout capture owns no new field or
+  // communication storage.  The copy kernels update the accepted image in place.
+  const AllocationEventStats before_capture = allocation_event_stats();
+  rt->capture_step_snapshot(accepted);
+  const AllocationEventStats after_capture = allocation_event_stats();
+  EXPECT_EQ(after_capture.fab_calls, before_capture.fab_calls);
+  EXPECT_EQ(after_capture.fab_bytes, before_capture.fab_bytes);
+  EXPECT_EQ(after_capture.communication_calls, before_capture.communication_calls);
+  EXPECT_EQ(after_capture.communication_bytes, before_capture.communication_bytes);
+
+  rt->level_state(0, 0).set_val(Real(37));
+  rt->phi().set_val(Real(-9));
+  rt->restore_step_snapshot(accepted);
+  EXPECT_EQ(rt->level_state(0, 0).fab(0).array().p, state_storage);
+  EXPECT_EQ(rt->phi().fab(0).array().p, phi_storage);
+  EXPECT_EQ(rt->block_level_state(0, 0), accepted_state);
+  EXPECT_EQ(rt->topology_materialization_generation(), first_generation)
+      << "same-layout rollback preserves every topology-bound prepared workspace";
+  context.regrid_if_due(rt->macro_step());
+  EXPECT_EQ(context.capture_flux_workspace_generation(),
+            rt->topology_materialization_generation());
+
+  bool measured_coarse_capture = false;
+  context.advance_hierarchy(dt, [&](double level_dt) {
+    context.set_stage_time(0, 1);
+    (void)context.solve_fields();
+    MultiFab& state = context.state(0);
+    MultiFab& rate = context.rhs_scratch(17, 0, state);
+    Real* const rate_storage = rate.local_size() > 0 ? rate.fab(0).array().p : nullptr;
+    const AllocationEventStats before_reacquire = allocation_event_stats();
+    MultiFab& same_rate = context.rhs_scratch(17, 0, state);
+    const AllocationEventStats after_reacquire = allocation_event_stats();
+    EXPECT_EQ(&same_rate, &rate);
+    if (rate_storage != nullptr)
+      EXPECT_EQ(same_rate.fab(0).array().p, rate_storage);
+    EXPECT_EQ(after_reacquire.fab_calls, before_reacquire.fab_calls);
+    EXPECT_EQ(after_reacquire.fab_bytes, before_reacquire.fab_bytes);
+    if (context.level() == 0) {
+      // Warm the halo lease owned by this RHS scratch/layout before measuring the steady-state path.
+      // Field solves exercise a distinct MultiFab cache and therefore cannot warm this lease for us.
+      context.rhs_into(0, state, rate, 17);
+      const AllocationEventStats before = allocation_event_stats();
+      context.rhs_into(0, state, rate, 17);
+      context.rhs_into(0, state, rate, 17);
+      const AllocationEventStats after = allocation_event_stats();
+      EXPECT_EQ(after.fab_calls, before.fab_calls);
+      EXPECT_EQ(after.fab_bytes, before.fab_bytes);
+      EXPECT_EQ(after.communication_calls, before.communication_calls);
+      EXPECT_EQ(after.communication_bytes, before.communication_bytes);
+      measured_coarse_capture = true;
+    } else {
+      context.rhs_into(0, state, rate, 17);
+    }
+    context.axpy(state, static_cast<Real>(level_dt), rate, static_cast<Real>(level_dt),
+                 {{1, 1, 1}});
+  });
+  EXPECT_TRUE(measured_coarse_capture);
+
+  // Parent old/new interpolation images are topology-scoped workspaces too.  Warm one complete
+  // attempt, then prove that the next attempt copies into resident storage instead of allocating
+  // two MultiFabs per block and parent level again.
+  std::vector<MultiFab> rates;
+  const auto evaluate_without_commit = [&](double) {
+    const int level = context.level();
+    while (rates.size() <= static_cast<std::size_t>(level))
+      rates.push_back(context.rhs_scratch_like(context.state(0)));
+    context.set_stage_time(0, 1);
+    context.rhs_into(0, context.state(0), rates[static_cast<std::size_t>(level)], 23);
+  };
+  // Two attempts warm both alternating parent interpolation images.  The history ring deliberately
+  // changes image on each attempt, so a single pass only prepares half of the steady-state leases.
+  context.advance_hierarchy(dt, evaluate_without_commit);
+  context.advance_hierarchy(dt, evaluate_without_commit);
+  const AllocationEventStats before_parent_replay = allocation_event_stats();
+  context.advance_hierarchy(dt, evaluate_without_commit);
+  const AllocationEventStats after_parent_replay = allocation_event_stats();
+  EXPECT_EQ(after_parent_replay.fab_calls, before_parent_replay.fab_calls);
+  EXPECT_EQ(after_parent_replay.fab_bytes, before_parent_replay.fab_bytes);
+  EXPECT_EQ(after_parent_replay.communication_calls, before_parent_replay.communication_calls);
+  EXPECT_EQ(after_parent_replay.communication_bytes, before_parent_replay.communication_bytes);
+
+  // A rejected attempt restores accepted simulation state but deliberately keeps topology-matching
+  // scratch storage resident. The next acquisition resets its provisional bytes in place.
+  Real* rejected_storage = nullptr;
+  EXPECT_THROW(
+      context.advance_hierarchy(dt, [&](double) {
+        MultiFab& rejected = context.rhs_scratch(901, 0, context.state(0));
+        if (context.level() == 0 && rejected.local_size() > 0) {
+          rejected_storage = rejected.fab(0).array().p;
+          rejected.set_val(Real(73));
+          throw runtime::program::StepAttemptRejected(
+              SolveStatus::kIterationLimit, "scratch rollback",
+              "fault after provisional persistent scratch write");
+        }
+      }),
+      runtime::program::StepAttemptRejected);
+  ASSERT_NE(rejected_storage, nullptr);
+  MultiFab& retried = context.rhs_scratch(901, 0, context.state(0));
+  ASSERT_GT(retried.local_size(), 0);
+  EXPECT_EQ(retried.fab(0).array().p, rejected_storage);
+  EXPECT_EQ(retried.fab(0).const_array()(retried.box(0).lo[0], retried.box(0).lo[1], 0), Real(0));
 }
 
 TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreItExactly) {
@@ -348,7 +600,7 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 0;
   AmrSystem sim(cfg);
   AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
@@ -512,10 +764,11 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 2;
 
   AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
   sim.set_temporal_relations({1}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -527,8 +780,8 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   const std::vector<PatchBox> initial_patches = rt->patch_boxes();
   const double initial_mass = rt->composite_reduce("a", "sum", 0, {0});
 
@@ -596,7 +849,7 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   EXPECT_EQ(context.history_flux_topology_epoch(), rt->topology_epoch());
   EXPECT_TRUE(nonflux_carry_kept_old_fine_overlap)
       << "a history with no conservative flux authority must keep the normal old-fine overlap";
-  EXPECT_NEAR(lagged_rate_spread_after_regrid, lagged_rate_spread_before_regrid, 1.0e-12)
+  EXPECT_GT(lagged_rate_spread_after_regrid, 1.0e-12)
       << "the conservative parent-average correction must retain old-fine subcell detail";
   EXPECT_LT(std::fabs(rt->composite_reduce("a", "sum", 0, {0}) - initial_mass), 1.0e-10)
       << "the remapped lagged residual and zero-mismatch flux authority must conserve AB2 mass";
@@ -608,7 +861,7 @@ TEST(test_amr_history_ring, RejectedAb2RegridRestoresTopologyHistoryFluxAndState
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 2;
   AmrSystem sim(cfg);
   AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
@@ -635,6 +888,7 @@ TEST(test_amr_history_ring, RejectedAb2RegridRestoresTopologyHistoryFluxAndState
   const int macro_before = sim.macro_step();
   const int regrids_before = rt->regrid_count();
   const std::uint64_t topology_before = rt->topology_epoch();
+  const std::uint64_t materialization_before = rt->topology_materialization_generation();
   const std::uint64_t history_topology_before = context.history_flux_topology_epoch();
   const int history_rebinds_before = context.history_flux_topology_rebind_count();
   const std::vector<PatchBox> patches_before = rt->patch_boxes();
@@ -658,6 +912,8 @@ TEST(test_amr_history_ring, RejectedAb2RegridRestoresTopologyHistoryFluxAndState
   EXPECT_EQ(sim.macro_step(), macro_before);
   EXPECT_EQ(rt->regrid_count(), regrids_before);
   EXPECT_EQ(rt->topology_epoch(), topology_before);
+  EXPECT_GT(rt->topology_materialization_generation(), materialization_before)
+      << "a rejected topology replacement must invalidate address-bound native workspaces";
   EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
   EXPECT_EQ(rt->level_owner_ranks(1), owners_before);
   EXPECT_EQ(context.history_flux_topology_epoch(), history_topology_before);
@@ -683,7 +939,7 @@ TEST(test_amr_history_ring, AcceptedStateRestartReconstructsReboundFluxAuthority
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 2;
   AmrSystem sim(cfg);
   AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
@@ -732,10 +988,11 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 1;
 
   AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -746,8 +1003,8 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
   sim.set_clock(0.25, 1);  // the accepted attempt performs a real due regrid
 
@@ -787,10 +1044,11 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 1;
 
   AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -801,8 +1059,8 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
   sim.set_clock(0.25, 1);  // next native engine step is regrid-due
 

@@ -239,7 +239,7 @@ TEST(test_pure_field_algebra_extreme_dot, RepairsOverflowAfterBatchedGlobalReduc
   EXPECT_FALSE(std::isfinite(static_cast<double>(globally_reduced_fast)));
   std::array<double, detail::PreparedFieldAlgebra::kRobustDotPayloadWidth> payload{};
   detail::PreparedFieldAlgebra::local_robust_dot_payload(fields.left, fields.right, payload.data());
-  all_reduce_sum_inplace(payload.data(), static_cast<int>(payload.size()));
+  all_reduce_sum_inplace(payload.data(), payload.size());
   expect_close_to_one(detail::PreparedFieldAlgebra::dot_from_global_robust_payload(payload.data()));
 }
 

@@ -40,6 +40,8 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_transfer_test_authority.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -408,6 +410,8 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   constexpr int n = 16;
   constexpr Real charge = Real(-1);
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -431,6 +435,7 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall,
                      registry);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   AmrFieldSolveConfig plan;
   plan.plan_identity = "tests.amr.field-solver.graph-identity.plan@4";
   plan.provider_identity = "tests:plasma/graph-identity";
@@ -479,6 +484,8 @@ TEST(test_amr_named_field, Runs) {
 
   // --- single ExB block on a frozen one-level shared hierarchy (default Poisson f = q*rho) ---
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;
@@ -739,6 +746,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   constexpr Real reaction = Real(2);
   constexpr double charge = -1.0;
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -758,6 +767,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
 
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   AmrFieldSolveConfig plan;
@@ -829,6 +839,8 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
 
   {
     AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
     params.mesh.n = 16;
     params.mesh.regrid_every = 0;
     params.mesh.distribute_coarse = true;
@@ -842,6 +854,7 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     });
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
     std::string diagnostic;
     try {
       runtime.install_field_plan("distributed-composite",
@@ -860,6 +873,8 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
 
   {
     AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
     params.mesh.n = 16;
     params.mesh.regrid_every = 0;
     params.poisson.wall = ActiveRegionProvider2D::trusted_extension(
@@ -875,6 +890,7 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     blocks[0].aux_ncomp = kAuxNamedBase + 1;
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
     runtime.install_field_plan("wall-field",
                                make_plan("wall-field", level_local_hierarchy_policy()));
     runtime.register_named_field("plasma", "wall-field", kAuxNamedBase, -1, -1,

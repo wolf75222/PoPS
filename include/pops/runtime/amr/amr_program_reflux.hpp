@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -38,8 +39,8 @@ namespace pops {
 /// (indexed (J - J0)*nc + k), the y strips nI*nc. Reused by CoarseFineInterface::route_reflux_integrated.
 struct EdgeStrip {
   int I0 = 0, I1 = -1, J0 = 0, J1 = -1;
-  std::vector<Real> cL, cR, cB, cT;  // coarse-side flux at the L/R/B/T C/F faces
-  std::vector<Real> fL, fR, fB, fT;  // fine-side (time-integrated) flux at the same faces
+  RefluxStorage<Real> cL, cR, cB, cT;  // coarse-side flux at the L/R/B/T C/F faces
+  RefluxStorage<Real> fL, fR, fB, fT;  // fine-side (time-integrated) flux at the same faces
 
   void alloc(const Box2D& coarse_footprint, int nc) {
     I0 = coarse_footprint.lo[0];
@@ -55,6 +56,35 @@ struct EdgeStrip {
     cT.assign(nI, Real(0));
     fB.assign(nI, Real(0));
     fT.assign(nI, Real(0));
+  }
+
+
+  bool matches(const Box2D& coarse_footprint, int nc) const noexcept {
+    if (nc <= 0 || I0 != coarse_footprint.lo[0] || I1 != coarse_footprint.hi[0] ||
+        J0 != coarse_footprint.lo[1] || J1 != coarse_footprint.hi[1])
+      return false;
+    const std::size_t nj = static_cast<std::size_t>(J1 - J0 + 1) *
+                           static_cast<std::size_t>(nc);
+    const std::size_t ni = static_cast<std::size_t>(I1 - I0 + 1) *
+                           static_cast<std::size_t>(nc);
+    return cL.size() == nj && cR.size() == nj && fL.size() == nj && fR.size() == nj &&
+           cB.size() == ni && cT.size() == ni && fB.size() == ni && fT.size() == ni;
+  }
+
+  void prepare(const Box2D& coarse_footprint, int nc) {
+    if (!matches(coarse_footprint, nc))
+      alloc(coarse_footprint, nc);
+  }
+
+  void clear_on_device() {
+    detail::clear_reflux_storage_on_device(cL);
+    detail::clear_reflux_storage_on_device(cR);
+    detail::clear_reflux_storage_on_device(cB);
+    detail::clear_reflux_storage_on_device(cT);
+    detail::clear_reflux_storage_on_device(fL);
+    detail::clear_reflux_storage_on_device(fR);
+    detail::clear_reflux_storage_on_device(fB);
+    detail::clear_reflux_storage_on_device(fT);
   }
 };
 
@@ -121,44 +151,99 @@ struct CoarseRoleScratch {
   int ncomp = 0;
   std::vector<Box2D> child_boxes;
   std::vector<int> child_ranks;
+  std::vector<Box2D> parent_boxes;
+  std::vector<int> parent_ranks;
+  bool replicated_parent = false;
   MultiFab Fx;
   MultiFab Fy;
+  std::optional<MfBoxLookup> parent_lookup;
 
-  bool matches(const MultiFab& child, std::uint64_t epoch, int nc) const {
+  bool matches(const MultiFab& parent, const MultiFab& child, bool replicated,
+               std::uint64_t epoch, int nc) const {
     return topology_epoch == epoch && ncomp == nc && child_boxes == child.box_array().boxes() &&
-           child_ranks == child.dmap().ranks();
+           child_ranks == child.dmap().ranks() && parent_boxes == parent.box_array().boxes() &&
+           parent_ranks == parent.dmap().ranks() && replicated_parent == replicated &&
+           (replicated ? parent_lookup.has_value() : !parent_lookup.has_value());
   }
 
-  void prepare(const MultiFab& child, std::uint64_t epoch, int nc) {
-    if (matches(child, epoch, nc))
+  void prepare(const MultiFab& parent, const MultiFab& child, bool replicated,
+               std::uint64_t epoch, int nc) {
+    if (matches(parent, child, replicated, epoch, nc))
       return;
-    const BoxArray coarse_child = coarsen(child.box_array(), kAmrRefRatio);
-    std::vector<Box2D> xfaces, yfaces;
-    xfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
-    yfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
-    for (int g = 0; g < coarse_child.size(); ++g) {
-      xfaces.push_back(xface_box(coarse_child[g]));
-      yfaces.push_back(yface_box(coarse_child[g]));
+    if (replicated) {
+      Fx = MultiFab{};
+      Fy = MultiFab{};
+      parent_lookup.emplace(parent);
+    } else {
+      parent_lookup.reset();
+      const BoxArray coarse_child = coarsen(child.box_array(), kAmrRefRatio);
+      std::vector<Box2D> xfaces, yfaces;
+      xfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
+      yfaces.reserve(static_cast<std::size_t>(coarse_child.size()));
+      for (int g = 0; g < coarse_child.size(); ++g) {
+        xfaces.push_back(xface_box(coarse_child[g]));
+        yfaces.push_back(yface_box(coarse_child[g]));
+      }
+      Fx = MultiFab(BoxArray(std::move(xfaces)), child.dmap(), nc, 0);
+      Fy = MultiFab(BoxArray(std::move(yfaces)), child.dmap(), nc, 0);
     }
-    Fx = MultiFab(BoxArray(std::move(xfaces)), child.dmap(), nc, 0);
-    Fy = MultiFab(BoxArray(std::move(yfaces)), child.dmap(), nc, 0);
     topology_epoch = epoch;
     ncomp = nc;
     child_boxes = child.box_array().boxes();
     child_ranks = child.dmap().ranks();
+    parent_boxes = parent.box_array().boxes();
+    parent_ranks = parent.dmap().ranks();
+    replicated_parent = replicated;
+  }
+};
+
+inline void prepare_edge_flux_coarse_role(EdgeFlux& flux, const MultiFab& child, int nc) {
+  flux.coarse.resize(static_cast<std::size_t>(child.box_array().size()));
+  for (int local = 0; local < child.local_size(); ++local) {
+    const int global = child.global_index(local);
+    flux.coarse.at(static_cast<std::size_t>(global))
+        .prepare(PatchRange(child.box(local)).box(), nc);
+  }
+}
+
+inline void prepare_edge_flux_fine_role(EdgeFlux& flux, const MultiFab& state, int nc) {
+  flux.fine.resize(static_cast<std::size_t>(state.box_array().size()));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const int global = state.global_index(local);
+    flux.fine.at(static_cast<std::size_t>(global))
+        .prepare(PatchRange(state.box(local)).box(), nc);
+  }
+}
+
+inline void clear_edge_flux_role_on_device(std::vector<EdgeStrip>& strips) {
+  for (EdgeStrip& strip : strips)
+    strip.clear_on_device();
+}
+
+struct EdgeAxpyKernel {
+  Real* destination = nullptr;
+  const Real* source = nullptr;
+  Real coefficient = Real(0);
+
+  POPS_HD void operator()(std::int64_t index) const {
+    destination[index] += coefficient * source[index];
   }
 };
 
 /// Add a * src into dst component-wise (both strips share the SAME patch footprint within a frozen macro-
 /// step layout, so the flat arrays align by index). Missing src (empty) contributes 0. Used by the ledger
 /// axpy mirror.
-inline void edge_axpy(std::vector<Real>& dst, Real a, const std::vector<Real>& src) {
+inline void edge_axpy(RefluxStorage<Real>& dst, Real a, const RefluxStorage<Real>& src) {
   if (src.empty())
     return;
   if (dst.size() != src.size())
     dst.assign(src.size(), Real(0));
-  for (std::size_t i = 0; i < src.size(); ++i)
-    dst[i] += a * src[i];
+  detail::ensure_kokkos_initialized();
+  Kokkos::parallel_for(
+      "pops_program_reflux_edge_axpy",
+      Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+          0, static_cast<std::int64_t>(src.size())),
+      EdgeAxpyKernel{dst.data(), src.data(), a});
 }
 
 inline void edge_strip_axpy(EdgeStrip& d, Real a, const EdgeStrip& s) {
@@ -188,6 +273,32 @@ inline void edge_flux_axpy(EdgeFlux& dst, Real a, const EdgeFlux& src) {
     edge_strip_axpy(dst.coarse[i], a, src.coarse[i]);
   for (std::size_t i = 0; i < src.fine.size(); ++i)
     edge_strip_axpy(dst.fine[i], a, src.fine[i]);
+  // EdgeFlux remains a regular value type for checkpoint/retry snapshots.  Complete device writes
+  // before a following value copy can read its pinned storage on the host.
+  device_fence();
+}
+
+/// Value-copy an exact EdgeFlux while retaining the destination's pinned strip allocations whenever
+/// its topology is unchanged.  This is the storage primitive used by the Program ledger: buffer
+/// identities persist across macro steps, while their numerical content remains an ordinary deep
+/// value suitable for checkpoint and retry snapshots.
+inline void edge_flux_copy_into(EdgeFlux& dst, const EdgeFlux& src) {
+  if (&dst == &src)
+    return;
+  dst.coarse.resize(src.coarse.size());
+  dst.fine.resize(src.fine.size());
+  clear_edge_flux_role_on_device(dst.coarse);
+  clear_edge_flux_role_on_device(dst.fine);
+  for (std::size_t index = 0; index < src.coarse.size(); ++index)
+    edge_strip_axpy(dst.coarse[index], Real(1), src.coarse[index]);
+  for (std::size_t index = 0; index < src.fine.size(); ++index)
+    edge_strip_axpy(dst.fine[index], Real(1), src.fine[index]);
+  device_fence();
+}
+
+inline void edge_flux_clear_on_device(EdgeFlux& flux) {
+  clear_edge_flux_role_on_device(flux.coarse);
+  clear_edge_flux_role_on_device(flux.fine);
 }
 
 /// Sample the COARSE-ROLE strip of a level-k flux field (Fx/Fy on the level-k grid, PARENT of level k+1):
@@ -205,67 +316,87 @@ inline void sample_coarse_role_strip(const MultiFab& parent, const MultiFab& Fx,
   validate_program_reflux_faces(parent, Fx, Fy, nc, "coarse-role");
   require_program_reflux(child.ncomp() == nc, "coarse-role child component count differs from nc");
   const BoxArray& child_ba = child.box_array();
-  out.coarse.assign(static_cast<std::size_t>(child_ba.size()), EdgeStrip{});
+  validate_ratio_aligned_disjoint_fine_layout(child_ba);
+
+  if (!scratch.matches(parent, child, replicated_parent, topology_epoch, nc))
+    throw std::invalid_argument("Program coarse-role scratch crossed an exact topology");
+  const MfBoxLookup* replicated_parent_lookup =
+      replicated_parent ? &*scratch.parent_lookup : nullptr;
+  if (replicated_parent) {
+    require_program_reflux(parent.local_size() == parent.box_array().size(),
+                           "replicated parent is not fully resident on this rank");
+    // Complete metadata preflight before allocating strips or launching a device kernel.  A later
+    // missing tile can therefore never unwind while an earlier pinned strip is still in flight.
+    for (int local_child = 0; local_child < child.local_size(); ++local_child) {
+      const PatchRange range(child.box(local_child));
+      for (int J = range.J0; J <= range.J1; ++J)
+        if (replicated_parent_lookup->find(range.I0, J) < 0 ||
+            replicated_parent_lookup->find(range.I1, J) < 0)
+          throw std::runtime_error(
+              "Program reflux: replicated parent does not cover a child x interface");
+      for (int I = range.I0; I <= range.I1; ++I)
+        if (replicated_parent_lookup->find(I, range.J0) < 0 ||
+            replicated_parent_lookup->find(I, range.J1) < 0)
+          throw std::runtime_error(
+              "Program reflux: replicated parent does not cover a child y interface");
+    }
+  }
+  if (out.coarse.size() != static_cast<std::size_t>(child_ba.size()))
+    throw std::invalid_argument("Program coarse-role EdgeFlux was not prepared for this layout");
+  clear_edge_flux_role_on_device(out.coarse);
 
   if (!replicated_parent) {
-    scratch.prepare(child, topology_epoch, nc);
     parallel_copy(scratch.Fx, Fx);
     parallel_copy(scratch.Fy, Fy);
     device_fence();
-  } else {
-    require_program_reflux(parent.local_size() == parent.box_array().size(),
-                           "replicated parent is not fully resident on this rank");
   }
 
   for (int lc = 0; lc < child.local_size(); ++lc) {
     const int g = child.global_index(lc);
     const PatchRange pr(child.box(lc));
     EdgeStrip& s = out.coarse[static_cast<std::size_t>(g)];
-    s.alloc(pr.box(), nc);
+    if (!s.matches(pr.box(), nc))
+      throw std::invalid_argument("Program coarse-role EdgeStrip was not prepared for this patch");
+    const RefluxStripView strip = reflux_strip_view(s, nc);
 
     if (replicated_parent) {
-      for (int J = s.J0; J <= s.J1; ++J) {
-        const int left = mf_find_box(parent, s.I0, J);
-        const int right = mf_find_box(parent, s.I1, J);
+      for (int J = s.J0; J <= s.J1;) {
+        const int left = replicated_parent_lookup->find(s.I0, J);
+        const int right = replicated_parent_lookup->find(s.I1, J);
         if (left < 0 || right < 0)
           throw std::runtime_error(
               "Program reflux: replicated parent does not cover a child x interface");
-        const ConstArray4 FXL = Fx.fab(left).const_array();
-        const ConstArray4 FXR = Fx.fab(right).const_array();
-        for (int k = 0; k < nc; ++k) {
-          s.cL[static_cast<std::size_t>((J - s.J0) * nc + k)] = FXL(s.I0, J, k);
-          s.cR[static_cast<std::size_t>((J - s.J0) * nc + k)] = FXR(s.I1 + 1, J, k);
-        }
+        int end = J;
+        while (end + 1 <= s.J1 && replicated_parent_lookup->find(s.I0, end + 1) == left &&
+               replicated_parent_lookup->find(s.I1, end + 1) == right)
+          ++end;
+        sample_coarse_x_strip(Fx.fab(left).const_array(), Fx.fab(right).const_array(), strip, J,
+                              end);
+        J = end + 1;
       }
-      for (int I = s.I0; I <= s.I1; ++I) {
-        const int bottom = mf_find_box(parent, I, s.J0);
-        const int top = mf_find_box(parent, I, s.J1);
+      for (int I = s.I0; I <= s.I1;) {
+        const int bottom = replicated_parent_lookup->find(I, s.J0);
+        const int top = replicated_parent_lookup->find(I, s.J1);
         if (bottom < 0 || top < 0)
           throw std::runtime_error(
               "Program reflux: replicated parent does not cover a child y interface");
-        const ConstArray4 FYB = Fy.fab(bottom).const_array();
-        const ConstArray4 FYT = Fy.fab(top).const_array();
-        for (int k = 0; k < nc; ++k) {
-          s.cB[static_cast<std::size_t>((I - s.I0) * nc + k)] = FYB(I, s.J0, k);
-          s.cT[static_cast<std::size_t>((I - s.I0) * nc + k)] = FYT(I, s.J1 + 1, k);
-        }
+        int end = I;
+        while (end + 1 <= s.I1 && replicated_parent_lookup->find(end + 1, s.J0) == bottom &&
+               replicated_parent_lookup->find(end + 1, s.J1) == top)
+          ++end;
+        sample_coarse_y_strip(Fy.fab(bottom).const_array(), Fy.fab(top).const_array(), strip, I,
+                              end);
+        I = end + 1;
       }
       continue;
     }
 
     const ConstArray4 FX = scratch.Fx.fab(lc).const_array();
     const ConstArray4 FY = scratch.Fy.fab(lc).const_array();
-    for (int J = s.J0; J <= s.J1; ++J)
-      for (int k = 0; k < nc; ++k) {
-        s.cL[static_cast<std::size_t>((J - s.J0) * nc + k)] = FX(s.I0, J, k);
-        s.cR[static_cast<std::size_t>((J - s.J0) * nc + k)] = FX(s.I1 + 1, J, k);
-      }
-    for (int I = s.I0; I <= s.I1; ++I)
-      for (int k = 0; k < nc; ++k) {
-        s.cB[static_cast<std::size_t>((I - s.I0) * nc + k)] = FY(I, s.J0, k);
-        s.cT[static_cast<std::size_t>((I - s.I0) * nc + k)] = FY(I, s.J1 + 1, k);
-      }
+    sample_coarse_strip(FX, FX, FY, FY, strip);
   }
+  // EdgeStrip uses pinned storage that may be copied into the Program ledger immediately on return.
+  device_fence();
 }
 
 /// Sample the FINE-ROLE strip of a level-k flux field (Fx/Fy on the level-k grid): for each LOCAL level-k
@@ -280,31 +411,23 @@ inline void sample_fine_role_strip(const MultiFab& state, const MultiFab& Fx, co
   device_fence();
   validate_program_reflux_faces(state, Fx, Fy, nc, "fine-role");
   const BoxArray& patch_ba = state.box_array();
-  out.fine.assign(static_cast<std::size_t>(patch_ba.size()), EdgeStrip{});
+  validate_ratio_aligned_disjoint_fine_layout(patch_ba);
+  if (out.fine.size() != static_cast<std::size_t>(patch_ba.size()))
+    throw std::invalid_argument("Program fine-role EdgeFlux was not prepared for this layout");
+  clear_edge_flux_role_on_device(out.fine);
   // The validated state authority supplies both local iteration and stable global patch identity.
   // Only the owning rank fills that global slot (the reflux router later reduces disjoint slots).
   for (int li = 0; li < state.local_size(); ++li) {
     const int g = state.global_index(li);
     const PatchRange pr(state.box(li));
     EdgeStrip& s = out.fine[static_cast<std::size_t>(g)];
-    s.alloc(pr.box(), nc);
+    if (!s.matches(pr.box(), nc))
+      throw std::invalid_argument("Program fine-role EdgeStrip was not prepared for this patch");
     const ConstArray4 FX = Fx.fab(li).const_array();
     const ConstArray4 FY = Fy.fab(li).const_array();
-    for (int J = s.J0; J <= s.J1; ++J)
-      for (int k = 0; k < nc; ++k) {
-        s.fL[static_cast<std::size_t>((J - s.J0) * nc + k)] =
-            Real(0.5) * (FX(2 * s.I0, 2 * J, k) + FX(2 * s.I0, 2 * J + 1, k));
-        s.fR[static_cast<std::size_t>((J - s.J0) * nc + k)] =
-            Real(0.5) * (FX(2 * s.I1 + 2, 2 * J, k) + FX(2 * s.I1 + 2, 2 * J + 1, k));
-      }
-    for (int I = s.I0; I <= s.I1; ++I)
-      for (int k = 0; k < nc; ++k) {
-        s.fB[static_cast<std::size_t>((I - s.I0) * nc + k)] =
-            Real(0.5) * (FY(2 * I, 2 * s.J0, k) + FY(2 * I + 1, 2 * s.J0, k));
-        s.fT[static_cast<std::size_t>((I - s.I0) * nc + k)] =
-            Real(0.5) * (FY(2 * I, 2 * s.J1 + 2, k) + FY(2 * I + 1, 2 * s.J1 + 2, k));
-      }
+    accumulate_fine_strip(FX, FY, reflux_strip_view(s, nc), Real(1));
   }
+  device_fence();
 }
 
 /// Combine a coarse-role EdgeStrip (c* = the level-(k-1) coarse flux at a patch's C/F faces) and the
@@ -321,10 +444,10 @@ inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fi
   g.J0 = shape.J0;
   g.J1 = shape.J1;
   const int nJ = (g.J1 - g.J0 + 1) * nc, nI = (g.I1 - g.I0 + 1) * nc;
-  auto take = [](const std::vector<Real>& v, int n) {
+  auto take = [](const RefluxStorage<Real>& v, int n) {
     return v.size() == static_cast<std::size_t>(n)
                ? v
-               : std::vector<Real>(static_cast<std::size_t>(n), Real(0));
+               : RefluxStorage<Real>(static_cast<std::size_t>(n), Real(0));
   };
   g.cL = take(coarse.cL, nJ);
   g.cR = take(coarse.cR, nJ);
@@ -340,8 +463,8 @@ inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fi
 /// Route the conservative reflux of the coarse-fine interface between coarse level @p k-1 (PARENT) and
 /// fine level @p k for block @p b: for each level-k patch, merge the coarse-role strip (from the level-
 /// (k-1) buffer's ledger) with the fine-role strip (from the level-k buffer's ledger) into a route_reflux
-/// register, deposit the coverage-aware correction into a GLOBAL-indexed FluxRegister restricted to the
-/// interface bounding box, gather (all_reduce; identity in serial), and apply to the coarse live state
+/// register, deposit the coverage-aware correction into a sparse GLOBAL-indexed FluxRegister restricted
+/// to exact interface cells, gather (all_reduce; identity in serial), and apply to the coarse live state
 /// under the coverage guard. Both sides are dt-integrated, so route_reflux_integrated (NO *dt) keeps the
 /// cancellation exact. REUSES CoarseFineInterface / FluxRegister / CoverageMask verbatim. MPI single-writer
 /// per (cell,direction) (ADC-636 ownership: each C/F face is owned by the rank holding the covering fine
@@ -349,43 +472,13 @@ inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fi
 inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const EdgeFlux& coarse_role,
                                  const EdgeFlux& fine_role) {
   MultiFab& Uc = eng.level_state(b, k - 1);  // the PARENT (coarse) live state we correct
-  const int nc = Uc.ncomp();
   const BoxArray child_ba = eng.level_state(b, k).box_array();  // GLOBAL level-k patches
   if (child_ba.size() == 0)
     return;
   const Geometry gc = eng.level_geom(k - 1);
-  const int NX = gc.domain.nx(), NY = gc.domain.ny();
-  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, child_ba);
-  // Interface register restricted to the coarse footprint of the fine patches, grown by 1 for the
-  // bordering reflux cells, clamped to the coarse domain (the native rbox, amr_subcycling.hpp:169-171).
-  const Box2D fpc = coarsen(child_ba, kAmrRefRatio).bounding_box();
-  const Box2D rbox{{std::max(fpc.lo[0] - 1, 0), std::max(fpc.lo[1] - 1, 0)},
-                   {std::min(fpc.hi[0] + 1, NX - 1), std::min(fpc.hi[1] + 1, NY - 1)}};
-  FluxRegister ref(rbox, nc);
-  const std::size_t np = static_cast<std::size_t>(child_ba.size());
-  for (std::size_t g = 0; g < np; ++g) {
-    const EdgeStrip c = (g < coarse_role.coarse.size()) ? coarse_role.coarse[g] : EdgeStrip{};
-    const EdgeStrip f = (g < fine_role.fine.size()) ? fine_role.fine[g] : EdgeStrip{};
-    if (c.cL.empty() && f.fL.empty() && c.cB.empty() && f.fB.empty())
-      continue;  // this rank owns neither role for this patch -> 0 (single-writer MPI rule)
-    const EdgeStrip merged = merge_reflux_strip(c, f, nc);
-    cfi.route_reflux_integrated(merged, gc.dx(), gc.dy(), ref, nc);
-  }
-  ref.gather();  // all_reduce (identity in serial); single-writer per slot -> associativity-free
-  device_fence();
-  for (int pb = 0; pb < Uc.local_size();
-       ++pb) {  // apply to the local coarse boxes under coverage guard
-    Array4 c = Uc.fab(pb).array();
-    const Box2D pbx = Uc.box(pb);
-    for (int J = pbx.lo[1]; J <= pbx.hi[1]; ++J)
-      for (int I = pbx.lo[0]; I <= pbx.hi[0]; ++I) {
-        if (!ref.in(I, J))
-          continue;
-        for (int kk = 0; kk < nc; ++kk)
-          c(I, J, kk) +=
-              ref.at(I, J, kk);  // reflux (0 if no face); covered cells were average_down'd
-      }
-  }
+  eng.prepared_reflux_transition(b, k).synchronize_integrated(
+      Uc, gc.dx(), gc.dy(), coarse_role.coarse, fine_role.fine,
+      world_communicator_view());
 }
 
 }  // namespace detail

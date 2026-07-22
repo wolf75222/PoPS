@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -151,6 +152,17 @@ class ClockScheduleState {
     return accepted_ticks_;
   }
 
+  /// Refresh a persistent transaction image without rebuilding its map/vector storage.  Logical
+  /// clock declarations are immutable after Program installation, but accepted ticks and active
+  /// subcycle frames are attempt state and must roll back exactly with the numerical hierarchy.
+  void copy_into(ClockScheduleState& destination) const {
+    destination.primary_ = primary_;
+    copy_map_into_(destination.relations_, relations_);
+    copy_map_into_(destination.accepted_ticks_, accepted_ticks_);
+    destination.frames_.resize(frames_.size());
+    std::copy(frames_.begin(), frames_.end(), destination.frames_.begin());
+  }
+
   void synchronize_sample_and_hold(const std::string& source, const std::string& target,
                                    int /*step*/, double offset) const {
     if (source.empty() || target.empty() || source == target)
@@ -167,6 +179,18 @@ class ClockScheduleState {
     std::string parent;
     int count = 0;
   };
+
+  template <class Map>
+  static void copy_map_into_(Map& destination, const Map& source) {
+    for (auto entry = destination.begin(); entry != destination.end();) {
+      if (source.find(entry->first) == source.end())
+        entry = destination.erase(entry);
+      else
+        ++entry;
+    }
+    for (const auto& [key, value] : source)
+      destination.insert_or_assign(key, value);
+  }
 
   static std::int64_t checked_multiply_(std::int64_t a, std::int64_t b) {
     if (a < 0 || b <= 0 || (a != 0 && b > std::numeric_limits<std::int64_t>::max() / a))

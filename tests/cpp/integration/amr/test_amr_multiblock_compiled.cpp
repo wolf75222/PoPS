@@ -262,7 +262,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
 
     AmrSystem sim(cfg);
@@ -316,7 +316,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
@@ -351,7 +351,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
@@ -386,7 +386,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       add_compiled_model(sim, "ne", exb_model(q0, B0), "none", "rusanov", "conservative",
@@ -412,7 +412,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       add_compiled_model(sim, "a", exb_model(q0, B0), "minmod", "rusanov", "conservative",
@@ -452,7 +452,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       AmrSystemConfig cfg;
       cfg.n = Nf;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
       AmrSystem sim(cfg);
       sim.set_temporal_relations({2}, {1}, {"integral_only"});
@@ -551,7 +551,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     AmrSystemConfig cfg;
     cfg.n = Ns;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});

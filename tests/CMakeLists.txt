@@ -340,12 +340,40 @@ function(pops_add_mpi_standalone_suite name)
 endfunction()
 
 function(pops_native_loader_definitions out)
-  set(${out}
+  set(_definitions
     POPS_TEST_CXX="${CMAKE_CXX_COMPILER}"
     POPS_TEST_INCLUDE="${CMAKE_SOURCE_DIR}/include"
     POPS_TEST_CXX_STD="c++${CMAKE_CXX_STANDARD}"
-    POPS_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}"
-    PARENT_SCOPE)
+    POPS_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
+  if(POPS_NATIVE_HEADER_SIGNATURE)
+    list(APPEND _definitions
+      POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}"
+      POPS_TEST_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
+  endif()
+  # Runtime-compiled native packages must replay the exact Kokkos development contract of their
+  # host test executable.  Keep this authority in one helper: a native-loader suite must never
+  # compile a serial DSO and then skip or silently accept it in a Kokkos build.
+  if(POPS_HAS_KOKKOS)
+    list(APPEND _definitions
+      POPS_TEST_KOKKOS_INC="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_INCLUDE_DIRECTORIES>, >"
+      POPS_TEST_KOKKOS_DEFS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_DEFINITIONS>, >"
+      POPS_TEST_KOKKOS_OPTS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_OPTIONS>, >")
+  endif()
+  if(POPS_HAS_MPI)
+    if(NOT POPS_NATIVE_MPI_ABI OR NOT POPS_NATIVE_MPI_INCLUDE OR
+       NOT POPS_NATIVE_MPI_LINK_LIBRARIES)
+      message(FATAL_ERROR
+        "Runtime-compiled test DSOs require the complete POPS_NATIVE_MPI_* authority")
+    endif()
+    list(APPEND _definitions
+      POPS_TEST_MPI_ABI="${POPS_NATIVE_MPI_ABI}"
+      POPS_TEST_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}"
+      POPS_TEST_MPI_COMPILE_OPTIONS="${POPS_NATIVE_MPI_COMPILE_OPTIONS}"
+      POPS_TEST_MPI_COMPILE_DEFINITIONS="${POPS_NATIVE_MPI_COMPILE_DEFINITIONS}"
+      POPS_TEST_MPI_LINK_OPTIONS="${POPS_NATIVE_MPI_LINK_OPTIONS}"
+      POPS_TEST_MPI_LINK_LIBRARIES="${POPS_NATIVE_MPI_LINK_LIBRARIES}")
+  endif()
+  set(${out} ${_definitions} PARENT_SCOPE)
 endfunction()
 
 function(pops_cap_opt_for_kokkos_ram target)
@@ -565,6 +593,16 @@ pops_test_source(_src test_native_aux_named)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
+pops_test_source(_src test_flux_failure_loader_transaction)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(
+  NAME test_flux_failure_loader_transaction
+  SOURCES "${_src}"
+  EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system
+  ENABLE_EXPORTS
+  RESOURCE_LOCK native_loader
+  COMPILE_DEFINITIONS ${_native_defs})
+
 pops_test_source(_src test_compiled_model_parity)
 pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}")
 
@@ -592,14 +630,7 @@ pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${
 
 pops_test_source(_src test_external_riemann_dispatch)
 pops_native_loader_definitions(_native_defs)
-set(_external_riemann_defs ${_native_defs})
-if(POPS_HAS_KOKKOS)
-  list(APPEND _external_riemann_defs
-    POPS_TEST_KOKKOS_INC="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_INCLUDE_DIRECTORIES>, >"
-    POPS_TEST_KOKKOS_DEFS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_DEFINITIONS>, >"
-    POPS_TEST_KOKKOS_OPTS="$<JOIN:$<TARGET_PROPERTY:Kokkos::kokkos,INTERFACE_COMPILE_OPTIONS>, >")
-endif()
-pops_add_gtest_suite(NAME test_external_riemann_dispatch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_external_riemann_defs})
+pops_add_gtest_suite(NAME test_external_riemann_dispatch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_amr_weno5_native)
 pops_add_gtest_suite(NAME test_amr_weno5_native SOURCES "${_src}")
@@ -755,11 +786,14 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_system_layout_transfer 2)
+  set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
+  set(POPS_MPI_RANKS_test_mpi_flux_failure_collective 2)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
@@ -792,11 +826,14 @@ if(POPS_HAS_MPI)
     test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
+    test_mpi_system_layout_transfer
+    test_mpi_load_balance_authority
     test_mpi_array_reduce
     test_mpi_multiblock_interface_scheduler
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary
+    test_mpi_flux_failure_collective
     test_mpi_poisson
     test_mpi_redistribute
     test_mpi_smoke
@@ -812,6 +849,7 @@ if(POPS_HAS_MPI)
 
   foreach(_test IN LISTS POPS_CPP_MPI_ONLY_TESTS)
     set(_extra_libs)
+    set(_compile_definitions)
     # test_mpi_system_* + test_mpi_coupled_source need the System runtime; test_mpi_amr_* +
     # test_amr_regrid_mpi_parity need the AMR runtime (AmrSystem). These are PREFIX matches --
     # a `$`-anchored pattern would only match the bare prefix and leave e.g.
@@ -828,19 +866,28 @@ if(POPS_HAS_MPI)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
+    if(_test STREQUAL "test_mpi_system_layout_transfer")
+      pops_native_loader_definitions(_compile_definitions)
+    endif()
     if(DEFINED POPS_MPI_RANK_PARITY_${_test})
       if(DEFINED POPS_MPI_RANKS_${_test})
         message(FATAL_ERROR "MPI suite ${_test} declares both rank and rank-parity launches")
       endif()
       pops_add_mpi_gtest_suite(${_test}
         EXTRA_LIBS ${_extra_libs}
-        RANK_PARITY ${POPS_MPI_RANK_PARITY_${_test}})
+        RANK_PARITY ${POPS_MPI_RANK_PARITY_${_test}}
+        COMPILE_DEFINITIONS ${_compile_definitions})
     else()
       pops_add_mpi_gtest_suite(${_test}
         EXTRA_LIBS ${_extra_libs}
-        RANKS ${POPS_MPI_RANKS_${_test}})
+        RANKS ${POPS_MPI_RANKS_${_test}}
+        COMPILE_DEFINITIONS ${_compile_definitions})
     endif()
   endforeach()
+  set_tests_properties(test_mpi_system_layout_transfer_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    RESOURCE_LOCK native_loader
+    TIMEOUT 180)
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
   set_tests_properties(test_mpi_system_analytic_level_set_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"

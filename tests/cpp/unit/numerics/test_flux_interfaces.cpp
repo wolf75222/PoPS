@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 
 #include <cmath>
@@ -81,6 +83,31 @@ struct RejectFlux {
       const Physical&, const typename Physical::Trace&, const typename Physical::Trace&,
       const pops::FaceContext&) const {
     return pops::FluxEvaluation<typename Physical::State>::reject(0x682u);
+  }
+};
+
+struct RecordRecoverableFluxFailures {
+  pops::FluxEvaluationRecorder recorder;
+
+  POPS_HD void operator()(int i, int, std::uint64_t& failure) const {
+    using Evaluation = pops::FluxEvaluation<pops::StateVec<1>>;
+    if (i == 0)
+      recorder.record(Evaluation::retry(0xffffu), failure);
+    else if (i == 1)
+      recorder.record(Evaluation::reject(0x10u), failure);
+    else
+      recorder.record(Evaluation::reject(0x20u), failure);
+  }
+};
+
+struct RecordFatalFluxFailures {
+  pops::FluxEvaluationRecorder recorder;
+
+  POPS_HD void operator()(int i, int, std::uint64_t& failure) const {
+    using Evaluation = pops::FluxEvaluation<pops::StateVec<1>>;
+    recorder.record(i == 0 ? Evaluation::reject(0xffffffffu)
+                           : Evaluation::failed(0x42u),
+                    failure);
   }
 };
 
@@ -240,6 +267,36 @@ TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
   EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
   EXPECT_EQ(evaluation.reason_code, 0x682u);
   EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+}
+
+TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_deterministically) {
+  static_assert(std::is_trivially_copyable_v<pops::FluxEvaluationTracker>);
+  static_assert(sizeof(pops::FluxEvaluationTracker) == sizeof(std::uint64_t));
+  pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
+  tracker.merge(pops::reduce_max_uint64_cell(
+      pops::Box2D{{0, 0}, {2, 0}}, RecordRecoverableFluxFailures{tracker.recorder()}));
+
+  const pops::FluxFailureReport report = tracker.collective_report();
+  EXPECT_EQ(report.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(report.reason_code, 0x20u);
+  EXPECT_EQ(report.action(), pops::TransactionFailureAction::kRejectStep);
+}
+
+TEST(test_flux_interfaces, fatal_flux_failure_remains_typed_and_preserves_reason) {
+  pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
+  tracker.merge(pops::reduce_max_uint64_cell(
+      pops::Box2D{{0, 0}, {1, 0}}, RecordFatalFluxFailures{tracker.recorder()}));
+
+  try {
+    tracker.throw_if_failed("unit_flux_phase");
+  } catch (const pops::FluxEvaluationFailure& failure) {
+    EXPECT_EQ(failure.status(), pops::EvaluationStatus::kFailed);
+    EXPECT_EQ(failure.action(), pops::TransactionFailureAction::kAbortRun);
+    EXPECT_EQ(failure.reason_code(), 0x42u);
+    EXPECT_EQ(failure.phase(), "unit_flux_phase");
+    return;
+  }
+  FAIL() << "fatal device flux failure was not propagated as FluxEvaluationFailure";
 }
 
 TEST(test_flux_interfaces, native_storage_binds_only_the_exact_model_pack) {

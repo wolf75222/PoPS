@@ -14,12 +14,14 @@
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/runtime/program/step_transaction.hpp>  // StepAttemptRejected: atomic public AMR attempts
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_blocks / required_solver: install-time validation (ADC-508)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
 #include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
 #include <pops/core/state/aux_names.hpp>  // canonical B_z component shared with the device Aux layout
 
@@ -27,6 +29,7 @@
 #include <array>      // std::array<int, 3>: named-elliptic-field aux components (ADC-428)
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <limits>  // std::numeric_limits (global step bounds: neutralization to +inf before the min)
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
@@ -67,22 +70,22 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
   };
   registry.add({"pops.lib.amr.transfer::conservative_linear",
                 exact("cell", "cell", "conservative", "prolongation", 2, {1}),
-                [](const TransferRouteDescriptor&) {
-                  PreparedTransferKernel kernel;
-                  kernel.spatial = [](const MultiFab& coarse, MultiFab& fine,
-                                      const SpatialTransferContext& context) {
-                    detail::coupler_conservative_linear_to_fine_mb(
-                        coarse, fine, context.index.coarse_origin, context.index.fine_origin,
-                        context.index.refinement_ratio);
-                  };
-                  return kernel;
-                }});
+                [](const TransferRouteDescriptor&) { return prepare_conservative_linear(); }});
   registry.add({"pops.lib.amr.transfer::volume_average",
                 exact("cell", "cell", "conservative", "restriction", 1, {0}),
                 [](const TransferRouteDescriptor&) { return prepare_volume_average(); }});
-  registry.add({"pops.lib.amr.transfer::conservative_coarse_fine",
-                exact("cell", "cell", "conservative", "coarse_fine_fill", 1, {1}),
-                [](const TransferRouteDescriptor&) { return prepare_conservative_coarse_fine(); }});
+  registry.add_exact(
+      "pops.lib.amr.transfer::conservative_coarse_fine",
+      TransferRouteDescriptor{"cell", "cell", "conservative", "dense", "coarse_fine_fill",
+                              2, {2}, 2, 2},
+      [](const TransferRouteDescriptor&) { return prepare_conservative_coarse_fine(); });
+  registry.add_exact(
+      "pops.lib.amr.transfer::conservative_polynomial5_coarse_fine",
+      TransferRouteDescriptor{"cell", "cell", "conservative", "dense", "coarse_fine_fill",
+                              5, {3}, 2, 2},
+      [](const TransferRouteDescriptor&) {
+        return prepare_conservative_polynomial5_coarse_fine();
+      });
   const auto face_accepts = [](const TransferRouteDescriptor& row) {
     return row.space == "face" && (row.centering == "face_x" || row.centering == "face_y") &&
            row.representation == "conservative" && row.storage == "dense" &&
@@ -222,6 +225,7 @@ EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton,
 
 struct AmrSystem::Impl {
   AmrSystemConfig cfg;
+  std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance_authority_;
 
   // Specification of ONE block (frozen at add_block, materialized at lazy build). Every registry
   // cardinality uses the same AmrRuntime engine, shared-hierarchy contract and prepared field
@@ -251,10 +255,10 @@ struct AmrSystem::Impl {
     // concrete Model type -- thus cons_vars -- is known there), just as the native path resolves it in
     // build_multi. Empty for a native block (is_compiled == false).
     AmrCompiledBlockBuilder compiled_block_builder;
-    // Initial density of the block (component 0), n*n row-major; targeted by set_density(name, rho).
+    // Initial density of the block (component 0), ny*nx row-major.
     bool has_density = false;
     std::vector<double> density;
-    // FULL initial conservative state (all components), ncomp*n*n component-major; set by
+    // FULL initial conservative state (all components), ncomp*ny*nx component-major; set by
     // set_conservative_state(name, U). Takes priority over density at seed (cf. make_build_params /
     // build_amr_compiled and the compiled/native multi-block builders).
     bool has_state = false;
@@ -272,8 +276,12 @@ struct AmrSystem::Impl {
     // COMPILED blocks carry it too (ADC-322): set_compiled_block stores it here from the regenerated
     // .so loader (pops_install_native_amr -> add_compiled_model), so both routings floor like a native block.
     double pos_floor = 0.0;
+    double weno_epsilon = static_cast<double>(kWenoEpsilon);
+    bool wave_speed_cache = false;
   };
 
+  // Declared before blocks so deferred builders/closures die before their DSO is unloaded.
+  std::vector<std::shared_ptr<void>> external_riemann_libraries_;
   std::vector<BlockSpec> blocks;
   // ADC-672: executable per-block plans installed before lazy hierarchy construction.  Their
   // presence forces the common AmrRuntime route so the same plan is captured by every level RHS.
@@ -355,13 +363,12 @@ struct AmrSystem::Impl {
     std::string provider_identity;
   };
   std::unique_ptr<TaggingSpec> tagging_spec;
-  // PHI tag threshold on |grad phi| (D4): <= 0 => phi does NOT contribute to the tag union (default,
-  // bit-identical). > 0 => in multi-block + regrid_every > 0, build_multi sets the engine's phi predicate
-  // (set_phi_tag_predicate): refines where |grad phi| (components 1,2 of the shared aux) exceeds this threshold.
+  // Shared-potential tag threshold on |grad phi|. build_multi appends one shared-aux gradient leaf to
+  // the same prepared graph as every other criterion; no phi-specific runtime predicate exists.
   double phi_grad_threshold = 0.0;
 
-  std::vector<double> bz_field;  // coarse B_z(x,y), n*n row-major (set_magnetic_field)
-  // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (n*n row-major).
+  std::vector<double> bz_field;  // coarse B_z(x,y), ny*nx row-major (set_magnetic_field)
+  // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (ny*nx row-major).
   // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
   // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
   std::map<int, AmrRuntime::StaticAuxField> named_aux_;
@@ -433,6 +440,9 @@ struct AmrSystem::Impl {
 
   explicit Impl(const AmrSystemConfig& c)
       : cfg(c),
+        load_balance_authority_(std::make_shared<const PreparedLoadBalanceAuthority>(
+            prepare_load_balance_authority(c.load_balance_route, c.load_balance_identity,
+                                           c.load_balance_options))),
         field_solver_registry_(make_default_amr_field_solver_registry()),
         field_nullspace_provider_registry_(make_default_field_nullspace_provider_registry()),
         hierarchy_tensor_solver_provider_registry_(
@@ -468,11 +478,11 @@ struct AmrSystem::Impl {
   }
 
   struct AcceptedSnapshot {
-    std::unique_ptr<AmrRuntime::StepSnapshot> runtime;
-    double time;
-    int macro_step;
-    bool clock_restore_pending;
-    Real last_program_dt;
+    AmrRuntime::StepSnapshot runtime;
+    double time = 0.0;
+    int macro_step = 0;
+    bool clock_restore_pending = false;
+    Real last_program_dt = Real(0);
     std::map<std::string, Real> program_diagnostics;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
@@ -480,48 +490,116 @@ struct AmrSystem::Impl {
     std::string last_dt_reason;
     std::vector<int> replay_regrid_steps;
     std::vector<std::uint8_t> program_accepted_state;
-    std::uint64_t program_accepted_state_revision;
+    std::uint64_t program_accepted_state_revision = 0;
 
-    explicit AcceptedSnapshot(Impl& impl)
-        : time(impl.t),
-          macro_step(impl.macro_step_),
-          clock_restore_pending(impl.clock_restore_pending_),
-          last_program_dt(impl.program_.last_dt_),
-          program_diagnostics(impl.program_.diagnostics_),
-          cache(impl.program_.cache_),
-          history(impl.program_.hist_),
-          profiler(impl.program_.profiler_),
-          last_dt_reason(impl.last_dt_reason),
-          replay_regrid_steps(impl.last_replay_regrid_steps_),
-          program_accepted_state(impl.program_accepted_state_),
-          program_accepted_state_revision(impl.program_accepted_state_revision_) {
+    template <class Map>
+    static void copy_value_map_into(Map& destination, const Map& source) {
+      for (auto entry = destination.begin(); entry != destination.end();) {
+        if (source.find(entry->first) == source.end())
+          entry = destination.erase(entry);
+        else
+          ++entry;
+      }
+      for (const auto& [key, value] : source)
+        destination.insert_or_assign(key, value);
+    }
+
+    template <class T>
+    static void copy_vector_into(std::vector<T>& destination, const std::vector<T>& source) {
+      destination.resize(source.size());
+      std::copy(source.begin(), source.end(), destination.begin());
+    }
+
+    void capture(Impl& impl) {
       if (!impl.runtime)
         throw std::runtime_error("AmrSystem snapshot requires a materialized AmrRuntime");
-      runtime = std::make_unique<AmrRuntime::StepSnapshot>(impl.runtime->step_snapshot());
+      impl.runtime->capture_step_snapshot(runtime);
+      time = impl.t;
+      macro_step = impl.macro_step_;
+      clock_restore_pending = impl.clock_restore_pending_;
+      last_program_dt = impl.program_.last_dt_;
+      copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
+      // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
+      // ProgramRuntimeState containers are therefore empty on the AMR path, but retain their value
+      // contract so a future target can populate them without weakening rollback semantics.
+      cache = impl.program_.cache_;
+      history = impl.program_.hist_;
+      profiler = impl.program_.profiler_;
+      last_dt_reason = impl.last_dt_reason;
+      copy_vector_into(replay_regrid_steps, impl.last_replay_regrid_steps_);
+      copy_vector_into(program_accepted_state, impl.program_accepted_state_);
+      program_accepted_state_revision = impl.program_accepted_state_revision_;
     }
 
     void restore(Impl& impl) const {
-      if (!runtime || !impl.runtime)
+      if (!impl.runtime)
         throw std::runtime_error("AmrSystem snapshot lost its AmrRuntime");
-      impl.runtime->restore_step_snapshot(*runtime);
+      impl.runtime->restore_step_snapshot(runtime);
       impl.t = time;
       impl.macro_step_ = macro_step;
       impl.clock_restore_pending_ = clock_restore_pending;
       impl.program_.last_dt_ = last_program_dt;
-      impl.program_.diagnostics_ = program_diagnostics;
+      copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;
       impl.last_dt_reason = last_dt_reason;
-      impl.last_replay_regrid_steps_ = replay_regrid_steps;
-      impl.program_accepted_state_ = program_accepted_state;
+      copy_vector_into(impl.last_replay_regrid_steps_, replay_regrid_steps);
+      copy_vector_into(impl.program_accepted_state_, program_accepted_state);
       impl.program_accepted_state_revision_ = program_accepted_state_revision;
     }
   };
 
-  std::unique_ptr<AcceptedSnapshot> restart_transaction_;
-  std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
+  AcceptedSnapshot internal_step_snapshot_;
+  AcceptedSnapshot external_step_snapshot_;
+  AcceptedSnapshot restart_snapshot_;
+  bool internal_step_transaction_active_ = false;
+  bool internal_step_transaction_restored_ = false;
+  bool external_step_transaction_active_ = false;
+  bool external_step_transaction_restored_ = false;
   bool external_step_transaction_committed_ = false;
+  bool restart_transaction_active_ = false;
+
+  bool has_active_step_transaction_() const noexcept {
+    return internal_step_transaction_active_ || external_step_transaction_active_;
+  }
+
+  void restore_active_step_transaction_() {
+    if (external_step_transaction_active_) {
+      if (!external_step_transaction_restored_) {
+        external_step_snapshot_.restore(*this);
+        external_step_transaction_restored_ = true;
+      }
+      return;
+    }
+    if (internal_step_transaction_active_) {
+      if (!internal_step_transaction_restored_) {
+        internal_step_snapshot_.restore(*this);
+        internal_step_transaction_restored_ = true;
+      }
+      return;
+    }
+    throw std::logic_error("AmrSystem: no active step transaction to restore");
+  }
+
+  struct RuntimeRollbackScope {
+    AmrRuntime* runtime = nullptr;
+
+    explicit RuntimeRollbackScope(AmrRuntime& engine) : runtime(&engine) {
+      runtime->begin_step_rollback_scope();
+    }
+    ~RuntimeRollbackScope() {
+      if (runtime == nullptr)
+        return;
+      try {
+        runtime->end_step_rollback_scope();
+      } catch (...) {
+        std::terminate();
+      }
+    }
+    RuntimeRollbackScope(const RuntimeRollbackScope&) = delete;
+    RuntimeRollbackScope& operator=(const RuntimeRollbackScope&) = delete;
+  };
 
   /// Execute one public AMR macro-step against an accepted snapshot.  The AmrRuntime snapshot owns
   /// topology + multi-block/per-level data; this facade layer adds its authoritative clock and the
@@ -529,22 +607,64 @@ struct AmrSystem::Impl {
   /// before propagating (RejectAttempt remains observable to the Python retry policy).
   template <class Body>
   decltype(auto) execute_step_transaction(Body&& body) {
-    if (external_step_transaction_) {
+    if (!runtime)
+      throw std::logic_error("AmrSystem step transaction requires a materialized runtime");
+    if (restart_transaction_active_)
+      throw std::logic_error("AmrSystem cannot advance while a restart transaction is active");
+    if (external_step_transaction_active_) {
       if (external_step_transaction_committed_)
         throw std::runtime_error(
             "AmrSystem: committed external step transaction must be finalized before another step");
+      external_step_transaction_restored_ = false;
+      RuntimeRollbackScope rollback_scope(*runtime);
       try {
         return std::forward<Body>(body)();
+      } catch (const FluxEvaluationFailure& failure) {
+        restore_active_step_transaction_();
+        if (failure.action() == TransactionFailureAction::kRetryStep ||
+            failure.action() == TransactionFailureAction::kRejectStep) {
+          const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
+                                       ? runtime::program::StepAttemptDisposition::kRetry
+                                       : runtime::program::StepAttemptDisposition::kReject;
+          throw runtime::program::StepAttemptRejected(
+              SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
+              failure.what());
+        }
+        throw;
       } catch (...) {
-        external_step_transaction_->restore(*this);
+        restore_active_step_transaction_();
         throw;
       }
     }
-    AcceptedSnapshot accepted(*this);
+    if (internal_step_transaction_active_)
+      throw std::logic_error("AmrSystem step transaction is non-reentrant");
+    internal_step_snapshot_.capture(*this);
+    internal_step_transaction_active_ = true;
+    internal_step_transaction_restored_ = false;
+    struct InternalTransactionLease {
+      Impl& impl;
+      ~InternalTransactionLease() {
+        impl.internal_step_transaction_active_ = false;
+        impl.internal_step_transaction_restored_ = false;
+      }
+    } transaction_lease{*this};
+    RuntimeRollbackScope rollback_scope(*runtime);
     try {
       return std::forward<Body>(body)();
+    } catch (const FluxEvaluationFailure& failure) {
+      restore_active_step_transaction_();
+      if (failure.action() == TransactionFailureAction::kRetryStep ||
+          failure.action() == TransactionFailureAction::kRejectStep) {
+        const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
+                                     ? runtime::program::StepAttemptDisposition::kRetry
+                                     : runtime::program::StepAttemptDisposition::kReject;
+        throw runtime::program::StepAttemptRejected(
+            SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
+            failure.what());
+      }
+      throw;
     } catch (...) {
-      accepted.restore(*this);
+      restore_active_step_transaction_();
       throw;
     }
   }
@@ -576,8 +696,14 @@ struct AmrSystem::Impl {
 
   BCRec poisson_bc() {
     std::string mode = p_bc;
-    if (mode == "auto")
-      mode = (p_wall == "circle" || !cfg.periodic) ? "dirichlet" : "periodic";
+    if (mode == "auto") {
+      BCRec automatic;
+      if (!cfg.periodicity.x)
+        automatic.xlo = automatic.xhi = BCType::Dirichlet;
+      if (!cfg.periodicity.y)
+        automatic.ylo = automatic.yhi = BCType::Dirichlet;
+      return automatic;
+    }
     BCRec b;
     if (mode == "periodic")
       return b;
@@ -592,8 +718,8 @@ struct AmrSystem::Impl {
     throw std::runtime_error("AmrSystem::set_poisson : unknown bc '" + mode + "'");
   }
   ActiveRegionProvider2D wall_active() {
-    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson", cfg.xlo,
-                                  cfg.ylo);
+    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, cfg.Ly,
+                                  "AmrSystem::set_poisson", cfg.xlo, cfg.ylo);
   }
 
   // Materializes only hierarchy/system-owned parameters.  Multi-block construction must never select
@@ -602,12 +728,16 @@ struct AmrSystem::Impl {
     AmrBuildParams bp;
     // MESH group: coarse geometry + ownership policy.
     bp.mesh.n = cfg.n;
+    bp.mesh.ny = cfg.ny;
     bp.mesh.L = cfg.L;
+    bp.mesh.Ly = cfg.Ly;
     bp.mesh.xlo = cfg.xlo;
     bp.mesh.ylo = cfg.ylo;
     bp.mesh.regrid_every = cfg.regrid_every;
+    bp.mesh.periodicity = cfg.periodicity;
     bp.mesh.distribute_coarse = cfg.distribute_coarse;
     bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
+    bp.mesh.load_balance = load_balance_authority_;
     // REGRID group: refinement threshold.
     bp.regrid.threshold = refine_threshold;
     // POISSON group: coarse Poisson BC + conductive wall.
@@ -644,6 +774,12 @@ struct AmrSystem::Impl {
       throw std::runtime_error(
           "AmrSystem : explicit AMR execution lacks a temporal relation for an active "
           "coarse/fine transition");
+    // A coarse-only explicit bootstrap has not installed its state-transfer routes yet, so its
+    // maximum spatial-transition contract is not available at this point. build_multi configures
+    // the complete capacity immediately after those providers are prepared. Subsequent level
+    // activation refreshes the active prefix inside AmrRuntime and needs no facade reinvention.
+    if (static_cast<std::size_t>(cfg.level_count) > active_transition_count + 1)
+      return;
     runtime->set_parent_child_temporal_relations(std::vector<::pops::amr::ParentChildClockRelation>(
         temporal_relations_.begin(),
         temporal_relations_.begin() + static_cast<std::ptrdiff_t>(active_transition_count)));
@@ -720,7 +856,8 @@ struct AmrSystem::Impl {
         // (it never marshals the field) -> inactive, bit-identical. No reject.
         rblocks.push_back(b.compiled_block_builder(
             S, b.name, b.density, b.has_density, b.state, b.has_state, b.gamma, b.substeps,
-            b.recon_prim, b.imex, b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor));
+            b.recon_prim, b.imex, b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor,
+            b.weno_epsilon, b.wave_speed_cache));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -749,7 +886,9 @@ struct AmrSystem::Impl {
                                          b.has_state ? &b.state : nullptr,
                                          b.newton_diagnostics,
                                          b.time_method,
-                                         b.pos_floor};
+                                         b.pos_floor,
+                                         b.weno_epsilon,
+                                         b.wave_speed_cache};
       // Transport dispatch mirrors detail::dispatch_transport (ADC-641): validate_transport preserves
       // the unknown_transport_msg byte-for-byte, then the switch on the typed TransportRouteId routes to
       // the per-transport seam.
@@ -780,6 +919,11 @@ struct AmrSystem::Impl {
         block.state_identity = route->second;
       }
     }
+    std::vector<std::pair<int, int>> reconstruction_requirements;
+    reconstruction_requirements.reserve(rblocks.size());
+    for (const auto& block : rblocks)
+      reconstruction_requirements.emplace_back(block.reconstruction_order,
+                                               block.reconstruction_ghost_depth);
     runtime = std::make_shared<pops::AmrRuntime>(
         S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(rblocks), S.base_per,
         S.replicated_coarse, S.wall, field_solver_registry_, field_nullspace_provider_registry_,
@@ -792,26 +936,67 @@ struct AmrSystem::Impl {
       runtime->install_external_clustering(amr_clustering_component_);
     if (!boundary_plans_.empty())
       runtime->install_boundary_storage_routes(boundary_field_routes_);
+    // Low-level facade compatibility has no authored AMRTransfer object.  Resolve its exact
+    // coarse/fine requirement through the same native capability catalogue, then install the
+    // selected prepared authority explicitly.  AmrRuntime itself owns no default or scheme switch.
+    if (bootstrap_block_subjects.empty()) {
+      for (std::size_t block = 0; block < reconstruction_requirements.size(); ++block) {
+        const auto [order, ghost_depth] = reconstruction_requirements[block];
+        auto coarse_fine = bootstrap_transfer_routes.prepare_minimum(
+            pops::runtime::amr::TransferRouteDescriptor{
+                "cell", "cell", "conservative", "dense", "coarse_fine_fill", order,
+                {ghost_depth}, 2, kAmrRefRatio});
+        runtime->set_block_transfer_authority(
+            block, pops::runtime::amr::prepare_conservative_linear(),
+            pops::runtime::amr::prepare_volume_average(), std::move(coarse_fine),
+            pops::runtime::amr::prepare_linear_time_interpolation(), kAmrRefRatio);
+      }
+    }
     // The authored AMRTransfer registry is the authority for every public-DSL block's runtime
     // coarse/fine and temporal routes. Resolve the exact owner-qualified subject once, then retain
     // only prepared native callables in AmrRuntime; no string/kernel switch survives into stepping.
+    int hierarchy_capacity_ratio = 0;
     for (const auto& [subject, block_name] : bootstrap_block_subjects) {
       const int block = block_index(block_name);
+      const auto prolongation_id = bootstrap_subject_routes.find({subject, "prolongation"});
+      const auto restriction_id = bootstrap_subject_routes.find({subject, "restriction"});
       const auto coarse_fine_id = bootstrap_subject_routes.find({subject, "coarse_fine_fill"});
       const auto temporal_id = bootstrap_subject_routes.find({subject, "temporal_interpolation"});
-      if (block < 0 || coarse_fine_id == bootstrap_subject_routes.end() ||
+      if (block < 0 || prolongation_id == bootstrap_subject_routes.end() ||
+          restriction_id == bootstrap_subject_routes.end() ||
+          coarse_fine_id == bootstrap_subject_routes.end() ||
           temporal_id == bootstrap_subject_routes.end())
         throw std::runtime_error(
-            "AmrSystem : state transfer authority lacks exact coarse/fine or temporal route");
+            "AmrSystem : state transfer authority lacks an exact prolongation, restriction, "
+            "coarse/fine or temporal route");
+      const auto& prolongation = bootstrap_transfer_routes.at(prolongation_id->second);
+      const auto& restriction = bootstrap_transfer_routes.at(restriction_id->second);
       const auto& coarse_fine = bootstrap_transfer_routes.at(coarse_fine_id->second);
       const auto& temporal = bootstrap_transfer_routes.at(temporal_id->second);
-      if (!coarse_fine.executable.coarse_fine || !temporal.executable.temporal ||
-          coarse_fine.descriptor.refinement_ratio != temporal.descriptor.refinement_ratio)
+      const int ratio = prolongation.descriptor.refinement_ratio;
+      if (!prolongation.executable.spatial || !restriction.executable.spatial ||
+          !coarse_fine.executable.coarse_fine || !temporal.executable.temporal ||
+          restriction.descriptor.refinement_ratio != ratio ||
+          coarse_fine.descriptor.refinement_ratio != ratio ||
+          temporal.descriptor.refinement_ratio != ratio)
         throw std::runtime_error(
             "AmrSystem : state transfer authority did not prepare compatible native callables");
-      runtime->set_block_transfer_authority(static_cast<std::size_t>(block), coarse_fine.executable,
-                                            temporal.executable,
-                                            coarse_fine.descriptor.refinement_ratio);
+      if (hierarchy_capacity_ratio != 0 && hierarchy_capacity_ratio != ratio)
+        throw std::runtime_error(
+            "AmrSystem : shared AMR hierarchy state providers disagree on refinement ratio");
+      hierarchy_capacity_ratio = ratio;
+      runtime->set_block_transfer_authority(
+          static_cast<std::size_t>(block), prolongation.executable, restriction.executable,
+          coarse_fine.executable, temporal.executable, ratio);
+    }
+    if (cfg.explicit_bootstrap) {
+      if (hierarchy_capacity_ratio < 2)
+        throw std::runtime_error(
+            "AmrSystem : explicit hierarchy capacity requires prepared state transfer routes");
+      runtime->configure_hierarchy_capacity(
+          std::vector<int>(static_cast<std::size_t>(cfg.level_count - 1),
+                           hierarchy_capacity_ratio),
+          temporal_relations_);
     }
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
     // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
@@ -821,57 +1006,114 @@ struct AmrSystem::Impl {
     for (const auto& [subject, array] : bootstrap_arrays)
       runtime->register_bootstrap_staggered_field(subject, bootstrap_centering(array.centering),
                                                   array.ncomp, array.initial_values);
-    if (tagging_spec) {
-      std::vector<AmrRuntime::TaggingProgram::Leaf> leaves;
-      leaves.reserve(tagging_spec->leaf_ops.size());
-      for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
-        const int block = block_index(tagging_spec->leaf_blocks[index]);
-        if (block < 0)
-          throw std::runtime_error("resolved AMR tagging names an unknown block");
-        const int component = detail::resolve_selected_component(
-            "AmrSystem::resolved tagging", tagging_spec->leaf_blocks[index],
-            runtime->block_cons_vars(static_cast<std::size_t>(block)),
-            tagging_spec->leaf_variables[index], "");
-        leaves.push_back(AmrRuntime::TaggingProgram::Leaf{
+    // Materialize every facade criterion into the same prepared graph consumed by the builtin
+    // Kokkos VM or an installed external Tagger. The convenience threshold APIs never install a
+    // host predicate and the shared-potential criterion is just another qualified field/stencil.
+    if (cfg.explicit_bootstrap || cfg.regrid_every > 0) {
+      using Program = AmrRuntime::TaggingProgram;
+      std::vector<Program::Stencil> stencils;
+      std::vector<Program::Leaf> leaves;
+      std::vector<std::int32_t> refine_ops, refine_args, coarsen_ops, coarsen_args;
+      int min_cycles = 0, equality_policy = 0, conflict_policy = 0;
+      std::string clock_identity = "amr::refinement";
+      std::string provider_identity = "pops.amr.tagging.component-threshold@1";
+
+      if (tagging_spec) {
+        stencils = tagging_spec->stencils;
+        leaves.reserve(tagging_spec->leaf_ops.size() + (phi_grad_threshold > 0.0 ? 1u : 0u));
+        for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
+          const int block = block_index(tagging_spec->leaf_blocks[index]);
+          if (block < 0)
+            throw std::runtime_error("resolved AMR tagging names an unknown block");
+          const int component = detail::resolve_selected_component(
+              "AmrSystem::resolved tagging", tagging_spec->leaf_blocks[index],
+              runtime->block_cons_vars(static_cast<std::size_t>(block)),
+              tagging_spec->leaf_variables[index], "");
+          leaves.push_back(Program::Leaf{
             static_cast<std::size_t>(block), static_cast<std::size_t>(component),
             tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
             tagging_spec->leaf_stencil_indices[index] < 0
                 ? POPS_TAGGING_NO_STENCIL_V1
                 : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
-      }
-      runtime->set_tagging_program(
-          tagging_spec->stencils, std::move(leaves), tagging_spec->refine_ops,
-          tagging_spec->refine_args, tagging_spec->coarsen_ops, tagging_spec->coarsen_args,
-          tagging_spec->min_cycles, tagging_spec->equality_policy, tagging_spec->conflict_policy,
-          tagging_spec->clock_identity, tagging_spec->provider_identity);
-    }
-    if (cfg.explicit_bootstrap) {
-      if (tagging_spec) {
-        // The resolved data-only graph was installed above and is shared by bootstrap and regrid.
+        }
+        refine_ops = tagging_spec->refine_ops;
+        refine_args = tagging_spec->refine_args;
+        coarsen_ops = tagging_spec->coarsen_ops;
+        coarsen_args = tagging_spec->coarsen_args;
+        min_cycles = tagging_spec->min_cycles;
+        equality_policy = tagging_spec->equality_policy;
+        conflict_policy = tagging_spec->conflict_policy;
+        clock_identity = tagging_spec->clock_identity;
+        provider_identity = tagging_spec->provider_identity;
       } else if (bootstrap_tag_spec) {
         const int b = block_index(bootstrap_tag_spec->block);
         if (b < 0)
-          throw std::runtime_error("explicit AMR bootstrap tag provider names an unknown block");
+          throw std::runtime_error("AMR threshold tag provider names an unknown block");
         const int component = detail::resolve_selected_component(
-            "AmrSystem::bootstrap tagging", bootstrap_tag_spec->block,
+            "AmrSystem::prepared threshold tagging", bootstrap_tag_spec->block,
             runtime->block_cons_vars(static_cast<std::size_t>(b)), bootstrap_tag_spec->variable,
             "");
-        runtime->set_bootstrap_threshold_tag(static_cast<std::size_t>(b), component,
-                                             static_cast<Real>(bootstrap_tag_spec->threshold),
-                                             bootstrap_tag_spec->provider_identity);
+        leaves.push_back(Program::Leaf{static_cast<std::size_t>(b),
+                                       static_cast<std::size_t>(component),
+                                       POPS_TAGGING_ABOVE_V1, bootstrap_tag_spec->threshold,
+                                       POPS_TAGGING_NO_STENCIL_V1});
+        refine_ops.push_back(POPS_TAGGING_ABOVE_V1);
+        refine_args.push_back(0);
+        provider_identity = bootstrap_tag_spec->provider_identity;
       } else {
         const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
+        leaves.reserve(blocks.size() + (phi_grad_threshold > 0.0 ? 1u : 0u));
         for (std::size_t b = 0; b < blocks.size(); ++b) {
           int component = 0;
           if (selected) {
             component = detail::resolve_selected_component(
-                "AmrSystem::bootstrap tagging", blocks[b].name, runtime->block_cons_vars(b),
-                refine_var_name, refine_var_role);
+                "AmrSystem::prepared threshold tagging", blocks[b].name,
+                runtime->block_cons_vars(b), refine_var_name, refine_var_role);
           }
-          runtime->set_bootstrap_threshold_tag(b, component, static_cast<Real>(refine_threshold),
-                                               "pops.amr.tagging.component-threshold@1");
+          leaves.push_back(Program::Leaf{b, static_cast<std::size_t>(component),
+                                         POPS_TAGGING_ABOVE_V1, refine_threshold,
+                                         POPS_TAGGING_NO_STENCIL_V1});
+          refine_ops.push_back(POPS_TAGGING_ABOVE_V1);
+          refine_args.push_back(static_cast<std::int32_t>(b));
+        }
+        if (leaves.size() > 1) {
+          refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
+          refine_args.push_back(static_cast<std::int32_t>(leaves.size()));
         }
       }
+
+      if (phi_grad_threshold > 0.0) {
+        const std::size_t stencil_index = stencils.size();
+        stencils.push_back(Program::Stencil{
+            "pops.amr.tagging.shared-aux-gradient@1",
+            POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
+            "l2",
+            "inverse_cell_size",
+            "ghost_extension",
+            2,
+            {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
+             Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}});
+        const std::size_t leaf_index = leaves.size();
+        leaves.push_back(Program::Leaf{blocks.size(), 0, POPS_TAGGING_GRADIENT_ABOVE_V1,
+                                       phi_grad_threshold, stencil_index});
+        if (refine_ops.empty()) {
+          refine_ops.push_back(POPS_TAGGING_GRADIENT_ABOVE_V1);
+          refine_args.push_back(static_cast<std::int32_t>(leaf_index));
+        } else {
+          refine_ops.push_back(POPS_TAGGING_GRADIENT_ABOVE_V1);
+          refine_args.push_back(static_cast<std::int32_t>(leaf_index));
+          refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
+          refine_args.push_back(2);
+        }
+        provider_identity = "pops.amr.tagging.composite@1[" + provider_identity +
+                            ";pops.amr.tagging.shared-aux-gradient@1]";
+      }
+
+      runtime->set_tagging_program(
+          std::move(stencils), std::move(leaves), std::move(refine_ops),
+          std::move(refine_args), std::move(coarsen_ops), std::move(coarsen_args), min_cycles,
+          equality_policy, conflict_policy, std::move(clock_identity),
+          std::move(provider_identity));
     }
     // Canonical B_z and model-NAMED aux fields share one native static-field authority. The runtime
     // validates that a block declared each component, publishes coarse->fine immediately, and
@@ -917,16 +1159,8 @@ struct AmrSystem::Impl {
       runtime->add_coupled_frequency_expr(cs.label, cs.in_blocks, cs.in_roles, cs.consts,
                                           cs.freq_prog_ops, cs.freq_prog_args);
     }
-    // TAG-UNION REGRID (capstone Phase 2, C.6): if regrid_every > 0, we ACTIVATE the engine's
-    // cadence and set the PER-BLOCK tag predicate (D1). The criterion tags where the SELECTED variable
-    // of the block exceeds refine_threshold -> the UNION of the block tags refines where ANY block
-    // exceeds it. By DEFAULT the variable is component 0 (historical density criterion, like the
-    // single-block path AmrCouplerMP which tags a(i,j,0) > threshold); ADC-296 lets set_refinement pick
-    // it PER BLOCK by name/role, resolved against the block's cons_vars (STRICT: absent -> explicit
-    // error, never a silent comp-0 fallback). refine_threshold == 1e30 (default, no refinement) -> no
-    // tag -> grid unchanged even if regrid_every > 0 (consistent no-op). regrid_every == 0 ->
-    // set_regrid(0) -> FROZEN hierarchy, bit-identical to before this PR.
-    const Real thr = static_cast<Real>(refine_threshold);
+    // The cadence and clustering provider consume the prepared graph installed above.
+    // regrid_every == 0 keeps the hierarchy frozen and therefore needs no tagging execution image.
     runtime->set_regrid(cfg.regrid_every, cfg.regrid_grow, cfg.regrid_margin);
     // ADC-616: Berger-Rigoutsos clustering params. Each <= 0 keeps the ClusterParams default (0.7 /
     // 1 / 32), so an unconfigured AMR run clusters bit-identically. Applied only when set.
@@ -936,55 +1170,6 @@ struct AmrSystem::Impl {
       const int minb = cfg.cluster_min_box_size > 0 ? cfg.cluster_min_box_size : 1;
       const int maxb = cfg.cluster_max_box_size > 0 ? cfg.cluster_max_box_size : 32;
       runtime->set_clustering(eff, minb, maxb);
-    }
-    if (cfg.regrid_every > 0) {
-      if (tagging_spec) {
-        // The engine evaluates the installed refine/coarsen graph directly.
-      } else if (bootstrap_tag_spec) {
-        const int b = block_index(bootstrap_tag_spec->block);
-        if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
-          throw std::runtime_error("runtime AMR tag provider names an unknown or compiled block");
-        const int component = detail::resolve_selected_component(
-            "AmrSystem::runtime tagging", bootstrap_tag_spec->block,
-            runtime->block_cons_vars(static_cast<std::size_t>(b)), bootstrap_tag_spec->variable,
-            "");
-        runtime->set_block_tag_predicate(
-            static_cast<std::size_t>(b),
-            [threshold = static_cast<Real>(bootstrap_tag_spec->threshold), component](
-                const ConstArray4& a, int i, int j) { return a(i, j, component) > threshold; });
-      } else {
-        const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
-        for (std::size_t b = 0; b < blocks.size(); ++b) {
-          int comp = 0;  // default: component 0 (bit-identical density criterion)
-          if (selected) {
-            // The compiled .so flat-ABI block carries no role table on its runtime side: a non-default
-            // selector there is REFUSED (comp-0 only), not silently ignored (mirror of the other .so rejects).
-            if (blocks[b].is_compiled)
-              throw std::runtime_error(
-                  "AmrSystem::set_refinement : variable/role selector not supported on the "
-                  "compiled "
-                  ".so block '" +
-                  blocks[b].name + "' (component 0 only) ; use a private native ModelSpec block");
-            comp = detail::resolve_selected_component("AmrSystem::set_refinement", blocks[b].name,
-                                                      runtime->block_cons_vars(b), refine_var_name,
-                                                      refine_var_role);
-          }
-          runtime->set_block_tag_predicate(
-              b, [thr, comp](const ConstArray4& a, int i, int j) { return a(i, j, comp) > thr; });
-        }
-      }
-      // PHI PREDICATE (D4): if the user set a |grad phi| threshold (set_phi_refinement > 0),
-      // we wire the engine's phi predicate (read on the shared aux, components 1,2 = grad phi in x,y).
-      // It is ADDED to the union of the per-block density predicates: the grid refines where any
-      // block exceeds refine_threshold OR |grad phi| exceeds gthr. Physical diocotron criterion (ring
-      // edge = potential gradient). <= 0 (default) -> not wired -> phi does not contribute (bit-identical).
-      if (phi_grad_threshold > 0.0) {
-        const Real gthr = static_cast<Real>(phi_grad_threshold);
-        runtime->set_phi_tag_predicate([gthr](const ConstArray4& a, int i, int j) {
-          const Real gx = a(i, j, 1), gy = a(i, j, 2);
-          return std::sqrt(gx * gx + gy * gy) > gthr;
-        });
-      }
     }
     // Replays the coupled sources frozen at add_coupled_source on the just-built runtime engine:
     // each resolves (block, role) -> (index, component) against the blocks' cons_vars and stores its
@@ -1009,19 +1194,30 @@ namespace {
 // UPSTREAM configuration guard (ADC-299): validate the AmrSystemConfig invariants BEFORE constructing
 // Impl. The AMR Impl ctor is trivial (it only stores cfg, allocating nothing from n), so unlike System
 // nothing is built before the check; we still validate ahead of Impl for parity with System and to keep
-// every config rejection at a single upstream point. n was already guarded (n == 0 -> nn = n*n = 0 -> a
-// division by zero in set_conservative_state, U.size() % nn, and an empty coarse grid downstream); L,
+// every config rejection at a single upstream point. Axis sizes and physical bounds must be valid
+// before any dense payload shape is computed; the zero ny/Ly values are the documented direct-C++
+// square shorthand and are canonicalized immediately after validation. L,
 // regrid_every and coarse_max_grid were unchecked and reach the lazy build (dx, regrid cadence, coarse
 // tiling) as is.
 void validate_amr_system_config(const AmrSystemConfig& c) {
   if (c.n < 1)
-    throw std::runtime_error("AmrSystem : n >= 1 required (coarse cells per direction) ; got n = " +
+    throw std::runtime_error("AmrSystem : n >= 1 required (coarse x cells) ; got n = " +
                              std::to_string(c.n));
+  if (c.ny < 0)
+    throw std::runtime_error(
+        "AmrSystem : ny must be zero (square shorthand) or >= 1; got ny = " +
+        std::to_string(c.ny));
   if (!(c.L > 0.0))
-    throw std::runtime_error("AmrSystem : L > 0 required (square Cartesian extent) ; got L = " +
+    throw std::runtime_error("AmrSystem : L > 0 required (Cartesian x extent) ; got L = " +
                              std::to_string(c.L));
-  if (!std::isfinite(c.xlo) || !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) ||
-      !std::isfinite(c.ylo + c.L))
+  if (c.Ly < 0.0)
+    throw std::runtime_error(
+        "AmrSystem : Ly must be zero (square shorthand) or > 0; got Ly = " +
+        std::to_string(c.Ly));
+  const double resolved_Ly = c.Ly == 0.0 ? c.L : c.Ly;
+  if (!std::isfinite(c.L) || !std::isfinite(resolved_Ly) || !std::isfinite(c.xlo) ||
+      !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) ||
+      !std::isfinite(c.ylo + resolved_Ly))
     throw std::runtime_error(
         "AmrSystem : finite Cartesian origin and upper bounds required; got xlo = " +
         std::to_string(c.xlo) + ", ylo = " + std::to_string(c.ylo));
@@ -1043,6 +1239,19 @@ void validate_amr_system_config(const AmrSystemConfig& c) {
         "AmrSystem : coarse_max_grid >= 0 required (0 = default n/2 tile, "
         "distribute_coarse only) ; got coarse_max_grid = " +
         std::to_string(c.coarse_max_grid));
+  if (c.load_balance_route.empty() || c.load_balance_identity.empty())
+    throw std::runtime_error(
+        "AmrSystem : load-balance route and semantic identity must be non-empty");
+  (void)c.load_balance_options.exact_contract();
+}
+
+AmrSystemConfig canonical_amr_system_config(const AmrSystemConfig& authored) {
+  AmrSystemConfig canonical = authored;
+  if (canonical.ny == 0)
+    canonical.ny = canonical.n;
+  if (canonical.Ly == 0.0)
+    canonical.Ly = canonical.L;
+  return canonical;
 }
 
 // RUNTIME FREEZE LIFECYCLE guard (ADC-592, parity with System::require_assembling): a STRUCTURAL setter
@@ -1065,7 +1274,7 @@ void require_assembling_amr(bool bound, const char* what) {
 
 AmrSystem::AmrSystem(const AmrSystemConfig& c) {
   validate_amr_system_config(c);  // BEFORE Impl (parity with System; single upstream config guard)
-  p_ = std::make_unique<Impl>(c);
+  p_ = std::make_unique<Impl>(canonical_amr_system_config(c));
 }
 AmrSystem::~AmrSystem() = default;
 AmrSystem::AmrSystem(AmrSystem&&) noexcept = default;
@@ -1077,7 +1286,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           int stride, const std::vector<std::string>& implicit_vars,
                           const std::vector<std::string>& implicit_roles,
                           const NewtonOptions& newton, bool newton_diagnostics,
-                          double positivity_floor) {
+                          double positivity_floor, double weno_epsilon,
+                          bool wave_speed_cache) {
   require_assembling_amr(p_->bound_, "add_block");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
@@ -1097,6 +1307,17 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "AmrSystem::add_block : positivity_floor >= 0 and finite (0 = inactive)");
+  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
+    throw std::runtime_error("AmrSystem::add_block : finite weno_epsilon > 0 required");
+  if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
+    throw std::runtime_error(
+        "AmrSystem::add_block : weno_epsilon applies to limiter='weno5' only");
+  if (wave_speed_cache && riemann != "hll")
+    throw std::runtime_error(
+        "AmrSystem::add_block : wave_speed_cache requires riemann='hll'");
+  if (wave_speed_cache && time == "imex")
+    throw std::runtime_error(
+        "AmrSystem::add_block : wave_speed_cache is supported by explicit AMR transport only");
   // IMEX source Newton options grouped into a POD (ADC-214; wave 3 audit, parity
   // System::add_block). Defaults {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none),
   // bit-identical. Native blocks use these options through the unified AmrRuntime at every block
@@ -1164,6 +1385,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.newton_diagnostics =
       newton_diagnostics;          // newton_report (native runtime; compiled .so rejected)
   b.pos_floor = positivity_floor;  // Zhang-Shu floor (ADC-259); threaded at build (single/multi)
+  b.weno_epsilon = weno_epsilon;
+  b.wave_speed_cache = wave_speed_cache;
   b.substeps = substeps;
   b.stride = stride;
   b.gamma = model.gamma;  // adiabatic index of the block (Euler), read by coupler_write_coarse
@@ -1333,6 +1556,10 @@ POPS_EXPORT void AmrSystem::install_amr_clustering_component(
   if (P->built || P->amr_clustering_component_)
     throw std::runtime_error(
         "AmrSystem external Clustering requires one installation before runtime build");
+  if (P->cfg.cluster_min_efficiency > 0.0 || P->cfg.cluster_min_box_size > 0 ||
+      P->cfg.cluster_max_box_size > 0)
+    throw std::runtime_error(
+        "AmrSystem external Clustering cannot consume Berger-Rigoutsos controls");
   P->amr_clustering_component_ = std::make_shared<runtime::amr::PreparedClusteringComponent>(
       std::move(spec), std::move(component));
 }
@@ -1402,7 +1629,8 @@ POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int subs
                                                int time_method, int stride,
                                                const std::vector<std::string>& implicit_vars,
                                                const std::vector<std::string>& implicit_roles,
-                                               double pos_floor) {
+                                               double pos_floor, double weno_epsilon,
+                                               bool wave_speed_cache) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
   require_assembling_amr(p_->bound_,
@@ -1416,10 +1644,16 @@ POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int subs
   if (!runtime_builder)
     throw std::runtime_error(
         "AmrSystem::set_compiled_block requires an executable AmrRuntime block provider");
+  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
+    throw std::runtime_error(
+        "AmrSystem::set_compiled_block requires finite weno_epsilon > 0");
   const AmrTimeMethod method = amr_time_method_from_wire(time_method);
   if (imex && method != AmrTimeMethod::kEuler)
     throw std::runtime_error(
         "AmrSystem::set_compiled_block : SSPRK2/SSPRK3 cannot be combined with time='imex'");
+  if (imex && wave_speed_cache)
+    throw std::runtime_error(
+        "AmrSystem::set_compiled_block : wave_speed_cache is supported by explicit AMR transport only");
   // The partial IMEX mask only applies to the IMEX source step (same guard as add_block):
   // requesting it in explicit is an ERROR (no silent ignore).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -1447,6 +1681,8 @@ POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int subs
   // Zhang-Shu positivity floor (ADC-322): carried by the regenerated .so loader (pops_install_native_amr
   // -> add_compiled_model). Stored on the block and forwarded through the AmrRuntime builder.
   b.pos_floor = pos_floor;
+  b.weno_epsilon = weno_epsilon;
+  b.wave_speed_cache = wave_speed_cache;
   b.compiled_block_builder = std::move(runtime_builder);
   p_->blocks.push_back(std::move(b));
 }
@@ -1492,7 +1728,7 @@ POPS_EXPORT void AmrSystem::set_block_elliptic_field(
   p_->ell_field_rhs_[field][block_name] = std::move(rhs);
 }
 
-// Solved potential of a named elliptic field on the coarse level, n*n row-major (ADC-428 read-back).
+// Solved potential of a named elliptic field on the coarse level, ny*nx row-major.
 // Builds the hierarchy on first call (ensure_built) then reads from the AmrRuntime engine, which solves
 // the fields (counterpart of potential()). Only the runtime path carries named fields, so the single-block
 // AmrCouplerMP coupler (no named field registered) rejects with a clear message.
@@ -1535,7 +1771,8 @@ void AmrSystem::set_field_potential_level(const std::string& provider_slot, int 
   if (level < 0 || level >= p_->runtime->provider_potential_levels(provider_slot))
     throw std::out_of_range("AmrSystem::set_field_potential_level level out of range");
   const int width = p_->cfg.n << level;
-  const std::size_t expected = static_cast<std::size_t>(width) * width;
+  const int height = p_->cfg.ny << level;
+  const std::size_t expected = static_cast<std::size_t>(width) * height;
   if (phi.size() != expected)
     throw std::runtime_error("AmrSystem::set_field_potential_level layout size mismatch");
   MultiFab& target = p_->runtime->provider_potential_level(provider_slot, level);
@@ -1566,13 +1803,14 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
   if (level < 0 || level >= p_->runtime->provider_potential_levels(provider_slot))
     throw std::out_of_range("AmrSystem::field_potential_level_global level out of range");
   const int width = p_->cfg.n << level;
+  const int height = p_->cfg.ny << level;
   MultiFab& source = p_->runtime->provider_potential_level(provider_slot, level);
   // The provider potential may have been produced by a Kokkos kernel.  This accessor is a
   // host-side global snapshot (it copies into a std::vector before the MPI reduction), so make
   // the host residence authoritative before reading any Array4 values.  The compact output-piece
   // route performs the same synchronization in output_local_pieces().
   source.sync_host();
-  std::vector<double> result(static_cast<std::size_t>(width) * width, 0.0);
+  std::vector<double> result(static_cast<std::size_t>(width) * height, 0.0);
   for (int li = 0; li < source.local_size(); ++li) {
     const ConstArray4 values = source.fab(li).const_array();
     const Box2D valid = source.box(li);
@@ -1584,7 +1822,7 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
   // Level 0 follows the authored coarse ownership policy; every fine level is distributed over
   // its patch mapping even when the coarse level is replicated.
   if (level > 0 || p_->cfg.distribute_coarse)
-    all_reduce_sum_inplace(result.data(), static_cast<int>(result.size()));
+    all_reduce_sum_inplace(result.data(), result.size());
   return result;
 }
 
@@ -1661,7 +1899,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                  const std::string& limiter, const std::string& riemann,
                                  const std::string& recon, const std::string& time, double gamma,
                                  int substeps, const std::vector<double>& params,
-                                 double positivity_floor) {
+                                 double positivity_floor, double weno_epsilon,
+                                 bool wave_speed_cache) {
   require_assembling_amr(p_->bound_,
                          "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
@@ -1672,6 +1911,18 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "AmrSystem::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
+  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
+    throw std::runtime_error(
+        "AmrSystem::add_native_block : finite weno_epsilon > 0 required");
+  if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
+    throw std::runtime_error(
+        "AmrSystem::add_native_block : weno_epsilon applies to limiter='weno5' only");
+  if (wave_speed_cache && riemann != "hll")
+    throw std::runtime_error(
+        "AmrSystem::add_native_block : wave_speed_cache requires riemann='hll'");
+  if (wave_speed_cache && time == "imex")
+    throw std::runtime_error(
+        "AmrSystem::add_native_block : wave_speed_cache is supported by explicit AMR transport only");
   // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) rejects unknown
   // time routes and recon outside {conservative, primitive}, but we diagnose HERE a
   // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
@@ -1725,7 +1976,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     }
     verify_amr_package(h, params);
     using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                  const char*, double, int, const double*, int, double);
+                                  const char*, double, int, const double*, int, double, double,
+                                  bool);
     auto install = reinterpret_cast<install_fn_t>(pops::dynlib::sym(h, "pops_install_native_amr"));
     if (!install) {
       pops::dynlib::close(h);
@@ -1734,7 +1986,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     }
     install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
             time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
-            static_cast<int>(params.size()), positivity_floor);
+            static_cast<int>(params.size()), positivity_floor, weno_epsilon, wave_speed_cache);
   }
 #else
   {
@@ -1785,7 +2037,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // double is the Zhang-Shu positivity floor (ADC-322): old 8-argument loaders carry an ABI key from
   // the pre-floor headers and are REJECTED above, so the 9-argument call never reaches a stale .so.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                const char*, double, int, const double*, int, double);
+                                const char*, double, int, const double*, int, double, double, bool);
   auto install = reinterpret_cast<install_fn_t>(dlsym(h, "pops_install_native_amr"));
   if (!install) {
     dlclose(h);
@@ -1796,7 +2048,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   }
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
           time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
-          static_cast<int>(params.size()), positivity_floor);
+          static_cast<int>(params.size()), positivity_floor, weno_epsilon, wave_speed_cache);
   // The local .so stays loaded for the duration of the process: the type-erasing builder installed
   // by set_compiled_block captures code (header template) that lives there. We do NOT close it.
 #endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
@@ -1810,6 +2062,28 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     b.gamma = gamma;
     b.substeps = substeps;
     b.pos_floor = positivity_floor;
+    b.weno_epsilon = weno_epsilon;
+    b.wave_speed_cache = wave_speed_cache;
+  }
+}
+
+void AmrSystem::add_external_riemann_block(
+    const std::string& name, const std::string& so_path, const std::string& brick_id,
+    const std::string& sha256, const std::string& limiter, const std::string& recon,
+    const std::string& time, double gamma, int substeps, int stride, int expected_nvars,
+    int expected_naux, const std::string& expected_model_identity, double positivity_floor,
+    double weno_epsilon) {
+  require_assembling_amr(p_->bound_, "add_external_riemann_block");
+  auto library = std::make_shared<runtime::program::ExternalBrickHandle>(
+      so_path, brick_id, sha256, expected_nvars, expected_naux, expected_model_identity);
+  p_->external_riemann_libraries_.push_back(library);
+  library->install_amr(this, name, limiter, recon, time, gamma, substeps, stride,
+                       positivity_floor, weno_epsilon);
+  const int installed_idx = p_->block_index(name);
+  if (installed_idx >= 0) {
+    Impl::BlockSpec& block = p_->blocks[static_cast<std::size_t>(installed_idx)];
+    block.limiter = limiter;
+    block.riemann = brick_id;
   }
 }
 
@@ -2163,7 +2437,7 @@ void AmrSystem::set_field_boundary_plan(const std::string& provider_slot,
         "AmrSystem::set_field_boundary_plan requires four xlo/xhi/ylo/yhi entries");
   BCRec bc;
   bc.dx = static_cast<Real>(p_->cfg.L / p_->cfg.n);
-  bc.dy = bc.dx;
+  bc.dy = static_cast<Real>(p_->cfg.Ly / p_->cfg.ny);
   BCType* types[] = {&bc.xlo, &bc.xhi, &bc.ylo, &bc.yhi};
   Real* vals[] = {&bc.xlo_val, &bc.xhi_val, &bc.ylo_val, &bc.yhi_val};
   Real* alphas[] = {&bc.xlo_alpha, &bc.xhi_alpha, &bc.ylo_alpha, &bc.yhi_alpha};
@@ -2320,6 +2594,12 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
   const int resolved = p_->block_index(name);
   if (resolved < 0)
     throw std::runtime_error("AmrSystem::set_density : no block named '" + name + "'");
+  const std::size_t cells =
+      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
+  if (rho.size() != cells)
+    throw std::runtime_error("AmrSystem::set_density : density size (" +
+                             std::to_string(rho.size()) + ") differs from ny*nx (" +
+                             std::to_string(cells) + ")");
   const std::size_t idx = static_cast<std::size_t>(resolved);
   p_->blocks[idx].density = rho;
   p_->blocks[idx].has_density = true;
@@ -2334,18 +2614,19 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
         "(set the state before any step/mass/density)");
   if (p_->blocks.empty())
     throw std::runtime_error("AmrSystem::set_conservative_state : call add_block first");
-  // UPSTREAM size guard: NON empty state and multiple of n*n. The exact size ncomp*n*n is checked
+  // UPSTREAM size guard: NON empty state and multiple of ny*nx. The exact size ncomp*ny*nx is checked
   // at build (coupler_write_coarse_state), the only place where ncomp == Model::n_vars is known -- same
-  // deferral as the n*n guard of set_density. We explicitly reject an EMPTY state (0 % nn == 0 would
+  // deferral as the dense-cell guard of set_density. We explicitly reject an EMPTY state (0 % nn == 0 would
   // otherwise set has_state=true with an empty state, which would only throw deep in the 1st step).
-  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
+  const std::size_t nn =
+      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (U.empty())
     throw std::runtime_error(
-        "AmrSystem::set_conservative_state : empty state (expected ncomp*n*n)");
+        "AmrSystem::set_conservative_state : empty state (expected ncomp*ny*nx)");
   if (U.size() % nn != 0)
     throw std::runtime_error("AmrSystem::set_conservative_state : state size (" +
-                             std::to_string(U.size()) + ") not a multiple of n*n (" +
-                             std::to_string(nn) + ") ; expected ncomp*n*n component-major");
+                             std::to_string(U.size()) + ") not a multiple of ny*nx (" +
+                             std::to_string(nn) + ") ; expected ncomp*ny*nx component-major");
   const int resolved = p_->block_index(name);
   if (resolved < 0)
     throw std::runtime_error("AmrSystem::set_conservative_state : no block named '" + name + "'");
@@ -2354,7 +2635,7 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
   p_->blocks[idx].has_state = true;
 }
 
-void AmrSystem::bootstrap_next_level(int refinement_ratio) {
+bool AmrSystem::bootstrap_next_level(int refinement_ratio) {
   require_assembling_amr(p_->bound_, "bootstrap_next_level");
   if (!p_->cfg.explicit_bootstrap)
     throw std::runtime_error("AmrSystem::bootstrap_next_level requires explicit_bootstrap=true");
@@ -2385,8 +2666,10 @@ void AmrSystem::bootstrap_next_level(int refinement_ratio) {
     throw std::runtime_error(
         "AmrSystem::bootstrap_next_level lacks the explicit temporal relation for the next "
         "coarse/fine transition");
-  p_->runtime->bootstrap_next_level(refinement_ratio);
-  p_->install_active_temporal_relations();
+  const bool created = p_->runtime->bootstrap_next_level(refinement_ratio);
+  if (created)
+    p_->install_active_temporal_relations();
+  return created;
 }
 
 void AmrSystem::begin_bootstrap_plan() {
@@ -2465,10 +2748,11 @@ void AmrSystem::register_bootstrap_array(const std::string& subject, const std::
       (route.descriptor.space != "face" && route.descriptor.space != "node"))
     throw std::runtime_error(
         "AmrSystem::register_bootstrap_array centering differs from its transfer route");
-  const int n = p_->cfg.n;
-  const bool shape_ok = (centering == "node" && nx == n + 1 && ny == n + 1) ||
-                        (centering == "face_x" && nx == n + 1 && ny == n) ||
-                        (centering == "face_y" && nx == n && ny == n + 1);
+  const int base_nx = p_->cfg.n, base_ny = p_->cfg.ny;
+  const bool shape_ok =
+      (centering == "node" && nx == base_nx + 1 && ny == base_ny + 1) ||
+      (centering == "face_x" && nx == base_nx + 1 && ny == base_ny) ||
+      (centering == "face_y" && nx == base_nx && ny == base_ny + 1);
   if (!shape_ok || ncomp < 1 || values.size() != static_cast<std::size_t>(ncomp) * nx * ny)
     throw std::runtime_error(
         "AmrSystem::register_bootstrap_array received an incompatible centered array shape");
@@ -2790,10 +3074,11 @@ void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
     throw std::runtime_error(
         "AmrSystem::set_magnetic_field : the system is already built "
         "(set B_z before any step)");
-  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
+  const std::size_t nn =
+      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (bz.size() != nn)
     throw std::runtime_error("AmrSystem::set_magnetic_field : B_z of size " +
-                             std::to_string(bz.size()) + " (expected n*n = " + std::to_string(nn) +
+                             std::to_string(bz.size()) + " (expected ny*nx = " + std::to_string(nn) +
                              ", coarse row-major)");
   p_->bz_field = bz;
 }
@@ -2810,11 +3095,12 @@ void AmrSystem::set_aux_field_component(int comp, const std::vector<double>& fie
         "AmrSystem::set_aux_field : component " + std::to_string(comp) +
         " reserved (phi/grad_x/grad_y/B_z/T_e) ; a named aux field starts at index " +
         std::to_string(kAuxNamedBase) + " (B_z -> set_magnetic_field)");
-  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
+  const std::size_t nn =
+      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (field.size() != nn)
     throw std::runtime_error("AmrSystem::set_aux_field : field of size " +
                              std::to_string(field.size()) +
-                             " (expected n*n = " + std::to_string(nn) + ", coarse row-major)");
+                             " (expected ny*nx = " + std::to_string(nn) + ", coarse row-major)");
   p_->named_aux_[comp].assign(
       field.begin(),
       field.end());  // pending: seeded into the engine at build (single + multi block)
@@ -2912,30 +3198,48 @@ void AmrSystem::advance(double dt, int nsteps) {
 }
 void AmrSystem::begin_step_transaction() {
   p_->ensure_built();
-  if (p_->external_step_transaction_)
+  if (p_->restart_transaction_active_)
+    throw std::runtime_error(
+        "AmrSystem::begin_step_transaction: restart transaction already active");
+  if (p_->external_step_transaction_active_)
     throw std::runtime_error("AmrSystem::begin_step_transaction: transaction already active");
-  p_->external_step_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+  if (p_->internal_step_transaction_active_)
+    throw std::runtime_error(
+        "AmrSystem::begin_step_transaction: cannot begin inside an executing step");
+  p_->external_step_snapshot_.capture(*p_);
+  p_->external_step_transaction_active_ = true;
+  p_->external_step_transaction_restored_ = false;
   p_->external_step_transaction_committed_ = false;
 }
 void AmrSystem::commit_step_transaction() {
-  if (!p_->external_step_transaction_)
+  if (!p_->external_step_transaction_active_)
     throw std::runtime_error("AmrSystem::commit_step_transaction: no active transaction");
   if (p_->external_step_transaction_committed_)
     throw std::runtime_error("AmrSystem::commit_step_transaction: transaction already committed");
   p_->external_step_transaction_committed_ = true;
 }
 void AmrSystem::finalize_step_transaction() {
-  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
+  if (!p_->external_step_transaction_active_ || !p_->external_step_transaction_committed_)
     throw std::runtime_error("AmrSystem::finalize_step_transaction: no committed transaction");
-  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_active_ = false;
+  p_->external_step_transaction_restored_ = false;
   p_->external_step_transaction_committed_ = false;
 }
 void AmrSystem::rollback_step_transaction() {
-  if (!p_->external_step_transaction_)
+  if (!p_->external_step_transaction_active_)
     throw std::runtime_error("AmrSystem::rollback_step_transaction: no active transaction");
-  p_->external_step_transaction_->restore(*p_);
-  p_->external_step_transaction_.reset();
+  p_->restore_active_step_transaction_();
+  p_->external_step_transaction_active_ = false;
+  p_->external_step_transaction_restored_ = false;
   p_->external_step_transaction_committed_ = false;
+}
+bool AmrSystem::has_active_step_transaction() const noexcept {
+  return p_ != nullptr && p_->has_active_step_transaction_();
+}
+void AmrSystem::restore_active_step_transaction_for_program() {
+  if (!p_)
+    throw std::logic_error("AmrSystem Program rollback requires a live facade");
+  p_->restore_active_step_transaction_();
 }
 double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->ensure_built();
@@ -2949,11 +3253,13 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
       p_->clock_restore_pending_ = false;
     }
     p_->runtime->set_component_logical_time(p_->macro_step_, p_->t);
-    const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
+    const double hx = p_->cfg.L / p_->cfg.n;
+    const double hy = p_->cfg.Ly / p_->cfg.ny;
+    const double h = std::min(hx, hy);  // conservative Cartesian spacing for the scalar CFL API
     // A Program is always on the runtime engine: compute its CFL bound there, then run the Program.
     if (p_->program_.step_) {
       double dt = static_cast<double>(p_->runtime->cfl_dt(
-          static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+          static_cast<Real>(cfl), static_cast<Real>(h), static_cast<Real>(speed_floor)));
       if (p_->program_.dt_bound_) {
         const double pb = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
         if (std::isfinite(pb) && pb > 0.0 && pb < dt) {
@@ -2973,7 +3279,7 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
       return dt;
     }
     double dt = static_cast<double>(p_->runtime->cfl_dt(
-        static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+        static_cast<Real>(cfl), static_cast<Real>(h), static_cast<Real>(speed_floor)));
     if (std::isfinite(max_dt) && max_dt < dt) {
       dt = std::min(dt, max_dt);
       p_->runtime->override_last_dt_bound("strategy:max_dt");
@@ -3027,7 +3333,7 @@ int AmrSystem::nx() const {
   return p_->cfg.n;
 }
 int AmrSystem::ny() const {
-  return p_->cfg.n;
+  return p_->cfg.ny;
 }
 double AmrSystem::time() const {
   return p_->t;
@@ -3106,6 +3412,10 @@ double AmrSystem::program_last_dt() const {
 }
 std::vector<std::uint8_t> AmrSystem::program_accepted_state() const {
   return p_->program_accepted_state_;
+}
+void AmrSystem::copy_program_accepted_state_into(std::vector<std::uint8_t>& state) const {
+  state.resize(p_->program_accepted_state_.size());
+  std::copy(p_->program_accepted_state_.begin(), p_->program_accepted_state_.end(), state.begin());
 }
 void AmrSystem::restore_program_accepted_state(const std::vector<std::uint8_t>& state) {
   p_->program_accepted_state_ = state;
@@ -3283,6 +3593,12 @@ void AmrSystem::mark_bound() {
                      [&name](const Impl::BlockSpec& block) { return block.name == name; }))
       throw std::runtime_error(
           "AmrSystem::mark_bound: prepared boundary plan references unknown block '" + name + "'");
+    const Periodicity expected = p_->cfg.periodicity;
+    if (!same_periodicity(plan->periodicity(), expected))
+      throw std::runtime_error(
+          "AmrSystem::mark_bound: prepared boundary plan periodicity disagrees with the domain "
+          "topology for block '" +
+          name + "'");
     (void)plan->has_boundary_linearization();
   }
   p_->bound_ = true;
@@ -3658,6 +3974,8 @@ std::vector<std::string> AmrSystem::block_names() const {
 EffectiveOptionsReport AmrSystem::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "amr_system";
+  report.topology.periodic_x = p_->cfg.periodicity.x;
+  report.topology.periodic_y = p_->cfg.periodicity.y;
   report.has_amr = true;
   report.poisson.rhs = p_->p_rhs;
   report.poisson.solver = p_->p_solver;
@@ -3666,26 +3984,62 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   report.poisson.wall_radius = p_->p_wall_radius;
   report.poisson.epsilon = 1.0;
   report.poisson.abs_tol = static_cast<double>(kMGDefaultAbsTol);
-  report.amr_refinement.threshold = p_->refine_threshold;
-  report.amr_refinement.disabled =
-      !(p_->refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold));
-  report.amr_refinement.disabled_policy =
-      report.amr_refinement.disabled ? "legacy_abi_sentinel_threshold" : "explicit_threshold";
-  report.amr_refinement.variable = p_->bootstrap_tag_spec ? p_->bootstrap_tag_spec->block + "." +
-                                                                p_->bootstrap_tag_spec->variable
-                                                          : p_->refine_var_name;
-  report.amr_refinement.role = p_->refine_var_role;
-  report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
-  report.amr_refinement.phi_refinement_enabled =
+  const bool has_scalar_threshold =
+      p_->bootstrap_tag_spec != nullptr ||
+      p_->refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold);
+  const bool has_prepared_graph = p_->tagging_spec != nullptr;
+  const bool has_phi_gradient =
       p_->phi_grad_threshold > static_cast<double>(kAmrPhiRefinementDisabledThreshold);
-  // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden by
-  // the AmrSystemConfig cluster_* fields, mirrored by the private AMR clustering descriptor).
-  report.amr_refinement.cluster_min_efficiency =
-      p_->cfg.cluster_min_efficiency > 0.0 ? p_->cfg.cluster_min_efficiency : 0.7;
-  report.amr_refinement.cluster_min_box_size =
-      p_->cfg.cluster_min_box_size > 0 ? p_->cfg.cluster_min_box_size : 1;
-  report.amr_refinement.cluster_max_box_size =
-      p_->cfg.cluster_max_box_size > 0 ? p_->cfg.cluster_max_box_size : 32;
+  report.amr_refinement.disabled =
+      !(has_scalar_threshold || has_prepared_graph || has_phi_gradient);
+  report.amr_refinement.scalar_threshold_available = !has_prepared_graph;
+  if (has_prepared_graph) {
+    report.amr_refinement.disabled_policy = "prepared_tagging_program";
+    report.amr_refinement.tagging_provider_identity = p_->tagging_spec->provider_identity;
+    report.amr_refinement.tagging_authority = "prepared_program";
+  } else if (p_->bootstrap_tag_spec) {
+    report.amr_refinement.threshold = p_->bootstrap_tag_spec->threshold;
+    report.amr_refinement.disabled_policy = "prepared_threshold";
+    report.amr_refinement.variable =
+        p_->bootstrap_tag_spec->block + "." + p_->bootstrap_tag_spec->variable;
+    report.amr_refinement.tagging_provider_identity = p_->bootstrap_tag_spec->provider_identity;
+    report.amr_refinement.tagging_authority = "prepared_threshold";
+  } else {
+    report.amr_refinement.threshold = p_->refine_threshold;
+    report.amr_refinement.disabled_policy = report.amr_refinement.disabled
+                                                ? "no_active_tagging_criterion"
+                                                : "facade_threshold";
+    report.amr_refinement.variable = p_->refine_var_name;
+    report.amr_refinement.role = p_->refine_var_role;
+    report.amr_refinement.tagging_provider_identity =
+        "pops.amr.tagging.component-threshold@1";
+    report.amr_refinement.tagging_authority = "native_threshold_program";
+  }
+  report.amr_refinement.tagging_execution_provider_identity =
+      p_->amr_tagger_component_ ? p_->amr_tagger_component_->provider_identity()
+                               : "pops.amr.tagging.native-kokkos-vm@1";
+  report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
+  report.amr_refinement.phi_refinement_enabled = has_phi_gradient;
+  if (has_phi_gradient)
+    report.amr_refinement.tagging_provider_identity =
+        "pops.amr.tagging.composite@1[" +
+        report.amr_refinement.tagging_provider_identity +
+        ";pops.amr.tagging.shared-aux-gradient@1]";
+  if (p_->amr_clustering_component_) {
+    report.amr_refinement.clustering_provider_identity =
+        p_->amr_clustering_component_->provider_identity();
+    report.amr_refinement.clustering_authority = "external_prepared_component";
+    report.amr_refinement.clustering_parameters_available = false;
+  } else {
+    report.amr_refinement.clustering_provider_identity = "pops.lib.amr::berger_rigoutsos";
+    report.amr_refinement.clustering_authority = "builtin_berger_rigoutsos";
+    report.amr_refinement.cluster_min_efficiency =
+        p_->cfg.cluster_min_efficiency > 0.0 ? p_->cfg.cluster_min_efficiency : 0.7;
+    report.amr_refinement.cluster_min_box_size =
+        p_->cfg.cluster_min_box_size > 0 ? p_->cfg.cluster_min_box_size : 1;
+    report.amr_refinement.cluster_max_box_size =
+        p_->cfg.cluster_max_box_size > 0 ? p_->cfg.cluster_max_box_size : 32;
+  }
 
   for (const Impl::BlockSpec& b : p_->blocks) {
     EffectiveBlockOptions row;
@@ -3708,6 +4062,8 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.implicit_roles = b.implicit_roles;
     row.newton = amr_effective_newton_options(b.newton, b.newton_diagnostics);
     row.positivity_floor = b.pos_floor;
+    row.wave_speed_cache = b.wave_speed_cache;
+    row.weno_epsilon = b.weno_epsilon;
     row.gamma = b.gamma;
     if (!b.is_compiled) {
       row.B0 = b.spec.B0;
@@ -3772,6 +4128,10 @@ int AmrSystem::n_levels() {
   p_->ensure_built();
   return p_->runtime->nlev();
 }
+int AmrSystem::max_levels() {
+  p_->ensure_built();
+  return p_->runtime->max_levels();
+}
 int AmrSystem::n_vars() {
   p_->ensure_built();
   if (p_->blocks.size() != 1)
@@ -3825,12 +4185,21 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
   if (owner_ranks.size() != boxes.size())
     throw std::runtime_error(
         "AmrSystem::rebuild_hierarchy : boxes and owner_ranks length mismatch");
-  const int nlev = p_->runtime->nlev();
+  int nlev = 1;
+  for (const PatchBox& box : boxes) {
+    if (box.level < 1)
+      throw std::runtime_error(
+          "AmrSystem::rebuild_hierarchy accepts only fine-level patch boxes");
+    nlev = std::max(nlev, box.level + 1);
+  }
+  if (nlev > p_->runtime->max_levels())
+    throw std::runtime_error(
+        "AmrSystem::rebuild_hierarchy active depth exceeds the resolved hierarchy capacity");
   std::vector<std::vector<PatchBox>> level_boxes(static_cast<std::size_t>(nlev));
   std::vector<std::vector<int>> level_owners(static_cast<std::size_t>(nlev));
   for (std::size_t idx = 0; idx < boxes.size(); ++idx) {
     const int k = boxes[idx].level;
-    if (k < 0 || k >= nlev)
+    if (k < 1 || k >= nlev)
       throw std::runtime_error("AmrSystem::rebuild_hierarchy : box level out of range");
     level_boxes[static_cast<std::size_t>(k)].push_back(boxes[idx]);
     level_owners[static_cast<std::size_t>(k)].push_back(owner_ranks[idx]);
@@ -3840,27 +4209,34 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
 
 void AmrSystem::begin_restart_transaction() {
   p_->ensure_built();
-  if (p_->restart_transaction_)
+  if (p_->restart_transaction_active_)
     throw std::runtime_error(
         "AmrSystem::begin_restart_transaction : a restart transaction is already active");
-  p_->restart_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+  if (p_->has_active_step_transaction_())
+    throw std::runtime_error(
+        "AmrSystem::begin_restart_transaction : a step transaction is already active");
+  p_->restart_snapshot_.capture(*p_);
+  p_->runtime->begin_step_rollback_scope();
+  p_->restart_transaction_active_ = true;
 }
 
 void AmrSystem::commit_restart_transaction() {
-  if (!p_->restart_transaction_)
+  if (!p_->restart_transaction_active_)
     throw std::runtime_error(
         "AmrSystem::commit_restart_transaction : no restart transaction is active");
-  p_->restart_transaction_.reset();
+  p_->runtime->end_step_rollback_scope();
+  p_->restart_transaction_active_ = false;
 }
 
 void AmrSystem::rollback_restart_transaction() {
-  if (!p_->restart_transaction_)
+  if (!p_->restart_transaction_active_)
     throw std::runtime_error(
         "AmrSystem::rollback_restart_transaction : no restart transaction is active");
   // Drop the active marker before restoration.  A restoration failure is terminal for this bracket,
   // rather than leaving an unusable nested transaction that masks the original exception.
-  std::unique_ptr<Impl::AcceptedSnapshot> accepted = std::move(p_->restart_transaction_);
-  accepted->restore(*p_);
+  p_->restart_transaction_active_ = false;
+  p_->runtime->end_step_rollback_scope();
+  p_->restart_snapshot_.restore(*p_);
 }
 
 int AmrSystem::checkpoint_regrid_count() const {

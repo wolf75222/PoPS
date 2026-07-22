@@ -28,6 +28,8 @@
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
+#include "amr_transfer_test_authority.hpp"
+
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -68,6 +70,8 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
                                  const std::vector<double>& rho_neut,
                                  const char* ions_user_role = nullptr) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
@@ -90,6 +94,7 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
     blocks[0].cons_vars.user_roles = {ions_user_role};
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;

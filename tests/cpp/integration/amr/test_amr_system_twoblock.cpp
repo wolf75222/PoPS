@@ -20,6 +20,8 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
@@ -107,6 +109,8 @@ TEST(test_amr_system_twoblock, Runs) {
   // ============================================================================================
   {
     AmrBuildParams bp;
+    bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    bp.mesh.periodicity = Periodicity{true, true};
     bp.mesh.n = N;
     bp.mesh.L = L;
     bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs PR1)
@@ -169,7 +173,7 @@ TEST(test_amr_system_twoblock, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie figee
 
     AmrSystem sim(cfg);
@@ -248,7 +252,7 @@ TEST(test_amr_system_twoblock, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_neutralized_charge(q0, B0, mono_background), "none", "rusanov",

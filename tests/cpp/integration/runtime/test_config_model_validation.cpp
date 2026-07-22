@@ -96,19 +96,19 @@ class KokkosEnvironment : public ::testing::Environment {
 // ADC-299 : SystemConfig invalide rejetee AVANT la construction de Impl (allocation geom/ba/dm/aux).
 // ================================================================================================
 TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{0, 1.0, false}); }, "n >= 1"))
+  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{0, 1.0, Periodicity{false, false}}); }, "n >= 1"))
       << "System(n=0) rejete avant Impl (n >= 1)";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{-4, 1.0, false}); }, "n >= 1"))
+  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{-4, 1.0, Periodicity{false, false}}); }, "n >= 1"))
       << "System(n<0) rejete";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, 0.0, false}); }, "L > 0"))
+  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, 0.0, Periodicity{false, false}}); }, "L > 0"))
       << "System(L=0) rejete (L > 0)";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, -1.0, false}); }, "L > 0"))
+  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, -1.0, Periodicity{false, false}}); }, "L > 0"))
       << "System(L<0) rejete";
   // Une config valide CONSTRUIT toujours (le garde-fou ne sur-rejette pas).
   {
     bool ok = false;
     try {
-      System s(SystemConfig{16, 1.0, false});
+      System s(SystemConfig{16, 1.0, Periodicity{false, false}});
       ok = (s.nx() == 16);
     } catch (...) {
       ok = false;
@@ -122,13 +122,13 @@ TEST(ConfigModelValidation, SystemRejectsAmbiguousDiffusionCoefficientShapes) {
   const std::vector<double> diagonal_x(8 * 8, 3.0);
   const std::vector<double> diagonal_y(8 * 8, 4.0);
 
-  System scalar_first(SystemConfig{8, 1.0, false});
+  System scalar_first(SystemConfig{8, 1.0, Periodicity{false, false}});
   scalar_first.set_epsilon_field(scalar);
   EXPECT_TRUE(raises_with(
       [&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
       "cannot be combined"));
 
-  System diagonal_first(SystemConfig{8, 1.0, false});
+  System diagonal_first(SystemConfig{8, 1.0, Periodicity{false, false}});
   diagonal_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y);
   EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); },
                           "cannot be combined"));
@@ -154,6 +154,16 @@ TEST(ConfigModelValidation, AmrSystemConfigInvalidRejectedBeforeImpl) {
   }
   {
     AmrSystemConfig c;
+    c.ny = -1;
+    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "ny"));
+  }
+  {
+    AmrSystemConfig c;
+    c.Ly = -1.0;
+    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "Ly"));
+  }
+  {
+    AmrSystemConfig c;
     c.n = 32;
     c.regrid_every = -1;
     EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "regrid_every"))
@@ -170,7 +180,7 @@ TEST(ConfigModelValidation, AmrSystemConfigInvalidRejectedBeforeImpl) {
     bool ok = false;
     try {
       AmrSystem a(AmrSystemConfig{32});
-      ok = (a.nx() == 32);
+      ok = (a.nx() == 32 && a.ny() == 32);
     } catch (...) {
       ok = false;
     }
@@ -285,7 +295,7 @@ TEST(ConfigModelValidation, AddBlockAppliesContractBeforeStringRouting) {
   // ne devient JAMAIS un Euler silencieux.
   EXPECT_TRUE(raises_with(
       [&] {
-        System s(SystemConfig{16, 1.0, false});
+        System s(SystemConfig{16, 1.0, Periodicity{false, false}});
         s.add_block("m", ModelSpec{});
       },
       "transport"))
@@ -293,7 +303,7 @@ TEST(ConfigModelValidation, AddBlockAppliesContractBeforeStringRouting) {
          "silencieux";
   // Un modele complet s'installe (chemin natif ExB scalaire complet, sans lever).
   EXPECT_TRUE(!raises([&] {
-    System s(SystemConfig{16, 1.0, false});
+    System s(SystemConfig{16, 1.0, Periodicity{false, false}});
     s.add_block("ne", exb_charge());
   })) << "System::add_block(modele complet) accepte";
 

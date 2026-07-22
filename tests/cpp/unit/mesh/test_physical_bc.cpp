@@ -17,6 +17,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 
+#include <cmath>
 #include <vector>
 
 using namespace pops;
@@ -102,4 +103,111 @@ TEST(test_physical_bc, corner_cross_multibox_x_physical_y_periodic) {
     // coin (i=-1, j=-1) : Foextrap lit a(0, -1) = a(0, 7) (deja rempli periodique) = g(0, 7).
     EXPECT_EQ(f0(-1, -1, 0), g(0, 7)) << "corner_xfoextrap_yperiodic_wrap";
   }
+}
+
+TEST(test_physical_bc, deep_dirichlet_on_one_cell_axes_reads_only_valid_data) {
+  constexpr int ng = 5;
+  const Box2D dom = Box2D::from_extents(1, 1);
+  const BoxArray ba = BoxArray::from_domain(dom, 1);
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  mf.fab(0)(0, 0, 0) = 5.0;
+
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = 2.0;
+  fill_physical_bc(mf, dom, bc);
+
+  const Fab2D& f = mf.fab(0);
+  const Box2D grown = dom.grow(ng);
+  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j) {
+    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
+      const bool odd_reflections = (std::abs(i) + std::abs(j)) % 2 != 0;
+      EXPECT_EQ(f(i, j, 0), odd_reflections ? -1.0 : 5.0)
+          << "deep Dirichlet extension at (" << i << ", " << j << ")";
+    }
+  }
+}
+
+TEST(test_physical_bc, deep_foextrap_and_robin_cover_corners) {
+  constexpr int ng = 4;
+  const Box2D dom = Box2D::from_extents(1, 1);
+  const BoxArray ba = BoxArray::from_domain(dom, 1);
+
+  MultiFab foextrap(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  foextrap.fab(0)(0, 0, 0) = 9.5;
+  BCRec foe;
+  foe.xlo = foe.xhi = foe.ylo = foe.yhi = BCType::Foextrap;
+  fill_physical_bc(foextrap, dom, foe);
+
+  MultiFab robin(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  robin.fab(0)(0, 0, 0) = 9.5;
+  BCRec zero_gradient;
+  zero_gradient.xlo = zero_gradient.xhi = zero_gradient.ylo = zero_gradient.yhi = BCType::Robin;
+  zero_gradient.dx = 0.25;
+  zero_gradient.dy = 0.5;
+  fill_physical_bc(robin, dom, zero_gradient);
+
+  const Box2D grown = dom.grow(ng);
+  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j) {
+    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
+      EXPECT_EQ(foextrap.fab(0)(i, j, 0), 9.5) << "deep Foextrap corner";
+      EXPECT_EQ(robin.fab(0)(i, j, 0), 9.5) << "deep zero-gradient Robin corner";
+    }
+  }
+}
+
+TEST(test_physical_bc, deep_extension_fails_before_reading_external_face) {
+  const Box2D dom = Box2D::from_extents(1, 1);
+  const BoxArray ba = BoxArray::from_domain(dom, 1);
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, 2);
+  mf.fab(0)(0, 0, 0) = 1.0;
+
+  BCRec bc;
+  bc.xlo = BCType::Dirichlet;
+  bc.xhi = BCType::External;
+  bc.ylo = bc.yhi = BCType::External;
+  EXPECT_THROW(fill_physical_bc(mf, dom, bc), std::invalid_argument);
+}
+
+TEST(test_physical_bc, deep_dirichlet_preserves_nonzero_index_origin) {
+  constexpr int ng = 3;
+  const Box2D dom{{-4, 9}, {-4, 9}};
+  const BoxArray ba(std::vector<Box2D>{dom});
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  mf.fab(0)(dom.lo[0], dom.lo[1], 0) = 6.0;
+
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = 2.0;
+  fill_physical_bc(mf, dom, bc);
+
+  const Box2D grown = dom.grow(ng);
+  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j) {
+    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
+      const bool odd_reflections =
+          (std::abs(i - dom.lo[0]) + std::abs(j - dom.lo[1])) % 2 != 0;
+      EXPECT_EQ(mf.fab(0)(i, j, 0), odd_reflections ? -2.0 : 6.0)
+          << "deep nonzero-origin Dirichlet extension at (" << i << ", " << j << ")";
+    }
+  }
+}
+
+TEST(test_physical_bc, singular_robin_and_one_sided_periodicity_fail_closed) {
+  const Box2D dom = Box2D::from_extents(2, 2);
+  const BoxArray ba = BoxArray::from_domain(dom, 2);
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, 1);
+
+  BCRec singular;
+  singular.xlo = BCType::Robin;
+  singular.xlo_alpha = 2.0;
+  singular.xlo_beta = -1.0;
+  singular.xhi = BCType::Foextrap;
+  singular.ylo = singular.yhi = BCType::External;
+  EXPECT_THROW(fill_physical_bc(mf, dom, singular), std::invalid_argument);
+
+  BCRec asymmetric;
+  asymmetric.xlo = BCType::Periodic;
+  asymmetric.xhi = BCType::Foextrap;
+  asymmetric.ylo = asymmetric.yhi = BCType::External;
+  EXPECT_THROW(fill_ghosts(mf, dom, asymmetric), std::invalid_argument);
 }

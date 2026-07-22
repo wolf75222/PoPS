@@ -20,6 +20,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <new>
+#include <stdexcept>
 
 using namespace pops;
 
@@ -58,8 +60,112 @@ static int pops_run_test_mpi_fillboundary(int argc, char** argv) {
     for (int c = 0; c < ncomp; ++c)
       for (int j = g.lo[1]; j <= g.hi[1]; ++j)
         for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-          if (std::fabs(F(i, j, c) - val(i, j, c)) > 1e-12)
-            ++fails;
+            if (std::fabs(F(i, j, c) - val(i, j, c)) > 1e-12)
+              ++fails;
+  }
+
+  // The halo is deeper than both complete periodic extents, including a one-cell x axis. With four
+  // one-cell boxes this also exercises repeated periodic images across MPI ranks and deep corners.
+  {
+    constexpr int deep_ng = 6;
+    const Box2D deep_dom = Box2D::from_extents(1, 4);
+    const BoxArray deep_ba = BoxArray::from_domain(deep_dom, 1);
+    const DistributionMapping deep_dm = make_sfc_distribution(deep_ba, np);
+    MultiFab deep(deep_ba, deep_dm, ncomp, deep_ng);
+    auto deep_wrap = [](int x, int extent) { return ((x % extent) + extent) % extent; };
+    auto deep_val = [&](int i, int j, int c) {
+      return 11.0 * deep_wrap(i, deep_dom.nx()) + deep_wrap(j, deep_dom.ny()) + 100.0 * c;
+    };
+    for (int li = 0; li < deep.local_size(); ++li) {
+      Fab2D& F = deep.fab(li);
+      const Box2D b = F.box();
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+            F(i, j, c) = deep_val(i, j, c);
+    }
+    fill_boundary(deep, deep_dom, Periodicity{true, true});
+    for (int li = 0; li < deep.local_size(); ++li) {
+      const Fab2D& F = deep.fab(li);
+      const Box2D grown = F.box().grow(deep_ng);
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+          for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+            if (std::fabs(F(i, j, c) - deep_val(i, j, c)) > 1e-12)
+              ++fails;
+    }
+  }
+
+  // Schedule construction itself is rank-local and may reject before buffer sizing.  Give only the
+  // last rank an invalid periodic extent: every peer must receive the collective rejection, nobody
+  // may enter a later collective/post, and no local ghost copy may become visible.
+  {
+    constexpr Real untouched = Real(-901.25);
+    MultiFab rejected(ba, dm, ncomp, ng);
+    rejected.set_val(untouched);
+    for (int li = 0; li < rejected.local_size(); ++li) {
+      Fab2D& field = rejected.fab(li);
+      const Box2D valid = field.box();
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+          for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+            field(i, j, c) = Real(10 + me + c);
+    }
+    const Box2D rank_domain = me == np - 1 ? Box2D{{0, 0}, {-1, L - 1}} : dom;
+    bool rejected_everywhere = false;
+    try {
+      HaloExchange exchange = fill_boundary_begin(rejected, rank_domain, Periodicity{true, true});
+      fill_boundary_end(rejected, exchange);
+    } catch (const std::runtime_error&) {
+      rejected_everywhere = true;
+    } catch (...) {
+    }
+    if (!rejected_everywhere)
+      ++fails;
+    device_fence();
+    for (int li = 0; li < rejected.local_size(); ++li) {
+      const Fab2D& field = rejected.fab(li);
+      const Box2D valid = field.box();
+      const Box2D grown = field.grown_box();
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+          for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+            if (!valid.contains(i, j) && field(i, j, c) != untouched)
+              ++fails;
+    }
+  }
+
+  // A rank-local allocation/preparation failure must be observed by every peer before any
+  // point-to-point request can be posted.  Exercise the same collective guard used by the real
+  // pinned-buffer allocation path, with the last rank as the sole failing participant.
+  {
+    bool rejected_everywhere = false;
+    try {
+      detail::collectively_prepare_before_halo_post(world_communicator_view(), [&] {
+        if (me == np - 1)
+          throw std::bad_alloc();
+      });
+    } catch (const std::bad_alloc&) {
+      rejected_everywhere = true;
+    } catch (...) {
+    }
+    if (!rejected_everywhere)
+      ++fails;
+  }
+
+  {
+    bool rejected_everywhere = false;
+    try {
+      detail::collectively_prepare_before_halo_post(world_communicator_view(), [&] {
+        if (me == np - 1)
+          throw std::runtime_error("injected halo preparation failure");
+      });
+    } catch (const std::runtime_error&) {
+      rejected_everywhere = true;
+    } catch (...) {
+    }
+    if (!rejected_everywhere)
+      ++fails;
   }
 
   const long gfails = all_reduce_sum(fails);

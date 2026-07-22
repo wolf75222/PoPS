@@ -132,7 +132,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System src(cfg);
   add_gas(src);

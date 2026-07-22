@@ -10,11 +10,23 @@
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/parallel/load_balance.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 
+#include <cstdint>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 using namespace pops;
+
+static_assert(std::is_copy_constructible_v<PreparedLoadBalanceProvider>);
+static_assert(std::is_nothrow_move_constructible_v<PreparedLoadBalanceProvider>);
+static_assert(std::is_copy_assignable_v<PreparedLoadBalanceProvider>);
+static_assert(std::is_nothrow_move_assignable_v<PreparedLoadBalanceProvider>);
+static_assert(std::is_copy_constructible_v<PreparedLoadBalanceAuthority>);
+static_assert(std::is_nothrow_move_constructible_v<PreparedLoadBalanceAuthority>);
 
 namespace {
 
@@ -44,6 +56,23 @@ int n_ranks_used(const DistributionMapping& dm, int nranks) {
     u += c;
   return u;
 }
+
+struct ExternalIndexLoadBalance {
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.load_balance.external_index", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.text("external-index-policy").scalar(std::uint32_t{1});
+  }
+
+  DistributionMapping operator()(const BoxArray& boxes, int ranks,
+                                 LoadBalanceWeights weights) const {
+    if (!weights.empty() && weights.size() != static_cast<std::size_t>(boxes.size()))
+      throw std::invalid_argument("external load-balance weight count mismatch");
+    return DistributionMapping(boxes.size(), ranks);
+  }
+};
 
 }  // namespace
 
@@ -109,4 +138,75 @@ TEST(test_load_balance, nonuniform_case_knapsack_beats_sfc) {
   std::printf("non-uniforme : sfc_imb=%.4f knap_imb=%.4f\n", sfc3_imb, knap3_imb);
   EXPECT_LE(knap3_imb, sfc3_imb + 1e-9) << "knap_balances_at_least_as_well";
   EXPECT_LT(knap3_imb, sfc3_imb) << "knap_strictly_better_here";
+}
+
+TEST(test_load_balance, supplied_weights_drive_weighted_policies) {
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 1), 1);
+  ASSERT_EQ(boxes.size(), 4);
+  const std::vector<std::int64_t> weights{100, 1, 1, 1};
+
+  const DistributionMapping unweighted_sfc = make_sfc_distribution(boxes, 2);
+  const DistributionMapping weighted_sfc = make_sfc_distribution(boxes, 2, weights);
+  EXPECT_EQ(unweighted_sfc.ranks(), (std::vector<int>{0, 0, 1, 1}));
+  EXPECT_EQ(weighted_sfc.ranks(), (std::vector<int>{0, 1, 1, 1}));
+
+  const DistributionMapping unweighted_knapsack = make_knapsack_distribution(boxes, 2);
+  const DistributionMapping weighted_knapsack = make_knapsack_distribution(boxes, 2, weights);
+  EXPECT_EQ(unweighted_knapsack.ranks(), (std::vector<int>{0, 1, 0, 1}));
+  EXPECT_EQ(weighted_knapsack.ranks(), (std::vector<int>{0, 1, 1, 1}));
+
+  EXPECT_LT(load_imbalance(boxes, weighted_knapsack, 2, weights),
+            load_imbalance(boxes, unweighted_knapsack, 2, weights));
+}
+
+TEST(test_load_balance, round_robin_authenticates_but_does_not_consume_weights) {
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 1), 1);
+  const std::vector<std::int64_t> weights{100, 1, 1, 1};
+
+  EXPECT_EQ(make_round_robin_distribution(boxes, 2).ranks(),
+            (std::vector<int>{0, 1, 0, 1}));
+  EXPECT_EQ(make_round_robin_distribution(boxes, 2, weights).ranks(),
+            (std::vector<int>{0, 1, 0, 1}));
+
+  EXPECT_THROW(make_round_robin_distribution(boxes, 2,
+                                              std::vector<std::int64_t>{1, 2}),
+               std::invalid_argument);
+  EXPECT_THROW(make_round_robin_distribution(
+                   boxes, 2, std::vector<std::int64_t>{1, 0, 1, 1}),
+               std::invalid_argument);
+
+  const auto authority = prepare_load_balance_authority(
+      "round_robin", "test.round-robin.identity",
+      PreparedProviderOptions{"pops.amr.load-balance.round-robin@1", {}});
+  EXPECT_EQ(authority.implementation(), "pops.load_balance.round_robin");
+  EXPECT_FALSE(authority.collective_contract().empty());
+}
+
+TEST(test_load_balance, third_party_provider_registers_without_core_changes) {
+  register_load_balance_provider(
+      "test_external_index",
+      [](std::string semantic_identity, const PreparedProviderOptions& options) {
+        if (options.schema_identity != "pops.test.load-balance.external-index@1" ||
+            !options.values.empty())
+          throw std::invalid_argument("external load-balance options are not canonical");
+        return PreparedLoadBalanceAuthority(
+            std::move(semantic_identity),
+            PreparedLoadBalanceProvider(ExternalIndexLoadBalance{}));
+      });
+
+  const auto authority = prepare_load_balance_authority(
+      "test_external_index", "test.external-index.semantic-identity",
+      PreparedProviderOptions{"pops.test.load-balance.external-index@1", {}});
+  EXPECT_EQ(authority.semantic_identity(), "test.external-index.semantic-identity");
+  EXPECT_EQ(authority.implementation(), "pops.test.load_balance.external_index");
+
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 1), 1);
+  const DistributionMapping mapping = authority.distribute(boxes, 1);
+  EXPECT_EQ(mapping.ranks(), (std::vector<int>{0, 0, 0, 0}));
+
+  EXPECT_THROW(
+      prepare_load_balance_authority(
+          "test_external_index", "test.external-index.semantic-identity",
+          PreparedProviderOptions{"pops.test.load-balance.wrong-schema@1", {}}),
+      std::invalid_argument);
 }
