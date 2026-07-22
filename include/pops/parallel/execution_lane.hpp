@@ -12,10 +12,13 @@
 
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -300,6 +303,8 @@ class ExecutionLane {
 #endif
 
  private:
+  friend class ObserverMpiLane;
+
   struct StaticIdentity {};
 
 #ifdef POPS_HAS_MPI
@@ -343,6 +348,305 @@ class ExecutionLane {
   MPI_Comm communicator_ = MPI_COMM_NULL;
   bool owns_communicator_ = false;
 #endif
+};
+
+/// Explicit-lifetime communicator dedicated to a post-commit observer worker.
+///
+/// The communicator is duplicated collectively before the worker starts and must be closed
+/// collectively after that worker has joined.  Its destructor deliberately performs no MPI call:
+/// Python garbage collection is neither collectively ordered nor guaranteed to run before MPI
+/// finalization.  Forgetting close_collectively() therefore keeps the duplicate alive until MPI
+/// finalization instead of risking a process deadlock from MPI_Comm_free in a GC destructor.
+class ObserverMpiLane {
+ public:
+  /// Reuse the canonical ExecutionLane materialization gate, then transfer its owned communicator
+  /// into an object whose release is explicit rather than destructor-driven.
+  [[nodiscard]] static ObserverMpiLane duplicate_world_collectively(std::string_view identity) {
+    return ObserverMpiLane(ExecutionLane::duplicate_world_collectively(identity));
+  }
+
+  ObserverMpiLane(const ObserverMpiLane&) = delete;
+  ObserverMpiLane& operator=(const ObserverMpiLane&) = delete;
+  ObserverMpiLane& operator=(ObserverMpiLane&&) = delete;
+
+  ObserverMpiLane(ObserverMpiLane&& other) noexcept
+      : identity_(std::move(other.identity_)),
+        static_identity_(std::exchange(other.static_identity_, std::string_view{})),
+#ifdef POPS_HAS_MPI
+        communicator_(std::exchange(other.communicator_, MPI_COMM_NULL)),
+#endif
+        closed_(std::exchange(other.closed_, true)) {}
+
+  /// Intentionally non-owning at destruction time; see the class contract above.
+  ~ObserverMpiLane() = default;
+
+  [[nodiscard]] std::string_view identity() const noexcept {
+    return static_identity_.empty() ? std::string_view(identity_) : static_identity_;
+  }
+
+  [[nodiscard]] bool active() const noexcept {
+    if (closed_)
+      return false;
+#ifdef POPS_HAS_MPI
+    return communicator_ != MPI_COMM_NULL && detail::comm_active_unlocked();
+#else
+    return true;
+#endif
+  }
+
+  [[nodiscard]] bool closed() const noexcept { return closed_; }
+
+  [[nodiscard]] CommunicatorView communicator() const noexcept {
+#ifdef POPS_HAS_MPI
+    return CommunicatorView{closed_ ? MPI_COMM_NULL : communicator_};
+#else
+    return CommunicatorView{};
+#endif
+  }
+
+  [[nodiscard]] int rank() const {
+    require_open_();
+    return communicator().rank();
+  }
+
+  [[nodiscard]] int size() const {
+    require_open_();
+    return communicator().size();
+  }
+
+  [[nodiscard]] std::int64_t fortran_handle() const {
+    require_open_();
+#ifdef POPS_HAS_MPI
+    return static_cast<std::int64_t>(MPI_Comm_c2f(communicator_));
+#else
+    throw std::runtime_error("observer MPI lane is unavailable in a serial PoPS build");
+#endif
+  }
+
+  void barrier() const {
+    require_open_();
+    pops::barrier(communicator());
+  }
+
+  /// Broadcast arbitrary bytes over the duplicated communicator.  Large payloads are split into
+  /// MPI-int-sized chunks and allocation failures are made uniform before payload traffic begins.
+  [[nodiscard]] std::string broadcast_bytes(std::string payload, int root = 0) const {
+    require_open_();
+#ifdef POPS_HAS_MPI
+    const CommunicatorView lane = communicator();
+    int minimum_root = root;
+    int maximum_root = root;
+    detail::require_mpi_success(
+        MPI_Allreduce(&root, &minimum_root, 1, MPI_INT, MPI_MIN, lane.native_handle()),
+        "MPI_Allreduce(observer root minimum)");
+    detail::require_mpi_success(
+        MPI_Allreduce(&root, &maximum_root, 1, MPI_INT, MPI_MAX, lane.native_handle()),
+        "MPI_Allreduce(observer root maximum)");
+    if (minimum_root != maximum_root)
+      throw std::invalid_argument("observer collective root differs across MPI ranks");
+    const int ranks = lane.size();
+    if (root < 0 || root >= ranks)
+      throw std::out_of_range("observer collective root is outside the lane");
+    const int me = lane.rank();
+
+    long length_overflow = 0;
+    if constexpr (sizeof(std::size_t) > sizeof(unsigned long long)) {
+      if (me == root &&
+          payload.size() >
+              static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max()))
+        length_overflow = 1;
+    }
+    if (all_reduce_max(length_overflow, lane) != 0)
+      throw std::overflow_error("observer broadcast payload exceeds the MPI length domain");
+
+    unsigned long long length = me == root ? static_cast<unsigned long long>(payload.size()) : 0ULL;
+    detail::require_mpi_success(
+        MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, root, lane.native_handle()),
+        "MPI_Bcast(observer payload length)");
+    if (length > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max()))
+      throw std::overflow_error("observer broadcast payload exceeds the local size_t domain");
+
+    long allocation_failed = 0;
+    if (me != root) {
+      try {
+        payload.resize(static_cast<std::size_t>(length));
+      } catch (const std::bad_alloc&) {
+        allocation_failed = 1;
+      } catch (const std::length_error&) {
+        allocation_failed = 1;
+      }
+    }
+    if (all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("an observer rank could not allocate a broadcast payload");
+
+    unsigned long long offset = 0;
+    while (offset < length) {
+      const int count = static_cast<int>(std::min<unsigned long long>(
+          length - offset, static_cast<unsigned long long>(std::numeric_limits<int>::max())));
+      detail::require_mpi_success(
+          MPI_Bcast(payload.data() + static_cast<std::size_t>(offset), count, MPI_BYTE, root,
+                    lane.native_handle()),
+          "MPI_Bcast(observer payload chunk)");
+      offset += static_cast<unsigned long long>(count);
+    }
+    return payload;
+#else
+    if (root != 0)
+      throw std::out_of_range("serial observer broadcast root must be zero");
+    return payload;
+#endif
+  }
+
+  /// Return one rank-ordered payload per lane participant.  Observer traffic is control-plane
+  /// traffic, so a canonical sequence of lane-local broadcasts favors simple large-count safety
+  /// over a second bespoke Allgatherv chunk protocol.
+  [[nodiscard]] std::vector<std::string> allgather_bytes(const std::string& payload) const {
+    require_open_();
+#ifdef POPS_HAS_MPI
+    const CommunicatorView lane = communicator();
+    const int ranks = lane.size();
+    const int me = lane.rank();
+    std::vector<std::string> result;
+    long allocation_failed = 0;
+    try {
+      result.resize(static_cast<std::size_t>(ranks));
+    } catch (const std::bad_alloc&) {
+      allocation_failed = 1;
+    } catch (const std::length_error&) {
+      allocation_failed = 1;
+    }
+    if (all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("an observer rank could not allocate allgather results");
+
+    for (int source = 0; source < ranks; ++source) {
+      std::string source_payload;
+      long copy_failed = 0;
+      if (me == source) {
+        try {
+          source_payload = payload;
+        } catch (const std::bad_alloc&) {
+          copy_failed = 1;
+        } catch (const std::length_error&) {
+          copy_failed = 1;
+        }
+      }
+      if (all_reduce_max(copy_failed, lane) != 0)
+        throw std::runtime_error("an observer rank could not stage its allgather payload");
+      result[static_cast<std::size_t>(source)] =
+          broadcast_bytes(std::move(source_payload), source);
+    }
+    return result;
+#else
+    return {payload};
+#endif
+  }
+
+  /// Gather one rank-ordered payload vector on root; non-root ranks return std::nullopt.
+  [[nodiscard]] std::optional<std::vector<std::string>> gather_bytes(const std::string& payload,
+                                                                     int root = 0) const {
+    require_open_();
+#ifdef POPS_HAS_MPI
+    const CommunicatorView lane = communicator();
+    int minimum_root = root;
+    int maximum_root = root;
+    detail::require_mpi_success(
+        MPI_Allreduce(&root, &minimum_root, 1, MPI_INT, MPI_MIN, lane.native_handle()),
+        "MPI_Allreduce(observer gather root minimum)");
+    detail::require_mpi_success(
+        MPI_Allreduce(&root, &maximum_root, 1, MPI_INT, MPI_MAX, lane.native_handle()),
+        "MPI_Allreduce(observer gather root maximum)");
+    if (minimum_root != maximum_root)
+      throw std::invalid_argument("observer collective root differs across MPI ranks");
+    const int ranks = lane.size();
+    if (root < 0 || root >= ranks)
+      throw std::out_of_range("observer collective root is outside the lane");
+    const int me = lane.rank();
+
+    std::optional<std::vector<std::string>> result;
+    long allocation_failed = 0;
+    if (me == root) {
+      try {
+        result.emplace(static_cast<std::size_t>(ranks));
+      } catch (const std::bad_alloc&) {
+        allocation_failed = 1;
+      } catch (const std::length_error&) {
+        allocation_failed = 1;
+      }
+    }
+    if (all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("observer root could not allocate gathered results");
+
+    for (int source = 0; source < ranks; ++source) {
+      std::string source_payload;
+      long copy_failed = 0;
+      if (me == source) {
+        try {
+          source_payload = payload;
+        } catch (const std::bad_alloc&) {
+          copy_failed = 1;
+        } catch (const std::length_error&) {
+          copy_failed = 1;
+        }
+      }
+      if (all_reduce_max(copy_failed, lane) != 0)
+        throw std::runtime_error("an observer rank could not stage its gather payload");
+      std::string received = broadcast_bytes(std::move(source_payload), source);
+      if (me == root)
+        (*result)[static_cast<std::size_t>(source)] = std::move(received);
+    }
+    return result;
+#else
+    if (root != 0)
+      throw std::out_of_range("serial observer gather root must be zero");
+    return std::vector<std::string>{payload};
+#endif
+  }
+
+  /// Collectively release the duplicate.  The owner must call this only after its observer worker
+  /// has joined.  Repeated calls after a successful close are local no-ops.
+  void close_collectively() {
+    if (closed_)
+      return;
+#ifdef POPS_HAS_MPI
+    if (communicator_ != MPI_COMM_NULL && detail::comm_active_unlocked()) {
+      detail::require_mpi_success(MPI_Comm_free(&communicator_),
+                                  "MPI_Comm_free(observer lane)");
+    } else {
+      // MPI_Finalize has already reclaimed MPI resources; never invoke MPI from this state.
+      communicator_ = MPI_COMM_NULL;
+    }
+#endif
+    closed_ = true;
+  }
+
+ private:
+  explicit ObserverMpiLane(ExecutionLane&& lane) noexcept
+      : identity_(std::move(lane.identity_)),
+        static_identity_(std::exchange(lane.static_identity_, std::string_view{})),
+#ifdef POPS_HAS_MPI
+        communicator_(std::exchange(lane.communicator_, MPI_COMM_NULL)),
+#endif
+        closed_(false) {
+#ifdef POPS_HAS_MPI
+    lane.owns_communicator_ = false;
+#endif
+  }
+
+  void require_open_() const {
+    if (closed_)
+      throw std::logic_error("observer MPI lane is closed");
+#ifdef POPS_HAS_MPI
+    if (communicator_ == MPI_COMM_NULL || !detail::comm_active_unlocked())
+      throw std::runtime_error("observer MPI lane is not active");
+#endif
+  }
+
+  std::string identity_;
+  std::string_view static_identity_;
+#ifdef POPS_HAS_MPI
+  MPI_Comm communicator_ = MPI_COMM_NULL;
+#endif
+  bool closed_ = true;
 };
 
 // Lane-shaped collective facade. These overloads keep the execution communicator explicit at each

@@ -52,9 +52,10 @@ def _require_native_parallel_hdf5() -> tuple[Any, dict[str, Any]]:
     required = {"available", "hdf5_version", "reason", "communicator", "implementation"}
     if type(report) is not dict or set(report) != required or report["available"] is not True:
         raise RuntimeError("native collective HDF5 capability report is unavailable or malformed")
-    if report["communicator"] != "MPI_COMM_WORLD" \
+    if report["communicator"] != "explicit native MPI communicator" \
             or report["implementation"] != "C++ HDF5 C API":
-        raise RuntimeError("native collective HDF5 capability is not the final C++ world route")
+        raise RuntimeError(
+            "native collective HDF5 capability is not the explicit-communicator C++ route")
     return _pops, report
 
 
@@ -166,7 +167,7 @@ def _parallel_snapshot_data(
     communicator: Any,
 ) -> tuple[dict[str, Any], tuple[Any, ...], Path, Any, dict[str, Any]]:
     from pops.output._consumer_contracts import ParallelMode
-    from pops._native_collectives import allgather_value, rank, require_world
+    from pops._native_collectives import allgather_value, rank, require_communicator
 
     selected = ()
     target_path = None
@@ -176,9 +177,9 @@ def _parallel_snapshot_data(
         if request.parallel_mode is not ParallelMode.COLLECTIVE:
             raise ValueError(
                 "a resolved communicator is valid only for HDF5 COLLECTIVE output")
-        require_world(communicator)
+        require_communicator(communicator)
         if request.rank != rank(communicator):
-            raise ValueError("collective HDF5 request rank differs from native MPI_COMM_WORLD")
+            raise ValueError("collective HDF5 request rank differs from its native communicator")
         native, capability = _require_native_parallel_hdf5()
         target_path = Path(target)
         if target_path.suffix not in {".h5", ".hdf5"}:
@@ -676,8 +677,12 @@ class HDF5Writer:
             raise ValueError("HDF5 writer mode differs from its resolved output request")
         if request.parallel_mode is ParallelMode.SERIAL and communicator is not None:
             raise ValueError("SERIAL HDF5 writer session cannot carry a communicator")
-        if request.parallel_mode is not ParallelMode.SERIAL and communicator is None:
-            raise TypeError("distributed HDF5 writer session requires its communicator")
+        detached_root = request.parallel_mode is ParallelMode.ROOT and request.rank == 0
+        if request.parallel_mode is not ParallelMode.SERIAL and communicator is None \
+                and not detached_root:
+            raise TypeError(
+                "distributed HDF5 writer session requires its communicator unless a complete "
+                "ROOT snapshot was detached for post-commit writing")
         authority = writer_session_authority(self.format, request, target)
 
         def stage_file() -> _StagedOutputFile:

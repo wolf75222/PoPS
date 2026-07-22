@@ -6,6 +6,7 @@ guess a block, layout, level or state: every selected array carries all four ide
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
@@ -15,9 +16,34 @@ from pops.identity import Identity, make_identity
 from pops.model import Handle
 
 
-_CENTERINGS = frozenset({"cell", "node", "face_x", "face_y"})
+_CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
 _CARTESIAN_CELL_AREA = "pops://cell-measures/cartesian-area@1"
 _NATIVE_GEOMETRY_ARRAYS = object()
+
+
+def _box_slices(lower: tuple[int, ...], upper: tuple[int, ...]) -> tuple[slice, ...]:
+    return tuple(slice(lo, hi) for lo, hi in zip(lower, upper, strict=True))
+
+
+def _centering_shape(
+    cell_shape: tuple[int, ...], centering: str,
+) -> tuple[int, ...]:
+    if centering == "cell":
+        return cell_shape
+    if centering == "node":
+        return tuple(extent + 1 for extent in cell_shape)
+    face_axis = {"face_x": 0, "face_y": 1, "face_z": 2}.get(centering)
+    if face_axis is None or face_axis >= len(cell_shape):
+        raise ValueError(
+            "field centering %r is not defined for spatial rank %d"
+            % (centering, len(cell_shape))
+        )
+    # Dense scientific arrays use (..., z, y, x) order while geometry coordinates use
+    # (x, y, z).  The corresponding face-normal axis is therefore counted from the end.
+    array_axis = len(cell_shape) - 1 - face_axis
+    result = list(cell_shape)
+    result[array_axis] += 1
+    return tuple(result)
 
 
 def _text(value: Any, where: str) -> str:
@@ -61,7 +87,11 @@ def array_evidence(value: Any) -> dict[str, Any]:
     digest.update(b"\0")
     digest.update(",".join(str(item) for item in array.shape).encode("ascii"))
     digest.update(b"\0")
-    digest.update(memoryview(cast(Any, array)).cast("B"))
+    # Python refuses to cast a multidimensional memoryview when any extent is zero.
+    # An empty dense array still has canonical dtype/shape evidence and contributes no
+    # payload bytes, so keep the zero-copy path for non-empty scientific arrays only.
+    if array.size:
+        digest.update(memoryview(cast(Any, array)).cast("B"))
     return {
         "dtype": array.dtype.str,
         "shape": list(array.shape),
@@ -168,15 +198,15 @@ class LevelGeometry:
     layout_identity: Identity
     layout_kind: str
     level: int
-    origin: tuple[float, float]
-    spacing: tuple[float, float]
-    cell_shape: tuple[int, int]
-    boxes: tuple[tuple[int, int, int, int], ...]
+    origin: tuple[float, ...]
+    spacing: tuple[float, ...]
+    cell_shape: tuple[int, ...]
+    boxes: tuple[tuple[int, ...], ...]
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
     coordinate_system: str = "pops://coordinates/cartesian-2d@1"
     cell_measure: str = _CARTESIAN_CELL_AREA
-    axis_names: tuple[str, str] = ("x", "y")
+    axis_names: tuple[str, ...] = ("x", "y")
     valid_cells: Any = field(init=False, repr=False, compare=False)
     _native_valid_cells: InitVar[Any] = None
     _native_arrays: InitVar[Any] = None
@@ -196,44 +226,58 @@ class LevelGeometry:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.startswith("pops://") or "@" not in value:
                 raise ValueError("geometry %s must be a versioned pops:// URI" % name)
-        axis_names = tuple(self.axis_names)
-        if len(axis_names) != 2 or any(
-                not isinstance(item, str) or not item for item in axis_names) \
-                or len(set(axis_names)) != 2:
-            raise ValueError("geometry axis_names must contain two distinct non-empty names")
-        object.__setattr__(self, "axis_names", axis_names)
         if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
             raise ValueError("geometry level must be an integer >= 0")
+        shape = tuple(self.cell_shape)
+        if len(shape) not in (1, 2, 3) or any(
+                isinstance(item, bool) or not isinstance(item, int) or item < 1
+                for item in shape):
+            raise ValueError(
+                "cell_shape must have spatial rank 1, 2, or 3 and positive integer extents")
+        if native and len(shape) != 2:
+            raise ValueError("native LevelGeometry authority is currently exactly two-dimensional")
+        object.__setattr__(self, "cell_shape", shape)
+        dimension = len(shape)
+        axis_names = tuple(self.axis_names)
+        if len(axis_names) != dimension or any(
+                not isinstance(item, str) or not item for item in axis_names) \
+                or len(set(axis_names)) != dimension:
+            raise ValueError(
+                "geometry axis_names must contain %d distinct non-empty names" % dimension)
+        object.__setattr__(self, "axis_names", axis_names)
         for name in ("origin", "spacing"):
             values = tuple(float(item) for item in getattr(self, name))
-            if len(values) != 2 or any(item != item or item in (float("inf"), float("-inf"))
-                                       for item in values):
-                raise ValueError("geometry %s must contain two finite values" % name)
+            if len(values) != dimension or any(
+                    item != item or item in (float("inf"), float("-inf"))
+                    for item in values):
+                raise ValueError(
+                    "geometry %s must contain %d finite values" % (name, dimension))
             if name == "spacing" and any(item <= 0.0 for item in values):
                 raise ValueError("geometry spacing must be positive")
             object.__setattr__(self, name, values)
-        shape = tuple(self.cell_shape)
-        if len(shape) != 2 or any(isinstance(item, bool) or not isinstance(item, int) or item < 1
-                                  for item in shape):
-            raise ValueError("cell_shape must be (ny, nx) with positive integers")
-        object.__setattr__(self, "cell_shape", shape)
         boxes = tuple(tuple(item) for item in self.boxes)
         if not boxes:
             raise ValueError("geometry boxes must explicitly cover the represented level")
-        ny, nx = shape
         for index, box in enumerate(boxes):
-            if len(box) != 4 or any(isinstance(item, bool) or not isinstance(item, int)
-                                    for item in box):
-                raise TypeError("geometry boxes use integer (jlo, ilo, jhi, ihi) bounds")
-            jlo, ilo, jhi, ihi = box
-            if jlo < 0 or ilo < 0 or jhi <= jlo or ihi <= ilo or jhi > ny or ihi > nx:
+            if len(box) != 2 * dimension or any(
+                    isinstance(item, bool) or not isinstance(item, int) for item in box):
+                raise TypeError(
+                    "geometry boxes use %d integer lower bounds followed by %d upper bounds"
+                    % (dimension, dimension))
+            lower, upper = box[:dimension], box[dimension:]
+            if any(
+                    lo < 0 or hi <= lo or hi > extent
+                    for lo, hi, extent in zip(lower, upper, shape, strict=True)):
                 raise ValueError("geometry box %r is outside cell_shape %r" % (box, shape))
             # Native boxes come from the hierarchy and the mask/cardinality check below proves their
             # represented union without an O(patch_count**2) Python scan.
             if not native:
                 for prior in boxes[:index]:
-                    if not (jhi <= prior[0] or prior[2] <= jlo
-                            or ihi <= prior[1] or prior[3] <= ilo):
+                    prior_lower, prior_upper = prior[:dimension], prior[dimension:]
+                    if all(
+                            lo < prior_hi and prior_lo < hi
+                            for lo, hi, prior_lo, prior_hi in zip(
+                                lower, upper, prior_lower, prior_upper, strict=True)):
                         raise ValueError("geometry boxes must not overlap")
         object.__setattr__(self, "boxes", boxes)
         if native:
@@ -243,15 +287,19 @@ class LevelGeometry:
             if valid.shape != shape:
                 raise ValueError("native valid_cells must be a binary cell_shape mask")
             represented = sum(
-                (box[2] - box[0]) * (box[3] - box[1]) for box in boxes)
+                math.prod(
+                    hi - lo for lo, hi in zip(
+                        box[:dimension], box[dimension:], strict=True))
+                for box in boxes
+            )
             if int(np.count_nonzero(valid)) != represented:
                 raise ValueError("native valid_cells count differs from geometry boxes")
         else:
             if _native_valid_cells is not None:
                 raise TypeError("valid_cells is derived from boxes outside the native provider")
             valid = np.zeros(shape, dtype=np.bool_)
-            for jlo, ilo, jhi, ihi in boxes:
-                valid[jlo:jhi, ilo:ihi] = True
+            for box in boxes:
+                valid[_box_slices(box[:dimension], box[dimension:])] = True
             valid.setflags(write=False)
         object.__setattr__(self, "valid_cells", valid)
         coverage = _array(self.coverage, dtype=np.bool_, borrow=native)
@@ -377,8 +425,8 @@ class _NativeCompositeIntegral:
 
 @dataclass(frozen=True, slots=True)
 class ArrayPiece:
-    lower: tuple[int, int]
-    upper: tuple[int, int]
+    lower: tuple[int, ...]
+    upper: tuple[int, ...]
     values: Any = field(repr=False, compare=False)
     global_box_index: int
     owner_rank: int
@@ -386,14 +434,16 @@ class ArrayPiece:
 
     def __post_init__(self) -> None:
         lower, upper = tuple(self.lower), tuple(self.upper)
-        if len(lower) != 2 or len(upper) != 2 or any(
+        if len(lower) not in (1, 2, 3) or len(upper) != len(lower) or any(
                 isinstance(item, bool) or not isinstance(item, int) for item in lower + upper):
-            raise TypeError("array piece bounds must be integer (j, i) pairs")
-        if lower[0] < 0 or lower[1] < 0 or upper[0] <= lower[0] or upper[1] <= lower[1]:
-            raise ValueError("array piece bounds must be positive non-empty half-open ranges")
+            raise TypeError(
+                "array piece bounds must be integer tuples of spatial rank 1, 2, or 3")
+        if any(lo < 0 or hi <= lo for lo, hi in zip(lower, upper, strict=True)):
+            raise ValueError("array piece bounds must be non-negative non-empty half-open ranges")
         values = _array(self.values)
-        if values.ndim not in (2, 3) or values.shape[-2:] != (
-                upper[0] - lower[0], upper[1] - lower[1]):
+        spatial_shape = tuple(hi - lo for lo, hi in zip(lower, upper, strict=True))
+        if values.ndim not in (len(lower), len(lower) + 1) \
+                or values.shape[-len(lower):] != spatial_shape:
             raise ValueError("array piece values do not match its spatial bounds")
         for name in ("global_box_index", "owner_rank"):
             value = getattr(self, name)
@@ -421,7 +471,7 @@ class FieldPayload:
     centering: str
     units: str
     component_names: tuple[str, ...]
-    global_shape: tuple[int, int]
+    global_shape: tuple[int, ...]
     pieces: tuple[ArrayPiece, ...]
     dtype: str | None = None
 
@@ -436,9 +486,11 @@ class FieldPayload:
                 or len(names) != len(set(names)):
             raise ValueError("field component_names must be unique non-empty strings")
         shape = tuple(self.global_shape)
-        if len(shape) != 2 or any(isinstance(item, bool) or not isinstance(item, int) or item < 1
-                                  for item in shape):
-            raise ValueError("field global_shape must be a positive (ny, nx)")
+        if len(shape) not in (1, 2, 3) or any(
+                isinstance(item, bool) or not isinstance(item, int) or item < 1
+                for item in shape):
+            raise ValueError(
+                "field global_shape must have spatial rank 1, 2, or 3 and positive extents")
         pieces = tuple(self.pieces)
         if any(type(piece) is not ArrayPiece for piece in pieces):
             raise TypeError("field payload pieces must be exact ArrayPiece values")
@@ -453,18 +505,22 @@ class FieldPayload:
                 raise ValueError("a rank with no field pieces must still declare the exact dtype")
             import numpy as np
             inferred_dtype = np.dtype(self.dtype).str
-        expected_ndim = 3 if names else 2
+        expected_ndim = len(shape) + (1 if names else 0)
         for piece in pieces:
+            if len(piece.lower) != len(shape):
+                raise ValueError("array piece spatial rank differs from global_shape")
             if piece.values.ndim != expected_ndim:
                 raise ValueError("component_names and array rank disagree")
             if names and piece.values.shape[0] != len(names):
                 raise ValueError("component_names count does not match array components")
-            if piece.upper[0] > shape[0] or piece.upper[1] > shape[1]:
+            if any(hi > extent for hi, extent in zip(piece.upper, shape, strict=True)):
                 raise ValueError("array piece lies outside global_shape")
         for index, left in enumerate(pieces):
             for right in pieces[index + 1:]:
-                if not (left.upper[0] <= right.lower[0] or right.upper[0] <= left.lower[0]
-                        or left.upper[1] <= right.lower[1] or right.upper[1] <= left.lower[1]):
+                if all(
+                        left_lo < right_hi and right_lo < left_hi
+                        for left_lo, left_hi, right_lo, right_hi in zip(
+                            left.lower, left.upper, right.lower, right.upper, strict=True)):
                     raise ValueError("array pieces overlap")
         box_indices = [piece.global_box_index for piece in pieces]
         if len(box_indices) != len(set(box_indices)):
@@ -490,12 +546,11 @@ class FieldPayload:
         result = np.empty(prefix + self.global_shape, dtype=self.pieces[0].values.dtype)
         written = np.zeros(self.global_shape, dtype=np.uint8)
         for piece in self.pieces:
-            jlo, ilo = piece.lower
-            jhi, ihi = piece.upper
-            if np.any(written[jlo:jhi, ilo:ihi]):
+            spatial = _box_slices(piece.lower, piece.upper)
+            if np.any(written[spatial]):
                 raise ValueError("array pieces overlap")
-            result[..., jlo:jhi, ilo:ihi] = piece.values
-            written[jlo:jhi, ilo:ihi] = 1
+            result[(...,) + spatial] = piece.values
+            written[spatial] = 1
         if not np.all(written):
             raise ValueError("field payload does not completely cover global_shape")
         result.setflags(write=False)
@@ -681,11 +736,7 @@ class OutputSnapshot:
             geometry = geometry_map.get((item.key.layout_identity.token, item.key.level))
             if geometry is None:
                 raise ValueError("field has no exact layout/level geometry")
-            ny, nx = geometry.cell_shape
-            expected = {
-                "cell": (ny, nx), "node": (ny + 1, nx + 1),
-                "face_x": (ny, nx + 1), "face_y": (ny + 1, nx),
-            }[item.centering]
+            expected = _centering_shape(geometry.cell_shape, item.centering)
             if item.global_shape != expected:
                 raise ValueError("field shape does not match its centering and geometry")
         diagnostics = tuple(self.diagnostics)

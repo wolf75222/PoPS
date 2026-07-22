@@ -60,8 +60,12 @@ class NPZWriter:
             raise ValueError("NPZ has no COLLECTIVE writer; select HDF5(COLLECTIVE)")
         if request.parallel_mode is ParallelMode.SERIAL and communicator is not None:
             raise ValueError("SERIAL NPZ writer session cannot carry a communicator")
-        if request.parallel_mode is not ParallelMode.SERIAL and communicator is None:
-            raise ValueError("distributed NPZ writer session requires its communicator")
+        detached_root = request.parallel_mode is ParallelMode.ROOT and request.rank == 0
+        if request.parallel_mode is not ParallelMode.SERIAL and communicator is None \
+                and not detached_root:
+            raise ValueError(
+                "distributed NPZ writer session requires its communicator unless a complete "
+                "ROOT snapshot was detached for post-commit writing")
         authority = writer_session_authority(self.format, request, target)
 
         def stage_file() -> _StagedOutputFile:

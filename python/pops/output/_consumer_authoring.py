@@ -18,6 +18,7 @@ from ._consumer_contracts import (
     FailRun,
     ParallelMode,
     _FAILURE_ACTIONS,
+    _observer_provider_data,
 )
 
 
@@ -109,8 +110,16 @@ class ConsumerAuthoringNode:
         elif self.kind is ConsumerKind.CHECKPOINT:
             if self.output_format is not None or self.operation is None:
                 raise ValueError("Checkpoint requires only its restart operation provider")
+        elif self.kind is ConsumerKind.MONITOR:
+            if self.output_format is not None or self.operation is None:
+                raise ValueError("Monitor requires only its live observer operation provider")
+            operation_data = _observer_provider_data(
+                self.operation, where="ConsumerAuthoringNode.operation")
+            if operation_data["parallel_mode"] != self.parallel_mode.value:
+                raise ValueError(
+                    "Monitor authoring parallel mode differs from its operation provider")
         elif self.output_format is not None or self.operation is not None:
-            raise ValueError("Diagnostic/Monitor authoring carries no publication provider")
+            raise ValueError("Diagnostic authoring carries no publication provider")
         if type(self.failure_action) not in _FAILURE_ACTIONS:
             raise TypeError("ConsumerAuthoringNode.failure_action has an unsupported type")
 
@@ -310,6 +319,26 @@ class ConsumerAuthoringNode:
                     "scientific output format %s accepts one exact layout per consumer; "
                     "declare one ScientificOutput per layout"
                     % format_data["provider_id"])
+        elif self.kind is ConsumerKind.MONITOR:
+            operation_data = self.operation.consumer_data()
+            observer_data = operation_data.get("observer", {})
+            async_format = (
+                observer_data.get("format")
+                if observer_data.get("observer_kind") == "async_scientific_output"
+                else None
+            )
+            selection_contract = (
+                async_format.get("selection_contract")
+                if isinstance(async_format, dict) else None
+            )
+            selected_layouts = {quantity.layout_id for quantity in quantities}
+            if isinstance(async_format, dict) and selection_contract is not None \
+                    and selection_contract["layout_cardinality"] == "single" \
+                    and len(selected_layouts) > 1:
+                raise ValueError(
+                    "async scientific output format %s accepts one exact layout per consumer; "
+                    "declare one AsyncScientificOutput per layout"
+                    % async_format["provider_id"])
         return ConsumerManifest(
             handle=handle,
             kind=self.kind,

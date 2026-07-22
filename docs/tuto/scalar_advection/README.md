@@ -452,31 +452,144 @@ python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 
 [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie une sortie periodique au
 `ConsumerGraph`. Deux constantes, placees en tete du fichier, suffisent pour choisir le format et
-la frequence :
+la cadence physique :
 
 ```python
 OUTPUT_FORMAT = output.ParaView()
-OUTPUT_EVERY_STEPS = 2
+OUTPUT_EVERY_DT = 0.02
 ```
 
-Remplacer seulement `ParaView` par `HDF5` ou `NPZ` change le format sans toucher au reste du cas. La
-frequence compte les pas acceptes : une longue simulation pourra par exemple utiliser
-`OUTPUT_EVERY_STEPS = 100`.
+Remplacer seulement `ParaView` par `HDF5` ou `NPZ` change le format sans toucher au graphe du cas.
+`every_dt(OUTPUT_EVERY_DT, clock=program.clock)` pose les echantillons aux temps physiques
+`0.02, 0.04, ..., 0.10`, meme quand le `dt` CFL varie. Seuls les pas acceptes publient une sortie.
+Pour une cadence en nombre de pas acceptes, utiliser a la place
+`every(OUTPUT_EVERY_STEPS, clock=program.clock)`.
 
 ```bash
 python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 ```
 
 Les instantanes sont ecrits au fil du calcul sous
-`docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`. Le format choisi rouvre ensuite la
-serie, son dernier instantane et leurs identites, sans branche conditionnelle sur l'extension.
+`docs/tuto/scalar_advection/results/12_openmp_amr_outputs/`. Le script rouvre ensuite le catalogue
+generique de HDF5/NPZ ou le dernier PVD standard de ParaView, puis authentifie le dernier instantane.
 
-Avec `ParaView`, le script affiche une ligne `time series`. Ouvrir la valeur exacte affichee sur
-cette ligne charge tous les instantanes dans la timeline ; son nom ressemble a
-`series__f….vtu.series`. Le champ `tracer__U`
-rassemble les valeurs des deux niveaux ; les cellules
-grossieres recouvertes par le niveau fin sont marquees comme raffinees et ne sont pas affichees deux
-fois.
+Avec ParaView, la ligne `time series` designe le `.pvd` cumulatif le plus recent : c'est la serie
+canonique, sans `.vtu.series` proprietaire en doublon. Chaque PVD est immuable; pendant le calcul,
+ouvrir le nouveau PVD le plus recent ajoute les instants deja publies sans invalider les anciens
+catalogues. Chaque feuille `.vtu` est compressee et reste autonome avec son `TimeValue`. Le tableau
+s'appelle `U`, car ce nom vient
+de la chaine explicite de `model.state("U", ...)`, jamais du nom de la variable a gauche de
+l'affectation Python. Son composant s'appelle `u`; il n'y a plus de nom generique `field_0000`.
+Les cellules du niveau grossier recouvertes par le niveau fin sont marquees comme cellules raffinees
+et ne sont pas affichees deux fois.
+
+Sans installation ParaView, chaque PVD est accompagne de `*.view.json` et `*.view.py`. Cette recette
+authentifie le PVD, reste relocatable avec son repertoire et applique la presentation demandee. Le
+script `.view.py` se lance avec le `pvpython` de la machine de visualisation. Ce n'est pas un faux
+`.pvsm` ecrit a la main.
+
+Pour demander en plus un vrai `.pvsm` (`U`, palette Viridis, surface avec aretes), remplacer
+seulement la configuration `OUTPUT_FORMAT` :
+
+```python
+OUTPUT_FORMAT = output.ParaView(
+    preset=output.ParaViewPreset(
+        color_by="U",
+        color_map="Viridis",
+        representation="Surface With Edges",
+    ),
+    state=output.MaterializedPVSM(pvpython="/opt/paraview/bin/pvpython"),
+)
+```
+
+PoPS verifie l'executable, lui demande d'ouvrir le PVD au dernier temps, d'appliquer la presentation,
+de sauvegarder l'etat puis de le recharger. Avec le simple `output.ParaView()` du tutoriel, VTU, PVD
+et recette portable sont quand meme produits; seul le PVSM n'est pas demande.
+
+Ce tutoriel et la capture native PoPS restent 2D et centres cellules. Le writer VTU sous-jacent sait
+aussi representer des snapshots cartesiens exacts 1D, 2D ou 3D. Il place les champs centres cellules
+dans `CellData` et les champs nodaux dans `PointData`/`PPointData` avec `state=None`; cela ne signifie
+pas encore que le solveur natif produit des etats 1D, 3D ou nodaux. Les champs centres faces sont
+refuses explicitement tant qu'une topologie de faces distincte n'est pas fournie. En MPI,
+`ParaView(mode=ParallelMode.PER_RANK)` produit un `.pvtu`; le placement par defaut relaie les morceaux
+bornes par une lane MPI privee vers le rang zero, sans filesystem partage, tandis que
+`placement=SharedDirectory()` demande explicitement un repertoire visible par tous les rangs.
+
+### Ecriture asynchrone et durabilite optionnelles
+
+Le tutoriel garde volontairement `ScientificOutput`, le chemin le plus court. Pour recouvrir le
+calcul et l'I/O, remplacer ce consumer par la variante post-commit bornee :
+
+```python
+output.AsyncScientificOutput(
+    format=OUTPUT_FORMAT,
+    schedule=output_schedule,
+    fields=(tracer_U,),
+    target="solution/tracer",
+    queue_capacity=2,
+)
+```
+
+Une file pleine applique de la contre-pression; `pops.run` la draine avant de rendre la main. Sans
+politique `durability`, cette file vit seulement dans le processus et un arret brutal peut perdre un
+echantillon accepte mais encore en attente. Une application peut ajouter
+`durability=output.DurableJournal("results/observer-journal")`. La garantie au moins une fois
+commence seulement apres la synchronisation du handoff `pending`; le journal n'est pas atomique avec
+le pas accepte ni avec un checkpoint. Les archives completes `delivered` ne sont pas purgees
+automatiquement, donc l'application doit gerer leur croissance apres le run.
+
+Les sorties scientifiques MPI asynchrones sont distinctes du live Catalyst. Elles exigent
+`MPI_THREAD_MULTIPLE`, utilisent une lane dupliquee propre a chaque consumer, jamais
+`MPI_COMM_WORLD`, et imposent `max_attempts=1` apres l'entree dans une publication MPI. Toutes les
+sessions post-commit d'un meme run passent par un FIFO partage dans le processus.
+
+### Catalyst 2 optionnel
+
+Le meme tutoriel peut envoyer les instants acceptes a la pipeline
+[`catalyst_pipeline.py`](catalyst_pipeline.py). Il faut une installation ParaView fournissant les
+modules Python Catalyst 2 et Conduit, ainsi que l'implementation Catalyst `paraview`, dans
+l'environnement qui execute PoPS :
+
+```bash
+POPS_CATALYST=1 python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
+```
+
+La declaration du tutoriel utilise la valeur par defaut `implementation="paraview"`. PoPS transmet ce
+choix a `catalyst_load/implementation`; il ne considere donc pas un chargement du stub Catalyst comme
+une visualisation reussie. Si l'implementation n'est pas dans les chemins du loader, une application
+peut fournir ses repertoires et ses arguments de pipeline explicitement :
+
+```python
+Catalyst(
+    pipeline="catalyst_pipeline.py",
+    implementation="paraview",
+    search_paths=("/chemin/vers/implementations-catalyst",),
+    args=("--view=surface",),
+)
+```
+
+Les chemins doivent exister au moment de la declaration. Les arguments suivent le Blueprint standard
+`catalyst/scripts/pops/args` et une pipeline peut les lire avec `paraview.catalyst.get_args()`. Apres
+`initialize`, PoPS appelle `about()`, refuse une implementation inattendue ou une version d'API
+Catalyst absente. Le recu expose `implementation` et `catalyst_api_version`; `catalyst/version`
+n'est pas presente comme une version propre a l'implementation.
+
+La declaration garde priorite sur l'environnement : `CATALYST_IMPLEMENTATION_PREFER_ENV` doit etre
+absent ou vide.
+
+Cette variante OpenMP utilise `LiveVisualization(..., mode=ParallelMode.SERIAL)`. Pour l'instant,
+PoPS ne supporte pas la visualisation live dans un calcul MPI : `ROOT`, `PER_RANK` et `COLLECTIVE`
+sont refuses pendant l'authoring, et une declaration serie ne peut pas etre liee a un contexte MPI.
+PoPS ne transmet donc jamais `catalyst/mpi_comm`. Pour suivre un calcul MPI pendant son execution,
+utiliser les sorties progressives PVTU ou HDF5 avec `AsyncScientificOutput`.
+
+Le worker PoPS est l'unique couche asynchrone : l'async interne Catalyst est force a zero et un
+`CATALYST_ASYNC_ENABLED` actif est refuse, de sorte que le recu suit la fin de
+`catalyst.execute`. Le provider integre accepte un seul consumer/pipeline combine et un seul run par
+`RuntimeInstance`. Sa reservation process-global n'est jamais relachee : lancer un nouveau
+processus pour un autre run Catalyst. Plusieurs `RuntimeInstance` concurrents dans le meme processus
+ne sont pas supportes avec Catalyst ou HDF5 asynchrone. Comme toute visualisation live, l'envoi est
+irreversible apres commit et ne peut pas annuler un pas numerique accepte.
 
 ## Checkpoint et restart exact
 

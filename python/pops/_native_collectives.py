@@ -175,34 +175,56 @@ def decode_value(payload: Any) -> Any:
     return value
 
 
-def require_world(communicator: Any) -> Any:
-    """Require the exact active communicator object produced by ``_pops.mpi_world()``."""
+def require_communicator(communicator: Any, *, allow_world: bool = True) -> Any:
+    """Require an exact active native world authority or duplicated observer lane."""
     from pops import _pops
 
-    if type(communicator) is not _pops._NativeWorldCommunicator:
-        raise TypeError("distributed execution requires the native PoPS world communicator")
-    if communicator.identity != _WORLD_IDENTITY or communicator.active is not True:
-        raise ValueError("distributed execution requires active native MPI_COMM_WORLD")
-    rank, size = int(communicator.rank), int(communicator.size)
-    if size < 1 or rank < 0 or rank >= size:
-        raise ValueError("native MPI_COMM_WORLD has an invalid rank topology")
+    world_type = _pops._NativeWorldCommunicator
+    lane_type = getattr(_pops, "_NativeObserverMpiLane", None)
+    if type(communicator) is world_type:
+        if not allow_world:
+            raise TypeError("worker MPI requires a duplicated observer communicator lane")
+        if communicator.identity != _WORLD_IDENTITY:
+            raise ValueError("native world communicator has an invalid identity")
+    elif lane_type is None or type(communicator) is not lane_type:
+        raise TypeError(
+            "distributed execution requires an exact native PoPS communicator authority")
+    elif not isinstance(communicator.identity, str) \
+            or not communicator.identity.startswith(_WORLD_IDENTITY + "/"):
+        raise ValueError("native observer lane has an invalid qualified identity")
+    if communicator.active is not True:
+        raise ValueError("distributed execution requires an active native communicator")
+    communicator_rank, communicator_size = int(communicator.rank), int(communicator.size)
+    if communicator_size < 1 or communicator_rank < 0 \
+            or communicator_rank >= communicator_size:
+        raise ValueError("native communicator has an invalid rank topology")
     return communicator
 
 
+def require_world(communicator: Any) -> Any:
+    """Require the exact active communicator object produced by ``_pops.mpi_world()``."""
+    native = require_communicator(communicator)
+    from pops import _pops
+
+    if type(native) is not _pops._NativeWorldCommunicator:
+        raise TypeError("distributed execution requires the native PoPS world communicator")
+    return native
+
+
 def rank(communicator: Any) -> int:
-    return int(require_world(communicator).rank)
+    return int(require_communicator(communicator).rank)
 
 
 def size(communicator: Any) -> int:
-    return int(require_world(communicator).size)
+    return int(require_communicator(communicator).size)
 
 
 def barrier(communicator: Any) -> None:
-    require_world(communicator).barrier()
+    require_communicator(communicator).barrier()
 
 
 def broadcast_value(communicator: Any, value: Any, *, root: int = 0) -> Any:
-    native = require_world(communicator)
+    native = require_communicator(communicator)
     frame = _value_frame(value) if int(native.rank) == root else b""
     result = native.broadcast_bytes(frame, root)
     failure = _frame_error(result, where="native broadcast")
@@ -213,7 +235,7 @@ def broadcast_value(communicator: Any, value: Any, *, root: int = 0) -> Any:
 
 def broadcast_bytes(communicator: Any, payload: bytes, *, root: int = 0) -> bytes:
     """Broadcast one opaque payload directly in C++ without Python object serialization."""
-    native = require_world(communicator)
+    native = require_communicator(communicator)
     frame = _bytes_frame(payload) if int(native.rank) == root else b""
     result = native.broadcast_bytes(frame, root)
     failure = _frame_error(result, where="native byte broadcast")
@@ -223,7 +245,7 @@ def broadcast_bytes(communicator: Any, payload: bytes, *, root: int = 0) -> byte
 
 
 def allgather_value(communicator: Any, value: Any) -> tuple[Any, ...]:
-    native = require_world(communicator)
+    native = require_communicator(communicator)
     frames = native.allgather_bytes(_value_frame(value))
     if type(frames) is not tuple or len(frames) != int(native.size):
         raise RuntimeError("native allgather returned an invalid rank payload set")
@@ -239,7 +261,7 @@ def allgather_value(communicator: Any, value: Any) -> tuple[Any, ...]:
 
 def allgather_bytes(communicator: Any, payload: bytes) -> tuple[bytes, ...]:
     """All-gather one opaque payload per rank through the native C++ byte collective."""
-    native = require_world(communicator)
+    native = require_communicator(communicator)
     frames = native.allgather_bytes(_bytes_frame(payload))
     if type(frames) is not tuple or len(frames) != int(native.size):
         raise RuntimeError("native byte allgather returned an invalid rank payload set")
@@ -253,7 +275,38 @@ def allgather_bytes(communicator: Any, payload: bytes) -> tuple[bytes, ...]:
     return tuple(frame[1:] for frame in frames)
 
 
+def gather_bytes(
+    communicator: Any, payload: bytes, *, root: int = 0,
+) -> tuple[bytes, ...] | None:
+    """Gather one opaque payload per rank onto ``root`` through the native byte transport.
+
+    Every participant enters the native collective even when its local payload is invalid.  The
+    selected root authenticates the complete ordered frame set and returns one exact ``bytes``
+    payload per contiguous rank; non-root ranks must receive and return ``None``.  A caller that
+    needs uniform failure on every rank must broadcast the root publication status afterwards.
+    """
+    native = require_communicator(communicator)
+    frames = native.gather_bytes(_bytes_frame(payload), root)
+    native_rank = int(native.rank)
+    native_size = int(native.size)
+    if native_rank != root:
+        if frames is not None:
+            raise RuntimeError("native byte gather returned payloads on a non-root rank")
+        return None
+    if type(frames) is not tuple or len(frames) != native_size:
+        raise RuntimeError("native byte gather returned an invalid root payload set")
+    failures = [
+        "rank %d: %s" % (owner, failure)
+        for owner, frame in enumerate(frames)
+        if (failure := _frame_error(frame, where="native gather")) is not None
+    ]
+    if failures:
+        raise RuntimeError("native byte gather failed: " + "; ".join(failures))
+    return tuple(frame[1:] for frame in frames)
+
+
 __all__ = [
     "allgather_bytes", "allgather_value", "barrier", "broadcast_bytes", "broadcast_value",
-    "decode_value", "encode_value", "rank", "require_world", "size",
+    "decode_value", "encode_value", "gather_bytes", "rank", "require_communicator",
+    "require_world", "size",
 ]

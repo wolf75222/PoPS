@@ -209,7 +209,12 @@ def test_third_party_schedule_lowers_without_codegen_registration():
     assert "ctx.cache_restore_scratch(" in cpp
 
     manifest = SimpleNamespace(schedule=schedule, qualified_id="test.consumer")
-    moment = ConsumerMoment(point=TimePoint(program.clock), accepted_step=6, attempt=0)
+    moment = ConsumerMoment(
+        point=TimePoint(program.clock),
+        accepted_step=6,
+        attempt=0,
+        physical_time_hex=(0.0).hex(),
+    )
     assert _schedule_coordinate(manifest, moment) == 6
     assert _is_due(manifest, moment) is True
 

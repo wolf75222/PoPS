@@ -8,11 +8,20 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
 from pops.layouts import Uniform
-from pops.output import Checkpoint, ConsumerGraph, HDF5, ParaView, ScientificOutput
+from pops.output import (
+    Checkpoint,
+    ConsumerGraph,
+    FailRun as OutputFailRun,
+    HDF5,
+    ParaView,
+    Retry,
+    ScientificOutput,
+    SkipSampleReported,
+)
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import Clock, every
+from pops.time import Clock, FailRun as SolveFailRun, every
 from tests.python.support.layout_plan import cartesian_grid
 
 
@@ -104,6 +113,52 @@ def test_consumer_protocol_is_required_and_schedule_authority_is_unique():
         )
 
 
+def test_scientific_output_exposes_exact_failure_actions_without_changing_the_default():
+    _, _, state = _case()
+    clock = Clock("macro")
+    schedule = every(1, clock=clock)
+
+    default = ScientificOutput(
+        format=HDF5(), schedule=schedule, fields=(state,), target="state/default"
+    )
+    retried = ScientificOutput(
+        format=HDF5(),
+        schedule=schedule,
+        fields=(state,),
+        target="state/retried",
+        failure_action=Retry(max_attempts=3),
+    )
+    skipped = ScientificOutput(
+        format=HDF5(),
+        schedule=schedule,
+        fields=(state,),
+        target="state/skipped",
+        failure_action=SkipSampleReported(),
+    )
+
+    assert type(default.failure_action) is OutputFailRun
+    assert retried.options()["failure_action"] == {"action": "retry", "max_attempts": 3}
+    assert skipped.consumer_authoring()[0].failure_action.to_data() == {
+        "action": "skip_sample_reported"
+    }
+    with pytest.raises(TypeError, match="pops.output.FailRun"):
+        ScientificOutput(
+            format=HDF5(),
+            schedule=schedule,
+            fields=(state,),
+            target="state/wrong-action",
+            failure_action=object(),
+        )
+    with pytest.raises(TypeError, match="pops.output.FailRun"):
+        ScientificOutput(
+            format=HDF5(),
+            schedule=schedule,
+            fields=(state,),
+            target="state/solve-action",
+            failure_action=SolveFailRun(),
+        )
+
+
 def test_embedded_diagnostic_identity_is_qualified_by_its_consumer():
     case, block, state = _case()
     clock = Clock("macro", owner=case.owner_path)
@@ -145,11 +200,18 @@ def test_output_format_options_refuse_python_truthiness_coercion() -> None:
         HDF5(mode="serial")
     with pytest.raises(TypeError, match="exact bool or None"):
         HDF5(series=1)
+    with pytest.raises(TypeError, match="exact bool or None"):
+        ParaView(series=1)
     assert HDF5().consumer_data()["options"] == {"mode": "serial", "series": True}
-    assert ParaView().consumer_data()["options"] == {"mode": "serial", "series": True}
-    assert ParaView(mode=ParallelMode.PER_RANK).consumer_data()["options"] == {
-        "mode": "per_rank", "series": False,
-    }
+    serial_options = ParaView().consumer_data()["options"]
+    assert serial_options["mode"] == "serial"
+    assert serial_options["collection"] is True
+    assert "series" not in serial_options
+    per_rank_options = ParaView(
+        mode=ParallelMode.PER_RANK).consumer_data()["options"]
+    assert per_rank_options["mode"] == "per_rank"
+    assert per_rank_options["collection"] is True
+    assert per_rank_options["placement"]["mode"] == "mpi_relay_to_root"
 
 
 def test_scientific_output_target_is_logical_and_format_independent() -> None:

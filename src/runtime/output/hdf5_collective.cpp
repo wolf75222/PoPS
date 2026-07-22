@@ -141,9 +141,10 @@ template <class Operation>
   return failure;
 }
 
-[[nodiscard]] AgreedFailure agree_failure(int rank, const LocalFailure& local) {
+[[nodiscard]] AgreedFailure agree_failure(int rank, const LocalFailure& local,
+                                          MPI_Comm communicator) {
   int first = local.failed != 0 ? rank : std::numeric_limits<int>::max();
-  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &first, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD),
+  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &first, 1, MPI_INT, MPI_MIN, communicator),
               "MPI_Allreduce(first failing rank)");
   if (first == std::numeric_limits<int>::max())
     return {};
@@ -152,14 +153,16 @@ template <class Operation>
   if (rank == first)
     result.detail = local.detail;
   require_mpi(MPI_Bcast(result.detail.data(), static_cast<int>(result.detail.size()), MPI_CHAR,
-                        first, MPI_COMM_WORLD),
+                        first, communicator),
               "MPI_Bcast(collective failure)");
   return result;
 }
 
 template <class Operation>
-[[nodiscard]] AgreedFailure collective_phase(int rank, Operation&& operation) {
-  return agree_failure(rank, capture_local_failure(std::forward<Operation>(operation)));
+[[nodiscard]] AgreedFailure collective_phase(int rank, MPI_Comm communicator,
+                                              Operation&& operation) {
+  return agree_failure(
+      rank, capture_local_failure(std::forward<Operation>(operation)), communicator);
 }
 
 [[noreturn]] void throw_collective_failure(std::string_view phase, std::string_view subject,
@@ -181,19 +184,20 @@ void require_collective_success(std::string_view phase, std::string_view subject
     throw_collective_failure(phase, subject, failure);
 }
 
-[[nodiscard]] AgreedFailure require_identical_text(int rank, std::string_view local) {
+[[nodiscard]] AgreedFailure require_identical_text(int rank, std::string_view local,
+                                                   MPI_Comm communicator) {
   int overflow = local.size() > static_cast<std::size_t>(
                                     std::numeric_limits<unsigned long long>::max());
-  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &overflow, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD),
+  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &overflow, 1, MPI_INT, MPI_MAX, communicator),
               "MPI_Allreduce(schema length overflow)");
   if (overflow != 0) {
     LocalFailure failure;
     set_failure(failure, "schema length exceeds the native MPI length domain");
-    return agree_failure(rank, failure);
+    return agree_failure(rank, failure, communicator);
   }
 
   unsigned long long length = rank == 0 ? static_cast<unsigned long long>(local.size()) : 0ULL;
-  require_mpi(MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD),
+  require_mpi(MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator),
               "MPI_Bcast(schema length)");
 
   std::string reference;
@@ -204,7 +208,7 @@ void require_collective_success(std::string_view phase, std::string_view subject
       reference.resize(static_cast<std::size_t>(length));
     }
   });
-  if (auto failure = agree_failure(rank, allocation); failure.failed())
+  if (auto failure = agree_failure(rank, allocation, communicator); failure.failed())
     return failure;
 
   unsigned long long offset = 0;
@@ -213,7 +217,7 @@ void require_collective_success(std::string_view phase, std::string_view subject
         length - offset, static_cast<unsigned long long>(std::numeric_limits<int>::max())));
     char* buffer = rank == 0 ? const_cast<char*>(local.data()) + static_cast<std::size_t>(offset)
                              : reference.data() + static_cast<std::size_t>(offset);
-    require_mpi(MPI_Bcast(buffer, count, MPI_CHAR, 0, MPI_COMM_WORLD),
+    require_mpi(MPI_Bcast(buffer, count, MPI_CHAR, 0, communicator),
                 "MPI_Bcast(schema bytes)");
     offset += static_cast<unsigned long long>(count);
   }
@@ -222,7 +226,7 @@ void require_collective_success(std::string_view phase, std::string_view subject
   const std::string_view expected = rank == 0 ? local : std::string_view{reference};
   if (local != expected)
     set_failure(mismatch, "path, manifest, or dataset schema differs across ranks");
-  return agree_failure(rank, mismatch);
+  return agree_failure(rank, mismatch, communicator);
 }
 
 using PieceDescriptor = std::array<unsigned long long, 5>;
@@ -265,29 +269,29 @@ using PieceDescriptor = std::array<unsigned long long, 5>;
 
 [[nodiscard]] AgreedFailure require_disjoint_rank_pieces(
     int rank, int ranks, const std::vector<PieceDescriptor>& local,
-    const std::vector<FieldView>& fields) {
+    const std::vector<FieldView>& fields, MPI_Comm communicator) {
   static_assert(sizeof(PieceDescriptor) == 5 * sizeof(unsigned long long));
   int length_overflow = 0;
   if constexpr (sizeof(std::size_t) > sizeof(unsigned long long)) {
     length_overflow =
         local.size() > static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max());
   }
-  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &length_overflow, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD),
+  require_mpi(MPI_Allreduce(MPI_IN_PLACE, &length_overflow, 1, MPI_INT, MPI_MAX, communicator),
               "MPI_Allreduce(piece descriptor length overflow)");
   if (length_overflow != 0) {
     LocalFailure failure;
     set_failure(failure, "piece descriptor count exceeds the native MPI length domain");
-    return agree_failure(rank, failure);
+    return agree_failure(rank, failure, communicator);
   }
 
   MPI_Datatype descriptor_type = MPI_DATATYPE_NULL;
-  const auto type_failure = collective_phase(rank, [&] {
+  const auto type_failure = collective_phase(rank, communicator, [&] {
     require_mpi(MPI_Type_contiguous(5, MPI_UNSIGNED_LONG_LONG, &descriptor_type),
                 "MPI_Type_contiguous(piece descriptor)");
     require_mpi(MPI_Type_commit(&descriptor_type), "MPI_Type_commit(piece descriptor)");
   });
   auto finish = [&](const AgreedFailure& primary) {
-    const auto free_failure = collective_phase(rank, [&] {
+    const auto free_failure = collective_phase(rank, communicator, [&] {
       if (descriptor_type != MPI_DATATYPE_NULL)
         require_mpi(MPI_Type_free(&descriptor_type), "MPI_Type_free(piece descriptor)");
     });
@@ -299,7 +303,7 @@ using PieceDescriptor = std::array<unsigned long long, 5>;
   for (int owner = 0; owner < ranks; ++owner) {
     unsigned long long count =
         rank == owner ? static_cast<unsigned long long>(local.size()) : 0ULL;
-    require_mpi(MPI_Bcast(&count, 1, MPI_UNSIGNED_LONG_LONG, owner, MPI_COMM_WORLD),
+    require_mpi(MPI_Bcast(&count, 1, MPI_UNSIGNED_LONG_LONG, owner, communicator),
                 "MPI_Bcast(piece descriptor count)");
 
     std::vector<PieceDescriptor> remote;
@@ -309,7 +313,7 @@ using PieceDescriptor = std::array<unsigned long long, 5>;
       if (rank != owner)
         remote.resize(static_cast<std::size_t>(count));
     });
-    if (auto failure = agree_failure(rank, allocation); failure.failed())
+    if (auto failure = agree_failure(rank, allocation, communicator); failure.failed())
       return finish(failure);
 
     auto* buffer = rank == owner ? const_cast<PieceDescriptor*>(local.data()) : remote.data();
@@ -318,7 +322,7 @@ using PieceDescriptor = std::array<unsigned long long, 5>;
       const int chunk = static_cast<int>(std::min<unsigned long long>(
           count - offset, static_cast<unsigned long long>(std::numeric_limits<int>::max())));
       require_mpi(MPI_Bcast(buffer + static_cast<std::size_t>(offset), chunk, descriptor_type, owner,
-                            MPI_COMM_WORLD),
+                            communicator),
                   "MPI_Bcast(piece descriptors)");
       offset += static_cast<unsigned long long>(chunk);
     }
@@ -340,7 +344,7 @@ using PieceDescriptor = std::array<unsigned long long, 5>;
         }
       }
     });
-    if (auto failure = agree_failure(rank, overlap); failure.failed())
+    if (auto failure = agree_failure(rank, overlap, communicator); failure.failed())
       return finish(failure);
   }
   return finish({});
@@ -773,35 +777,42 @@ ParallelHdf5Capability parallel_hdf5_capability() {
 #endif
 }
 
-void collective_hdf5_input_consensus(const WorldCommunicator& world,
+void collective_hdf5_input_consensus(const CommunicatorView& communicator,
                                      const std::string& local_error) {
 #if !defined(POPS_HAS_PARALLEL_HDF5)
-  (void)world;
+  (void)communicator;
   (void)local_error;
   throw std::runtime_error(
       "collective HDF5 is unavailable: module lacks native parallel HDF5 support");
 #else
-  world.require_active_mpi_world();
-  if (&world != &WorldCommunicator::world())
-    throw std::invalid_argument(
-        "collective HDF5 requires the exact native MPI_COMM_WORLD resource");
+  if (!communicator.active())
+    throw std::invalid_argument("collective HDF5 requires an active native communicator");
   std::lock_guard<std::mutex> guard{parallel_hdf5_mutex()};
-  detail::require_active_mpi_world_unlocked();
+  const MPI_Comm native = communicator.native_handle();
   int rank = 0;
-  require_mpi(MPI_Comm_rank(MPI_COMM_WORLD, &rank), "MPI_Comm_rank");
+  require_mpi(MPI_Comm_rank(native, &rank), "MPI_Comm_rank");
   LocalFailure local;
   if (!local_error.empty())
     set_failure(local, local_error);
-  require_collective_success("binding input validation", "", agree_failure(rank, local));
+  require_collective_success(
+      "binding input validation", "", agree_failure(rank, local, native));
 #endif
 }
 
-void write_collective_hdf5(const WorldCommunicator& world, const std::string& path,
+void collective_hdf5_input_consensus(const WorldCommunicator& world,
+                                     const std::string& local_error) {
+  if (&world != &WorldCommunicator::world())
+    throw std::invalid_argument(
+        "collective HDF5 requires the exact native process-world authority");
+  collective_hdf5_input_consensus(world.communicator(), local_error);
+}
+
+void write_collective_hdf5(const CommunicatorView& communicator, const std::string& path,
                            const std::string& manifest_json,
                            const std::vector<NamedArrayView>& root_arrays,
                            const std::vector<FieldView>& fields) {
 #if !defined(POPS_HAS_PARALLEL_HDF5)
-  (void)world;
+  (void)communicator;
   (void)path;
   (void)manifest_json;
   (void)root_arrays;
@@ -810,33 +821,34 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
       "collective HDF5 is unavailable: rebuild with POPS_USE_MPI=ON, POPS_USE_HDF5=ON, "
       "and a parallel HDF5 C library");
 #else
-  world.require_active_mpi_world();
-  if (&world != &WorldCommunicator::world())
-    throw std::invalid_argument(
-        "collective HDF5 requires the exact native MPI_COMM_WORLD resource");
+  if (!communicator.active())
+    throw std::invalid_argument("collective HDF5 requires an active native communicator");
   std::lock_guard<std::mutex> guard{parallel_hdf5_mutex()};
-  detail::require_active_mpi_world_unlocked();
+  const MPI_Comm native = communicator.native_handle();
   int rank = 0;
   int ranks = 1;
-  require_mpi(MPI_Comm_rank(MPI_COMM_WORLD, &rank), "MPI_Comm_rank");
-  require_mpi(MPI_Comm_size(MPI_COMM_WORLD, &ranks), "MPI_Comm_size");
+  require_mpi(MPI_Comm_rank(native, &rank), "MPI_Comm_rank");
+  require_mpi(MPI_Comm_size(native, &ranks), "MPI_Comm_size");
 
-  require_collective_success("input validation", "", collective_phase(rank, [&] {
+  require_collective_success("input validation", "", collective_phase(rank, native, [&] {
     validate_inputs(path, manifest_json, root_arrays, fields);
   }));
 
   std::string schema;
-  require_collective_success("schema preparation", "", collective_phase(rank, [&] {
+  require_collective_success("schema preparation", "", collective_phase(rank, native, [&] {
     schema = schema_text(path, manifest_json, root_arrays, fields);
   }));
-  require_collective_success("schema consensus", "", require_identical_text(rank, schema));
+  require_collective_success(
+      "schema consensus", "", require_identical_text(rank, schema, native));
 
   std::vector<PieceDescriptor> descriptors;
-  require_collective_success("piece descriptor preparation", "", collective_phase(rank, [&] {
+  require_collective_success(
+      "piece descriptor preparation", "", collective_phase(rank, native, [&] {
     descriptors = piece_descriptors(fields);
   }));
   require_collective_success("piece descriptor consensus", "",
-                             require_disjoint_rank_pieces(rank, ranks, descriptors, fields));
+                             require_disjoint_rank_pieces(
+                                 rank, ranks, descriptors, fields, native));
 
   std::vector<std::string> dataset_names;
   std::vector<std::string> groups;
@@ -847,7 +859,8 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
   H5Handle file_creation;
   H5Handle access;
   H5Handle transfer;
-  require_collective_success("local HDF5 preparation", "", collective_phase(rank, [&] {
+  require_collective_success(
+      "local HDF5 preparation", "", collective_phase(rank, native, [&] {
     dataset_names.reserve(root_arrays.size() + fields.size());
     for (const auto& array : root_arrays)
       dataset_names.push_back(array.dataset);
@@ -871,8 +884,8 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
       throw std::runtime_error("HDF5 deterministic file creation-property preparation failed");
 
     access = H5Handle(H5Pcreate(H5P_FILE_ACCESS), H5Pclose);
-    if (!access || H5Pset_fapl_mpio(access.get(), MPI_COMM_WORLD, MPI_INFO_NULL) < 0)
-      throw std::runtime_error("H5Pset_fapl_mpio(MPI_COMM_WORLD) failed");
+    if (!access || H5Pset_fapl_mpio(access.get(), native, MPI_INFO_NULL) < 0)
+      throw std::runtime_error("H5Pset_fapl_mpio(explicit communicator) failed");
 #if H5_VERSION_GE(1, 10, 0)
     if (H5Pset_all_coll_metadata_ops(access.get(), 1) < 0 ||
         H5Pset_coll_metadata_write(access.get(), 1) < 0)
@@ -884,7 +897,7 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
   }));
 
   H5Handle file;
-  require_collective_success("file creation", path, collective_phase(rank, [&] {
+  require_collective_success("file creation", path, collective_phase(rank, native, [&] {
     file = H5Handle(H5Fcreate(path.c_str(), H5F_ACC_TRUNC, file_creation.get(), access.get()),
                     H5Fclose);
     if (!file)
@@ -898,7 +911,7 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
   };
 
   for (const auto& group : groups) {
-    const auto failure = collective_phase(rank, [&] {
+    const auto failure = collective_phase(rank, native, [&] {
       const hid_t handle =
           H5Gcreate2(file.get(), group.c_str(), H5P_DEFAULT, group_creation.get(), H5P_DEFAULT);
       if (handle < 0)
@@ -913,7 +926,7 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
 
   if (!transaction_failure.failed()) {
     H5Handle attribute;
-    const auto create_failure = collective_phase(rank, [&] {
+    const auto create_failure = collective_phase(rank, native, [&] {
       attribute = H5Handle(H5Acreate2(file.get(), "pops_output_manifest", manifest_plan.type.get(),
                                       manifest_plan.space.get(), H5P_DEFAULT, H5P_DEFAULT),
                            H5Aclose);
@@ -922,14 +935,14 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
     });
     remember_failure(create_failure);
     if (!transaction_failure.failed()) {
-      remember_failure(collective_phase(rank, [&] {
+      remember_failure(collective_phase(rank, native, [&] {
         const char* value = manifest_json.c_str();
         if (H5Awrite(attribute.get(), manifest_plan.type.get(), &value) < 0)
           throw std::runtime_error("H5Awrite failed");
       }));
     }
     if (!create_failure.failed()) {
-      const auto close_failure = collective_phase(rank, [&] {
+      const auto close_failure = collective_phase(rank, native, [&] {
         const hid_t handle = attribute.release();
         if (H5Aclose(handle) < 0)
           throw std::runtime_error("H5Aclose failed");
@@ -943,17 +956,17 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
       const auto& array = root_arrays[index];
       H5Handle dataset;
       RootArrayWrite write_plan;
-      const auto create_failure = collective_phase(rank, [&] {
+      const auto create_failure = collective_phase(rank, native, [&] {
         dataset = create_dataset(file.get(), array.dataset, root_creation_plans[index]);
       });
       remember_failure(create_failure);
       if (!transaction_failure.failed()) {
-        remember_failure(collective_phase(rank, [&] {
+        remember_failure(collective_phase(rank, native, [&] {
           write_plan = prepare_root_array(dataset.get(), array.values, rank);
         }));
       }
       if (!transaction_failure.failed()) {
-        remember_failure(collective_phase(rank, [&] {
+        remember_failure(collective_phase(rank, native, [&] {
           if (H5Dwrite(dataset.get(), root_creation_plans[index].type.get(),
                        write_plan.memory_space.get(), write_plan.file_space.get(), transfer.get(),
                        write_plan.data()) < 0)
@@ -961,7 +974,7 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
         }));
       }
       if (!create_failure.failed()) {
-        const auto close_failure = collective_phase(rank, [&] {
+        const auto close_failure = collective_phase(rank, native, [&] {
           const hid_t handle = dataset.release();
           if (H5Dclose(handle) < 0)
             throw std::runtime_error("H5Dclose(root array) failed");
@@ -978,16 +991,16 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
       const auto& field = fields[index];
       H5Handle dataset;
       PackedField packed;
-      const auto create_failure = collective_phase(rank, [&] {
+      const auto create_failure = collective_phase(rank, native, [&] {
         dataset = create_dataset(file.get(), field.dataset, field_creation_plans[index]);
       });
       remember_failure(create_failure);
       if (!transaction_failure.failed()) {
         remember_failure(
-            collective_phase(rank, [&] { packed = pack_field(dataset.get(), field); }));
+            collective_phase(rank, native, [&] { packed = pack_field(dataset.get(), field); }));
       }
       if (!transaction_failure.failed()) {
-        remember_failure(collective_phase(rank, [&] {
+        remember_failure(collective_phase(rank, native, [&] {
           if (H5Dwrite(dataset.get(), field_creation_plans[index].type.get(),
                        packed.memory_space.get(), packed.file_space.get(), transfer.get(),
                        packed.data()) < 0)
@@ -995,7 +1008,7 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
         }));
       }
       if (!create_failure.failed()) {
-        const auto close_failure = collective_phase(rank, [&] {
+        const auto close_failure = collective_phase(rank, native, [&] {
           const hid_t handle = dataset.release();
           if (H5Dclose(handle) < 0)
             throw std::runtime_error("H5Dclose(field) failed");
@@ -1008,13 +1021,13 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
   }
 
   if (!transaction_failure.failed()) {
-    remember_failure(collective_phase(rank, [&] {
+    remember_failure(collective_phase(rank, native, [&] {
       if (H5Fflush(file.get(), H5F_SCOPE_GLOBAL) < 0)
         throw std::runtime_error("H5Fflush failed");
     }));
   }
 
-  const auto close_failure = collective_phase(rank, [&] {
+  const auto close_failure = collective_phase(rank, native, [&] {
       const hid_t handle = file.release();
       if (H5Fclose(handle) < 0)
         throw std::runtime_error("H5Fclose failed");
@@ -1022,6 +1035,17 @@ void write_collective_hdf5(const WorldCommunicator& world, const std::string& pa
   remember_failure(close_failure);
   require_collective_success("transaction", "", transaction_failure);
 #endif
+}
+
+void write_collective_hdf5(const WorldCommunicator& world, const std::string& path,
+                           const std::string& manifest_json,
+                           const std::vector<NamedArrayView>& root_arrays,
+                           const std::vector<FieldView>& fields) {
+  if (&world != &WorldCommunicator::world())
+    throw std::invalid_argument(
+        "collective HDF5 requires the exact native process-world authority");
+  write_collective_hdf5(
+      world.communicator(), path, manifest_json, root_arrays, fields);
 }
 
 }  // namespace pops::runtime::output

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,8 +16,18 @@ from pops.codegen._compiled_artifact import (
     CompiledLayoutProgram,
     CompiledSimulationArtifact,
 )
+from pops.identity import Identity, make_identity
 from pops.model import Handle, OwnerPath
-from pops.output import NPZ, NPZWriter, read_npz
+from pops.output import (
+    AsyncScientificOutput,
+    LiveVisualization,
+    NPZ,
+    NPZWriter,
+    OutputPublicationReceipt,
+    RaiseOnFlush,
+    ReportOnly,
+    read_npz,
+)
 from pops.output._consumer_contracts import (
     ConsumerGraph,
     ConsumerKind,
@@ -25,9 +36,20 @@ from pops.output._consumer_contracts import (
     ParallelMode,
 )
 from pops.output._restart_provider import RestartV3
+from pops.output.observers import ObserverReceipt
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._temporal_restart import TemporalRestartState
-from pops.time import AcceptedStep, AtEnd, Clock, Every, FixedDt, Schedule
+from pops.time import (
+    AcceptedStep,
+    AdaptiveCFL,
+    AtEnd,
+    Clock,
+    Every,
+    ExternalTimeGrid,
+    FixedDt,
+    Schedule,
+    every_dt,
+)
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.runtime.test_runtime_planning import _artifact as _planning_artifact
 
@@ -526,6 +548,7 @@ def test_consumer_moment_uses_the_accepted_qualified_child_clock_cursor(tmp_path
     (moment,) = runtime._moments()
     assert moment.point.step == 4
     assert moment.clock_tick == 4
+    assert moment.physical_time_hex == (0.25).hex()
     assert moment.accepted_step == 1 and moment.wall_tick == 1
 
 
@@ -569,6 +592,511 @@ def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp
         "consumer_graph": graph.identity.token,
         "runtime_plan": runtime._runtime_plan.identity.token,
     }
+
+
+class _BlockingWriterSession:
+    def __init__(self, owner, snapshot, request, target):
+        from pops.output import writer_session_authority
+
+        self.authority = writer_session_authority("blocking-test", request, target)
+        self.identity = Identity.from_token(self.authority["session_identity"])
+        self._owner = owner
+        self._snapshot = snapshot
+        self._request = request
+        self._target = Path(target)
+        self._published = False
+
+    def stage(self):
+        self._owner.writer_started.set()
+        if not self._owner.release_writer.wait(timeout=10):
+            raise TimeoutError("test writer was not released")
+
+    def abort_prepare(self):
+        return None
+
+    def publish(self):
+        self._target.parent.mkdir(parents=True, exist_ok=True)
+        self._target.write_text("exact async artifact\n")
+        self._published = True
+        self._owner.paths.append(self._target)
+        return OutputPublicationReceipt(
+            self._target,
+            "blocking-test",
+            make_identity("scientific-output", {
+                "selection": self._request.publication_identity.token,
+            }),
+            self._request.publication_identity,
+        )
+
+    def rollback(self):
+        self._target.unlink(missing_ok=True)
+
+    def finalize(self):
+        if not self._published:
+            raise RuntimeError("blocking writer finalized before publication")
+        return None
+
+
+class _BlockingWriter:
+    format = "blocking-test"
+
+    def __init__(self, owner):
+        self._owner = owner
+
+    def preflight(self, _execution_context):
+        return {"schema_version": 1, "provider_id": "blocking-test", "serial": True}
+
+    def prepare_session(self, snapshot, request, target, *, communicator=None):
+        assert communicator is None
+        return _BlockingWriterSession(self._owner, snapshot, request, target)
+
+
+class _BlockingFormat:
+    __pops_ir_immutable__ = True
+
+    def __init__(self):
+        self.writer_started = threading.Event()
+        self.release_writer = threading.Event()
+        self.paths = []
+
+    def consumer_data(self):
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.test.blocking-async.v1",
+            "format_name": "blocking-test",
+            "extension": ".async",
+            "parallel_mode": "serial",
+        }
+
+    def writer(self):
+        return _BlockingWriter(self)
+
+
+def test_async_scientific_output_overlaps_next_step_and_flushes_real_receipts(tmp_path):
+    output_root = tmp_path / "async-output"
+    output_root.mkdir()
+    format_provider = _BlockingFormat()
+    authoring_clock = Clock("async-authoring")
+    descriptor = AsyncScientificOutput(
+        format=format_provider,
+        schedule=Schedule(Every(AcceptedStep(authoring_clock), 1)),
+        fields=(Handle("rho", kind="state", owner=OwnerPath.model("async-authoring")),),
+        target="async-output",
+        queue_capacity=1,
+    )
+    operation = descriptor.consumer_authoring()[0].operation
+    plan, _, _ = _with_graph(
+        output_root,
+        kind=ConsumerKind.MONITOR,
+        output_format=None,
+        operation=operation,
+    )
+
+    class _ProgressExecutor(_Executor):
+        def __init__(self, install):
+            super().__init__(install)
+            self.second_step_finalized = threading.Event()
+
+        def _finalize_step_transaction(self):
+            super()._finalize_step_transaction()
+            if self._step >= 2:
+                self.second_step_finalized.set()
+
+    executor = _ProgressExecutor(plan)
+    runtime = RuntimeInstance(plan, executor=executor)
+    results = []
+    errors = []
+
+    def run():
+        try:
+            results.append(runtime._run(t_end=2.0, max_steps=2))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run, daemon=False)
+    worker.start()
+    assert format_provider.writer_started.wait(timeout=5)
+    assert executor.second_step_finalized.wait(timeout=5)
+    assert worker.is_alive(), "end-of-run flush must still wait for the blocked writer"
+    format_provider.release_writer.set()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert results[0].accepted_steps == 2
+    assert len(runtime.post_commit_reports) == 2
+    assert all(report.status == "delivered" for report in runtime.post_commit_reports)
+    assert len(format_provider.paths) == 2
+    assert all(path.is_file() for path in format_provider.paths)
+    assert {
+        Path(report.receipt.detail["path"])
+        for report in runtime.post_commit_reports
+        if report.receipt is not None
+    } == set(format_provider.paths)
+
+
+class _FailingPostCommitSession:
+    authority = {
+        "schema_version": 1,
+        "provider_id": "pops.test.failing-post-commit.v1",
+        "delivery": "post_commit",
+        "threading": "dedicated_serial",
+        "worker_mpi": False,
+    }
+
+    def initialize(self, _run):
+        return None
+
+    def execute(self, _frame):
+        raise RuntimeError("viewer is unavailable")
+
+    def finalize(self):
+        return None
+
+    def abort(self):
+        return None
+
+
+class _FailingPostCommitProvider:
+    def consumer_data(self):
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.test.failing-post-commit.v1",
+            "observer_kind": "test",
+        }
+
+    def open_session(self, _execution_context):
+        return _FailingPostCommitSession()
+
+
+@pytest.mark.parametrize(
+    ("policy", "raises"),
+    ((ReportOnly(), False), (RaiseOnFlush(), True)),
+)
+def test_post_commit_failure_policy_is_applied_only_at_run_flush(
+    tmp_path, policy, raises,
+):
+    descriptor = LiveVisualization(
+        observer=_FailingPostCommitProvider(),
+        schedule=Schedule(Every(AcceptedStep(Clock("live-authoring")), 1)),
+        fields=(Handle("rho", kind="state", owner=OwnerPath.model("live-authoring")),),
+        on_failure=policy,
+    )
+    operation = descriptor.consumer_authoring()[0].operation
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.MONITOR,
+        output_format=None,
+        operation=operation,
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    if raises:
+        with pytest.raises(RuntimeError, match="post-commit consumer delivery failed"):
+            runtime._run(t_end=1.0, max_steps=1)
+    else:
+        runtime._run(t_end=1.0, max_steps=1)
+
+    assert runtime.time() == 1.0
+    assert len(runtime.post_commit_reports) == 1
+    assert runtime.post_commit_reports[0].status == "skipped"
+
+
+class _OpenFailureProvider(_FailingPostCommitProvider):
+    def open_session(self, _execution_context):
+        raise RuntimeError("optional visualization dependency is missing")
+
+
+def test_post_commit_session_dependency_failure_is_refused_before_any_step(tmp_path):
+    descriptor = LiveVisualization(
+        observer=_OpenFailureProvider(),
+        schedule=Schedule(Every(AcceptedStep(Clock("preflight-authoring")), 1)),
+        fields=(Handle("rho", kind="state", owner=OwnerPath.model("preflight-authoring")),),
+    )
+    operation = descriptor.consumer_authoring()[0].operation
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.MONITOR,
+        output_format=None,
+        operation=operation,
+    )
+    executor = _Executor(plan)
+
+    with pytest.raises(RuntimeError, match="session preflight failed"):
+        RuntimeInstance(plan, executor=executor)
+
+    assert executor.macro_step() == 0
+
+
+class _InitializeFailureSession(_FailingPostCommitSession):
+    authority = {
+        **_FailingPostCommitSession.authority,
+        "provider_id": "pops.test.initialize-failure.v1",
+    }
+
+    def __init__(self):
+        self.abort_calls = 0
+
+    def initialize(self, _run):
+        raise RuntimeError("run-scoped observer initialization failed")
+
+    def abort(self):
+        self.abort_calls += 1
+
+
+class _InitializeFailureProvider:
+    def __init__(self):
+        self.session = _InitializeFailureSession()
+
+    def consumer_data(self):
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.test.initialize-failure.v1",
+            "observer_kind": "test",
+        }
+
+    def open_session(self, _execution_context):
+        return self.session
+
+
+def test_post_commit_run_initialization_failure_precedes_start_sample_and_first_step(tmp_path):
+    provider = _InitializeFailureProvider()
+    descriptor = LiveVisualization(
+        observer=provider,
+        schedule=Schedule(Every(AcceptedStep(Clock("initialize-failure")), 1)),
+        fields=(Handle("rho", kind="state", owner=OwnerPath.model("initialize-failure")),),
+    )
+    operation = descriptor.consumer_authoring()[0].operation
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.MONITOR,
+        output_format=None,
+        operation=operation,
+    )
+    executor = _Executor(plan)
+    runtime = RuntimeInstance(plan, executor=executor)
+
+    with pytest.raises(RuntimeError, match="session initialization failed"):
+        runtime._run(t_end=1.0, max_steps=1)
+
+    assert executor.macro_step() == 0
+    assert provider.session.abort_calls == 1
+
+
+class _InjectedFinalizeDiagnosticSession(_FailingPostCommitSession):
+    authority = {
+        **_FailingPostCommitSession.authority,
+        "provider_id": "pops.test.injected-finalize-diagnostic.v1",
+    }
+
+    def execute(self, frame):
+        return ObserverReceipt(
+            frame.identity,
+            self.authority["provider_id"],
+            {"writer_finalize_error": "not an async-writer diagnostic"},
+        )
+
+
+class _InjectedFinalizeDiagnosticProvider:
+    def consumer_data(self):
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.test.injected-finalize-diagnostic.v1",
+            "observer_kind": "test",
+        }
+
+    def open_session(self, _execution_context):
+        return _InjectedFinalizeDiagnosticSession()
+
+
+def test_generic_observer_cannot_inject_async_writer_finalize_failure(tmp_path):
+    descriptor = LiveVisualization(
+        observer=_InjectedFinalizeDiagnosticProvider(),
+        schedule=Schedule(Every(AcceptedStep(Clock("injected-diagnostic")), 1)),
+        fields=(Handle("rho", kind="state", owner=OwnerPath.model("injected-diagnostic")),),
+        on_failure=RaiseOnFlush(),
+    )
+    operation = descriptor.consumer_authoring()[0].operation
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.MONITOR,
+        output_format=None,
+        operation=operation,
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=1.0, max_steps=1)
+
+    assert report.accepted_steps == 1
+    assert runtime.post_commit_reports[0].status == "delivered"
+    assert runtime.post_commit_diagnostics == ()
+
+
+def _published_times(root: Path) -> list[float]:
+    return sorted(
+        float.fromhex(read_npz(path).manifest["snapshot"]["clock"]["time"])
+        for path in root.rglob("*.npz")
+    )
+
+
+def test_every_dt_clips_adaptive_steps_to_exact_thresholds_without_end_duplicate(tmp_path):
+    output_root = tmp_path / "adaptive-outputs"
+    plan, _, manifest = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(0.25, clock=clock),
+    )
+
+    class _AdaptiveExecutor(_Executor):
+        def step_cfl(self, cfl, *, max_dt, min_dt):
+            assert cfl == pytest.approx(0.4)
+            dt = min(0.4, float(max_dt))
+            if dt < float(min_dt):
+                raise RuntimeError("test adaptive stability bound is below min_dt")
+            self.step(dt)
+            return dt
+
+    executor = _AdaptiveExecutor(plan)
+    executor._step_strategy = AdaptiveCFL(0.4)
+    runtime = RuntimeInstance(plan, executor=executor)
+
+    report = runtime._run(t_end=0.5, max_steps=2)
+
+    assert report.accepted_steps == 2
+    assert runtime.time() == 0.5
+    assert _published_times(output_root) == [0.25, 0.5]
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 2
+
+
+def test_every_dt_restart_rederives_next_deadline_without_republishing_boundary(tmp_path):
+    output_root = tmp_path / "restart-outputs"
+    plan, _, manifest = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(0.25, clock=clock),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._run(t_end=0.5, max_steps=2)
+    checkpoint = runtime.checkpoint(tmp_path / "physical-cadence-restart")
+
+    restored = RuntimeInstance(plan, executor=_Executor(plan))
+    restored.restart(checkpoint)
+    report = restored._run(t_end=0.75, max_steps=1)
+
+    assert report.accepted_steps == 1
+    assert restored.time() == 0.75
+    assert _published_times(output_root) == [0.25, 0.5, 0.75]
+    assert restored.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 3
+
+
+@pytest.mark.parametrize(
+    ("interval", "t_end", "grid"),
+    (
+        (0.25, 0.5, (0.0, 0.2, 0.5)),
+        (1.0e-20, 2.0e-20, (0.0, 2.0e-20)),
+    ),
+)
+def test_every_dt_requires_each_active_deadline_in_external_time_grid(
+    tmp_path,
+    interval,
+    t_end,
+    grid,
+):
+    output_root = tmp_path / "external-grid-outputs"
+    plan, _, _ = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(interval, clock=clock),
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = ExternalTimeGrid("forcing_times")
+    runtime = RuntimeInstance(plan, executor=executor)
+
+    with pytest.raises(ValueError, match="absent from ExternalTimeGrid"):
+        runtime._run(
+            t_end=t_end,
+            max_steps=2,
+            forcing_times=grid,
+        )
+
+    assert runtime.time() == 0.0
+    assert _published_times(output_root) == []
+
+
+def test_every_dt_accepts_equivalent_external_grid_threshold_rounding(tmp_path):
+    output_root = tmp_path / "compatible-external-grid-outputs"
+    plan, _, manifest = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(0.1, clock=clock),
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = ExternalTimeGrid("forcing_times")
+    runtime = RuntimeInstance(plan, executor=executor)
+
+    report = runtime._run(
+        t_end=0.3,
+        max_steps=3,
+        forcing_times=(0.0, 0.1, 0.2, 0.3),
+    )
+
+    assert report.accepted_steps == 3
+    assert runtime.time() == 0.3
+    assert _published_times(output_root) == [0.1, 0.2, 0.3]
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 3
+
+
+def test_every_dt_external_grid_must_not_land_before_threshold(tmp_path):
+    output_root = tmp_path / "early-external-grid-output"
+    plan, _, _ = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(0.1, clock=clock),
+    )
+    executor = _Executor(plan)
+    executor._step_strategy = ExternalTimeGrid("forcing_times")
+    runtime = RuntimeInstance(plan, executor=executor)
+
+    with pytest.raises(ValueError, match="absent from ExternalTimeGrid"):
+        runtime._run(
+            t_end=0.1,
+            max_steps=1,
+            forcing_times=(0.0, np.nextafter(0.1, -np.inf).item()),
+        )
+
+    assert runtime.time() == 0.0
+    assert _published_times(output_root) == []
+
+
+def test_every_dt_merges_equivalent_run_end_without_duplicate_micro_step(tmp_path):
+    output_root = tmp_path / "merged-run-end-output"
+    t_end = 3.0 * 0.1
+    assert t_end == np.nextafter(0.3, np.inf)
+    plan, _, manifest = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(0.1, clock=clock),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=t_end, max_steps=3)
+
+    assert report.accepted_steps == 3
+    assert runtime.time() == t_end
+    assert _published_times(output_root) == [0.1, 0.2, t_end]
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 3
+
+
+def test_every_dt_threshold_one_ulp_after_run_end_is_not_due(tmp_path):
+    output_root = tmp_path / "nextafter-output"
+    interval = np.nextafter(0.1, np.inf).item()
+    plan, _, manifest = _with_graph(
+        output_root,
+        schedule=lambda clock: every_dt(interval, clock=clock),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.3, max_steps=3)
+
+    assert report.accepted_steps == 3
+    assert runtime.time() == 0.3
+    assert _published_times(output_root) == [interval, 2.0 * interval]
+    assert 3.0 * interval == np.nextafter(0.3, np.inf)
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 2
 
 
 def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):

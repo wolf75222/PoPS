@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -23,7 +24,7 @@ from pops.output._consumer_contracts import (
     ScheduleCursor,
     SkipSampleReported,
 )
-from ._consumer_planning import plan_accepted_side_effects
+from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effects
 from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
@@ -45,6 +46,35 @@ def _identity_data(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError("runtime identity evidence must implement to_data() or be canonical scalar data")
+
+
+def _same_physical_time(left: float, right: float) -> bool:
+    tolerance = 4.0 * max(math.ulp(left), math.ulp(right))
+    return abs(left - right) <= tolerance
+
+
+def _validate_external_grid_deadline(
+    strategy: Any,
+    controls: Mapping[str, Any],
+    deadline: float | None,
+    run_end: float,
+) -> None:
+    """Require an exact external grid to contain every active consumer hard boundary."""
+    from pops.time import ExternalTimeGrid
+
+    if type(strategy) is not ExternalTimeGrid or deadline is None:
+        return
+    if deadline > run_end:
+        return
+    grid = tuple(float(value) for value in controls[strategy.grid_id])
+    if not any(
+            value >= deadline and _same_physical_time(value, deadline)
+            for value in grid):
+        raise ValueError(
+            "every_dt deadline %s is absent from ExternalTimeGrid %r; add every physical-output "
+            "deadline to the declared external grid"
+            % (deadline.hex(), strategy.grid_id)
+        )
 
 
 _FIELD_TOPOLOGY_ROW_KEYS = frozenset({
@@ -347,6 +377,55 @@ class RuntimeInstance:
         registry = getattr(self, "_consumer_recoveries", {})
         return tuple(registry[key].record for key in sorted(registry))
 
+    @property
+    def post_commit_reports(self) -> tuple[Any, ...]:
+        """Post-commit delivery reports retained across completed runs."""
+        rows = getattr(self._publisher, "post_commit_reports", ())
+        if not isinstance(rows, tuple):
+            raise TypeError("consumer publisher post_commit_reports must be a tuple")
+        return rows
+
+    @property
+    def post_commit_diagnostics(self) -> tuple[str, ...]:
+        """Operational delivery failures that never rewrote numerical acceptance."""
+        rows = getattr(self._publisher, "post_commit_diagnostics", ())
+        if not isinstance(rows, tuple) or any(not isinstance(row, str) for row in rows):
+            raise TypeError("consumer publisher post_commit_diagnostics must be tuple[str, ...]")
+        return rows
+
+    @property
+    def live_visualization_reports(self) -> tuple[Any, ...]:
+        """Compatibility alias for :attr:`post_commit_reports`."""
+        return self.post_commit_reports
+
+    @property
+    def live_visualization_diagnostics(self) -> tuple[str, ...]:
+        """Compatibility alias for :attr:`post_commit_diagnostics`."""
+        return self.post_commit_diagnostics
+
+    def flush_post_commit_consumers(self) -> tuple[Any, ...]:
+        """Block until the current run's queued post-commit frames have terminal reports.
+
+        Every MPI rank must call this method, as for the rest of the collective RuntimeInstance
+        surface.  SERIAL/ROOT workers do not call MPI; PER_RANK/COLLECTIVE workers use their
+        authenticated duplicated observer lanes and require ``MPI_THREAD_MULTIPLE``.
+        """
+        run_identity = self.last_run_identity
+        if type(run_identity) is not Identity or run_identity.domain != "run":
+            raise RuntimeError("no authenticated run is available to flush")
+        flush = getattr(self._publisher, "flush_post_commit_consumers", None)
+        if not callable(flush):
+            raise NotImplementedError(
+                "the installed consumer publisher has no post-commit flush route")
+        reports = flush(run_identity)
+        if not isinstance(reports, tuple):
+            raise TypeError("post-commit flush must return a tuple of reports")
+        return reports
+
+    def flush_live_visualizations(self) -> tuple[Any, ...]:
+        """Compatibility alias for :meth:`flush_post_commit_consumers`."""
+        return self.flush_post_commit_consumers()
+
     def retry_consumer_finalizers(self) -> tuple[str, ...]:
         """Retry release-only finalizers without reopening accepted transactions."""
         return self._retry_consumer_finalizers()
@@ -622,6 +701,10 @@ class RuntimeInstance:
                 "accepted_diagnostics": [
                     payload.to_data() for payload in self._publisher.accepted_diagnostics
                 ],
+                "post_commit_reports": [
+                    report.to_data() for report in self.post_commit_reports
+                ],
+                "post_commit_diagnostics": list(self.post_commit_diagnostics),
                 "attempt": self._attempt,
                 "output_root": None if self._output_root is None else str(self._output_root),
                 "last_run_identity": _identity_data(self.last_run_identity),
@@ -654,6 +737,7 @@ class RuntimeInstance:
                 TimePoint(clock, step=int(cursor["tick"])),
                 accepted_step=accepted_step,
                 attempt=self._attempt,
+                physical_time_hex=cursor["time"],
                 clock_tick=int(cursor["tick"]),
                 wall_tick=accepted_step,
                 layouts=self._layout_bindings(),
@@ -1079,6 +1163,7 @@ class RuntimeInstance:
         steps = 0
         rejected_steps = 0
         console_session = None
+        manifest = None
         try:
             prepare_step_controller(native, selected, controller_controls)
             temporal = getattr(native, "_temporal_restart_state", None)
@@ -1097,12 +1182,43 @@ class RuntimeInstance:
                 from pops.runtime._console_run import safe_begin_console_run
 
                 console_session = safe_begin_console_run(self, manifest, selected)
+            begin_post_commit = getattr(
+                self._publisher, "begin_post_commit_consumers", None)
+            if callable(begin_post_commit):
+                begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
-                def advance() -> tuple[Any, int]:
+                deadline = next_consumer_deadline(self._consumer_graph, self._moments())
+                run_end = float(t_end)
+                _validate_external_grid_deadline(
+                    selected, controller_controls, deadline, run_end)
+                # A tolerance can validate a controller landing, but it must never extend the
+                # requested run.  In particular, a threshold one ULP above t_end is a future
+                # occurrence, not an end-of-run sample.
+                if deadline is not None and deadline <= run_end:
+                    deadline_is_active = True
+                    step_end = (
+                        run_end if _same_physical_time(deadline, run_end) else deadline)
+                else:
+                    deadline_is_active = False
+                    step_end = run_end
+
+                def advance(
+                    *,
+                    accepted_deadline: float | None = deadline if deadline_is_active else None,
+                    accepted_step_end: float = step_end,
+                ) -> tuple[Any, int]:
                     report = run_step_attempt(
-                        native, step_target, selected, t_end=float(t_end),
+                        native, step_target, selected, t_end=accepted_step_end,
                         controls=controller_controls)
+                    reached = float(native.time())
+                    if accepted_deadline is not None \
+                            and reached > accepted_deadline \
+                            and not _same_physical_time(reached, accepted_deadline):
+                        raise RuntimeError(
+                            "step controller crossed every_dt hard deadline %s and reached %s"
+                            % (accepted_deadline.hex(), reached.hex())
+                        )
                     return report, report.attempts
 
                 step_report = self._accepted_step_transaction(
@@ -1118,7 +1234,28 @@ class RuntimeInstance:
                     f"requested t_end={t_end!r}")
             if steps == 0:
                 self._fire_consumers(at_end=True)
+            close_live = getattr(self._publisher, "close_live_visualizations", None)
+            if callable(close_live):
+                close_live(manifest.run_identity)
         except BaseException as error:
+            if manifest is not None:
+                close_live = getattr(self._publisher, "close_live_visualizations", None)
+                if callable(close_live):
+                    before = len(self.post_commit_diagnostics)
+                    try:
+                        close_live(manifest.run_identity, raise_on_failure=False)
+                    except BaseException as close_error:
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "post-commit consumer close also failed: %s" % close_error)
+                    after = self.post_commit_diagnostics
+                    if len(after) > before:
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "post-commit consumer delivery diagnostics: %s"
+                                % "; ".join(after[before:]))
             # ``begin_run`` binds controller/strategy state before the first native transaction.
             # If no macro-step commits, the complete failed call leaves the temporal authority at
             # its entry boundary.  After one or more accepted steps, each later failed transaction

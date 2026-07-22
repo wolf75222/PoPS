@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -247,14 +247,18 @@ def _authenticate_preparation(
         "size", "mode", "effect", "payload", "format", "request_family",
         "snapshot_family", "target_family",
     )
-    mismatches = [
-        rank for rank, row in enumerate(rows)
+    mismatches = {
+        rank: tuple(key for key in shared_keys if row[key] != authority[key])
+        for rank, row in enumerate(rows)
         if any(row[key] != authority[key] for key in shared_keys)
-    ]
+    }
     if mismatches:
         raise RuntimeError(
             "output request/format/target authority differs across ranks: "
-            + ", ".join(map(str, mismatches)))
+            + "; ".join(
+                "rank %d [%s]" % (rank, ", ".join(keys))
+                for rank, keys in mismatches.items()
+            ))
     mode = preparation.request.parallel_mode
     targets = tuple(row["target"] for row in rows)
     if mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE):
@@ -436,8 +440,13 @@ class PreparedConsumerOutput(PreparedPublication):
                 raise TypeError("rank %d output receipt has an invalid schema" % rank)
             output_identity = Identity.from_token(local["output_identity"])
             selection_identity = Identity.from_token(local["selection_identity"])
-            if selection_identity != self._request.publication_identity:
-                raise ValueError("output receipt selection identity differs from its request")
+            expected_request = self._request
+            if mode is ParallelMode.PER_RANK:
+                expected_request = replace(self._request, rank=rank)
+            if selection_identity != expected_request.publication_identity:
+                raise ValueError(
+                    "rank %d output receipt selection identity differs from its request"
+                    % rank)
             try:
                 path = Path(local["path"]).expanduser().resolve()
             except TypeError as exc:

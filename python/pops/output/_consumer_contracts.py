@@ -84,6 +84,52 @@ def _provider_data(value: Any, *, where: str, methods: tuple[str, ...]) -> Mappi
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
+    """Authenticate a non-file, irreversible monitor operation provider."""
+    if getattr(value, "__pops_ir_immutable__", False) is not True:
+        raise TypeError("%s must declare immutable semantic state" % where)
+    consumer_data = getattr(value, "consumer_data", None)
+    if not callable(consumer_data) or not callable(getattr(value, "open_session", None)):
+        raise TypeError(
+            "%s must implement consumer_data() and open_session()" % where)
+    first, second = consumer_data(), consumer_data()
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("%s consumer_data() must return one deterministic dict" % where)
+    expected = {
+        "schema_version", "provider_id", "parallel_mode", "queue_capacity",
+        "max_attempts", "on_failure", "durability", "observer",
+    }
+    if set(first) != expected or first["schema_version"] != 1:
+        raise ValueError("%s consumer_data has an unsupported live-observer schema" % where)
+    _text(first["provider_id"], "%s.consumer_data.provider_id" % where)
+    if first["parallel_mode"] not in {"serial", "root", "per_rank", "collective"}:
+        raise ValueError("%s parallel_mode is unsupported" % where)
+    for name in ("queue_capacity", "max_attempts"):
+        value = first[name]
+        if isinstance(value, bool) or type(value) is not int or value < 1:
+            raise ValueError("%s %s must be an integer >= 1" % (where, name))
+    if first["on_failure"] not in (
+            {"action": "raise_on_flush"}, {"action": "report_only"}):
+        raise ValueError("%s on_failure has an unsupported policy" % where)
+    durability = first["durability"]
+    if durability is not None and (
+            type(durability) is not dict
+            or set(durability) != {
+                "schema_version", "kind", "root", "sync", "recover", "delivery"
+            }
+            or durability["schema_version"] != 1
+            or durability["kind"] != "durable_observer_journal"
+            or durability["sync"] not in {"fsync", "none"}
+            or durability["recover"] not in {"automatic", "manual"}
+            or durability["delivery"] != "at_least_once_after_handoff"
+            or not isinstance(durability["root"], str)
+            or not durability["root"]):
+        raise ValueError("%s durability has an unsupported journal policy" % where)
+    if type(first["observer"]) is not dict:
+        raise TypeError("%s observer declaration must be an exact dict" % where)
+    return freeze_data(first, "%s.consumer_data" % where)
+
+
 def validate_checkpoint_snapshot(value: Any, *, where: str = "checkpoint snapshot") -> Any:
     """Require the compensating protocol used before and after checkpoint publication."""
     missing = tuple(
@@ -385,9 +431,18 @@ class ConsumerManifest:
                 where="ConsumerManifest.operation",
                 methods=("snapshot", "validate_snapshot", "write", "reopen", "restore"),
             )
+        elif self.kind is ConsumerKind.MONITOR:
+            if self.output_format is not None:
+                raise ValueError("Monitor has no scientific output_format")
+            format_data = None
+            operation_data = _observer_provider_data(
+                self.operation, where="ConsumerManifest.operation")
+            if operation_data["parallel_mode"] != self.parallel_mode.value:
+                raise ValueError(
+                    "ConsumerManifest parallel mode differs from its live observer provider")
         else:
             if self.output_format is not None or self.operation is not None:
-                raise ValueError("Diagnostic/Monitor consumers carry no publication provider")
+                raise ValueError("Diagnostic consumers carry no publication provider")
             format_data = operation_data = None
         object.__setattr__(self, "output_format_data", format_data)
         object.__setattr__(self, "operation_data", operation_data)
@@ -667,6 +722,7 @@ class ConsumerMoment:
     point: TimePoint
     accepted_step: int
     attempt: int
+    physical_time_hex: str
     clock_tick: int = 0
     wall_tick: int = 0
     stage: StagePoint | None = None
@@ -683,6 +739,11 @@ class ConsumerMoment:
             raise TypeError("ConsumerMoment.point must be an exact TimePoint")
         for name in ("accepted_step", "attempt", "clock_tick", "wall_tick"):
             _index(getattr(self, name), "ConsumerMoment.%s" % name)
+        object.__setattr__(
+            self,
+            "physical_time_hex",
+            _nonnegative_binary64_hex(self.physical_time_hex, "ConsumerMoment.physical_time_hex"),
+        )
         if self.stage is not None and type(self.stage) is not StagePoint:
             raise TypeError("ConsumerMoment.stage must be an exact StagePoint or None")
         if self.level is not None:
@@ -713,6 +774,7 @@ class ConsumerMoment:
             "point": self.point.to_data(),
             "accepted_step": self.accepted_step,
             "attempt": self.attempt,
+            "physical_time": self.physical_time_hex,
             "clock_tick": self.clock_tick,
             "wall_tick": self.wall_tick,
             "stage": self.stage.to_data() if self.stage else None,

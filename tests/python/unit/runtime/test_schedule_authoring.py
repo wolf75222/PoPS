@@ -103,6 +103,35 @@ def test_every_rejects_non_positive():
         _every(adctime.Clock("macro"), True)
 
 
+def test_every_dt_is_an_exact_consumer_physical_time_cadence():
+    clock = adctime.Clock("macro")
+    schedule = adctime.every_dt(0.1, clock=clock)
+
+    assert isinstance(schedule.trigger, adctime.EveryDt)
+    assert schedule.trigger.interval == 0.1
+    assert not schedule.is_always()
+    assert schedule.to_data()["trigger"] == {
+        "type": "every_dt",
+        "interval": {"binary64": (0.1).hex()},
+    }
+    assert schedule.trigger.consumer_next_deadline(physical_time_hex=(0.0).hex()) == (0.1).hex()
+    with pytest.raises(NotImplementedError, match="ConsumerGraph physical-time cadence"):
+        schedule.native_schedule_ir(where="compiled Program test")
+
+
+@pytest.mark.parametrize("interval", (0.0, -1.0, float("nan"), float("inf"), True, "0.1"))
+def test_every_dt_rejects_non_positive_or_non_binary64_intervals(interval):
+    with pytest.raises((TypeError, ValueError)):
+        adctime.every_dt(interval, clock=adctime.Clock("macro"))
+
+
+def test_every_dt_fails_when_interval_is_below_the_current_clock_resolution():
+    schedule = adctime.every_dt(1.0e-308, clock=adctime.Clock("macro"))
+
+    with pytest.raises(RuntimeError, match="below binary64 clock resolution"):
+        schedule.trigger.consumer_next_deadline(physical_time_hex=(1.0e308).hex())
+
+
 def test_other_kinds_exist():
     clock = adctime.Clock("macro")
     assert isinstance(_when(clock, lambda: True).trigger, adctime.When)

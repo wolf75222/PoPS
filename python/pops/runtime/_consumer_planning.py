@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from pops.codegen.lowering_coverage import LoweringCoverageReport, LoweringCoverageRow
@@ -65,15 +66,26 @@ def _is_due(manifest: ConsumerManifest, moment: ConsumerMoment) -> bool:
 
 def _occurrence(manifest: ConsumerManifest, moment: ConsumerMoment) -> Identity:
     domain = manifest.schedule.domain
-    evidence: dict[str, Any] = {
-        "coordinate": _schedule_coordinate(manifest, moment),
-        "point": moment.point.to_data(),
-    }
-    domain_evidence = domain.consumer_occurrence_evidence(moment)
-    if type(domain_evidence) is not dict:
-        raise TypeError(
-            "Domain.consumer_occurrence_evidence() must return an exact dict")
-    evidence.update(domain_evidence)
+    coordinate = _schedule_coordinate(manifest, moment)
+    trigger_provider = getattr(
+        manifest.schedule.trigger, "consumer_occurrence_evidence", None)
+    trigger_evidence = (
+        trigger_provider(coordinate, moment) if callable(trigger_provider) else None)
+    if trigger_evidence is not None:
+        if type(trigger_evidence) is not dict:
+            raise TypeError(
+                "Trigger.consumer_occurrence_evidence() must return an exact dict or None")
+        evidence: dict[str, Any] = {"trigger": trigger_evidence}
+    else:
+        evidence = {
+            "coordinate": coordinate,
+            "point": moment.point.to_data(),
+        }
+        domain_evidence = domain.consumer_occurrence_evidence(moment)
+        if type(domain_evidence) is not dict:
+            raise TypeError(
+                "Domain.consumer_occurrence_evidence() must return an exact dict")
+        evidence.update(domain_evidence)
     return make_identity(
         "consumer-occurrence",
         {
@@ -82,6 +94,60 @@ def _occurrence(manifest: ConsumerManifest, moment: ConsumerMoment) -> Identity:
             "evidence": evidence,
         },
     )
+
+
+def next_consumer_deadline(
+    graph: Any,
+    moments: Any,
+) -> float | None:
+    """Return the earliest hard physical-time boundary declared by active consumers.
+
+    Deadline discovery is a trigger protocol rather than a concrete ``EveryDt`` dispatch.  It is
+    pure and derives its answer from the current accepted clock evidence, so restart needs no second
+    mutable deadline cursor.
+    """
+    if type(graph) is not ConsumerGraph:
+        raise TypeError("consumer deadline planning requires an exact ConsumerGraph")
+    if not graph.is_resolved:
+        raise TypeError("consumer deadline planning requires a resolved ConsumerGraph")
+    if not isinstance(moments, tuple) or any(
+        type(value) is not ConsumerMoment for value in moments
+    ):
+        raise TypeError("consumer deadline planning requires a tuple of ConsumerMoment values")
+    by_clock = {moment.point.clock: moment for moment in moments}
+    if len(by_clock) != len(moments):
+        raise ValueError("consumer deadline moments contain duplicate qualified clocks")
+
+    deadlines = []
+    for manifest in graph.nodes:
+        try:
+            moment = by_clock[manifest.schedule.domain.clock]
+        except KeyError:
+            continue
+        provider = getattr(manifest.schedule.trigger, "consumer_next_deadline", None)
+        if not callable(provider):
+            raise TypeError(
+                "consumer schedule trigger %s has no consumer_next_deadline() protocol"
+                % type(manifest.schedule.trigger).__name__
+            )
+        deadline_hex = provider(physical_time_hex=moment.physical_time_hex)
+        if deadline_hex is None:
+            continue
+        if not isinstance(deadline_hex, str):
+            raise TypeError(
+                "consumer_next_deadline() must return canonical float.hex() text or None"
+            )
+        try:
+            deadline = float.fromhex(deadline_hex)
+        except (OverflowError, ValueError):
+            raise ValueError("consumer deadline is not canonical float.hex() text") from None
+        now = float.fromhex(moment.physical_time_hex)
+        if not math.isfinite(deadline) or deadline.hex() != deadline_hex or not deadline > now:
+            raise ValueError(
+                "consumer deadline must be canonical, finite, and strictly after accepted time"
+            )
+        deadlines.append(deadline)
+    return min(deadlines) if deadlines else None
 
 
 def _resource_bindings(
@@ -93,14 +159,14 @@ def _resource_bindings(
         and manifest.operation_data.get("supports_singleton_collective") is True
     )
     communicator = runtime.communication.communicator_id
-    if (manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+    if (manifest.kind in (ConsumerKind.SCIENTIFIC_OUTPUT, ConsumerKind.MONITOR)
             and manifest.parallel_mode is ParallelMode.SERIAL
             and communicator != "serial"):
         refuse(
             "serial_consumer_requires_serial_context",
             "consumer[%s].parallel_mode" % manifest.qualified_id,
-            "SERIAL output is valid only in a proved serial ExecutionContext; select ROOT, "
-            "COLLECTIVE, or PER_RANK explicitly for distributed execution",
+            "SERIAL output/monitor is valid only in a proved serial ExecutionContext; select "
+            "an explicitly supported distributed mode for distributed execution",
             evidence={"communicator": communicator},
         )
     if (manifest.parallel_mode is not ParallelMode.SERIAL
@@ -182,7 +248,7 @@ def _resource_bindings(
 def _field_consumer(kind: ConsumerKind) -> Any:
     from pops.fields import FieldConsumer
 
-    if kind in (ConsumerKind.DIAGNOSTIC, ConsumerKind.MONITOR):
+    if kind is ConsumerKind.DIAGNOSTIC:
         return FieldConsumer.DIAGNOSTIC
     return FieldConsumer.OUTPUT
 
@@ -342,4 +408,4 @@ def plan_accepted_side_effects(
     return EffectPlan(graph.identity, runtime_plan.identity, tuple(effects), coverage)
 
 
-__all__ = ["plan_accepted_side_effects"]
+__all__ = ["next_consumer_deadline", "plan_accepted_side_effects"]

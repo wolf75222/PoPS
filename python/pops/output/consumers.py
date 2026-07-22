@@ -41,6 +41,18 @@ def _format_data(value: Any) -> dict[str, Any]:
     return consumer_format_data(value, where="ScientificOutput.format")
 
 
+def _failure_action(value: Any) -> Any:
+    from ._consumer_contracts import FailRun, _FAILURE_ACTIONS
+
+    selected = FailRun() if value is None else value
+    if type(selected) not in _FAILURE_ACTIONS:
+        raise TypeError(
+            "ScientificOutput.failure_action must be pops.output.FailRun(), Retry(...), "
+            "or SkipSampleReported()"
+        )
+    return selected
+
+
 def _diagnostic(value: Any, *, index: int) -> None:
     where = "ScientificOutput diagnostics[%d]" % index
     for method in ("declaration_references", "resolve_references", "consumer_data", "freeze"):
@@ -66,6 +78,7 @@ class ScientificOutput(Descriptor):
         diagnostics: Any = (),
         levels: Any = None,
         target: Any,
+        failure_action: Any = None,
     ) -> None:
         format_data = _format_data(format)
         field_rows = tuple(fields)
@@ -94,6 +107,7 @@ class ScientificOutput(Descriptor):
         self.diagnostics = diagnostic_rows
         self.levels = selected_levels
         self.target = _target(target, where="ScientificOutput.target")
+        self.failure_action = _failure_action(failure_action)
 
     def declaration_references(self) -> tuple[Handle, ...]:
         result = list(self.fields)
@@ -130,6 +144,7 @@ class ScientificOutput(Descriptor):
             levels=self.levels,
             operation=None,
             diagnostics=self.diagnostics,
+            failure_action=self.failure_action,
         ),)
 
     def options(self) -> dict[str, Any]:
@@ -140,6 +155,7 @@ class ScientificOutput(Descriptor):
             "n_diagnostics": len(self.diagnostics),
             "levels": self.levels.to_data(),
             "target": self.target,
+            "failure_action": self.failure_action.to_data(),
         }
 
 

@@ -6,6 +6,7 @@ import math
 import json
 import stat
 import tempfile
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -39,6 +40,10 @@ from pops.output.data import (
     OutputRequest,
     OutputSnapshot,
 )
+from pops.output.observers import (
+    ObserverFrame,
+    ObserverRun,
+)
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.output._writers.common import (
     _OutputRecoveryRequired,
@@ -56,6 +61,30 @@ from ._consumer import (
 )
 from ._component_execution_context import component_execution_data
 from ._output_publisher import ConsumerOutputPublisher, OutputPreparation
+from ._observer_runtime import (
+    _DetachedObserverFrame,
+    _authenticated_detached_frame,
+    _detach_owned_observer_frame,
+    ObserverDeliveryReport,
+    PostCommitObserverQueue,
+    PostCommitObserverWorker,
+)
+
+
+_BUILTIN_CATALYST_PROCESS_LOCK = threading.Lock()
+_BUILTIN_CATALYST_PROCESS_STARTED = False
+
+
+def _reserve_builtin_catalyst_process_lifecycle() -> None:
+    """Reserve Catalyst's process-global initialize/finalize lifecycle exactly once."""
+
+    global _BUILTIN_CATALYST_PROCESS_STARTED
+    with _BUILTIN_CATALYST_PROCESS_LOCK:
+        if _BUILTIN_CATALYST_PROCESS_STARTED:
+            raise RuntimeError(
+                "the built-in Catalyst lifecycle has already started in this OS process; "
+                "launch a new process for another Catalyst simulation run")
+        _BUILTIN_CATALYST_PROCESS_STARTED = True
 
 
 def _block_name(reference: Any, names: tuple[str, ...]) -> str:
@@ -154,6 +183,34 @@ def _execution_topology(owner: Any) -> tuple[int, int, Any]:
     return native_rank(native), native_size(native), native
 
 
+def _post_commit_root_consensus(
+    communicator: Any,
+    *,
+    rank: int,
+    size: int,
+    error: str | None,
+    phase: str,
+) -> None:
+    """Reach exactly one ROOT status collective before exposing any local failure."""
+
+    rows = allgather_value(communicator, {"rank": rank, "error": error})
+    if len(rows) != size or any(
+            not isinstance(row, Mapping)
+            or set(row) != {"rank", "error"}
+            or row["rank"] != owner_rank
+            or (row["error"] is not None and not isinstance(row["error"], str))
+            for owner_rank, row in enumerate(rows)):
+        raise RuntimeError("ROOT post-commit %s returned a malformed envelope" % phase)
+    failures = [
+        "rank %d: %s" % (owner_rank, row["error"])
+        for owner_rank, row in enumerate(rows)
+        if row["error"] is not None
+    ]
+    if failures:
+        raise RuntimeError(
+            "ROOT post-commit %s failed: %s" % (phase, "; ".join(failures)))
+
+
 class _PreparedDiagnostic(PreparedPublication):
     def __init__(self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...],
                  publish: Any, discard: Any, rollback: Any) -> None:
@@ -208,6 +265,110 @@ class _PreparedDiagnostic(PreparedPublication):
             self._discard(self._effect)
         self._published = False
         self._discarded = True
+
+
+class _PreparedLiveVisualization(PreparedPublication):
+    """Compensatable intent whose irreversible frame is submitted only from ``finalize``."""
+
+    def __init__(
+        self,
+        effect: AcceptedSideEffect,
+        frame: _DetachedObserverFrame | None,
+        submit: Any,
+        journal: Any = None,
+        journal_record: Any = None,
+        *,
+        size: int = 1,
+    ) -> None:
+        if isinstance(size, bool) or type(size) is not int or size < 1:
+            raise TypeError("live-visualization intent size must be an integer >= 1")
+        self._effect = effect
+        self._frame = frame
+        self._submit = submit
+        self._journal = journal
+        self._journal_record = journal_record
+        self._size = size
+        self._published = False
+        self._discarded = False
+        self._finalized = False
+
+    def _discard_prepared_journal(self) -> None:
+        if self._journal is None or self._journal_record is None:
+            return
+        if getattr(self._journal_record, "state", None) == "prepared":
+            self._journal.discard_prepared(self._journal_record)
+
+    @property
+    def effect_identity(self) -> Identity:
+        return self._effect.identity
+
+    @property
+    def payload_identity(self) -> Identity:
+        return self._effect.payload.identity
+
+    def publish(self) -> PublicationReceipt:
+        if self._discarded:
+            raise RuntimeError("discarded live-visualization intent cannot be published")
+        self._published = True
+        artifact = make_identity("live-visualization-intent", {
+            "effect": self.effect_identity.token,
+            "payload": self.payload_identity.token,
+        })
+        rank_artifacts = ()
+        if self._effect.target.parallel_mode is ParallelMode.PER_RANK:
+            rank_artifacts = tuple(
+                (rank, make_identity("live-visualization-rank-intent", {
+                    "intent": artifact.token,
+                    "rank": rank,
+                    "size": self._size,
+                }).token)
+                for rank in range(self._size)
+            )
+        return PublicationReceipt(
+            self.effect_identity,
+            self.payload_identity,
+            "pops.live-visualization-intent.v1",
+            artifact.token,
+            parallel_mode=self._effect.target.parallel_mode,
+            rank_artifacts=rank_artifacts,
+        )
+
+    def discard(self) -> None:
+        if not self._published and not self._discarded:
+            self._discard_prepared_journal()
+            self._frame = None
+            self._discarded = True
+
+    def rollback(self) -> None:
+        if self._finalized:
+            raise RuntimeError("a submitted live frame is post-commit and cannot be rolled back")
+        self._discard_prepared_journal()
+        self._frame = None
+        self._published = False
+        self._discarded = True
+
+    def finalize(self) -> None:
+        if self._finalized:
+            return None
+        if not self._published or self._discarded:
+            raise RuntimeError("only a published live-visualization intent can be finalized")
+        # Set this boundary before dispatch so an operational finalizer retry can never duplicate
+        # an irreversible packet. Journal commit/enqueue consensus is owned by the callback because
+        # every MPI rank must arm its worker job together.
+        preexisting_committed = (
+            self._journal_record is not None
+            and self._journal_record.state in {"pending", "delivered"}
+        )
+        self._finalized = True
+        frame, self._frame = self._frame, None
+        self._submit(
+            self._effect,
+            frame,
+            self._journal,
+            self._journal_record,
+            preexisting_committed,
+        )
+        return None
 
 
 class _PreparedScientificOutput(PreparedPublication):
@@ -991,6 +1152,16 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._pending_baselines: dict[str, dict[str, float]] = {}
         self._diagnostics: dict[str, DiagnosticPayload] = {}
         self._baselines: dict[str, float] = {}
+        self._rank, self._size, self._communicator = rank, size, communicator
+        self._observer_queues: dict[tuple[str, str], PostCommitObserverQueue] = {}
+        self._observer_lanes: dict[tuple[str, str], Any] = {}
+        self._observer_workers: dict[str, PostCommitObserverWorker] = {}
+        self._observer_journals: dict[tuple[str, str], Any] = {}
+        self._observer_preflight_sessions: dict[str, Any] = {}
+        self._observer_reports: dict[str, ObserverDeliveryReport] = {}
+        self._observer_pending_failures: dict[tuple[str, str], list[str]] = {}
+        self._observer_diagnostics: list[str] = []
+        self._closed_observer_runs: set[str] = set()
         self._output = ConsumerOutputPublisher(
             self._resolve_output,
             retain_recoveries=owner._retain_output_recoveries,
@@ -998,8 +1169,85 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._external_writers: dict[str, Any] = {}
         logical_targets: dict[str, str] = {}
         self._validate_diagnostic_providers()
+        builtin_catalyst = []
+        for candidate in owner._consumer_graph.nodes:
+            if candidate.kind is not ConsumerKind.MONITOR:
+                continue
+            observer = candidate.operation_data.get("observer", {})
+            provider = observer.get("provider", {}) if isinstance(observer, Mapping) else {}
+            if isinstance(provider, Mapping) \
+                    and provider.get("provider_id") == "pops.output.catalyst-python.v1":
+                builtin_catalyst.append(candidate.qualified_id)
+        if len(builtin_catalyst) > 1:
+            raise ValueError(
+                "the built-in Catalyst provider permits one process-global pipeline per "
+                "RuntimeInstance; combine pipelines in that script or install one multiplexing "
+                "provider: %s" % ", ".join(sorted(builtin_catalyst)))
+        self._builtin_catalyst_consumers = tuple(sorted(builtin_catalyst))
+        self._builtin_catalyst_run_started = False
         from pops import interfaces
         for manifest in owner._consumer_graph.nodes:
+            if manifest.kind is ConsumerKind.MONITOR:
+                data = manifest.operation_data
+                if data is None or data["parallel_mode"] != manifest.parallel_mode.value:
+                    raise ValueError(
+                        "Monitor operation and resolved parallel mode disagree at install")
+                if manifest.parallel_mode is ParallelMode.SERIAL:
+                    if (rank, size, communicator) != (0, 1, None):
+                        raise ValueError(
+                            "SERIAL post-commit consumers require a proved serial "
+                            "ExecutionContext")
+                elif manifest.parallel_mode in (
+                        ParallelMode.ROOT, ParallelMode.PER_RANK, ParallelMode.COLLECTIVE):
+                    if communicator is None:
+                        raise ValueError(
+                            "%s post-commit consumer requires a proved native MPI "
+                            "ExecutionContext" % manifest.parallel_mode.name)
+                else:
+                    raise ValueError("post-commit consumer has an unsupported parallel mode")
+                preopened: Any = None
+                local_error = None
+                try:
+                    preflight = getattr(manifest.operation, "preflight", None)
+                    if callable(preflight):
+                        preflight(owner._execution_context)
+                    # Worker-MPI sessions are opened only after their run-scoped duplicated lane
+                    # exists.  SERIAL/ROOT dependencies can still fail early at bind/install.
+                    if rank == 0 and manifest.parallel_mode in (
+                            ParallelMode.SERIAL, ParallelMode.ROOT):
+                        preopen = getattr(manifest.operation, "preopen_session", None)
+                        if not callable(preopen):
+                            raise TypeError(
+                                "post-commit monitor operation has no preopen_session() route")
+                        preopened = preopen(owner._execution_context)
+                except BaseException as error:
+                    local_error = _exception_text(error)
+                if manifest.parallel_mode is not ParallelMode.SERIAL:
+                    try:
+                        _post_commit_root_consensus(
+                            communicator,
+                            rank=rank,
+                            size=size,
+                            error=local_error,
+                            phase="provider session preflight",
+                        )
+                    except BaseException as error:
+                        if preopened is not None:
+                            try:
+                                preopened.abort()
+                            except BaseException as abort_error:
+                                add_note = getattr(error, "add_note", None)
+                                if callable(add_note):
+                                    add_note(
+                                        "preopened observer abort also failed: %s"
+                                        % _exception_text(abort_error))
+                        raise
+                elif local_error is not None:
+                    raise RuntimeError(
+                        "post-commit provider session preflight failed: %s" % local_error)
+                if preopened is not None:
+                    self._observer_preflight_sessions[manifest.qualified_id] = preopened
+                continue
             if manifest.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
                 continue
             data = manifest.output_format_data
@@ -1065,6 +1313,722 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         """Last committed registry only; staged attempt values are deliberately excluded."""
         return tuple(sorted(
             self._diagnostics.values(), key=lambda value: value.key.identity.token))
+
+    @property
+    def post_commit_reports(self) -> tuple[ObserverDeliveryReport, ...]:
+        """Terminal post-commit deliveries, including reports from a still-open run."""
+        rows = dict(self._observer_reports)
+        for observer_queue in self._observer_queues.values():
+            for report in observer_queue.reports:
+                rows[report.identity.token] = report
+        return tuple(sorted(
+            rows.values(),
+            key=lambda value: (
+                value.run_identity.token, value.consumer_id, value.sequence,
+                value.identity.token,
+            ),
+        ))
+
+    @property
+    def post_commit_diagnostics(self) -> tuple[str, ...]:
+        pending = tuple(
+            message
+            for key in sorted(self._observer_pending_failures)
+            for message in self._observer_pending_failures[key]
+        )
+        return tuple(self._observer_diagnostics) + pending
+
+    @property
+    def live_visualization_reports(self) -> tuple[ObserverDeliveryReport, ...]:
+        """Compatibility alias for :attr:`post_commit_reports`."""
+        return self.post_commit_reports
+
+    @property
+    def live_visualization_diagnostics(self) -> tuple[str, ...]:
+        """Compatibility alias for :attr:`post_commit_diagnostics`."""
+        return self.post_commit_diagnostics
+
+    @staticmethod
+    def _observer_key(consumer_id: str, run_identity: Identity) -> tuple[str, str]:
+        if type(run_identity) is not Identity or run_identity.domain != "run":
+            raise TypeError("post-commit consumer requires an exact run Identity")
+        return consumer_id, run_identity.token
+
+    def _record_observer_failure(
+        self, consumer_id: str, run_identity: Identity, error: BaseException,
+    ) -> None:
+        key = self._observer_key(consumer_id, run_identity)
+        self._observer_pending_failures.setdefault(key, []).append(_exception_text(error))
+
+    def _observer_journal(self, manifest: Any, run_identity: Identity) -> Any:
+        """Resolve one consumer/rank journal without assuming a shared filesystem."""
+
+        key = self._observer_key(manifest.qualified_id, run_identity)
+        current = self._observer_journals.get(key)
+        if current is not None:
+            return current
+        configured = getattr(manifest.operation, "durability", None)
+        if configured is None:
+            return None
+        from pops.output._durable_journal import DurableJournal
+
+        if type(configured) is not DurableJournal:
+            raise TypeError("installed post-commit durability is not a DurableJournal")
+        root = (
+            configured.root
+            / manifest.identity.hexdigest
+            / ("rank-%06d" % self._rank)
+        )
+        current = DurableJournal(root, sync=configured.sync, recover=configured.recover)
+        target = Path(manifest.target_uri)
+        if self._owner._output_root is not None:
+            target = Path(self._owner._output_root) / target
+        current.bind_delivery_authority({
+            "schema_version": 1,
+            "consumer_id": manifest.qualified_id,
+            "manifest_identity": manifest.identity.token,
+            "target_uri": manifest.target_uri,
+            "resolved_target": target.expanduser().resolve(strict=False).as_posix(),
+        })
+        self._observer_journals[key] = current
+        return current
+
+    @staticmethod
+    def _journal_event(record: Any) -> str:
+        frame = getattr(record, "frame", None)
+        if type(frame) is not ObserverFrame:
+            raise TypeError("durable journal record contains no exact ObserverFrame")
+        request = frame.request.to_data()
+        request.pop("rank")
+        return make_identity("durable-observer-event", {
+            "run_identity": frame.snapshot.provenance.run_identity.to_data(),
+            "clock": frame.snapshot.clock.to_data(),
+            "request": request,
+        }).token
+
+    def _inspect_observer_journal(
+        self,
+        manifest: Any,
+        journal: Any,
+    ) -> tuple[tuple[Any, ...], tuple[tuple[str, ...], ...]]:
+        """Authenticate replay order/state before any observer session is initialized."""
+
+        worker_mpi = manifest.parallel_mode in (
+            ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+        if worker_mpi:
+            records: tuple[Any, ...] = ()
+            local_events = []
+            local_error = None
+            try:
+                records = journal.list_committed()
+                seen = set()
+                for record in records:
+                    event = self._journal_event(record)
+                    if event in seen:
+                        raise RuntimeError(
+                            "durable observer journal contains duplicate committed events")
+                    seen.add(event)
+                    local_events.append({"event": event, "state": record.state})
+            except BaseException as error:
+                local_error = _exception_text(error)
+                records = ()
+                local_events = []
+            rows = allgather_value(self._communicator, {
+                "rank": self._rank,
+                "events": local_events,
+                "error": local_error,
+            })
+            if len(rows) != self._size or any(
+                    not isinstance(row, Mapping)
+                    or set(row) != {"rank", "events", "error"}
+                    or row["rank"] != owner
+                    or not isinstance(row["events"], (tuple, list))
+                    or (row["error"] is not None and not isinstance(row["error"], str))
+                    for owner, row in enumerate(rows)):
+                raise RuntimeError(
+                    "durable MPI observer replay returned malformed rank evidence")
+            failures = [
+                "rank %d: %s" % (owner, row["error"])
+                for owner, row in enumerate(rows) if row["error"] is not None
+            ]
+            if failures:
+                raise RuntimeError(
+                    "durable MPI observer journal inspection failed collectively: "
+                    + "; ".join(failures))
+            sequences = []
+            rank_states = []
+            for row in rows:
+                sequence = []
+                states = []
+                for item in row["events"]:
+                    if not isinstance(item, Mapping) or set(item) != {"event", "state"} \
+                            or not isinstance(item["event"], str) \
+                            or item["state"] not in {"pending", "delivered"} \
+                            or item["event"] in sequence:
+                        raise RuntimeError(
+                            "durable MPI observer replay contains malformed event evidence")
+                    sequence.append(item["event"])
+                    states.append(item["state"])
+                sequences.append(tuple(sequence))
+                rank_states.append(tuple(states))
+            if any(sequence != sequences[0] for sequence in sequences[1:]):
+                raise RuntimeError(
+                    "durable MPI observer journals disagree in temporal event order after a "
+                    "crash; the handoff is not atomic with the numerical checkpoint")
+            return records, tuple(rank_states)
+        records = journal.list_pending()
+        return records, (tuple("pending" for _record in records),)
+
+    def _replay_observer_journal(
+        self,
+        manifest: Any,
+        observer_queue: PostCommitObserverQueue,
+        journal: Any,
+        records: tuple[Any, ...],
+        rank_states: tuple[tuple[str, ...], ...],
+    ) -> None:
+        """Replay authenticated pending handoffs, including prior run identities."""
+
+        worker_mpi = manifest.parallel_mode in (
+            ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+        if worker_mpi:
+            for index, record in enumerate(records):
+                if not any(states[index] == "pending" for states in rank_states):
+                    continue
+                submission = None
+                enqueue_error = None
+                try:
+                    submission = observer_queue._prepare_detached(
+                        _detach_owned_observer_frame(record.frame),
+                        journal=journal,
+                        journal_record=record,
+                    )
+                except BaseException as error:
+                    enqueue_error = _exception_text(error)
+                try:
+                    _post_commit_root_consensus(
+                        self._communicator,
+                        rank=self._rank,
+                        size=self._size,
+                        error=enqueue_error,
+                        phase="durable replay enqueue %d" % index,
+                    )
+                except BaseException as error:
+                    if submission is not None:
+                        submission.cancel(error)
+                    raise
+                if submission is not None:
+                    submission.arm()
+            return
+        for record in records:
+            observer_queue.submit(
+                record.frame, journal=journal, journal_record=record)
+
+    def _open_observer_session(
+        self, manifest: Any, run_identity: Identity, lane: Any,
+    ) -> Any:
+        del run_identity
+        session = self._observer_preflight_sessions.pop(manifest.qualified_id, None)
+        if session is not None:
+            return session
+        runtime_open = getattr(manifest.operation, "open_runtime_session", None)
+        if callable(runtime_open):
+            runtime_configuration = {
+                "target_uri": manifest.target_uri,
+                "output_root": (
+                    None if self._owner._output_root is None
+                    else str(self._owner._output_root)
+                ),
+                "consumer_id": manifest.qualified_id,
+            }
+            if lane is not None:
+                runtime_configuration["worker_communicator"] = lane
+            return runtime_open(runtime_configuration, self._owner._execution_context)
+        return manifest.operation.open_session(self._owner._execution_context)
+
+    def _observer_queue(
+        self,
+        manifest: Any,
+        run_identity: Identity,
+        *,
+        session: Any = None,
+        recovery_run_identities: tuple[Identity, ...] = (),
+    ) -> PostCommitObserverQueue:
+        key = self._observer_key(manifest.qualified_id, run_identity)
+        current = self._observer_queues.get(key)
+        if current is not None:
+            return current
+        operation_data = manifest.operation_data
+        if operation_data is None:
+            raise RuntimeError("post-commit consumer manifest lost its operation authority")
+        lane = self._observer_lanes.get(key)
+        if session is None:
+            session = self._open_observer_session(manifest, run_identity, lane)
+        observer_run = ObserverRun(run_identity, {
+            "consumer_id": manifest.qualified_id,
+            "manifest_identity": manifest.identity.token,
+            "bind_identity": self._owner.bind_identity.token,
+        }, recovery_run_identities)
+        current = PostCommitObserverQueue(
+            session,
+            observer_run,
+            consumer_id=manifest.qualified_id,
+            capacity=operation_data["queue_capacity"],
+            max_attempts=operation_data["max_attempts"],
+            thread_name="pops-live-%s" % manifest.identity.hexdigest[:12],
+            worker_communicator=lane,
+            shared_worker=self._observer_worker(run_identity),
+        )
+        self._observer_queues[key] = current
+        return current
+
+    def _observer_worker(self, run_identity: Identity) -> PostCommitObserverWorker:
+        self._observer_key("worker", run_identity)
+        current = self._observer_workers.get(run_identity.token)
+        if current is None:
+            current = PostCommitObserverWorker(
+                thread_name="pops-post-commit-%s" % run_identity.hexdigest[:12])
+            self._observer_workers[run_identity.token] = current
+        return current
+
+    def _drain_post_commit_before_hdf5(self) -> None:
+        """Exclude process-global observer-library calls from synchronous HDF5 publication."""
+
+        for key in sorted(self._observer_queues):
+            self._observer_queues[key].flush()
+
+    def begin_post_commit_consumers(self, run_identity: Identity) -> None:
+        """Initialize every active post-commit session before the first consumer/step.
+
+        A provider may allocate run-scoped state from ``ObserverRun``.  Deferring that work until
+        the first scheduled frame would allow a dependency or initialization failure after the
+        numerical clock had already advanced.  ROOT ranks always exchange one status envelope
+        before any rank exposes a local failure.
+        """
+
+        self._observer_key("run-begin", run_identity)
+        if self._builtin_catalyst_consumers:
+            if self._builtin_catalyst_run_started:
+                raise RuntimeError(
+                    "the built-in Catalyst lifecycle permits one run in this OS process; launch "
+                    "a new process for another Catalyst simulation run")
+            self._builtin_catalyst_run_started = True
+        manifests = tuple(sorted(
+            (row for row in self._owner._consumer_graph.nodes
+             if row.kind is ConsumerKind.MONITOR),
+            key=lambda value: value.qualified_id,
+        ))
+        for manifest in manifests:
+            local_error = None
+            session = None
+            journal = None
+            replay_records: tuple[Any, ...] = ()
+            replay_states: tuple[tuple[str, ...], ...] = ((),)
+            worker_mpi = manifest.parallel_mode in (
+                ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+            key = self._observer_key(manifest.qualified_id, run_identity)
+            if worker_mpi:
+                try:
+                    lane_identity = "post-commit/%s/%s" % (
+                        manifest.identity.token, run_identity.token)
+                    self._observer_lanes[key] = \
+                        self._communicator.duplicate_observer_lane(lane_identity)
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            active = self._rank == 0 or worker_mpi
+            if active and local_error is None:
+                try:
+                    journal = self._observer_journal(manifest, run_identity)
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            # Journal construction and its exact target binding must agree before MPI ranks inspect
+            # committed events.  Otherwise a healthy rank could enter replay allgather while a
+            # failing rank has already left the phase.
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                try:
+                    _post_commit_root_consensus(
+                        self._communicator,
+                        rank=self._rank,
+                        size=self._size,
+                        error=local_error,
+                        phase="journal/lane construction",
+                    )
+                except BaseException:
+                    self._observer_lanes.pop(key, None)
+                    raise
+            elif local_error is not None:
+                raise RuntimeError(
+                    "post-commit journal construction failed: %s" % local_error)
+
+            local_error = None
+            if active and journal is not None:
+                try:
+                    replay_records, replay_states = self._inspect_observer_journal(
+                        manifest, journal)
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                try:
+                    _post_commit_root_consensus(
+                        self._communicator,
+                        rank=self._rank,
+                        size=self._size,
+                        error=local_error,
+                        phase="durable journal inspection",
+                    )
+                except BaseException:
+                    self._observer_lanes.pop(key, None)
+                    raise
+            elif local_error is not None:
+                raise RuntimeError(
+                    "post-commit journal inspection failed: %s" % local_error)
+
+            local_error = None
+            if active:
+                try:
+                    session = self._open_observer_session(
+                        manifest, run_identity, self._observer_lanes.get(key))
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            # No worker is started until provider imports, pipeline authentication and replay
+            # inspection have succeeded everywhere.
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                try:
+                    _post_commit_root_consensus(
+                        self._communicator,
+                        rank=self._rank,
+                        size=self._size,
+                        error=local_error,
+                        phase="session construction",
+                    )
+                except BaseException:
+                    if session is not None:
+                        try:
+                            session.abort()
+                        except BaseException:
+                            pass
+                    # Do not attempt a collective free after a possibly asymmetric communicator
+                    # construction failure. ObserverMpiLane deliberately leaks safely until MPI
+                    # finalization in this exceptional path instead of risking a cleanup deadlock.
+                    self._observer_lanes.pop(key, None)
+                    raise
+            elif local_error is not None:
+                raise RuntimeError(
+                    "post-commit session construction failed: %s" % local_error)
+
+            local_error = None
+            if manifest.qualified_id in self._builtin_catalyst_consumers:
+                try:
+                    _reserve_builtin_catalyst_process_lifecycle()
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=local_error,
+                    phase="Catalyst process lifecycle reservation",
+                )
+            elif local_error is not None:
+                raise RuntimeError(
+                    "Catalyst process lifecycle reservation failed: %s" % local_error)
+
+            recovery_run_identities = tuple(sorted({
+                record.frame.snapshot.provenance.run_identity
+                for record in replay_records
+                if record.frame.snapshot.provenance.run_identity != run_identity
+            }, key=lambda item: item.token))
+            local_error = None
+            if active:
+                try:
+                    observer_queue = self._observer_queue(
+                        manifest,
+                        run_identity,
+                        session=session,
+                        recovery_run_identities=recovery_run_identities,
+                    )
+                    if journal is not None:
+                        self._replay_observer_journal(
+                            manifest,
+                            observer_queue,
+                            journal,
+                            replay_records,
+                            replay_states,
+                        )
+                except BaseException as error:
+                    local_error = _exception_text(error)
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=local_error,
+                    phase="session initialization/replay",
+                )
+            elif local_error is not None:
+                raise RuntimeError(
+                    "post-commit session initialization/replay failed: %s" % local_error)
+
+    def _submit_live_visualization(
+        self,
+        effect: AcceptedSideEffect,
+        frame: _DetachedObserverFrame | None,
+        journal: Any = None,
+        journal_record: Any = None,
+        preexisting_committed: bool = False,
+    ) -> None:
+        """Commit and arm one post-commit job only after rank-identical main-thread consensus."""
+        manifest = self._manifest(effect)
+        raw_frame = None
+        if frame is not None:
+            try:
+                raw_frame = _authenticated_detached_frame(frame)
+            except BaseException:
+                raw_frame = None
+        run_identity = self._owner.last_run_identity
+        if type(run_identity) is not Identity or run_identity.domain != "run":
+            # Snapshot provenance is the stronger frame-local authority when available.
+            run_identity = (
+                None if raw_frame is None else raw_frame.snapshot.provenance.run_identity)
+        active = self._rank == 0 or manifest.parallel_mode in (
+            ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+        submission = None
+        local_error = None
+        try:
+            if type(preexisting_committed) is not bool:
+                raise TypeError("post-commit preexisting flag must be an exact bool")
+            if type(run_identity) is not Identity or run_identity.domain != "run":
+                raise RuntimeError("post-commit dispatch lost its exact run identity")
+            if active:
+                if frame is None or raw_frame is None:
+                    raise RuntimeError("active post-commit rank has no detached observer frame")
+                if raw_frame.snapshot.provenance.run_identity != run_identity:
+                    raise ValueError("post-commit frame belongs to a different run")
+                committed_record = journal_record
+                if journal is not None:
+                    if journal_record is None:
+                        raise RuntimeError("durable live frame lost its journal record")
+                    if not preexisting_committed:
+                        committed_record = journal.commit(journal_record)
+                elif journal_record is not None:
+                    raise TypeError("post-commit journal record has no DurableJournal")
+                already_delivered = (
+                    committed_record is not None
+                    and committed_record.state == "delivered"
+                )
+                if not preexisting_committed and not already_delivered:
+                    submission = self._observer_queue(
+                        manifest, run_identity)._prepare_detached(
+                            frame,
+                            journal=journal,
+                            journal_record=committed_record,
+                        )
+        except BaseException as error:
+            local_error = _exception_text(error)
+        consensus_error = None
+        if manifest.parallel_mode is not ParallelMode.SERIAL:
+            try:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=local_error,
+                    phase="post-commit journal/enqueue",
+                )
+            except BaseException as error:
+                consensus_error = error
+        elif local_error is not None:
+            consensus_error = RuntimeError(local_error)
+        if consensus_error is not None:
+            if submission is not None:
+                submission.cancel(consensus_error)
+            if active and type(run_identity) is Identity and run_identity.domain == "run":
+                self._record_observer_failure(
+                    manifest.qualified_id, run_identity, consensus_error)
+            return None
+        if submission is not None:
+            submission.arm()
+        return None
+
+    def _drain_observer_manifest(
+        self,
+        manifest: Any,
+        run_identity: Identity,
+        *,
+        close: bool,
+    ) -> tuple[str, ...]:
+        key = self._observer_key(manifest.qualified_id, run_identity)
+        local_reports: tuple[ObserverDeliveryReport, ...] = ()
+        local_diagnostics = list(self._observer_pending_failures.pop(key, ()))
+        worker_mpi = manifest.parallel_mode in (
+            ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+        active = self._rank == 0 or worker_mpi
+        observer_queue = self._observer_queues.get(key) if active else None
+        if observer_queue is not None:
+            try:
+                local_reports = observer_queue.close() if close else observer_queue.flush()
+            except BaseException as error:
+                local_reports = observer_queue.reports
+                local_diagnostics.append(_exception_text(error))
+            finally:
+                if close:
+                    self._observer_queues.pop(key, None)
+        if close and worker_mpi:
+            lane = self._observer_lanes.pop(key, None)
+            if lane is None:
+                local_diagnostics.append("worker MPI lane disappeared before collective close")
+            else:
+                try:
+                    lane.close_collectively()
+                except BaseException as error:
+                    local_diagnostics.append(
+                        "worker MPI lane close failed: %s" % _exception_text(error))
+        envelope = {
+            "rank": self._rank,
+            "reports": [report.to_collective_data() for report in local_reports],
+            "diagnostics": local_diagnostics,
+        }
+        if manifest.parallel_mode is ParallelMode.ROOT:
+            if self._communicator is None:
+                raise RuntimeError("ROOT post-commit consumer lost its native communicator")
+            rows = allgather_value(self._communicator, envelope)
+            if len(rows) != self._size or any(
+                    not isinstance(row, Mapping)
+                    or set(row) != {"rank", "reports", "diagnostics"}
+                    or row["rank"] != rank
+                    or not isinstance(row["reports"], (tuple, list))
+                    or not isinstance(row["diagnostics"], (tuple, list))
+                    for rank, row in enumerate(rows)):
+                raise RuntimeError("ROOT post-commit flush returned a malformed envelope")
+            if any(row["reports"] or row["diagnostics"] for row in rows[1:]):
+                raise RuntimeError(
+                    "ROOT post-commit delivery occurred outside rank zero")
+            authoritative = rows[0]
+        elif worker_mpi:
+            if self._communicator is None:
+                raise RuntimeError("MPI post-commit flush lost its world communicator")
+            rows = allgather_value(self._communicator, envelope)
+            if len(rows) != self._size or any(
+                    not isinstance(row, Mapping)
+                    or set(row) != {"rank", "reports", "diagnostics"}
+                    or row["rank"] != owner
+                    or not isinstance(row["reports"], (tuple, list))
+                    or not isinstance(row["diagnostics"], (tuple, list))
+                    for owner, row in enumerate(rows)):
+                raise RuntimeError("MPI post-commit flush returned a malformed envelope")
+            authoritative = {
+                "rank": 0,
+                "reports": [report for row in rows for report in row["reports"]],
+                "diagnostics": [
+                    "rank %d: %s" % (owner, diagnostic)
+                    for owner, row in enumerate(rows)
+                    for diagnostic in row["diagnostics"]
+                ],
+            }
+        else:
+            authoritative = envelope
+        reports = tuple(
+            ObserverDeliveryReport.from_collective_data(dict(row))
+            for row in authoritative["reports"]
+        )
+        for report in reports:
+            if report.consumer_id != manifest.qualified_id:
+                raise RuntimeError("post-commit report authenticates another session")
+            self._observer_reports[report.identity.token] = report
+        diagnostics = tuple(str(value) for value in authoritative["diagnostics"])
+        release_diagnostics = tuple(
+            "frame %s writer finalization: %s" % (
+                report.frame_identity.token,
+                report.receipt.detail["writer_finalize_error"],
+            )
+            for report in reports
+            if report.receipt is not None
+            and report.receipt.provider_id
+            == "pops.output.async-scientific-writer.v1"
+            and report.receipt.detail.get("writer_finalize_error") is not None
+        )
+        diagnostics += release_diagnostics
+        for message in diagnostics:
+            rendered = "%s [%s]: %s" % (
+                manifest.qualified_id, run_identity.token, message)
+            if rendered not in self._observer_diagnostics:
+                self._observer_diagnostics.append(rendered)
+        failures = list(diagnostics)
+        failures.extend(
+            "frame %s: %s" % (report.frame_identity.token, report.reason)
+            for report in reports if report.status == "skipped"
+        )
+        if manifest.operation_data["on_failure"]["action"] == "report_only":
+            return ()
+        return tuple(
+            "%s: %s" % (manifest.qualified_id, message) for message in failures)
+
+    def flush_live_visualizations(
+        self,
+        run_identity: Identity,
+        *,
+        close: bool = False,
+        raise_on_failure: bool = True,
+    ) -> tuple[ObserverDeliveryReport, ...]:
+        """Drain every live consumer for one run, with ROOT consensus on the main thread."""
+        self._observer_key("run-flush", run_identity)
+        if close and run_identity.token in self._closed_observer_runs:
+            return tuple(
+                report for report in self.post_commit_reports
+                if report.run_identity == run_identity)
+        failures = []
+        manifests = tuple(sorted(
+            (row for row in self._owner._consumer_graph.nodes
+             if row.kind is ConsumerKind.MONITOR),
+            key=lambda value: value.qualified_id,
+        ))
+        for manifest in manifests:
+            try:
+                failures.extend(self._drain_observer_manifest(
+                    manifest, run_identity, close=close))
+            except BaseException as error:
+                rendered = "%s: %s" % (manifest.qualified_id, _exception_text(error))
+                if rendered not in self._observer_diagnostics:
+                    self._observer_diagnostics.append(rendered)
+                failures.append(rendered)
+        if close:
+            worker = self._observer_workers.pop(run_identity.token, None)
+            if worker is not None:
+                try:
+                    worker.close()
+                except BaseException as error:
+                    rendered = "post-commit worker: %s" % _exception_text(error)
+                    if rendered not in self._observer_diagnostics:
+                        self._observer_diagnostics.append(rendered)
+                    failures.append(rendered)
+            self._closed_observer_runs.add(run_identity.token)
+        if failures and raise_on_failure:
+            raise RuntimeError(
+                "post-commit consumer delivery failed at %s: %s"
+                % ("run close" if close else "flush", "; ".join(failures)))
+        return tuple(
+            report for report in self.post_commit_reports
+            if report.run_identity == run_identity)
+
+    def flush_post_commit_consumers(
+        self,
+        run_identity: Identity,
+        *,
+        close: bool = False,
+        raise_on_failure: bool = True,
+    ) -> tuple[ObserverDeliveryReport, ...]:
+        return self.flush_live_visualizations(
+            run_identity, close=close, raise_on_failure=raise_on_failure)
+
+    def close_live_visualizations(
+        self,
+        run_identity: Identity,
+        *,
+        raise_on_failure: bool = True,
+    ) -> tuple[ObserverDeliveryReport, ...]:
+        return self.flush_live_visualizations(
+            run_identity, close=True, raise_on_failure=raise_on_failure)
 
     def diagnostic_restart_state(self) -> dict[str, Any]:
         """Return the complete last-accepted typed diagnostic registry."""
@@ -1428,6 +2392,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
+        if manifest.output_format_data["provider_id"] == "pops.output.hdf5.v1":
+            self._drain_post_commit_before_hdf5()
         snapshot, request = self._owner._output_snapshot(
             manifest, self._pending.get(effect.identity.token, ()))
         fmt = manifest.output_format
@@ -1444,12 +2410,66 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             communicator = None
         return OutputPreparation(fmt, snapshot, request, target, communicator)
 
+    def _prepare_live_visualization(
+        self, effect: AcceptedSideEffect, manifest: Any,
+    ) -> _PreparedLiveVisualization:
+        snapshot, request = self._owner._output_snapshot(manifest)
+        frame = None
+        journal = None
+        journal_record = None
+        local_error = None
+        try:
+            if request.parallel_mode is not manifest.parallel_mode:
+                raise RuntimeError("live-visualization snapshot parallel mode is stale")
+            active = self._rank == 0 or manifest.parallel_mode in (
+                ParallelMode.PER_RANK, ParallelMode.COLLECTIVE)
+            if active:
+                # The runtime snapshot owns its field arrays, but native geometry views are
+                # borrowed.  Detach once at capture time, before the accepted native boundary can
+                # regrid or advance, and carry private ownership evidence into the queue.
+                frame = _detach_owned_observer_frame(ObserverFrame(snapshot, request))
+                journal = self._observer_journal(
+                    manifest, snapshot.provenance.run_identity)
+                if journal is not None:
+                    journal_record = journal.prepare(
+                        _authenticated_detached_frame(frame))
+        except BaseException as error:
+            local_error = _exception_text(error)
+        try:
+            if manifest.parallel_mode is not ParallelMode.SERIAL:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=local_error,
+                    phase="frame detachment",
+                )
+            elif local_error is not None:
+                raise RuntimeError(
+                    "post-commit frame detachment failed during durable preparation: %s"
+                    % local_error)
+        except BaseException:
+            if journal is not None and journal_record is not None \
+                    and journal_record.state == "prepared":
+                journal.discard_prepared(journal_record)
+            raise
+        return _PreparedLiveVisualization(
+            effect,
+            frame,
+            self._submit_live_visualization,
+            journal,
+            journal_record,
+            size=self._size,
+        )
+
     def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
         if type(effect) is not AcceptedSideEffect:
             raise TypeError("RuntimeConsumerPublisher requires an exact AcceptedSideEffect")
         manifest = self._manifest(effect)
-        if manifest.kind in (ConsumerKind.DIAGNOSTIC, ConsumerKind.MONITOR):
+        if manifest.kind is ConsumerKind.DIAGNOSTIC:
             return self._prepare_diagnostic(effect, manifest)
+        if manifest.kind is ConsumerKind.MONITOR:
+            return self._prepare_live_visualization(effect, manifest)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             diagnostic = self._prepare_diagnostic(effect, manifest) \
                 if manifest.diagnostic_quantities else None

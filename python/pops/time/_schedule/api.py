@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal, localcontext
+import math
 from typing import Any, ClassVar
 
 from pops.params.use_sites import ParamUse, resolve_param_use
@@ -107,6 +109,28 @@ class Trigger:
             "schedule trigger %s does not implement consumer_due()" % type(self).__name__
         )
 
+    def consumer_next_deadline(self, *, physical_time_hex: str) -> str | None:
+        """Return the next hard physical-time boundary, if this trigger owns one.
+
+        The default keeps logical cadences independent from the step controller.  Physical-time
+        triggers override this protocol with a canonical ``float.hex()`` value so the runtime can
+        cap a macro-step before it prepares accepted ConsumerGraph effects.
+        """
+        del physical_time_hex
+        return None
+
+    def consumer_occurrence_evidence(
+        self, coordinate: int, moment: Any,
+    ) -> dict[str, Any] | None:
+        """Optional stable key for one logical occurrence.
+
+        Most schedules use the exact runtime point/domain evidence.  Physical lattices override
+        this so two binary64 landing points equivalent to the same lattice index cannot publish
+        the same logical sample twice.
+        """
+        del coordinate, moment
+        return None
+
 
 @stable_component_identity("pops://time/schedule/triggers/always")
 @dataclass(frozen=True, slots=True)
@@ -144,6 +168,147 @@ class Every(Trigger):
 
     def consumer_due(self, coordinate: int, moment: Any) -> bool:
         return not moment.at_start and coordinate % self.n == 0
+
+
+def _canonical_binary64(value: Any, *, where: str, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("%s must be a finite binary64 number" % where)
+    number = float(value)
+    if not math.isfinite(number) or (positive and not number > 0.0):
+        qualifier = "positive " if positive else ""
+        raise ValueError("%s must be a finite %sbinary64 number" % (where, qualifier))
+    return number
+
+
+def _canonical_time_hex(value: Any, *, where: str) -> tuple[str, float]:
+    if not isinstance(value, str):
+        raise TypeError("%s must be canonical float.hex() text" % where)
+    try:
+        number = float.fromhex(value)
+    except (OverflowError, ValueError):
+        raise ValueError("%s must be canonical float.hex() text" % where) from None
+    if not math.isfinite(number) or number.hex() != value:
+        raise ValueError("%s must be canonical finite float.hex() text" % where)
+    return value, number
+
+
+def _same_physical_time(left: float, right: float) -> bool:
+    tolerance = 4.0 * max(math.ulp(left), math.ulp(right))
+    return abs(left - right) <= tolerance
+
+
+def _every_dt_quotient(now: float, interval: float) -> float:
+    quotient = now / interval
+    if not math.isfinite(quotient):
+        raise RuntimeError(
+            "EveryDt interval is below binary64 clock resolution at the current physical time"
+        )
+    return quotient
+
+
+def _every_dt_lattice_time(index: int, interval: float) -> float:
+    """Round one user-facing decimal lattice point to binary64.
+
+    Python's direct ``3 * 0.1`` is one ulp above the float written ``0.3``.  Deriving each point
+    from the interval's shortest round-trip decimal spelling makes both authored forms the same
+    physical threshold.  The directional due check can therefore remain strict: an unrelated
+    adaptive step immediately below the threshold is not published early.
+    """
+    with localcontext() as context:
+        context.prec = 50
+        return float(Decimal(str(interval)) * index)
+
+
+@stable_component_identity("pops://time/schedule/triggers/every-dt")
+@dataclass(frozen=True, slots=True)
+class EveryDt(Trigger):
+    """Accepted ConsumerGraph cadence on the absolute lattice ``k * interval``, ``k >= 1``.
+
+    The runtime caps macro-steps at the next lattice point, so adaptive ``dt`` values do not move
+    samples away from their requested physical times.  This trigger intentionally has no native
+    Program-node lowering: use it for outputs, diagnostics and checkpoints in a ConsumerGraph.
+    """
+
+    interval: float
+    manifest_tag: ClassVar[str | None] = "every_dt"
+
+    def __post_init__(self) -> None:
+        super(EveryDt, self).__post_init__()
+        interval = resolve_param_use(
+            self.interval, ParamUse.SCHEDULE, where="EveryDt(interval=)")
+        object.__setattr__(
+            self,
+            "interval",
+            _canonical_binary64(interval, where="EveryDt(interval=)", positive=True),
+        )
+
+    def is_always(self) -> bool:
+        # ``Schedule.__post_init__`` needs this classification without requesting a native Program
+        # lowering that deliberately does not exist for this ConsumerGraph-owned cadence.
+        return False
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        raise NotImplementedError(
+            "EveryDt is a ConsumerGraph physical-time cadence and cannot schedule compiled "
+            "Program nodes at %s" % where
+        )
+
+    def schedule_params(self) -> dict[str, Any]:
+        return {"interval": self.interval}
+
+    def schedule_payload(self) -> dict[str, Any]:
+        return {"interval": {"binary64": self.interval.hex()}}
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        del coordinate
+        if moment.at_start:
+            return False
+        _, now = _canonical_time_hex(
+            moment.physical_time_hex,
+            where="EveryDt ConsumerMoment.physical_time_hex",
+        )
+        nearest = round(_every_dt_quotient(now, self.interval))
+        if nearest < 1:
+            return False
+        target = _every_dt_lattice_time(nearest, self.interval)
+        return math.isfinite(target) and now >= target and _same_physical_time(now, target)
+
+    def consumer_occurrence_evidence(
+        self, coordinate: int, moment: Any,
+    ) -> dict[str, Any] | None:
+        del coordinate
+        _, now = _canonical_time_hex(
+            moment.physical_time_hex,
+            where="EveryDt ConsumerMoment.physical_time_hex",
+        )
+        index = round(_every_dt_quotient(now, self.interval))
+        if index < 1:
+            return None
+        target = _every_dt_lattice_time(index, self.interval)
+        if not (math.isfinite(target) and now >= target and _same_physical_time(now, target)):
+            return None
+        return {"kind": "physical_lattice", "index": index}
+
+    def consumer_next_deadline(self, *, physical_time_hex: str) -> str | None:
+        _, now = _canonical_time_hex(
+            physical_time_hex,
+            where="EveryDt.consumer_next_deadline physical_time_hex",
+        )
+        quotient = _every_dt_quotient(now, self.interval)
+        nearest = round(quotient)
+        nearest_time = _every_dt_lattice_time(nearest, self.interval)
+        if nearest >= 1 and now >= nearest_time and _same_physical_time(now, nearest_time):
+            index = nearest + 1
+        else:
+            index = max(1, math.floor(quotient) + 1)
+        deadline = _every_dt_lattice_time(index, self.interval)
+        if not math.isfinite(deadline):
+            raise OverflowError("EveryDt next physical-time deadline is not finite")
+        if not deadline > now:
+            raise RuntimeError(
+                "EveryDt interval is below binary64 clock resolution at the current physical time"
+            )
+        return deadline.hex()
 
 
 @stable_component_identity("pops://time/schedule/triggers/at-start")
@@ -439,6 +604,11 @@ def every(n: Any, *, clock: Clock) -> Schedule:
     return Schedule(Every(AcceptedStep(clock), n))
 
 
+def every_dt(interval: Any, *, clock: Clock) -> Schedule:
+    """Schedule accepted ConsumerGraph effects at ``interval, 2*interval, ...``."""
+    return Schedule(EveryDt(AcceptedStep(clock), interval))
+
+
 def when(cond: Any, *, clock: Clock) -> Schedule:
     return Schedule(When(AcceptedStep(clock), cond))
 
@@ -472,6 +642,7 @@ __all__ = [
     "Trigger",
     "Always",
     "Every",
+    "EveryDt",
     "AtStart",
     "AtEnd",
     "When",
@@ -484,6 +655,7 @@ __all__ = [
     "Schedule",
     "always",
     "every",
+    "every_dt",
     "when",
     "on_start",
     "on_end",

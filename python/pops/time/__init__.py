@@ -5,9 +5,11 @@ BUILDS a typed IR; it never executes a numerical stage. Compiler and runtime lay
 package through explicit adapters, while :mod:`pops.time` remains an inert authoring authority.
 
 This package is the time LANGUAGE only: ``Program``, the ``ProgramValue`` /
-``StageStateSet`` values, the ``Schedule`` scheduler (``always`` / ``every`` / ``when`` /
-``on_start`` / ``on_end`` / ``subcycle``) and the IR-optimizer wrappers (``eliminate_*`` /
-``optimize``). The READY time-stepping schemes live in ``pops.lib.time`` (Spec 4 s6 / s14),
+``StageStateSet`` values, the ``Schedule`` scheduler (``always`` / ``every`` / ``every_dt`` /
+``when`` / ``on_start`` / ``on_end`` / ``subcycle``) and the IR-optimizer wrappers
+(``eliminate_*`` / ``optimize``). ``every_dt`` is the ConsumerGraph physical-time cadence; it
+does not schedule compiled Program stages. The READY time-stepping schemes live in
+``pops.lib.time`` (Spec 4 s6 / s14),
 called by their explicit names (no ``std`` bundle, Spec 4 s7); import them from there.
 
 cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
@@ -56,11 +58,11 @@ from pops.time._step.transaction import (  # noqa: F401
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time._schedule.api import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
-    ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
+    ClockTick, Domain, Error, Event, EventHandle, Every, EveryDt, Hold, OffPolicy,
     Schedule, ScheduleAction, ScheduleComment, ScheduleDomainIR, ScheduleDueIR,
     ScheduleDueKind, ScheduleLoweringIR, ScheduleOffIR, ScheduleTimeline,
     Skip, Stage, Trigger, WallOutput, When, Zero,
-    always, every, on_end, on_start, when,
+    always, every, every_dt, on_end, on_start, when,
 )
 from pops.time._schedule.synchronization import (  # noqa: F401
     SampleAndHold, SynchronizationRelation,
@@ -89,12 +91,12 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
            "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
-           "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every",
+           "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every", "EveryDt",
            "AtStart", "AtEnd", "When", "OffPolicy", "Hold", "Skip", "Zero",
            "AccumulateDt", "Error",
             "ScheduleTimeline", "ScheduleDueKind", "ScheduleAction", "ScheduleComment",
             "ScheduleDomainIR", "ScheduleDueIR", "ScheduleOffIR", "ScheduleLoweringIR",
             "UnresolvedScheduleCondition",
-            "always", "every", "when", "on_start", "on_end",
+            "always", "every", "every_dt", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]

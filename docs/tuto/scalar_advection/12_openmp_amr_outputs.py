@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """AMR OpenMP avec une sortie scientifique periodique.
 
-Le format et la frequence se choisissent avec deux constantes. Le ConsumerGraph ecrit ensuite un
-instantane au fil du calcul et le meme format rouvre le dernier artefact produit.
+Le format et la cadence physique se choisissent avec deux constantes. Le ConsumerGraph publie les
+instants acceptes au fil du calcul; ParaView construit un PVD temporel standard et peut aussi
+alimenter une visualisation Catalyst strictement serie.
 """
 
 # ruff: noqa: E402
 
+import os
 from pathlib import Path
 import shutil
 
@@ -44,14 +46,17 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.output import (
+    Catalyst,
     ConsumerGraph,
+    LiveVisualization,
+    ParallelMode,
     ScientificOutput,
 )
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import AdaptiveCFL, every
+from pops.time import AdaptiveCFL, every, every_dt
 
 
 NX = 32
@@ -66,10 +71,11 @@ MAX_STEPS = 10_000
 
 # Pour changer de format, remplacer seulement ParaView par HDF5 ou NPZ.
 OUTPUT_FORMAT = output.ParaView()
-OUTPUT_EVERY_STEPS = 2
+OUTPUT_EVERY_DT = 0.02
 
 HERE = Path(__file__).resolve().parent
 OUTPUT_ROOT = HERE / "results" / "12_openmp_amr_outputs"
+ENABLE_CATALYST = os.environ.get("POPS_CATALYST") == "1"
 
 shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
 
@@ -126,12 +132,16 @@ tracer = case.block("tracer", model=model)
 tracer_U = tracer[U]
 
 boundaries = frame.boundaries
-numerics.boundaries.add(TransportBoundarySet({
-    boundaries.x_min: Inflow(state=tracer_U, value=FAR_FIELD),
-    boundaries.x_max: Outflow(state=tracer_U),
-    boundaries.y_min: Inflow(state=tracer_U, value=FAR_FIELD),
-    boundaries.y_max: Outflow(state=tracer_U),
-}))
+numerics.boundaries.add(
+    TransportBoundarySet(
+        {
+            boundaries.x_min: Inflow(state=tracer_U, value=FAR_FIELD),
+            boundaries.x_max: Outflow(state=tracer_U),
+            boundaries.y_min: Inflow(state=tracer_U, value=FAR_FIELD),
+            boundaries.y_max: Outflow(state=tracer_U),
+        }
+    )
+)
 case.numerics(numerics, block=tracer)
 
 
@@ -140,29 +150,42 @@ program = SSPRK2(tracer_U, rate=advection_rate)
 program.step_strategy(AdaptiveCFL(cfl=CFL, max_dt=MAX_DT))
 case.program(program)
 
-case.initials.add(InitialCondition(
-    state=tracer_U,
-    value=Gaussian(
-        frame=frame,
-        center={x_axis: 0.30, y_axis: 0.35},
-        background=FAR_FIELD,
-        amplitude=0.95,
-        inverse_width=120.0,
-    ),
-    projection=ConservativeCellAverage(),
-))
+case.initials.add(
+    InitialCondition(
+        state=tracer_U,
+        value=Gaussian(
+            frame=frame,
+            center={x_axis: 0.30, y_axis: 0.35},
+            background=FAR_FIELD,
+            amplitude=0.95,
+            inverse_width=120.0,
+        ),
+        projection=ConservativeCellAverage(),
+    )
+)
 
 
-# 4. Un instantane est publie tous les OUTPUT_EVERY_STEPS pas acceptes.
-output_schedule = every(OUTPUT_EVERY_STEPS, clock=program.clock)
-case.consumers(ConsumerGraph.from_consumers((
+# 4. Un instantane est publie sur une grille reguliere de temps physique accepte.
+output_schedule = every_dt(OUTPUT_EVERY_DT, clock=program.clock)
+consumers = [
     ScientificOutput(
         format=OUTPUT_FORMAT,
         schedule=output_schedule,
         fields=(tracer_U,),
         target="solution/tracer",
     ),
-)))
+]
+if ENABLE_CATALYST:
+    consumers.append(
+        LiveVisualization(
+            observer=Catalyst(pipeline=str(HERE / "catalyst_pipeline.py")),
+            schedule=output_schedule,
+            fields=(tracer_U,),
+            mode=ParallelMode.SERIAL,
+            queue_capacity=2,
+        )
+    )
+case.consumers(ConsumerGraph.from_consumers(tuple(consumers)))
 
 
 # 5. AMR a deux niveaux avec transfert conservatif et subcycling 2:1.
@@ -186,9 +209,7 @@ layout = AMR(
     tagging=tagging,
     regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
     transfer=transfer,
-    execution=AMRExecution.subcycled((
-        AMRClockRelation(0, 1, 2),
-    )),
+    execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
 )
 
 
@@ -197,7 +218,7 @@ validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 simulation = pops.bind(artifact)
-pops.run(
+report = pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
@@ -205,15 +226,28 @@ pops.run(
 )
 
 
-# 7. Le format choisi authentifie la serie et rouvre son dernier instantane.
-output_series = OUTPUT_FORMAT.reopen_series(OUTPUT_ROOT / "solution" / "tracer")
-last_output = output_series.latest
+# 7. Le format choisi authentifie sa serie canonique et son dernier instantane.
+if isinstance(OUTPUT_FORMAT, output.ParaView):
+    pvd_paths = tuple(sorted(OUTPUT_ROOT.rglob("*.pvd")))
+    if not pvd_paths:
+        raise RuntimeError("ParaView temporal output did not publish a PVD collection")
+    series_path = pvd_paths[-1]
+    output_series = OUTPUT_FORMAT.reopen_series(series_path)
+    last_output = OUTPUT_FORMAT.reopen(output_series.paths[-1])
+    sample_count = len(output_series.paths)
+else:
+    output_series = OUTPUT_FORMAT.reopen_series(OUTPUT_ROOT / "solution" / "tracer")
+    last_output = output_series.latest
+    series_path = output_series.path
+    sample_count = len(output_series.samples)
 
 print("PoPS AMR periodic-output tutorial finished")
+print("  accepted steps   : %d" % report.accepted_steps)
+print("  final time       : %.6f" % simulation.time())
 print("  AMR levels       : %d" % simulation.n_levels())
-print("  snapshots        : %d" % len(output_series.samples))
+print("  snapshots        : %d" % sample_count)
 print("  arrays in latest : %d" % len(last_output.arrays))
 print("  latest identity  : %s" % last_output.output_identity.hexdigest[:12])
-print("  latest artifact  : %s" % output_series.files[-1])
-print("  time series      : %s" % output_series.path)
+print("  time series      : %s" % series_path)
+print("  Catalyst live    : %s" % ("serial" if ENABLE_CATALYST else "disabled"))
 print("  output root      : %s" % OUTPUT_ROOT)

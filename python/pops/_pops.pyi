@@ -129,6 +129,25 @@ class _NativeWorldCommunicator:
     def gather_bytes(
         self, payload: bytes, root: int = 0
     ) -> tuple[bytes, ...] | None: ...
+    def duplicate_observer_lane(self, identity: str) -> _NativeObserverMpiLane: ...
+
+
+class _NativeObserverMpiLane:
+    """Explicit-lifetime communicator duplicated for one post-commit observer worker."""
+
+    rank: int
+    size: int
+    active: bool
+    closed: bool
+    identity: str
+    fortran_handle: int
+    def barrier(self) -> None: ...
+    def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
+    def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
+    def gather_bytes(
+        self, payload: bytes, root: int = 0
+    ) -> tuple[bytes, ...] | None: ...
+    def close_collectively(self) -> None: ...
 
 
 class _SolveReport:

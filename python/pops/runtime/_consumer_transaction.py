@@ -355,9 +355,10 @@ class ConsumerTransaction:
             diagnostics + cleanup + (self._reason(error),),
         )
         self._state = "failed"
+        reason = self._reason(error)
         return ConsumerPublicationError(
-            "consumer %s failed under %s" % (
-                effect.consumer_id, type(effect.failure_action).__name__),
+            "consumer %s failed under %s: %s" % (
+                effect.consumer_id, type(effect.failure_action).__name__, reason),
             report=report,
         )
 

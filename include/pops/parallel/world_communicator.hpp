@@ -160,6 +160,17 @@ class WorldCommunicator {
 #endif
   }
 
+  /// Borrow the exact process-world communicator for native subsystems that also accept a
+  /// duplicated observer lane. The returned view never owns or frees MPI_COMM_WORLD.
+  [[nodiscard]] CommunicatorView communicator() const {
+#ifdef POPS_HAS_MPI
+    detail::require_active_mpi_world_unlocked();
+    return CommunicatorView{MPI_COMM_WORLD};
+#else
+    return CommunicatorView{};
+#endif
+  }
+
   void require_active_mpi_world() const {
 #ifdef POPS_HAS_MPI
     detail::require_active_mpi_world();

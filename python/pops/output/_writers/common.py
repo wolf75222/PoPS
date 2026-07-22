@@ -227,9 +227,21 @@ def _snapshot_series_family_identity(
     return output_series_family_identity(
         format_data,
         format_name=format_name,
-        selection=request.publication_data(),
+        selection=_publication_family_data(request),
         run_identity=snapshot.provenance.run_identity.token,
     )
+
+
+def _publication_family_data(request: OutputRequest) -> dict[str, Any]:
+    """Return cross-rank publication evidence for one logical artifact family."""
+    from pops.output._consumer_contracts import ParallelMode
+
+    data = request.publication_data()
+    if request.parallel_mode is ParallelMode.PER_RANK:
+        data = dict(data)
+        data.pop("rank")
+        data["ranks"] = list(range(request.size))
+    return data
 
 
 def deterministic_target(
@@ -257,12 +269,17 @@ def deterministic_target(
     if (not extension.startswith(".") or "/" in extension or "\\" in extension
             or len(extension.encode("utf-8")) > 32):
         raise ValueError("output extension must be a simple suffix")
+    from pops.output._consumer_contracts import ParallelMode
+
+    # The rank qualifier below makes each PER_RANK leaf distinct.  Keep the identity digest common
+    # to the complete rank family so distributed publication authenticates one target template.
+    publication_selection = _publication_family_data(request)
     target_identity = make_identity("scientific-output-target", {
         "prefix": str(prefix),
         "consumer_id": request.consumer_id,
         "clock": snapshot.clock.to_data(),
         "provenance": snapshot.provenance.to_data(),
-        "publication_selection": request.publication_data(),
+        "publication_selection": publication_selection,
         "extension": extension,
     })
     if format_data is None:
@@ -277,7 +294,6 @@ def deterministic_target(
         format_name = "extension:%s" % extension
     family = _snapshot_series_family_identity(
         format_data, format_name, snapshot, request)
-    from pops.output._consumer_contracts import ParallelMode
 
     rank_part = (
         "__r%06d" % request.rank
@@ -1966,12 +1982,12 @@ def field_values_on_mask(field: Any, mask: Any, *, require_piece_subset: bool) -
     result = np.empty(shape, dtype=np.dtype(field.array_dtype))
     written = np.zeros(shape[0], dtype=np.bool_)
     for piece in field.pieces:
-        jlo, ilo = piece.lower
-        jhi, ihi = piece.upper
-        local_mask = selected[jlo:jhi, ilo:ihi]
+        spatial = tuple(
+            slice(lo, hi) for lo, hi in zip(piece.lower, piece.upper, strict=True))
+        local_mask = selected[spatial]
         if require_piece_subset and not np.all(local_mask):
             raise ValueError("field piece extends outside its exact valid geometry mask")
-        target = ordinals[jlo:jhi, ilo:ihi][local_mask]
+        target = ordinals[spatial][local_mask]
         if np.any(written[target]):
             raise ValueError("field pieces overlap on the selected geometry mask")
         if components:
@@ -1993,38 +2009,79 @@ def validate_field_pieces(
     rank: int | None = None,
     size: int | None = None,
 ) -> None:
-    """Prove that pieces are a non-overlapping subset/partition of valid geometry boxes."""
+    """Prove exact cell boxes or an exact nodal union for a rank-1/2/3 geometry."""
+    import math
+    import numpy as np
+
     pieces = sorted(field.pieces, key=lambda piece: (piece.lower, piece.upper))
     boxes = tuple(geometry.boxes)
-    active: list[Any] = []
-    covered = 0
+    dimension = len(geometry.cell_shape)
+    if len(field.global_shape) != dimension:
+        raise ValueError("field and geometry spatial ranks differ")
+    if field.centering not in {"cell", "node"}:
+        raise NotImplementedError(
+            "exact piece validation for %s fields requires a distinct face topology"
+            % field.centering)
+    expected_mask = None
+    actual_mask = None
+    if field.centering == "node":
+        expected_mask = np.zeros(field.global_shape, dtype=np.bool_)
+        actual_mask = np.zeros(field.global_shape, dtype=np.bool_)
+        for box in boxes:
+            lower, upper = box[:dimension], box[dimension:]
+            nodal_upper = tuple(value + 1 for value in upper)
+            expected_mask[tuple(
+                slice(lo, hi) for lo, hi in zip(lower, nodal_upper, strict=True))] = True
     for piece in pieces:
-        jlo, ilo = piece.lower
-        jhi, ihi = piece.upper
+        if len(piece.lower) != dimension:
+            raise ValueError("field piece and geometry spatial ranks differ")
         if piece.global_box_index >= len(boxes):
             raise ValueError("field global_box_index lies outside exact geometry boxes")
-        if (jlo, ilo, jhi, ihi) != boxes[piece.global_box_index]:
-            raise ValueError("field piece differs from its indexed exact geometry box")
+        box = boxes[piece.global_box_index]
+        box_lower, box_upper = box[:dimension], box[dimension:]
+        if field.centering == "cell":
+            if piece.lower + piece.upper != box:
+                raise ValueError("field piece differs from its indexed exact geometry box")
+        else:
+            nodal_upper = tuple(value + 1 for value in box_upper)
+            if any(
+                    piece_lo < box_lo or piece_hi > box_hi
+                    for piece_lo, piece_hi, box_lo, box_hi in zip(
+                        piece.lower, piece.upper, box_lower, nodal_upper, strict=True)):
+                raise ValueError("nodal field piece lies outside its indexed geometry box")
         if rank is not None and piece.owner_rank != rank:
             raise ValueError("field piece owner_rank differs from its publication rank")
         if size is not None and piece.owner_rank >= size:
             raise ValueError("field piece owner_rank lies outside publication topology")
         if complete and piece.replicated and piece.owner_rank != 0:
             raise ValueError("complete field uses a non-root replicated piece authority")
-        active = [other for other in active if other.upper[0] > jlo]
-        if any(not (ihi <= other.lower[1] or other.upper[1] <= ilo) for other in active):
-            raise ValueError("field pieces overlap")
-        active.append(piece)
-        covered += (jhi - jlo) * (ihi - ilo)
-    if complete:
-        expected = sum(
-            (jhi - jlo) * (ihi - ilo)
-            for jlo, ilo, jhi, ihi in boxes
-        )
-        if covered != expected:
-            raise ValueError("field pieces do not exactly cover the valid geometry boxes")
-        if {piece.global_box_index for piece in pieces} != set(range(len(boxes))):
-            raise ValueError("field pieces do not authenticate every exact geometry box")
+        if actual_mask is not None:
+            spatial = tuple(
+                slice(lo, hi) for lo, hi in zip(piece.lower, piece.upper, strict=True))
+            if np.any(actual_mask[spatial]):
+                raise ValueError("nodal field pieces overlap")
+            actual_mask[spatial] = True
+    if field.centering == "cell":
+        if complete:
+            covered = sum(
+                math.prod(hi - lo for lo, hi in zip(
+                    piece.lower, piece.upper, strict=True))
+                for piece in pieces)
+            expected = sum(
+                math.prod(hi - lo for lo, hi in zip(
+                    box[:dimension], box[dimension:], strict=True))
+                for box in boxes)
+            if covered != expected:
+                raise ValueError("field pieces do not exactly cover the valid geometry boxes")
+            if {piece.global_box_index for piece in pieces} != set(range(len(boxes))):
+                raise ValueError("field pieces do not authenticate every exact geometry box")
+        return
+    if actual_mask is None or expected_mask is None:
+        raise RuntimeError("nodal validation masks were not initialized")
+    if np.any(actual_mask & ~expected_mask):
+        raise ValueError("nodal field pieces extend outside the represented geometry")
+    if complete and not np.array_equal(actual_mask, expected_mask):
+        raise ValueError("nodal field pieces do not exactly cover the represented geometry points")
 
 
 def selected_geometries(

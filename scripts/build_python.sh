@@ -129,6 +129,15 @@ cd "$HERE"
 if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
   WHEEL_DIR="$HERE/$WHEEL_DIR"
 fi
+cmake_settings=(-C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+if [[ $WITH_MPI -eq 1 ]]; then
+  # Environment seeding applies only to a fresh CMake cache.  These explicit settings also switch
+  # an existing serial scikit-build cache to the requested MPI + parallel-HDF5 contract.
+  cmake_settings+=(
+    -C cmake.define.POPS_USE_MPI=ON
+    -C cmake.define.POPS_USE_HDF5=ON
+  )
+fi
 if [[ -n "$WHEEL_DIR" ]]; then
   mkdir -p "$WHEEL_DIR"
   shopt -s nullglob
@@ -137,17 +146,16 @@ if [[ -n "$WHEEL_DIR" ]]; then
     echo "--wheel-dir must be empty; refusing stale release artifacts in $WHEEL_DIR" >&2
     exit 2
   fi
-  pip_args=(wheel -v . --no-deps --wheel-dir "$WHEEL_DIR" \
-    -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+  pip_args=(wheel -v . --no-deps --wheel-dir "$WHEEL_DIR" "${cmake_settings[@]}")
 else
-  pip_args=(install -v . -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+  pip_args=(install -v . "${cmake_settings[@]}")
 fi
 if python -c "import scikit_build_core, pybind11" >/dev/null 2>&1; then
   if [[ -n "$WHEEL_DIR" ]]; then
     pip_args=(wheel -v . --no-deps --no-build-isolation --wheel-dir "$WHEEL_DIR" \
-      -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+      "${cmake_settings[@]}")
   else
-    pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+    pip_args=(install -v . --no-build-isolation "${cmake_settings[@]}")
   fi
 else
   echo "note: scikit-build-core/pybind11 not in '$ENV_NAME'; using pip build isolation"

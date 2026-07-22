@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 
 import pytest
 
@@ -41,7 +42,7 @@ from pops.runtime._consumer import (
     PublicationReceipt,
     plan_accepted_side_effects,
 )
-from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint
+from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint, every_dt
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
 
@@ -102,11 +103,14 @@ def _manifest_for(
     )
 
 
-def _moment(clock: Clock, *, step: int = 2, layouts=()) -> ConsumerMoment:
+def _moment(
+    clock: Clock, *, step: int = 2, physical_time: float | None = None, layouts=()
+) -> ConsumerMoment:
     return ConsumerMoment(
         TimePoint(clock, step=step),
         accepted_step=step,
         attempt=1,
+        physical_time_hex=float(step if physical_time is None else physical_time).hex(),
         layouts=tuple(layouts),
     )
 
@@ -342,6 +346,7 @@ def test_failure_actions_have_exact_cursor_and_artifact_semantics():
     fail_publisher = _Publisher(fail_publications=1)
     with pytest.raises(ConsumerPublicationError) as failure:
         ConsumerTransaction(fail_plan, cursors, fail_publisher).accept()
+    assert "OSError: injected publication failure" in str(failure.value)
     assert failure.value.report.cursors.to_data() == cursors.to_data()
     assert failure.value.report.published == ()
     assert fail_publisher.temporaries == set()
@@ -384,6 +389,92 @@ def test_success_receipt_is_the_only_cursor_commit_and_deduplicates_occurrence()
     assert report.cursors.for_consumer(manifest.qualified_id) == plan.effects[0].cursor_after
     duplicate = plan_accepted_side_effects(runtime, graph, moment, report.cursors)
     assert duplicate.effects == ()
+
+
+def test_every_dt_is_due_only_on_reached_physical_thresholds_and_deduplicates():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("physical-output-cadence"))
+    manifest = replace(
+        _manifest_for(runtime, "physical", clock),
+        schedule=every_dt(0.1, clock=clock),
+    )
+    graph = ConsumerGraph((manifest,))
+    cursors = ConsumerCursorSet()
+
+    assert (
+        plan_accepted_side_effects(
+            runtime, graph, _moment(clock, step=1, physical_time=0.1 - 1.0e-8), cursors
+        ).effects
+        == ()
+    )
+    due = plan_accepted_side_effects(
+        runtime, graph, _moment(clock, step=2, physical_time=0.1), cursors
+    )
+    assert len(due.effects) == 1
+    accepted = ConsumerTransaction(due, cursors, _Publisher()).accept()
+    assert accepted.cursors.for_consumer(manifest.qualified_id).committed_samples == 1
+
+    duplicate = plan_accepted_side_effects(
+        runtime, graph, _moment(clock, step=2, physical_time=0.1), accepted.cursors
+    )
+    assert duplicate.effects == ()
+    assert (
+        plan_accepted_side_effects(
+            runtime, graph, _moment(clock, step=3, physical_time=0.15), accepted.cursors
+        ).effects
+        == ()
+    )
+    second = plan_accepted_side_effects(
+        runtime, graph, _moment(clock, step=4, physical_time=0.2), accepted.cursors
+    )
+    assert len(second.effects) == 1
+
+    assert manifest.schedule.trigger.consumer_next_deadline(
+        physical_time_hex=(0.2).hex()
+    ) == (0.3).hex()
+    assert (
+        plan_accepted_side_effects(
+            runtime,
+            graph,
+            _moment(clock, step=5, physical_time=math.nextafter(0.3, -math.inf)),
+            accepted.cursors,
+        ).effects
+        == ()
+    )
+    third = plan_accepted_side_effects(
+        runtime, graph, _moment(clock, step=6, physical_time=0.3), accepted.cursors
+    )
+    assert len(third.effects) == 1
+
+
+def test_every_dt_deduplicates_one_lattice_index_across_nearby_deadlines():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("nearby-physical-cadences"))
+    first = replace(
+        _manifest_for(runtime, "decimal-cadence", clock),
+        schedule=every_dt(0.1, clock=clock),
+    )
+    second = replace(
+        _manifest_for(runtime, "nextafter-cadence", clock),
+        schedule=every_dt(math.nextafter(0.1, math.inf), clock=clock),
+    )
+    graph = ConsumerGraph((first, second))
+    cursors = ConsumerCursorSet()
+
+    decimal_landing = plan_accepted_side_effects(
+        runtime, graph, _moment(clock, step=3, physical_time=0.3), cursors)
+    assert [effect.consumer_id for effect in decimal_landing.effects] == [
+        first.qualified_id]
+    accepted = ConsumerTransaction(decimal_landing, cursors, _Publisher()).accept()
+
+    nextafter_landing = plan_accepted_side_effects(
+        runtime,
+        graph,
+        _moment(clock, step=4, physical_time=math.nextafter(0.3, math.inf)),
+        accepted.cursors,
+    )
+    assert [effect.consumer_id for effect in nextafter_landing.effects] == [
+        second.qualified_id]
 
 
 def test_accepted_publications_remain_compensatable_until_the_outer_transaction_seals():

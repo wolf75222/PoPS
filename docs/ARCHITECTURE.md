@@ -628,6 +628,42 @@ The execution model is pure data parallelism, no threads sharing an arbitrary mu
 - Halo writes: the three families of ghosts (physical, parallel, coarse-fine) are sequenced steps, not concurrent with the interior computation. `fill_ghosts` is an explicit composition `fill_boundary` (exchange) then `fill_physical_bc` (BC at the border); it executes between two sweeps, not during.
 - MPI communication: the seam `comm` is not designed for concurrent calls from several threads on the same communicator; the pattern is single-thread per rank, threads/GPU inside the rank via `for_each_cell`.
 
+**Post-commit scientific output.** A detached observer frame is immutable and is submitted only
+after its numerical step commits. `ROOT` gathers on the main path and performs no MPI from its
+worker. Asynchronous `PER_RANK` and `COLLECTIVE` output require `MPI_THREAD_MULTIPLE`; each consumer
+receives a run-scoped duplicated execution lane and its worker never borrows `MPI_COMM_WORLD`. All
+post-commit sessions in one `RuntimeInstance` run share one process-local FIFO, which gives HDF5 and
+other asynchronous writers the same initialization/execution/finalization order on every rank.
+Synchronous HDF5 drains that FIFO before entering its writer. The default PVTU placement relays
+bounded VTU chunks through the lane to rank zero, so the published dataset does not require a shared filesystem;
+`SharedDirectory()` is the explicit direct-publication contract.
+
+`LiveVisualization` and the built-in Catalyst provider are currently single-rank only. Authoring
+rejects `ROOT`, `PER_RANK` and `COLLECTIVE`, runtime binding requires a proved serial execution
+context, and no `catalyst/mpi_comm` is passed. MPI runs remain observable through progressive PVTU
+or HDF5 `AsyncScientificOutput` artifacts.
+
+The built-in Catalyst provider permits one combined pipeline consumer and one simulation run per
+`RuntimeInstance`. Its one-shot process-global lifecycle reservation is never released; another
+built-in Catalyst simulation requires a fresh OS process. Multiple concurrent `RuntimeInstance`
+runs in one process are unsupported when asynchronous HDF5 or built-in Catalyst is active: each
+runtime owns a different FIFO and cannot jointly order process-global library state.
+
+The PoPS post-commit worker is the sole asynchronous layer: Catalyst internal async is forced off and
+an active inherited `CATALYST_ASYNC_ENABLED` is rejected, so `catalyst.execute` completes before its
+delivery receipt. A `DurableJournal` does not widen this
+concurrency contract. Its at-least-once delivery guarantee starts only after the frame reaches the
+durable `pending` handoff; that handoff is not atomic with the accepted transaction or a checkpoint.
+Complete `delivered` archives are retained as evidence and require an application-managed storage
+lifecycle.
+
+The VTK XML writer itself accepts authenticated Cartesian snapshots in one, two or three spatial
+dimensions and maps cell- and node-centred arrays to `CellData` and `PointData`/`PPointData`.
+The native PoPS capture path and built-in Catalyst Blueprint path remain two-dimensional and
+cell-centred; the generic writer does not imply a native 1D, 3D or nodal solver state. VTK array
+names come from explicit declaration strings such as `model.state("U", ...)`, not Python
+left-hand-side variable names. A real materialised PVSM is created only by a real ParaView
+`pvpython`; the portable JSON/Python recipe remains the installation-independent representation.
 
 ## Using the library
 

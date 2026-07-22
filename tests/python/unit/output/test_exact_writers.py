@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from fractions import Fraction
+from xml.etree import ElementTree as ET
 from importlib import import_module
 from copy import deepcopy
 from dataclasses import replace
@@ -25,17 +26,21 @@ from pops.output import (
     ArrayPiece, BalanceTerms, DiagnosticKey, DiagnosticPayload,
     FieldKey, FieldPayload, FileSeriesCatalog,
     HDF5, HDF5Writer, LevelGeometry, NPZ, NPZWriter, OutputClock,
+    MaterializedPVSM,
     OutputProvenance, OutputPublicationReceipt, OutputRequest, OutputSnapshot,
-    ParaView, ParaViewWriter, composite_integrals, deterministic_target, read_hdf5,
-    read_npz, read_paraview, writer_session_authority,
+    ParaView, ParaViewPreset, ParaViewWriter, composite_integrals, deterministic_target,
+    read_hdf5, read_npz, read_paraview, read_paraview_parallel,
+    read_paraview_series, writer_session_authority,
 )
 from pops.output._consumer_contracts import FailRun, ParallelMode, ScheduleCursor
+from pops.output.data import array_evidence
 from pops.output._writers.common import (
     _OutputRecoveryRequired,
     _StagedOutputFile,
     authenticate_series_catalog,
 )
 from pops.output._writers.hdf5 import _rebuild_parallel_snapshot_data
+from pops.output._writers.paraview import _series_identity, _stage_pvtu, _vtu_schema
 from pops.output.provider import consumer_format_data
 from pops.runtime._consumer import (
     AcceptedSideEffect, ConsumerPayload, PreparedPublication, PublicationReceipt, PublicationTarget,
@@ -44,7 +49,9 @@ from pops.runtime._output_publisher import (
     ConsumerOutputPublisher,
     OutputPreparation,
     PreparedConsumerOutput,
+    _per_rank_target_family,
 )
+from pops.runtime._runtime_consumers import _target
 from pops.runtime._runtime_instance import RuntimeInstance
 
 
@@ -289,6 +296,22 @@ def test_runtime_target_preserves_the_complete_logical_directory(tmp_path):
     assert target.parent == tmp_path / "solution" / "tracer"
     assert target.suffix == ".vtu"
     assert tuple(tmp_path.glob("*.vtu")) == ()
+
+
+def test_per_rank_deterministic_targets_share_one_authenticated_family(tmp_path):
+    snapshot, request, _ = _snapshot()
+    rank_zero = replace(
+        request, parallel_mode=ParallelMode.PER_RANK, rank=0, size=2)
+    rank_one = replace(
+        request, parallel_mode=ParallelMode.PER_RANK, rank=1, size=2)
+
+    zero_target = deterministic_target(
+        tmp_path, "fields", rank_zero, snapshot, ".vtu")
+    one_target = deterministic_target(
+        tmp_path, "fields", rank_one, snapshot, ".vtu")
+
+    assert zero_target != one_target
+    assert _per_rank_target_family(zero_target, 0) == _per_rank_target_family(one_target, 1)
 
 
 def test_npz_collision_and_discard_never_publish_partial_content(tmp_path):
@@ -872,15 +895,16 @@ def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path
     assert coarse_record["name"] == fine_record["name"] == "rho"
     assert np.array_equal(
         reopened.arrays["rho"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0])
-    assert np.array_equal(reopened.arrays["connectivity"], np.arange(32))
+    assert np.array_equal(reopened.arrays["connectivity"], [
+        0, 1, 4, 3, 1, 2, 5, 4, 3, 4, 7, 6, 4, 5, 8, 7,
+        9, 10, 13, 12, 10, 11, 14, 13, 12, 13, 16, 15, 13, 14, 17, 16,
+    ])
     assert np.array_equal(reopened.arrays["offsets"], np.arange(4, 33, 4))
-    assert np.array_equal(
-        reopened.arrays["Points"][::4, :2],
-        np.asarray([
-            [0.0, 0.0], [0.5, 0.0], [0.0, 0.5], [0.5, 0.5],
-            [10.25, 20.25], [10.5, 20.25], [10.25, 20.5], [10.5, 20.5],
-        ]),
-    )
+    assert reopened.arrays["Points"].shape == (18, 3)
+    assert np.array_equal(reopened.arrays["Points"][[0, 1, 3, 4, 9, 10, 12, 13], :2], [
+        [0.0, 0.0], [0.5, 0.0], [0.0, 0.5], [0.5, 0.5],
+        [10.25, 20.25], [10.5, 20.25], [10.25, 20.5], [10.5, 20.5],
+    ])
     prepared.abort_prepare()
 
 
@@ -900,11 +924,11 @@ def test_paraview_field_names_are_readable_collision_safe_and_reserved_safe():
         ("family-c", (member(None, "vtkGhostType"),)),
         ("family-d", (member("hot jet", "x velocity"),)),
     ))
-    assert names[0].startswith("fluid__rho__")
-    assert names[1].startswith("fluid__rho__")
+    assert names[0].startswith("fluid.rho__")
+    assert names[1].startswith("fluid.rho__")
     assert names[0] != names[1]
-    assert names[2] == "field__vtkGhostType"
-    assert names[3] == "hot_jet__x_velocity"
+    assert names[2] == "field.vtkGhostType"
+    assert names[3] == "x_velocity"
 
 
 def test_paraview_preserves_vector_component_labels(tmp_path):
@@ -988,13 +1012,10 @@ def test_paraview_per_rank_keeps_one_multilevel_family_and_empty_local_level(tmp
             size=2,
             diagnostics=(),
         )
-        prepared = _stage_writer(
-            ParaViewWriter(ParallelMode.PER_RANK),
-            local_snapshot,
-            local_request,
-            tmp_path / ("rank-%d.vtu" % rank),
-            communicator=object(),
-        )
+        # This isolates one rank's leaf. The public PER_RANK session performs a real
+        # all-rank collective so it can publish its authenticated .pvtu companion.
+        prepared = ParaViewWriter(ParallelMode.PER_RANK)._stage_file(
+            local_snapshot, local_request, tmp_path / ("rank-%d.vtu" % rank))
         reopened = read_paraview(prepared.temporary).require_selection(local_request)
         coarse_record = reopened.manifest["datasets"]["fields"][coarse.key.identity.token]
         fine_record = reopened.manifest["datasets"]["fields"][fine.key.identity.token]
@@ -1006,7 +1027,41 @@ def test_paraview_per_rank_keeps_one_multilevel_family_and_empty_local_level(tmp
         assert np.array_equal(reopened.arrays["vtkGhostType"], ghosts)
         assert np.array_equal(reopened.arrays["TimeValue"], [0.125])
         assert np.array_equal(reopened.arrays["rho"], values)
-        prepared.abort_prepare()
+        prepared.discard()
+
+
+def test_paraview_per_rank_writes_a_valid_piece_when_rank_owns_no_cells(tmp_path):
+    snapshot, request, _ = _snapshot()
+    selected = snapshot.select(request)
+    empty_fields = tuple(replace(field, pieces=()) for field in selected)
+    local_snapshot = replace(snapshot, fields=empty_fields)
+    local_request = replace(
+        request,
+        parallel_mode=ParallelMode.PER_RANK,
+        rank=1,
+        size=2,
+        diagnostics=(),
+    )
+
+    prepared = ParaViewWriter(ParallelMode.PER_RANK)._stage_file(
+        local_snapshot, local_request, tmp_path / "empty-rank.vtu")
+    reopened = read_paraview(prepared.temporary).require_selection(local_request)
+
+    assert reopened.arrays["Points"].shape == (0, 3)
+    assert reopened.arrays["connectivity"].shape == (0,)
+    assert reopened.arrays["offsets"].shape == (0,)
+    assert reopened.arrays["types"].shape == (0,)
+    assert reopened.arrays["rho"].shape == (0,)
+    assert reopened.arrays["TimeValue"].tolist() == [0.125]
+    prepared.discard()
+
+
+def test_empty_multicomponent_array_has_canonical_output_evidence():
+    evidence = array_evidence(np.empty((0, 1), dtype="<f8"))
+
+    assert evidence["dtype"] == "<f8"
+    assert evidence["shape"] == [0, 1]
+    assert evidence == array_evidence(np.empty((0, 1), dtype="<f8"))
 
 
 def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_path):
@@ -1032,12 +1087,13 @@ def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_pa
     assert information.Get(time_steps, 0) == 0.125
     reader.Update()
     grid = reader.GetOutput()
-    assert grid.GetNumberOfCells() == 8 and grid.GetNumberOfPoints() == 32
-    assert grid.GetPoint(16) == (10.25, 20.25, 0.0)
+    assert grid.GetNumberOfCells() == 8 and grid.GetNumberOfPoints() == 18
+    assert grid.GetPoint(9) == (10.25, 20.25, 0.0)
     assert {grid.GetCellData().GetArrayName(index)
             for index in range(grid.GetCellData().GetNumberOfArrays())} >= {
                 "pops_layout", "pops_level", "pops_coverage", "vtkGhostType", "rho"}
     assert grid.GetCellData().GetArray("energy") is None
+    assert grid.GetCellData().GetArray("field_0000") is None
     assert [grid.GetCellData().GetArray("rho").GetTuple1(index)
             for index in range(8)] == [1.0] * 4 + [2.0] * 4
     assert [grid.GetCellData().GetArray("vtkGhostType").GetTuple1(index)
@@ -1131,6 +1187,384 @@ def test_paraview_preserves_declared_component_axis(
     assert published[start:end].shape == expected_shape
     assert np.array_equal(published[start:end], values.reshape(len(component_names), -1).T)
     prepared.abort_prepare()
+
+
+def test_paraview_uses_compressed_shared_mesh_and_readable_collision_safe_names(tmp_path):
+    snapshot, request, _ = _snapshot()
+    selected = snapshot.select(request)
+    coarse = next(field for field in selected if field.key.level == 0)
+    fine = next(field for field in selected if field.key.level == 1)
+    radiation = _handle("radiation", "rho")
+    radiation_manifest = _identity("component-manifest", "radiation-rho")
+    radiation_coarse_key = FieldKey(
+        radiation, radiation_manifest, coarse.key.layout_identity, 0, "accepted")
+    radiation_fine_key = FieldKey(
+        radiation, radiation_manifest, fine.key.layout_identity, 1, "accepted")
+    radiation_coarse = FieldPayload(
+        radiation_coarse_key, "cell", "kg.m-3", (), (2, 2),
+        (_piece(np.full((2, 2), 3.0)),),
+    )
+    radiation_fine = FieldPayload(
+        radiation_fine_key, "cell", "kg.m-3", (), (4, 4),
+        (_piece(np.full((2, 2), 4.0), lower=(1, 1)),),
+    )
+    selected_snapshot = replace(
+        snapshot, fields=(coarse, fine, radiation_coarse, radiation_fine))
+    selected_request = OutputRequest(
+        "collision-output",
+        (coarse.key, fine.key, radiation_coarse_key, radiation_fine_key),
+        ParallelMode.SERIAL,
+    )
+    prepared = _stage_writer(
+        ParaViewWriter(compression=6, collection=False),
+        selected_snapshot,
+        selected_request,
+        tmp_path / "collision.vtu",
+    )
+
+    root = ET.parse(prepared.temporary).getroot()
+    reopened = read_paraview(prepared.temporary).require_selection(selected_request)
+    assert root.attrib["compressor"] == "vtkZLibDataCompressor"
+    assert reopened.arrays["Points"].shape == (18, 3)
+    assert {record["name"] for record in reopened.manifest["datasets"]["fields"].values()} \
+        == {"fluid.rho", "radiation.rho"}
+    assert np.array_equal(reopened.arrays["fluid.rho"], [1.0] * 4 + [2.0] * 4)
+    assert np.array_equal(reopened.arrays["radiation.rho"], [3.0] * 4 + [4.0] * 4)
+    prepared.abort_prepare()
+
+
+def test_paraview_maps_polar_vertices_to_physical_cartesian_points(tmp_path):
+    from pops.mesh._layout_plan_contracts import (
+        POLAR_ANNULUS_2D_COORDINATES,
+        POLAR_ANNULUS_CELL_AREA,
+    )
+
+    snapshot, request, _ = _snapshot()
+    coarse, fine = snapshot.geometries
+    polar_coarse = replace(
+        coarse,
+        origin=(1.0, 0.0),
+        spacing=(1.0, np.pi / 2.0),
+        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+        cell_measure=POLAR_ANNULUS_CELL_AREA,
+        axis_names=("r", "theta"),
+    )
+    polar_fine = replace(
+        fine,
+        origin=(1.0, 0.0),
+        spacing=(0.5, np.pi / 4.0),
+        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+        cell_measure=POLAR_ANNULUS_CELL_AREA,
+        axis_names=("r", "theta"),
+    )
+    polar_snapshot = replace(snapshot, geometries=(polar_coarse, polar_fine))
+    prepared = _stage_writer(
+        ParaViewWriter(compression=6, collection=False),
+        polar_snapshot,
+        request,
+        tmp_path / "polar.vtu",
+    )
+
+    points = read_paraview(prepared.temporary).arrays["Points"]
+    expected_coarse = np.asarray([
+        (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (3.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0), (0.0, 2.0, 0.0), (0.0, 3.0, 0.0),
+        (-1.0, 0.0, 0.0), (-2.0, 0.0, 0.0), (-3.0, 0.0, 0.0),
+    ])
+    assert np.allclose(points[:9], expected_coarse, rtol=0.0, atol=1.0e-15)
+    prepared.abort_prepare()
+
+
+def test_paraview_refuses_unknown_coordinate_system_before_publication(tmp_path):
+    snapshot, request, _ = _snapshot()
+    unsupported = replace(
+        snapshot,
+        geometries=tuple(
+            replace(geometry, coordinate_system="pops://coordinates/custom-2d@1")
+            for geometry in snapshot.geometries
+        ),
+    )
+    target = tmp_path / "unsupported.vtu"
+
+    with pytest.raises(NotImplementedError, match="does not support coordinate system"):
+        _stage_writer(ParaViewWriter(), unsupported, request, target)
+
+    assert not target.exists()
+
+
+def test_paraview_pvd_is_cumulative_exact_and_transactional(tmp_path):
+    first_snapshot, request, _ = _snapshot()
+    writer = ParaViewWriter(collection=True)
+    first_target = deterministic_target(
+        tmp_path, "series", request, first_snapshot, ".vtu")
+    first = _stage_writer(writer, first_snapshot, request, first_target)
+    first_receipt = first.publish()
+    assert first_receipt is not None and first_receipt.path.suffix == ".pvd"
+    assert first_receipt.format == ParaView.format_name
+    assert first.publish() == first_receipt
+    first.finalize()
+
+    second_snapshot = replace(
+        first_snapshot,
+        clock=OutputClock.at("macro", 0.25, 8, stage="accepted"),
+    )
+    second_target = deterministic_target(
+        tmp_path, "series", request, second_snapshot, ".vtu")
+    second = _stage_writer(writer, second_snapshot, request, second_target)
+    second_receipt = second.publish()
+    assert second_receipt is not None and second_receipt.path.suffix == ".pvd"
+    assert second.publish() == second_receipt
+    second.finalize()
+
+    pvd_paths = sorted(tmp_path.glob("density-output__series-*__s*.pvd"))
+    assert len(pvd_paths) == 2
+    reopened = read_paraview_series(pvd_paths[-1])
+    assert ParaView().reopen_series(pvd_paths[-1]).output_identity == reopened.output_identity
+    assert reopened.kind == "pvd"
+    assert [row["macro_step"] for row in reopened.manifest["entries"]] == [7, 8]
+    assert [float.fromhex(row["time_hex"]) for row in reopened.manifest["entries"]] \
+        == [0.125, 0.25]
+    assert [path.name for path in reopened.paths] == [first_target.name, second_target.name]
+    assert all(path.is_file() for path in reopened.paths)
+    xml_entries = ET.parse(pvd_paths[-1]).getroot().findall("./Collection/DataSet")
+    assert [node.attrib["timestep"] for node in xml_entries] == ["0.125", "0.25"]
+
+    third_snapshot = replace(
+        first_snapshot,
+        clock=OutputClock.at("macro", 0.5, 9, stage="accepted"),
+    )
+    third_target = deterministic_target(
+        tmp_path, "series", request, third_snapshot, ".vtu")
+    third = _stage_writer(writer, third_snapshot, request, third_target)
+    third_receipt = third.publish()
+    assert third_receipt is not None and third_receipt.path.is_file()
+    assert len(tuple(tmp_path.glob("density-output__series-*__s*.pvd"))) == 3
+    third.rollback()
+    assert not third_target.exists()
+    assert len(tuple(tmp_path.glob("density-output__series-*__s*.pvd"))) == 2
+    assert read_paraview_series(pvd_paths[-1]).output_identity == reopened.output_identity
+
+
+def test_paraview_collection_versions_samples_inside_the_logical_target_directory(tmp_path):
+    first_snapshot, request, _ = _snapshot()
+    second_snapshot = replace(
+        first_snapshot,
+        clock=OutputClock.at("macro", 0.25, 8, stage="accepted"),
+    )
+    provider = ParaView(collection=True)
+    format_data = provider.consumer_data()
+    targets = []
+    for snapshot in (first_snapshot, second_snapshot):
+        target = _target(
+            "result.vtu",
+            format_data,
+            provider.format_name,
+            snapshot,
+            request,
+            "result",
+            tmp_path,
+        )
+        targets.append(target)
+        session = _stage_writer(provider.writer(), snapshot, request, target)
+        receipt = session.publish()
+        assert receipt is not None and receipt.path.suffix == ".pvd"
+        session.finalize()
+
+    assert targets[0] != targets[1]
+    assert all(target.is_file() for target in targets)
+    assert all(target.parent == tmp_path / "result.vtu" for target in targets)
+    latest = read_paraview_series(sorted((tmp_path / "result.vtu").glob("*.pvd"))[-1])
+    assert latest.paths == tuple(target.resolve() for target in targets)
+
+    literal = _target(
+        "result.vtu",
+        ParaView(collection=False).consumer_data(),
+        ParaView.format_name,
+        first_snapshot,
+        request,
+        "result",
+        tmp_path,
+    )
+    assert literal.parent == tmp_path / "result.vtu"
+    assert literal.suffix == ".vtu"
+
+
+def test_paraview_pvd_refuses_equal_or_decreasing_physical_time(tmp_path):
+    snapshot, request, _ = _snapshot()
+    writer = ParaViewWriter(collection=True)
+    target = deterministic_target(tmp_path, "series", request, snapshot, ".vtu")
+    first = _stage_writer(writer, snapshot, request, target)
+    first.publish()
+    first.finalize()
+
+    for macro_step, physical_time in ((8, 0.125), (9, 0.0625)):
+        conflicting = replace(
+            snapshot,
+            clock=OutputClock.at("macro", physical_time, macro_step, stage="accepted"),
+        )
+        conflicting_target = deterministic_target(
+            tmp_path, "series", request, conflicting, ".vtu")
+        with pytest.raises(ValueError, match="physical times are not strictly increasing"):
+            _stage_writer(writer, conflicting, request, conflicting_target)
+        assert not conflicting_target.exists()
+
+    assert len(tuple(tmp_path.glob("density-output__series-*__s*.pvd"))) == 1
+
+
+def test_paraview_pvtu_authenticates_all_relative_rank_pieces(tmp_path):
+    snapshot, serial_request, _ = _snapshot()
+    selected = snapshot.select(serial_request)
+    coarse = next(field for field in selected if field.key.level == 0)
+    fine = next(field for field in selected if field.key.level == 1)
+    replicated_coarse_rank0 = replace(
+        coarse,
+        pieces=(replace(coarse.pieces[0], replicated=True),),
+    )
+    replicated_coarse_rank1 = replace(
+        coarse,
+        pieces=(replace(coarse.pieces[0], owner_rank=1, replicated=True),),
+    )
+    rank_snapshots = (
+        replace(snapshot, fields=(replicated_coarse_rank0, replace(fine, pieces=()))),
+        replace(
+            snapshot,
+            fields=(
+                replicated_coarse_rank1,
+                replace(fine, pieces=(replace(fine.pieces[0], owner_rank=1),)),
+            ),
+        ),
+    )
+    requests = tuple(
+        replace(
+            serial_request,
+            parallel_mode=ParallelMode.PER_RANK,
+            rank=rank,
+            size=2,
+            diagnostics=(),
+        )
+        for rank in range(2)
+    )
+    targets = tuple(tmp_path / ("piece-rank-%d.vtu" % rank) for rank in range(2))
+    leaves = tuple(
+        ParaViewWriter(ParallelMode.PER_RANK)._stage_file(
+            rank_snapshots[rank], requests[rank], targets[rank])
+        for rank in range(2)
+    )
+    for leaf in leaves:
+        leaf.publish()
+    rows = tuple({
+        "rank": rank,
+        "target": str(targets[rank].resolve()),
+        "output_identity": leaves[rank].output_identity.token,
+        "schema": _vtu_schema(targets[rank]),
+    } for rank in range(2))
+    pvtu = _stage_pvtu(
+        tmp_path,
+        snapshot,
+        requests[0],
+        rows,
+        _series_identity(snapshot, requests[0], compression=6),
+    )
+    pvtu_receipt = pvtu.publish()
+    assert pvtu_receipt.format == ParaView.format_name
+    assert pvtu.publish() == pvtu_receipt
+
+    reopened = read_paraview_parallel(pvtu.target)
+    assert reopened.kind == "pvtu"
+    assert [row["rank"] for row in reopened.manifest["pieces"]] == [0, 1]
+    assert reopened.paths == targets
+    root = ET.parse(pvtu.target).getroot()
+    assert root.attrib["type"] == "PUnstructuredGrid"
+    assert [node.attrib["Source"] for node in root.findall("./PUnstructuredGrid/Piece")] \
+        == [path.name for path in targets]
+    rank1 = read_paraview(targets[1])
+    assert np.array_equal(rank1.arrays["vtkGhostType"], [1, 9, 1, 1] + [0] * 4)
+    pvtu.finalize()
+    for leaf in leaves:
+        leaf.finalize()
+
+
+def test_paraview_pvsm_is_generated_and_reloaded_by_configured_pvpython(tmp_path):
+    fake = tmp_path / "pvpython"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+log = Path(__file__).with_suffix(".log")
+if sys.argv[1:] == ["--version"]:
+    log.write_text("version\\n", encoding="utf-8")
+    print("ParaView 6.1.0")
+elif sys.argv[1] == "-c" and "SaveState" in sys.argv[2]:
+    pvd, state, raw = sys.argv[3:6]
+    config = json.loads(raw)
+    assert Path(pvd).is_file()
+    assert "GetAnimationScene" in sys.argv[2]
+    assert "GoToLast" in sys.argv[2]
+    assert "TimestepValues" in sys.argv[2]
+    assert "AnimationTime" in sys.argv[2]
+    assert config["color_by"] == "rho"
+    assert config["representation"] == "Surface With Edges"
+    Path(state).write_text(
+        '<GenericParaViewApplication><ServerManagerState version="6.1.0"/>'
+        '</GenericParaViewApplication>',
+        encoding="utf-8",
+    )
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("save\\n")
+elif sys.argv[1] == "-c" and "LoadState" in sys.argv[2]:
+    state, directory = sys.argv[3:5]
+    assert Path(directory).is_dir()
+    assert ET.parse(state).getroot().find("./ServerManagerState") is not None
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("load\\n")
+else:
+    raise SystemExit("unexpected fake pvpython invocation")
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    snapshot, request, _ = _snapshot()
+    provider = ParaView(
+        preset=ParaViewPreset(
+            color_by="rho", representation="Surface With Edges"),
+        state=MaterializedPVSM(str(fake)),
+    )
+    assert provider.consumer_data()["options"] == {
+        "mode": "serial",
+        "compression": 6,
+        "collection": True,
+        "preset": {
+            "color_by": "rho",
+            "component": None,
+            "color_map": "Viridis",
+            "representation": "Surface With Edges",
+            "show_scalar_bar": True,
+        },
+        "placement": {"schema_version": 1, "mode": "shared_directory"},
+        "state": {
+            "schema_version": 1,
+            "mode": "materialized_pvsm",
+            "pvpython": str(fake),
+        },
+    }
+    writer = provider.writer()
+    target = deterministic_target(tmp_path, "state", request, snapshot, ".vtu")
+    prepared = _stage_writer(writer, snapshot, request, target)
+    receipt = prepared.publish()
+    assert receipt is not None and receipt.path.suffix == ".pvsm"
+    assert receipt.format == ParaView.format_name
+    assert prepared.publish() == receipt
+    assert ET.parse(receipt.path).getroot().find("./ServerManagerState") is not None
+    assert fake.with_suffix(".log").read_text(encoding="utf-8").splitlines() \
+        == ["version", "save", "load"]
+    prepared.finalize()
+
+    missing = tmp_path / "missing-pvpython"
+    with pytest.raises(RuntimeError, match="requires an executable pvpython"):
+        ParaView(state=MaterializedPVSM(str(missing))).writer()
 
 
 def test_hdf5_is_reopened_with_native_reader_and_exact_selection(tmp_path):
@@ -1475,6 +1909,81 @@ def test_rank_local_base_exception_is_consensus_error_before_publish_returns(
     assert len(collectives) == 1
 
 
+def test_per_rank_receipts_are_checked_against_their_rank_qualified_requests(
+    tmp_path, monkeypatch,
+):
+    module = import_module("pops.runtime._output_publisher")
+    snapshot, serial, _ = _snapshot()
+    rank0 = replace(serial, parallel_mode=ParallelMode.PER_RANK, rank=0, size=2)
+    rank1 = replace(rank0, rank=1)
+    target0 = deterministic_target(tmp_path, "pieces", rank0, snapshot, ".npz")
+    target1 = deterministic_target(tmp_path, "pieces", rank1, snapshot, ".npz")
+    effect = _accepted_output_effect(rank0, target0)
+    session_authority = writer_session_authority("test-per-rank", rank0, target0)
+    output0 = make_identity("test-rank-output", {"rank": 0})
+    output1 = make_identity("test-rank-output", {"rank": 1})
+
+    class Session:
+        identity = Identity.from_token(session_authority["session_identity"])
+        temporary = None
+        target = target0
+
+        @property
+        def authority(self):
+            return dict(session_authority)
+
+        @staticmethod
+        def stage():
+            return None
+
+        @staticmethod
+        def abort_prepare():
+            return None
+
+        @staticmethod
+        def publish():
+            return OutputPublicationReceipt(
+                target0, "test-per-rank", output0, rank0.publication_identity)
+
+        @staticmethod
+        def rollback():
+            return None
+
+        @staticmethod
+        def finalize():
+            return None
+
+    def gather(_communicator, envelope):
+        return envelope, {
+            "mode": ParallelMode.PER_RANK.value,
+            "rank": 1,
+            "result": {
+                "output_identity": output1.token,
+                "selection_identity": rank1.publication_identity.token,
+                "path": str(target1.resolve()),
+                "format": "test-per-rank",
+                "file_evidence": None,
+            },
+            "error": None,
+        }
+
+    monkeypatch.setattr(module, "allgather_value", gather)
+    prepared = PreparedConsumerOutput(
+        effect,
+        Session(),
+        "pops.test.per-rank",
+        rank0,
+        object(),
+        target=target0,
+        format_name="test-per-rank",
+    )
+
+    receipt = prepared.publish()
+
+    assert receipt.parallel_mode is ParallelMode.PER_RANK
+    assert tuple(rank for rank, _ in receipt.rank_artifacts) == (0, 1)
+
+
 def test_rank_without_pieces_keeps_exact_dtype_but_cannot_materialize():
     snapshot, request, _ = _snapshot()
     field = snapshot.select(request)[0]
@@ -1609,7 +2118,7 @@ def test_format_interface_selects_exact_writer():
     assert type(HDF5().writer()) is HDF5Writer
 
 
-@pytest.mark.parametrize("format", [NPZ(), HDF5(), ParaView()], ids=["npz", "hdf5", "vtu"])
+@pytest.mark.parametrize("format", [NPZ(), HDF5()], ids=["npz", "hdf5"])
 def test_format_provider_publishes_and_reopens_one_authenticated_series(tmp_path, format):
     snapshot, request, _ = _snapshot()
     format_data = freeze_data(format.consumer_data(), "test format data")
@@ -1970,13 +2479,20 @@ def test_series_lock_contention_fails_explicitly_and_is_retryable(tmp_path, monk
     assert format.reopen_series(tmp_path).files == (target,)
 
 
-def test_builtin_series_policy_is_explicit_for_rank_local_outputs():
+def test_generic_series_policy_excludes_paraview_pvd_collections():
     assert HDF5().series is True
     assert NPZ().series is True
-    assert ParaView().series is True
-    assert ParaView(mode=ParallelMode.PER_RANK).series is False
-    with pytest.raises(ValueError, match="one shared artifact"):
-        ParaView(mode=ParallelMode.PER_RANK, series=True)
+    assert ParaView().series is False
+    assert ParaView().series_catalog() is None
+    with pytest.warns(DeprecationWarning, match="collection"):
+        enabled = ParaView(series=True)
+    assert enabled.collection is True
+    with pytest.warns(DeprecationWarning, match="collection"):
+        disabled = ParaView(series=False)
+    assert disabled.collection is False
+    with pytest.warns(DeprecationWarning, match="collection"):
+        with pytest.raises(ValueError, match="disagree"):
+            ParaView(collection=True, series=False)
 
 
 def test_format_writers_publish_structural_preflight_capabilities():
@@ -1987,9 +2503,19 @@ def test_format_writers_publish_structural_preflight_capabilities():
         datatype=ExecutionResource("datatype", "float64"),
         device=ExecutionResource("device", "host"),
     )
-    for writer, provider in (
-        (NPZ().writer(), "pops.output.npz.v1"),
-        (ParaView().writer(), "pops.output.paraview-vtu.v1"),
+    for writer, provider, options in (
+        (NPZ().writer(), "pops.output.npz.v1", {}),
+        (
+            ParaView().writer(),
+            "pops.output.paraview-vtu.v1",
+            {
+                "compression": 6,
+                "collection": True,
+                "placement": {"schema_version": 1, "mode": "shared_directory"},
+                "state": {"schema_version": 1, "mode": "portable"},
+                "pvsm": None,
+            },
+        ),
     ):
         capability = writer.preflight(context)
         assert capability == {
@@ -1998,7 +2524,7 @@ def test_format_writers_publish_structural_preflight_capabilities():
             "parallel_mode": "serial",
             "communicator": "serial",
             "size": 1,
-        }
+        } | options
 
 
 def test_custom_format_writer_must_implement_structural_preflight():

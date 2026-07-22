@@ -6,6 +6,7 @@
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
 #include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
@@ -367,7 +368,84 @@ void init_core(py::module_& m) {
               result[index] = py::bytes((*gathered)[index]);
             return result;
           },
-          py::arg("payload"), py::arg("root") = 0);
+          py::arg("payload"), py::arg("root") = 0)
+      .def(
+          "duplicate_observer_lane",
+          [](const pops::WorldCommunicator& world, const std::string& identity) {
+            if (&world != &pops::WorldCommunicator::world())
+              throw std::invalid_argument(
+                  "observer lane duplication requires the exact native process world");
+            py::gil_scoped_release release;
+            return pops::ObserverMpiLane::duplicate_world_collectively(identity);
+          },
+          py::arg("identity"),
+          "Collectively duplicate the process world for one post-commit observer worker.");
+
+  py::class_<pops::ObserverMpiLane>(m, "_NativeObserverMpiLane")
+      .def_property_readonly("rank", &pops::ObserverMpiLane::rank)
+      .def_property_readonly("size", &pops::ObserverMpiLane::size)
+      .def_property_readonly("active", &pops::ObserverMpiLane::active)
+      .def_property_readonly("closed", &pops::ObserverMpiLane::closed)
+      .def_property_readonly(
+          "identity",
+          [](const pops::ObserverMpiLane& lane) { return std::string(lane.identity()); })
+      .def_property_readonly("fortran_handle", &pops::ObserverMpiLane::fortran_handle)
+      .def("barrier",
+           [](const pops::ObserverMpiLane& lane) {
+             py::gil_scoped_release release;
+             lane.barrier();
+           })
+      .def(
+          "broadcast_bytes",
+          [](const pops::ObserverMpiLane& lane, const py::bytes& payload, int root) {
+            std::string native = payload.cast<std::string>();
+            {
+              py::gil_scoped_release release;
+              native = lane.broadcast_bytes(std::move(native), root);
+            }
+            return py::bytes(native);
+          },
+          py::arg("payload"), py::arg("root") = 0)
+      .def(
+          "allgather_bytes",
+          [](const pops::ObserverMpiLane& lane, const py::bytes& payload) {
+            const std::string native = payload.cast<std::string>();
+            std::vector<std::string> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = lane.allgather_bytes(native);
+            }
+            py::tuple result(gathered.size());
+            for (std::size_t index = 0; index < gathered.size(); ++index)
+              result[index] = py::bytes(gathered[index]);
+            return result;
+          },
+          py::arg("payload"))
+      .def(
+          "gather_bytes",
+          [](const pops::ObserverMpiLane& lane, const py::bytes& payload,
+             int root) -> py::object {
+            const std::string native = payload.cast<std::string>();
+            std::optional<std::vector<std::string>> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = lane.gather_bytes(native, root);
+            }
+            if (!gathered)
+              return py::none();
+            py::tuple result(gathered->size());
+            for (std::size_t index = 0; index < gathered->size(); ++index)
+              result[index] = py::bytes((*gathered)[index]);
+            return result;
+          },
+          py::arg("payload"), py::arg("root") = 0)
+      .def(
+          "close_collectively",
+          [](pops::ObserverMpiLane& lane) {
+            py::gil_scoped_release release;
+            lane.close_collectively();
+          },
+          "Collectively release this lane after its observer worker has joined.");
 
   m.def(
       "mpi_world", []() -> pops::WorldCommunicator& { return pops::WorldCommunicator::world(); },

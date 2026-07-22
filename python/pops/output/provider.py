@@ -16,6 +16,7 @@ _REQUIRED = frozenset({
 })
 _MODES = frozenset({"serial", "root", "collective", "per_rank"})
 _LAYOUT_CARDINALITIES = frozenset({"single", "multiple"})
+_TARGET_POLICIES = frozenset({"literal", "immutable_sample"})
 
 
 def consumer_format_data(provider: Any, *, where: str = "output format") -> dict[str, Any]:
@@ -53,6 +54,10 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
     if mode not in _MODES:
         raise ValueError(
             "%s parallel_mode must be serial, root, collective, or per_rank" % where)
+    target_policy = first.get("target_policy", "literal")
+    if target_policy not in _TARGET_POLICIES:
+        raise ValueError(
+            "%s target_policy must be literal or immutable_sample" % where)
     selection_contract = first.get("selection_contract")
     if selection_contract is not None:
         if type(selection_contract) is not dict or set(selection_contract) != {
@@ -73,4 +78,14 @@ def consumer_format_data(provider: Any, *, where: str = "output format") -> dict
     return first
 
 
-__all__ = ["consumer_format_data"]
+def immutable_sample_targets(format_data: Any) -> bool:
+    """Return whether an authenticated format versions even explicitly suffixed targets."""
+    if type(format_data) is not dict:
+        raise TypeError("format_data must be an authenticated exact dict")
+    policy = format_data.get("target_policy", "literal")
+    if policy not in _TARGET_POLICIES:
+        raise ValueError("format_data has an unsupported target_policy")
+    return policy == "immutable_sample"
+
+
+__all__ = ["consumer_format_data", "immutable_sample_targets"]
