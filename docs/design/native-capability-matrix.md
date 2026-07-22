@@ -60,11 +60,11 @@ Supported native routes include:
 - Uniform single-level layout. A `Uniform(...)` layout with an active AMR refinement criterion
   attached is refused by `Case.validate` by default (ADC-589/ADC-555); the explicit escape is
   `Uniform(mesh, refine=..., ignore_amr=pops.amr.IgnoreAMRCriteria())`.
-  The current native `SystemConfig` has one `n`, one `L`, and no origin, so public
-  `CartesianGrid` lowering requires `lower == (0, 0)`, equal axis lengths, and equal axis cell
-  counts. Its global periodic switch lowers exactly an empty or all-axis typed `PeriodicAxes`
-  partition. Rectangular, anisotropic, translated, and partially periodic grids fail before engine
-  construction; no topology is widened or collapsed.
+  The current native `SystemConfig` has one `n`, one `L`, and a two-coordinate origin, so public
+  `CartesianGrid` lowering requires equal axis lengths and equal axis cell counts. Its typed
+  per-axis periodicity lowers every Cartesian `PeriodicAxes` partition. Rectangular and anisotropic
+  grids fail before engine construction; translated and partially periodic grids retain their exact
+  authored geometry and topology.
 - Multiple distinct Uniform layouts in one `RuntimeInstance` when the Program is exactly separable
   per layout and every directional exchange is backed by an authenticated native `Transfer`
   component. Mixed Uniform/AMR, heterogeneous AMR, implicit reverse mappings and co-located
