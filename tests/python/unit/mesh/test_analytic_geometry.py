@@ -6,7 +6,7 @@ import json
 import pytest
 
 import pops
-from pops.analytic import PredicateExpr, constant, coordinates, param
+from pops.analytic import PredicateExpr, constant, coordinates, input as analytic_input, param
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh.geometry import (
@@ -50,6 +50,13 @@ def test_parameterized_level_set_refuses_the_prebind_geometry_ambiguity() -> Non
 
     with pytest.raises(NotImplementedError, match="signed during resolve"):
         LevelSet(x_value - param(radius))
+
+
+def test_input_dependent_level_set_refuses_the_missing_geometry_input_table() -> None:
+    x_value, _ = coordinates(_frame())
+
+    with pytest.raises(NotImplementedError, match="no discrete input table"):
+        LevelSet(x_value - analytic_input(0, "radius"))
 
 
 def test_disc_level_set_uses_explicit_or_frame_center_without_callback() -> None:

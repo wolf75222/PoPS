@@ -220,6 +220,12 @@ class LevelSet(Geometry):
                 "signed during resolve, before bind values exist. Use a parameter-free LevelSet; "
                 "support requires a distinct bind-authenticated geometry-plan contract."
             )
+        if expression.input_references():
+            raise NotImplementedError(
+                "input-dependent LevelSet geometry is not supported: geometry installation has "
+                "no discrete input table. Use a coordinate-only LevelSet; dynamic geometry "
+                "requires a distinct native geometry-update contract."
+            )
         self.expression = expression
 
     def options(self) -> dict:

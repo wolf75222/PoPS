@@ -14,7 +14,7 @@ from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 
 if TYPE_CHECKING:
-    from .preview import DomainPreview, GeometryPreviewProvider
+    from .preview import AnalyticPreviewValue, DomainPreview, GeometryPreviewProvider
 
 
 _SCHEMA_VERSION = 1
@@ -360,24 +360,28 @@ class Rectangle:
         self,
         *,
         geometry: GeometryPreviewProvider | None = None,
+        field: AnalyticPreviewValue | None = None,
         resolution: int | tuple[int, int] = (256, 256),
     ) -> DomainPreview:
-        """Sample this domain and an optional generic implicit geometry for presentation."""
+        """Sample this domain with optional analytic-field and implicit-geometry overlays."""
 
         from .preview import preview_rectangle
 
-        return preview_rectangle(self, geometry=geometry, resolution=resolution)
+        return preview_rectangle(
+            self, geometry=geometry, field=field, resolution=resolution)
 
     def show(
         self,
         *,
         geometry: GeometryPreviewProvider | None = None,
+        field: AnalyticPreviewValue | None = None,
         resolution: int | tuple[int, int] = (256, 256),
         path: str | PathLike[str] | None = None,
     ) -> Path | None:
         """Show this domain interactively, or save it when ``path`` is provided."""
 
-        return self.preview(geometry=geometry, resolution=resolution).show(path=path)
+        return self.preview(
+            geometry=geometry, field=field, resolution=resolution).show(path=path)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -501,4 +505,4 @@ __all__ = [
 
 # The annotations are public and must resolve under typing.get_type_hints(). Importing after the
 # rectangle definitions avoids a cycle while keeping the preview layer independent from mesh.
-from .preview import DomainPreview, GeometryPreviewProvider  # noqa: E402
+from .preview import AnalyticPreviewValue, DomainPreview, GeometryPreviewProvider  # noqa: E402

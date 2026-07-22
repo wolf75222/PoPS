@@ -25,6 +25,15 @@ FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
 
+class AnalyticPreviewValue(Protocol):
+    """Structural view of one canonical analytic scalar or predicate expression."""
+
+    def to_data(self) -> Mapping[str, Any]:
+        """Return the canonical data-only expression tree."""
+
+        raise NotImplementedError
+
+
 class GeometryPreviewProvider(Protocol):
     """Small presentation protocol shared by built-in and third-party geometries."""
 
@@ -67,7 +76,7 @@ def _readonly_bool_array(value: Any, *, shape: tuple[int, int], where: str) -> B
 
 @dataclass(frozen=True, slots=True, eq=False)
 class DomainPreview:
-    """Sampled presentation data for one rectangle and an optional implicit geometry."""
+    """Sampled presentation data for one domain, analytic field, and implicit geometry."""
 
     domain: Rectangle
     geometry: GeometryPreviewProvider | None
@@ -75,6 +84,9 @@ class DomainPreview:
     y: FloatArray
     level_set_values: FloatArray | None = None
     active_mask: BoolArray | None = None
+    field: AnalyticPreviewValue | None = None
+    field_values: NDArray[Any] | None = None
+    field_kind: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.domain, Rectangle):
@@ -89,31 +101,55 @@ class DomainPreview:
         object.__setattr__(self, "y", y_values)
 
         expected_shape = (y_values.size, x_values.size)
-        if self.level_set_values is None or self.active_mask is None:
-            if self.level_set_values is not None or self.active_mask is not None:
-                raise ValueError(
-                    "DomainPreview level-set values and active mask must be present together"
-                )
-            if self.geometry is not None:
-                raise ValueError("DomainPreview geometry requires sampled level-set values")
-            return
+        if (self.level_set_values is None) != (self.active_mask is None):
+            raise ValueError(
+                "DomainPreview level-set values and active mask must be present together"
+            )
         if self.geometry is None:
-            raise ValueError("DomainPreview sampled level-set values require a geometry")
-        level_set_values = _readonly_float_array(
-            self.level_set_values, ndim=2, where="DomainPreview.level_set_values")
-        if level_set_values.shape != expected_shape:
-            raise ValueError(
-                "DomainPreview.level_set_values has shape %r instead of %r"
-                % (level_set_values.shape, expected_shape)
-            )
-        active_mask = _readonly_bool_array(
-            self.active_mask, shape=expected_shape, where="DomainPreview.active_mask")
-        if not np.array_equal(active_mask, level_set_values < 0.0):
-            raise ValueError(
-                "DomainPreview.active_mask must equal level_set_values < 0"
-            )
-        object.__setattr__(self, "level_set_values", level_set_values)
-        object.__setattr__(self, "active_mask", active_mask)
+            if self.level_set_values is not None:
+                raise ValueError("DomainPreview sampled level-set values require a geometry")
+        else:
+            if self.level_set_values is None:
+                raise ValueError("DomainPreview geometry requires sampled level-set values")
+            level_set_values = _readonly_float_array(
+                self.level_set_values, ndim=2, where="DomainPreview.level_set_values")
+            if level_set_values.shape != expected_shape:
+                raise ValueError(
+                    "DomainPreview.level_set_values has shape %r instead of %r"
+                    % (level_set_values.shape, expected_shape)
+                )
+            active_mask = _readonly_bool_array(
+                self.active_mask, shape=expected_shape, where="DomainPreview.active_mask")
+            if not np.array_equal(active_mask, level_set_values < 0.0):
+                raise ValueError(
+                    "DomainPreview.active_mask must equal level_set_values < 0"
+                )
+            object.__setattr__(self, "level_set_values", level_set_values)
+            object.__setattr__(self, "active_mask", active_mask)
+
+        if self.field is None:
+            if self.field_values is not None or self.field_kind is not None:
+                raise ValueError(
+                    "DomainPreview sampled field data require an analytic field")
+            return
+        field_kind = _expression_kind(self.field, where="DomainPreview.field")
+        if self.field_kind not in (None, field_kind):
+            raise ValueError("DomainPreview.field_kind disagrees with the canonical expression")
+        if self.field_values is None:
+            raise ValueError("DomainPreview analytic field requires sampled field values")
+        if field_kind == "predicate":
+            field_values = _readonly_bool_array(
+                self.field_values, shape=expected_shape, where="DomainPreview.field_values")
+        else:
+            field_values = _readonly_float_array(
+                self.field_values, ndim=2, where="DomainPreview.field_values")
+            if field_values.shape != expected_shape:
+                raise ValueError(
+                    "DomainPreview.field_values has shape %r instead of %r"
+                    % (field_values.shape, expected_shape)
+                )
+        object.__setattr__(self, "field_values", field_values)
+        object.__setattr__(self, "field_kind", field_kind)
 
     @property
     def resolution(self) -> tuple[int, int]:
@@ -136,46 +172,86 @@ def preview_rectangle(
     domain: Rectangle,
     *,
     geometry: GeometryPreviewProvider | None = None,
+    field: AnalyticPreviewValue | None = None,
     resolution: int | tuple[int, int] = (256, 256),
 ) -> DomainPreview:
-    """Sample ``geometry`` over ``domain`` through the generic level-set contract."""
+    """Sample analytic data over ``domain`` through canonical expression contracts."""
 
     if not isinstance(domain, Rectangle):
         raise TypeError("preview_rectangle requires a Rectangle")
     if geometry is not None and not callable(getattr(geometry, "level_set", None)):
         raise TypeError("Rectangle.preview geometry must implement level_set(frame)")
+    if field is not None:
+        _expression_kind(field, where="Rectangle.preview field")
     nx, ny = _checked_resolution(resolution)
     x_values = np.linspace(domain.lower[0], domain.upper[0], nx, dtype=np.float64)
     y_values = np.linspace(domain.lower[1], domain.upper[1], ny, dtype=np.float64)
-    if geometry is None:
+    if geometry is None and field is None:
         return DomainPreview(domain, None, x_values, y_values)
 
     frame = domain.frame(Cartesian2D())
-    level_set = geometry.level_set(frame)
-    expression = getattr(level_set, "expression", None)
+    xx, yy = np.meshgrid(x_values, y_values, indexing="xy")
+    level_set_values = None
+    active_mask = None
+    if geometry is not None:
+        level_set = geometry.level_set(frame)
+        expression = getattr(level_set, "expression", None)
+        level_set_values, level_set_kind = _sample_expression(
+            expression, frame_id=frame.canonical_id, x=xx, y=yy,
+            where="geometry level set")
+        if level_set_kind != "scalar":
+            raise TypeError("geometry level set must be scalar, never a predicate")
+        active_mask = level_set_values < 0.0
+
+    field_values = None
+    if field is not None:
+        field_values, _ = _sample_expression(
+            field, frame_id=frame.canonical_id, x=xx, y=yy, where="analytic field")
+    return DomainPreview(
+        domain, geometry, x_values, y_values, level_set_values, active_mask,
+        field, field_values,
+    )
+
+
+def _sample_expression(
+    expression: Any,
+    *,
+    frame_id: str,
+    x: FloatArray,
+    y: FloatArray,
+    where: str,
+) -> tuple[NDArray[Any], str]:
+    expression_data = _expression_data(expression, where=where)
+    expression_kind = expression_data["expression_type"]
+    values, valid = _evaluate_node(
+        expression_data["root"], frame_id=frame_id, x=x, y=y)
+    dtype = np.bool_ if expression_kind == "predicate" else np.float64
+    sampled = np.asarray(values, dtype=dtype)
+    validity = np.asarray(valid, dtype=np.bool_)
+    if sampled.shape != x.shape:
+        sampled = np.broadcast_to(sampled, x.shape)
+    if validity.shape != x.shape:
+        validity = np.broadcast_to(validity, x.shape)
+    if not validity.all():
+        invalid_count = int(validity.size - np.count_nonzero(validity))
+        raise ValueError(
+            "%s is undefined at %d preview sample(s)" % (where, invalid_count))
+    return sampled, expression_kind
+
+
+def _expression_data(expression: Any, *, where: str) -> Mapping[str, Any]:
     to_data = getattr(expression, "to_data", None)
     if not callable(to_data):
-        raise TypeError(
-            "Geometry.level_set(frame) must return an object with a canonical expression"
-        )
-    expression_data = to_data()
-    if not isinstance(expression_data, Mapping) or not isinstance(
-            expression_data.get("root"), Mapping):
-        raise TypeError("geometry preview expression must expose canonical root data")
-    xx, yy = np.meshgrid(x_values, y_values, indexing="xy")
-    values, valid = _evaluate_node(
-        expression_data["root"], frame_id=frame.canonical_id, x=xx, y=yy)
-    values = np.asarray(values, dtype=np.float64)
-    valid = np.asarray(valid, dtype=np.bool_)
-    if values.shape != xx.shape:
-        values = np.broadcast_to(values, xx.shape)
-    if valid.shape != xx.shape:
-        valid = np.broadcast_to(valid, xx.shape)
-    if not valid.all():
-        invalid_count = int(valid.size - np.count_nonzero(valid))
-        raise ValueError(
-            "geometry level set is undefined at %d preview sample(s)" % invalid_count)
-    return DomainPreview(domain, geometry, x_values, y_values, values, values < 0.0)
+        raise TypeError("%s must implement canonical to_data()" % where)
+    data = to_data()
+    if not isinstance(data, Mapping) or data.get("expression_type") not in {
+            "scalar", "predicate"} or not isinstance(data.get("root"), Mapping):
+        raise TypeError("%s must expose canonical analytic expression data" % where)
+    return data
+
+
+def _expression_kind(expression: Any, *, where: str) -> str:
+    return str(_expression_data(expression, where=where)["expression_type"])
 
 
 def _constant_grid(value: float, shape: tuple[int, int]) -> tuple[FloatArray, BoolArray]:
@@ -279,9 +355,9 @@ def _checked_output_path(value: str | PathLike[str]) -> Path:
     try:
         result = Path(value)
     except TypeError:
-        raise TypeError("Rectangle.show path must be text or path-like") from None
+        raise TypeError("DomainPreview.show path must be text or path-like") from None
     if not result.name or not result.suffix:
-        raise ValueError("Rectangle.show path must include a filename extension")
+        raise ValueError("DomainPreview.show path must include a filename extension")
     return result
 
 
@@ -297,7 +373,8 @@ def _show_matplotlib(
         RectanglePatch = import_module("matplotlib.patches").Rectangle
     except ModuleNotFoundError:
         raise ModuleNotFoundError(
-            "Rectangle.show requires Matplotlib; install it with 'python -m pip install matplotlib'"
+            "DomainPreview.show requires Matplotlib; "
+            "install it with 'python -m pip install matplotlib'"
         ) from None
 
     domain = preview.domain
@@ -306,18 +383,43 @@ def _show_matplotlib(
     figure_height = max(4.0, min(8.0, figure_width * height / width))
     figure, axes = plt.subplots(figsize=(figure_width, figure_height))
     axes.set_facecolor("#f7f8fa")
+    extent = (domain.lower[0], domain.upper[0], domain.lower[1], domain.upper[1])
+    if preview.field_values is not None:
+        if preview.field_kind == "predicate":
+            axes.imshow(
+                preview.field_values.astype(np.float64),
+                extent=extent,
+                origin="lower",
+                interpolation="nearest",
+                cmap=ListedColormap(["#f7f8fa", "#4c9bd3"]),
+                vmin=0.0,
+                vmax=1.0,
+                alpha=0.9,
+                aspect="auto",
+            )
+        else:
+            image = axes.imshow(
+                preview.field_values,
+                extent=extent,
+                origin="lower",
+                interpolation="nearest",
+                cmap="viridis",
+                aspect="auto",
+            )
+            figure.colorbar(image, ax=axes, label="value", shrink=0.85)
     if preview.active_mask is not None and preview.level_set_values is not None:
-        axes.imshow(
-            preview.active_mask.astype(np.float64),
-            extent=(domain.lower[0], domain.upper[0], domain.lower[1], domain.upper[1]),
-            origin="lower",
-            interpolation="nearest",
-            cmap=ListedColormap(["#f7f8fa", "#b9dcf5"]),
-            vmin=0.0,
-            vmax=1.0,
-            alpha=0.9,
-            aspect="auto",
-        )
+        if preview.field_values is None:
+            axes.imshow(
+                preview.active_mask.astype(np.float64),
+                extent=extent,
+                origin="lower",
+                interpolation="nearest",
+                cmap=ListedColormap(["#f7f8fa", "#b9dcf5"]),
+                vmin=0.0,
+                vmax=1.0,
+                alpha=0.9,
+                aspect="auto",
+            )
         minimum = float(np.min(preview.level_set_values))
         maximum = float(np.max(preview.level_set_values))
         if minimum < 0.0 < maximum:
@@ -368,4 +470,6 @@ def _show_matplotlib(
     return output_path
 
 
-__all__ = ["DomainPreview", "GeometryPreviewProvider", "preview_rectangle"]
+__all__ = [
+    "AnalyticPreviewValue", "DomainPreview", "GeometryPreviewProvider", "preview_rectangle",
+]

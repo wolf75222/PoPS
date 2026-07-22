@@ -1,7 +1,7 @@
 """Math-like construction helpers for analytic expression trees."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._model import (
@@ -134,6 +134,31 @@ def hypot(first: Any, second: Any) -> ScalarExpr:
     return _scalar_binary("hypot", first, second)
 
 
+def norm(*components: Any) -> ScalarExpr:
+    """Return a balanced, overflow-safe Euclidean norm of one or more components."""
+
+    values: tuple[Any, ...]
+    if len(components) == 1 and not isinstance(components[0], (str, bytes, ScalarExpr)) \
+            and isinstance(components[0], Sequence):
+        values = tuple(components[0])
+    else:
+        values = components
+    if not values:
+        raise ValueError("analytic norm requires at least one component")
+    expressions = tuple(abs(value) for value in values)
+    while len(expressions) > 1:
+        next_level = [
+            hypot(expressions[index], expressions[index + 1])
+            for index in range(0, len(expressions) - 1, 2)
+        ]
+        if len(expressions) % 2:
+            next_level.append(expressions[-1])
+        expressions = tuple(next_level)
+    if not expressions:
+        raise RuntimeError("analytic norm composition unexpectedly became empty")
+    return expressions[0]
+
+
 def minimum(first: Any, second: Any) -> ScalarExpr:
     """Return the pointwise minimum of two scalar expressions."""
 
@@ -180,6 +205,7 @@ __all__ = [
     "log",
     "maximum",
     "minimum",
+    "norm",
     "param",
     "radius",
     "sin",

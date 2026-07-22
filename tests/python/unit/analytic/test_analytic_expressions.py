@@ -29,6 +29,7 @@ from pops.analytic import (
     log,
     maximum,
     minimum,
+    norm,
     param,
     radius,
     sin,
@@ -109,6 +110,19 @@ def test_polar_helpers_and_clamp_remain_generic_expression_composition() -> None
         radius(frame, center=(0.0,))
     with pytest.raises(ValueError, match="every frame axis"):
         angle(frame, center={frame.x: 0.0})
+
+
+def test_norm_is_variadic_balanced_and_uses_the_native_hypot_primitive() -> None:
+    x_value, y_value = coordinates(_frame())
+    vector_norm = norm(x_value, y_value, 2.0)
+    sequence_norm = norm((x_value, y_value, 2.0))
+
+    assert vector_norm.same_as(sequence_norm)
+    assert vector_norm.op == "hypot"
+    assert vector_norm.frame_id == x_value.frame_id
+    assert norm(x_value).op == "abs"
+    with pytest.raises(ValueError, match="at least one"):
+        norm()
 
 
 def test_predicates_are_explicit_and_where_is_generic() -> None:
