@@ -5,9 +5,9 @@ Calling one exact ``FieldHandle`` with ``(U0, U1, ...)`` and consuming its outco
 coupled Poisson where EVERY listed block contributes its own stage state at once. Its IR already builds
 (ADC-426); this test exercises
 the LOWERING ADC-457 adds: ``_check_lowerable`` no longer refuses it, and ``emit_cpp_program``
-produces ``ctx.solve_fields_from_blocks(<vec>)`` with each listed block slotted by index. The vector
-is sized to ``ctx.n_blocks()`` (a nullptr entry uses the block's live state), so the runtime sees
-each coupled block at its stage state into the one shared phi/aux.
+produces one exact-IR ``ctx.solve_fields_from_blocks`` request with each listed block slotted by
+index. The context owns and reuses the native pointer/snapshot workspace, so the generated step does
+not allocate a host vector while the runtime still sees every coupled stage in one shared phi/aux.
 
 Pure-Python codegen check (always runs when pops.time imports; skips cleanly if _pops is absent). The
 .so that runs the coupled solve is validated on ROMEO (Kokkos-only AOT, not buildable host-only)."""
@@ -104,28 +104,31 @@ def main():
         lambda: _check_lowerable(P, None, _field_plans(P))),
         "_check_lowerable(None) accepts solve_fields_from_blocks (no longer deferred)")
 
-    # (2) emit_cpp_program lowers the coupled solve to ctx.solve_fields_from_blocks(<vec>).
+    # (2) emit_cpp_program lowers through the context-owned exact-IR workspace seam.
     src = _emit(P)
     chk("ctx.solve_fields_from_blocks(" in src,
         "emit contains the coupled multi-block solve call")
-    chk("std::vector<const pops::MultiFab*>" in src,
-        "emit builds a per-block MultiFab pointer vector")
-    chk("ctx.n_blocks()" in src,
-        "the pointer vector is sized to ctx.n_blocks() (nullptr = the block's live state)")
+    chk("std::vector<const pops::MultiFab*>" not in src,
+        "the generated step does not allocate a MultiFab pointer vector")
 
-    # (3) each listed block slots its stage state by index (one `[k] = &state` push per block).
-    chk(src.count("] = &") >= len(blocks),
-        "every listed block (%d) slots its stage state by index" % len(blocks))
+    # (3) each listed block appears once in the allocation-free initializer-list request.
+    chk(sum(src.count("{%d, &" % k) for k in range(len(blocks))) >= len(blocks),
+        "every listed block (%d) carries its exact stage state" % len(blocks))
     # The three blocks bind ctx.state(0/1/2) and the coupled solve precedes the per-block RHS.
     for k in range(len(blocks)):
         chk("ctx.state(%d)" % k in src, "block index %d binds ctx.state(%d)" % (k, k))
-    chk(src.index("ctx.solve_fields_from_blocks(") < src.index("ctx.rhs_into("),
-        "the coupled field solve is emitted before the per-block RHS reads the shared aux")
+    rhs_positions = [
+        pos for token in ("ctx.rhs_into(", "ctx.rhs_group(")
+        if (pos := src.find(token)) >= 0
+    ]
+    chk(bool(rhs_positions) and src.index("ctx.solve_fields_from_blocks(") < min(rhs_positions),
+        "the coupled field solve is emitted before the RHS reads the shared aux")
 
     # (4) a 2-block coupled solve also lowers (parity with the per-block solve_fields path).
     P2 = coupled_program(t, "coupled_two", ("a", "b"))
     src2 = _emit(P2)
-    chk("ctx.solve_fields_from_blocks(" in src2 and src2.count("] = &") >= 2,
+    chk("ctx.solve_fields_from_blocks(" in src2 and
+        sum(src2.count("{%d, &" % k) for k in range(2)) >= 2,
         "a 2-block coupled solve lowers with both blocks slotted")
 
     print("%s test_coupled_fieldsolve_codegen" % ("FAIL (%d)" % fails if fails else "PASS"))

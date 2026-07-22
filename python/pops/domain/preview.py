@@ -1,4 +1,4 @@
-"""Host-side previews for rectangular domains and generic implicit geometries.
+"""Host-side previews for bounded domains and generic implicit geometries.
 
 Previewing is presentation only: NumPy samples the same canonical analytic expression that the
 runtime lowers to its native evaluator, while Matplotlib is imported only when a figure is shown or
@@ -18,7 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pops.frames import Cartesian2D
-from .rectangle import Rectangle
+from pops.identity import make_identity
 
 
 FloatArray = NDArray[np.float64]
@@ -41,6 +41,97 @@ class GeometryPreviewProvider(Protocol):
         """Return an object exposing one canonical analytic ``expression``."""
 
 
+class PreviewBoundaryNames(Protocol):
+    """Structural labels used by the generic Cartesian preview renderer."""
+
+    x_min: str
+    x_max: str
+    y_min: str
+    y_max: str
+
+
+class PreviewDomainProvider(Protocol):
+    """Minimal bounded-domain protocol consumed by sampling and rendering."""
+
+    name: str
+    lower: tuple[float, float]
+    upper: tuple[float, float]
+    boundary_names: PreviewBoundaryNames
+
+    @property
+    def lengths(self) -> tuple[float, float]:
+        """Return positive Cartesian lengths."""
+
+    def frame(self, coordinates: Cartesian2D) -> Any:
+        """Bind the domain to a typed Cartesian frame."""
+
+
+@dataclass(frozen=True, slots=True)
+class _DefaultBoundaryNames:
+    x_min: str = "x_min"
+    x_max: str = "x_max"
+    y_min: str = "y_min"
+    y_max: str = "y_max"
+
+
+@dataclass(frozen=True, slots=True)
+class _GeometryPreviewDomain:
+    """Presentation-only bounded window owned by an implicit geometry preview."""
+
+    name: str
+    lower: tuple[float, float]
+    upper: tuple[float, float]
+    frame_id: str | None
+    boundary_names: _DefaultBoundaryNames = _DefaultBoundaryNames()
+
+    @property
+    def lengths(self) -> tuple[float, float]:
+        return (self.upper[0] - self.lower[0], self.upper[1] - self.lower[1])
+
+    def frame(self, coordinates: Cartesian2D) -> _GeometryPreviewFrame:
+        return _GeometryPreviewFrame(self, coordinates)
+
+
+@dataclass(frozen=True, slots=True)
+class _GeometryPreviewFrame:
+    domain: _GeometryPreviewDomain
+    coordinates: Cartesian2D
+
+    @property
+    def axes(self) -> Any:
+        return self.coordinates.axes
+
+    @property
+    def x(self) -> Any:
+        return self.coordinates.x
+
+    @property
+    def y(self) -> Any:
+        return self.coordinates.y
+
+    @property
+    def lower(self) -> tuple[float, float]:
+        return self.domain.lower
+
+    @property
+    def upper(self) -> tuple[float, float]:
+        return self.domain.upper
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "frame_type": "geometry_preview_cartesian_2d",
+            "lower_binary64": [value.hex() for value in self.lower],
+            "upper_binary64": [value.hex() for value in self.upper],
+            "coordinates": self.coordinates.to_dict(),
+        }
+
+    @property
+    def canonical_id(self) -> str:
+        if self.domain.frame_id is not None:
+            return self.domain.frame_id
+        return make_identity("geometry-preview-frame", self.to_dict(), schema_version=1).token
+
+
 def _checked_resolution(value: Any) -> tuple[int, int]:
     if isinstance(value, int) and not isinstance(value, bool):
         values = (value, value)
@@ -54,6 +145,46 @@ def _checked_resolution(value: Any) -> tuple[int, int]:
     if any(item < 2 for item in values):
         raise ValueError("preview resolution entries must be >= 2")
     return (values[0], values[1])
+
+
+def _checked_extent(value: Any) -> tuple[tuple[float, float], tuple[float, float]]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 2:
+        raise TypeError("preview extent must contain lower and upper two-dimensional points")
+    points: list[tuple[float, float]] = []
+    for point_index, point in enumerate(value):
+        if isinstance(point, (str, bytes)) or not isinstance(point, Sequence) or len(point) != 2:
+            raise TypeError("preview extent point %d must contain two coordinates" % point_index)
+        coordinates = []
+        for coordinate in point:
+            if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+                raise TypeError("preview extent coordinates must be real numbers, never bool")
+            converted = float(coordinate)
+            if not np.isfinite(converted):
+                raise ValueError("preview extent coordinates must be finite")
+            coordinates.append(converted)
+        points.append((coordinates[0], coordinates[1]))
+    lower, upper = points
+    if any(high <= low for low, high in zip(lower, upper, strict=True)):
+        raise ValueError("preview extent upper coordinates must exceed lower coordinates")
+    return lower, upper
+
+
+def _validate_preview_domain(domain: Any) -> None:
+    name = getattr(domain, "name", None)
+    if not isinstance(name, str) or not name:
+        raise TypeError("DomainPreview.domain must expose a non-empty name")
+    lower, upper = _checked_extent((getattr(domain, "lower", None),
+                                    getattr(domain, "upper", None)))
+    lengths = getattr(domain, "lengths", None)
+    expected_lengths = (upper[0] - lower[0], upper[1] - lower[1])
+    if not isinstance(lengths, Sequence) or tuple(lengths) != expected_lengths:
+        raise TypeError("DomainPreview.domain lengths must match its lower and upper bounds")
+    labels = getattr(domain, "boundary_names", None)
+    if any(not isinstance(getattr(labels, face, None), str) or not getattr(labels, face)
+           for face in ("x_min", "x_max", "y_min", "y_max")):
+        raise TypeError("DomainPreview.domain must expose four non-empty boundary labels")
+    if not callable(getattr(domain, "frame", None)):
+        raise TypeError("DomainPreview.domain must implement frame(Cartesian2D)")
 
 
 def _readonly_float_array(value: Any, *, ndim: int, where: str) -> FloatArray:
@@ -78,7 +209,7 @@ def _readonly_bool_array(value: Any, *, shape: tuple[int, int], where: str) -> B
 class DomainPreview:
     """Sampled presentation data for one domain, analytic field, and implicit geometry."""
 
-    domain: Rectangle
+    domain: PreviewDomainProvider
     geometry: GeometryPreviewProvider | None
     x: FloatArray
     y: FloatArray
@@ -89,8 +220,7 @@ class DomainPreview:
     field_kind: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.domain, Rectangle):
-            raise TypeError("DomainPreview.domain must be a Rectangle")
+        _validate_preview_domain(self.domain)
         if self.geometry is not None and not callable(getattr(self.geometry, "level_set", None)):
             raise TypeError("DomainPreview.geometry must implement level_set(frame)")
         x_values = _readonly_float_array(self.x, ndim=1, where="DomainPreview.x")
@@ -165,11 +295,21 @@ class DomainPreview:
         interactive window.
         """
 
-        return _show_matplotlib(self, path=path)
+        if path is not None:
+            return self.export(path)
+        return _show_matplotlib(self, path=None)
+
+    def export(self, path: str | PathLike[str]) -> Path:
+        """Write this preview without opening an interactive window."""
+
+        result = _show_matplotlib(self, path=path)
+        if result is None:
+            raise RuntimeError("DomainPreview export did not produce an output path")
+        return result
 
 
-def preview_rectangle(
-    domain: Rectangle,
+def preview_domain(
+    domain: PreviewDomainProvider,
     *,
     geometry: GeometryPreviewProvider | None = None,
     field: AnalyticPreviewValue | None = None,
@@ -177,12 +317,11 @@ def preview_rectangle(
 ) -> DomainPreview:
     """Sample analytic data over ``domain`` through canonical expression contracts."""
 
-    if not isinstance(domain, Rectangle):
-        raise TypeError("preview_rectangle requires a Rectangle")
+    _validate_preview_domain(domain)
     if geometry is not None and not callable(getattr(geometry, "level_set", None)):
-        raise TypeError("Rectangle.preview geometry must implement level_set(frame)")
+        raise TypeError("domain preview geometry must implement level_set(frame)")
     if field is not None:
-        _expression_kind(field, where="Rectangle.preview field")
+        _expression_kind(field, where="domain preview field")
     nx, ny = _checked_resolution(resolution)
     x_values = np.linspace(domain.lower[0], domain.upper[0], nx, dtype=np.float64)
     y_values = np.linspace(domain.lower[1], domain.upper[1], ny, dtype=np.float64)
@@ -211,6 +350,31 @@ def preview_rectangle(
         domain, geometry, x_values, y_values, level_set_values, active_mask,
         field, field_values,
     )
+
+
+def preview_geometry(
+    geometry: GeometryPreviewProvider,
+    *,
+    extent: Any = None,
+    resolution: int | tuple[int, int] = (256, 256),
+) -> DomainPreview:
+    """Preview any implicit-geometry provider in its own bounded presentation window."""
+
+    if not callable(getattr(geometry, "level_set", None)):
+        raise TypeError("preview_geometry requires a provider implementing level_set(frame)")
+    if extent is None:
+        extent_provider = getattr(geometry, "preview_extent", None)
+        extent = extent_provider() if callable(extent_provider) else ((-1.0, -1.0), (1.0, 1.0))
+    lower, upper = _checked_extent(extent)
+    frame_provider = getattr(geometry, "preview_frame_id", None)
+    frame_id = frame_provider() if callable(frame_provider) else None
+    if frame_id is not None and (not isinstance(frame_id, str) or not frame_id):
+        raise TypeError("geometry preview_frame_id() must return non-empty text or None")
+    name = getattr(geometry, "name", type(geometry).__name__)
+    if not isinstance(name, str) or not name:
+        raise TypeError("geometry preview name must be non-empty text")
+    domain = _GeometryPreviewDomain(name, lower, upper, frame_id)
+    return preview_domain(domain, geometry=geometry, resolution=resolution)
 
 
 def _sample_expression(
@@ -247,7 +411,20 @@ def _expression_data(expression: Any, *, where: str) -> Mapping[str, Any]:
     if not isinstance(data, Mapping) or data.get("expression_type") not in {
             "scalar", "predicate"} or not isinstance(data.get("root"), Mapping):
         raise TypeError("%s must expose canonical analytic expression data" % where)
-    return data
+
+    # Built-in expressions validate their own immutable graph in ``to_data``. Structural
+    # third-party providers are useful for inspection tooling, but their claim of exposing the
+    # canonical schema must be authenticated before the evaluator traverses arbitrary mappings.
+    # Reusing the owning decoder keeps preview and native lowering on one operation/arity contract
+    # and turns malformed data into a precise authoring error rather than a late KeyError.
+    from pops.analytic import PredicateExpr, ScalarExpr
+
+    if isinstance(expression, (ScalarExpr, PredicateExpr)):
+        return data
+    expression_type = data["expression_type"]
+    decoded = (ScalarExpr.from_data(data) if expression_type == "scalar"
+               else PredicateExpr.from_data(data))
+    return decoded.to_data()
 
 
 def _expression_kind(expression: Any, *, where: str) -> str:
@@ -355,9 +532,9 @@ def _checked_output_path(value: str | PathLike[str]) -> Path:
     try:
         result = Path(value)
     except TypeError:
-        raise TypeError("DomainPreview.show path must be text or path-like") from None
+        raise TypeError("DomainPreview output path must be text or path-like") from None
     if not result.name or not result.suffix:
-        raise ValueError("DomainPreview.show path must include a filename extension")
+        raise ValueError("DomainPreview output path must include a filename extension")
     return result
 
 
@@ -471,5 +648,6 @@ def _show_matplotlib(
 
 
 __all__ = [
-    "AnalyticPreviewValue", "DomainPreview", "GeometryPreviewProvider", "preview_rectangle",
+    "AnalyticPreviewValue", "DomainPreview", "GeometryPreviewProvider", "PreviewDomainProvider",
+    "preview_domain", "preview_geometry",
 ]

@@ -76,11 +76,21 @@ def compile_component(
     from pops import _pops
     from pops.codegen._native_mpi import native_mpi_communicator
     from pops._platform_contracts import artifact_platform_manifest
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
 
     # The component is compiled with the same shared loader flags as generated Programs.  Its
     # manifest must therefore describe that selected host communicator as well; claiming ``serial``
     # for a binary built with POPS_HAS_MPI defeats the exact launch gate later at installation.
     communicator = native_mpi_communicator(_pops)
+    runtime_backend = native_runtime_backend_for_route(
+        "aot-component", "component", communicator)
+    runtime_device = runtime_backend.device.require("runtime.device")
+    normalized_runtime_device = "cpu" if runtime_device in ("host", "cpu") else runtime_device
+    if target["device"] != normalized_runtime_device:
+        raise ComponentPackageError(
+            "target", "component.target",
+            "component target device %r differs from installed Kokkos target %r"
+            % (target["device"], normalized_runtime_device))
     host_abi = getattr(_pops, "abi_key", None)
     if not callable(host_abi) or not isinstance((abi := host_abi()), str) or not abi:
         raise RuntimeError("loaded pops._pops exposes no exact native abi_key()")
@@ -89,6 +99,7 @@ def compile_component(
         target="component",
         component=SimpleNamespace(abi_key=abi),
         communicator=communicator,
+        runtime_backend=runtime_backend,
     )
     component.component_manifest.require_target(target)
     symbols = {

@@ -94,7 +94,7 @@ def test_form():
 
 def test_facade_rejects():
     """The low-level setter refuses canonical fields and unknown blocks explicitly."""
-    runtime = System(n=8, L=1.0, periodic=True)
+    runtime = System(n=8, L=1.0, periodicity=(True, True))
     field = np.ones((8, 8))
 
     try:
@@ -158,7 +158,7 @@ def test_end_to_end():
         assert compiled.aux_extra_names == ["kappa"]
         assert compiled.n_aux == 6
 
-        runtime = System(n=n, L=1.0, periodic=True)
+        runtime = System(n=n, L=1.0, periodicity=(True, True))
         runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
         runtime.add_equation(
             "decay", model=compiled, spatial=_spatial(), time=engine.Explicit())
@@ -241,7 +241,7 @@ def test_amr_named_aux_single_block_regrid():
         n = 24
         lo, hi = n // 3, 2 * n // 3
 
-        reference = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        reference = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=1)
         reference.set_temporal_relations([2], [1], ["integral_only"])
         reference.add_equation(
             "decay",
@@ -257,7 +257,7 @@ def test_amr_named_aux_single_block_regrid():
             reference.step(1e-2)
         assert abs(reference.mass("decay") - initial_mass) < 1e-10
 
-        runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=1)
         runtime.set_temporal_relations([2], [1], ["integral_only"])
         runtime.add_equation(
             "decay",
@@ -314,7 +314,7 @@ def test_amr_named_aux_multiblock_regrid():
             target="amr_system",
         )
 
-        runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=1)
         runtime.set_temporal_relations([2], [1], ["integral_only"])
         runtime.add_equation(
             "decay", model=decay, spatial=_spatial(), time=engine.Explicit())
@@ -339,7 +339,7 @@ def test_amr_named_aux_multiblock_regrid():
 
 def test_amr_named_aux_rejections():
     """AMR rejects canonical fields and unknown blocks before compilation."""
-    runtime = AmrSystem(n=8, L=1.0, periodic=True)
+    runtime = AmrSystem(n=8, L=1.0, periodicity=(True, True))
     field = np.ones((8, 8))
     for name, expected in (("B_z", "set_magnetic_field"), ("phi", "CANONICAL")):
         try:

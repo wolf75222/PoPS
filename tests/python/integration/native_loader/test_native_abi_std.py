@@ -129,7 +129,7 @@ def check_native_loads_without_abi_error(expected_std, cxx):
             wave_speed_provider="pressure_derived",
         )
 
-        sys = System(n=n, L=1.0, periodic=True)
+        sys = System(n=n, L=1.0, periodicity=(True, True))
         # Si le std du modele != std du loader, le dispatcher leve RuntimeError("incompatible ABI").
         try:
             sys.add_equation(

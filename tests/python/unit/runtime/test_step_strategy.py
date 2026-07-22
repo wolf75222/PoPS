@@ -18,6 +18,7 @@ from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
+    _phase,
     prepare_step_controller,
     register_step_controller_factory,
     resolve_run_strategy,
@@ -97,14 +98,14 @@ class _TemporalOwner:
         raise AssertionError("a controller opened a nested facade step transaction")
 
 
-def _error_strategy():
+def _error_strategy(*, max_rejections=3):
     return ErrorControlledDt(
         dt_init=0.2,
         rtol=1.0e-4,
         atol=1.0e-8,
         dt_min=0.01,
         dt_max=0.5,
-        max_rejections=3,
+        max_rejections=max_rejections,
         shrink=0.5,
         growth=1.5,
     )
@@ -174,6 +175,44 @@ def test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count
     assert engine._last_step_transaction_report.phase == "guard"
     assert engine._last_step_transaction_report.attempts == 4
     assert native.time() == 0.0
+
+
+def test_structured_rejection_phase_precedes_legacy_message_parsing():
+    error = StepAttemptRejected("step attempt rejected during guard: legacy diagnostic")
+    error.phase = "stage"
+    assert _phase(error) == "stage"
+
+    error.phase = "prepared field evaluation"
+    assert _phase(error) == "solve"
+
+    del error.phase
+    assert _phase(error) == "guard"
+
+
+@pytest.mark.parametrize("disposition", ["retry", "reject"])
+def test_error_controller_preserves_both_dispositions_without_changing_retry_policy(disposition):
+    class RejectingNative(_Native):
+        def step(self, dt):
+            self.calls.append(("step", float(dt)))
+            error = StepAttemptRejected(
+                "step attempt rejected during guard: structured rejection")
+            error.status = "invalid_evaluation"
+            error.phase = "stage"
+            error.detail = "structured rejection"
+            error.disposition = disposition
+            error.reason_code = 17
+            raise error
+
+    native = RejectingNative()
+    engine = _Engine()
+    with pytest.raises(StepAttemptRejected) as caught:
+        run_step_attempt(
+            engine, native, _error_strategy(max_rejections=1), t_end=1.0)
+
+    assert native.calls == [("step", 0.2), ("step", 0.1)]
+    assert caught.value.disposition == disposition
+    assert caught.value.reason_code == 17
+    assert engine._last_step_transaction_report.phase == "stage"
 
 
 def test_controls_are_validated_before_controller_or_manifest_publication():

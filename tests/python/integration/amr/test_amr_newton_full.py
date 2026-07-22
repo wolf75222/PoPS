@@ -65,12 +65,12 @@ def gaussian(n):
 def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
-    s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    s = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     s.set_refinement(1e30)
     s.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()), time=time)
-    s.set_density("e", gaussian(16).ravel())
+    s.set_density("e", gaussian(16))
     s.step(2e-3)
     return np.asarray(s.density("e")).reshape(16, 16)
 
@@ -94,7 +94,7 @@ chk(np.all(np.isfinite(d_a)),
 
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
-amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
@@ -102,8 +102,8 @@ amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod())
                  time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
 amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
                  time=engine.Explicit())
-amr.set_density("e1", gaussian(16).ravel())
-amr.set_density("e2", gaussian(16).ravel())
+amr.set_density("e1", gaussian(16))
+amr.set_density("e2", gaussian(16))
 amr.advance(2e-3, 3)
 rep = amr.newton_report("e1")
 chk(rep["enabled"] is True, "newton_report : enabled (au moins une avance IMEX jouee)")
@@ -139,7 +139,7 @@ chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identiq
 
 # ---- (d) GARDE PRE-LOADER SUR METADONNEES DETACHEES : rejet explicite ---------------------------
 print("== (d) garde pre-loader AMR : options/diagnostics Newton rejetes explicitement ==")
-sim_opt = AmrSystem(n=16, periodic=True)
+sim_opt = AmrSystem(n=16, periodicity=(True, True))
 sim_opt.set_temporal_relations([2], [1], ["integral_only"])
 try:
     sim_opt.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),
@@ -148,7 +148,7 @@ try:
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
         "options Newton sur metadonnees AMR : ValueError claire (Newton/production)")
-sim_diag = AmrSystem(n=16, periodic=True)
+sim_diag = AmrSystem(n=16, periodicity=(True, True))
 sim_diag.set_temporal_relations([2], [1], ["integral_only"])
 try:
     sim_diag.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),

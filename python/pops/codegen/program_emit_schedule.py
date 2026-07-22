@@ -204,10 +204,11 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
 def _split_output_decl(program: Any, body: Any, out: Any, v: Any) -> tuple:
     """Split a scratch node's emitted @p body into (declaration_line, rest): the OUTPUT scratch
     ``out`` must be declared OUTSIDE the policy guard so both branches see it, while the fill stays
-    inside. The op declares its output as its FIRST emitted line (``pops::MultiFab <out> = ...;``);
+    inside. The op binds its output as its FIRST emitted line
+    (``pops::MultiFab& <out> = ctx.*_scratch(...);``);
     hoist exactly that one line. Raises if the shape is unexpected (a node whose output is not a
     freshly-declared scratch cannot use a cache/zero policy through this path)."""
-    decl_prefix = "pops::MultiFab %s = " % out
+    decl_prefix = "pops::MultiFab& %s = " % out
     if not body or not body[0].startswith(decl_prefix):
         raise NotImplementedError(
             "schedule policy on node %r (op '%s') needs its output scratch %r declared as its first "

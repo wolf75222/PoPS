@@ -142,7 +142,7 @@ def _run_section_b(t):
         import pops.runtime._engine_descriptors as engine
     except Exception as exc:
         require_native_or_skip("test_time_std_rk compiled parity unavailable: %s" % exc)
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         require_native_or_skip(
             "test_time_std_rk _pops lacks install_program (rebuild _pops)"
         )
@@ -175,7 +175,7 @@ def _run_section_b(t):
     initial = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
     def run(handle):
-        sim = System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodicity=(True, True))
         compiled_model = _passive_model("rk_block").compile(backend="production")
         sim.add_equation(
             "plasma", compiled_model,

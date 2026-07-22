@@ -113,7 +113,7 @@ requires_engine = pytest.mark.skipif(
 
 
 def _build(n=32, L=1.0):
-    return System(n=n, L=L, periodic=False)
+    return System(n=n, L=L, periodicity=(False, False))
 
 
 @requires_engine

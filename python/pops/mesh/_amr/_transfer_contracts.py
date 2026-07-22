@@ -270,9 +270,12 @@ class TransferProvider:
         routes = tuple(self.routes)
         if not routes or any(type(route) is not TransferProviderRoute for route in routes):
             raise TypeError("TransferProvider.routes must contain TransferProviderRoute values")
-        route_ids = [route.key.identity.token for route in routes]
+        route_ids = [
+            make_identity("amr-transfer-provider-route", route.to_data()).token
+            for route in routes
+        ]
         if len(route_ids) != len(set(route_ids)):
-            raise ValueError("TransferProvider contains a duplicate exact transfer key")
+            raise ValueError("TransferProvider contains a duplicate exact capability route")
         if type(self.options) is not CanonicalOptions:
             raise TypeError("TransferProvider.options must be CanonicalOptions")
         object.__setattr__(self, "routes", routes)

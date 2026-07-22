@@ -86,6 +86,39 @@ def test_riemann_descriptors_compute_nothing():
     assert lib.riemann.Rusanov() == lib.riemann.Rusanov()
 
 
+def test_brick_identity_includes_requirements_capabilities_and_nested_options():
+    base = lib.BrickDescriptor(
+        "acme.flux", "external_cpp", category="riemann", native_id="acme_flux",
+        scheme="user", requirements={"capabilities": []},
+        capabilities={"provides": ["cpu"]},
+        options={"method": {"weights": [1, 2], "limiter": lib.limiters.Minmod()}},
+    )
+    same = lib.BrickDescriptor(
+        "acme.flux", "external_cpp", category="riemann", native_id="acme_flux",
+        scheme="user", requirements={"capabilities": []},
+        capabilities={"provides": ["cpu"]},
+        options={"method": {"weights": [1, 2], "limiter": lib.limiters.Minmod()}},
+    )
+    needs_waves = lib.BrickDescriptor(
+        "acme.flux", "external_cpp", category="riemann", native_id="acme_flux",
+        scheme="user", requirements={"capabilities": ["wave_speeds"]},
+        capabilities={"provides": ["cpu"]},
+        options={"method": {"weights": [1, 2], "limiter": lib.limiters.Minmod()}},
+    )
+    different_capability = lib.BrickDescriptor(
+        "acme.flux", "external_cpp", category="riemann", native_id="acme_flux",
+        scheme="user", requirements={"capabilities": []},
+        capabilities={"provides": ["gpu"]},
+        options={"method": {"weights": [1, 2], "limiter": lib.limiters.Minmod()}},
+    )
+
+    assert base == same
+    assert hash(base) == hash(same)
+    assert base != needs_waves
+    assert base != different_capability
+    assert len({base, same, needs_waves, different_capability}) == 3
+
+
 def test_field_solver_descriptor_carries_options():
     d = lib.fields.GeometricMG(tolerance=1e-10, max_iters=200)
     assert d.brick_type == "native"

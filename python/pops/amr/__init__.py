@@ -32,13 +32,21 @@ from .materialization import (
     NativeAMRMaterializationKind,
     TransferCapabilities,
 )
-from .providers import ClusteringProvider, TaggerProvider
+from .providers import (
+    AMRProviderLoweringContext,
+    amr_provider_binding_identity,
+    ClusteringProvider,
+    ResolvedAMRProviderBinding,
+    TaggerProvider,
+)
 
 
 __all__ = [
     "AMRClockRelation",
     "AMRExecution",
     "AMRHierarchy",
+    "AMRProviderLoweringContext",
+    "amr_provider_binding_identity",
     "AMRRegrid",
     "AMRTagging",
     "AMRRemainderPolicy",
@@ -58,6 +66,7 @@ __all__ = [
     "PatchLayout",
     "PreparedHierarchyNativeLowering",
     "PreparedHierarchyNativeProvider",
+    "ResolvedAMRProviderBinding",
     "Tag",
     "TaggerProvider",
     "TransferCapabilities",

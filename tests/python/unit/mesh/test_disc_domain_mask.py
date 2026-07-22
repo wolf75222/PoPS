@@ -71,7 +71,7 @@ def ring(n, L, cx=0.5, cy=0.5):
 # ---------------------------------------------------------------------------
 
 def _build(n, L):
-    sim = System(n=n, L=L, periodic=True)
+    sim = System(n=n, L=L, periodicity=(True, True))
     sim.set_poisson(bc=Periodic())
     rho0 = ring(n, L)
     sim.add_equation("s", model=iso_model(n0=float(rho0.mean())),

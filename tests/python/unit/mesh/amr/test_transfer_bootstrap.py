@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,10 @@ from pops.lib.amr import (
     StateTransfer,
 )
 from pops.model import Handle, OwnerPath, ParamHandle
+from pops.numerics.reconstruction import WENO5
+from pops.numerics.riemann import Rusanov
+from pops.numerics.spatial import FiniteVolume
+from pops.numerics.variables import Conservative
 from pops.time import Clock
 from pops.identity import make_identity
 from pops.runtime._amr_bootstrap_execution import BootstrapReceipt, execute_bootstrap
@@ -273,6 +278,30 @@ def test_public_transfer_object_derives_all_state_routes_and_hides_internal_buil
     import pops.mesh._amr.transfer as module
     assert module.__all__ == ["AMRTransfer", "ResolvedAMRTransfer"]
     assert "AMRTransferBuilder" not in module.__all__
+
+
+def test_public_transfer_selects_minimum_route_from_resolved_weno_accuracy():
+    plan, _, state, _ = _layout()
+    flux = Handle("F", kind="flux", owner=state.owner_path)
+    method = FiniteVolume(
+        flux=flux,
+        variables=Conservative(state),
+        reconstruction=WENO5(),
+        riemann=Rusanov(),
+    )
+    numerics = (SimpleNamespace(rates=(SimpleNamespace(method=method),)),)
+    authored = AMRTransfer()
+    authored.state(state, StateTransfer())
+
+    resolved = authored.resolve(plan, numerics)
+    coarse_fine = next(
+        entry for entry in resolved.entries
+        if entry.key.operation == COARSE_FINE_FILL
+    )
+    assert coarse_fine.action.route.options.to_data()["native_route"] \
+        == "conservative_polynomial5_coarse_fine"
+    assert coarse_fine.action.capabilities.order == 5
+    assert coarse_fine.action.capabilities.ghost_depth == (3,)
 
 
 def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():

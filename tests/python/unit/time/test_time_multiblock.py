@@ -210,10 +210,11 @@ def section_a(t):
         "solve_fields_from_blocks lowers to the coupled multi-block solve",
     )
     chk(
-        "std::vector<const pops::MultiFab*>" in src_c,
-        "the coupled solve builds a per-block MultiFab pointer vector",
+        "std::vector<const pops::MultiFab*>" not in src_c,
+        "the coupled solve reuses its context-owned native workspace",
     )
-    chk(src_c.count("] = &") >= 2, "each listed block slots its stage state by index")
+    chk("{0, &" in src_c and "{1, &" in src_c,
+        "each listed block carries its exact stage state")
 
     # The callable field handle rejects malformed coupled arguments before outcome creation.
     Pb = t.Program("b")
@@ -275,7 +276,7 @@ def section_b(t):
         require_native_or_skip("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         if fails:
             raise AssertionError(
                 "%d pure-Python acceptance(s) failed before the native capability skip" % fails
@@ -318,7 +319,7 @@ def section_b(t):
     chk(comp_ab.program_name == "two_block_passive", "the 2-block handle carries the program name")
 
     def make_sim(blocks):
-        sim = System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodicity=(True, True))
         for blk in blocks:
             try:
                 cm = passive_model("blk_" + blk).compile(backend="production")

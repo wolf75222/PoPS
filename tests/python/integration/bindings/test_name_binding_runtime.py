@@ -95,7 +95,7 @@ def _run():
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
 
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         _skip("_pops lacks the install_program binding (rebuild _pops)")
 
     print("== NAME-based block binding: reversed System add-order matches in-order ==")
@@ -119,7 +119,7 @@ def _run():
 
     def make_sim(add_order):
         """A System with the two blocks added in @p add_order, each set to its OWN-named IC."""
-        sim = System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodicity=(True, True))
         for blk in add_order:
             try:
                 cm = passive_model("nb_blk_" + blk).compile(backend="production")

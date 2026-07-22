@@ -365,9 +365,9 @@ class Rectangle:
     ) -> DomainPreview:
         """Sample this domain with optional analytic-field and implicit-geometry overlays."""
 
-        from .preview import preview_rectangle
+        from .preview import preview_domain
 
-        return preview_rectangle(
+        return preview_domain(
             self, geometry=geometry, field=field, resolution=resolution)
 
     def show(

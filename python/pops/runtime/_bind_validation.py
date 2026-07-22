@@ -154,14 +154,14 @@ def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh:
     shape = _shape_of(array)
     if shape is None:
         lines.append("initial state for block %r is not an array (no .shape); pass a numpy array of "
-                     "shape (%s, n, n)" % (name, components or "n_components"))
+                     "shape (%s, ny, nx)" % (name, components or "n_components"))
         return
     if mesh is not None and ghost is not None:
         expected = _expected_shapes(components, mesh, ghost)
         if shape not in expected:
-            lines.append("initial state for block %r has shape %s; expected one of %s (n=%d "
-                         "cells per axis, %d component(s), ghost depth %d)"
-                         % (name, shape, sorted(expected), mesh, components, ghost))
+            lines.append("initial state for block %r has shape %s; expected one of %s "
+                         "(cells=(nx=%d, ny=%d), %d component(s), ghost depth %d)"
+                         % (name, shape, sorted(expected), mesh[0], mesh[1], components, ghost))
     dtype = _dtype_name(array)
     if dtype is not None and dtype not in accepted_dtypes:
         lines.append("initial state for block %r has dtype %r; the artifact's declared precision "
@@ -200,12 +200,13 @@ def validate_bound_initial_values(
         mesh = _layout_mesh(_layout_for_block(layout, name))
         if mesh is None:
             lines.append(
-                "typed initial value for block %r requires an explicit square grid extent" % name
+                "typed initial value for block %r requires explicit Cartesian grid cells" % name
             )
             continue
         components = int(spec.get("components", 0) or 0)
         shape = _shape_of(array)
-        expected = {(components, mesh, mesh)} if components > 0 else set()
+        nx, ny = mesh
+        expected = {(components, ny, nx)} if components > 0 else set()
         if shape is None:
             lines.append(
                 "typed initial value for block %r is not an array (no .shape)" % name
@@ -226,22 +227,22 @@ def validate_bound_initial_values(
 
 
 def _expected_shapes(components: Any, mesh: Any, ghost: Any) -> Any:
-    """The set of accepted (..., n, n) shapes for @p components on an @p mesh (valid or +ghost ring)."""
-    n = int(mesh)
-    valid = (n, n)
-    haloed = (n + 2 * int(ghost), n + 2 * int(ghost))
+    """Accepted (..., ny, nx) shapes for valid cells or one complete ghost ring."""
+    nx, ny = (int(value) for value in mesh)
+    valid = (ny, nx)
+    haloed = (ny + 2 * int(ghost), nx + 2 * int(ghost))
     shapes = set()
     for grid in (valid, haloed):
         if components and components > 1:
             shapes.add((components,) + grid)
         else:
             shapes.add((1,) + grid)
-            shapes.add(grid)  # a single-component block may be a bare (n, n) array
+            shapes.add(grid)  # a single-component block may be a bare (ny, nx) array
     return shapes
 
 
 def _layout_mesh(layout: Any) -> Any:
-    """The 2D cell count ``n`` (an n x n grid) of @p layout, or ``None`` when it carries no mesh."""
+    """The exact 2D cell counts ``(nx, ny)``, or ``None`` when no mesh is available."""
     if layout is None:
         return None
     if _layout_kind(layout) == "amr":
@@ -252,21 +253,23 @@ def _layout_mesh(layout: Any) -> Any:
         if not isinstance(data, dict):
             return None
         cells = data.get("grid", {}).get("cells")
-        if not isinstance(cells, (list, tuple)) or len(cells) != 2 or cells[0] != cells[1]:
+        if not isinstance(cells, (list, tuple)) or len(cells) != 2:
             return None
-        return int(cells[0])
+        return int(cells[0]), int(cells[1])
     mesh = getattr(layout, "mesh", None)
     cells = getattr(mesh, "cells", None)
     if isinstance(cells, (tuple, list)):
-        if len(cells) != 2 or cells[0] != cells[1]:
+        if len(cells) != 2:
             return None
-        return int(cells[0])
+        return int(cells[0]), int(cells[1])
     n = getattr(mesh, "n", None)
     if n is None:
         return None
     if isinstance(n, (tuple, list)):
-        return int(n[0]) if n else None
-    return int(n)
+        if len(n) != 2:
+            return None
+        return int(n[0]), int(n[1])
+    return int(n), int(n)
 
 
 def _layout_for_block(layout: Any, block_name: str) -> Any:

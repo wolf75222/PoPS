@@ -1,6 +1,10 @@
 """Typed brick descriptors, factories, and the strict external-brick catalog."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+from decimal import Decimal
+from enum import Enum
+from fractions import Fraction
 from typing import Any
 
 from pops._manifest_protocol import strict_json_loads
@@ -8,6 +12,18 @@ from pops._manifest_protocol import strict_json_loads
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
 BRICK_MANIFEST_SCHEMA_VERSION = 3
+_EXTERNAL_RIEMANN_ABI_VERSION = 2
+_EXTERNAL_RIEMANN_ABI_KEY = b"pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy"
+_EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset({
+    "pops_external_riemann_abi_version",
+    "pops_external_riemann_abi_key",
+    "pops_brick_residual_v2",
+    "pops_brick_install_system_v2",
+    "pops_brick_install_amr_v2",
+    "pops_brick_model_identity",
+    "pops_brick_kokkos_backend",
+    "pops_brick_kokkos_version",
+})
 _BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "annotations", "bricks"})
 _BRICK_MANIFEST_TOP_REQUIRED = ("schema_version", "abi_key", "annotations", "bricks")
 _BRICK_MANIFEST_ENTRY_REQUIRED = (
@@ -15,6 +31,58 @@ _BRICK_MANIFEST_ENTRY_REQUIRED = (
     "supported_platforms", "params", "options", "exported_symbols",
 )
 _BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED)
+
+
+def _brick_identity_value(value: Any, *, where: str) -> tuple[Any, ...]:
+    """Project descriptor metadata to a recursively hashable semantic value.
+
+    Descriptor identity cannot use ``repr`` or process-local object identity.  Nested descriptors
+    and PoPS value objects participate through their canonical data protocols; ordinary container
+    structure and exact scalar types are tagged explicitly so distinct values cannot collide.
+    """
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        return (type(value).__name__, value)
+    if isinstance(value, float):
+        return ("binary64", value.hex())
+    if isinstance(value, Decimal):
+        return ("decimal", str(value))
+    if isinstance(value, Fraction):
+        return ("rational", value.numerator, value.denominator)
+    if isinstance(value, Enum):
+        return ("enum", type(value).__module__, type(value).__qualname__, value.name)
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) or not key for key in value):
+            raise TypeError("%s mapping keys must be non-empty strings" % where)
+        return (
+            "mapping",
+            tuple(
+                (key, _brick_identity_value(item, where="%s.%s" % (where, key)))
+                for key, item in sorted(value.items())
+            ),
+        )
+    if isinstance(value, (list, tuple)):
+        return (
+            "sequence",
+            tuple(_brick_identity_value(item, where="%s[]" % where) for item in value),
+        )
+    if isinstance(value, (set, frozenset)):
+        rows = [_brick_identity_value(item, where="%s{}" % where) for item in value]
+        return ("set", tuple(sorted(rows)))
+    if isinstance(value, BrickDescriptor):
+        return ("brick", value._key())
+    for name in ("canonical_identity", "to_data", "to_dict"):
+        project = getattr(value, name, None)
+        if callable(project):
+            return (
+                "value",
+                type(value).__module__,
+                type(value).__qualname__,
+                _brick_identity_value(project(), where="%s.%s()" % (where, name)),
+            )
+    raise TypeError(
+        "%s contains opaque %s without a canonical identity protocol"
+        % (where, type(value).__name__)
+    )
 
 
 class BrickDescriptor:
@@ -76,8 +144,17 @@ class BrickDescriptor:
         object.__setattr__(self, key, value)
 
     def _key(self) -> tuple:
-        return (self.category, self.name, self.brick_type, self.native_id,
-                self.scheme, tuple(sorted(self.options.items())))
+        return (
+            self.category,
+            self.name,
+            self.brick_type,
+            self.native_id,
+            _brick_identity_value(self.scheme, where="BrickDescriptor.scheme"),
+            _brick_identity_value(self.requirements, where="BrickDescriptor.requirements"),
+            _brick_identity_value(self.capabilities, where="BrickDescriptor.capabilities"),
+            _brick_identity_value(self.options, where="BrickDescriptor.options"),
+            self._available,
+        )
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, BrickDescriptor) and self._key() == other._key()
@@ -218,12 +295,14 @@ def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any 
 # descriptor is NEVER fabricated for an unregistered brick.
 _EXTERNAL_BRICKS: dict = {}
 _EXTERNAL_BRICK_ORIGINS: dict = {}
+_EXTERNAL_BRICK_LIBRARIES: dict = {}
 
 
 def _clear_external_catalog() -> None:
     """Drop every loaded external brick (test isolation; not part of the public API)."""
     _EXTERNAL_BRICKS.clear()
     _EXTERNAL_BRICK_ORIGINS.clear()
+    _EXTERNAL_BRICK_LIBRARIES.clear()
 
 
 def _split_csv(value: Any) -> list:
@@ -385,12 +464,17 @@ def load_cpp_library(path: Any) -> int:
     ``const char* pops_brick_manifest()`` to read the registered bricks as JSON, and registers
     the ids in the in-process catalog so ``riemann.User(id)`` / :func:`external` resolve. The
     ``.so`` must export ``pops_brick_manifest`` (a missing symbol is a clear ``ValueError``).
+    A ``riemann`` row must also declare and export the exact versioned external-Riemann ABI;
+    legacy global-periodicity residuals are rejected before catalog registration.
     Returns the number of bricks registered.
     """
     import ctypes
-    import os
-    os.stat(path)  # normalize every missing-path route to the exact FileNotFoundError contract
-    handle = ctypes.CDLL(str(path))  # raises OSError if the existing path is not loadable
+    import hashlib
+    from pathlib import Path
+
+    library = Path(path).resolve(strict=True)
+    digest = hashlib.sha256(library.read_bytes()).hexdigest()
+    handle = ctypes.CDLL(str(library))  # raises OSError if the existing path is not loadable
     try:
         manifest_fn = handle.pops_brick_manifest
     except AttributeError as err:
@@ -401,7 +485,61 @@ def load_cpp_library(path: Any) -> int:
     if raw is None:
         raise ValueError("external brick library %r: pops_brick_manifest() returned NULL"
                          % (path,))
-    return _register_manifest(raw.decode("utf-8"))
+    manifest_json = raw.decode("utf-8")
+    records, _abi_key, _annotations = _parse_brick_manifest_document(manifest_json)
+    riemann_rows = [record for record in records if record["category"] == "riemann"]
+    if riemann_rows:
+        for record in riemann_rows:
+            missing = sorted(_EXTERNAL_RIEMANN_ABI_SYMBOLS - set(record["exported_symbols"]))
+            if missing:
+                raise ValueError(
+                    "external Riemann brick %r uses a legacy/unversioned numerical ABI; its "
+                    "manifest is missing %s. Rebuild it with the current "
+                    "POPS_DEFINE_EXTERNAL_RIEMANN_BRICK macro"
+                    % (record["id"], missing)
+                )
+        try:
+            version_fn = handle.pops_external_riemann_abi_version
+            key_fn = handle.pops_external_riemann_abi_key
+            getattr(handle, "pops_brick_residual_v2")
+            getattr(handle, "pops_brick_install_system_v2")
+            getattr(handle, "pops_brick_install_amr_v2")
+            model_identity_fn = handle.pops_brick_model_identity
+            getattr(handle, "pops_brick_kokkos_backend")
+            getattr(handle, "pops_brick_kokkos_version")
+        except AttributeError as err:
+            raise ValueError(
+                "external Riemann brick library %r declares ABI v2 but does not export its exact "
+                "version/key/residual symbols" % (path,)
+            ) from err
+        version_fn.restype = ctypes.c_int
+        key_fn.restype = ctypes.c_char_p
+        model_identity_fn.restype = ctypes.c_char_p
+        version = version_fn()
+        key = key_fn()
+        model_identity_raw = model_identity_fn()
+        if version != _EXTERNAL_RIEMANN_ABI_VERSION or key != _EXTERNAL_RIEMANN_ABI_KEY:
+            raise ValueError(
+                "external Riemann brick library %r has incompatible numerical ABI version/key; "
+                "rebuild it with the current PoPS headers" % (path,)
+            )
+        if not model_identity_raw:
+            raise ValueError(
+                "external Riemann brick library %r exports an empty model identity" % (path,))
+        model_identity = model_identity_raw.decode("utf-8")
+    else:
+        model_identity = None
+    registered = _register_manifest(manifest_json)
+    for record in records:
+        identity = (str(library), digest, handle, model_identity)
+        previous = _EXTERNAL_BRICK_LIBRARIES.get(record["id"])
+        if previous is not None and previous[:2] != identity[:2]:
+            raise ValueError(
+                "external brick id %r is already loaded from a different native library"
+                % record["id"]
+            )
+        _EXTERNAL_BRICK_LIBRARIES.setdefault(record["id"], identity)
+    return registered
 
 
 def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> BrickDescriptor:
@@ -422,9 +560,20 @@ def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> Brick
                          % (brick_id, entry["category"], expect_category))
     req = {"capabilities": list(entry["requirements"])} if entry["requirements"] else {}
     caps = {"provides": list(entry["capabilities"])} if entry["capabilities"] else {}
+    runtime = _EXTERNAL_BRICK_LIBRARIES.get(entry["id"])
+    options = None if runtime is None or entry["category"] != "riemann" else {
+        "library_path": runtime[0],
+        "library_sha256": runtime[1],
+        "abi_version": _EXTERNAL_RIEMANN_ABI_VERSION,
+        "abi_key": _EXTERNAL_RIEMANN_ABI_KEY.decode("ascii"),
+        "native_abi_key": _EXTERNAL_BRICK_ORIGINS[entry["id"]][0],
+        "supported_layouts": tuple(entry["supported_layouts"]),
+        "model_identity": runtime[3],
+    }
     return BrickDescriptor(entry["id"], "external_cpp", category=entry["category"],
                            native_id=entry["native_id"], scheme="user",
-                           requirements=req or None, capabilities=caps or None)
+                           requirements=req or None, capabilities=caps or None,
+                           options=options)
 
 
 def external(brick_id: Any) -> BrickDescriptor:

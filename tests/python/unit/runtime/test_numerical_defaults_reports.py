@@ -66,7 +66,7 @@ def test_numerical_defaults_report_classifies_every_constant():
 
 
 def test_system_inspect_reports_effective_block_and_solver_options():
-    sim = System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodicity=(True, True))
     sim.add_equation(
         "ion",
         _isothermal_model(),
@@ -87,6 +87,7 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert options["poisson"]["solver"] == "geometric_mg"
     assert options["poisson"]["epsilon"] == pytest.approx(1.0)
     assert options["poisson"]["abs_tol"] == pytest.approx(1e-11)
+    assert options["topology"] == {"periodic_x": True, "periodic_y": True}
 
     block = options["blocks"][0]
     assert block["name"] == "ion"
@@ -106,8 +107,14 @@ def test_invalid_newton_and_refinement_values_are_rejected():
     with pytest.raises(ValueError, match="newton_max_iters"):
         engine.IMEX(newton_max_iters=0)
 
-    amr = AmrSystem(n=8, L=1.0, periodic=True)
+    amr = AmrSystem(n=8, L=1.0, periodicity=(True, True))
     with pytest.raises(RuntimeError, match="threshold must be finite"):
         amr.set_refinement(math.inf)
     with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
         amr.set_phi_refinement(math.nan)
+
+    partial = AmrSystem(n=8, L=1.0, periodicity=(False, True))
+    assert partial.inspect().to_dict()["options"]["topology"] == {
+        "periodic_x": False,
+        "periodic_y": True,
+    }

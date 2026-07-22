@@ -111,7 +111,7 @@ def smooth_state():
 def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
-    s = AmrSystem(n=N, L=1.0, periodic=True)
+    s = AmrSystem(n=N, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
@@ -167,15 +167,15 @@ def main():
         print("== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder ==")
         band = np.full((N, N), 1e-6)
         band[:, N // 3:2 * N // 3] = 1.0
-        sm = AmrSystem(n=N, L=1.0, periodic=True)
+        sm = AmrSystem(n=N, L=1.0, periodicity=(True, True))
         sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.set_refinement(1e30)
         sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
         sm.add_equation("b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
-        sm.set_density("a", band.ravel().copy())
-        sm.set_density("b", band.ravel().copy())
+        sm.set_density("a", band.copy())
+        sm.set_density("b", band.copy())
         for _ in range(5):
             sm.step(DT)
         chk(np.all(np.isfinite(np.asarray(sm.density("a")))), "multi-block compiled floor: block a finite")

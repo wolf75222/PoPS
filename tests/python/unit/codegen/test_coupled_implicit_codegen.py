@@ -121,8 +121,8 @@ def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     guard = source.index("if (!ci_report_")
     first_commit = source.index("ctx.commit_many(", guard)
 
-    assert "ctx.scratch_state_like(u0)" in source
-    assert "ctx.scratch_state_like(u1)" in source
+    assert "ctx.scratch_state(2, 0, u0)" in source
+    assert "ctx.scratch_state(2, 1, u1)" in source
     assert "ctx.commit_many(" not in source[:guard]
     assert guard < first_commit
 

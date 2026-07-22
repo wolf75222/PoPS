@@ -210,7 +210,7 @@ def _run_section_b(t):
         )
 
     n = 8
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip(
             "test_time_control_flow_b _pops lacks install_program (rebuild _pops)"
@@ -234,7 +234,7 @@ def _run_section_b(t):
         )
 
     def run(handle):
-        s = System(n=n, L=1.0, periodic=True)
+        s = System(n=n, L=1.0, periodicity=(True, True))
         try:
             cm = _passive_model("blk_" + handle.program_name).compile(backend="production")
         except RuntimeError as exc:

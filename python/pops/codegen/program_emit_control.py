@@ -15,6 +15,7 @@ from fractions import Fraction
 from typing import Any
 
 import json
+from pops.codegen._rhs_coherence import groupable_default_rhs, plan_rhs_coherence
 from pops.time.references import block_name
 
 
@@ -136,22 +137,6 @@ def _walk_expr(e: Any) -> Any:
         stack.extend(_children(node))
 
 
-def _groupable_default_rhs(value: Any) -> bool:
-    """Whether one RHS can enter the native simultaneous-interface batch.
-
-    Named flux kernels and named source additions remain independent SSA work.  The default full or
-    flux-only finite-volume residual is the exact route for which the runtime owns an interface-
-    omitting closure and a shared NumericalFlux insertion.
-    """
-    if value.op != "rhs" or not value.attrs.get("flux", True):
-        return False
-    fluxes = value.attrs.get("fluxes")
-    if fluxes and tuple(fluxes) != ("default",):
-        return False
-    requested = value.attrs.get("sources")
-    return not any(source != "default" for source in (requested or ()))
-
-
 def _stage_fraction(value: Any) -> Fraction:
     point = value.point
     if not hasattr(point, "offset"):
@@ -174,8 +159,8 @@ def _emit_contiguous_rhs_group(
     for value in values:
         state = value.inputs[0]
         var[value.id] = "r%d" % value.id
-        lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                     % (var[value.id], var[state.id]))
+        lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[value.id], int(value.id), var[state.id]))
         index = _required_block_index(
             block_idx, value.block, "emit simultaneous rhs %r" % value.name)
         requested = value.attrs.get("sources")
@@ -183,6 +168,7 @@ def _emit_contiguous_rhs_group(
         requests.append("{%d, &%s, &%s, %d, %d}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1))
     lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
+
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None) -> tuple:
@@ -263,21 +249,25 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
     # the atomic group while every RhsGroupRequest retains its own exact rate identity.
     next_group_identity = int(program._next_id)
+    rhs_plan = plan_rhs_coherence(program, values)
+    rhs_schedule = rhs_plan.schedule
+    rhs_grouped = rhs_plan.grouped_ids
     while index < len(values):
+        if index in rhs_schedule:
+            group = rhs_schedule[index]
+            unavailable = sorted(
+                row.inputs[0].id for row in group if row.inputs[0].id not in var)
+            if unavailable:
+                raise ValueError(
+                    "RHS coherence barrier lacks materialized state value ids %s"
+                    % unavailable)
+            _emit_contiguous_rhs_group(
+                group, block_idx, var, lines, next_group_identity)
+            next_group_identity += 1
         v = values[index]
-        if _groupable_default_rhs(v):
-            end = index + 1
-            while end < len(values) and _groupable_default_rhs(values[end]) \
-                    and values[end].point == v.point:
-                end += 1
-            group = values[index:end]
-            if len(group) > 1 and len({row.block for row in group}) == len(group) \
-                    and all(row.inputs[0].id in var for row in group):
-                _emit_contiguous_rhs_group(
-                    group, block_idx, var, lines, next_group_identity)
-                next_group_identity += 1
-                index = end
-                continue
+        if v.id in rhs_grouped:
+            index += 1
+            continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
                  target=target, field_plans=field_plans)
@@ -457,7 +447,8 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     var[v.id] = x
     # Hoist + initialize the loop variable from the entry state (x <- loop_in).
-    lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                 % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
     lines.append("for (;;) {")
@@ -494,7 +485,8 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     i = "i%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                 % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
     lines.append("for (int %s = 0; %s < %d; ++%s) {" % (i, i, int(v.attrs["count"]), i))
@@ -534,7 +526,8 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     scope = "subcycle_scope_%d" % v.id
     evaluation_scope = "logical_evaluation_scope_%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                 % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
                  "static_cast<pops::Real>(1), %s);" % (x, x, var[loop_in.id]))
     lines.append("{")
@@ -593,7 +586,8 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
             raise NotImplementedError(
                 "branch codegen for a block-free scalar_field result requires an explicit "
                 "layout template")
-        lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (x, int(v.id), var[base.id]))
     else:
         cpp_type = "bool" if v.vtype == "bool" else "pops::Real"
         lines.append("%s %s;" % (cpp_type, x))

@@ -132,6 +132,30 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
     assert tuple(builder._geometry_cache) == ((third.layout_identity.token, 0, 1),)
 
 
+def test_runtime_output_accepts_adaptive_rectangular_geometry():
+    frame = Rectangle("adaptive-rectangle", (0.0, -1.0), (2.0, 2.0)).frame(Cartesian2D())
+    plan = normalize_layout_plan(
+        Uniform(CartesianGrid(frame=frame, cells=(4, 3))),
+        owner=OwnerPath.case("adaptive-rectangle-output"),
+    )
+    layout = replace(
+        plan.layouts[0], adaptive=True, transition_ratios=(2,),
+        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
+    )
+    engine = _Engine(4, 3)
+    engine.boxes = ((1, 2, 1, 5, 4),)
+    owner = SimpleNamespace(
+        _layout_plan=SimpleNamespace(layouts=(layout,)),
+        _executor_for_layout=lambda layout_id: engine,
+    )
+
+    geometry = RuntimeOutputSnapshot(owner)._geometry(layout, 1)
+
+    assert geometry.cell_shape == (6, 8)
+    assert geometry.spacing == (0.25, 0.5)
+    assert geometry.origin == (0.0, -1.0)
+
+
 def test_runtime_output_composite_integral_forwards_exact_levels_to_native_reducer():
     calls = []
 

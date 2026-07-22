@@ -55,7 +55,7 @@ def electron_model():
 
 def run(policy, n=24, dt=0.002, nsteps=4):
     """Avance le bloc electron avec la politique temporelle @p policy ; renvoie l'etat final (4, n, n)."""
-    s = System(n=n, periodic=False)
+    s = System(n=n, periodicity=(False, False))
     s.add_equation("ne", electron_model(), spatial=engine.Spatial(minmod=True), time=policy)
     s.set_poisson(bc=Dirichlet())
     xs = meshx(n)
@@ -147,7 +147,7 @@ print("== 5. masque rejete sur une politique non-IMEX ==")
 # politique puis on passe par ``System.add_equation`` : le runtime doit refuser ce contrat incoherent
 # (le masque n'a de sens qu'en IMEX).
 try:
-    s = System(n=16, periodic=False)
+    s = System(n=16, periodicity=(False, False))
     explicit_with_mask = engine.Explicit()
     explicit_with_mask.implicit_vars = ["rho_u"]
     explicit_with_mask.implicit_roles = []

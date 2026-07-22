@@ -76,7 +76,7 @@ def transport_model():
 
 def make_sim(method):
     n = 24
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method=method))
@@ -111,7 +111,7 @@ if not bit:
 
 print("== (3) no-default-change : defaut == ssprk2 ==")
 sd = make_sim("ssprk2")
-s_def = System(n=24, L=1.0, periodic=True)
+s_def = System(n=24, L=1.0, periodicity=(True, True))
 s_def.add_equation("ions", transport_model(),
                    spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                    time=engine.Explicit())
@@ -131,7 +131,7 @@ chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
 def make_amr_sim(method):
     n = 24
-    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation(
         "ions",
@@ -250,7 +250,7 @@ except RuntimeError as ex:
 
 def make_prod_sim(method):
     n = 16
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("q", model=prod,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method=method))

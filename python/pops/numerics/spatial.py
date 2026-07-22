@@ -205,8 +205,9 @@ class FiniteVolume(Descriptor):
     def amr_indicator_stencil(self, *, dimension: int) -> Any:
         """Return the reconstruction-owned, typed discrete gradient lowering.
 
-        There is deliberately no scheme-name switch here.  A native or external reconstruction
-        must carry its exact axis coefficients; missing metadata is refused during AMR resolution.
+        There is deliberately no scheme-name switch here. A native reconstruction must carry its
+        exact axis coefficients; an external reconstruction is not admitted until its authenticated
+        source can be compiled into the same Kokkos artifact. Missing metadata is always refused.
         """
         from pops.numerics.indicator_stencils import (
             LinearAxisStencil,

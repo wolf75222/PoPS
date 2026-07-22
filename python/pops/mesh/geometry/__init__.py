@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from os import PathLike
+from pathlib import Path
 from typing import Any, cast
 
 from .._descriptor import MeshDescriptor
@@ -74,7 +76,44 @@ def _frame_center(frame: Any) -> tuple[float, float]:
         checked_lower, checked_upper, strict=True))  # type: ignore[return-value]
 
 
-class Geometry(MeshDescriptor):
+class _GeometryPreviewSurface:
+    """Shared presentation protocol for every implicit-domain descriptor."""
+
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Return a bounded presentation window without affecting runtime geometry."""
+
+        return ((-1.0, -1.0), (1.0, 1.0))
+
+    def preview_frame_id(self) -> str | None:
+        """Return a pre-bound analytic frame identity, when one exists."""
+
+        return None
+
+    def preview(
+        self,
+        *,
+        extent: Any = None,
+        resolution: int | tuple[int, int] = (256, 256),
+    ) -> Any:
+        """Sample this implicit geometry without requiring a separate domain argument."""
+
+        from pops.domain.preview import preview_geometry
+
+        return preview_geometry(self, extent=extent, resolution=resolution)
+
+    def show(
+        self,
+        *,
+        extent: Any = None,
+        resolution: int | tuple[int, int] = (256, 256),
+        path: str | PathLike[str] | None = None,
+    ) -> Path | None:
+        """Show this geometry, or write it without opening a window when ``path`` is provided."""
+
+        return self.preview(extent=extent, resolution=resolution).show(path=path)
+
+
+class Geometry(_GeometryPreviewSurface, MeshDescriptor):
     """Extensible descriptor interface for an embedded geometry."""
 
     category = "geometry"
@@ -169,6 +208,12 @@ class Disc(Geometry):
     def options(self) -> dict:
         return {"center": self.center, "radius": self.radius}
 
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        center = self.center if self.center is not None else (0.0, 0.0)
+        margin = 1.25 * self.radius
+        return ((center[0] - margin, center[1] - margin),
+                (center[0] + margin, center[1] + margin))
+
     def lower_wall(self) -> Any:
         """Lower to the native conducting-wall tokens ``("circle", radius)``."""
         if self.center is not None:
@@ -198,6 +243,10 @@ class HalfPlane(Geometry):
 
     def options(self) -> dict:
         return {"point": self.point, "normal": self.normal}
+
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        return ((self.point[0] - 1.0, self.point[1] - 1.0),
+                (self.point[0] + 1.0, self.point[1] + 1.0))
 
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this half-plane to ``frame``; the side opposite the normal is active."""
@@ -237,6 +286,9 @@ class LevelSet(Geometry):
     @property
     def frame_id(self) -> str | None:
         return self.expression.frame_id
+
+    def preview_frame_id(self) -> str | None:
+        return self.frame_id
 
     def level_set(self, frame: Any) -> LevelSet:
         """Authenticate this already-generic level set against its owning frame."""
@@ -312,6 +364,25 @@ class GeometryComposition(Geometry):
     def options(self) -> dict[str, Any]:
         return {"operation": self.operation, "operands": self.operands}
 
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        extents = tuple(operand.preview_extent() for operand in self.operands)
+        return (
+            (min(extent[0][0] for extent in extents),
+             min(extent[0][1] for extent in extents)),
+            (max(extent[1][0] for extent in extents),
+             max(extent[1][1] for extent in extents)),
+        )
+
+    def preview_frame_id(self) -> str | None:
+        identities = {
+            identity for identity in (
+                operand.preview_frame_id() for operand in self.operands)
+            if identity is not None
+        }
+        if len(identities) > 1:
+            raise ValueError("geometry composition contains expressions from different frames")
+        return next(iter(identities), None)
+
     def level_set(self, frame: Any) -> LevelSet:
         resolved = tuple(item.level_set(frame) for item in self.operands)
         if any(type(item) is not LevelSet for item in resolved):
@@ -366,7 +437,7 @@ def complement(geometry: Any) -> GeometryComposition:
     return GeometryComposition("complement", (_geometry(geometry, where="complement"),))
 
 
-class DiscDomain(MeshDescriptor):
+class DiscDomain(_GeometryPreviewSurface, MeshDescriptor):
     """A typed DISC TRANSPORT domain (Spec 5 sec.8.16): center + radius + transport mode.
 
     ``mode`` must implement :class:`pops.mesh.masks.TransportMask`; strings are rejected at
@@ -394,6 +465,14 @@ class DiscDomain(MeshDescriptor):
     def options(self) -> dict:
         return {"center": self.center, "radius": self.radius, "mode": self.mode.name}
 
+    def level_set(self, frame: Any) -> LevelSet:
+        return Disc(center=self.center, radius=self.radius).level_set(frame)
+
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        margin = 1.25 * self.radius
+        return ((self.center[0] - margin, self.center[1] - margin),
+                (self.center[0] + margin, self.center[1] + margin))
+
     def capabilities(self) -> Any:
         return CapabilitySet({"transport_domain": "disc"})
 
@@ -410,7 +489,7 @@ class DiscDomain(MeshDescriptor):
         return (cx, cy, self.radius, lower_transport_mask(self.mode))
 
 
-class EmbeddedBoundary(MeshDescriptor):
+class EmbeddedBoundary(_GeometryPreviewSurface, MeshDescriptor):
     """An embedded boundary = geometry + transport metrics + an explicit boundary flux.
 
     Passed to a layout as
@@ -460,6 +539,12 @@ class EmbeddedBoundary(MeshDescriptor):
         if type(result) is not LevelSet:
             raise TypeError("Geometry.level_set(frame) must return an exact LevelSet")
         return result
+
+    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        return self.domain.preview_extent()
+
+    def preview_frame_id(self) -> str | None:
+        return self.domain.preview_frame_id()
 
     def requirements(self) -> Any:
         return RequirementSet({

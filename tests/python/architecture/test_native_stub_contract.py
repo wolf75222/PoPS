@@ -8,6 +8,7 @@ import re
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 STUB = REPO_ROOT / "python" / "pops" / "_pops.pyi"
+BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "bindings.cpp"
 CORE_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_core.cpp"
 AMR_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp"
 HDF5_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_parallel_hdf5.cpp"
@@ -27,20 +28,22 @@ PUBLIC_METADATA = {
 }
 PUBLIC_CALLABLES = {
     "abi_key", "my_rank", "n_ranks", "mpi_world", "module_capabilities", "capability_report",
-    "runtime_environment_report", "runtime_backend_manifest", "numerical_defaults_report",
+    "runtime_environment_report", "runtime_backend_manifest", "native_execution_resource",
+    "numerical_defaults_report",
     "fallback_diagnostics_report", "reset_fallback_diagnostics", "kokkos_is_initialized",
 }
 INTERNAL_BOOTSTRAP_TYPES = {"SystemConfig", "AmrSystemConfig", "ModelSpec", "System", "AmrSystem"}
 SYSTEM_CONFIG_FIELDS = {
     "n": "int", "L": "float", "xlo": "float", "ylo": "float",
-    "periodic": "bool", "geometry": "str", "nr": "int",
+    "periodicity": "tuple[bool, bool]", "geometry": "str", "nr": "int",
     "ntheta": "int", "r_min": "float", "r_max": "float", "theta_boxes": "int",
 }
 AMR_CONFIG_FIELDS = {
-    "n": "int", "L": "float", "xlo": "float", "ylo": "float",
+    "n": "int", "ny": "int", "L": "float", "Ly": "float",
+    "xlo": "float", "ylo": "float",
     "regrid_every": "int", "level_count": "int",
     "regrid_grow": "int", "regrid_margin": "int", "explicit_bootstrap": "bool",
-    "periodic": "bool", "distribute_coarse": "bool", "coarse_max_grid": "int",
+    "periodicity": "tuple[bool, bool]", "distribute_coarse": "bool", "coarse_max_grid": "int",
     "cluster_min_efficiency": "float", "cluster_min_box_size": "int", "cluster_max_box_size": "int",
 }
 
@@ -79,7 +82,7 @@ def _native_config_fields(path: pathlib.Path, class_name: str) -> set[str]:
     assert start >= 0, "cannot find %s pybind declaration in %s" % (class_name, path)
     end = source.find(";\n\n", start)
     assert end >= 0, "cannot find end of %s pybind declaration in %s" % (class_name, path)
-    return set(re.findall(r'\.def_readwrite\("([^"]+)"', source[start:end]))
+    return set(re.findall(r'\.def_(?:readwrite|property)\(\s*"([^"]+)"', source[start:end]))
 
 
 def test_public_native_stub_surface_is_closed_and_backed_by_cpp():
@@ -102,12 +105,39 @@ def test_runtime_environment_stub_exposes_exact_kokkos_concurrency():
     tree = _tree()
     report = _classes(tree)["_RuntimeEnvironmentReport"]
     assert _annotated_fields(report)["kokkos_concurrency"] == "int"
+    assert _annotated_fields(report)["kokkos_device"] == "str"
+    assert _annotated_fields(report)["kokkos_shared_space"] == "str"
+    assert _annotated_fields(report)["field_memory_space"] == "str"
+    assert _annotated_fields(report)["kokkos_stream"] == "str"
 
     function = next(
         node for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "runtime_environment_report"
     )
     assert ast.unparse(function.returns) == "_RuntimeEnvironmentReport"
+
+
+def test_step_attempt_rejection_is_a_structured_runtime_error_contract():
+    rejection = _classes(_tree())["StepAttemptRejected"]
+    assert ast.unparse(rejection.bases[0]) == "RuntimeError"
+    assert _annotated_fields(rejection) == {
+        "status": (
+            "Literal['solved', 'singular', 'breakdown', 'iteration_limit', "
+            "'invalid_evaluation', 'capability_failure', 'invalid_input', "
+            "'incompatible_rhs']"
+        ),
+        "phase": "str",
+        "detail": "str",
+        "disposition": "Literal['retry', 'reject']",
+        "reason_code": "int",
+    }
+
+    source = BINDINGS.read_text(encoding="utf-8")
+    assert "register_step_attempt_rejected(m)" in source
+    assert "register_local_exception_translator(&translate_step_attempt_rejected)" in source
+    for field in ("status", "phase", "detail", "disposition", "reason_code"):
+        assert 'instance.attr("%s")' % field in source
+    assert "py::register_exception<" not in source
 
 
 def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():

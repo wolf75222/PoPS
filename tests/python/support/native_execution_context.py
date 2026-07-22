@@ -20,6 +20,7 @@ def platform_execution_context(platform: Any) -> Any:
         validate_launch,
     )
     from pops.runtime._platform_manifest import native_runtime_backend
+    from pops.runtime._platform_manifest import native_device_resource
 
     if type(platform) is not PlatformManifest:
         raise TypeError("native integration context requires an exact PlatformManifest")
@@ -27,7 +28,6 @@ def platform_execution_context(platform: Any) -> Any:
     backend = native_runtime_backend(platform)
     communicator_name = platform.communicator.require("artifact.communicator")
     datatype_name = platform.precision.storage.require("artifact.precision.storage")
-    device_name = platform.device.require("artifact.device")
     if communicator_name == "MPI_COMM_WORLD":
         from pops._native_collectives import require_world
 
@@ -43,14 +43,14 @@ def platform_execution_context(platform: Any) -> Any:
                 "communicator", "MPI_COMM_WORLD", handle=communicator),
             datatype=ExecutionResource(
                 "datatype", datatype_name, handle=communicator.datatype_float64),
-            device=ExecutionResource("device", device_name),
+            device=native_device_resource(backend),
         )
     elif communicator_name == "serial":
         context = ExecutionContext(
             backend=backend,
             communicator=ExecutionResource("communicator", "serial"),
             datatype=ExecutionResource("datatype", datatype_name),
-            device=ExecutionResource("device", device_name),
+            device=native_device_resource(backend),
         )
     else:
         raise ValueError(

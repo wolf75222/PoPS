@@ -219,7 +219,7 @@ def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope
 
     n = 8
     dt = 0.01
-    system = System(n=n, L=1.0, periodic=True)
+    system = System(n=n, L=1.0, periodicity=(True, True))
     system.add_equation(
         "scalar",
         engine.Model(

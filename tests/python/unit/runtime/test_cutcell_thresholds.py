@@ -62,7 +62,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _sim():
-    sim = System(n=16, L=1.0, periodic=False)
+    sim = System(n=16, L=1.0, periodicity=(False, False))
     sim.add_block("ion", Model(FluidState.isothermal(cs2=0.7), IsothermalFlux(),
                                NoSource(), ChargeDensity(charge=1.0)),
                   # The native embedded-boundary facade currently provides a geometry-aware

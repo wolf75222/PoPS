@@ -83,12 +83,6 @@ def validate_amr_authorities(plan: Any) -> None:
     providers = plan.amr_providers
     if tuple(providers) != ("clustering", "tagger"):
         raise ValueError("AMR plan requires exact clustering and tagger provider bindings")
-    from pops import interfaces
-
-    expected_interfaces = {
-        "clustering": interfaces.Clustering.to_data(),
-        "tagger": interfaces.Tagger.to_data(),
-    }
     # Component inputs deliberately admit both source authorities and already-compiled
     # artifacts.  Their representations differ, but both expose the same authenticated
     # projection protocol.  Index that projection instead of reaching through the source-only
@@ -108,67 +102,16 @@ def validate_amr_authorities(plan: Any) -> None:
         if component_id in component_inputs:
             raise ValueError("AMR component inputs contain a duplicate component authority")
         component_inputs[component_id] = dict(component_data)
-    for slot, binding in providers.items():
-        if not isinstance(binding, Mapping) or binding.get("schema_version") != 1 \
-                or not isinstance(binding.get("provider_identity"), str) \
-                or binding.get("layout_identity") != plan.layout_plan.qualified_id \
-                or binding.get("native_interface") != expected_interfaces[slot]:
-            raise TypeError("AMR %s provider binding is incomplete or unauthenticated" % slot)
-        external = binding.get("component_id") is not None
-        expected_type = "external_amr_%s" % slot if external else "builtin_amr_%s" % slot
-        if binding.get("provider_type") != expected_type:
-            raise ValueError("AMR %s provider kind disagrees with its component authority" % slot)
-        if external and (
-                not isinstance(binding.get("component_manifest_identity"), str)
-                or binding.get("interface_version") != 1
-                or not isinstance(binding.get("component"), Mapping)
-                or component_inputs.get(binding.get("component_id"))
-                != dict(binding["component"])):
-            raise TypeError("external AMR %s provider lost exact component identity" % slot)
-        if not external:
-            expected_id = {
-                "clustering": "pops.lib.amr::berger_rigoutsos",
-                "tagger": "pops.lib.amr::symbolic_tagger",
-            }[slot]
-            if binding.get("provider_id") != expected_id:
-                raise ValueError("builtin AMR %s provider is not canonical" % slot)
-    tagger = providers["tagger"]
-    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
+    from pops.amr.providers import validate_amr_provider_binding
 
-    capability = tagger.get("tagging_capability")
-    expected_capability_keys = {
-        "schema_version", "capability_type", "leaf_opcodes", "leaf_opcode_ids",
-        "logical_opcodes", "logical_opcode_ids", "candidate_outputs",
-        "indicator_stencil_routes", "maximum_stencil_terms",
-        "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
-    }
-    maximum_stencil_terms = (
-        capability.get("maximum_stencil_terms")
-        if isinstance(capability, Mapping)
-        else None
-    )
-    if not isinstance(capability, Mapping) or set(capability) != expected_capability_keys \
-            or capability.get("schema_version") != 1 \
-            or capability.get("capability_type") != "amr_tagging_program" \
-            or tuple(capability.get("candidate_outputs", ())) != tuple(
-                NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]) \
-            or not set(capability.get("indicator_stencil_routes", ())) <= set(
-                NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
-            or not capability.get("indicator_stencil_routes") \
-            or isinstance(maximum_stencil_terms, bool) \
-            or not isinstance(maximum_stencil_terms, int) \
-            or maximum_stencil_terms < 1 \
-            or maximum_stencil_terms \
-            > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"] \
-            or capability.get("non_finite_policy") \
-            != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] \
-            or capability.get("persistent_hysteresis") is not \
-            NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"]:
-        raise ValueError("AMR tagger lacks the exact candidate-program protocol")
-    if tagger.get("tagging_graph_identity") != plan.bootstrap_plan.tagging.qualified_id:
-        raise ValueError("AMR tagger authenticates another resolved tagging graph")
-    if not isinstance(tagger.get("clock_identity"), str):
-        raise ValueError("AMR tagger lost its exact logical clock identity")
+    for role, binding in providers.items():
+        validate_amr_provider_binding(
+            role=role,
+            frozen_binding=binding,
+            layout_identity=plan.layout_plan.qualified_id,
+            component_inputs=component_inputs,
+            resolved_tagging_identity=plan.bootstrap_plan.tagging.qualified_id,
+        )
     hierarchy = plan.resolved_hierarchy
     transitions = hierarchy.plan.transitions
     execution = plan.amr_execution
@@ -208,10 +151,13 @@ def validate_amr_authorities(plan: Any) -> None:
         raise NotImplementedError(
             "native AMR patch generation requires native_route='box_array'"
         )
-    if hierarchy.plan.load_balance.options.to_data() != {"native_route": "round_robin"}:
-        raise NotImplementedError(
-            "native AMR load balance requires native_route='round_robin'"
-        )
+    balance_options = hierarchy.plan.load_balance.options.to_data()
+    if type(balance_options) is not dict or set(balance_options) != {"provider"}:
+        raise TypeError(
+            "resolved AMR load balance must preserve one exact provider authority")
+    from pops.amr._load_balance_contract import validate_load_balance_provider_data
+
+    validate_load_balance_provider_data(balance_options["provider"])
     state_blocks = []
     for binding in plan.initial_condition_plan.bindings:
         subject = binding.subject
@@ -355,7 +301,10 @@ def validate_amr_authorities(plan: Any) -> None:
                 if requirement.key.operation == RESTRICTION:
                     route_contract = ("volume_average", 1, (0,))
                 elif requirement.key.operation == COARSE_FINE_FILL:
-                    route_contract = ("conservative_coarse_fine", 1, (1,))
+                    # Coarse/fine providers form an open capability family.  The resolved action
+                    # already proves that its exact route supports this requirement; the native
+                    # registry authenticates and prepares the named implementation at bind time.
+                    route_contract = None
                 elif requirement.key.operation == TEMPORAL_INTERPOLATION:
                     route_contract = ("linear_time_interpolation", 2, (0,))
                 else:
@@ -369,7 +318,13 @@ def validate_amr_authorities(plan: Any) -> None:
                     raise NotImplementedError(
                         "native AMR physical descriptor omitted transfer capabilities"
                     )
-                if route_contract is None \
+                if requirement.key.operation == COARSE_FINE_FILL:
+                    if not native.native_route or not capabilities.conservative \
+                            or capabilities.temporal:
+                        raise NotImplementedError(
+                            "native AMR coarse/fine provider lacks conservative spatial "
+                            "capabilities")
+                elif route_contract is None \
                         or (
                             native.native_route,
                             capabilities.order,
@@ -394,6 +349,53 @@ def validate_amr_authorities(plan: Any) -> None:
                     )
             else:
                 raise NotImplementedError("native AMR bootstrap has an unknown materialization")
+
+    # Reconstruction and hierarchy transfer are separate authorities. Bind them by qualified state
+    # identity and refuse a lower-order or shallower coarse/fine provider before artifact creation;
+    # otherwise a WENO/MUSCL block could silently execute with a first-order interface injection.
+    coarse_fine_capabilities = {}
+    for entry in plan.amr_transfer.entries:
+        if entry.key.operation != COARSE_FINE_FILL:
+            continue
+        capabilities = entry.native_materialization.capabilities.transfer
+        if capabilities is None:
+            raise TypeError("physical coarse/fine transfer omitted its capabilities")
+        ghost = tuple(capabilities.ghost_depth)
+        if not ghost or len(ghost) not in (1, 2) or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in ghost):
+            raise TypeError(
+                "physical coarse/fine transfer requires one isotropic or two axis ghost depths"
+            )
+        for requirement in entry.requirements:
+            subject = requirement.subject.qualified_id
+            previous = coarse_fine_capabilities.get(subject)
+            if previous is not None and previous != capabilities:
+                raise ValueError(
+                    "AMR state %s has conflicting coarse/fine transfer capabilities" % subject
+                )
+            coarse_fine_capabilities[subject] = capabilities
+    for block in plan.blocks:
+        formal_order = getattr(block.spatial, "formal_order", None)
+        ghost_depth = getattr(block.spatial, "ghost_depth", None)
+        if isinstance(formal_order, bool) or not isinstance(formal_order, int) \
+                or isinstance(ghost_depth, bool) or not isinstance(ghost_depth, int):
+            raise TypeError("AMR spatial provider lacks exact reconstruction order/halo metadata")
+        for subject in block.state_identities:
+            capabilities = coarse_fine_capabilities.get(subject)
+            if capabilities is None:
+                raise ValueError(
+                    "AMR state %s has no resolved coarse/fine transfer authority" % subject)
+            available_ghost = tuple(capabilities.ghost_depth)
+            if len(available_ghost) == 1:
+                available_ghost *= 2
+            if capabilities.order < formal_order or any(
+                    value < ghost_depth for value in available_ghost):
+                raise NotImplementedError(
+                    "AMR state %s uses reconstruction order %d with ghost depth %d, but its "
+                    "coarse/fine provider certifies only order %d and ghost depth %r"
+                    % (subject, formal_order, ghost_depth, capabilities.order,
+                       tuple(capabilities.ghost_depth)))
 
 
 __all__ = ["validate_amr_authorities"]

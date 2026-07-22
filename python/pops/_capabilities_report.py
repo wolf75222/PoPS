@@ -424,8 +424,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
              limitation="ghost_depth=1", source=source),
         _row("reconstruction:muscl", layout="uniform|amr", backend="production",
              limitation="ghost_depth=2; native limiters minmod/vanleer", source=source),
-        _row("reconstruction:weno5", layout="uniform|amr", backend="production",
-             limitation="ghost_depth=3; high-order route is native", source=source),
+        _row(
+            "reconstruction:weno5", layout="uniform|amr", backend="production",
+            limitation=("ghost_depth=3; ratio-2 2D AMR selects the conservative order-5 "
+                        "cell-average provider from resolved spatial capabilities"),
+            source=source),
         _row("limiter:mc", layout="uniform|amr", backend="none", status="unavailable",
              limitation="catalogued but no native C++ limiter symbol exists",
              requested="limiter=MC()", available_route="Minmod() or VanLeer()",
@@ -472,7 +475,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row("amr:hierarchy_policy_routes", layout="amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu, status="partial",
              limitation=("native hierarchy route is shared_n_level with berger_rigoutsos "
-                         "clustering, box_array patch generation, and round_robin load balance"),
+                         "clustering, box_array patch generation, and the resolved prepared "
+                         "load-balance provider (space-filling curve by default)"),
              source=source),
         _row("amr:transfer_contracts", layout="amr", backend="production", platform="host",
              mpi=mpi, gpu=gpu, status="partial",

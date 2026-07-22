@@ -383,7 +383,7 @@ def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
     import pops.runtime._engine_descriptors as engine
 
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         require_native_or_skip(
             "test_time_history_checkpoint requires install_program/history_names bindings")

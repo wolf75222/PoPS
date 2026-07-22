@@ -21,6 +21,9 @@ PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
 TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
 PACKAGE_CONFIG = (ROOT / "cmake" / "popsConfig.cmake.in").read_text(encoding="utf-8")
+NATIVE_DSO_COMPILER = (
+    ROOT / "tests" / "cpp" / "support" / "native_dso_compiler.hpp"
+).read_text(encoding="utf-8")
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -159,3 +162,39 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
     for name in ("ci-kokkos", "ci-mpi"):
         assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "1"
         assert "POPS_HEAVY_MODULE_TU_POOL" not in configure_presets[name]["cacheVariables"]
+
+
+def test_runtime_compiled_test_dsos_replay_the_complete_native_mpi_contract():
+    for authority in (
+        "POPS_NATIVE_MPI_ABI",
+        "POPS_NATIVE_MPI_INCLUDE",
+        "POPS_NATIVE_MPI_COMPILE_OPTIONS",
+        "POPS_NATIVE_MPI_COMPILE_DEFINITIONS",
+        "POPS_NATIVE_MPI_LINK_OPTIONS",
+        "POPS_NATIVE_MPI_LINK_LIBRARIES",
+    ):
+        assert authority in TESTS_CMAKE
+    for replay in (
+        "POPS_TEST_MPI_ABI",
+        "POPS_TEST_MPI_INCLUDE",
+        "POPS_TEST_MPI_COMPILE_OPTIONS",
+        "POPS_TEST_MPI_COMPILE_DEFINITIONS",
+        "POPS_TEST_MPI_LINK_OPTIONS",
+        "POPS_TEST_MPI_LINK_LIBRARIES",
+        "POPS_TEST_HEADER_SIG",
+        "POPS_HAS_MPI",
+        "POPS_MPI_ABI",
+        "POPS_HEADER_SIG",
+    ):
+        assert replay in NATIVE_DSO_COMPILER
+    for forwarded in (
+        "POPS_TEST_MPI_ABI",
+        "POPS_TEST_MPI_INCLUDE",
+        "POPS_TEST_MPI_COMPILE_OPTIONS",
+        "POPS_TEST_MPI_COMPILE_DEFINITIONS",
+        "POPS_TEST_MPI_LINK_OPTIONS",
+        "POPS_TEST_MPI_LINK_LIBRARIES",
+        "POPS_TEST_HEADER_SIG",
+    ):
+        assert forwarded in TESTS_CMAKE
+    assert 'POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}"' in TESTS_CMAKE

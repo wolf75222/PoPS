@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 
 # This extension is an implementation detail of ``pops``.  ``__all__`` is the
@@ -38,6 +38,7 @@ __all__ = (
     "capability_report",
     "runtime_environment_report",
     "runtime_backend_manifest",
+    "native_execution_resource",
     "numerical_defaults_report",
     "fallback_diagnostics_report",
     "reset_fallback_diagnostics",
@@ -69,7 +70,21 @@ __max_runtime_params__: int
 __aux_canonical__: dict[str, int]
 
 
-class StepAttemptRejected(RuntimeError): ...
+class StepAttemptRejected(RuntimeError):
+    status: Literal[
+        "solved",
+        "singular",
+        "breakdown",
+        "iteration_limit",
+        "invalid_evaluation",
+        "capability_failure",
+        "invalid_input",
+        "incompatible_rhs",
+    ]
+    phase: str
+    detail: str
+    disposition: Literal["retry", "reject"]
+    reason_code: int
 
 
 class _RuntimeEnvironmentReport(TypedDict):
@@ -85,6 +100,11 @@ class _RuntimeEnvironmentReport(TypedDict):
     kokkos_initialized_by_pops: bool
     kokkos_atexit_finalize_registered: bool
     kokkos_backend: str
+    kokkos_device: str
+    kokkos_shared_space: str
+    field_memory_space: str
+    kokkos_stream: str
+    kokkos_stream_synchronous: bool
     kokkos_concurrency: int
     kokkos_ownership: str
     kokkos_lifecycle: str
@@ -101,6 +121,17 @@ class _RuntimeEnvironmentReport(TypedDict):
     allocator_mode: str
     comm_allocator_mode: str
     allocator_lifetime: str
+
+
+class _NativeExecutionResource:
+    """Non-constructible process-lifetime Kokkos execution resource."""
+
+    execution_backend: str
+    device_identity: str
+    memory_space_identity: str
+    shared_space_identity: str
+    stream_handle: int
+    stream_identity: str
 
 
 class _NativeMpiDatatype:
@@ -171,7 +202,7 @@ class SystemConfig:
     L: float
     xlo: float
     ylo: float
-    periodic: bool
+    periodicity: tuple[bool, bool]
     geometry: str
     nr: int
     ntheta: int
@@ -183,7 +214,9 @@ class SystemConfig:
 
 class AmrSystemConfig:
     n: int
+    ny: int
     L: float
+    Ly: float
     xlo: float
     ylo: float
     regrid_every: int
@@ -191,13 +224,17 @@ class AmrSystemConfig:
     regrid_grow: int
     regrid_margin: int
     explicit_bootstrap: bool
-    periodic: bool
+    periodicity: tuple[bool, bool]
     distribute_coarse: bool
     coarse_max_grid: int
     cluster_min_efficiency: float
     cluster_min_box_size: int
     cluster_max_box_size: int
     def __init__(self) -> None: ...
+    def _set_load_balance_provider(
+        self, route: str, semantic_identity: str,
+        option_schema_identity: str, options: dict[str, object],
+    ) -> None: ...
 
 
 class ModelSpec:
@@ -275,6 +312,7 @@ def runtime_environment_report() -> _RuntimeEnvironmentReport: ...
 def runtime_backend_manifest(
     backend: str, target: str, communicator: str
 ) -> dict[str, object]: ...
+def native_execution_resource() -> _NativeExecutionResource: ...
 def numerical_defaults_report() -> dict[str, object]: ...
 def fallback_diagnostics_report() -> dict[str, object]: ...
 def reset_fallback_diagnostics() -> None: ...

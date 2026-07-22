@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "scripts" / "codesign_pops_extensions.py"
 SETUP = ROOT / "scripts" / "setup_env.sh"
 BUILD = ROOT / "scripts" / "build_python.sh"
+VERIFY_NATIVE = ROOT / "scripts" / "verify_installed_native.py"
 
 
 def _helper():
@@ -140,13 +141,19 @@ def test_scripts_run_the_shared_helper_before_every_import_or_doctor():
     setup = SETUP.read_text(encoding="utf-8")
     build = BUILD.read_text(encoding="utf-8")
     helper_call = "codesign_pops_extensions.py"
+    verifier_call = "verify_installed_native.py"
 
-    assert setup.index(helper_call) < setup.index('python -c "import pops"')
+    assert setup.index(helper_call) < setup.index(verifier_call)
+    assert 'python -c "import pops"' not in setup
+    assert setup.index(verifier_call) < setup.index("find_spec('pops')")
     assert build.index('python -m pip "${pip_args[@]}"') \
         < build.index(helper_call) \
+        < build.index(verifier_call) \
         < build.index('python -c "import pops;')
+    assert "--expect-mpi --expect-parallel-hdf5" in build
     assert "PYTHONPATH= PYTHONNOUSERSITE=1" in build
-    assert setup.count("PYTHONPATH= PYTHONNOUSERSITE=1") == 3
+    assert setup.count("PYTHONPATH= PYTHONNOUSERSITE=1") == 4
+    assert VERIFY_NATIVE.is_file()
 
 
 def test_codesign_command_is_reachable_only_after_the_darwin_guard():

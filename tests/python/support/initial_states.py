@@ -21,7 +21,7 @@ def bubble_amr(n: int) -> np.ndarray:
     """
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)
-    return (1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)).reshape(-1)
+    return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)
 
 
 def bubble_offset(n: int) -> np.ndarray:

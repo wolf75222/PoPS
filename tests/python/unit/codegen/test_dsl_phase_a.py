@@ -132,7 +132,7 @@ def pure_python_checks():
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
-    sys = System(n=16, periodic=True)
+    sys = System(n=16, periodicity=(True, True))
     fake = CompiledModel(so_path="/inexistant.so", backend="production",
                          cons_names=["rho", "rho_u", "rho_v", "E"],
                          cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
@@ -192,7 +192,7 @@ def modelspec_substeps_check():
     """substeps= doit etre forwarde pour un ModelSpec (pas seulement pour un CompiledModel) : la
     branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
     qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
-    s = System(n=16, periodic=True)
+    s = System(n=16, periodicity=(True, True))
     spec = engine.Model(state=engine.FluidState("isothermal", cs2=1.0), transport=engine.IsothermalFlux(),
                      source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=-1.0))
     calls = []

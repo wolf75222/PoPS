@@ -2553,11 +2553,7 @@ class RuntimeOutputSnapshot:
         if int(engine.nx()) != base_nx:
             raise ValueError(
                 "runtime x cell count does not match normalized layout geometry")
-        if layout.adaptive:
-            if base_nx != base_ny:
-                raise NotImplementedError(
-                    "adaptive scientific output requires the native square-grid geometry")
-        elif int(engine.ny()) != base_ny:
+        if int(engine.ny()) != base_ny:
             raise ValueError(
                 "runtime y cell count does not match normalized layout geometry")
         scale = layout.levels[level].refinement

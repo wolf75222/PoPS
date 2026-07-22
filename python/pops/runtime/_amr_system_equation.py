@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any
 from pops._bootstrap import ModelSpec
 from pops.runtime._numeric import native_real, positive_int
 from pops.runtime._engine_descriptors import Spatial, Explicit
-from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
+from pops.runtime.routes import (
+    check_riemann_requirement_contract as _check_riemann_requirement_contract,
+)
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -22,6 +24,7 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
     PHYSICAL_DEFAULT_GAMMA,
+    numerical_defaults_report,
 )
 
 if TYPE_CHECKING:
@@ -101,10 +104,12 @@ class _AmrSystemEquation(_AmrSystem):
         stage-weighted effective face flux to conservative reflux. At coarse/fine boundaries, every
         stage samples the authored parent time window at its RK abscissa. IMEX remains the distinct
         forward-Euler transport plus backward-Euler stiff-source split; the cell-local implicit source
-        does not enter reflux. recon "primitive" and flux "roe"/"hllc"/weno5 are
-        WIRED on AMR (parity with add_block; cf. dispatch_amr_compiled). limiter="weno5" (WENO5-Z,
-        3 ghosts): the coupler allocates its levels to Limiter::n_ghost and the regrid inherits n_grow(), so
-        the 5-point stencil does not read out of bounds. cf. DSL_MODEL_DESIGN.md Phase D (point 10).
+        does not enter reflux. ``recon="primitive"`` and fluxes ``roe`` / ``hllc`` use the same
+        compiled dispatch as ``add_block``. The low-level dispatch also contains the WENO5-Z
+        stencil and its three-cell halo, but the resolved Case route accepts it only when the
+        owner-qualified coarse/fine provider certifies order 5 and ghost depth 3. The native
+        catalogue resolves that provider from the reconstruction requirements and never lowers
+        the coarse/fine interface order silently.
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
@@ -147,6 +152,12 @@ class _AmrSystemEquation(_AmrSystem):
         if isinstance(model, ModelSpec):
             # Native model: Newton options and diagnostics are wired at every block count. No facade
             # filtering: C++ AmrSystem::add_block validates the complete contract.
+            spatial_options = {
+                "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
+            }
+            if getattr(spatial, "weno_epsilon", None) is not None:
+                spatial_options["weno_epsilon"] = native_real(
+                    spatial.weno_epsilon, where="AmrSystem.add_equation.weno_epsilon")
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, getattr(time, "stride", 1),
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -162,7 +173,8 @@ class _AmrSystemEquation(_AmrSystem):
                               getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               getattr(time, "newton_diagnostics", False),
                               native_real(getattr(spatial, "positivity_floor", 0.0),
-                                          where="AmrSystem.add_equation.positivity_floor"))
+                                          where="AmrSystem.add_equation.positivity_floor"),
+                              **spatial_options)
             return
 
         if not isinstance(model, CompiledModel):
@@ -181,25 +193,13 @@ class _AmrSystemEquation(_AmrSystem):
                 "re-resolve and compile the Case for its AMR layout so that the loader inlines "
                 "add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
-        # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled, with the
-        # SAME ADC-590 guard as System.add_equation (shared helper): generic hllc/roe are GENERIC-ONLY
-        # (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the explicit
-        # euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
-        _check_riemann_capability(spatial.flux, compiled, "AmrSystem.add_equation")
-        # ADC-552: cross-check a HLL(waves=<provider>) selection against the model's actual source.
-        if spatial.flux == "hll" and getattr(spatial, "waves_provider", None) is not None:
-            from pops.numerics.riemann.waves import check_hll_waves
-            check_hll_waves(spatial.waves_provider, compiled, "AmrSystem.add_equation")
-        # HLL: same early guard as System.add_equation (wave_speeds emitted by the explicit pair
-        # typed Model.wave_speeds(...) OR primitive 'p'; the C++ gate only triggers at first use).
-        if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
-            raise ValueError(
-                "AmrSystem.add_equation: riemann 'hll' requires signed wave speeds: declare "
-                "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
-                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
-                "[requested route %s -> %s]"
-                % (getattr(spatial.flux, "id", "riemann.hll"),
-                   getattr(spatial.flux, "native_entry", "?")))
+        # Descriptor-owned model predicates are shared verbatim with System and availability.
+        _check_riemann_requirement_contract(
+            spatial.riemann_capability_contract,
+            compiled,
+            "AmrSystem.add_equation",
+            flux=spatial.flux,
+        )
 
         # The package ABI transports NEITHER the
         # multirate cadence (stride) NOR the partial IMEX mask (implicit_vars / implicit_roles):
@@ -208,7 +208,7 @@ class _AmrSystemEquation(_AmrSystem):
         # We REJECT them rather than ignore them (explicit route, same spirit as the rejection
         # of stride/mask on the compiled backends of System.add_equation, cf. ~lines 886-955).
         nstride = getattr(time, "stride", 1)
-        if nstride != 1:
+        if nstride != 1 and spatial.external_flux_id is None:
             raise ValueError(
                 "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
                 "(the block would otherwise run at stride=1 silently). "
@@ -254,12 +254,52 @@ class _AmrSystemEquation(_AmrSystem):
                 raise ValueError(
                     "AmrSystem.add_equation: bound parameter vector has %d values, expected %d"
                     % (len(bind_values), len(runtime_names)))
-        self._s._install_native_block(
-            name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-            gamma, nsub, bind_values,
-            native_real(getattr(spatial, "positivity_floor", 0.0),
-                        where="AmrSystem.add_equation.positivity_floor"),
-        )
+        spatial_options = {
+            "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
+        }
+        if getattr(spatial, "weno_epsilon", None) is not None:
+            spatial_options["weno_epsilon"] = native_real(
+                spatial.weno_epsilon, where="AmrSystem.add_equation.weno_epsilon")
+        positivity_floor = native_real(
+            getattr(spatial, "positivity_floor", 0.0),
+            where="AmrSystem.add_equation.positivity_floor")
+        if spatial.external_flux_id is not None:
+            if "amr" not in spatial.external_flux_supported_layouts:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann brick %r does not support AMR"
+                    % spatial.external_flux_id)
+            if runtime_names:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport model "
+                    "RuntimeParams")
+            if spatial.external_flux_model_identity != compiled.model_hash:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann brick %r targets model %r, not %r"
+                    % (spatial.external_flux_id, spatial.external_flux_model_identity,
+                       compiled.model_hash))
+            if spatial.external_flux_native_abi_key != compiled.abi_key:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann brick %r was built for a different "
+                    "native ABI" % spatial.external_flux_id)
+            if spatial_options["wave_speed_cache"]:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport "
+                    "wave_speed_cache")
+            self._s._install_external_riemann_block(
+                name, spatial.external_flux_library_path, spatial.external_flux_id,
+                spatial.external_flux_library_sha256, spatial.limiter, spatial.recon,
+                time.kind, gamma, nsub, nstride, compiled.n_vars, compiled.n_aux,
+                compiled.model_hash,
+                positivity_floor,
+                spatial_options.get(
+                    "weno_epsilon",
+                    float(numerical_defaults_report()["weno"]["epsilon"])),
+            )
+        else:
+            self._s._install_native_block(
+                name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
+                gamma, nsub, bind_values, positivity_floor, **spatial_options,
+            )
         # ADC-291: record the named aux fields the block declares (component of the k-th name =
         # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])
@@ -292,9 +332,9 @@ class _AmrSystemEquation(_AmrSystem):
 
     def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
         """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
-        hierarchy. AMR counterpart of System.set_aux_field. @p field: 2D array (n, n) on the COARSE
-        base level; it is STATIC (re-applied each step, injected to the fine levels, survives a regrid).
-        Call BEFORE the first step (like set_density). Mono-rank facade.
+        hierarchy. AMR counterpart of System.set_aux_field. ``field`` is exactly one 2D
+        ``(ny, nx)`` array on the coarse level; it is static (re-applied each step, injected to the
+        fine levels, survives a regrid). Call before the first step (like ``set_density``).
 
         @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's coarse-level ghost
         boundary policy (foextrap / dirichlet), applied to the non-periodic faces after the shared aux
@@ -302,6 +342,6 @@ class _AmrSystemEquation(_AmrSystem):
         import numpy as np
         comp = self._resolve_aux_field(block, name)
         arr = np.asarray(field, dtype=float)
-        self._s.set_aux_field_component(comp, arr.reshape(-1))
+        self._s.set_aux_field_component(comp, arr)
         if halo is not None:
             self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)

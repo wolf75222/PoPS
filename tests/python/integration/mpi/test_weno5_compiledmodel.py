@@ -64,7 +64,7 @@ def main():
 
         # --- native ModelSpec reference (numerical parity oracle) ---
         def ref(limiter):
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             lim = {"none": dict(none=True), "minmod": dict(minmod=True),
                    "weno5": dict(weno5=True)}[limiter]
             sys.add_equation("gas", spec, spatial=engine.Spatial(flux=Rusanov(), recon=Conservative(),
@@ -74,7 +74,7 @@ def main():
 
         # --- final production component: strict bit-identical WENO5 parity ---
         def prod(limiter):
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             lim = {
                 "none": dict(none=True),
                 "minmod": dict(minmod=True),
@@ -104,7 +104,7 @@ def main():
 
         # avance production weno5 : etat final bit-identique au natif sur 12 pas a dt fixe.
         def build_prod_step():
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             sys.add_equation(
                 "gas",
                 compiled_prod,
@@ -117,7 +117,7 @@ def main():
             return sys
 
         def build_ref_step():
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             sys.add_equation("gas", spec, spatial=engine.Spatial(weno5=True, flux=Rusanov(),
                                                                     recon=Conservative()),
                              time=engine.Explicit())

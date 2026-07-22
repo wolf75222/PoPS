@@ -262,6 +262,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_flux_failure_collective"
+sources = ["tests/cpp/integration/mpi/test_mpi_flux_failure_collective.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_hdf5_collective"
 sources = ["tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -272,6 +278,12 @@ name = "test_mpi_hybrid_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_load_balance_authority"
+sources = ["tests/cpp/integration/mpi/test_mpi_load_balance_authority.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 4]
 
 [[cpp.suite]]
 name = "test_mpi_mbox_parity"
@@ -334,6 +346,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_system_layout_transfer"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_layout_transfer.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_system_solve_fields"
 sources = ["tests/cpp/integration/mpi/test_mpi_system_solve_fields.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -372,6 +390,11 @@ labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 [[cpp.suite]]
 name = "test_external_riemann_dispatch"
 sources = ["tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_flux_failure_loader_transaction"
+sources = ["tests/cpp/integration/native_loader/test_flux_failure_loader_transaction.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]

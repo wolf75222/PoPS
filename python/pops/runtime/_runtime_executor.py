@@ -89,11 +89,31 @@ def _require_supported_execution_context(plan: Any) -> None:
         raise NotImplementedError(
             "native RuntimeInstance providers require exact float64"
         )
-    if context.device.identity not in ("host", "cpu") or context.device.handle is not None:
-        raise NotImplementedError(
-            "native RuntimeInstance providers require host/cpu without a device handle"
-        )
     facts = _native_runtime_facts()
+    expected_device = facts.get("kokkos_device")
+    expected_memory = facts.get("field_memory_space")
+    expected_backend = facts.get("kokkos_backend")
+    expected_shared = facts.get("kokkos_shared_space")
+    expected_stream = facts.get("kokkos_stream")
+    if context.device.identity != expected_device:
+        raise ValueError(
+            "ExecutionContext device differs from the installed Kokkos DefaultExecutionSpace"
+        )
+    spaces = tuple(context.backend.memory_spaces.require("runtime.memory_spaces"))
+    if spaces != (expected_memory,):
+        raise ValueError("ExecutionContext memory space differs from installed Kokkos SharedSpace")
+    exact_capabilities = {
+        "execution_backend": expected_backend,
+        "shared_space": expected_shared,
+        "stream_identity": expected_stream,
+    }
+    for name, expected in exact_capabilities.items():
+        actual = context.backend.capabilities[name].require("runtime.%s" % name)
+        if actual != expected:
+            raise ValueError("ExecutionContext %s differs from installed Kokkos" % name)
+    from pops.runtime._platform_manifest import validate_native_device_resource
+
+    validate_native_device_resource(context)
     communicator = context.communicator
     if communicator.identity == "serial":
         if communicator.handle is not None:
@@ -128,12 +148,6 @@ def _require_supported_execution_context(plan: Any) -> None:
             "native RuntimeInstance providers support only serial or exact MPI_COMM_WORLD; got %r"
             % communicator.identity
         )
-    backend = str(facts.get("kokkos_backend", "")).lower()
-    if any(token in backend for token in ("cuda", "hip", "sycl", "openmptarget")):
-        raise NotImplementedError(
-            "native Kokkos execution space %r is incompatible with host ExecutionContext"
-            % facts.get("kokkos_backend")
-        )
 
 
 class _UniformNativeProvider(RuntimeExecutorProvider):
@@ -157,10 +171,6 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         from pops.runtime._system import System
 
         config = system_config_from_layout(plan.layout)
-        if any(block.boundaries for block in plan.artifact.plan.blocks):
-            # GhostProducerPlan is the topology authority. Physical transport boundaries must not
-            # leave unrelated native storage periodic through the legacy mesh flag.
-            config.periodic = False
         engine = System(config)
         cast(Any, engine)._execution_context = plan.execution_context
         normalized_layout, = plan.artifact.layout_plan.layouts

@@ -43,7 +43,7 @@ def chk(cond, label):
 # ---- build a real native block and step it under profiling ----
 print("== §29 counters on a stepped native block ==")
 N = 16
-sim = System(n=N, L=1.0, periodic=True)
+sim = System(n=N, L=1.0, periodicity=(True, True))
 sim.add_equation("gas",
               engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                         transport=engine.IsothermalFlux(),
@@ -86,7 +86,7 @@ chk("kernels=" not in sim.profile_report(), "reset clears the counters")
 
 # profiling OFF stays zero-overhead: a stepped, never-enabled System records nothing.
 print("== profiling off records no counters ==")
-sim_off = System(n=N, L=1.0, periodic=True)
+sim_off = System(n=N, L=1.0, periodicity=(True, True))
 sim_off.add_equation("gas",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
