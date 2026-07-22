@@ -25,7 +25,6 @@ from typing import Any
 
 from pops.descriptors import BrickDescriptor
 from pops.params.use_sites import ParamUse, resolve_param_use
-from pops.runtime.routes import LIMITER_NONE, LIMITER_WENO5, Route, resolve, routes_of
 from .limiters import Minmod, _native_reconstruction_descriptor, limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
@@ -34,7 +33,10 @@ from .limiters import Minmod, _native_reconstruction_descriptor, limiters
 # reads two neighbours each side (3). Keyed on the token so the runtime Spatial brick (which
 # carries the lowered token, not the descriptor) can look the requirement up.
 REQUIRED_GHOST_DEPTH = MappingProxyType({
-    route.token: route.metadata["n_ghost"] for route in routes_of("limiter")
+    "none": 1,
+    "minmod": 2,
+    "vanleer": 2,
+    "weno5": 3,
 })
 
 #: The conservative second-order-MUSCL ghost depth the INSPECTION surface assumes for a memory
@@ -46,21 +48,21 @@ REQUIRED_GHOST_DEPTH = MappingProxyType({
 #: halo a caller passes), never against this assumption -- rejecting WENO5 by default would be a
 #: FALSE POSITIVE that breaks a working problem.
 INSPECT_GHOST_DEPTH_ASSUMPTION = max(
-    route.metadata["n_ghost"]
-    for route in routes_of("limiter")
-    if route.metadata["muscl_compatible"]
+    REQUIRED_GHOST_DEPTH[token] for token in ("minmod", "vanleer")
 )
 
 
 def authenticated_reconstruction_route(
     descriptor: Any, *, require_muscl_limiter: bool = False
-) -> Route:
+) -> Any:
     """Authenticate a reconstruction descriptor against the generated native catalogue.
 
     A scheme spelling alone is not authority: external manifests and user-created descriptors
     cannot borrow a builtin token.  The descriptor must carry the native brick type, an accepted
     category, the exact native C++ entry, and the catalogue-owned stencil contract.
     """
+    from pops.runtime.routes import resolve
+
     if type(descriptor) is not BrickDescriptor:
         raise TypeError(
             "reconstruction selection requires a native BrickDescriptor from "
@@ -127,6 +129,8 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
     certify order 5 and ghost depth 3. The builtin capability family selects its conservative
     order-5 route from that resolved requirement; an insufficient external provider is refused
     before artifact creation rather than silently lowering the interface order."""
+    from pops.runtime.routes import LIMITER_WENO5
+
     if epsilon is None:
         return _native_reconstruction_descriptor(
             LIMITER_WENO5, category="reconstruction", name=name)
@@ -182,9 +186,15 @@ class _ReconstructionCatalog(SimpleNamespace):
         raise AttributeError(name)
 
 
+def _first_order() -> Any:
+    from pops.runtime.routes import LIMITER_NONE
+
+    return _native_reconstruction_descriptor(
+        LIMITER_NONE, category="reconstruction", name="firstorder")
+
+
 reconstruction = _ReconstructionCatalog(
-    FirstOrder=lambda: _native_reconstruction_descriptor(
-        LIMITER_NONE, category="reconstruction", name="firstorder"),
+    FirstOrder=_first_order,
     MUSCL=_muscl,
     WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
     WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),
@@ -200,6 +210,8 @@ def required_ghost_depth(reconstruction_or_token: Any) -> Any:
     not a known incompatibility; no false positive).
     """
     if isinstance(reconstruction_or_token, str):
+        from pops.runtime.routes import resolve
+
         try:
             route = resolve(
                 "limiter", reconstruction_or_token, context="required_ghost_depth")

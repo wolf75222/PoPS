@@ -79,8 +79,12 @@ def test_amr_layout_paths_require_one_prepared_load_balance_authority():
         and "DistributionMapping(fine_ba.size(), n_ranks())" not in source
         for source in sources.values()
     )
-    assert "load_balance_authority().distribute" in sources[paths[1]]
-    assert "load_balance.distribute(ba, n_ranks())" in sources[paths[3]]
+    assert "load_balance.distribute(ba, n_ranks())" in sources[paths[2]]
+    assert (
+        "load_balance.distribute(*candidate_layout, communicator.size(), {}, communicator)"
+        in sources[paths[3]]
+    )
+    assert "hierarchy.load_balance_authority()" in sources[paths[3]]
     assert "*hierarchy_.load_balance" in sources[paths[4]]
     assert "bp.mesh.load_balance->distribute" in sources[paths[5]]
 

@@ -6,11 +6,10 @@ from typing import Any
 
 from pops.descriptors import _native
 from pops.numerics.indicator_stencils import FOURTH_ORDER_AXIS, SECOND_ORDER_AXIS
-from pops.runtime.routes import LIMITER_MINMOD, LIMITER_VANLEER, Route
 
 
 def _native_reconstruction_descriptor(
-    route: Route, *, category: str, name: str | None = None, **options: Any
+    route: Any, *, category: str, name: str | None = None, **options: Any
 ) -> Any:
     """Build one descriptor from an authenticated generated limiter route.
 
@@ -18,6 +17,8 @@ def _native_reconstruction_descriptor(
     WENO regulariser or the selected MUSCL limiter, but they cannot restate or override those
     structural facts.
     """
+    from pops.runtime.routes import Route
+
     if not isinstance(route, Route) or route.family != "limiter":
         raise TypeError("reconstruction descriptors require a generated limiter Route")
     metadata = route.metadata
@@ -41,15 +42,21 @@ def _native_reconstruction_descriptor(
         **options,
     )
 
-limiters = SimpleNamespace(
-    Minmod=lambda: _native_reconstruction_descriptor(
-        LIMITER_MINMOD, category="limiter"),
-    VanLeer=lambda: _native_reconstruction_descriptor(
-        LIMITER_VANLEER, category="limiter"),
-)
+
+def Minmod() -> Any:
+    from pops.runtime.routes import LIMITER_MINMOD
+
+    return _native_reconstruction_descriptor(LIMITER_MINMOD, category="limiter")
+
+
+def VanLeer() -> Any:
+    from pops.runtime.routes import LIMITER_VANLEER
+
+    return _native_reconstruction_descriptor(LIMITER_VANLEER, category="limiter")
+
+
+limiters = SimpleNamespace(Minmod=Minmod, VanLeer=VanLeer)
 
 # Spec 5: expose the limiters at module scope.
-Minmod = limiters.Minmod
-VanLeer = limiters.VanLeer
 
 __all__ = ["limiters", "Minmod", "VanLeer"]

@@ -33,6 +33,8 @@ static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
   auto fval = [](int ci, int cj, int k) { return double(ci * 1000 + cj * 10 + k); };
 
   // parent : niveau 1, 4 boites pavant [0,32)^2 (quadrants 16x16), reparti round-robin.
+  const Box2D coarse_domain = Box2D::from_extents(32, 32);
+  const Box2D fine_domain = coarse_domain.refine(2);
   std::vector<Box2D> pb;
   for (int qy = 0; qy < 2; ++qy)
     for (int qx = 0; qx < 2; ++qx) {

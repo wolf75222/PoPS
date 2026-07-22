@@ -206,16 +206,16 @@ fi
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
 # output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
 # verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH='' PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
+PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
 native_verify_args=()
 if [[ $WITH_MPI -eq 1 ]]; then
   native_verify_args=(--expect-mpi --expect-parallel-hdf5)
 else
   native_verify_args=(--expect-serial)
 fi
-PYTHONPATH='' PYTHONNOUSERSITE=1 \
+PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
-PYTHONPATH='' PYTHONNOUSERSITE=1 \
+PYTHONPATH= PYTHONNOUSERSITE=1 \
   python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"
