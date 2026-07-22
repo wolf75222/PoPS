@@ -546,12 +546,12 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
             _retain_output_recoveries=runtime._retain_output_recoveries,
         ))
 
-    # Two separately qualified Writers cannot claim the same canonical target.
+    # Two separately qualified Writers cannot claim the same logical target.
     collision_graph = ConsumerGraph(tuple(
         replace(row, target_uri="same-target")
         for row in runtime.consumer_graph.nodes
     ))
-    with pytest.raises(ValueError, match="same exact output target"):
+    with pytest.raises(ValueError, match="same logical target"):
         RuntimeConsumerPublisher(SimpleNamespace(
             _consumer_graph=collision_graph,
             _installed_components=runtime._installed_components,
