@@ -66,6 +66,7 @@ Les autres scripts traitent chacun un point precis :
 | Deux binds, une seule compilation | [`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) |
 | Sorties scientifiques periodiques | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
+| Sorties MPI PVD/PVTU et Catalyst collectif | [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py) |
 
 Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
 fixent un thread par rang, construisent
@@ -451,11 +452,15 @@ python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 ## Sorties scientifiques periodiques
 
 [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie une sortie periodique au
-`ConsumerGraph`. Deux constantes, placees en tete du fichier, suffisent pour choisir le format et
-la cadence physique :
+`ConsumerGraph`. La configuration placee en tete du fichier choisit la presentation ParaView et la
+cadence physique :
 
 ```python
-OUTPUT_FORMAT = output.ParaView()
+PARAVIEW_PRESET = output.ParaViewPreset(
+    color_by="U",
+    color_map="Viridis",
+    representation="Surface With Edges",
+)
 OUTPUT_EVERY_DT = 0.02
 ```
 
@@ -488,23 +493,38 @@ authentifie le PVD, reste relocatable avec son repertoire et applique la present
 script `.view.py` se lance avec le `pvpython` de la machine de visualisation. Ce n'est pas un faux
 `.pvsm` ecrit a la main.
 
-Pour demander en plus un vrai `.pvsm` (`U`, palette Viridis, surface avec aretes), remplacer
-seulement la configuration `OUTPUT_FORMAT` :
+Pour demander en plus un vrai `.pvsm` (`U`, palette Viridis, surface avec aretes), annoncer
+l'installation ParaView avant de lancer le tutoriel :
 
-```python
-OUTPUT_FORMAT = output.ParaView(
-    preset=output.ParaViewPreset(
-        color_by="U",
-        color_map="Viridis",
-        representation="Surface With Edges",
-    ),
-    state=output.MaterializedPVSM(pvpython="/opt/paraview/bin/pvpython"),
-)
+```bash
+export POPS_PARAVIEW_ROOT=/Applications/ParaView-6.1.1.app
+python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 ```
 
 PoPS verifie l'executable, lui demande d'ouvrir le PVD au dernier temps, d'appliquer la presentation,
-de sauvegarder l'etat puis de le recharger. Avec le simple `output.ParaView()` du tutoriel, VTU, PVD
-et recette portable sont quand meme produits; seul le PVSM n'est pas demande.
+de sauvegarder l'etat puis de le recharger. Sans `POPS_PARAVIEW_ROOT`, VTU, PVD et recette portable
+sont quand meme produits; seul le PVSM n'est pas demande.
+
+La variante MPI complete est [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py). Elle publie un PVTU
+par instant physique, une feuille VTU par rang et un PVD temporel cumulatif :
+
+```bash
+export POPS_PARAVIEW_ROOT=/Applications/ParaView-6.1.1.app
+mpiexec -n 2 python docs/tuto/scalar_advection/14_mpi_amr_outputs.py
+```
+
+Avec cinq instants et deux rangs, cette commande produit cinq PVD cumulatifs, cinq PVTU, dix VTU et
+cinq PVSM preconfigures. Le placement par defaut `MpiRelayToRoot()` ne demande pas de filesystem
+partage. `POPS_CATALYST=1` active en plus le consumer live collectif.
+
+Pour rouvrir directement la derniere vue MPI configuree, sans refaire `Apply`, `Color By` ni la
+representation :
+
+```bash
+OUTPUT_DIR="$PWD/docs/tuto/scalar_advection/results/14_mpi_amr_outputs/solution/tracer"
+PVSM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pvsm' | sort | tail -n 1)"
+"$POPS_PARAVIEW_ROOT/Contents/MacOS/paraview" --state "$PVSM"
+```
 
 Ce tutoriel et la capture native PoPS restent 2D et centres cellules. Le writer VTU sous-jacent sait
 aussi representer des snapshots cartesiens exacts 1D, 2D ou 3D. Il place les champs centres cellules

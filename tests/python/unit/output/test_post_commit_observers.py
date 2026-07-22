@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops._geometry_contracts import POLAR_ANNULUS_2D_COORDINATES
 from pops.identity import make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
 from pops.output._catalyst_backend import CatalystPythonProvider
@@ -135,6 +136,27 @@ def _frame(
     return ObserverFrame(snapshot, request)
 
 
+def _without_local_pieces(base: ObserverFrame) -> ObserverFrame:
+    field = base.snapshot.fields[0]
+    empty_field = FieldPayload(
+        field.key,
+        field.centering,
+        field.units,
+        field.component_names,
+        field.global_shape,
+        (),
+        dtype=field.array_dtype,
+    )
+    snapshot = OutputSnapshot(
+        base.snapshot.clock,
+        base.snapshot.provenance,
+        base.snapshot.geometries,
+        (empty_field,),
+        dict(base.snapshot.metadata),
+    )
+    return ObserverFrame(snapshot, base.request)
+
+
 class _Node:
     def __init__(self, values=None, prefix=""):
         self.values = {} if values is None else values
@@ -156,6 +178,17 @@ class _Node:
 
     def __str__(self):
         return repr(self.values)
+
+
+class _FetchTrackingNode(_Node):
+    def __init__(self, values=None, prefix="", fetched=None):
+        super().__init__(values, prefix)
+        self.fetched = [] if fetched is None else fetched
+
+    def fetch(self, key):
+        path = self._path(key)
+        self.fetched.append(path)
+        return _FetchTrackingNode(self.values, path, self.fetched)
 
 
 class _CatalystModule:
@@ -210,6 +243,10 @@ class _ConduitModule:
     def __init__(self):
         self.__name__ = "test_catalyst_conduit"
         self.blueprint = SimpleNamespace(mesh=_BlueprintMesh())
+
+
+class _FetchTrackingConduitModule(_ConduitModule):
+    Node = _FetchTrackingNode
 
 
 def _serial_context():
@@ -392,6 +429,77 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
     assert paths["catalyst/state/timestep"] == 4
     assert paths["catalyst/state/time"] == 0.25
     assert reports[0].receipt.detail["conduit_module"] == "test_catalyst_conduit"
+
+
+def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "empty_rank_pipeline.py"
+    pipeline.write_text("# collective rank with no local mesh partition\n")
+    catalyst_module = _CatalystModule()
+    provider = CatalystPythonProvider(
+        catalyst_module=catalyst_module,
+        conduit_module=_FetchTrackingConduitModule(),
+    )
+    execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
+    session = Catalyst(
+        pipeline=str(pipeline), provider=provider,
+    ).open_runtime_session(
+        {"worker_communicator": worker_lane}, execution_context,
+    )
+
+    frame = _without_local_pieces(_frame(mode=ParallelMode.COLLECTIVE))
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    execute_node = catalyst_module.operations[1][1]
+    data_path = "catalyst/channels/mesh/data"
+    assert execute_node.fetched == [data_path]
+    child_paths = {
+        path: value for path, value in execute_node.values.items()
+        if path.startswith(data_path + "/")
+    }
+    assert any(path.endswith("/topologies/mesh_000000/type") and value == "uniform"
+               for path, value in child_paths.items())
+    empty_arrays = [
+        value for path, value in child_paths.items()
+        if "/fields/" in path and path.endswith("/values")
+    ]
+    assert len(empty_arrays) == 4
+    assert all(array.size == 0 for array in empty_arrays)
+
+
+def test_collective_catalyst_rejects_unproved_polar_empty_peer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "polar_empty_rank_pipeline.py"
+    pipeline.write_text("# polar collective zero-cell peer is not proved\n")
+    provider = CatalystPythonProvider(
+        catalyst_module=_CatalystModule(),
+        conduit_module=_FetchTrackingConduitModule(),
+    )
+    execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
+    session = Catalyst(
+        pipeline=str(pipeline), provider=provider,
+    ).open_runtime_session(
+        {"worker_communicator": worker_lane}, execution_context,
+    )
+    frame = _without_local_pieces(_frame(
+        mode=ParallelMode.COLLECTIVE,
+        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+    ))
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    with pytest.raises(
+        RuntimeError,
+        match="zero-cell peers currently prove Cartesian 2D only",
+    ):
+        session.execute(frame)
+    session.finalize()
 
 
 def test_catalyst_rejects_nested_async_environment(tmp_path: Path, monkeypatch):
