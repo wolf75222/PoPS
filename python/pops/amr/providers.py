@@ -737,15 +737,19 @@ def validate_amr_provider_binding(
                 binding.get("native_interface"), protocol.native_interface):
         raise ValueError("AMR provider binding role disagrees with its native interface")
     installation = binding.get("runtime_installation")
+    installation_protocol = (
+        installation.get("protocol") if isinstance(installation, Mapping) else None)
     if binding.get("schema_version") != 1 \
             or not isinstance(binding.get("provider_identity"), str) \
             or not binding["provider_identity"] \
             or binding.get("layout_identity") != layout_identity \
             or not isinstance(installation, Mapping) \
             or set(installation) != {"schema_version", "protocol"} \
-            or installation.get("schema_version") != 1:
+            or installation.get("schema_version") != 1 \
+            or not isinstance(installation_protocol, str) \
+            or not installation_protocol:
         raise ValueError("AMR %s provider binding is incomplete or unauthenticated" % role)
-    validator = _BINDING_PROTOCOLS.get(installation.get("protocol"))
+    validator = _BINDING_PROTOCOLS.get(installation_protocol)
     if validator is None:
         raise NotImplementedError("AMR %s provider binding protocol is not implemented" % role)
     validator(protocol, binding, component_inputs)
@@ -777,6 +781,9 @@ def _prepare_external_provider(
     resolved_tagging_identity: str | None,
 ) -> PreparedAMRProviderInstallation:
     component_id = binding.get("component_id")
+    if not isinstance(component_id, str) or not component_id:
+        raise ValueError(
+            "AMR %s provider requires one non-empty component identity" % protocol.role)
     installed = components.get(component_id)
     if installed is None:
         raise ValueError(
@@ -856,13 +863,18 @@ def prepare_amr_provider_native_config(
     protocol = protocols.get(_runtime_interface_key(raw.get("native_interface")))
     if protocol is None:
         raise ValueError("AMR provider native config selects an unsupported interface")
+    layout_identity = raw.get("layout_identity")
+    if not isinstance(layout_identity, str) or not layout_identity:
+        raise ValueError("AMR provider native config requires one layout identity")
     binding = validate_amr_provider_binding(
         role=protocol.role,
         frozen_binding=raw,
-        layout_identity=raw.get("layout_identity"),
+        layout_identity=layout_identity,
     )
     installation = binding.get("runtime_installation")
     route = installation.get("protocol") if isinstance(installation, Mapping) else None
+    if not isinstance(route, str) or not route:
+        raise ValueError("AMR provider native config lacks its exact runtime protocol")
     lowering = _NATIVE_CONFIG_PROTOCOLS.get(route)
     if lowering is None:
         raise NotImplementedError("AMR provider native config protocol is not implemented")
@@ -895,11 +907,15 @@ def prepare_amr_provider_installation(
     protocol = _runtime_interface_protocols()[
         _runtime_interface_key(binding.get("native_interface"))]
     installation = binding.get("runtime_installation")
+    installation_protocol = (
+        installation.get("protocol") if isinstance(installation, Mapping) else None)
     if not isinstance(installation, Mapping) \
             or set(installation) != {"schema_version", "protocol"} \
-            or installation.get("schema_version") != 1:
+            or installation.get("schema_version") != 1 \
+            or not isinstance(installation_protocol, str) \
+            or not installation_protocol:
         raise ValueError("AMR %s provider lacks its exact runtime protocol" % role)
-    lowering = _INSTALLATION_PROTOCOLS.get(installation.get("protocol"))
+    lowering = _INSTALLATION_PROTOCOLS.get(installation_protocol)
     if lowering is None:
         raise NotImplementedError(
             "AMR %s provider runtime protocol is not implemented" % role)

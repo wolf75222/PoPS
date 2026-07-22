@@ -10,7 +10,7 @@ resolve and scan a coupled_rate node.  The op dispatcher ``_emit_op`` lives in
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from fractions import Fraction
 from typing import Any
 
@@ -148,7 +148,7 @@ def _stage_fraction(value: Any) -> Fraction:
 
 
 def _emit_contiguous_rhs_group(
-        values: list[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
+        values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
         lines: list[str], group_identity: int) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index

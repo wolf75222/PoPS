@@ -119,7 +119,10 @@ def native_device_resource(runtime):
     if not callable(factory) or resource_type is None:
         raise RuntimeError(
             "loaded _pops exposes no exact native execution resource; rebuild/install this tree")
-    resource = factory()
+    # Call through the typed extension surface after authenticating that the loaded binary
+    # actually exposes it.  This keeps static and runtime contracts aligned without weakening the
+    # exact-type check below.
+    resource = _pops.native_execution_resource()
     if type(resource) is not resource_type:
         raise TypeError("native_execution_resource() returned an unauthenticated resource")
     expected_device = runtime.device.require("runtime.device")

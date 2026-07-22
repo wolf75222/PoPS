@@ -79,6 +79,12 @@ def _frame_center(frame: Any) -> tuple[float, float]:
 class _GeometryPreviewSurface:
     """Shared presentation protocol for every implicit-domain descriptor."""
 
+    def level_set(self, frame: Any) -> Any:
+        """Return this descriptor's canonical implicit surface in ``frame``."""
+
+        del frame
+        raise NotImplementedError
+
     def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Return a bounded presentation window without affecting runtime geometry."""
 

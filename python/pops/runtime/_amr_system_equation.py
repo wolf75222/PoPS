@@ -152,7 +152,7 @@ class _AmrSystemEquation(_AmrSystem):
         if isinstance(model, ModelSpec):
             # Native model: Newton options and diagnostics are wired at every block count. No facade
             # filtering: C++ AmrSystem::add_block validates the complete contract.
-            spatial_options = {
+            spatial_options: dict[str, bool | float] = {
                 "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
             }
             if getattr(spatial, "weno_epsilon", None) is not None:
@@ -254,7 +254,7 @@ class _AmrSystemEquation(_AmrSystem):
                 raise ValueError(
                     "AmrSystem.add_equation: bound parameter vector has %d values, expected %d"
                     % (len(bind_values), len(runtime_names)))
-        spatial_options = {
+        spatial_options: dict[str, bool | float] = {
             "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
         }
         if getattr(spatial, "weno_epsilon", None) is not None:

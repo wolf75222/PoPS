@@ -5,6 +5,7 @@ users select physics-level policies and never author compiler ``AccuracyRequirem
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -101,7 +102,12 @@ class _ImmutableTransferPolicy:
             value = getattr(self, name)
             candidates = getattr(value, "amr_transfer_kernel_candidates", None)
             if callable(candidates):
-                values = tuple(candidates())
+                candidate_values = candidates()
+                if not isinstance(candidate_values, Iterable):
+                    raise TypeError(
+                        "AMR transfer kernel candidates must be iterable"
+                    )
+                values = tuple(candidate_values)
                 if not values:
                     raise ValueError("AMR transfer kernel family must not be empty")
                 routes[name] = [item.amr_transfer_kernel_data() for item in values]

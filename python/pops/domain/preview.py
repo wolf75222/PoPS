@@ -44,23 +44,47 @@ class GeometryPreviewProvider(Protocol):
 class PreviewBoundaryNames(Protocol):
     """Structural labels used by the generic Cartesian preview renderer."""
 
-    x_min: str
-    x_max: str
-    y_min: str
-    y_max: str
+    @property
+    def x_min(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def x_max(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def y_min(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def y_max(self) -> str:
+        raise NotImplementedError
 
 
 class PreviewDomainProvider(Protocol):
     """Minimal bounded-domain protocol consumed by sampling and rendering."""
 
-    name: str
-    lower: tuple[float, float]
-    upper: tuple[float, float]
-    boundary_names: PreviewBoundaryNames
+    @property
+    def name(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def lower(self) -> tuple[float, float]:
+        raise NotImplementedError
+
+    @property
+    def upper(self) -> tuple[float, float]:
+        raise NotImplementedError
+
+    @property
+    def boundary_names(self) -> PreviewBoundaryNames:
+        raise NotImplementedError
 
     @property
     def lengths(self) -> tuple[float, float]:
         """Return positive Cartesian lengths."""
+
+        raise NotImplementedError
 
     def frame(self, coordinates: Cartesian2D) -> Any:
         """Bind the domain to a typed Cartesian frame."""

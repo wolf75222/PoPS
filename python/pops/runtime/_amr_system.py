@@ -315,7 +315,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
-        spatial_options = {
+        spatial_options: dict[str, bool | float] = {
             "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
         }
         if getattr(spatial, "weno_epsilon", None) is not None:

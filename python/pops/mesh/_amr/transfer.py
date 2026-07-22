@@ -2,6 +2,7 @@
 # ruff: noqa: F405
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 from typing import Any
 
@@ -64,7 +65,10 @@ def _kernel_candidates(kernel: Any, *, where: str) -> tuple[Any, ...]:
     if not callable(protocol):
         _kernel_data(kernel, where=where)
         return (kernel,)
-    candidates = tuple(protocol())
+    candidate_values = protocol()
+    if not isinstance(candidate_values, Iterable):
+        raise TypeError("%s kernel candidates must be iterable" % where)
+    candidates = tuple(candidate_values)
     if not candidates:
         raise ValueError("%s kernel family must not be empty" % where)
     rows = tuple(_kernel_data(value, where=where) for value in candidates)
@@ -314,12 +318,17 @@ class AMRTransfer:
                     methods.append(method)
         if not methods:
             return None
-        orders = [getattr(method, "formal_order", None) for method in methods]
-        ghosts = [getattr(method, "ghost_depth", None) for method in methods]
-        if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
-               for value in orders + ghosts):
-            raise TypeError(
-                "resolved spatial methods must authenticate integer order and ghost depth")
+        orders: list[int] = []
+        ghosts: list[int] = []
+        for method in methods:
+            order = getattr(method, "formal_order", None)
+            ghost = getattr(method, "ghost_depth", None)
+            if (isinstance(order, bool) or not isinstance(order, int) or order < 1
+                    or isinstance(ghost, bool) or not isinstance(ghost, int) or ghost < 1):
+                raise TypeError(
+                    "resolved spatial methods must authenticate integer order and ghost depth")
+            orders.append(order)
+            ghosts.append(ghost)
         return max(orders), (max(ghosts),)
 
     def resolve(
