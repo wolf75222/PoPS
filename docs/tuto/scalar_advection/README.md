@@ -450,6 +450,43 @@ Les cles sont les handles owner-qualifies obtenus apres validation.
 python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 ```
 
+## Suivre le calcul dans le terminal
+
+Les parcours de reference `01`, `03`, `05` et `07` utilisent un `ConsoleMonitor`.
+Le meme monitor est combine avec les sorties scientifiques dans `12` et `14` :
+
+```python
+ConsoleMonitor(
+    schedule=every(MONITOR_EVERY, clock=program.clock),
+    diagnostics=(
+        StepChangeNorm(L2(), block=tracer),
+        Integral(block=tracer),
+    ),
+    template=(
+        "step={step} t={time:.4e} dt={dt:.3e} "
+        "dU_L2={tracer.step_change_l2:.3e} "
+        "mass={tracer.integral:.6e}"
+    ),
+    enabled=ENABLE_MONITOR,
+)
+```
+
+`dU_L2` est la norme L2 de la difference entre les etats acceptes avant et
+apres le pas courant. Elle indique si la solution change encore sans copier le
+champ complet vers Python. `mass` est l'integrale conservative sur le domaine.
+
+La cadence `every(10, ...)` compte uniquement les pas macro acceptes. Les
+reductions sont executees par C++/Kokkos seulement lorsque le monitor arrive a
+echeance ;
+sous MPI elles sont collectives, puis le formatage Python et le `print()` ont
+lieu uniquement sur le rang zero. Mettre `ENABLE_MONITOR = False` retire le
+consumer avant la compilation : aucun test par cellule ni reduction n'est
+ajoute a la boucle de calcul.
+
+Pour une cadence en temps physique, le meme monitor accepte
+`every_dt(0.02, clock=program.clock)`. Ce choix impose alors des points de temps
+externes exacts au controleur de pas.
+
 ## Sorties scientifiques periodiques
 
 [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie une sortie periodique au

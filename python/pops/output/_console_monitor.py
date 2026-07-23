@@ -169,6 +169,9 @@ class ConsolePresentation:
             "schema_version": 1,
             "provider_id": "pops.output.console-presentation.v1",
             "parallel_mode": "root",
+            # A serial run has one natural root. Native diagnostic reductions already
+            # support that singleton communicator, so no MPI context is required.
+            "supports_singleton_collective": True,
             "template": self.template,
             "handler": (
                 None if self._handler_data is None

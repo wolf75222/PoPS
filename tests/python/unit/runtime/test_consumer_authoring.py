@@ -128,6 +128,7 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
     assert type(monitor.failure_action) is SkipSampleReported
     assert monitor.operation_data["provider_id"] == "pops.output.console-presentation.v1"
     assert monitor.operation_data["parallel_mode"] == "root"
+    assert monitor.operation_data["supports_singleton_collective"] is True
     quantity, = monitor.diagnostic_quantities
     assert quantity.execution["operations"] == ({
         "name": "step_change_l2",

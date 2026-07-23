@@ -19,6 +19,7 @@ from pops.fields import (
 from pops.identity import make_identity
 from pops.model import Handle, OwnerPath
 from pops.output import HDF5, NPZ
+from pops.output._console_monitor import ConsolePresentation
 from pops.output._restart_provider import RestartV3
 from pops.output._consumer_contracts import (
     ConsumerCursorSet,
@@ -260,6 +261,27 @@ def test_singleton_collective_requires_an_explicit_provider_capability():
         output_format=None,
         parallel_mode=ParallelMode.COLLECTIVE,
         operation=RestartV3(bit_identical=True),
+    )
+
+    plan = plan_accepted_side_effects(
+        serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
+    assert len(plan.effects) == 1
+    assert manifest.operation_data["supports_singleton_collective"] is True
+
+
+def test_console_root_is_the_serial_process_for_a_singleton_run():
+    _, serial_runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("console-singleton"))
+    manifest = ConsumerManifest(
+        handle=Handle(
+            "console", kind="consumer", owner=OwnerPath.consumer("console-singleton")),
+        kind=ConsumerKind.DIAGNOSTIC,
+        quantities=(),
+        schedule=Schedule(Every(AcceptedStep(clock), 2)),
+        target_uri="console/diagnostics",
+        output_format=None,
+        parallel_mode=ParallelMode.ROOT,
+        operation=ConsolePresentation(template=None, handler=None),
     )
 
     plan = plan_accepted_side_effects(

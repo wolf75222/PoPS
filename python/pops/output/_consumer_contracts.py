@@ -141,10 +141,14 @@ def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     if type(first) is not dict or type(second) is not dict or first != second:
         raise TypeError("%s consumer_data() must return one deterministic dict" % where)
     expected = {
-        "schema_version", "provider_id", "parallel_mode", "template", "handler",
+        "schema_version", "provider_id", "parallel_mode",
+        "supports_singleton_collective", "template", "handler",
     }
     if set(first) != expected or first["schema_version"] != 1:
         raise ValueError("%s consumer_data has an unsupported console schema" % where)
+    if first["supports_singleton_collective"] is not True:
+        raise ValueError(
+            "%s console provider must support the serial singleton root" % where)
     if first["provider_id"] != "pops.output.console-presentation.v1":
         raise ValueError("%s has an unsupported console provider" % where)
     if first["parallel_mode"] != "root":

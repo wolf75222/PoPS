@@ -20,18 +20,21 @@ pops.set_threads(7)
 
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.time import SSPRK2
+from pops.linalg.norms import L2
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
+from pops.output import ConsoleMonitor, ConsumerGraph
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import AdaptiveCFL
+from pops.time import AdaptiveCFL, every
 
 
 # Les valeurs faciles a modifier sont regroupees ici, sans interface en ligne de commande.
@@ -46,6 +49,8 @@ GAUSSIAN_CENTER_X = 0.30
 GAUSSIAN_CENTER_Y = 0.35
 CFL = 0.45
 MAX_DT = 1.0e-2
+MONITOR_EVERY = 10
+ENABLE_MONITOR = True
 T_END = 0.20
 MAX_STEPS = 10_000
 
@@ -131,6 +136,24 @@ case.numerics(numerics, block=tracer)
 program = SSPRK2(tracer_U, rate=advection_rate)
 program.step_strategy(AdaptiveCFL(cfl=CFL, max_dt=MAX_DT))
 case.program(program)
+
+# Le diagnostic natif n'est calcule que tous les MONITOR_EVERY pas acceptes.
+# enabled=False retire entierement ce consumer avant la compilation.
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=tracer),
+            Integral(block=tracer),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={tracer.step_change_l2:.3e} "
+            "mass={tracer.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
 
 
 # 7. Condition initiale : une bosse gaussienne fournie une seule fois au bind.

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """HyQMOM15 constant periodique, HLL et Euler explicite."""
 
+# ruff: noqa: E402
+
 from pathlib import Path
 import time
 
@@ -9,15 +11,19 @@ import pops
 
 pops.set_threads(7)
 
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
+from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+from pops.moments import CartesianVelocityMoments, closure
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
-from pops.time import AdaptiveCFL
+from pops.output import ConsoleMonitor, ConsumerGraph
+from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
+from pops.time import AdaptiveCFL, every
 
 
 CELLS = 64
@@ -26,6 +32,8 @@ X_MAX = 0.5
 Y_MIN = -0.5
 Y_MAX = 0.5
 CFL = 0.5
+MONITOR_EVERY = 100
+ENABLE_MONITOR = True
 T_END = 1.0
 MAX_STEPS = 2_000_000
 
@@ -33,13 +41,53 @@ HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "02_openmp_constant_hll.npz"
 
 
+@closure(4)
+def user_hyqmom15_closure(S):  # noqa: N803
+    """Six moments standardises d'ordre cinq, ecrits par l'utilisateur."""
+    s03 = S["S03"]
+    s04 = S["S04"]
+    s11 = S["S11"]
+    s12 = S["S12"]
+    s13 = S["S13"]
+    s21 = S["S21"]
+    s22 = S["S22"]
+    s30 = S["S30"]
+    s31 = S["S31"]
+    s40 = S["S40"]
+
+    return {
+        "S50": 0.5 * s30 * (5.0 * s40 - 3.0 * s30 * s30 - 1.0),
+        "S41": (
+            -0.25 * s30 * (8.0 * s40 - 9.0 * s30 * s30 - 4.0) * s11
+            + 0.25 * (10.0 * s40 - 15.0 * s30 * s30 - 6.0) * s21
+            + 2.0 * s30 * s31
+        ),
+        "S32": (
+            0.5 * (2.0 * s40 - 3.0 * s30 * s30) * s12
+            + 0.5 * (3.0 * s22 - 1.0) * s30
+        ),
+        "S23": (
+            0.5 * (2.0 * s04 - 3.0 * s03 * s03) * s21
+            + 0.5 * (3.0 * s22 - 1.0) * s03
+        ),
+        "S14": (
+            -0.25 * s03 * (8.0 * s04 - 9.0 * s03 * s03 - 4.0) * s11
+            + 0.25 * (10.0 * s04 - 15.0 * s03 * s03 - 6.0) * s12
+            + 2.0 * s03 * s13
+        ),
+        "S05": 0.5 * s03 * (5.0 * s04 - 3.0 * s03 * s03 - 1.0),
+    }
+
+
 domain = Rectangle("hyqmom_constant_square", lower=(X_MIN, Y_MIN), upper=(X_MAX, Y_MAX))
 frame = domain.frame(Cartesian2D())
 grid = CartesianGrid(frame=frame, cells=(CELLS, CELLS), periodic=PeriodicAxes(frame.axes))
 
+# La facade construit en Python l'etat M00...M04, les transformations M -> C -> S,
+# les flux fermes et leurs Jacobiennes a partir de la fermeture utilisateur.
 hierarchy = CartesianVelocityMoments(
     4,
-    closure=HyQMOM15Closure(),
+    closure=user_hyqmom15_closure,
     robust=False,
     exact_speeds=True,
 )
@@ -70,6 +118,22 @@ candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=mo
 program.commit(moments.next, candidate)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 case.program(program)
+
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=plasma),
+            Integral(role=Density(), block=plasma),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={plasma.step_change_l2:.3e} "
+            "mass={plasma.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
 
 base = np.array(
     [1.0, 0.0, 1.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 3.0],

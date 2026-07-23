@@ -28,6 +28,7 @@ from pops.amr import (
 )
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
@@ -35,11 +36,13 @@ from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
 from pops.lib.initial import Gaussian
 from pops.lib.time import SSPRK2
+from pops.linalg.norms import L2
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
+from pops.output import ConsoleMonitor, ConsumerGraph
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
@@ -54,6 +57,8 @@ AY = 0.25
 FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
+MONITOR_EVERY = 10
+ENABLE_MONITOR = True
 T_END = 0.10
 MAX_STEPS = 10_000
 
@@ -134,6 +139,22 @@ case.numerics(numerics, block=tracer)
 program = SSPRK2(tracer_U, rate=advection_rate)
 program.step_strategy(AdaptiveCFL(cfl=CFL, max_dt=MAX_DT))
 case.program(program)
+
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=tracer),
+            Integral(block=tracer),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={tracer.step_change_l2:.3e} "
+            "mass={tracer.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
 
 
 # 6. Condition initiale analytique, projetee conservativement sur chaque niveau AMR.

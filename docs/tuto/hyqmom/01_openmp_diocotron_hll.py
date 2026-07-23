@@ -11,6 +11,7 @@ import pops
 
 pops.set_threads(7)
 
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.fields import (
     CellCenteredSecondOrder,
@@ -21,14 +22,17 @@ from pops.fields import (
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
+from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.output import ConsoleMonitor, ConsumerGraph
 from pops.params import RuntimeParam
+from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
 from pops.solvers.elliptic import FFT
-from pops.time import AdaptiveCFL, FailRun
+from pops.time import AdaptiveCFL, FailRun, every
 
 
 # Parametres du cas diocotron de l'archive MATLAB.
@@ -48,6 +52,8 @@ AZIMUTHAL_MODE = 4
 OMEGA_P = 20.0
 OMEGA_C = -20.0
 CFL = 0.5
+MONITOR_EVERY = 100
+ENABLE_MONITOR = True
 T_END = 1.0
 MAX_STEPS = 200_000_000
 
@@ -144,6 +150,23 @@ program.set_dt_bound(
 )
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 case.program(program)
+
+# Le cout des reductions natives n'est paye que tous les MONITOR_EVERY pas acceptes.
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=plasma),
+            Integral(role=Density(), block=plasma),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={plasma.step_change_l2:.3e} "
+            "mass={plasma.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
 
 
 # 6. Bootstrap initial du MATLAB : rho -> Poisson -> derive ExB -> gaussienne translatee.
