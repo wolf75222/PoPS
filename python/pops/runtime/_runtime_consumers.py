@@ -266,7 +266,6 @@ class _PreparedDiagnostic(PreparedPublication):
         self._published = False
         self._discarded = True
 
-
 class _PreparedLiveVisualization(PreparedPublication):
     """Compensatable intent whose irreversible frame is submitted only from ``finalize``."""
 
@@ -1849,6 +1848,29 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return None
         if submission is not None:
             submission.arm()
+        if manifest.parallel_mode is not ParallelMode.SERIAL:
+            # A Catalyst implementation may enter MPI from its worker thread even when PoPS gives
+            # it a duplicated communicator.  Do not let the next AMR/native step concurrently
+            # enter solver collectives on the main thread: MPICH and third-party VTK internals do
+            # not guarantee progress for that cross-library ordering.  Drain the accepted live
+            # frame locally, then prove every rank has left the worker lane before any rank returns
+            # to the solver.  Serial observers and asynchronous scientific writers remain async.
+            delivery_error = None
+            try:
+                self._observer_queue(manifest, run_identity).flush()
+            except BaseException as error:
+                delivery_error = _exception_text(error)
+            try:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=delivery_error,
+                    phase="collective live delivery",
+                )
+            except BaseException as error:
+                self._record_observer_failure(
+                    manifest.qualified_id, run_identity, error)
         return None
 
     def _drain_observer_manifest(
@@ -2174,7 +2196,20 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             for quantity in manifest.diagnostic_quantities:
                 block = _block_name(quantity.reference, component_names)
                 names, roles = _conservative_metadata(self._owner, block)
-                self._diagnostic_component(names, roles, quantity.execution["role"])
+                reductions = {
+                    operation["reduction"]
+                    for operation in quantity.execution["operations"]
+                }
+                if reductions == {"step_change_l2"}:
+                    if quantity.execution["role"] is not None:
+                        raise ValueError("step-change norm is a whole-state diagnostic")
+                    if not callable(getattr(
+                            self._owner._executor_for_block(block),
+                            "_step_change_l2", None)):
+                        raise NotImplementedError(
+                            "step-change norm requires native _step_change_l2()")
+                else:
+                    self._diagnostic_component(names, roles, quantity.execution["role"])
                 layout = layouts.get(quantity.layout_id)
                 if layout is None:
                     raise KeyError(
@@ -2238,6 +2273,17 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         full_state: bool,
         levels: tuple[int, ...],
     ) -> tuple[float, bool]:
+        if reduction == "step_change_l2":
+            if not full_state:
+                raise ValueError("step-change L2 must reduce the complete conservative state")
+            native = getattr(engine, "_step_change_l2", None)
+            if not callable(native):
+                raise RuntimeError("installed runtime has no native step-change L2 provider")
+            values = native()
+            if block not in values:
+                raise RuntimeError(
+                    "native step-change L2 provider omitted block %r" % block)
+            return float(values[block]), True
         composite = getattr(engine, "composite_reduce", None)
         if callable(composite):
             kind = reduction + ("_all" if full_state else "")
@@ -2259,7 +2305,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return float(cast(Any, native)(block, kind, component)), False
 
     def _diagnostic_values(
-        self, manifest: Any,
+        self,
+        manifest: Any,
+        *,
+        skip_reductions: frozenset[str] = frozenset(),
     ) -> tuple[tuple[DiagnosticPayload, ...], dict[str, float]]:
         names = tuple(self._owner._component_manifests)
         values = []
@@ -2269,9 +2318,17 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             engine = self._owner._executor_for_block(block)
             variables, roles = _conservative_metadata(self._owner, block)
             execution = quantity.execution
-            component, full_state = self._diagnostic_component(
-                variables, roles, execution["role"])
+            reductions = {
+                operation["reduction"] for operation in execution["operations"]
+            }
+            if reductions == {"step_change_l2"}:
+                component, full_state = 0, True
+            else:
+                component, full_state = self._diagnostic_component(
+                    variables, roles, execution["role"])
             for operation in execution["operations"]:
+                if operation["reduction"] in skip_reductions:
+                    continue
                 value, composite = self._native_diagnostic_reduction(
                     engine, block, operation["reduction"], component, full_state,
                     quantity.levels)
@@ -2342,12 +2399,79 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
+    def _render_console_diagnostics(
+        self,
+        _effect: AcceptedSideEffect,
+        manifest: Any,
+        values: tuple[DiagnosticPayload, ...],
+        *,
+        unavailable: str | None = None,
+    ) -> None:
+        if self._rank != 0:
+            return
+        from pops.output._console_monitor import ConsoleSample
+
+        temporal = getattr(self._owner._executor, "_temporal_restart_state", None)
+        last_dt = None if temporal is None else temporal.controller_state.get(
+            "last_accepted_dt")
+        dt = 0.0 if last_dt is None else float.fromhex(last_dt)
+        names = tuple(self._owner._component_manifests)
+        sample_values: dict[str, float | None] = {}
+        unavailable_values: dict[str, str] = {}
+        for value in values:
+            block = _block_name(value.key.reference, names)
+            qualified = "%s.%s" % (block, value.key.reduction)
+            sample_values[qualified] = value.value
+            if len(names) == 1:
+                sample_values[value.key.reduction] = value.value
+                if value.key.reduction == "step_change_l2":
+                    sample_values["dU_L2"] = value.value
+        if unavailable is not None:
+            for quantity in manifest.diagnostic_quantities:
+                reductions = {
+                    operation["reduction"]
+                    for operation in quantity.execution["operations"]
+                }
+                if "step_change_l2" not in reductions:
+                    continue
+                block = _block_name(quantity.reference, names)
+                qualified = "%s.step_change_l2" % block
+                sample_values[qualified] = None
+                unavailable_values[qualified] = unavailable
+                if len(names) == 1:
+                    sample_values["step_change_l2"] = None
+                    sample_values["dU_L2"] = None
+                    unavailable_values["step_change_l2"] = unavailable
+                    unavailable_values["dU_L2"] = unavailable
+        sample = ConsoleSample(
+            time=float(self._owner._executor.time()),
+            step=int(self._owner._executor.macro_step()),
+            dt=dt,
+            values=sample_values,
+            unavailable=unavailable_values,
+        )
+        manifest.operation.emit(sample)
+
     def _discard_diagnostics(self, effect: AcceptedSideEffect) -> None:
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
     def _prepare_diagnostic(self, effect: AcceptedSideEffect, manifest: Any) -> Any:
-        values, baseline_updates = self._diagnostic_values(manifest)
+        unavailable = None
+        try:
+            values, baseline_updates = self._diagnostic_values(manifest)
+        except RuntimeError as error:
+            message = str(error)
+            if manifest.kind is not ConsumerKind.DIAGNOSTIC:
+                raise
+            if "step-change L2 unavailable after an AMR topology change" in message:
+                unavailable = "AMR regrid"
+            elif "step_change_l2 requires an active external step transaction" in message:
+                unavailable = "initial state"
+            else:
+                raise
+            values, baseline_updates = self._diagnostic_values(
+                manifest, skip_reductions=frozenset({"step_change_l2"}))
         previous = {
             value.key.identity.token: self._diagnostics.get(value.key.identity.token)
             for value in values
@@ -2387,8 +2511,15 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
         self._pending[effect.identity.token] = values
         self._pending_baselines[effect.identity.token] = baseline_updates
+        publish = self._publish_diagnostics
+        if manifest.kind is ConsumerKind.DIAGNOSTIC:
+            def publish(accepted_effect: AcceptedSideEffect,
+                        accepted_values: tuple[DiagnosticPayload, ...]) -> None:
+                self._publish_diagnostics(accepted_effect, accepted_values)
+                self._render_console_diagnostics(
+                    accepted_effect, manifest, accepted_values, unavailable=unavailable)
         return _PreparedDiagnostic(
-            effect, values, self._publish_diagnostics, self._discard_diagnostics, rollback)
+            effect, values, publish, self._discard_diagnostics, rollback)
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)

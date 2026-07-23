@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""AMR OpenMP avec une sortie scientifique periodique.
+"""AMR MPI avec sorties PVD/PVTU periodiques et visualisation Catalyst collective.
 
 Le format et la cadence physique se choisissent avec deux constantes. Le ConsumerGraph publie les
-instants acceptes au fil du calcul; ParaView construit un PVD temporel standard et peut aussi
-alimenter une visualisation Catalyst strictement serie.
+instants acceptes au fil du calcul; ParaView construit un PVD temporel dont chaque instant est un
+PVTU distribue et peut aussi alimenter une visualisation Catalyst collective.
 """
 
 # ruff: noqa: E402
@@ -15,7 +15,7 @@ import shutil
 import pops
 import pops.output as output
 
-pops.set_threads(7)
+pops.set_threads(1)
 
 from pops.amr import (
     AMRClockRelation,
@@ -29,11 +29,11 @@ from pops.amr import (
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
+    PatchLayout,
     Tag,
 )
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
-from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
@@ -55,6 +55,7 @@ from pops.output import (
     ParallelMode,
     ScientificOutput,
 )
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
@@ -69,14 +70,12 @@ AY = 0.25
 FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
-MONITOR_EVERY = 10
-ENABLE_MONITOR = True
 T_END = 0.10
 MAX_STEPS = 10_000
 
-# Pour changer de format, remplacer seulement ParaView par HDF5 ou NPZ. Quand une installation
-# ParaView est annoncee, produire aussi un vrai PVSM deja configure; sinon la recette portable
-# .view.json/.view.py reste suffisante et ne rend pas ParaView obligatoire pour calculer.
+# Ce tutoriel prouve ParaView en mode MPI PER_RANK. Les formats alternatifs doivent choisir leur
+# propre mode MPI compatible. Quand une installation ParaView est annoncee, produire aussi un vrai
+# PVSM deja configure; sinon la recette portable .view.json/.view.py reste suffisante.
 PARAVIEW_ROOT = os.environ.get("POPS_PARAVIEW_ROOT")
 PARAVIEW_PRESET = output.ParaViewPreset(
     color_by="U",
@@ -96,18 +95,22 @@ if PARAVIEW_ROOT:
             % paraview_root
         )
     OUTPUT_FORMAT = output.ParaView(
+        mode=ParallelMode.PER_RANK,
         preset=PARAVIEW_PRESET,
         state=output.MaterializedPVSM(pvpython=str(pvpython)),
     )
 else:
-    OUTPUT_FORMAT = output.ParaView(preset=PARAVIEW_PRESET)
+    OUTPUT_FORMAT = output.ParaView(
+        mode=ParallelMode.PER_RANK,
+        preset=PARAVIEW_PRESET,
+    )
 OUTPUT_EVERY_DT = 0.02
+MONITOR_EVERY = 3
 
 HERE = Path(__file__).resolve().parent
-OUTPUT_ROOT = HERE / "results" / "12_openmp_amr_outputs"
+OUTPUT_ROOT = HERE / "results" / "14_mpi_amr_outputs"
 ENABLE_CATALYST = os.environ.get("POPS_CATALYST") == "1"
-
-shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
+ENABLE_PROGRESS = os.environ.get("POPS_PROGRESS", "1") != "0"
 
 
 # 1. Domaine, etat conservatif et flux physique.
@@ -120,7 +123,7 @@ frame = domain.frame(Cartesian2D())
 x_axis, y_axis = frame.axes
 grid = CartesianGrid(frame=frame, cells=(NX, NY))
 
-model = pops.Model("scalar_advection_amr_outputs", frame=frame)
+model = pops.Model("scalar_advection_amr_mpi_outputs", frame=frame)
 U = model.state(
     "U",
     components=("u",),
@@ -157,7 +160,7 @@ finite_volume = FiniteVolume(
 numerics = DiscretizationPlan()
 numerics.rates.add(advection_rate, finite_volume)
 
-case = pops.Case("tutorial_scalar_advection_amr_outputs")
+case = pops.Case("tutorial_scalar_advection_amr_mpi_outputs")
 tracer = case.block("tracer", model=model)
 tracer_U = tracer[U]
 
@@ -215,7 +218,7 @@ consumers = [
             "dU_L2={tracer.step_change_l2:.3e} "
             "mass={tracer.integral:.6e}"
         ),
-        enabled=ENABLE_MONITOR,
+        enabled=ENABLE_PROGRESS,
     ),
 ]
 if ENABLE_CATALYST:
@@ -224,8 +227,9 @@ if ENABLE_CATALYST:
             observer=Catalyst(pipeline=str(HERE / "catalyst_pipeline.py")),
             schedule=output_schedule,
             fields=(tracer_U,),
-            mode=ParallelMode.SERIAL,
+            mode=ParallelMode.COLLECTIVE,
             queue_capacity=2,
+            max_attempts=1,
         )
     )
 case.consumers(ConsumerGraph.from_consumers(tuple(consumers)))
@@ -253,44 +257,68 @@ layout = AMR(
     regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
     transfer=transfer,
     execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+    patch_layout=PatchLayout(
+        distribute_coarse=True,
+        coarse_max_grid=16,
+    ),
 )
 
 
-# 6. Cycle public final et publication periodique.
+# 6. Cycle public MPI final, nettoyage racine et publication periodique distribuee.
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-simulation = pops.bind(artifact)
+execution_context = pops.ExecutionContext.mpi_world(artifact)
+world = execution_context.communicator.handle
+rank = int(world.rank)
+if rank == 0:
+    shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
+world.barrier()
+simulation = pops.bind(
+    artifact,
+    resources={"execution_context": execution_context},
+)
 report = pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
     output_dir=OUTPUT_ROOT,
 )
+world.barrier()
 
 
-# 7. Le format choisi authentifie sa serie canonique et son dernier instantane.
-if isinstance(OUTPUT_FORMAT, output.ParaView):
-    pvd_paths = tuple(sorted(OUTPUT_ROOT.rglob("*.pvd")))
-    if not pvd_paths:
-        raise RuntimeError("ParaView temporal output did not publish a PVD collection")
-    series_path = pvd_paths[-1]
-    output_series = OUTPUT_FORMAT.reopen_series(series_path)
-    last_output = OUTPUT_FORMAT.reopen(output_series.paths[-1])
-    sample_count = len(output_series.paths)
-else:
-    output_series = OUTPUT_FORMAT.reopen_series(OUTPUT_ROOT / "solution" / "tracer")
-    last_output = output_series.latest
-    series_path = output_series.path
-    sample_count = len(output_series.samples)
+# 7. Le rang racine authentifie la serie canonique et son dernier instantane PVTU.
+if rank == 0:
+    if isinstance(OUTPUT_FORMAT, output.ParaView):
+        pvd_paths = tuple(sorted(OUTPUT_ROOT.rglob("*.pvd")))
+        if not pvd_paths:
+            raise RuntimeError("ParaView temporal output did not publish a PVD collection")
+        series_path = pvd_paths[-1]
+        output_series = OUTPUT_FORMAT.reopen_series(series_path)
+        last_output = OUTPUT_FORMAT.reopen(output_series.paths[-1])
+        if not isinstance(last_output, output.ReopenedParaViewIndex) \
+                or last_output.kind != "pvtu" or not last_output.paths:
+            raise RuntimeError("ParaView MPI output did not publish a populated PVTU index")
+        latest_leaf = OUTPUT_FORMAT.reopen(last_output.paths[0])
+        piece_count = len(last_output.paths)
+        sample_count = len(output_series.paths)
+    else:
+        output_series = OUTPUT_FORMAT.reopen_series(OUTPUT_ROOT / "solution" / "tracer")
+        last_output = output_series.latest
+        latest_leaf = last_output
+        piece_count = int(world.size)
+        series_path = output_series.path
+        sample_count = len(output_series.samples)
 
-print("PoPS AMR periodic-output tutorial finished")
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.6f" % simulation.time())
-print("  AMR levels       : %d" % simulation.n_levels())
-print("  snapshots        : %d" % sample_count)
-print("  arrays in latest : %d" % len(last_output.arrays))
-print("  latest identity  : %s" % last_output.output_identity.hexdigest[:12])
-print("  time series      : %s" % series_path)
-print("  Catalyst live    : %s" % ("serial" if ENABLE_CATALYST else "disabled"))
-print("  output root      : %s" % OUTPUT_ROOT)
+    print("PoPS MPI AMR periodic-output tutorial finished")
+    print("  MPI ranks        : %d" % int(world.size))
+    print("  accepted steps   : %d" % report.accepted_steps)
+    print("  final time       : %.6f" % simulation.time())
+    print("  AMR levels       : %d" % simulation.n_levels())
+    print("  snapshots        : %d" % sample_count)
+    print("  pieces in latest : %d" % piece_count)
+    print("  arrays per piece : %d" % len(latest_leaf.arrays))
+    print("  latest identity  : %s" % last_output.output_identity.hexdigest[:12])
+    print("  time series      : %s" % series_path)
+    print("  Catalyst live    : %s" % ("collective" if ENABLE_CATALYST else "disabled"))
+    print("  output root      : %s" % OUTPUT_ROOT)

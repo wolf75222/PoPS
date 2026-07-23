@@ -753,6 +753,7 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_commit_step_transaction", &System::commit_step_transaction)
+      .def("_step_change_l2", &System::step_change_l2)
       .def("_finalize_step_transaction", &System::finalize_step_transaction)
       .def("_rollback_step_transaction", &System::rollback_step_transaction)
       .def(

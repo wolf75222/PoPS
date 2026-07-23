@@ -130,6 +130,42 @@ def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
+    """Authenticate the Python-only renderer of a rank-zero diagnostic consumer."""
+    if getattr(value, "__pops_ir_immutable__", False) is not True:
+        raise TypeError("%s must declare immutable semantic state" % where)
+    consumer_data = getattr(value, "consumer_data", None)
+    if not callable(consumer_data) or not callable(getattr(value, "emit", None)):
+        raise TypeError("%s must implement consumer_data() and emit()" % where)
+    first, second = consumer_data(), consumer_data()
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("%s consumer_data() must return one deterministic dict" % where)
+    expected = {
+        "schema_version", "provider_id", "parallel_mode",
+        "supports_singleton_collective", "template", "handler",
+    }
+    if set(first) != expected or first["schema_version"] != 1:
+        raise ValueError("%s consumer_data has an unsupported console schema" % where)
+    if first["supports_singleton_collective"] is not True:
+        raise ValueError(
+            "%s console provider must support the serial singleton root" % where)
+    if first["provider_id"] != "pops.output.console-presentation.v1":
+        raise ValueError("%s has an unsupported console provider" % where)
+    if first["parallel_mode"] != "root":
+        raise ValueError("%s console parallel_mode must be root" % where)
+    template, handler = first["template"], first["handler"]
+    if (template is None) == (handler is None):
+        raise ValueError("%s must declare exactly one console presentation" % where)
+    if template is not None and (not isinstance(template, str) or not template):
+        raise TypeError("%s template must be non-empty text" % where)
+    if handler is not None and (
+            type(handler) is not dict
+            or set(handler) != {"module", "qualname"}
+            or any(not isinstance(item, str) or not item for item in handler.values())):
+        raise TypeError("%s handler must be a canonical function reference" % where)
+    return freeze_data(first, "%s.consumer_data" % where)
+
+
 def validate_checkpoint_snapshot(value: Any, *, where: str = "checkpoint snapshot") -> Any:
     """Require the compensating protocol used before and after checkpoint publication."""
     missing = tuple(
@@ -247,7 +283,9 @@ class ConsumerQuantity:
         return {**self._payload(), "identity": self.identity.to_data()}
 
 
-_DIAGNOSTIC_REDUCTIONS = frozenset({"sum", "abs_sum", "sum_sq", "min", "max", "abs_max"})
+_DIAGNOSTIC_REDUCTIONS = frozenset({
+    "sum", "abs_sum", "sum_sq", "min", "max", "abs_max", "step_change_l2",
+})
 _DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
 _DIAGNOSTIC_COLLECTIVES = {
     "sum": "global_sum",
@@ -256,6 +294,7 @@ _DIAGNOSTIC_COLLECTIVES = {
     "min": "global_min",
     "max": "global_max",
     "abs_max": "global_max",
+    "step_change_l2": "global_sum",
 }
 
 
@@ -440,10 +479,16 @@ class ConsumerManifest:
             if operation_data["parallel_mode"] != self.parallel_mode.value:
                 raise ValueError(
                     "ConsumerManifest parallel mode differs from its live observer provider")
+        elif self.kind is ConsumerKind.DIAGNOSTIC:
+            if self.output_format is not None:
+                raise ValueError("Diagnostic consumers have no scientific output_format")
+            format_data = None
+            operation_data = _console_provider_data(
+                self.operation, where="ConsumerManifest.operation")
+            if self.parallel_mode is not ParallelMode.ROOT:
+                raise ValueError("Console diagnostic consumers must use root parallel mode")
         else:
-            if self.output_format is not None or self.operation is not None:
-                raise ValueError("Diagnostic consumers carry no publication provider")
-            format_data = operation_data = None
+            raise ValueError("ConsumerManifest has an unsupported consumer kind")
         object.__setattr__(self, "output_format_data", format_data)
         object.__setattr__(self, "operation_data", operation_data)
         if not isinstance(self.diagnostics, tuple):
@@ -468,8 +513,10 @@ class ConsumerManifest:
                 "descriptor": first,
                 "references": [value.canonical_identity() for value in resolved_references],
             }, "%s.consumer_data" % where))
-        if diagnostic_rows and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
-            raise ValueError("only ScientificOutput can embed diagnostic providers")
+        if diagnostic_rows and self.kind not in {
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+            raise ValueError(
+                "only ConsoleMonitor or ScientificOutput can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.diagnostic_quantities, tuple) or any(
                 type(value) is not DiagnosticQuantity
@@ -485,9 +532,10 @@ class ConsumerManifest:
         if len(diagnostic_quantities) != len(self.diagnostics):
             raise ValueError(
                 "ConsumerManifest must lower every diagnostic descriptor exactly once")
-        if diagnostic_quantities and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
+        if diagnostic_quantities and self.kind not in {
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
             raise ValueError(
-                "only ScientificOutput can carry embedded diagnostic quantities")
+                "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
         object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")

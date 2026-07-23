@@ -66,6 +66,8 @@ Les autres scripts traitent chacun un point precis :
 | Deux binds, une seule compilation | [`11_openmp_runtime_parameters.py`](11_openmp_runtime_parameters.py) |
 | Sorties scientifiques periodiques | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
+| Sorties MPI PVD/PVTU et Catalyst collectif | [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py) |
+| Convergence vers la solution analytique | [`15_openmp_convergence.py`](15_openmp_convergence.py) |
 
 Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
 fixent un thread par rang, construisent
@@ -448,14 +450,55 @@ Les cles sont les handles owner-qualifies obtenus apres validation.
 python docs/tuto/scalar_advection/11_openmp_runtime_parameters.py
 ```
 
+## Suivre le calcul dans le terminal
+
+Les parcours de reference `01`, `03`, `05` et `07` utilisent un `ConsoleMonitor`.
+Le meme monitor est combine avec les sorties scientifiques dans `12` et `14` :
+
+```python
+ConsoleMonitor(
+    schedule=every(MONITOR_EVERY, clock=program.clock),
+    diagnostics=(
+        StepChangeNorm(L2(), block=tracer),
+        Integral(block=tracer),
+    ),
+    template=(
+        "step={step} t={time:.4e} dt={dt:.3e} "
+        "dU_L2={tracer.step_change_l2:.3e} "
+        "mass={tracer.integral:.6e}"
+    ),
+    enabled=ENABLE_MONITOR,
+)
+```
+
+`dU_L2` est la norme L2 de la difference entre les etats acceptes avant et
+apres le pas courant. Elle indique si la solution change encore sans copier le
+champ complet vers Python. `mass` est l'integrale conservative sur le domaine.
+
+La cadence `every(10, ...)` compte uniquement les pas macro acceptes. Les
+reductions sont executees par C++/Kokkos seulement lorsque le monitor arrive a
+echeance ;
+sous MPI elles sont collectives, puis le formatage Python et le `print()` ont
+lieu uniquement sur le rang zero. Mettre `ENABLE_MONITOR = False` retire le
+consumer avant la compilation : aucun test par cellule ni reduction n'est
+ajoute a la boucle de calcul.
+
+Pour une cadence en temps physique, le meme monitor accepte
+`every_dt(0.02, clock=program.clock)`. Ce choix impose alors des points de temps
+externes exacts au controleur de pas.
+
 ## Sorties scientifiques periodiques
 
 [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) confie une sortie periodique au
-`ConsumerGraph`. Deux constantes, placees en tete du fichier, suffisent pour choisir le format et
-la cadence physique :
+`ConsumerGraph`. La configuration placee en tete du fichier choisit la presentation ParaView et la
+cadence physique :
 
 ```python
-OUTPUT_FORMAT = output.ParaView()
+PARAVIEW_PRESET = output.ParaViewPreset(
+    color_by="U",
+    color_map="Viridis",
+    representation="Surface With Edges",
+)
 OUTPUT_EVERY_DT = 0.02
 ```
 
@@ -488,23 +531,38 @@ authentifie le PVD, reste relocatable avec son repertoire et applique la present
 script `.view.py` se lance avec le `pvpython` de la machine de visualisation. Ce n'est pas un faux
 `.pvsm` ecrit a la main.
 
-Pour demander en plus un vrai `.pvsm` (`U`, palette Viridis, surface avec aretes), remplacer
-seulement la configuration `OUTPUT_FORMAT` :
+Pour demander en plus un vrai `.pvsm` (`U`, palette Viridis, surface avec aretes), annoncer
+l'installation ParaView avant de lancer le tutoriel :
 
-```python
-OUTPUT_FORMAT = output.ParaView(
-    preset=output.ParaViewPreset(
-        color_by="U",
-        color_map="Viridis",
-        representation="Surface With Edges",
-    ),
-    state=output.MaterializedPVSM(pvpython="/opt/paraview/bin/pvpython"),
-)
+```bash
+export POPS_PARAVIEW_ROOT=/Applications/ParaView-6.1.1.app
+python docs/tuto/scalar_advection/12_openmp_amr_outputs.py
 ```
 
 PoPS verifie l'executable, lui demande d'ouvrir le PVD au dernier temps, d'appliquer la presentation,
-de sauvegarder l'etat puis de le recharger. Avec le simple `output.ParaView()` du tutoriel, VTU, PVD
-et recette portable sont quand meme produits; seul le PVSM n'est pas demande.
+de sauvegarder l'etat puis de le recharger. Sans `POPS_PARAVIEW_ROOT`, VTU, PVD et recette portable
+sont quand meme produits; seul le PVSM n'est pas demande.
+
+La variante MPI complete est [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py). Elle publie un PVTU
+par instant physique, une feuille VTU par rang et un PVD temporel cumulatif :
+
+```bash
+export POPS_PARAVIEW_ROOT=/Applications/ParaView-6.1.1.app
+mpiexec -n 2 python docs/tuto/scalar_advection/14_mpi_amr_outputs.py
+```
+
+Avec cinq instants et deux rangs, cette commande produit cinq PVD cumulatifs, cinq PVTU, dix VTU et
+cinq PVSM preconfigures. Le placement par defaut `MpiRelayToRoot()` ne demande pas de filesystem
+partage. `POPS_CATALYST=1` active en plus le consumer live collectif.
+
+Pour rouvrir directement la derniere vue MPI configuree, sans refaire `Apply`, `Color By` ni la
+representation :
+
+```bash
+OUTPUT_DIR="$PWD/docs/tuto/scalar_advection/results/14_mpi_amr_outputs/solution/tracer"
+PVSM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pvsm' | sort | tail -n 1)"
+"$POPS_PARAVIEW_ROOT/Contents/MacOS/paraview" --state "$PVSM"
+```
 
 Ce tutoriel et la capture native PoPS restent 2D et centres cellules. Le writer VTU sous-jacent sait
 aussi representer des snapshots cartesiens exacts 1D, 2D ou 3D. Il place les champs centres cellules
@@ -588,7 +646,10 @@ MPI, le provider integre accepte `ParallelMode.COLLECTIVE` : chaque rang fournit
 sur une lane dupliquee et PoPS transmet son handle Fortran par `catalyst/mpi_comm`. `ROOT` et
 `PER_RANK` restent refuses, et une tentative collective ne peut pas etre rejouee
 (`max_attempts=1`). Les sorties progressives PVTU ou HDF5 avec `AsyncScientificOutput` restent une
-voie independante du live.
+voie independante du live. Pour eviter qu'un collectif VTK du worker chevauche le collectif AMR
+suivant, PoPS draine chaque frame live MPI avant de rendre la main au solveur; le live MPI est donc
+synchronise aux instants publies. Le live serie et les sorties scientifiques asynchrones conservent
+leur recouvrement.
 
 Le bundle macOS de ParaView lie ses modules Catalyst a son Python prive. Il ne faut donc pas ajouter
 son dossier `Python` au Python Conda. Le lanceur neutre charge ce Python sans demarrer
@@ -618,9 +679,17 @@ La presentation reproductible `U`/Viridis/`Surface With Edges` reste celle de `P
 `.pvsm` materiel de la sortie fichier. Une pipeline Catalyst qui rend elle-meme des images depuis le
 worker exige une distribution ParaView munie d'un backend de rendu hors-ecran compatible threads.
 
-Le worker PoPS est l'unique couche asynchrone : l'async interne Catalyst est force a zero et un
+Dans le client graphique live, `catalyst: / mesh` est la source distante et
+`builtin: / Extract: mesh` est son extrait local affichable. Selectionner **Extract: mesh** (la ligne
+du haut), appuyer sur la barre d'espace pour activer l'oeil, puis **Reset Camera**. Choisir ensuite
+`Color By: U` et `Surface With Edges`. Le `.pvsm` automatise deja ces choix pour la relecture des
+sorties fichier; le protocole Catalyst Live de ParaView ne transfere pas cet etat de presentation
+client avec les donnees.
+
+Le worker PoPS est l'unique couche de livraison : l'async interne Catalyst est force a zero et un
 `CATALYST_ASYNC_ENABLED` actif est refuse, de sorte que le recu suit la fin de
-`catalyst.execute`. Le provider integre accepte un seul consumer/pipeline combine et un seul run par
+`catalyst.execute`. En MPI collectif, ce worker est draine a chaque frame avant le prochain pas
+solveur; en serie il reste asynchrone. Le provider integre accepte un seul consumer/pipeline combine et un seul run par
 `RuntimeInstance`. Sa reservation process-global n'est jamais relachee : lancer un nouveau
 processus pour un autre run Catalyst. Plusieurs `RuntimeInstance` concurrents dans le meme processus
 ne sont pas supportes avec Catalyst ou HDF5 asynchrone. Comme toute visualisation live, l'envoi est
@@ -639,7 +708,17 @@ python docs/tuto/scalar_advection/13_openmp_amr_restart.py
 Le checkpoint est ecrit sous
 `docs/tuto/scalar_advection/results/13_openmp_amr_restart/`.
 
-## Figures generees
+## Verification par la solution analytique
+
+Pour une vitesse constante, la solution se calcule exactement en remontant les caracteristiques :
+
+```math
+u(x,y,t)=u_0(x-a_x t,y-a_y t).
+```
+
+Quand le pied de la caracteristique sort du carre unite par une face entrante, la valeur exacte est
+le fond impose `FAR_FIELD`. Les scripts enregistrent les parametres de la gaussienne et le script de
+trace reconstruit cette solution analytique aux memes centres de cellules que la solution PoPS.
 
 Apres les deux simulations OpenMP :
 
@@ -647,8 +726,51 @@ Apres les deux simulations OpenMP :
 python docs/tuto/scalar_advection/plot_openmp_results.py
 ```
 
-La premiere figure compare les deux executions OpenMP : condition initiale, solution advectee et
-difference entre les deux ecritures de SSPRK2.
+Le script calcule les erreurs ponderees par l'aire des cellules :
+
+```math
+\|e\|_1=\sum_{ij}|e_{ij}|\,\Delta x\Delta y,\qquad
+\|e\|_2=\left(\sum_{ij}e_{ij}^2\,\Delta x\Delta y\right)^{1/2},\qquad
+\|e\|_\infty=\max_{ij}|e_{ij}|.
+```
+
+Il verifie aussi que l'erreur L2 relative a la perturbation gaussienne reste inferieure a `0.10`.
+La figure principale montre directement le champ PoPS, la solution analytique, l'erreur absolue et
+une coupe superposee :
+
+![PoPS compared with the analytic scalar-advection solution](figures/scalar_advection_analytic_verification.png)
+
+### Etude de convergence
+
+Le script suivant repete exactement le meme probleme sur des grilles de
+$32^2$, $64^2$, $128^2$ et $256^2$ cellules :
+
+```bash
+python docs/tuto/scalar_advection/15_openmp_convergence.py
+```
+
+Le nombre CFL reste constant. Le pas de temps diminue donc avec $\Delta x$ :
+l'etude mesure la convergence conjointe de la discretisation MUSCL et de SSPRK2.
+Entre deux resolutions successives, l'ordre observe est
+
+```math
+p=\frac{\log(E_N/E_{2N})}{\log(2)}.
+```
+
+Le script verifie que les erreurs $L^1$, $L^2$ et $L^\infty$ diminuent a chaque
+raffinement, sauvegarde les valeurs dans `results/15_openmp_convergence.npz` et
+produit la figure suivante :
+
+![Scalar-advection convergence study](figures/scalar_advection_convergence.png)
+
+La solution exacte est echantillonnee aux centres des cellules. Avec un
+limiteur non lineaire comme Van Leer, l'ordre peut etre reduit localement pres
+des extrema de la gaussienne ; la pente mesuree est donc plus informative
+qu'une pente d'ordre deux supposee a priori.
+
+Les deux figures historiques restent utiles pour verifier que les deux ecritures de SSPRK2 sont
+strictement equivalentes. La premiere compare condition initiale, solution advectee et difference
+entre les deux programmes temporels.
 
 ![Initial state, final state and SSPRK2 parity](figures/scalar_advection_fields.png)
 

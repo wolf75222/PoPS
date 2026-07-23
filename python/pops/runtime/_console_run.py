@@ -168,7 +168,11 @@ def _warning(phase: str, error: Exception) -> None:
         pass
 
 
-def begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRunSession:
+def begin_console_run(
+    instance: Any,
+    manifest: Any,
+    strategy: Any,
+) -> ConsoleRunSession:
     """Print the actual resolved/native configuration once on rank zero."""
     communicator, rank, ranks = _rank_size(instance)
     if rank != 0:
@@ -224,7 +228,11 @@ def begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRun
     return ConsoleRunSession(True, perf_counter())
 
 
-def safe_begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRunSession:
+def safe_begin_console_run(
+    instance: Any,
+    manifest: Any,
+    strategy: Any,
+) -> ConsoleRunSession:
     """Start presentation without letting a terminal failure alter numerical execution."""
 
     try:

@@ -159,6 +159,92 @@ class ScientificOutput(Descriptor):
         }
 
 
+class ConsoleMonitor(Descriptor):
+    """Print scheduled native diagnostics for accepted states on MPI rank zero."""
+
+    category = "console_monitor"
+
+    def __init__(
+        self,
+        *,
+        schedule: Any,
+        diagnostics: Any,
+        levels: Any = None,
+        enabled: Any = True,
+        template: str | None = None,
+        handler: Any = None,
+        failure_action: Any = None,
+    ) -> None:
+        if type(enabled) is not bool:
+            raise TypeError("ConsoleMonitor.enabled must be an exact bool")
+        rows = tuple(diagnostics)
+        if not rows:
+            raise ValueError("ConsoleMonitor requires at least one diagnostic")
+        for index, diagnostic in enumerate(rows):
+            _diagnostic(diagnostic, index=index)
+            cadence = getattr(diagnostic, "cadence", None)
+            if cadence is not None and cadence != schedule:
+                raise ValueError(
+                    "a diagnostic embedded in ConsoleMonitor must use the same schedule")
+        selected_levels = AllLevels() if levels is None else levels
+        if not isinstance(selected_levels, LevelSelection):
+            raise TypeError("ConsoleMonitor levels must be a typed LevelSelection")
+        self.schedule = _schedule(schedule, where="ConsoleMonitor.schedule")
+        self.diagnostics = rows
+        self.levels = selected_levels
+        self.enabled = enabled
+        from ._console_monitor import ConsolePresentation
+        self.presentation = ConsolePresentation(template=template, handler=handler)
+        from ._consumer_contracts import SkipSampleReported
+        self.failure_action = (
+            SkipSampleReported() if failure_action is None else _failure_action(failure_action)
+        )
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        result = []
+        for index, diagnostic in enumerate(self.diagnostics):
+            references = diagnostic.declaration_references()
+            if not isinstance(references, tuple) or any(
+                    not isinstance(reference, Handle) for reference in references):
+                raise TypeError(
+                    "ConsoleMonitor diagnostics[%d].declaration_references() must return "
+                    "a tuple of Handles" % index)
+            for reference in references:
+                if reference not in result:
+                    result.append(reference)
+        return tuple(result)
+
+    def consumer_authoring(self) -> tuple[Any, ...]:
+        if not self.enabled:
+            return ()
+        from ._consumer_authoring import ConsumerAuthoringNode
+        from ._consumer_contracts import ConsumerKind, ParallelMode
+
+        return (ConsumerAuthoringNode(
+            label="console-monitor",
+            kind=ConsumerKind.DIAGNOSTIC,
+            references=(),
+            schedule=self.schedule,
+            target_uri="console/diagnostics",
+            output_format=None,
+            parallel_mode=ParallelMode.ROOT,
+            levels=self.levels,
+            operation=self.presentation,
+            diagnostics=self.diagnostics,
+            failure_action=self.failure_action,
+        ),)
+
+    def options(self) -> dict[str, Any]:
+        return {
+            "schedule": self.schedule.to_data(),
+            "n_diagnostics": len(self.diagnostics),
+            "levels": self.levels.to_data(),
+            "enabled": self.enabled,
+            "presentation": self.presentation.consumer_data(),
+            "failure_action": self.failure_action.to_data(),
+        }
+
+
 class Checkpoint(Descriptor):
     """A restartable checkpoint consumer; bit identity is the only optional stronger guarantee."""
 
@@ -200,4 +286,4 @@ class Checkpoint(Descriptor):
         }
 
 
-__all__ = ["Checkpoint", "ScientificOutput"]
+__all__ = ["Checkpoint", "ConsoleMonitor", "ScientificOutput"]

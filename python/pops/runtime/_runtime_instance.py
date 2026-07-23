@@ -1142,6 +1142,10 @@ class RuntimeInstance:
              **controller_controls: Any) -> RunReport:
         if type(console) is not bool:
             raise TypeError("pops.run console= must be an exact bool")
+        if "progress" in controller_controls:
+            raise TypeError(
+                "pops.run progress= was removed; declare a scheduled "
+                "pops.output.ConsoleMonitor instead")
         if "strategy" in controller_controls or "cfl" in controller_controls:
             raise TypeError(
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "

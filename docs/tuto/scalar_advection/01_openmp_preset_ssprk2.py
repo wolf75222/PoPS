@@ -20,18 +20,21 @@ pops.set_threads(7)
 
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.time import SSPRK2
+from pops.linalg.norms import L2
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
+from pops.output import ConsoleMonitor, ConsumerGraph
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import AdaptiveCFL
+from pops.time import AdaptiveCFL, every
 
 
 # Les valeurs faciles a modifier sont regroupees ici, sans interface en ligne de commande.
@@ -40,8 +43,14 @@ NY = 64
 AX = 1.0
 AY = 0.25
 FAR_FIELD = 0.05
+GAUSSIAN_AMPLITUDE = 0.95
+GAUSSIAN_BETA = 120.0
+GAUSSIAN_CENTER_X = 0.30
+GAUSSIAN_CENTER_Y = 0.35
 CFL = 0.45
 MAX_DT = 1.0e-2
+MONITOR_EVERY = 10
+ENABLE_MONITOR = True
 T_END = 0.20
 MAX_STEPS = 10_000
 
@@ -128,14 +137,35 @@ program = SSPRK2(tracer_U, rate=advection_rate)
 program.step_strategy(AdaptiveCFL(cfl=CFL, max_dt=MAX_DT))
 case.program(program)
 
+# Le diagnostic natif n'est calcule que tous les MONITOR_EVERY pas acceptes.
+# enabled=False retire entierement ce consumer avant la compilation.
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=tracer),
+            Integral(block=tracer),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={tracer.step_change_l2:.3e} "
+            "mass={tracer.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
+
 
 # 7. Condition initiale : une bosse gaussienne fournie une seule fois au bind.
 x = (np.arange(NX, dtype=np.float64) + 0.5) / NX
 y = (np.arange(NY, dtype=np.float64) + 0.5) / NY
 xx, yy = np.meshgrid(x, y, indexing="xy")
 
-initial_u = FAR_FIELD + 0.95 * np.exp(
-    -120.0 * ((xx - 0.30) ** 2 + (yy - 0.35) ** 2)
+initial_u = FAR_FIELD + GAUSSIAN_AMPLITUDE * np.exp(
+    -GAUSSIAN_BETA * (
+        (xx - GAUSSIAN_CENTER_X) ** 2
+        + (yy - GAUSSIAN_CENTER_Y) ** 2
+    )
 )
 initial_state = np.ascontiguousarray(initial_u[np.newaxis, :, :], dtype=np.float64)
 
@@ -172,6 +202,11 @@ np.savez_compressed(
     ny=NY,
     ax=AX,
     ay=AY,
+    far_field=FAR_FIELD,
+    gaussian_amplitude=GAUSSIAN_AMPLITUDE,
+    gaussian_beta=GAUSSIAN_BETA,
+    gaussian_center_x=GAUSSIAN_CENTER_X,
+    gaussian_center_y=GAUSSIAN_CENTER_Y,
     cfl=CFL,
     t_end=T_END,
 )

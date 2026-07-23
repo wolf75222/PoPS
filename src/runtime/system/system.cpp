@@ -56,6 +56,32 @@ void System::commit_step_transaction() {
     throw std::runtime_error("System::commit_step_transaction: transaction already committed");
   p_->external_step_transaction_committed_ = true;
 }
+std::map<std::string, double> System::step_change_l2() const {
+  if (!p_->external_step_transaction_)
+    throw std::runtime_error(
+        "System::step_change_l2 requires an active external step transaction");
+  if (p_->polar_)
+    throw std::runtime_error(
+        "System::step_change_l2 does not yet define the polar cell measure");
+  const auto& previous = p_->external_step_transaction_->states;
+  if (previous.size() != p_->sp.size())
+    throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
+  RelativeCellMeasure measure;
+  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
+    measure.active_cells = &p_->domain_mask_;
+    if (p_->geometry_mode_ == GeometryMode::CutCell)
+      measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
+  }
+  const double cell_area =
+      static_cast<double>(p_->geom.dx()) * static_cast<double>(p_->geom.dy());
+  std::map<std::string, double> result;
+  for (std::size_t block = 0; block < p_->sp.size(); ++block) {
+    const double sum_sq = static_cast<double>(
+        pops::difference_sum_sq_all(p_->sp[block].U, previous[block], measure));
+    result.emplace(p_->sp[block].name, std::sqrt(cell_area * sum_sq));
+  }
+  return result;
+}
 void System::finalize_step_transaction() {
   if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
     throw std::runtime_error("System::finalize_step_transaction: no committed transaction");

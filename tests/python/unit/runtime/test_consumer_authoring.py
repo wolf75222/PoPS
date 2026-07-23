@@ -3,13 +3,14 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.diagnostics import Integral
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
 from pops.layouts import Uniform
 from pops.output import (
     Checkpoint,
+    ConsoleMonitor,
     ConsumerGraph,
     FailRun as OutputFailRun,
     HDF5,
@@ -18,6 +19,7 @@ from pops.output import (
     ScientificOutput,
     SkipSampleReported,
 )
+from pops.linalg.norms import L2
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.representations import Conservative
 from pops.spaces import CellState
@@ -96,6 +98,98 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v3"
     assert checkpoint.operation_data["bit_identical"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
+
+
+def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
+    case, block, _state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(7, clock=clock)
+    graph = ConsumerGraph.from_consumers((ConsoleMonitor(
+        schedule=schedule,
+        diagnostics=(StepChangeNorm(L2(), block=block),),
+    ),))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    monitor, = resolved.nodes
+    assert monitor.kind is ConsumerKind.DIAGNOSTIC
+    assert monitor.parallel_mode is ParallelMode.ROOT
+    assert monitor.schedule == schedule
+    assert type(monitor.failure_action) is SkipSampleReported
+    assert monitor.operation_data["provider_id"] == "pops.output.console-presentation.v1"
+    assert monitor.operation_data["parallel_mode"] == "root"
+    assert monitor.operation_data["supports_singleton_collective"] is True
+    quantity, = monitor.diagnostic_quantities
+    assert quantity.execution["operations"] == ({
+        "name": "step_change_l2",
+        "reduction": "step_change_l2",
+        "transform": "identity",
+        "metric_weighted": False,
+    },)
+
+
+def test_console_monitor_can_be_removed_at_authoring_time():
+    case, block, _state = _case()
+    monitor = ConsoleMonitor(
+        schedule=every(1, clock=Clock("macro", owner=case.owner_path)),
+        diagnostics=(StepChangeNorm(L2(), block=block),),
+        enabled=False,
+    )
+    assert monitor.consumer_authoring() == ()
+
+
+def _collect_console_sample(sample):
+    _collect_console_sample.last = sample
+
+
+def test_console_monitor_presentation_is_typed_and_identity_bearing():
+    case, block, _state = _case()
+    schedule = every(1, clock=Clock("macro", owner=case.owner_path))
+    diagnostic = StepChangeNorm(L2(), block=block)
+    templated = ConsoleMonitor(
+        schedule=schedule,
+        diagnostics=(diagnostic,),
+        template="step={step} dU={tracer.step_change_l2:.3e}",
+    )
+    handled = ConsoleMonitor(
+        schedule=schedule,
+        diagnostics=(diagnostic,),
+        handler=_collect_console_sample,
+    )
+
+    assert templated.options()["presentation"]["template"].startswith("step=")
+    assert handled.options()["presentation"]["handler"] == {
+        "module": __name__,
+        "qualname": "_collect_console_sample",
+    }
+    assert (
+        templated.consumer_authoring()[0].canonical_data(case.resolve)["operation"]
+        != handled.consumer_authoring()[0].canonical_data(case.resolve)["operation"]
+    )
+
+    with pytest.raises(ValueError, match="either template=.*handler"):
+        ConsoleMonitor(
+            schedule=schedule,
+            diagnostics=(diagnostic,),
+            template="step={step}",
+            handler=_collect_console_sample,
+        )
+    with pytest.raises(TypeError, match="named Python function"):
+        ConsoleMonitor(
+            schedule=schedule,
+            diagnostics=(diagnostic,),
+            handler=lambda _sample: None,
+        )
 
 
 def test_consumer_protocol_is_required_and_schedule_authority_is_unique():

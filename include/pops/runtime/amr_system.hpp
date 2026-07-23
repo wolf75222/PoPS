@@ -866,6 +866,9 @@ class AmrSystem {
   /// snapshot; a direct C++ Program context remains autonomous.
   POPS_EXPORT bool has_active_step_transaction() const noexcept;
   POPS_EXPORT void restore_active_step_transaction_for_program();
+  /// Volume-weighted L2 norm of each block's accepted AMR macro-step change. Collective and valid
+  /// while the retained outer transaction snapshot still owns U^n.
+  POPS_EXPORT std::map<std::string, double> step_change_l2() const;
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);

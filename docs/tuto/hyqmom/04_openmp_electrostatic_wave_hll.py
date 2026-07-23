@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """HyQMOM15 electrostatic wave periodique, Poisson, HLL et Euler explicite."""
 
+# ruff: noqa: E402
+
 from pathlib import Path
 import time
 
@@ -9,18 +11,22 @@ import pops
 
 pops.set_threads(7)
 
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.fields import CellCenteredSecondOrder, ConstantNullspace, FieldDiscretization, MeanValueGauge
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
+from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
-from pops.solvers.elliptic import FFT
-from pops.time import AdaptiveCFL, FailRun
+from pops.output import ConsoleMonitor, ConsumerGraph
+from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
+from pops.solvers.elliptic import FFT
+from pops.time import AdaptiveCFL, FailRun, every
 
 
 CELLS = 128
@@ -35,6 +41,8 @@ KY = 4.0 * np.pi / (Y_MAX - Y_MIN)
 OMEGA_P = 30.0
 DEBYE_LENGTH = 1.0 / OMEGA_P
 CFL = 0.5
+MONITOR_EVERY = 100
+ENABLE_MONITOR = True
 T_END = 1.0
 MAX_STEPS = 200_000_000
 
@@ -98,6 +106,22 @@ program.set_dt_bound(
 )
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 case.program(program)
+
+case.consumers(ConsumerGraph.from_consumers((
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(
+            StepChangeNorm(L2(), block=plasma),
+            Integral(role=Density(), block=plasma),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={plasma.step_change_l2:.3e} "
+            "mass={plasma.integral:.6e}"
+        ),
+        enabled=ENABLE_MONITOR,
+    ),
+)))
 
 base = np.array(
     [1.0, 0.0, 1.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 3.0],

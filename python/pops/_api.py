@@ -82,7 +82,9 @@ def run(instance: Any, **controls: Any) -> RunReport:
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
     are recorded by the runtime's run identity. Success returns an immutable :class:`RunReport`;
     terminal failures raise and never manufacture a success report. ``console=False`` disables
-    only the rank-zero presentation banner and never enters the numerical run identity.
+    only the rank-zero launch and completion presentation. Scheduled progress and scalar
+    diagnostics are declared explicitly with :class:`pops.output.ConsoleMonitor`; their cadence
+    belongs to the ConsumerGraph and native reductions run only when that consumer is due.
     """
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(

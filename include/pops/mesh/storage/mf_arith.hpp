@@ -119,6 +119,15 @@ struct DotKernel {
   POPS_HD void operator()(int i, int j, Real& acc) const { acc += x(i, j, comp) * y(i, j, comp); }
 };
 
+struct DifferenceSqKernel {
+  ConstArray4 current, previous;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    const Real difference = current(i, j, comp) - previous(i, j, comp);
+    acc += difference * difference;
+  }
+};
+
 // Reducer f(i,j,comp) -> sum / signed max / signed min over one component. Same device-clean named
 // functor recipe as DotKernel / NormInfKernel (the compiled time Program reductions are first
 // instantiated from a generated problem.so, an external TU). MaxKernel/MinKernel are SIGNED (no fabs,
@@ -198,6 +207,21 @@ struct RelativeCellDotKernel {
     acc += has_inverse_volume_fraction
                ? product / inverse_volume_fraction(i, j, 0)
                : product;
+  }
+};
+
+struct RelativeCellDifferenceSqKernel {
+  ConstArray4 current, previous, active_cells, inverse_volume_fraction;
+  int comp;
+  bool has_inverse_volume_fraction;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (active_cells(i, j, 0) < Real(0.5))
+      return;
+    const Real difference = current(i, j, comp) - previous(i, j, comp);
+    const Real square = difference * difference;
+    acc += has_inverse_volume_fraction
+               ? square / inverse_volume_fraction(i, j, 0)
+               : square;
   }
 };
 
@@ -416,6 +440,27 @@ inline Real dot_all(const MultiFab& x, const MultiFab& y) {
   return static_cast<Real>(all_reduce_sum(static_cast<double>(dot_all_local(x, y))));
 }
 
+/// Sum of squared component-wise changes over every valid cell.  The subtraction happens before
+/// squaring, avoiding the cancellation in ||current||² + ||previous||² - 2 current.previous.
+/// COLLECTIVE under MPI; no field leaves native Kokkos storage.
+inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previous) {
+  if (current.ncomp() != previous.ncomp() ||
+      current.box_array().boxes() != previous.box_array().boxes() ||
+      current.dmap().ranks() != previous.dmap().ranks() ||
+      current.local_size() != previous.local_size())
+    throw std::invalid_argument(
+        "difference_sum_sq_all: fields must have the same component layout");
+  Real local = 0;
+  for (int li = 0; li < current.local_size(); ++li) {
+    const ConstArray4 now = current.fab(li).const_array();
+    const ConstArray4 before = previous.fab(li).const_array();
+    for (int comp = 0; comp < current.ncomp(); ++comp)
+      local += reduce_sum_cell(
+          current.box(li), detail::DifferenceSqKernel{now, before, comp});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
 /// Sum Sum_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_sum) -- the
 /// compiled-Program P.sum / P.sum_component reduction. COLLECTIVE, MANDATORY UNDER MPI: called on every
 /// rank (an empty rank contributes 0), like dot. Same per-tile Kokkos::Sum FP guarantees as dot.
@@ -551,6 +596,34 @@ inline Real dot_all(const MultiFab& left, const MultiFab& right,
           detail::RelativeCellDotKernel{left.fab(li).const_array(), right.fab(li).const_array(),
                                         measure.active_cells->fab(li).const_array(), inverse, comp,
                                         measure.inverse_volume_fraction != nullptr});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+}
+
+inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previous,
+                                  const RelativeCellMeasure& measure) {
+  detail::validate_relative_cell_measure(
+      current, measure, "difference_sum_sq_all(measure)");
+  if (current.ncomp() != previous.ncomp() ||
+      current.box_array().boxes() != previous.box_array().boxes() ||
+      current.dmap().ranks() != previous.dmap().ranks() ||
+      current.local_size() != previous.local_size())
+    throw std::invalid_argument(
+        "difference_sum_sq_all(measure): fields must have the same component layout");
+  if (measure.active_cells == nullptr)
+    return difference_sum_sq_all(current, previous);
+  Real local = 0;
+  for (int li = 0; li < current.local_size(); ++li) {
+    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
+                                    ? ConstArray4{}
+                                    : measure.inverse_volume_fraction->fab(li).const_array();
+    for (int comp = 0; comp < current.ncomp(); ++comp)
+      local += reduce_sum_cell(
+          current.box(li),
+          detail::RelativeCellDifferenceSqKernel{
+              current.fab(li).const_array(), previous.fab(li).const_array(),
+              measure.active_cells->fab(li).const_array(), inverse, comp,
+              measure.inverse_volume_fraction != nullptr});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
 }

@@ -267,7 +267,10 @@ The declaration remains authoritative over the loader. PoPS rejects any non-empt
 `SERIAL` and `COLLECTIVE`; `ROOT` and `PER_RANK` are rejected during authoring. The collective route
 requires `max_attempts=1`, authenticates a duplicated worker communicator, and passes its
 `MPI_Comm_c2f` value through `catalyst/mpi_comm`. Local Blueprint construction and backend errors
-are agreed on that lane so a rank cannot enter the next collective alone. Progressive
+are agreed on that lane so a rank cannot enter the next collective alone. After arming a collective
+live frame, every rank drains its worker then performs a root consensus before returning to the
+native solver. This deliberately prevents VTK collectives from overlapping the following AMR/solver
+collective; only serial live delivery remains asynchronous. Progressive
 `AsyncScientificOutput` PVTU/HDF5 artifacts remain available without Catalyst.
 
 PoPS owns the only asynchronous layer: it forces `catalyst/async/enabled=0` and refuses an active

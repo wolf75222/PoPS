@@ -1209,6 +1209,36 @@ présentation : cette valeur ne rejoint ni le manifeste ni l'identité numériqu
 terminal est signalée sur `stderr`, mais ne peut ni masquer une exception numérique, ni empêcher un
 rollback, ni convertir un run réussi en échec.
 
+Le suivi pendant la boucle n'est pas une option implicite de `pops.run`. Il est un consumer typé du
+`ConsumerGraph`, avec la même autorité de cadence que les sorties scientifiques :
+
+```python
+ConsoleMonitor(
+    schedule=every(10, clock=program.clock),
+    diagnostics=(
+        StepChangeNorm(L2(), block=tracer),
+        Integral(block=tracer),
+    ),
+    template=(
+        "step={step} t={time:.4e} dt={dt:.3e} "
+        "dU_L2={tracer.step_change_l2:.3e} mass={tracer.integral:.6e}"
+    ),
+)
+```
+
+`every(10)` compte les pas macro acceptés et `every_dt(0.1)` impose une grille de temps physique.
+Les réductions sont calculées nativement, sur Kokkos puis MPI, uniquement quand le consumer est dû ;
+seuls quelques scalaires immuables atteignent Python et seul le rang zéro effectue le formatage. Le
+consumer est absent lorsque `enabled=False` : aucun test, calcul, formatage ou I/O n'est alors ajouté
+à la boucle d'exécution. `StepChangeNorm(L2())` réutilise l'image transactionnelle `U^n` sans recopier
+le champ. Une étape qui change la topologie AMR rend cette seule valeur indisponible et le template
+affiche `n/a (AMR regrid)` ; les autres diagnostics dus, comme l'intégrale, restent calculés.
+
+Pour une présentation avancée, `handler=display` remplace `template=`. Le handler est une fonction
+Python nommée, sans closure, appelée sur le rang zéro avec un `ConsoleSample` immuable contenant
+`time`, `step`, `dt` et les scalaires réduits accessibles par nom (`sample["dU_L2"]` ou
+`sample["tracer.step_change_l2"]`). Il ne reçoit ni tableau natif, ni communicateur MPI.
+
 Les seules options de compilation sont celles acceptées par `pops.resolve(..., compile_options=...)` :
 `so_path`, `force`, `cxx`, `include`, `std` et `debug`. Le backend est une autorité séparée. Il n'existe
 pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldManifest`.

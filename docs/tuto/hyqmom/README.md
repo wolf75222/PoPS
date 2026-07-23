@@ -8,7 +8,7 @@ et les donnees initiales dans l'ordre ou ils sont utilises.
 | Fichier | Cas |
 |---|---|
 | `01_openmp_diocotron_hll.py` | diocotron periodique avec Poisson FFT et source cyclotron |
-| `02_openmp_constant_hll.py` | etat Maxwellien constant |
+| `02_openmp_constant_hll.py` | etat Maxwellien constant et fermeture HyQMOM ecrite en Python |
 | `03_openmp_fluid_wave_hll.py` | onde fluide lineaire avec flux HLL |
 | `04_openmp_electrostatic_wave_hll.py` | onde electrostatique avec Poisson FFT |
 | `05_openmp_magnetic_wave_hll.py` | onde magnetique avec Poisson FFT et source cyclotron |
@@ -68,6 +68,66 @@ S_{32}=\frac{1}{2}\left(2S_{40}-3S_{30}^2\right)S_{12}
 
 Cette fermeture est appliquee aux expressions symboliques lors de la construction du modele. Les
 flux obtenus sont ensuite compiles ; aucune fermeture Python n'est appelee dans les cellules.
+
+### Fermeture utilisateur complete
+
+Le script [`02_openmp_constant_hll.py`](02_openmp_constant_hll.py) n'appelle
+pas `HyQMOM15Closure()`. Il ecrit explicitement les six relations du PDF dans
+une fermeture utilisateur :
+
+```python
+@closure(4)
+def user_hyqmom15_closure(S):
+    s30 = S["S30"]
+    s40 = S["S40"]
+    # ... S41, S32, S23 et S14 sont egalement definis dans le script.
+    return {
+        "S50": 0.5 * s30 * (5.0 * s40 - 3.0 * s30 * s30 - 1.0),
+        "S41": ...,
+        "S32": ...,
+        "S23": ...,
+        "S14": ...,
+        "S05": ...,
+    }
+```
+
+`CartesianVelocityMoments(4, closure=user_hyqmom15_closure)` construit ensuite
+en Python les quinze inconnues, les transformations des moments bruts vers les
+moments centres puis standardises, les flux fermes et leurs Jacobiennes. La
+fonction utilisateur est evaluee une seule fois sur les expressions symboliques
+pendant la construction. Son arithmetique est incorporee dans l'AST compile :
+il n'existe aucun callback Python dans les cellules ou les pas de temps.
+
+L'exemple conserve `HyQMOM15Closure()` dans les autres cas afin de montrer la
+version concise de la meme physique. Les deux chemins utilisent le meme
+protocole generique de fermeture locale.
+
+## Suivre les simulations
+
+Les cinq premiers cas possedent un `ConsoleMonitor` configurable :
+
+```python
+ConsoleMonitor(
+    schedule=every(MONITOR_EVERY, clock=program.clock),
+    diagnostics=(
+        StepChangeNorm(L2(), block=plasma),
+        Integral(role=Density(), block=plasma),
+    ),
+    template=(
+        "step={step} t={time:.4e} dt={dt:.3e} "
+        "dU_L2={plasma.step_change_l2:.3e} "
+        "mass={plasma.integral:.6e}"
+    ),
+    enabled=ENABLE_MONITOR,
+)
+```
+
+Le residu `dU_L2` porte sur les quinze moments. `mass` selectionne uniquement
+la composante ayant le role `Density`, donc $M_{00}$. La cadence par defaut est
+de 100 pas acceptes, car le diagnostic global d'un etat a quinze composantes
+est plus couteux que celui de l'advection scalaire. Les reductions restent
+natives et OpenMP ; seul l'affichage des scalaires a lieu en Python.
+`ENABLE_MONITOR = False` retire completement le monitor avant compilation.
 
 ## Initialisations
 

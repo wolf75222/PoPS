@@ -395,8 +395,10 @@ class _CatalystPythonSession:
         root: Any,
         frame: ObserverFrame,
         geometry: LevelGeometry,
+        layout_ordinal: int,
         box_index: int,
         partition_index: int,
+        domain_name: str,
         display_names: Mapping[str, str],
     ) -> None:
         import numpy as np
@@ -404,8 +406,7 @@ class _CatalystPythonSession:
         if len(geometry.cell_shape) != 2:
             raise NotImplementedError("Catalyst Python provider currently proves rank-2 meshes")
         jlo, ilo, jhi, ihi = geometry.boxes[box_index]
-        block_name = _block_name(geometry)
-        base = "catalyst/channels/%s/data/%s" % (self._channel, block_name)
+        base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % partition_index
         topology = "mesh_%06d" % partition_index
         if geometry.coordinate_system == CARTESIAN_2D_COORDINATES:
@@ -478,6 +479,14 @@ class _CatalystPythonSession:
             return internal_name
 
         coverage = geometry.coverage[jlo:jhi, ilo:ihi].astype(np.uint8, copy=False)
+        cell_field(
+            "pops_layout",
+            np.full(coverage.shape, layout_ordinal, dtype=np.int32),
+        )
+        cell_field(
+            "pops_level",
+            np.full(coverage.shape, geometry.level, dtype=np.int32),
+        )
         cell_field("pops_coverage", coverage)
         # VTK_REFINED_CELL=8; this hides covered coarse cells in ParaView without deleting their
         # scientific values from the live Blueprint domain.
@@ -504,6 +513,80 @@ class _CatalystPythonSession:
                 cell_field(field_name, piece.values[0])
             else:
                 cell_field(field_name, piece.values)
+
+    def _add_empty_domain(
+        self,
+        root: Any,
+        frame: ObserverFrame,
+        geometry: LevelGeometry,
+        box_index: int,
+        domain_name: str,
+        display_names: Mapping[str, str],
+    ) -> None:
+        """Publish one schema-complete zero-cell block for a box owned by another MPI rank."""
+        import numpy as np
+
+        if len(geometry.cell_shape) != 2:
+            raise NotImplementedError("Catalyst Python provider currently proves rank-2 meshes")
+        if geometry.coordinate_system != CARTESIAN_2D_COORDINATES:
+            raise NotImplementedError(
+                "collective Catalyst zero-cell peers currently prove Cartesian 2D only")
+        base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
+        coordset = "coords_%06d" % box_index
+        topology = "mesh_%06d" % box_index
+        root[base + "/coordsets/%s/type" % coordset] = "uniform"
+        root[base + "/coordsets/%s/dims/i" % coordset] = 0
+        root[base + "/coordsets/%s/dims/j" % coordset] = 1
+        root[base + "/topologies/%s/type" % topology] = "uniform"
+        root[base + "/topologies/%s/coordset" % topology] = coordset
+        root[base + "/state/level"] = geometry.level
+        root[base + "/state/cycle"] = frame.macro_step
+        root[base + "/state/time"] = frame.physical_time
+
+        field_slot = 0
+
+        def empty_cell_field(
+            field_name: str,
+            dtype: Any,
+            component_names: tuple[str, ...] = (),
+        ) -> str:
+            nonlocal field_slot
+            internal_name = "array_%06d_partition_%06d" % (field_slot, box_index)
+            field_slot += 1
+            prefix = base + "/fields/" + internal_name
+            root[prefix + "/association"] = "element"
+            root[prefix + "/topology"] = topology
+            root[prefix + "/display_name"] = field_name
+            if len(component_names) > 1:
+                for component in component_names:
+                    root[prefix + "/values/" + component] = np.empty(0, dtype=dtype)
+            else:
+                root[prefix + "/values"] = np.empty(0, dtype=dtype)
+            return internal_name
+
+        empty_cell_field("pops_layout", np.int32)
+        empty_cell_field("pops_level", np.int32)
+        empty_cell_field("pops_coverage", np.uint8)
+        ghost_field = empty_cell_field("vtkGhostType", np.uint8)
+        root[
+            base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field
+        ] = "Ghosts"
+        empty_cell_field("pops_cell_volume", np.float64)
+
+        names: set[str] = set()
+        for field in self._geometry_fields(frame, geometry):
+            family = _field_family_identity(field.key).token
+            field_name = display_names.get(family)
+            if field_name is None:
+                raise RuntimeError("Catalyst field family has no shared ParaView display name")
+            if field_name in names:
+                raise ValueError("Catalyst field name collision: %s" % field_name)
+            names.add(field_name)
+            empty_cell_field(
+                field_name,
+                np.dtype(field.dtype),
+                field.component_names,
+            )
 
     def _prepare_execute_node(self, frame: ObserverFrame) -> Any:
         if not self._initialized or self._finalized:
@@ -552,13 +635,8 @@ class _CatalystPythonSession:
         if not geometries:
             raise ValueError("Catalyst frame has no selected geometry")
         populated_blocks = []
-        for geometry in geometries:
+        for layout_ordinal, geometry in enumerate(geometries):
             block_name = _block_name(geometry)
-            if callable(fetch):
-                # ``multimesh`` block names become PDC metadata and must be identical on every
-                # rank.  Each child is itself a Blueprint multi-domain mesh containing the boxes
-                # local to this rank; an empty child is valid when a rank owns no box at a level.
-                fetch("catalyst/channels/%s/data/%s" % (self._channel, block_name))
             fields = self._geometry_fields(frame, geometry)
             local_boxes = {
                 piece.global_box_index for field in fields for piece in field.pieces
@@ -568,16 +646,23 @@ class _CatalystPythonSession:
                     for field in fields):
                 raise ValueError(
                     "Catalyst fields disagree on the local geometry-box ownership set")
-            ordered_boxes = sorted(local_boxes)
-            if ordered_boxes:
-                populated_blocks.append(block_name)
-            for partition_index, box_index in enumerate(ordered_boxes):
-                if box_index < 0 or box_index >= len(geometry.boxes):
-                    raise ValueError("Catalyst field references an unknown global geometry box")
-                self._add_domain(
-                    node, frame, geometry, box_index,
-                    partition_index,
-                    display_names)
+            for box_index in range(len(geometry.boxes)):
+                # ParaView's multimesh protocol defines every data child as one Blueprint mesh.
+                # A global AMR box is that indivisible block; its qualified name stays unique and
+                # stable across ranks; non-owning ranks publish its schema-complete zero-cell peer.
+                domain_name = "%s_box_%06d" % (block_name, box_index)
+                populated_blocks.append(domain_name)
+                if box_index in local_boxes:
+                    self._add_domain(
+                        node, frame, geometry, layout_ordinal, box_index,
+                        box_index,
+                        domain_name,
+                        display_names)
+                else:
+                    self._add_empty_domain(
+                        node, frame, geometry, box_index,
+                        domain_name,
+                        display_names)
 
         blueprint = getattr(self._conduit, "blueprint", None)
         mesh = getattr(blueprint, "mesh", None)

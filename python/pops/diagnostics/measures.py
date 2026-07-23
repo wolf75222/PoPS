@@ -221,6 +221,44 @@ class Norm(_Measure):
         }
 
 
+class StepChangeNorm(_Measure):
+    """Norm of the accepted macro-step change ``U[n+1] - U[n]``.
+
+    The previous state is the runtime transaction snapshot, so the reduction is evaluated
+    natively on the execution backend and collectively under MPI.  It is intentionally a
+    whole-state diagnostic: selecting one component would no longer describe the solution
+    change reported by the time integrator.
+    """
+
+    category = "diagnostic_step_change_norm"
+    scheme = "step_change_norm"
+    reduction = "step_change_norm"
+
+    def __init__(self, norm: Any, block: Any = None, cadence: Any = None) -> None:
+        if not isinstance(norm, _Norm):
+            raise TypeError(
+                "StepChangeNorm(norm=...) takes a typed pops.linalg.norms object")
+        if norm.kind != "l2":
+            raise ValueError("StepChangeNorm currently supports exactly pops.linalg.norms.L2()")
+        super().__init__(block=block, role=None, cadence=cadence)
+        self.norm = norm
+
+    def options(self) -> dict:
+        opts = super().options()
+        opts["norm"] = self.norm.kind
+        return opts
+
+    def diagnostic_execution(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "role": None,
+            "operations": [
+                _operation("step_change_l2", "step_change_l2"),
+            ],
+            "conservation": None,
+        }
+
+
 class Integral(_Measure):
     """A typed domain-integral reduction over a block: ``Integral(role=Density())``.
 

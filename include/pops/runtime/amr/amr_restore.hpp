@@ -40,6 +40,19 @@ inline double AmrRuntime::composite_reduce(const std::string& block, const std::
                                                levels);
 }
 
+inline std::map<std::string, double> AmrRuntime::step_change_l2(
+    const StepSnapshot& previous) const {
+  if (previous.block_levels.size() != blocks_.size())
+    throw std::runtime_error("AmrRuntime::step_change_l2 snapshot composition mismatch");
+  std::map<std::string, double> result;
+  for (std::size_t block = 0; block < blocks_.size(); ++block)
+    result.emplace(
+        blocks_[block].name,
+        runtime::amr::composite_difference_l2_levels(
+            *blocks_[block].levels, previous.block_levels[block], replicated_coarse_));
+  return result;
+}
+
 inline double AmrRuntime::composite_reduce_field(const std::string& provider_slot,
                                                  const std::string& kind, int comp,
                                                  const std::vector<int>& levels) {

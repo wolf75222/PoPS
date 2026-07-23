@@ -643,7 +643,10 @@ route uses the same duplicated observer lane as collective asynchronous output, 
 Fortran handle through `catalyst/mpi_comm`, and agrees local preparation failures before entering
 each Catalyst collective. `ROOT` and `PER_RANK` remain invalid because the Catalyst lifecycle is
 collective. Progressive PVTU or HDF5 `AsyncScientificOutput` artifacts remain independent of the
-live connection.
+live connection. Collective Catalyst execution is deliberately drained after every published frame
+and followed by a rank consensus before the next native solver step. This prevents a VTK worker
+collective from overlapping an AMR/solver collective on the main thread. Serial live visualization
+and scientific-output workers remain asynchronous.
 
 The built-in Catalyst provider permits one combined pipeline consumer and one simulation run per
 `RuntimeInstance`. Its one-shot process-global lifecycle reservation is never released; another
@@ -651,9 +654,11 @@ built-in Catalyst simulation requires a fresh OS process. Multiple concurrent `R
 runs in one process are unsupported when asynchronous HDF5 or built-in Catalyst is active: each
 runtime owns a different FIFO and cannot jointly order process-global library state.
 
-The PoPS post-commit worker is the sole asynchronous layer: Catalyst internal async is forced off and
-an active inherited `CATALYST_ASYNC_ENABLED` is rejected, so `catalyst.execute` completes before its
-delivery receipt. A worker-safe live pipeline may publish sources and filters, but a local render
+The PoPS post-commit worker is the sole worker layer: Catalyst internal async is forced off and an
+active inherited `CATALYST_ASYNC_ENABLED` is rejected, so `catalyst.execute` completes before its
+delivery receipt. In collective MPI mode PoPS then drains that worker before returning to the
+solver; this live route is intentionally synchronous at frame boundaries. A worker-safe live
+pipeline may publish sources and filters, but a local render
 view additionally requires a ParaView off-screen backend that supports creation outside the main
 thread. In particular, the macOS Cocoa backend cannot create `RenderView` from this worker; the
 tutorial keeps its live pipeline renderless and carries reproducible presentation in the file-output

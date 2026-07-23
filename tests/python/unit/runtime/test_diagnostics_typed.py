@@ -17,7 +17,7 @@ pops = pytest.importorskip("pops")
 
 from pops.descriptors import Descriptor  # noqa: E402
 from pops.diagnostics import (ConservationCheck, Integral, MinMax,  # noqa: E402
-                             Norm)
+                             Norm, StepChangeNorm)
 from pops.linalg.norms import L1, L2, LInf  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.physics.roles import Density  # noqa: E402
@@ -31,7 +31,7 @@ _NE_BLOCK = _DIAGNOSTIC_PROBLEM.block("ne", Module("diagnostic-model"))
 # --- package surface --------------------------------------------------------------------
 def test_typed_measures_exported():
     import pops.diagnostics as diag
-    for name in ("Norm", "Integral", "MinMax", "ConservationCheck"):
+    for name in ("Norm", "Integral", "MinMax", "ConservationCheck", "StepChangeNorm"):
         assert hasattr(diag, name), name
         assert name in diag.__all__, name
 
@@ -75,6 +75,19 @@ def test_norm_rejects_non_norm_object():
         Norm(object())
     with pytest.raises(TypeError):
         Norm(Integral())  # an Integral is a measure, not a norm kind
+
+
+def test_step_change_norm_is_typed_l2_and_whole_state():
+    change = StepChangeNorm(L2(), block=_NE_BLOCK)
+    assert change.options()["norm"] == "l2"
+    assert change.diagnostic_execution()["operations"] == [{
+        "name": "step_change_l2", "reduction": "step_change_l2",
+        "transform": "identity", "metric_weighted": False,
+    }]
+    with pytest.raises(ValueError, match="exactly.*L2"):
+        StepChangeNorm(L1())
+    with pytest.raises(TypeError, match="typed pops.linalg.norms"):
+        StepChangeNorm("l2")
 
 
 # --- Integral / MinMax ------------------------------------------------------------------

@@ -58,8 +58,9 @@ restent selectionnables sans changer le graphe du cas. Un vrai PVSM se demande e
 pour cette execution OpenMP serie. En MPI, le live est disponible en mode `COLLECTIVE` lorsque PoPS
 et ParaView partagent exactement la meme pile MPI; `ROOT` et `PER_RANK` restent refuses. Les sorties
 scientifiques progressives PVTU/HDF5 restent independantes et disponibles sans client live.
-Le script 13 ecrit son checkpoint sous
-`results/13_openmp_amr_restart/`.
+Le script 13 ecrit son checkpoint sous `results/13_openmp_amr_restart/`. Le script 14 est la variante
+MPI complete : PVD/PVTU/VTU progressifs, PVSM si `POPS_PARAVIEW_ROOT` est defini et Catalyst live
+collectif si `POPS_CATALYST=1`.
 
 Les figures comparent ces deux executions OpenMP :
 
@@ -85,7 +86,7 @@ conda activate pops
 bash scripts/build_python.sh --mpi --clean
 ```
 
-Les quatre scripts MPI fixent un thread par rang. Apres `pops.compile`, ils construisent le monde
+Les scripts MPI fixent un thread par rang. Apres `pops.compile`, ils construisent le monde
 natif et le transmettent au bind :
 
 ```python
@@ -106,10 +107,13 @@ mpiexec -n 2 python docs/tuto/scalar_advection/03_mpi_preset_ssprk2.py
 mpiexec -n 2 python docs/tuto/scalar_advection/04_mpi_explicit_ssprk2.py
 mpiexec -n 2 python docs/tuto/scalar_advection/07_mpi_amr_preset_ssprk2.py
 mpiexec -n 2 python docs/tuto/scalar_advection/08_mpi_amr_explicit_ssprk2.py
+POPS_PARAVIEW_ROOT=/Applications/ParaView-6.1.1.app \
+  mpiexec -n 2 python docs/tuto/scalar_advection/14_mpi_amr_outputs.py
 ```
 
-Ces fichiers MPI calculent puis affichent le bilan de chaque rang. Les scripts OpenMP produisent les
-figures ; les fichiers MPI n'ont donc pas de branche de publication ni d'ecriture concurrente.
+Les scripts 03, 04, 07 et 08 calculent puis affichent le bilan de chaque rang. Le script 14 ajoute la
+publication distribuee : cinq PVTU, dix feuilles VTU et un PVD temporel complet pour deux rangs et
+cinq echeances physiques. Le rang zero produit aussi les recettes et les PVSM demandes.
 
 L'API de sortie sait neanmoins executer les writers asynchrones `PER_RANK` et `COLLECTIVE` sur un
 worker post-commit MPI. Ces modes exigent `MPI_THREAD_MULTIPLE`. Le runtime duplique une lane par
@@ -128,6 +132,14 @@ peut pas les importer directement. Le lanceur neutre conserve un seul MPI dans l
 conda activate pops
 scripts/paraview_python.sh --mpi 2 \
   tests/python/integration/mpi/probe_catalyst_live_mpi.py
+```
+
+Pour voir directement l'advection MPI en live, connecter d'abord le client ParaView Catalyst Live,
+puis lancer dans un second terminal :
+
+```bash
+POPS_CATALYST=1 scripts/paraview_python.sh --mpi 2 \
+  docs/tuto/scalar_advection/14_mpi_amr_outputs.py
 ```
 
 Pour prouver aussi la connexion socket et le rendu client, lancer le gate autonome
