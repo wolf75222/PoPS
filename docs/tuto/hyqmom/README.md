@@ -91,12 +91,18 @@ def user_hyqmom15_closure(S):
     }
 ```
 
-`CartesianVelocityMoments(4, closure=user_hyqmom15_closure)` construit ensuite
-en Python les quinze inconnues, les transformations des moments bruts vers les
-moments centres puis standardises, les flux fermes et leurs Jacobiennes. La
-fonction utilisateur est evaluee une seule fois sur les expressions symboliques
-pendant la construction. Son arithmetique est incorporee dans l'AST compile :
-il n'existe aucun callback Python dans les cellules ou les pas de temps.
+Le tutoriel n'appelle pas non plus la facade `CartesianVelocityMoments`. La
+fonction `build_user_hyqmom15_model()` declare explicitement l'etat
+`M00, M10, ..., M04`, construit les flux selon `x` et `y`, demande les vitesses
+HLL au Jacobien puis pose l'equation
+`ddt(U) == -div(flux)`. `moment_flux_expressions()` est le generateur
+algebrique Python generique : il realise les transformations des moments bruts
+vers les moments centres puis standardises et applique la fermeture utilisateur.
+
+La fonction de fermeture est evaluee une seule fois sur les expressions
+symboliques pendant la construction. Son arithmetique est incorporee dans l'AST
+compile : il n'existe aucun callback Python dans les cellules ou les pas de
+temps.
 
 L'exemple conserve `HyQMOM15Closure()` dans les autres cas afin de montrer la
 version concise de la meme physique. Les deux chemins utilisent le meme

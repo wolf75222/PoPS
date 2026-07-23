@@ -16,12 +16,13 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.linalg.norms import L2
+from pops.math import ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, closure
+from pops.moments import closure, moment_flux_expressions
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.output import ConsoleMonitor, ConsumerGraph
-from pops.physics import Density
+from pops.physics import Density, Model
 from pops.runtime_environment import runtime_environment_report
 from pops.time import AdaptiveCFL, every
 
@@ -39,6 +40,14 @@ MAX_STEPS = 2_000_000
 
 HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "02_openmp_constant_hll.npz"
+
+MOMENT_COMPONENTS = (
+    "M00", "M10", "M20", "M30", "M40",
+    "M01", "M11", "M21", "M31",
+    "M02", "M12", "M22",
+    "M03", "M13",
+    "M04",
+)
 
 
 @closure(4)
@@ -79,19 +88,47 @@ def user_hyqmom15_closure(S):  # noqa: N803
     }
 
 
+def build_user_hyqmom15_model(name, frame):
+    """Construit explicitement le modele a quinze moments dans ce script."""
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U",
+        components=MOMENT_COMPONENTS,
+        roles={"M00": Density()},
+    )
+
+    # Ce generateur Python effectue M -> moments centres -> moments standardises,
+    # applique la fermeture ci-dessus, puis reconstruit les moments bruts d'ordre 5.
+    expressions = moment_flux_expressions(
+        model,
+        tuple(state),
+        order=4,
+        closure=user_hyqmom15_closure,
+        robust=False,
+    )
+    x_axis, y_axis = frame.axes
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: expressions.x,
+            y_axis: expressions.y,
+        },
+    )
+
+    # Le modele complet est ferme ici : vitesses HLL issues du Jacobien et
+    # equation dU/dt = -div(F(U)).
+    model.wave_speeds_from_jacobian()
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
+
+
 domain = Rectangle("hyqmom_constant_square", lower=(X_MIN, Y_MIN), upper=(X_MAX, Y_MAX))
 frame = domain.frame(Cartesian2D())
 grid = CartesianGrid(frame=frame, cells=(CELLS, CELLS), periodic=PeriodicAxes(frame.axes))
 
-# La facade construit en Python l'etat M00...M04, les transformations M -> C -> S,
-# les flux fermes et leurs Jacobiennes a partir de la fermeture utilisateur.
-hierarchy = CartesianVelocityMoments(
-    4,
-    closure=user_hyqmom15_closure,
-    robust=False,
-    exact_speeds=True,
-)
-model = hierarchy.build("hyqmom15_constant", frame=frame)
+model = build_user_hyqmom15_model("hyqmom15_constant", frame)
 
 state = model.states["U"]
 physical_flux = model.fluxes["transport"]

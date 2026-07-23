@@ -14,6 +14,7 @@ from pops.moments import (
     LocalClosure,
     RealizabilityProjection,
     closure,
+    moment_flux_expressions,
     moment_names,
 )
 from pops.domain import RectangleFrame
@@ -24,6 +25,10 @@ from pops.time import ProjectAndRecheck, RejectAttempt
 
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"
+
+
+def test_moment_flux_generator_is_public_for_explicit_python_models() -> None:
+    assert callable(moment_flux_expressions)
 
 
 def _load_example():

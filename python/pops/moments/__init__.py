@@ -13,6 +13,7 @@ surface (:mod:`pops.moments.closures`).
 # --- generator surface (the engine) ----------------------------------------
 from .model_builder import (
     build_moment_model,
+    moment_flux_expressions,
     moment_indices,
     moment_names,
     moment_transport_blocks,
@@ -43,6 +44,7 @@ __all__ = [
     "maxwellian_moments",
     "bgk_source",
     "build_moment_model",
+    "moment_flux_expressions",
     # facade API
     "CartesianVelocityMoments",
     "MomentModel",
