@@ -297,19 +297,119 @@ jobs:
             --force-full "$FORCE_FULL" \
             --github-output "$GITHUB_OUTPUT"
 
+  # PREWARM C++ NATIF. Quatre runners compilent une partition exacte et disjointe des objets runtime
+  # communs a tous les shards. Ils publient uniquement des entrees ccache et leur contrat exact
+  # compilateur/flags/revision/sources. Les shards reconfigurent ensuite eux-memes le graphe officiel,
+  # authentifient ces contrats, compilent leurs executables distincts et executent leurs propres tests.
+  # Le prewarm ne publie donc aucun binaire et ne peut masquer ni un objet absent ni un changement ABI.
+  gate-cpp-prewarm:
+    name: ubuntu-latest / Kokkos Serial (C++ prewarm ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    needs: [changes, set-mode]
+    if: needs.set-mode.outputs.cpp_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [system, amr-base, amr-compressible, amr-compiled]
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-cpp-prewarm
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold
+
+      - name: Prewarm production runtime objects (${{ matrix.lane }})
+        run: |
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          lane_parallelism=4
+          case "${{ matrix.lane }}" in
+            amr-base|amr-compressible) lane_parallelism=2 ;;
+          esac
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism" \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          python3 scripts/ci_python_module_objects.py --build-dir build-kokkos --verify
+          ccache --zero-stats
+          mapfile -t object_targets < <(
+            python3 scripts/ci_python_module_objects.py \
+              --build-dir build-kokkos \
+              --lane "${{ matrix.lane }}" \
+              --contract-file "$RUNNER_TEMP/cpp-prewarm-contract-${{ matrix.lane }}.json"
+          )
+          test "${#object_targets[@]}" -gt 0
+          run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m \
+            cmake --build --preset ci-kokkos --parallel "$lane_parallelism" \
+              --target "${object_targets[@]}"
+          ccache -s
+          tar -C "$CCACHE_DIR" -cf "$RUNNER_TEMP/cpp-prewarm-ccache-${{ matrix.lane }}.tar" .
+
+      - name: Upload C++ prewarm cache and compile contract
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-cpp-prewarm-${{ matrix.lane }}
+          path: |
+            ${{ runner.temp }}/cpp-prewarm-ccache-${{ matrix.lane }}.tar
+            ${{ runner.temp }}/cpp-prewarm-contract-${{ matrix.lane }}.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en six shards deterministes
   # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
-  # construit TOUJOURS ses cibles explicites (meme en mode all) puis applique la regex CTest du meme
-  # shard : l'ensemble des executables n'est plus sur le chemin critique d'un runner unique.
+  # authentifie et reutilise le socle prechauffe, construit ses cibles explicites puis applique la
+  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee six fois.
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 38 min cold build + 7 min for the selected tests. The main step keeps five minutes for
-    # configure/inventory between those independently diagnosed phases; the outer job keeps ten
-    # more for checkout, toolchain/cache setup and the always() ccache save. These are fail-safe
-    # ceilings and do not lengthen a healthy build.
-    timeout-minutes: 60
-    needs: [changes, set-mode]
+    # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
+    # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
+    # for tests. A cold common runtime can no longer consume this watchdog independently six times.
+    timeout-minutes: 40
+    needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
       fail-fast: false
       matrix:
@@ -319,11 +419,10 @@ jobs:
     if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # Un cache par shard, borne a 768 Mo : 4.5 Go maximum par generation. Les cold builds mesures
-      # produisent 520-550 Mo d'objets ; cette marge evite que ccache evince ses propres premiers
-      # objets avant la sauvegarde tout en gardant les six caches strictement separes.
+      # Le cache final fusionne les quatre partitions runtime puis ajoute les objets de tests du
+      # shard. Deux Gio evitent d'evincer le socle authentifie avant son utilisation.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 768M
+      CCACHE_MAXSIZE: 2G
       # ADC-366 ccache cross-run/cross-checkout hit-rate (codegen-neutral, keys unchanged; paired with
       # -ffile-prefix-map on the cmake line below).
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -413,6 +512,25 @@ jobs:
       - name: Reset ccache stats (Kokkos Serial, shard ${{ matrix.shard }})
         run: ccache --zero-stats
 
+      - name: Download parallel C++ prewarm caches
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gate-cpp-prewarm-*
+          path: ${{ github.workspace }}/.pops-ci/cpp-prewarm
+
+      - name: Merge parallel C++ prewarm caches
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          mapfile -t cache_archives < <(
+            find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
+              -name 'cpp-prewarm-ccache-*.tar' -type f | sort
+          )
+          test "${#cache_archives[@]}" -eq 4
+          for cache_archive in "${cache_archives[@]}"; do
+            tar -C "$CCACHE_DIR" -xf "$cache_archive"
+          done
+          ccache --zero-stats
+
       # Flags du build : CMakePresets.json (preset ci-kokkos) = SOURCE UNIQUE DE VERITE, partagee
       # avec le dev local ; Kokkos_ROOT vient de $KOKKOS_PREFIX (install en cache ci-dessus) et
       # ccache est auto-detecte par le CMakeLists (POPS_USE_CCACHE). Le preset pose aussi
@@ -425,7 +543,7 @@ jobs:
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Configure + build + test (Kokkos Serial)
-        timeout-minutes: 50
+        timeout-minutes: 30
         run: |
           SECONDS=0
           run_with_heartbeat() {
@@ -464,16 +582,20 @@ jobs:
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          mapfile -t compile_contracts < <(
+            find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
+              -name 'cpp-prewarm-contract-*.json' -type f | sort
+          )
+          test "${#compile_contracts[@]}" -eq 4
+          python3 scripts/ci_python_module_objects.py \
+            --build-dir build-kokkos \
+            --verify-contracts "${compile_contracts[@]}"
           read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_shard_targets }}"
           if [ "${#cpp_targets[@]}" -eq 0 ]; then
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi
-          # A production-header invalidation leaves the AMR-heavy shards within a few targets of
-          # completion at the former 30-minute boundary (measured 144-148/153-155). Keep the cold
-          # path bounded, but allow those real compilations to finish instead of reporting a false
-          # test failure; warm ccache runs remain substantially shorter.
-          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 38m \
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m \
             cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
@@ -1297,6 +1419,123 @@ jobs:
         if: always()
         run: ccache -s
 
+  # PREWARM MPI NATIF. Le prewarm Serial ci-dessus ne peut pas produire de hits ccache fiables pour
+  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces quatre
+  # lanes configurent donc le graphe ci-mpi exact et compilent uniquement sa partition disjointe
+  # d'objets runtime. Comme pour le prewarm Serial, les artefacts ne contiennent aucun binaire lie :
+  # seulement les entrees ccache et un contrat compiler/flags/revision/sources que le job final verifie.
+  gate-mpi-prewarm:
+    name: ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm ${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    needs: [set-mode, changes]
+    if: needs.set-mode.outputs.mpi_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [system, amr-base, amr-compressible, amr-compiled]
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: libhdf5-openmpi-dev libopenmpi-dev openmpi-bin pybind11-dev python3-dev
+
+      - name: Restore reusable MPI ccache (${{ matrix.lane }})
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-mpi-prewarm-${{ matrix.lane }}-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-mpi-${{ github.ref }}-
+            ccache-${{ runner.os }}-mpi-refs/heads/master-
+            ccache-${{ runner.os }}-mpi-
+
+      - name: Prewarm MPI production runtime objects (${{ matrix.lane }})
+        run: |
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          lane_parallelism=4
+          case "${{ matrix.lane }}" in
+            amr-base|amr-compressible) lane_parallelism=2 ;;
+          esac
+          mpi_cmake_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
+          fi
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake --preset ci-mpi \
+            -DPOPS_BUILD_PYTHON=ON \
+            -DPOPS_USE_HDF5=ON \
+            -DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism" \
+            -DPython_EXECUTABLE=/usr/bin/python3 \
+            "${mpi_cmake_args[@]}"
+          python3 scripts/ci_python_module_objects.py --build-dir build-mpi --verify
+          ccache --zero-stats
+          mapfile -t object_targets < <(
+            python3 scripts/ci_python_module_objects.py \
+              --build-dir build-mpi \
+              --lane "${{ matrix.lane }}" \
+              --contract-file "$RUNNER_TEMP/mpi-prewarm-contract-${{ matrix.lane }}.json"
+          )
+          test "${#object_targets[@]}" -gt 0
+          run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m \
+            cmake --build --preset ci-mpi --parallel "$lane_parallelism" \
+              --target "${object_targets[@]}"
+          ccache -s
+          tar -C "$CCACHE_DIR" -cf "$RUNNER_TEMP/mpi-prewarm-ccache-${{ matrix.lane }}.tar" .
+
+      - name: Upload MPI prewarm cache and compile contract
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-mpi-prewarm-${{ matrix.lane }}
+          path: |
+            ${{ runner.temp }}/mpi-prewarm-ccache-${{ matrix.lane }}.tar
+            ${{ runner.temp }}/mpi-prewarm-contract-${{ matrix.lane }}.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   # Agregation REQUISE : l'UNIQUE check a referencer dans la branch protection (ADC-166). Resout
   # trois faiblesses structurelles du routage par chemins (findings revue ADC-171) :
   #  (1) GitHub traite un required check SKIPPED comme PASSANT -> sans agregateur, une PR touchant
@@ -1345,7 +1584,7 @@ jobs:
     # fence run sequentially. Each C++ launch retains its configured bounded
     # TIMEOUT; grouping removes PROCESSORS head-of-line blocking without skips.
     timeout-minutes: 70
-    needs: [set-mode, changes]
+    needs: [set-mode, changes, gate-mpi-prewarm]
     # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
     if: needs.set-mode.outputs.mpi_required == 'true'
 
@@ -1426,6 +1665,24 @@ jobs:
             ccache-${{ runner.os }}-mpi-refs/heads/master-
             ccache-${{ runner.os }}-mpi-
 
+      - name: Download parallel MPI prewarm caches
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gate-mpi-prewarm-*
+          path: ${{ github.workspace }}/.pops-ci/mpi-prewarm
+
+      - name: Merge parallel MPI prewarm caches
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          mapfile -t cache_archives < <(
+            find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
+              -name 'mpi-prewarm-ccache-*.tar' -type f | sort
+          )
+          test "${#cache_archives[@]}" -eq 4
+          for cache_archive in "${cache_archives[@]}"; do
+            tar -C "$CCACHE_DIR" -xf "$cache_archive"
+          done
+
       - name: Reset ccache stats (MPI)
         run: ccache --zero-stats
 
@@ -1446,6 +1703,7 @@ jobs:
           test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
+        timeout-minutes: 22
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
@@ -1460,8 +1718,18 @@ jobs:
             -DPOPS_USE_HDF5=ON \
             -DPython_EXECUTABLE=/usr/bin/python3 \
             "${mpi_cmake_args[@]}"
+          mapfile -t compile_contracts < <(
+            find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
+              -name 'mpi-prewarm-contract-*.json' -type f | sort
+          )
+          test "${#compile_contracts[@]}" -eq 4
+          python3 scripts/ci_python_module_objects.py \
+            --build-dir build-mpi \
+            --verify-contracts "${compile_contracts[@]}"
           read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
-          cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          timeout --signal=TERM --kill-after=30s 18m \
+            cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
 
       - name: Installed package smoke (MPI-only + collective HDF5)
         run: |

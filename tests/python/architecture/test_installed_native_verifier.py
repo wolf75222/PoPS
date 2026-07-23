@@ -26,7 +26,7 @@ def _native(extension: Path, *, mpi=True, hdf5=True, capability=None):
             "available": True,
             "hdf5_version": "1.14.3",
             "reason": "",
-            "communicator": "MPI_COMM_WORLD",
+            "communicator": "explicit native MPI communicator",
             "implementation": "C++ HDF5 C API",
         }
     return SimpleNamespace(
@@ -86,7 +86,7 @@ def test_serial_verification_rejects_a_stale_mpi_extension(tmp_path):
                 "available": False,
                 "hdf5_version": "1.14.3",
                 "reason": "not initialized",
-                "communicator": "MPI_COMM_WORLD",
+                "communicator": "explicit native MPI communicator",
                 "implementation": "C++ HDF5 C API",
             }),
             "capability is not available",

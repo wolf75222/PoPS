@@ -73,10 +73,10 @@ def verify_installed_native(
                 or not capability["hdf5_version"]:
             raise InstalledNativeVerificationError(
                 "the installed parallel HDF5 runtime has no version identity")
-        if capability["communicator"] != "MPI_COMM_WORLD" \
+        if capability["communicator"] != "explicit native MPI communicator" \
                 or capability["implementation"] != "C++ HDF5 C API":
             raise InstalledNativeVerificationError(
-                "the installed parallel HDF5 provider is not the native world contract")
+                "the installed parallel HDF5 provider is not the explicit native communicator contract")
 
     return origin
 
