@@ -1000,9 +1000,10 @@ class System {
   /// @{
   /// Register (idempotent) a history named @p name with maximum lag @p lag (>= 1): a ring buffer of
   /// depth @p lag + 1 (slot 0 = the CURRENT value, slot k = the value k macro-steps back after the
-  /// rotates), each slot a MultiFab co-distributed with block 0 and zero-initialized. @p ncomp is the
-  /// slot component count: the default -1 resolves to block 0's ncomp (the historical multistep ring,
-  /// so a slot can hold a full RHS / state -- byte-identical to the pre-ADC-427 signature), while an
+  /// rotates), each slot a zero-initialized MultiFab on the shared block layout. Qualified calls bind
+  /// the exact owner plus logical state/space/clock/interpolation identities; unqualified calls retain
+  /// the legacy owner=-1 contract and cannot use selective replay. @p ncomp is the slot component
+  /// count: the default -1 resolves to the qualified owner's ncomp (or block 0 for a legacy ring), while an
   /// explicit @p ncomp >= 1 sizes a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
   /// carry). The component count binds at the FIRST register; a later re-register ignores @p ncomp.
   /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
@@ -1054,6 +1055,9 @@ class System {
   /// facade records it so a restart restores the initialized state without a phantom re-fill. @throws
   /// if @p name is unknown.
   POPS_EXPORT bool history_initialized(const std::string& name) const;
+  /// Saturating count of authentic accepted stores represented in the ring (0..history_depth).
+  /// Cold-start copies do not advance this count; selective persistence is safe only at full depth.
+  POPS_EXPORT int history_fill_count(const std::string& name) const;
   /// RESTORE (restart) slot @p slot of history @p name from a GLOBAL component-major buffer (same layout
   /// as history_global / set_state): the owner rank writes its box, the others are no-ops (MPI-safe, all
   /// ranks call it). Registers the ring (depth = max(slot)+1) if @p name is unknown yet, so the restart
@@ -1064,19 +1068,24 @@ class System {
   /// read at lag without a phantom cold-start re-fill on its first post-restart store. @throws if
   /// @p name is unknown (restore its slots first).
   POPS_EXPORT void set_history_initialized(const std::string& name, bool initialized);
+  /// Restore the exact authentic fill count persisted by a checkpoint. Also restores the derived
+  /// initialized flag (`fill_count > 0`). @throws if outside [0, history_depth].
+  POPS_EXPORT void restore_history_fill_count(const std::string& name, int fill_count);
   /// @}
   /// @name Selective history persistence + deterministic ring replay (ADC-626)
   /// A history-persistence policy (pops.time.Dense / Interval / Revolve) stores only a SUBSET of a
   /// ring's slots in a checkpoint; the restart REBUILDS the missing slots by re-stepping the installed
-  /// Program. The per-slot dt each store produced is exposed so the checkpoint records it and replay
-  /// reproduces a variable-dt history bit-for-bit.
+  /// Program. The per-slot outgoing dt is exposed so the checkpoint records the exact interval
+  /// between adjacent state samples and replay reproduces a variable-dt history bit-for-bit.
   /// @{
-  /// The dt that produced slot @p slot of history @p name (HistoryManager::slot_dt). 0 for a slot that
-  /// was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out of range.
+  /// The outgoing dt from slot @p slot toward its newer neighbour (HistoryManager::slot_dt). 0 for a
+  /// slot that was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out
+  /// of range.
   POPS_EXPORT double history_slot_dt(const std::string& name, int slot) const;
-  /// Restore the dt that produced slot @p slot of history @p name (the inverse of history_slot_dt, used
-  /// at restart so replay re-steps with the exact recorded dt). Grows the per-slot dt vector to fit the
-  /// ring. @throws if @p name is unknown (restore its slots first).
+  /// Restore the outgoing dt recorded with slot @p slot of history @p name (the inverse of
+  /// history_slot_dt, used at restart so replay re-steps with the exact interval from an older anchor
+  /// to its newer neighbour). Grows the per-slot dt vector to fit the ring. @throws if @p name is
+  /// unknown (restore its slots first).
   POPS_EXPORT void restore_history_slot_dt(const std::string& name, int slot, double dt);
   /// REBUILD the MISSING slots of history @p name by deterministic replay (ADC-626). @p stored_slots is
   /// the sorted set of slot indices already restored (via restore_history); every OTHER slot in

@@ -370,6 +370,7 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &System::history_initialized, py::arg("name"))
+      .def("history_fill_count", &System::history_fill_count, py::arg("name"))
       .def(
           "restore_history",
           [](System& s, const std::string& name, int slot,
@@ -379,6 +380,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &System::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
+      .def("restore_history_fill_count", &System::restore_history_fill_count, py::arg("name"),
+           py::arg("fill_count"))
       // Selective history persistence + deterministic ring replay (ADC-626): the checkpoint stores only
       // the policy-selected slots + the per-slot dt; the restart replays the gaps via
       // rebuild_history_slots (re-stepping the installed Program from the nearest older stored slot).

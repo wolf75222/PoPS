@@ -30,7 +30,9 @@ def preflight_uniform_restart(payload: Any) -> None:
         keys = {
             "history_depth_" + name, "history_ncomp_" + name,
             "history_init_" + name, "history_policy_" + name,
-            "history_stored_slots_" + name, "history_slot_dt_" + name,
+            "history_requested_stored_slots_" + name,
+            "history_stored_slots_" + name, "history_storage_mode_" + name,
+            "history_slot_dt_" + name,
         }
         absent = sorted(keys - files)
         if absent:
@@ -41,6 +43,13 @@ def preflight_uniform_restart(payload: Any) -> None:
         ncomp = int(payload["history_ncomp_" + name])
         if depth <= 0 or ncomp <= 0:
             raise ValueError("restart : history '%s' depth/ncomp must be positive" % name)
+        from pops.runtime._system_io_history import history_fill_count_from_payload
+        history_fill_count_from_payload(
+            payload,
+            name,
+            depth,
+            bool(payload["history_init_" + name]),
+        )
         slots = [int(slot) for slot in payload["history_stored_slots_" + name]]
         if len(slots) != len(set(slots)) or any(slot < 0 or slot >= depth for slot in slots):
             raise ValueError("restart : history '%s' stored-slot index is invalid" % name)

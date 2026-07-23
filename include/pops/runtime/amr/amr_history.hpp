@@ -106,6 +106,9 @@ struct AmrHistoryOps {
     eng.hist_depth_[name] = want_depth;
     eng.hist_block_owner_[name] = block;
     eng.hist_init_[name] = std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
+    eng.hist_fill_count_[name] = std::vector<int>(static_cast<std::size_t>(eng.nlev_), 0);
+    eng.hist_store_pending_[name] =
+        std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
     eng.hist_slot_dt_[name] = std::vector<Real>(static_cast<std::size_t>(want_depth), Real(0));
   }
 
@@ -157,6 +160,10 @@ struct AmrHistoryOps {
       }
       init[static_cast<std::size_t>(level)] = 1;
     }
+    std::vector<char>& pending = eng.hist_store_pending_[name];
+    if (static_cast<int>(pending.size()) < eng.nlev_)
+      pending.resize(static_cast<std::size_t>(eng.nlev_), 0);
+    pending[static_cast<std::size_t>(level)] = 1;
   }
 
   static void rotate_histories(AmrRuntime& eng) {
@@ -171,6 +178,20 @@ struct AmrHistoryOps {
         std::vector<Real>& dts = dt_it->second;
         for (std::size_t s = dts.size(); s-- > 1;)
           std::swap(dts[s], dts[s - 1]);
+      }
+      std::vector<int>& fill_count = eng.hist_fill_count_[name];
+      std::vector<char>& pending = eng.hist_store_pending_[name];
+      if (fill_count.size() != static_cast<std::size_t>(eng.nlev_) ||
+          pending.size() != static_cast<std::size_t>(eng.nlev_))
+        throw std::runtime_error(
+            "AMR history fill metadata disagrees with the active hierarchy");
+      for (int level = 0; level < eng.nlev_; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        if (pending[index]) {
+          fill_count[index] =
+              std::min(static_cast<int>(ring.size()), fill_count[index] + 1);
+          pending[index] = 0;
+        }
       }
     }
   }
@@ -209,12 +230,40 @@ struct AmrHistoryOps {
     return !it->second.empty() && it->second[0] != 0;
   }
 
+  static int fill_count(const AmrRuntime& eng, const std::string& name) {
+    auto it = eng.hist_fill_count_.find(name);
+    if (it == eng.hist_fill_count_.end() || it->second.empty())
+      throw std::runtime_error("AmrRuntime::history_fill_count: unknown history '" + name + "'");
+    return *std::min_element(it->second.begin(), it->second.end());
+  }
+
   static void set_initialized(AmrRuntime& eng, const std::string& name, bool value) {
     auto it = eng.hist_init_.find(name);
     if (it == eng.hist_init_.end())
       throw std::runtime_error("AmrRuntime::set_history_initialized: unknown history '" + name +
                                "' (restore its slots first)");
     std::fill(it->second.begin(), it->second.end(), value ? char(1) : char(0));
+    std::vector<int>& fill_count = eng.hist_fill_count_[name];
+    fill_count.assign(it->second.size(), value ? eng.hist_depth_.at(name) : 0);
+    eng.hist_store_pending_[name].assign(it->second.size(), char(0));
+  }
+
+  static void restore_fill_count(AmrRuntime& eng, const std::string& name, int value) {
+    auto depth = eng.hist_depth_.find(name);
+    auto initialized = eng.hist_init_.find(name);
+    auto fill_count = eng.hist_fill_count_.find(name);
+    if (depth == eng.hist_depth_.end() || initialized == eng.hist_init_.end() ||
+        fill_count == eng.hist_fill_count_.end())
+      throw std::runtime_error("AmrRuntime::restore_history_fill_count: unknown history '" + name +
+                               "' (restore its slots first)");
+    if (value < 0 || value > depth->second)
+      throw std::runtime_error("AmrRuntime::restore_history_fill_count: fill count " +
+                               std::to_string(value) + " is outside [0, " +
+                               std::to_string(depth->second) + "] for history '" + name + "'");
+    fill_count->second.assign(initialized->second.size(), value);
+    std::fill(initialized->second.begin(), initialized->second.end(),
+              value > 0 ? char(1) : char(0));
+    eng.hist_store_pending_[name].assign(initialized->second.size(), char(0));
   }
 
   // FULL history slot @p slot of ring @p name as ONE flat buffer, the per-level slices concatenated
@@ -375,10 +424,20 @@ struct AmrHistoryOps {
       }
       if (appended_level) {
         auto initialized = eng.hist_init_.find(name);
+        auto fill_count = eng.hist_fill_count_.find(name);
+        auto pending = eng.hist_store_pending_.find(name);
         if (initialized == eng.hist_init_.end() ||
-            initialized->second.size() != static_cast<std::size_t>(pk + 1))
+            fill_count == eng.hist_fill_count_.end() ||
+            pending == eng.hist_store_pending_.end() ||
+            initialized->second.size() != static_cast<std::size_t>(pk + 1) ||
+            fill_count->second.size() != static_cast<std::size_t>(pk + 1) ||
+            pending->second.size() != static_cast<std::size_t>(pk + 1))
           throw std::runtime_error("AMR history initialization mask disagrees with activation");
-        initialized->second.push_back(initialized->second[static_cast<std::size_t>(pk)]);
+        initialized->second.push_back(
+            prolong ? initialized->second[static_cast<std::size_t>(pk)] : char(0));
+        fill_count->second.push_back(
+            prolong ? fill_count->second[static_cast<std::size_t>(pk)] : 0);
+        pending->second.push_back(0);
       }
     }
   }
@@ -403,6 +462,14 @@ struct AmrHistoryOps {
       if (initialized != eng.hist_init_.end() &&
           initialized->second.size() > static_cast<std::size_t>(parent_level + 1))
         initialized->second.resize(static_cast<std::size_t>(parent_level + 1));
+      auto fill_count = eng.hist_fill_count_.find(name);
+      if (fill_count != eng.hist_fill_count_.end() &&
+          fill_count->second.size() > static_cast<std::size_t>(parent_level + 1))
+        fill_count->second.resize(static_cast<std::size_t>(parent_level + 1));
+      auto pending = eng.hist_store_pending_.find(name);
+      if (pending != eng.hist_store_pending_.end() &&
+          pending->second.size() > static_cast<std::size_t>(parent_level + 1))
+        pending->second.resize(static_cast<std::size_t>(parent_level + 1));
     }
   }
 
@@ -424,6 +491,12 @@ struct AmrHistoryOps {
       auto initialized = eng.hist_init_.find(name);
       if (initialized != eng.hist_init_.end())
         initialized->second.resize(static_cast<std::size_t>(target_levels));
+      auto fill_count = eng.hist_fill_count_.find(name);
+      if (fill_count != eng.hist_fill_count_.end())
+        fill_count->second.resize(static_cast<std::size_t>(target_levels), 0);
+      auto pending = eng.hist_store_pending_.find(name);
+      if (pending != eng.hist_store_pending_.end())
+        pending->second.resize(static_cast<std::size_t>(target_levels), 0);
     }
   }
 
@@ -480,6 +553,11 @@ struct AmrHistoryOps {
                                std::to_string(d - 1) + " of history '" + name +
                                "' is not stored; the ring is unreconstructable (the persistence "
                                "policy must store the oldest slot).");
+    if (anchors.front() != 0)
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_history_slots: the newest slot 0 of history '" + name +
+          "' is not stored; slots newer than the first anchor are unbracketed (the persistence "
+          "policy must store the newest slot).");
     if (static_cast<int>(anchors.size()) == d)
       return {};  // Dense: nothing to recompute.
 
@@ -498,7 +576,11 @@ struct AmrHistoryOps {
     // published.  This keeps restart replay aligned with the ordinary step-transaction boundary.
     const AmrRuntime::StepSnapshot saved = eng.step_snapshot();
 
-    // Per-slot dt each store produced (from the SAVED snapshot -- the replay MUTATES hist_slot_dt_).
+    // Per-slot outgoing dt (from the SAVED snapshot -- replay MUTATES hist_slot_dt_).  A
+    // keep_history store snapshots U^n before the tail commit, then the ring and this ledger rotate
+    // together. Consequently slot k carries the interval from its sample to slot k-1, not the dt
+    // that produced the sample in slot k. Reconstructing slot j from slot j+1 must use dts[j+1].
+    // This distinction is observable for a clipped/adaptive terminal step.
     std::vector<Real> dts(static_cast<std::size_t>(d), Real(0));
     auto sd_it = saved.history_slot_dt.find(name);
     if (sd_it != saved.history_slot_dt.end())
@@ -528,14 +610,15 @@ struct AmrHistoryOps {
                             name)[static_cast<std::size_t>(older)][static_cast<std::size_t>(level)],
                         Real(0), state);
         }
-        for (int j = older - 1; j >= newer; --j) {
+        // Adjacent anchors bracket only omitted slots.  Stop before `newer`: it already is an exact
+        // checkpoint value, so executing the step that lands on it would add one unreported Program
+        // step per gap and could trigger side effects that selective replay never needs.
+        for (int j = older - 1; j > newer; --j) {
           const int cursor = m - 1 - j;
           const int rc_before = eng.regrid_count_;
-          program_step(static_cast<double>(dts[static_cast<std::size_t>(j)]), cursor);
+          program_step(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]), cursor);
           if (eng.regrid_count_ != rc_before)
             outcome.fired_regrid_steps.push_back(cursor);
-          if (is_stored[static_cast<std::size_t>(j)])
-            continue;
           auto& slot = reconstructed[static_cast<std::size_t>(j)];
           slot.reserve(static_cast<std::size_t>(eng.nlev_));
           for (int level = 0; level < eng.nlev_; ++level)

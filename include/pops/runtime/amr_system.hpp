@@ -919,8 +919,8 @@ class AmrSystem {
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
   /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
-  /// so a history ring's store_history tags the per-slot dt (variable-dt replay). POPS_EXPORT for the
-  /// dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
+  /// so a pre-commit history sample records its outgoing interval (variable-dt replay). POPS_EXPORT
+  /// for the dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
   POPS_EXPORT double program_last_dt() const;
   /// Authenticated accepted-state image owned by the compiled AMR Program context.  This is distinct
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
@@ -1153,7 +1153,9 @@ class AmrSystem {
   int history_depth(const std::string& name) const;
   int history_ncomp(const std::string& name) const;
   bool history_initialized(const std::string& name) const;
+  int history_fill_count(const std::string& name) const;
   void set_history_initialized(const std::string& name, bool initialized);
+  void restore_history_fill_count(const std::string& name, int fill_count);
   std::vector<double> history_global(const std::string& name, int slot) const;
   void restore_history(const std::string& name, int slot, const std::vector<double>& values);
   double history_slot_dt(const std::string& name, int slot) const;

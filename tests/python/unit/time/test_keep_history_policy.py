@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""ADC-626: keep_history accepts the typed persistence policy; compile-time coherence + determinism.
+"""ADC-626: keep_history persistence coherence and exact selective-replay eligibility.
 
 The NotImplementedError gate is REMOVED: ``T.keep_history(U, depth, checkpoint_policy=...)`` accepts a
 typed history-persistence descriptor, records it in the Program-owned history table, validates coherence at
-author time, and the compile-time gate (Program.validate) refuses a non-Dense policy whose replay would
-reach a non-deterministic op. Pure Python IR construction (no numerics / no _pops).
+author time. The compile-time gate refuses a non-Dense policy outside the proven primary-clock,
+strictly owner-affine replay class. Pure Python IR construction (no numerics / no _pops).
 """
-from typed_program_support import typed_state
+from typed_program_support import state_refs, typed_state
 
 import sys
 
@@ -15,6 +15,7 @@ import pytest
 from pops import time as adctime
 from pops.time._history.persistence import Dense, Interval, Revolve
 from pops.time._history.validation import check_program, validate_history_persistence
+from pops.time.points import Clock
 
 
 def _expect(exc_type, fn, needle):
@@ -42,6 +43,23 @@ def test_keep_history_records_depth_and_policy_on_program():
     ring_slots, policy = P._history_persistence["plasma.U"]
     assert ring_slots == 6 and isinstance(policy, Revolve)
     assert policy.stored_slots(ring_slots) == (0, 2, 5)
+
+
+def test_manual_selective_history_fails_closed_without_state_phase_provenance():
+    from pops._report import DiagnosticError
+    from pops.numerics.terms import DefaultSource
+
+    P = adctime.Program("manual_interval_replay")
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    P.store_history("blk.R", R, depth=3, checkpoint_policy=Interval(3))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("same_state", 1.0 * U, at=endpoint.point))
+    with pytest.raises(DiagnosticError) as exc:
+        check_program(P)
+    message = str(exc.value)
+    assert "was not declared by keep_history" in message
+    assert "outgoing-dt" in message
 
 
 def test_multiple_histories_distinct_policies_one_program():
@@ -109,16 +127,85 @@ def test_oversized_revolve_refused_at_author_time():
             "exceeds ring depth")
 
 
-# --- compile-time determinism gate --------------------------------------------------------------
-def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
-    P = adctime.Program("det")
+# --- compile-time exact-replay gate -------------------------------------------------------------
+def test_primary_clock_affine_transition_with_dt_and_zero_weight_lag_passes():
+    P = adctime.Program("affine")
     U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
-    # A deterministic combine reading the ring, committed as the new state (a valid State value).
+    # The exact-zero coefficient is canonicalized out of the effective dependency graph. It may
+    # declare/read the physical lag without making the dt-dependent transition multistep.
+    nxt = P.value(
+        "U_next", U.n + 0.25 * P.dt * U.n + 0.0 * U.prev(3), at=U.next.point)
+    P.commit(U.next, nxt)
+    check_program(P)
+    from pops.time._program.detach import detach_compiled_program
+    check_program(detach_compiled_program(P))
+
+
+def test_load_bearing_lag_refuses_single_anchor_replay():
+    P = adctime.Program("multistep")
+    U = typed_state(P, "plasma", state_name="U")
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     nxt = P.value(
         "U_next", 1.0 * U.n + 0.5 * U.prev(1), at=U.next.point)
     P.commit(U.next, nxt)
-    check_program(P)  # no refusal: every op is on the vetted deterministic allow-list
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("non_affine_replay") for issue in report.issues)
+    assert "depends on lagged history" in str(report)
+
+
+def test_rhs_transition_refuses_single_anchor_replay():
+    from pops.numerics.terms import DefaultSource
+
+    P = adctime.Program("rhs_transition")
+    U = typed_state(P, "plasma", state_name="U")
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
+    rate = P.rhs(state=U.n, terms=[DefaultSource()])
+    P.commit(
+        U.next,
+        P.value("U_next", U.n + P.dt * rate + 0.0 * U.prev(3), at=U.next.point),
+    )
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("non_affine_replay") for issue in report.issues)
+    assert "unproved replay op 'rhs'" in str(report)
+    assert any(issue.code.endswith("unrestored_replay_context") for issue in report.issues)
+    assert "non-affine/context-dependent op 'rhs'" in str(report)
+
+
+def test_child_clock_history_refuses_primary_step_replay():
+    P = adctime.Program("child_history")
+    block, declaration = state_refs(P, "plasma", state_name="U")
+    fast = Clock("fast", owner=P.owner_path)
+    U = P.state(block[declaration], clock=fast)
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
+    P.commit(U.next, P.value("U_next", 1.0 * U.n, at=U.next.point))
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("non_primary_clock_replay") for issue in report.issues)
+    assert "child clock" in str(report)
+
+
+def test_context_side_effect_refuses_single_anchor_replay():
+    P = adctime.Program("context_history")
+    U = typed_state(P, "plasma", state_name="U")
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
+    P.record_scalar("state_sum", P.sum(U.n))
+    P.commit(U.next, P.value("U_next", 1.0 * U.n, at=U.next.point))
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("unrestored_replay_context") for issue in report.issues)
+    assert "non-affine/context-dependent op 'reduce'" in str(report)
+
+
+def test_cross_block_commit_is_rejected_before_replay_validation():
+    P = adctime.Program("cross_block_history")
+    U = typed_state(P, "plasma", state_name="U")
+    W = typed_state(P, "neutral", state_name="W")
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
+    with pytest.raises(ValueError, match="cross-block write"):
+        P.commit(U.next, P.value("U_next", 1.0 * W.n, at=U.next.point))
 
 
 def test_dense_policy_never_refused_even_with_unknown_op():

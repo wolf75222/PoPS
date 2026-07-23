@@ -259,12 +259,15 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
   detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
   EXPECT_EQ(detail::AmrHistoryOps::depth(rt, "R"), 2);
   EXPECT_FALSE(detail::AmrHistoryOps::initialized(rt, "R"));
+  EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 0);
 
   // Store block 0's per-level state into slot 0 of every level (what the AMR per-level loop does).
   const std::vector<double> s0 = block0_all_levels(rt);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
   EXPECT_TRUE(detail::AmrHistoryOps::initialized(rt, "R"));
+  EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 0)
+      << "a write is not an accepted logical sample until ring rotation";
 
   // slot 0 == the stored state; slot 1 == the SAME (per-level cold-start fill on the first store).
   EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt, "R", 0, false), s0), 0.0)
@@ -275,15 +278,22 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
   // Rotate: slot 1 <- slot 0 (the just-stored value); slot 0 recycled. Store a MUTATED value to slot 0
   // and check prev(lag=1) reads the pre-rotate value.
   detail::AmrHistoryOps::rotate_histories(rt);
+  EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 1)
+      << "cold copies do not warm additional logical slots";
   // advance the live state so the next store differs.
   rt.step(Real(0.01));
   const std::vector<double> s1 = block0_all_levels(rt);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
+  EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 1)
+      << "multiple level writes remain one pending logical sample";
   // read lag 1 (level by level) == the FIRST stored state s0; lag 0 == the new state s1.
   EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt, "R", 1, false), s0), 0.0) << "prev_reads_older";
   EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt, "R", 0, false), s1), 0.0) << "cur_reads_newest";
   EXPECT_GT(dmax(s0, s1), 0.0) << "the_step_actually_changed_the_state";
+  detail::AmrHistoryOps::rotate_histories(rt);
+  EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 2)
+      << "the conservative per-level count reaches full depth together";
 }
 
 TEST(test_amr_history_ring, CheckpointRoundTrip) {
@@ -752,6 +762,135 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
               parents_before[index].snapshot.physical_time_bits);
     EXPECT_NE(parents_after[index].snapshot.revision,
               parents_before[index].snapshot.revision);
+  }
+}
+
+TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCapacity) {
+  constexpr int n = 16;
+  constexpr double dt = 1.0e-4;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 1;
+  cfg.level_count = 3;
+  cfg.explicit_bootstrap = true;
+
+  AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
+  sim.set_temporal_relations({1, 1}, {1, 1}, {"integral_only", "integral_only"});
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_refinement(1.2);
+  sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
+  sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
+  sim.set_program_block_map({0, 1});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 1);
+  ASSERT_EQ(rt->max_levels(), 3);
+
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
+      "test::lagged-flux-depth-refine@1");
+  runtime::program::AmrProgramContext context(rt, &sim);
+  install_native_ab2_program(context);
+
+  sim.step(dt);  // fresh hierarchy: bind the accepted one-level topology and seed AB2
+  ASSERT_EQ(rt->nlev(), 1);
+  sim.step(dt);  // activate both resolved transitions
+  ASSERT_EQ(rt->nlev(), 3);
+  const int growth_rebinds = context.history_flux_topology_rebind_count();
+  EXPECT_EQ(growth_rebinds, 2);
+
+  // The accepted multilevel AB2 state now carries real compact conservative contributions. The
+  // following coarsen therefore proves that removal invalidates an existing authority rather than
+  // merely bypassing the no-history SSPRK path.
+  const auto multilevel = runtime::program::deserialize_amr_program_accepted_state(
+      sim.program_accepted_state());
+  const auto contributions = multilevel.ring_flux_contributions.find("a.rate");
+  ASSERT_NE(contributions, multilevel.ring_flux_contributions.end());
+  bool has_multilevel_flux = false;
+  for (const auto& slot : contributions->second)
+    for (const auto& level : slot)
+      has_multilevel_flux = has_multilevel_flux || !level.empty();
+  ASSERT_TRUE(has_multilevel_flux);
+
+  const std::vector<Box2D> middle_before_partial_shrink =
+      rt->level_state(0, 1).box_array().boxes();
+  rt->level_state(0, 0).set_val(Real(2));
+  rt->level_state(0, 1).set_val(Real(1));
+  rt->level_state(0, 2).set_val(Real(1));
+  test::install_prepared_threshold_decisions(
+      *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
+      "test::lagged-flux-depth-partial-coarsen@1");
+  sim.step(dt);
+  ASSERT_EQ(rt->nlev(), 2);
+  EXPECT_EQ(rt->level_state(0, 1).box_array().boxes(), middle_before_partial_shrink)
+      << "the surviving child keeps its layout while absorbing the removed descendant";
+  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 2);
+
+  const auto middle = runtime::program::deserialize_amr_program_accepted_state(
+      sim.program_accepted_state());
+  for (const auto& slot : middle.ring_flux.at("a.rate"))
+    EXPECT_EQ(slot.size(), 2u);
+  for (const auto& slot : middle.ring_flux_contributions.at("a.rate"))
+    EXPECT_EQ(slot.size(), 2u);
+  for (const auto& slot : middle.ring_clocks.at("a.rate"))
+    EXPECT_EQ(slot.size(), 2u);
+  for (const auto& slot : middle.ring_identities.at("a.rate"))
+    EXPECT_EQ(slot.size(), 2u);
+  EXPECT_EQ(middle.ring_flux_initialized.at("a.rate").size(), 2u);
+
+  rt->level_state(0, 0).set_val(Real(1));
+  test::install_prepared_threshold_decisions(
+      *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
+      "test::lagged-flux-depth-full-coarsen@1");
+  sim.step(dt);
+  ASSERT_EQ(rt->nlev(), 1);
+  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 3);
+
+  const auto coarse = runtime::program::deserialize_amr_program_accepted_state(
+      sim.program_accepted_state());
+  for (const auto& slot : coarse.ring_flux.at("a.rate"))
+    EXPECT_EQ(slot.size(), 1u);
+  for (const auto& slot : coarse.ring_flux_contributions.at("a.rate"))
+    EXPECT_EQ(slot.size(), 1u);
+  for (const auto& slot : coarse.ring_clocks.at("a.rate"))
+    EXPECT_EQ(slot.size(), 1u);
+  for (const auto& slot : coarse.ring_identities.at("a.rate"))
+    EXPECT_EQ(slot.size(), 1u);
+  EXPECT_EQ(coarse.ring_flux_initialized.at("a.rate").size(), 1u);
+
+  test::install_prepared_threshold_union(
+      *rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
+      "test::lagged-flux-depth-reactivate@1");
+  sim.step(dt);
+  ASSERT_EQ(rt->nlev(), 3);
+  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 5);
+  const auto reactivated = runtime::program::deserialize_amr_program_accepted_state(
+      sim.program_accepted_state());
+  ASSERT_EQ(reactivated.ring_flux_initialized.at("a.rate").size(), 3u);
+  EXPECT_TRUE(std::all_of(reactivated.ring_flux_initialized.at("a.rate").begin(),
+                          reactivated.ring_flux_initialized.at("a.rate").end(),
+                          [](char initialized) { return initialized != 0; }));
+  for (std::size_t slot_index = 0; slot_index < reactivated.ring_clocks.at("a.rate").size();
+       ++slot_index) {
+    const auto& clocks = reactivated.ring_clocks.at("a.rate")[slot_index];
+    const auto& identities = reactivated.ring_identities.at("a.rate")[slot_index];
+    ASSERT_EQ(clocks.size(), 3u);
+    ASSERT_EQ(identities.size(), 3u);
+    for (int level = 0; level < 3; ++level) {
+      ASSERT_TRUE(identities[static_cast<std::size_t>(level)].has_value());
+      EXPECT_EQ(clocks[static_cast<std::size_t>(level)].level, level);
+      EXPECT_EQ(identities[static_cast<std::size_t>(level)]->level, level);
+      EXPECT_EQ(identities[static_cast<std::size_t>(level)]->clock,
+                clocks[static_cast<std::size_t>(level)]);
+    }
   }
 }
 

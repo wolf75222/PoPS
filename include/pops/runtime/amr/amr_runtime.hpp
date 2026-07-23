@@ -976,6 +976,8 @@ class AmrRuntime {
     std::map<std::string, int> history_depth;
     std::map<std::string, std::size_t> history_block_owner;
     std::map<std::string, std::vector<char>> history_initialized;
+    std::map<std::string, std::vector<int>> history_fill_count;
+    std::map<std::string, std::vector<char>> history_store_pending;
     std::map<std::string, std::vector<Real>> history_slot_dt;
     std::map<std::string, BootstrapStaggeredField> staggered_fields;
     std::map<std::string, BootstrapCacheState> bootstrap_caches;
@@ -2014,6 +2016,8 @@ class AmrRuntime {
         !same_snapshot_map_keys_(hist_depth_, saved.history_depth) ||
         !same_snapshot_map_keys_(hist_block_owner_, saved.history_block_owner) ||
         !same_snapshot_vector_map_shape_(hist_init_, saved.history_initialized) ||
+        !same_snapshot_vector_map_shape_(hist_fill_count_, saved.history_fill_count) ||
+        !same_snapshot_vector_map_shape_(hist_store_pending_, saved.history_store_pending) ||
         !same_snapshot_vector_map_shape_(hist_slot_dt_, saved.history_slot_dt) ||
         !same_snapshot_map_keys_(bootstrap_caches_, saved.bootstrap_caches))
       return false;
@@ -2137,6 +2141,8 @@ class AmrRuntime {
     copy_snapshot_value_map_(out.history_depth, hist_depth_);
     copy_snapshot_value_map_(out.history_block_owner, hist_block_owner_);
     copy_snapshot_vector_map_(out.history_initialized, hist_init_);
+    copy_snapshot_vector_map_(out.history_fill_count, hist_fill_count_);
+    copy_snapshot_vector_map_(out.history_store_pending, hist_store_pending_);
     copy_snapshot_vector_map_(out.history_slot_dt, hist_slot_dt_);
     copy_snapshot_staggered_fields_(out.staggered_fields, bootstrap_staggered_fields_);
     copy_snapshot_bootstrap_caches_(out.bootstrap_caches, bootstrap_caches_);
@@ -2221,6 +2227,8 @@ class AmrRuntime {
       copy_snapshot_value_map_(hist_depth_, saved.history_depth);
       copy_snapshot_value_map_(hist_block_owner_, saved.history_block_owner);
       copy_snapshot_vector_map_(hist_init_, saved.history_initialized);
+      copy_snapshot_vector_map_(hist_fill_count_, saved.history_fill_count);
+      copy_snapshot_vector_map_(hist_store_pending_, saved.history_store_pending);
       copy_snapshot_vector_map_(hist_slot_dt_, saved.history_slot_dt);
       copy_snapshot_staggered_fields_(bootstrap_staggered_fields_, saved.staggered_fields);
       copy_snapshot_bootstrap_caches_(bootstrap_caches_, saved.bootstrap_caches);
@@ -2304,6 +2312,8 @@ class AmrRuntime {
     copy_snapshot_value_map_(hist_depth_, saved.history_depth);
     copy_snapshot_value_map_(hist_block_owner_, saved.history_block_owner);
     copy_snapshot_vector_map_(hist_init_, saved.history_initialized);
+    copy_snapshot_vector_map_(hist_fill_count_, saved.history_fill_count);
+    copy_snapshot_vector_map_(hist_store_pending_, saved.history_store_pending);
     copy_snapshot_vector_map_(hist_slot_dt_, saved.history_slot_dt);
     copy_snapshot_staggered_fields_(bootstrap_staggered_fields_, saved.staggered_fields);
     copy_snapshot_bootstrap_caches_(bootstrap_caches_, saved.bootstrap_caches);
@@ -4187,13 +4197,23 @@ class AmrRuntime {
           ring[1].size() != static_cast<std::size_t>(nlev_) ||
           ring[0][0].ncomp() != blocks_[owner->second].ncomp ||
           hist_init_[name].size() != static_cast<std::size_t>(nlev_) ||
+          hist_fill_count_[name].size() != static_cast<std::size_t>(nlev_) ||
+          hist_store_pending_[name].size() != static_cast<std::size_t>(nlev_) ||
           hist_slot_dt_[name].size() != ring.size())
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
                                  "' requires an explicit materialization provider");
-      if (std::any_of(hist_init_[name].begin(), hist_init_[name].end(),
-                      [](char value) { return value == 0; }))
+      bool invalid_fill = false;
+      for (int level = 0; level < nlev_; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        const int fill = hist_fill_count_[name][index];
+        invalid_fill = invalid_fill || hist_init_[name][index] == 0 || fill < 0 ||
+                       fill > static_cast<int>(ring.size()) ||
+                       hist_store_pending_[name][index] != 0 ||
+                       (hist_init_[name][index] != 0) != (fill > 0);
+      }
+      if (invalid_fill)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
-                                 "' contains an uninitialized level");
+                                 "' contains inconsistent initialization/fill metadata");
     }
     bootstrap_pending_ = false;
   }
@@ -5205,6 +5225,8 @@ class AmrRuntime {
   std::map<std::string, int> hist_depth_;
   std::map<std::string, std::size_t> hist_block_owner_;
   std::map<std::string, std::vector<char>> hist_init_;
+  std::map<std::string, std::vector<int>> hist_fill_count_;
+  std::map<std::string, std::vector<char>> hist_store_pending_;
   std::map<std::string, std::vector<Real>> hist_slot_dt_;
   // Regrid / rebuild_hierarchy ring remap hook (member so the INLINE regrid() can call it before
   // detail::AmrHistoryOps is complete); body in amr_history.hpp forwards to AmrHistoryOps::remap_rings.

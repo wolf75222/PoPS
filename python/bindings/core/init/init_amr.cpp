@@ -1119,6 +1119,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &AmrSystem::history_initialized, py::arg("name"))
+      .def("history_fill_count", &AmrSystem::history_fill_count, py::arg("name"))
       .def(
           "restore_history",
           [](AmrSystem& s, const std::string& name, int slot,
@@ -1128,6 +1129,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &AmrSystem::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
+      .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count,
+           py::arg("name"), py::arg("fill_count"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))

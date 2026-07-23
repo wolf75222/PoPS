@@ -672,11 +672,21 @@ def _preflight_histories_v3(sim, d, current_ranks):
             raise ValueError(
                 "restart: history '%s' requires depth >= 2 and component count >= 1" % name)
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
-        from pops.runtime._system_io_history import resolve_history_storage
+        from pops.runtime._system_io_history import (
+            history_fill_count_from_payload,
+            resolve_history_storage,
+        )
+        fill_count = history_fill_count_from_payload(
+            d,
+            name,
+            depth,
+            bool(d["history_init_" + name]),
+        )
         expected_requested, expected_stored, expected_mode, expected_steps = \
             resolve_history_storage(
                 policy,
                 depth,
+                fill_count=fill_count,
                 macro_step=int(d["macro_step"]),
                 regrid_every=int(d["regrid_every"]),
             )

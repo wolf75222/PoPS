@@ -472,8 +472,9 @@ struct AmrSystem::Impl {
     const double eff_dt = dt * static_cast<double>(program_.stride_);  // catch-up effective step
     const double h = eff_dt / static_cast<double>(program_.substeps_);
     for (int s = 0; s < program_.substeps_; ++s) {
-      // ADC-626/ADC-631: tag the dt that produced this macro-step so a history ring's store_history
-      // records the per-slot dt (variable-dt replay). Parity with SystemStepper::run_program_cadence.
+      // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
+      // sample. The ring ledger then records the outgoing dt from that sample toward the next
+      // accepted sample (variable-dt replay). Parity with SystemStepper::run_program_cadence.
       program_.last_dt_ = h;
       program_.step_(h);
     }
@@ -3425,9 +3426,9 @@ bool AmrSystem::program_owns_operator_authority(
 std::string AmrSystem::installed_program_hash() const {
   return p_->program_.installed_hash_;
 }
-// ADC-631: the last macro-step dt handed to the installed Program (set by run_program_cadence_ before
-// each step_). The AmrProgramContext reads it so a history ring's store_history tags the per-slot dt
-// (variable-dt replay). Parity with ProgramRuntimeState::last_dt_ on the Uniform side.
+// ADC-631: the last macro-step dt handed to the installed Program (set by run_program_cadence_
+// before each step_). The AmrProgramContext reads it so a pre-commit history sample records its
+// outgoing interval (variable-dt replay). Parity with ProgramRuntimeState::last_dt_ on Uniform.
 double AmrSystem::program_last_dt() const {
   return static_cast<double>(p_->program_.last_dt_);
 }
@@ -4400,10 +4401,20 @@ bool AmrSystem::history_initialized(const std::string& name) const {
     throw std::runtime_error(kAmrHistNoEngine);
   return detail::AmrHistoryOps::initialized(*p_->runtime, name);
 }
+int AmrSystem::history_fill_count(const std::string& name) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::fill_count(*p_->runtime, name);
+}
 void AmrSystem::set_history_initialized(const std::string& name, bool initialized) {
   if (!p_->runtime)
     throw std::runtime_error(kAmrHistNoEngine);
   detail::AmrHistoryOps::set_initialized(*p_->runtime, name, initialized);
+}
+void AmrSystem::restore_history_fill_count(const std::string& name, int fill_count) {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  detail::AmrHistoryOps::restore_fill_count(*p_->runtime, name, fill_count);
 }
 std::vector<double> AmrSystem::history_global(const std::string& name, int slot) const {
   if (!p_->runtime)

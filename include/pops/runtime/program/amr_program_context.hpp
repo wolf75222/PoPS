@@ -3456,18 +3456,57 @@ class AmrProgramContext {
   /// example a phi/state carry) keep the engine's normal overlap-preserving remap and are untouched.
   void rebind_history_flux_topology_(const HistoryFluxTopology& before,
                                      const HistoryFluxTopology& after) const {
-    if (before.boxes.size() != after.boxes.size() || before.owners.size() != after.owners.size())
+    if (before.boxes.size() != before.owners.size() ||
+        after.boxes.size() != after.owners.size() || after.boxes.empty())
       throw std::runtime_error(
-          "AMR lagged-flux topology rebind cannot change the resolved hierarchy depth");
-    for (int child = 1; child < nlev(); ++child) {
+          "AMR lagged-flux topology rebind received an inconsistent hierarchy");
+    const std::size_t before_levels = before.boxes.size();
+    const std::size_t after_levels = after.boxes.size();
+    if (after_levels != static_cast<std::size_t>(nlev()))
+      throw std::runtime_error(
+          "AMR lagged-flux topology rebind differs from the active hierarchy depth");
+    if (after_levels > static_cast<std::size_t>(eng_->max_levels()))
+      throw std::runtime_error(
+          "AMR lagged-flux topology rebind exceeds the resolved hierarchy capacity");
+
+    auto level_changed = [&before, &after, before_levels](std::size_t level) {
+      return level >= before_levels || before.boxes[level] != after.boxes[level] ||
+             before.owners[level] != after.owners[level];
+    };
+    auto clear_transition = [this](const std::string& name, int parent, int child) {
+      auto flux_ring = ring_flux_.find(name);
+      if (flux_ring != ring_flux_.end())
+        for (auto& slot : flux_ring->second) {
+          if (parent < static_cast<int>(slot.size()))
+            clear_parent_interface_(slot[static_cast<std::size_t>(parent)]);
+          if (child < static_cast<int>(slot.size()))
+            clear_child_interface_(slot[static_cast<std::size_t>(child)]);
+        }
+      auto contributions = ring_flux_contributions_.find(name);
+      if (contributions != ring_flux_contributions_.end())
+        for (auto& slot : contributions->second) {
+          if (parent < static_cast<int>(slot.size()))
+            for (FluxContribution& contribution : slot[static_cast<std::size_t>(parent)])
+              clear_parent_interface_(contribution.payload);
+          if (child < static_cast<int>(slot.size()))
+            for (FluxContribution& contribution : slot[static_cast<std::size_t>(child)])
+              clear_child_interface_(contribution.payload);
+        }
+    };
+
+    // Existing and newly activated transitions both have an exact engine-owned history remap.  A
+    // new child has no old interface flux to prolong, so give its lagged conservative state the same
+    // zero-mismatch authority as a moved interface before clearing the obsolete compact strips.
+    for (int child = 1; child < static_cast<int>(after_levels); ++child) {
       const std::size_t k = static_cast<std::size_t>(child);
       const int parent = child - 1;
       const std::size_t p = static_cast<std::size_t>(parent);
-      const bool parent_changed =
-          before.boxes[p] != after.boxes[p] || before.owners[p] != after.owners[p];
-      const bool child_changed =
-          before.boxes[k] != after.boxes[k] || before.owners[k] != after.owners[k];
-      if (!parent_changed && !child_changed)
+      // Removing a fine suffix restricts it into the highest surviving child. Even when that
+      // child's boxes/owners are unchanged, its data and therefore its parent-interface flux
+      // authority changed.
+      const bool absorbed_removed_child =
+          before_levels > after_levels && k + 1 == after_levels;
+      if (!level_changed(p) && !level_changed(k) && !absorbed_removed_child)
         continue;
       for (const auto& [name, owner] : history_owners_) {
         (void)owner;
@@ -3475,26 +3514,78 @@ class AmrProgramContext {
           continue;
         pops::detail::AmrHistoryOps::match_conservative_ring_average_to_parent(*eng_, name, child,
                                                                                parent);
-        auto flux_ring = ring_flux_.find(name);
-        if (flux_ring != ring_flux_.end())
-          for (auto& slot : flux_ring->second) {
-            if (parent < static_cast<int>(slot.size()))
-              clear_parent_interface_(slot[static_cast<std::size_t>(parent)]);
-            if (child < static_cast<int>(slot.size()))
-              clear_child_interface_(slot[k]);
-          }
-        auto contributions = ring_flux_contributions_.find(name);
-        if (contributions != ring_flux_contributions_.end())
-          for (auto& slot : contributions->second) {
-            if (parent < static_cast<int>(slot.size()))
-              for (FluxContribution& contribution : slot[static_cast<std::size_t>(parent)])
-                clear_parent_interface_(contribution.payload);
-            if (child < static_cast<int>(slot.size()))
-              for (FluxContribution& contribution : slot[k])
-                clear_child_interface_(contribution.payload);
-          }
+        clear_transition(name, parent, child);
       }
       ++history_flux_topology_rebind_count_;
+    }
+
+    // Deactivated fine levels were conservatively restricted into their surviving parent by
+    // AmrHistoryOps.  Their compact interface authority is no longer meaningful; discard exactly
+    // those roles before shrinking every Program-owned level axis.
+    for (int child = static_cast<int>(before_levels) - 1;
+         child >= static_cast<int>(after_levels); --child) {
+      const int parent = child - 1;
+      for (const auto& [name, owner] : history_owners_) {
+        (void)owner;
+        if (has_lagged_conservative_flux_authority_(name))
+          clear_transition(name, parent, child);
+      }
+      ++history_flux_topology_rebind_count_;
+    }
+
+    auto require_old_axis = [before_levels](std::size_t size, const std::string& name,
+                                            const char* axis) {
+      if (size != before_levels)
+        throw std::runtime_error("AMR Program history '" + name + "' " + axis +
+                                 " axis differs from the accepted hierarchy depth");
+    };
+    for (auto& [name, ring] : ring_flux_)
+      for (auto& slot : ring) {
+        require_old_axis(slot.size(), name, "flux");
+        slot.resize(after_levels);
+      }
+    for (auto& [name, ring] : ring_flux_contributions_)
+      for (auto& slot : ring) {
+        require_old_axis(slot.size(), name, "flux-contribution");
+        slot.resize(after_levels);
+      }
+
+    // The native ring remap seeds an activated level from its immediate parent. Mirror that exact
+    // accepted-time qualification in the Program metadata instead of cold-starting older lags from
+    // the first new fine evaluation. This keeps prev(k), its clock and its empty new-interface flux
+    // authority aligned for arbitrary hierarchy growth and shrinkage.
+    for (auto& [name, ring] : ring_clocks_)
+      for (auto& slot : ring) {
+        require_old_axis(slot.size(), name, "clock");
+        slot.resize(after_levels);
+        for (std::size_t level = before_levels; level < after_levels; ++level) {
+          amr::ClockStamp inherited = slot[level - 1];
+          inherited.level = static_cast<int>(level);
+          slot[level] = inherited;
+        }
+      }
+    for (auto& [name, ring] : ring_identities_)
+      for (std::size_t slot_index = 0; slot_index < ring.size(); ++slot_index) {
+        auto& slot = ring[slot_index];
+        require_old_axis(slot.size(), name, "identity");
+        slot.resize(after_levels);
+        for (std::size_t level = before_levels; level < after_levels; ++level) {
+          slot[level] = slot[level - 1];
+          if (slot[level]) {
+            slot[level]->level = static_cast<int>(level);
+            const auto clocks = ring_clocks_.find(name);
+            if (clocks == ring_clocks_.end() || slot_index >= clocks->second.size())
+              throw std::runtime_error("AMR Program history '" + name +
+                                       "' lost its qualified clock during topology rebind");
+            slot[level]->clock = clocks->second[slot_index][level];
+          }
+        }
+      }
+    for (auto& [name, initialized] : ring_flux_init_) {
+      require_old_axis(initialized.size(), name, "flux-initialization");
+      initialized.resize(after_levels);
+      for (std::size_t level = before_levels; level < after_levels; ++level)
+        initialized[level] = initialized[level - 1];
     }
   }
 
