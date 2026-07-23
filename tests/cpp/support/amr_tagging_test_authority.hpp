@@ -12,10 +12,13 @@
 
 namespace pops::test {
 
+enum class PreparedThresholdRelation : std::uint8_t { Above, Below };
+
 struct PreparedThresholdTag {
   std::size_t field_index = 0;
   int component = 0;
   Real threshold = Real(0);
+  PreparedThresholdRelation relation = PreparedThresholdRelation::Above;
 };
 
 inline void install_prepared_threshold_decisions(
@@ -36,12 +39,14 @@ inline void install_prepared_threshold_decisions(
     for (const PreparedThresholdTag& criterion : criteria) {
       if (criterion.component < 0)
         throw std::invalid_argument("test threshold decision has a negative component");
+      const std::int32_t opcode =
+          criterion.relation == PreparedThresholdRelation::Above ? POPS_TAGGING_ABOVE_V1
+                                                                 : POPS_TAGGING_BELOW_V1;
       const auto leaf_index = static_cast<std::int32_t>(leaves.size());
       leaves.push_back(Program::Leaf{criterion.field_index,
                                      static_cast<std::size_t>(criterion.component),
-                                     POPS_TAGGING_ABOVE_V1, criterion.threshold,
-                                     POPS_TAGGING_NO_STENCIL_V1});
-      ops.push_back(POPS_TAGGING_ABOVE_V1);
+                                     opcode, criterion.threshold, POPS_TAGGING_NO_STENCIL_V1});
+      ops.push_back(opcode);
       args.push_back(leaf_index);
     }
     if (criteria.size() > 1) {

@@ -405,7 +405,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
-    A.set_density("gas", rho);
+    A.set_density("pot", rho);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtA);
 
@@ -428,7 +428,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
-    A.set_density("gas", rho);
+    A.set_density(bname, rho);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtB);
 

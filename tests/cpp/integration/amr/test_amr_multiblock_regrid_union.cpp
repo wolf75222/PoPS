@@ -282,8 +282,16 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   }
 
   rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
-  test::install_prepared_threshold_union(
-      rt, {{0, 0, Real(1.25)}, {1, 0, Real(1.25)}});
+  // Regridding is decision based: a false refine root holds the accepted fine coverage. The
+  // complementary roots below deliberately replace it, so the displaced threshold region can
+  // invalidate the old level-2 parent. Equality remains Hold and the roots never conflict.
+  test::install_prepared_threshold_decisions(
+      rt,
+      {{0, 0, Real(1.25), test::PreparedThresholdRelation::Above},
+       {1, 0, Real(1.25), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.25), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(1.25), test::PreparedThresholdRelation::Below}},
+      "test::prepared-replacement-threshold@1");
   rt.step(Real(1e-4));  // macro step zero never regrids
   EXPECT_EQ(rt.regrid_count(), 0);
 
@@ -291,6 +299,12 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   const std::uint64_t accepted_materialization = rt.topology_materialization_generation();
   const std::vector<Box2D> accepted_middle = rt.levels(0)[1].U.box_array().boxes();
   const std::vector<Box2D> accepted_finest = rt.levels(0)[2].U.box_array().boxes();
+  ASSERT_TRUE(std::all_of(
+      accepted_finest.begin(), accepted_finest.end(), [&](const Box2D& accepted_child) {
+        return layout_covers(rt.levels(0)[1].U.box_array(),
+                             accepted_child.coarsen(kAmrRefRatio));
+      }))
+      << "the accepted descendant must initially be supported by its parent";
   rt.step(Real(1e-4));  // regrids every active transition, coarse to fine
   const std::uint64_t regridded_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
