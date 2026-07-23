@@ -129,21 +129,30 @@ class ConsoleRunSession:
         accepted_steps: int,
         physical_time: float,
         dt: float,
+        step_change_l2: dict[str, float] | None = None,
+        step_change_error: str | None = None,
     ) -> None:
         if not self.enabled or not self.show_progress:
             return
-        span = self.target_time - self.run_start_time
-        fraction = 1.0 if span <= 0.0 else (
-            (physical_time - self.run_start_time) / span)
-        fraction = min(1.0, max(0.0, fraction))
-        bucket = min(10, int(fraction * 10.0 + 1.0e-12))
+        fraction, bucket = progress_fraction_bucket(
+            self.run_start_time, self.target_time, physical_time)
         if bucket <= self._progress_bucket:
             return
         self._progress_bucket = bucket
         percent = 100.0 * fraction
         elapsed = perf_counter() - self.started_at
+        change = ""
+        if step_change_l2:
+            if len(step_change_l2) == 1:
+                change = " | dU_L2=%.6e" % next(iter(step_change_l2.values()))
+            else:
+                change = " | dU_L2={%s}" % ", ".join(
+                    "%s=%.6e" % item for item in sorted(step_change_l2.items()))
+        elif step_change_error:
+            change = " | dU_L2=n/a (%s)" % step_change_error
         print(
-            "PoPS progress | t=%.12g / %.12g (%.1f%%) | step=%d | dt=%.12g | wall=%.3fs"
+            "PoPS progress | t=%.12g / %.12g (%.1f%%) | step=%d | dt=%.12g"
+            " | wall=%.3fs%s"
             % (
                 physical_time,
                 self.target_time,
@@ -151,6 +160,7 @@ class ConsoleRunSession:
                 accepted_steps,
                 dt,
                 elapsed,
+                change,
             ),
             flush=True,
         )
@@ -176,6 +186,19 @@ class ConsoleRunSession:
         print("PoPS run failed after %d accepted step(s) at t=%.12g (%.6f s)" % (
             accepted_steps, final_time, elapsed), file=sys.stderr)
         print("  %s: %s" % (type(error).__name__, error), file=sys.stderr)
+
+
+def progress_fraction_bucket(
+    run_start_time: float,
+    target_time: float,
+    physical_time: float,
+) -> tuple[float, int]:
+    """Rank-identical physical decile for collective sampling and rank-zero rendering."""
+    span = target_time - run_start_time
+    fraction = 1.0 if span <= 0.0 else (
+        (physical_time - run_start_time) / span)
+    fraction = min(1.0, max(0.0, fraction))
+    return fraction, min(10, int(fraction * 10.0 + 1.0e-12))
 
 
 def _rank_size(instance: Any) -> tuple[str, int, int]:
@@ -294,6 +317,8 @@ def safe_console_progress(
     accepted_steps: int,
     physical_time: float,
     dt: float,
+    step_change_l2: dict[str, float] | None = None,
+    step_change_error: str | None = None,
 ) -> None:
     """Render accepted-step progress without changing numerical execution."""
 
@@ -302,6 +327,8 @@ def safe_console_progress(
             accepted_steps=accepted_steps,
             physical_time=physical_time,
             dt=dt,
+            step_change_l2=step_change_l2,
+            step_change_error=step_change_error,
         )
     except Exception as error:
         _warning("progress", error)

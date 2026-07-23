@@ -2924,6 +2924,13 @@ void AmrSystem::commit_step_transaction() {
     throw std::runtime_error("AmrSystem::commit_step_transaction: transaction already committed");
   p_->external_step_transaction_committed_ = true;
 }
+std::map<std::string, double> AmrSystem::step_change_l2() const {
+  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_ ||
+      !p_->external_step_transaction_->runtime || !p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::step_change_l2 requires a committed external step transaction");
+  return p_->runtime->step_change_l2(*p_->external_step_transaction_->runtime);
+}
 void AmrSystem::finalize_step_transaction() {
   if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
     throw std::runtime_error("AmrSystem::finalize_step_transaction: no committed transaction");

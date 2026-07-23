@@ -704,6 +704,9 @@ class System {
   void finalize_step_transaction();
   /// Restore the accepted snapshot, including after commit but before finalize.
   void rollback_step_transaction();
+  /// Volume-weighted L2 norm of each block's accepted macro-step change. RuntimeInstance calls
+  /// this collective only while a committed outer transaction still retains U^n.
+  POPS_EXPORT std::map<std::string, double> step_change_l2() const;
 
   /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),

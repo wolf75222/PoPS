@@ -1206,12 +1206,15 @@ terminal est signalée sur `stderr`, mais ne peut ni masquer une exception numé
 rollback, ni convertir un run réussi en échec.
 
 Par défaut, le rang zéro ajoute au plus dix lignes de progression lorsque le temps physique accepté
-franchit les déciles de l'intervalle demandé. Cette cadence observe uniquement le pas macro déjà
-commité : elle ne parcourt aucun champ, ne suit pas les sous-pas AMR, ne lance aucun kernel et
-n'ajoute aucun collectif MPI. `progress=False` coupe les lectures d'horloge murale, calculs de
-pourcentage, formatage et I/O ; il ne reste qu'une branche prédictible par pas macro accepté, hors des
-boucles natives. Les kernels uniforme/AMR et OpenMP/GPU utilisent donc exactement le même chemin
-numérique.
+franchit les déciles de l'intervalle demandé. Cette cadence observe uniquement le pas macro accepté :
+elle ne suit ni les tentatives rejetées, ni les étages RK, ni les sous-pas AMR. Pour chaque ligne,
+le runtime calcule nativement, sur Kokkos puis MPI, la norme L2 pondérée par le volume
+`||U^(n+1)-U^n||_2` de chaque bloc. Il réutilise l'image `U^n` déjà retenue par la transaction de
+rollback et ne recopie donc pas le champ. Une étape qui change la topologie AMR affiche
+`dU_L2=n/a (AMR regrid)` : PoPS ne compare pas des cellules appartenant à deux maillages différents.
+`progress=False` coupe aussi ces réductions, les lectures d'horloge murale, les calculs de
+pourcentage, le formatage et les I/O ; il ne reste qu'une branche prédictible par pas macro accepté,
+hors des boucles natives.
 
 Les seules options de compilation sont celles acceptées par `pops.resolve(..., compile_options=...)` :
 `so_path`, `force`, `cxx`, `include`, `std` et `debug`. Le backend est une autorité séparée. Il n'existe

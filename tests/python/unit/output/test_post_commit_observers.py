@@ -417,6 +417,16 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
     assert any(
         path.endswith("/display_name") and value == "vtkGhostType"
         for path, value in paths.items())
+    level_prefix = next(
+        path.removesuffix("/display_name") for path, value in paths.items()
+        if path.endswith("/display_name") and value == "pops_level"
+    )
+    layout_prefix = next(
+        path.removesuffix("/display_name") for path, value in paths.items()
+        if path.endswith("/display_name") and value == "pops_layout"
+    )
+    assert np.array_equal(paths[level_prefix + "/values"], np.zeros(4, dtype=np.int32))
+    assert np.array_equal(paths[layout_prefix + "/values"], np.zeros(4, dtype=np.int32))
     assert paths["catalyst/channels/mesh/type"] == "multimesh"
     ghost_metadata = [
         value for path, value in paths.items()
@@ -468,7 +478,7 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
         value for path, value in child_paths.items()
         if "/fields/" in path and path.endswith("/values")
     ]
-    assert len(empty_arrays) == 4
+    assert len(empty_arrays) == 6
     assert all(array.size == 0 for array in empty_arrays)
 
 

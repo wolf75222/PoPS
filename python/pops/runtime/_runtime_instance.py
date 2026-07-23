@@ -1030,6 +1030,7 @@ class RuntimeInstance:
         advance: Any,
         *,
         at_end: Any = False,
+        observe_accepted: Any = None,
     ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
         from pops.time import StepTransactionReport
@@ -1067,6 +1068,13 @@ class RuntimeInstance:
             commit()
             phase = "effect"
             reports, cursors, _all_reports = self._accept_consumers(transactions)
+            if callable(observe_accepted):
+                # This is presentation-only evidence. A missing optional diagnostic must never
+                # roll back an otherwise accepted and externally published numerical step.
+                try:
+                    observe_accepted()
+                except Exception:
+                    pass
             phase = "commit"
             finalize()
             native_active = False
@@ -1192,6 +1200,9 @@ class RuntimeInstance:
             self._fire_consumers(at_start=True)
             progress_enabled = (
                 console_session is not None and console_session.show_progress)
+            progress_bucket = 0
+            progress_start_time = float(manifest.start_time)
+            progress_target_time = float(manifest.controls["t_end"])
             while native.time() < t_end and steps < max_steps:
                 step_start_time = float(native.time()) if progress_enabled else 0.0
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
@@ -1227,9 +1238,40 @@ class RuntimeInstance:
                         )
                     return report, report.attempts
 
+                progress_observation: dict[str, Any] = {}
+
+                def observe_progress(
+                    observation: dict[str, Any] = progress_observation,
+                ) -> None:
+                    nonlocal progress_bucket
+                    if not progress_enabled:
+                        return
+                    from pops.runtime._console_run import progress_fraction_bucket
+
+                    physical_time = float(native.time())
+                    _fraction, bucket = progress_fraction_bucket(
+                        progress_start_time, progress_target_time, physical_time)
+                    if bucket <= progress_bucket:
+                        return
+                    progress_bucket = bucket
+                    provider = getattr(native, "_step_change_l2", None)
+                    if not callable(provider):
+                        observation["error"] = "provider unavailable"
+                        return
+                    try:
+                        values = provider()
+                        observation["values"] = {
+                            str(name): float(value) for name, value in values.items()
+                        }
+                    except Exception as error:
+                        message = str(error)
+                        observation["error"] = (
+                            "AMR regrid" if "topology change" in message else message)
+
                 step_report = self._accepted_step_transaction(
                     advance,
                     at_end=lambda: not (native.time() < t_end),
+                    observe_accepted=observe_progress,
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
@@ -1245,6 +1287,8 @@ class RuntimeInstance:
                         accepted_steps=steps,
                         physical_time=physical_time,
                         dt=physical_time - step_start_time,
+                        step_change_l2=progress_observation.get("values"),
+                        step_change_error=progress_observation.get("error"),
                     )
             if native.time() < t_end:
                 raise RuntimeError(

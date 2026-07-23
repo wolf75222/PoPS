@@ -698,6 +698,7 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
       .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
+      .def("_step_change_l2", &AmrSystem::step_change_l2)
       .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)
       .def("_rollback_step_transaction", &AmrSystem::rollback_step_transaction)
       .def("step_cfl", &AmrSystem::step_cfl,

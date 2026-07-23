@@ -2512,6 +2512,9 @@ class AmrRuntime {
   /// amr_restore.hpp.
   double composite_reduce(const std::string& block, const std::string& kind, int comp,
                           const std::vector<int>& levels = {}) const;
+  /// Per-block volume-weighted L2 norm between the current hierarchy and one retained accepted
+  /// snapshot. Exact only while topology/layout are unchanged; topology-changing steps fail loud.
+  std::map<std::string, double> step_change_l2(const StepSnapshot& previous) const;
 
   /// Native level-composite reduction over one qualified elliptic field provider.  The provider is
   /// materialized on the shared hierarchy, then folded directly on its Kokkos MultiFabs with the

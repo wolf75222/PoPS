@@ -395,6 +395,7 @@ class _CatalystPythonSession:
         root: Any,
         frame: ObserverFrame,
         geometry: LevelGeometry,
+        layout_ordinal: int,
         box_index: int,
         partition_index: int,
         domain_name: str,
@@ -478,6 +479,14 @@ class _CatalystPythonSession:
             return internal_name
 
         coverage = geometry.coverage[jlo:jhi, ilo:ihi].astype(np.uint8, copy=False)
+        cell_field(
+            "pops_layout",
+            np.full(coverage.shape, layout_ordinal, dtype=np.int32),
+        )
+        cell_field(
+            "pops_level",
+            np.full(coverage.shape, geometry.level, dtype=np.int32),
+        )
         cell_field("pops_coverage", coverage)
         # VTK_REFINED_CELL=8; this hides covered coarse cells in ParaView without deleting their
         # scientific values from the live Blueprint domain.
@@ -555,6 +564,8 @@ class _CatalystPythonSession:
                 root[prefix + "/values"] = np.empty(0, dtype=dtype)
             return internal_name
 
+        empty_cell_field("pops_layout", np.int32)
+        empty_cell_field("pops_level", np.int32)
         empty_cell_field("pops_coverage", np.uint8)
         ghost_field = empty_cell_field("vtkGhostType", np.uint8)
         root[
@@ -624,7 +635,7 @@ class _CatalystPythonSession:
         if not geometries:
             raise ValueError("Catalyst frame has no selected geometry")
         populated_blocks = []
-        for geometry in geometries:
+        for layout_ordinal, geometry in enumerate(geometries):
             block_name = _block_name(geometry)
             fields = self._geometry_fields(frame, geometry)
             local_boxes = {
@@ -643,7 +654,7 @@ class _CatalystPythonSession:
                 populated_blocks.append(domain_name)
                 if box_index in local_boxes:
                     self._add_domain(
-                        node, frame, geometry, box_index,
+                        node, frame, geometry, layout_ordinal, box_index,
                         box_index,
                         domain_name,
                         display_names)
