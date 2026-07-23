@@ -47,8 +47,18 @@ using namespace pops;
 // Modele ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
 // de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
 using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_charge(double q, double B0) {
+static ExBModel exb_model(double q, double B0) {
   return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+static ModelSpec exb_spec(double q, double B0) {
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = q;
+  spec.B0 = B0;
+  return spec;
 }
 
 // A single periodic species needs an explicitly authored neutralizing background: q*n alone has a
@@ -114,10 +124,10 @@ TEST(test_amr_system_twoblock, Runs) {
 
     std::vector<AmrRuntimeBlock> blocks;
     // bloc 0 : ions q=+1, schema none/rusanov.
-    blocks.push_back(detail::dispatch_amr_block(exb_charge(q0, B0), "none", "rusanov", S, "ions",
+    blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), "none", "rusanov", S, "ions",
                                                 rho0, /*has_density=*/true, 1.4, 1, false, false));
     // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
-    blocks.push_back(detail::dispatch_amr_block(exb_charge(q1, B0), "minmod", "rusanov", S,
+    blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), "minmod", "rusanov", S,
                                                 "electrons", rho1, /*has_density=*/true, 1.4, 1,
                                                 false, false));
 
@@ -170,8 +180,8 @@ TEST(test_amr_system_twoblock, Runs) {
 
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
+    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);  // SCHEMA DIFFERENT du bloc 0
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
@@ -225,8 +235,8 @@ TEST(test_amr_system_twoblock, Runs) {
     cfg.regrid_every = 10;  // > 0
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
+    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
