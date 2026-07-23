@@ -185,6 +185,13 @@ static bool same_box_list(const std::vector<Box2D>& a, const std::vector<Box2D>&
   return true;
 }
 
+static bool layout_covers(const BoxArray& layout, const Box2D& required) {
+  std::int64_t covered = 0;
+  for (const Box2D& box : layout.boxes())
+    covered += box.intersect(required).num_cells();
+  return covered == required.num_cells();
+}
+
 // Construit un AmrRuntime a deux blocs ExB scalaires sur une hierarchie 2 niveaux N x N (un patch fin
 // central seed). Densites initiales fournies. q0/q1 : charges (signe inclus) pour le Poisson somme.
 static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q1,
@@ -252,7 +259,11 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
   SCOPED_TRACE("three-level bootstrap/regrid/rollback");
   const int N = 32;
-  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
+  // Start with data whose tagged region is outside the deterministic central bootstrap seeds.  A
+  // coarse regrid therefore replaces the middle level with a layout that cannot carry the old
+  // finest layout.  The runtime must retire that stale descendant before preparing the new parent
+  // topology, then rebuild it from the new middle level in the same transaction.
+  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.82, 0.50, 0.8, 1.0, 0.08));
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.levels(0).size(), 3u);
   EXPECT_EQ(rt.patch_boxes().size(), 2u);
@@ -298,6 +309,12 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_GT(regridded_materialization, accepted_materialization);
   EXPECT_FALSE(same_box_list(accepted_middle, rt.levels(0)[1].U.box_array().boxes()));
   EXPECT_FALSE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
+  EXPECT_TRUE(std::any_of(
+      accepted_finest.begin(), accepted_finest.end(), [&](const Box2D& stale_child) {
+        return !layout_covers(rt.levels(0)[1].U.box_array(),
+                              stale_child.coarsen(kAmrRefRatio));
+      }))
+      << "the regression must replace a parent that cannot support the stale descendant";
   EXPECT_TRUE(all_level_states_finite(rt));
 
   // This is the exact engine operation the AmrSystem accepted-attempt coordinator invokes after a

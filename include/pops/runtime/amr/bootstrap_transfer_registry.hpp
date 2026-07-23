@@ -160,10 +160,15 @@ class TransferKernelRegistry {
       throw std::runtime_error(
           "native AMR transfer route is incompatible with its authenticated kernel manifest");
     PreparedTransferKernel prepared = found->second.prepare(descriptor);
-    if (descriptor.operation == "coarse_fine_fill" &&
-        (!prepared.coarse_fine || !prepared.prepared_coarse_fine))
+    if (static_cast<bool>(prepared.coarse_fine) !=
+        static_cast<bool>(prepared.prepared_coarse_fine))
       throw std::runtime_error(
-          "native AMR coarse/fine provider omitted its prepared spatial identity");
+          "native AMR coarse/fine provider must pair its callable with one prepared spatial "
+          "identity");
+    if (descriptor.operation == "coarse_fine_fill" && !prepared.coarse_fine &&
+        !prepared.materialize)
+      throw std::runtime_error(
+          "native AMR coarse/fine provider omitted its executable authority");
     // The manifest acceptance predicate authenticates the descriptor.  Publish exactly those
     // capabilities with the callable so downstream code never needs a route-name switch.
     prepared.capabilities = PreparedTransferCapabilities{descriptor.order, descriptor.ghost_depth};

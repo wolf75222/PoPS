@@ -137,8 +137,19 @@ inline void append_copy_contract_int(std::string& bytes, int value) {
   append_copy_contract_u32(bytes, static_cast<std::uint32_t>(value));
 }
 
+inline bool locally_materializes_replica(const MultiFab& field, int communicator_rank) {
+  const BoxArray& boxes = field.box_array();
+  const DistributionMapping& mapping = field.dmap();
+  if (boxes.size() == 0 || mapping.size() != boxes.size() ||
+      field.local_size() != boxes.size())
+    return false;
+  return std::all_of(mapping.ranks().begin(), mapping.ranks().end(),
+                     [communicator_rank](int owner) { return owner == communicator_rank; });
+}
+
 inline void append_copy_contract_layout(std::string& bytes, const BoxArray& boxes,
-                                        const DistributionMapping& mapping) {
+                                        const DistributionMapping& mapping, bool replicated) {
+  append_copy_contract_int(bytes, replicated ? 1 : 0);
   append_copy_contract_int(bytes, boxes.size());
   for (const Box2D& box : boxes.boxes()) {
     append_copy_contract_int(bytes, box.lo[0]);
@@ -148,11 +159,12 @@ inline void append_copy_contract_layout(std::string& bytes, const BoxArray& boxe
   }
   append_copy_contract_int(bytes, mapping.size());
   for (int owner : mapping.ranks())
-    append_copy_contract_int(bytes, owner);
+    append_copy_contract_int(bytes, replicated ? 0 : owner);
 }
 
 inline std::string make_parallel_copy_contract_payload(const MultiFab& dst, const MultiFab& src,
-                                                       int communicator_size, int message_tag) {
+                                                       int communicator_size, int message_tag,
+                                                       bool dst_replicated, bool src_replicated) {
   std::string bytes;
   const std::size_t entries = static_cast<std::size_t>(dst.box_array().size()) +
                               static_cast<std::size_t>(src.box_array().size());
@@ -162,8 +174,8 @@ inline std::string make_parallel_copy_contract_payload(const MultiFab& dst, cons
   append_copy_contract_int(bytes, communicator_size);
   append_copy_contract_int(bytes, message_tag);
   append_copy_contract_int(bytes, dst.ncomp());
-  append_copy_contract_layout(bytes, dst.box_array(), dst.dmap());
-  append_copy_contract_layout(bytes, src.box_array(), src.dmap());
+  append_copy_contract_layout(bytes, dst.box_array(), dst.dmap(), dst_replicated);
+  append_copy_contract_layout(bytes, src.box_array(), src.dmap(), src_replicated);
   return bytes;
 }
 
@@ -272,10 +284,26 @@ inline std::shared_ptr<const CopySchedule> get_copy_schedule_collectively(
     return schedule;
   }
 
+  // A replicated MultiFab intentionally records every box owner as the current rank, so its raw
+  // DistributionMapping differs on every rank even though every rank materializes the same full
+  // field. Authenticate that mode collectively and canonicalize its owners in the exact contract.
+  // The schedule below is valid when both operands are replicated (all intersections are local) or
+  // both are distributed. A mixed copy needs a distinct broadcast/gather schedule; refusing it here
+  // preserves the existing fail-closed behavior instead of posting unmatched point-to-point work.
+  const bool dst_replicated =
+      all_reduce_min(locally_materializes_replica(dst, communicator_rank) ? 1L : 0L,
+                     communicator) == 1L;
+  const bool src_replicated =
+      all_reduce_min(locally_materializes_replica(src, communicator_rank) ? 1L : 0L,
+                     communicator) == 1L;
+  if (dst_replicated != src_replicated)
+    throw std::invalid_argument(
+        "parallel_copy does not support mixed replicated/distributed layouts");
+
   std::string contract_payload;
   collectively_prepare_before_parallel_copy_post(communicator, [&] {
-    contract_payload =
-        make_parallel_copy_contract_payload(dst, src, communicator_size, message_tag);
+    contract_payload = make_parallel_copy_contract_payload(
+        dst, src, communicator_size, message_tag, dst_replicated, src_replicated);
   });
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("parallel-copy-layout-v2"),

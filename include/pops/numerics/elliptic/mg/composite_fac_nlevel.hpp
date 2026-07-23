@@ -478,6 +478,57 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
     correction_axy_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
     correction_ayx_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
   }
+  prepare_fully_refined_solver_();
+}
+
+inline void CompositeFacPoisson::prepare_fully_refined_solver_() {
+  fully_refined_solver_.reset();
+  for (int level = 0; level + 1 < n_levels_; ++level)
+    if (cov_of_[static_cast<std::size_t>(level)].covered_cell_count() !=
+        static_cast<std::size_t>(geom_level(level).domain.num_cells()))
+      return;
+
+  const int finest = n_levels_ - 1;
+  MultiFab& layout = phi_level(finest);
+  fully_refined_solver_ = std::make_unique<GeometricMG>(
+      geom_level(finest), layout.box_array(), layout.dmap(), bc_, ActiveRegionProvider2D{},
+      FieldDistribution::Distributed);
+  if (has_reaction_)
+    fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction_));
+  if (has_boundary_kernel_)
+    fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
+}
+
+inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(
+    int max_iters, Real rel_tol, Real abs_tol) {
+  const int finest = n_levels_ - 1;
+  GeometricMG& solver = *fully_refined_solver_;
+  if (has_eps_) {
+    if (has_eps_y_)
+      solver.set_epsilon_anisotropic(eps_level(finest), eps_y_level(finest));
+    else
+      solver.set_epsilon(eps_level(finest));
+  }
+  if (has_cross_)
+    solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
+  if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
+    solver.set_boundary_context(boundary_context_);
+  copy0_(solver.rhs(), rhs_level(finest));
+  copy0_(solver.phi(), phi_level(finest));
+  Real residual = Real(0);
+  try {
+    solver.solve(rel_tol, max_iters, abs_tol);
+    residual = solver.last_residual();
+  } catch (...) {
+    last_solve_report_ = solver.last_solve_report();
+    throw;
+  }
+  last_solve_report_ = solver.last_solve_report();
+  copy0_(phi_level(finest), solver.phi());
+  cascade_avgdown_();
+  last_residual_ = residual;
+  record_residual(last_solve_report_.iters, residual);
+  return residual;
 }
 
 // dst <- src, component 0, valid cells (== the legacy copy0).

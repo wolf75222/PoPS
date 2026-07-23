@@ -232,6 +232,32 @@ TEST(test_regrid, ThirdLevelClusteringUsesTheParentLevelCoverage) {
       validate_fine_layout_proper_nesting(children, parents, /*refinement_ratio=*/2, /*margin=*/1));
 }
 
+TEST(test_regrid, ThirdLevelTagsAreProjectedOntoTheProperlyNestedParentRegion) {
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  const Box2D parent_domain = Box2D::from_extents(32, 32);
+  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {27, 27}}});
+  TagBox tags(parent_domain);
+  // A buffered tagging mask may extend to the edge of a partial parent level. The edge request
+  // cannot support a one-cell coarse stencil and must remain represented by the parent; the
+  // interior request is admissible and must still create a child patch.
+  tags(4, 12) = 1;
+  tags(6, 12) = 1;
+
+  auto [children, mapping] = regrid_compute_fine_layout(
+      std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
+      /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
+      world_communicator_view(), /*refinement_ratio=*/2, &parents);
+
+  ASSERT_GT(children.size(), 0);
+  EXPECT_EQ(mapping.size(), children.size());
+  EXPECT_TRUE(std::any_of(children.boxes().begin(), children.boxes().end(),
+                          [](const Box2D& box) { return box.contains(12, 24); }));
+  EXPECT_FALSE(std::any_of(children.boxes().begin(), children.boxes().end(),
+                           [](const Box2D& box) { return box.contains(8, 24); }));
+  EXPECT_NO_THROW(
+      validate_fine_layout_proper_nesting(children, parents, /*refinement_ratio=*/2, /*margin=*/1));
+}
+
 TEST(test_regrid, ProperNestingWrapsOnlyOnDeclaredPeriodicAxes) {
   const Box2D domain = Box2D::from_extents(8, 8);
   const BoxArray parents(std::vector<Box2D>{domain});

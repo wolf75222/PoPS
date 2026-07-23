@@ -325,9 +325,12 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
     all_reduce_or_inplace(grown.t.data(), grown.t.size(), communicator);
   // Proper nesting is a level-coverage invariant, never a patch-ownership invariant. Adjacent parent
   // boxes collectively provide a stencil neighborhood, and periodic boundaries wrap that
-  // neighborhood onto the opposite side of the parent domain. Restrict only cells whose complete
-  // margin is covered by the parent LEVEL, then cluster once so the result is independent of the
-  // parent's arbitrary tiling/DistributionMapping.
+  // neighborhood onto the opposite side of the parent domain. Project the requested tag mask onto
+  // cells whose complete margin is covered by the parent LEVEL, then cluster once so the result is
+  // independent of the parent's arbitrary tiling/DistributionMapping. A tagging criterion is a
+  // refinement request, not permission to publish a non-nested child: cells outside this admissible
+  // region remain represented by their parent level. This projection also clips the authored tag
+  // dilation at a partial parent's edge, as required when constructing level 2 and above.
   TagBox restricted;
   TagBox admissible;
   // This is topology preparation over host TagBox/BoxArray metadata.  It intentionally stays next
@@ -342,9 +345,6 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
         const int j = static_cast<int>(j64);
         const bool supported = regrid_parent_cell_has_nesting_support(
             i, j, margin, pdom, proper_nesting_parents, periodicity, physical_support);
-        if (grown.tagged(i, j) && !supported)
-          throw std::runtime_error(
-              "AMR tagged cell lacks certified parent or physical-ghost nesting support");
         admissible(i, j) = supported ? 1 : 0;
         restricted(i, j) = supported && grown.tagged(i, j) ? 1 : 0;
       }

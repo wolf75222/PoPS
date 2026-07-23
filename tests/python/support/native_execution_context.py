@@ -78,6 +78,7 @@ def compiled_problem_execution_context(compiled: Any, *, target: str) -> Any:
     from pops._platform_contracts import artifact_platform_manifest
     from pops.codegen.loader import CompiledProblem
     from pops.codegen._native_mpi import native_mpi_communicator
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
 
     if type(compiled) is not CompiledProblem:
         raise TypeError("native integration context requires an exact CompiledProblem")
@@ -87,11 +88,14 @@ def compiled_problem_execution_context(compiled: Any, *, target: str) -> Any:
         raise RuntimeError("CompiledProblem carries no authenticated native ABI key")
 
     selected_communicator = native_mpi_communicator(_pops)
+    runtime_backend = native_runtime_backend_for_route(
+        "production", target, selected_communicator)
     platform = artifact_platform_manifest(
         backend="production",
         target=target,
         component=compiled,
         communicator=selected_communicator,
+        runtime_backend=runtime_backend,
     )
     return platform_execution_context(platform)
 

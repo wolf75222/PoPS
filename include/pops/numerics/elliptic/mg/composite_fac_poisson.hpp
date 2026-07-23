@@ -431,6 +431,8 @@ class CompositeFacPoisson {
     reaction_ = reaction;
     has_reaction_ = true;
     mg_.set_reaction(constant_scalar_field_provider(reaction));
+    if (fully_refined_solver_)
+      fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction));
     for (auto& level : level_mg_)
       if (level)
         level->set_reaction(constant_scalar_field_provider(reaction));
@@ -498,6 +500,8 @@ class CompositeFacPoisson {
     boundary_context_.failure = &boundary_failure_;
     has_boundary_kernel_ = true;
     mg_.set_boundary_kernel(boundary_kernel_, boundary_context_);
+    if (fully_refined_solver_)
+      fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
   }
 
   void set_boundary_context(const FieldBoundaryExecutionContext& context) {
@@ -508,6 +512,8 @@ class CompositeFacPoisson {
     if (!boundary_kernel_.observes_iteration)
       boundary_context_.point.iteration = 0;
     mg_.set_boundary_context(boundary_context_);
+    if (fully_refined_solver_)
+      fully_refined_solver_->set_boundary_context(boundary_context_);
   }
 
   void set_field_nonlinear_options(const FieldNewtonOptions& options) {
@@ -562,6 +568,8 @@ class CompositeFacPoisson {
 
     last_solve_report_ = {};
     diagnostics_.clear();
+    if (fully_refined_solver_)
+      return solve_fully_refined_hierarchy_(max_iters, rel_tol, abs_tol);
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
     if (fallible_linear_boundary)
@@ -1148,6 +1156,12 @@ class CompositeFacPoisson {
   // Intermediate-level correction multigrid: level_mg_[m] serves level m for 1 <= m <= L-2 (the
   // finest patch level is relaxed by SOR only). [0] (base mg_) and [L-1] stay null.
   std::vector<std::unique_ptr<GeometricMG>> level_mg_;
+  // A hierarchy whose every transition covers the complete parent domain has no coarse/fine
+  // interface and no uncovered coarse unknown.  Its exact composite operator is therefore the
+  // uniform operator on the finest level, followed by conservative restriction to its covered
+  // parents.  Materialize that solver with the hierarchy (never in solve()) so the residual cannot
+  // silently collapse to zero merely because the interface set is empty.
+  std::unique_ptr<GeometricMG> fully_refined_solver_;
   // Hot-path MPI communication scratch.  Built with the hierarchy, then reset/reused by every
   // residual/correction: no FluxRegister or MultiFab allocation is allowed inside solve().
   std::vector<std::unique_ptr<FluxRegister>> flux_registers_;
@@ -1165,6 +1179,8 @@ class CompositeFacPoisson {
   // current hierarchy. Called by EVERY ctor (the 2-level ctor too) so the general path can be reached
   // for any shape, including a 2-level input via the test hook.
   void finalize_hierarchy_metadata_();
+  void prepare_fully_refined_solver_();
+  Real solve_fully_refined_hierarchy_(int max_iters, Real rel_tol, Real abs_tol);
   void setup_level_coeffs_();
   void fill_cf_field_(int k, MultiFab& fine,
                       const MultiFab& parent);  // C-F bilerp parent -> level k

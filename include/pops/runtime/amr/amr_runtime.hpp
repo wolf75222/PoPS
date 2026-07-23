@@ -4494,6 +4494,14 @@ class AmrRuntime {
                 hierarchy_.dm[static_cast<std::size_t>(fine_level)].ranks())
           continue;
 
+        // Replacing a parent layout invalidates every descendant layout even when those
+        // descendants are going to be rebuilt later in this same coarse-to-fine transaction.
+        // First publish the old fine suffix conservatively into the still-live parent, then remove
+        // it.  The current transition can now remap that synchronized state without attempting to
+        // prepare FillPatch carriers between a new parent and stale grandchildren.  The loop
+        // naturally recreates the suffix from the newly published parent on its next iterations.
+        if (fine_level + 1 < nlev_)
+          remove_levels_above_(fine_level);
         materialize_regrid_transition_(parent_level, boxes, distribution, refinement_ratio);
         invalidate_named_field_topology();
         record_topology_replacement_();

@@ -51,6 +51,7 @@ from pops.physics import Model
 from pops.projection import ConservativeCellAverage
 from pops.solvers.elliptic import GeometricMG
 from pops.time import FailRun, FixedDt, every
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -370,6 +371,7 @@ def test_runtime_parameter_bind_values_drive_native_execution_without_recompile(
             artifact,
             initial_state={"scalar": initial.copy()},
             params={parameter: value},
+            resources={"execution_context": artifact_execution_context(artifact)},
         )
         for value in values
     )
@@ -405,7 +407,12 @@ def test_analytic_initial_parameter_materializes_two_native_states_without_recom
     before = _binary_fingerprints(paths)
 
     simulations = tuple(
-        pops.bind(artifact, params={amplitude: value}) for value in (1.0, 2.0)
+        pops.bind(
+            artifact,
+            params={amplitude: value},
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
+        for value in (1.0, 2.0)
     )
     if target == "system":
         states = tuple(
@@ -458,7 +465,13 @@ def test_named_elliptic_runtime_parameter_binds_into_native_rhs_without_recompil
         bind_inputs = {"params": {parameter: value}}
         if target == "system":
             bind_inputs["initial_state"] = {"scalar": _initial_field_state()}
-        simulations.append(pops.bind(artifact, **bind_inputs))
+        simulations.append(
+            pops.bind(
+                artifact,
+                resources={"execution_context": artifact_execution_context(artifact)},
+                **bind_inputs,
+            )
+        )
     assert simulations[0].bind_identity != simulations[1].bind_identity
 
     centered_potentials = []

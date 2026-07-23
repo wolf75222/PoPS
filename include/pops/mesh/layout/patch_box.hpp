@@ -33,6 +33,8 @@ struct PatchBox {
   int jlo;
   int ihi;
   int jhi;
+
+  bool operator==(const PatchBox&) const = default;
 };
 
 }  // namespace pops

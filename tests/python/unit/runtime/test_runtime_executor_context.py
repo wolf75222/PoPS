@@ -51,19 +51,12 @@ def test_unsupported_execution_context_resources_are_rejected(context, match):
 
 
 @pytest.mark.parametrize(
-    "facts,error,match",
+    "fact_overrides,error,match",
     [
         (
-            {
-                "mpi_active": True,
-                "kokkos_backend": "host",
-                "kokkos_device": "host",
-                "field_memory_space": "host",
-                "kokkos_shared_space": "HostSpace",
-                "kokkos_stream": "host::synchronous",
-            },
+            {"invert_mpi_active": True},
             NotImplementedError,
-            "MPI to be inactive",
+            r"requires.*MPI",
         ),
         (
             {
@@ -80,7 +73,7 @@ def test_unsupported_execution_context_resources_are_rejected(context, match):
     ],
 )
 def test_mismatched_native_state_is_rejected_before_system_constructor(
-    monkeypatch, facts, error, match
+    monkeypatch, fact_overrides, error, match
 ):
     calls = []
 
@@ -88,6 +81,29 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
         calls.append((args, kwargs))
         raise AssertionError("System constructor became reachable")
 
+    plan = _install()
+    context = plan.execution_context
+    backend = context.backend
+    memory_spaces = backend.memory_spaces.require("runtime.memory_spaces")
+    assert len(memory_spaces) == 1
+    facts = {
+        "mpi_active": False,
+        "kokkos_backend": backend.capabilities["execution_backend"].require(
+            "runtime.execution_backend"
+        ),
+        "kokkos_device": context.device.identity,
+        "field_memory_space": memory_spaces[0],
+        "kokkos_shared_space": backend.capabilities["shared_space"].require(
+            "runtime.shared_space"
+        ),
+        "kokkos_stream": backend.capabilities["stream_identity"].require(
+            "runtime.stream_identity"
+        ),
+    }
+    overrides = dict(fact_overrides)
+    if overrides.pop("invert_mpi_active", False):
+        facts["mpi_active"] = context.communicator.identity == "serial"
+    facts.update(overrides)
     monkeypatch.setattr(executor, "_native_runtime_facts", lambda: facts)
     # This unit isolates the executor's native-state preflight.  The planning layer is covered
     # separately and an installed MPI/OpenMP wheel must not make this serial fixture fail before the
@@ -103,7 +119,7 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
         sys.modules, "pops.runtime._system", SimpleNamespace(System=forbidden_constructor)
     )
     with pytest.raises(error, match=match):
-        executor.install_runtime_executor(_install())
+        executor.install_runtime_executor(plan)
     assert calls == []
 
 

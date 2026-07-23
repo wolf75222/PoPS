@@ -307,7 +307,10 @@ def main():
             )
         ]
         for weno_system in weno_systems:
-            assert weno_system.n_patches() > 1, "WENO5 doit activer une hierarchie multilevel"
+            # n_patches() counts fine patches only, not hierarchy levels.  A single clustered
+            # fine patch is already a genuine two-level hierarchy; assert both facts explicitly.
+            assert weno_system.n_levels() == 2, "WENO5 doit produire exactement deux niveaux"
+            assert weno_system.n_patches() > 0, "WENO5 doit activer une hierarchie multilevel"
             weno_system.step(dt)
             assert np.isfinite(np.asarray(weno_system.density())).all()
         print("OK  (3w) WENO5 multilevel utilise le fournisseur coarse/fine ordre 5")
