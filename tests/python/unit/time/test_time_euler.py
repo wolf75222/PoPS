@@ -142,7 +142,7 @@ def make_amr_sim(method):
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_density("ions", rho.ravel())
+    sim.set_density("ions", rho)
     return sim, rho
 
 

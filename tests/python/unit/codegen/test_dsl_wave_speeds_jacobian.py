@@ -295,7 +295,10 @@ def test_hll_from_dense_jacobian_rejects_non_real_spectrum(
     state[0, :, :] = 1.0
     state[1, :, :] = 0.25
     simulation = pops.bind(artifact, initial_state={"toy": state})
-    with pytest.raises(RuntimeError, match="non-finite finite-volume data"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"solve status=invalid_evaluation.*numerical flux evaluation reject",
+    ):
         pops.run(simulation, t_end=DT, max_steps=1)
 
 

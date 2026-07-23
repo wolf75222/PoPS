@@ -4258,8 +4258,10 @@ class AmrRuntime {
                               block.boundary_plan->omits_face(1, 1))))
           throw std::runtime_error(
               "AMR regrid boundary authority omits a physical domain face");
-        all_depths_supported = false;
-        shared_depth = std::min(shared_depth, block.boundary_plan->required_depth());
+        if (!block.boundary_plan->fills_all_allocated_physical_ghosts()) {
+          all_depths_supported = false;
+          shared_depth = std::min(shared_depth, block.boundary_plan->required_depth());
+        }
         continue;
       }
       if (!block.transport_boundary_fill)

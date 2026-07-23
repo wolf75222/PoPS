@@ -396,15 +396,54 @@ def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
 
 
 def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
+    class TransactionalOwner(_TemporalOwner):
+        def __init__(self, strategy):
+            super().__init__(strategy)
+            self._native_snapshot = None
+            self._native_committed = False
+
+        def _begin_step_transaction(self):
+            if self._native_snapshot is not None:
+                raise RuntimeError("nested test transaction")
+            self._native_snapshot = (
+                self.raw.t, self.raw.cursor, tuple(self.raw.calls), self.raw.reject)
+            self._native_committed = False
+
+        def _commit_step_transaction(self):
+            if self._native_snapshot is None:
+                raise RuntimeError("missing test transaction")
+            self._native_committed = True
+
+        def _finalize_step_transaction(self):
+            if self._native_snapshot is None or not self._native_committed:
+                raise RuntimeError("missing committed test transaction")
+            self._native_snapshot = None
+            self._native_committed = False
+
+        def _rollback_step_transaction(self):
+            if self._native_snapshot is None:
+                raise RuntimeError("missing test transaction")
+            self.raw.t, self.raw.cursor, calls, self.raw.reject = self._native_snapshot
+            self.raw.calls[:] = calls
+            self._native_snapshot = None
+            self._native_committed = False
+
     strategy = FixedDt(0.1)
     children = {
-        "layout-a": _TemporalOwner(strategy),
-        "layout-b": _TemporalOwner(strategy),
+        "layout-a": TransactionalOwner(strategy),
+        "layout-b": TransactionalOwner(strategy),
     }
     executor = object.__new__(_MultiLayoutUniformExecutor)
     executor._runtime_plan = SimpleNamespace(
         communication=SimpleNamespace(transfers=()))
     executor._engines = children
+    executor._transfer_routes = ()
+    executor._mapping_evaluations = {}
+    executor._mapping_snapshot = None
+    executor._transfer_generation = 0
+    executor._active_transfer_generation = None
+    executor._transfer_attempt = 0
+    executor._last_mapping_receipts = ()
     executor._step_strategy = strategy
     executor._step_transaction_plan = None
     executor._step_controller = None
@@ -415,8 +454,15 @@ def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
     payload = run_control_payload(strategy)
     executor._temporal_restart_state.begin_run(payload, time=0.0, macro_step=0)
     controller = prepare_step_controller(executor, strategy)
-    report = run_step_attempt(
-        executor, native_step_target(executor), strategy, t_end=0.1)
+    executor._begin_step_transaction()
+    try:
+        report = run_step_attempt(
+            executor, native_step_target(executor), strategy, t_end=0.1)
+        executor._commit_step_transaction()
+        executor._finalize_step_transaction()
+    except BaseException:
+        executor._rollback_step_transaction()
+        raise
 
     assert report.attempts == 1
     assert executor._step_controller is controller
@@ -468,8 +514,7 @@ def test_native_target_resolution_never_invokes_dynamic_delegation():
 
 
 def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps():
-    from tests.python.unit.runtime.test_runtime_instance_gate import _Executor
-    from tests.python.unit.runtime.test_runtime_planning import _install
+    from tests.python.unit.runtime.test_runtime_instance_gate import _Executor, _install
 
     class RecordingExecutor(_Executor):
         def __init__(self, plan):

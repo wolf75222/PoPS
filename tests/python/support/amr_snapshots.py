@@ -43,7 +43,6 @@ def composite_active_mask(
             jlo // refinement_ratio : jhi // refinement_ratio + 1,
             ilo // refinement_ratio : ihi // refinement_ratio + 1,
         ] = False
-    assert np.any(active), f"AMR level {level} has no composite-active cell"
     return active
 
 

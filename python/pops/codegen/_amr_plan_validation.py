@@ -355,9 +355,11 @@ def validate_amr_authorities(plan: Any) -> None:
     # otherwise a WENO/MUSCL block could silently execute with a first-order interface injection.
     coarse_fine_capabilities = {}
     for entry in plan.amr_transfer.entries:
-        if entry.key.operation != COARSE_FINE_FILL:
+        native = _validated_native_materialization(entry)
+        if entry.key.operation != COARSE_FINE_FILL \
+                or native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
             continue
-        capabilities = entry.native_materialization.capabilities.transfer
+        capabilities = native.capabilities.transfer
         if capabilities is None:
             raise TypeError("physical coarse/fine transfer omitted its capabilities")
         ghost = tuple(capabilities.ghost_depth)

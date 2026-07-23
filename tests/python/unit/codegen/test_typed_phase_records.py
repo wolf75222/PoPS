@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 import numpy as np
 import pytest
 
+from pops import _pops
 from pops.codegen import _plans as plans
 from pops.codegen._layout_resolution import layout_lowering_coverage
 from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
@@ -17,6 +18,7 @@ from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
 from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 class _Canonical:
@@ -91,6 +93,11 @@ def _artifact(tmp_path):
     program = _Compiled(program_path, name="program")
     program.program_block_routes = ((0, "fluid"),)
     block = _Compiled(block_path, name="block")
+    native_abi = _pops.abi_key()
+    if not isinstance(native_abi, str) or not native_abi:
+        raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
+    program.abi_key = native_abi
+    block.abi_key = native_abi
     artifact = CompiledSimulationArtifact(
         plan,
         program,
@@ -197,6 +204,7 @@ def test_install_plan_is_bind_created_and_authenticates_all_inputs(tmp_path):
         params=artifact.bind_schema.resolve_bind(
             {}, compile_values=artifact.plan.compile_values),
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
     assert install.target == "system"
     assert install.capabilities["cpu"] is True

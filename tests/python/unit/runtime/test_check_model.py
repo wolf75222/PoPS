@@ -99,7 +99,8 @@ def test_compiled_model_rechecks_the_installed_native_block(
     assert report["ok"] is False
     assert any(
         "residual -div F + S evaluation failed" in failure
-        and "non-finite finite-volume data" in failure
+        and "numerical flux evaluation reject" in failure
+        and "reason_code=0x53544201" in failure
         for failure in report["failures"]
     )
     assert any("Density" in failure for failure in report["failures"])

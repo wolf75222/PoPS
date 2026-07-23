@@ -217,6 +217,15 @@ EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton,
   out.non_default = amr_newton_options_non_default(newton, diagnostics);
   return out;
 }
+
+std::string direct_amr_state_identity(const std::string& block_name) {
+  // A typed Case installs the exact owner-qualified Handle identity before declaring any block.
+  // The private native engine can also be exercised directly; in that mode the engine itself is
+  // the storage owner, so qualify its state deterministically from the already-unique block name.
+  // The length prefix keeps this mapping injective for arbitrary (including path-like) names.
+  return "pops://runtime/amr-direct-state/" + std::to_string(block_name.size()) + ":" +
+         block_name;
+}
 }  // namespace
 
 // resolve_implicit_components (AMR) moved to amr_block_seam.hpp (pops::detail::
@@ -918,6 +927,12 @@ struct AmrSystem::Impl {
               "AmrSystem materialized block has a missing or duplicate state identity");
         block.state_identity = route->second;
       }
+    } else {
+      // Direct low-level construction has no Case Handle registry, but the prepared Tagger still
+      // consumes exact qualified storage identities.  Give every engine-owned block its canonical
+      // private identity instead of weakening PreparedTaggingExecutionPlan's authority checks.
+      for (auto& block : rblocks)
+        block.state_identity = direct_amr_state_identity(block.name);
     }
     std::vector<std::pair<int, int>> reconstruction_requirements;
     reconstruction_requirements.reserve(rblocks.size());

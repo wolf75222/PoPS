@@ -25,6 +25,7 @@ from pops.mesh import (
 from pops.model import ComponentManifest
 from pops.time import FixedDt, StagePoint, TimePoint
 from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.native_execution_context import artifact_execution_context
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 DT = 1.0e-3
@@ -263,6 +264,7 @@ def _bind(compiled_multi_layout):
         artifact,
         initial_state={"tracer": fine_initial, "coarse": coarse_initial},
         params=params,
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     return instance, artifact, coarse_id, fine_id, mapping_id, fine_initial, coarse_initial
 
@@ -326,7 +328,7 @@ def test_two_native_layouts_execute_sliced_programs_and_exact_transfer(compiled_
             self.native = native
 
         def _native_step_target(self):
-            return self.native
+            return self.native._native_step_target()
 
         def state_global(self, *_args):
             raise AssertionError("per-step transfer called Python state_global")

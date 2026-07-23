@@ -90,17 +90,13 @@ def test_unstable_polar_profile_does_not_crash_at_teardown():
         "debordement de tampon au remodelage du champ ?\nstdout:\n%s\nstderr:\n%s"
         % (proc.returncode, proc.stdout, proc.stderr)
     )
-    # Le scenario lui-meme doit aller jusqu'au bout (instable mais SANS crash) : soit il imprime
-    # CHILD_OK (tear down propre apres lectures hote), soit il leve une exception Python CLAIRE
-    # (returncode 1, traceback) -- ce qui reste un echec gracieux, pas un crash memoire.
-    assert proc.returncode == 0, (
-        "le sous-processus ne s'est pas termine proprement (returncode=%d) :\nstdout:\n%s\nstderr:\n%s"
-        % (proc.returncode, proc.stdout, proc.stderr)
-    )
-    assert "CHILD_OK" in proc.stdout, (
-        "le scenario instable n'a pas atteint le teardown propre :\nstdout:\n%s\nstderr:\n%s"
-        % (proc.stdout, proc.stderr)
-    )
+    # Le scenario instable peut soit atteindre les lectures, soit etre refuse par le garde numerique
+    # natif avant publication. Dans les deux cas le processus doit quitter normalement, sans signal.
+    assert proc.returncode in (0, 1)
+    if proc.returncode == 0:
+        assert "CHILD_OK" in proc.stdout
+    else:
+        assert "numerical flux evaluation failed" in proc.stderr
 
 
 if __name__ == "__main__":
