@@ -3365,20 +3365,31 @@ class AmrProgramContext {
     if (lag < 0 || lag >= static_cast<int>(ring.size()) ||
         level_ >= static_cast<int>(ring[static_cast<std::size_t>(lag)].size()))
       return;
-    pops::detail::edge_flux_copy_into(
-        activate_flux_(key_(&mf)),
-        ring[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)]);
     const FluxKey destination_key = key_(&mf);
+    const EdgeFlux& stored_flux =
+        ring[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)];
     const auto contributions = ring_flux_contributions_.find(name);
+    const std::vector<FluxContribution>* stored_contributions = nullptr;
     if (contributions != ring_flux_contributions_.end() &&
         lag < static_cast<int>(contributions->second.size()) &&
         level_ < static_cast<int>(contributions->second[static_cast<std::size_t>(lag)].size())) {
-      copy_flux_contributions_in_place_(
-          flux_contributions_[destination_key],
-          contributions->second[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)]);
-    } else {
-      flux_contributions_.erase(destination_key);
+      stored_contributions =
+          &contributions->second[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)];
     }
+    if (stored_flux.empty() &&
+        (stored_contributions == nullptr || stored_contributions->empty())) {
+      active_flux_ledger_.erase(destination_key);
+      flux_ledger_.erase(destination_key);
+      flux_contributions_.erase(destination_key);
+      rate_provenance_.erase(destination_key);
+      return;
+    }
+    pops::detail::edge_flux_copy_into(activate_flux_(destination_key), stored_flux);
+    if (stored_contributions == nullptr)
+      flux_contributions_.erase(destination_key);
+    else
+      copy_flux_contributions_in_place_(flux_contributions_[destination_key],
+                                        *stored_contributions);
   }
   /// Rotate ring_flux_ one slot in lockstep with the ADC-631 history ring (called by couple_levels when
   /// the deferred rotate fires). O(1) vector-of-strip swaps, the exact chain AmrHistoryOps::rotate uses.

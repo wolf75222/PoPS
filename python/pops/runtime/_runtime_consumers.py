@@ -2294,6 +2294,12 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return float(values[block]), True
         composite = getattr(engine, "composite_reduce", None)
         if callable(composite):
+            active_depth = getattr(engine, "nlev", None)
+            if callable(active_depth):
+                nlev = int(active_depth())
+                levels = tuple(level for level in levels if 0 <= int(level) < nlev)
+                if not levels:
+                    raise RuntimeError("adaptive diagnostic selected no active AMR level")
             kind = reduction + ("_all" if full_state else "")
             return float(cast(Any, composite)(
                 block, kind, component, list(levels))), True
