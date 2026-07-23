@@ -7,7 +7,7 @@ from ._consumer_contracts import (
     Retry,
     SkipSampleReported,
 )
-from .consumers import Checkpoint, ScientificOutput
+from .consumers import Checkpoint, ConsoleMonitor, ScientificOutput
 from .levels import AllLevels, CoarseOnly, LevelSelection, SelectedLevels
 from .formats import (
     ExternalWriter, FormatInterface, HDF5, MpiRelayToRoot, NPZ, ParaView, ParaViewPreset,
@@ -50,7 +50,7 @@ from ._writers.paraview import (
 from . import formats
 
 __all__ = [
-    "AsyncScientificOutput", "Catalyst", "Checkpoint", "ConsumerGraph", "FailRun",
+    "AsyncScientificOutput", "Catalyst", "Checkpoint", "ConsoleMonitor", "ConsumerGraph", "FailRun",
     "DurableJournal", "LiveFailurePolicy", "LiveVisualization", "ParallelMode", "RaiseOnFlush",
     "ReportOnly", "Retry",
     "ScientificOutput", "SkipSampleReported",

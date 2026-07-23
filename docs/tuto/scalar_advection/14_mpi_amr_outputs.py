@@ -41,6 +41,7 @@ from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
 from pops.lib.initial import Gaussian
 from pops.lib.time import SSPRK2
+from pops.linalg.norms import L2
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -48,11 +49,13 @@ from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.output import (
     Catalyst,
+    ConsoleMonitor,
     ConsumerGraph,
     LiveVisualization,
     ParallelMode,
     ScientificOutput,
 )
+from pops.diagnostics import StepChangeNorm
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
@@ -102,10 +105,12 @@ else:
         preset=PARAVIEW_PRESET,
     )
 OUTPUT_EVERY_DT = 0.02
+MONITOR_EVERY = 3
 
 HERE = Path(__file__).resolve().parent
 OUTPUT_ROOT = HERE / "results" / "14_mpi_amr_outputs"
 ENABLE_CATALYST = os.environ.get("POPS_CATALYST") == "1"
+ENABLE_PROGRESS = os.environ.get("POPS_PROGRESS", "1") != "0"
 
 
 # 1. Domaine, etat conservatif et flux physique.
@@ -202,6 +207,11 @@ consumers = [
         fields=(tracer_U,),
         target="solution/tracer",
     ),
+    ConsoleMonitor(
+        schedule=every(MONITOR_EVERY, clock=program.clock),
+        diagnostics=(StepChangeNorm(L2(), block=tracer),),
+        enabled=ENABLE_PROGRESS,
+    ),
 ]
 if ENABLE_CATALYST:
     consumers.append(
@@ -265,6 +275,7 @@ report = pops.run(
     t_end=T_END,
     max_steps=MAX_STEPS,
     output_dir=OUTPUT_ROOT,
+    progress=False,
 )
 world.barrier()
 

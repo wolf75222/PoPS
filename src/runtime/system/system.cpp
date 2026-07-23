@@ -57,9 +57,9 @@ void System::commit_step_transaction() {
   p_->external_step_transaction_committed_ = true;
 }
 std::map<std::string, double> System::step_change_l2() const {
-  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
+  if (!p_->external_step_transaction_)
     throw std::runtime_error(
-        "System::step_change_l2 requires a committed external step transaction");
+        "System::step_change_l2 requires an active external step transaction");
   if (p_->polar_)
     throw std::runtime_error(
         "System::step_change_l2 does not yet define the polar cell measure");

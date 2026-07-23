@@ -247,7 +247,9 @@ class ConsumerQuantity:
         return {**self._payload(), "identity": self.identity.to_data()}
 
 
-_DIAGNOSTIC_REDUCTIONS = frozenset({"sum", "abs_sum", "sum_sq", "min", "max", "abs_max"})
+_DIAGNOSTIC_REDUCTIONS = frozenset({
+    "sum", "abs_sum", "sum_sq", "min", "max", "abs_max", "step_change_l2",
+})
 _DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
 _DIAGNOSTIC_COLLECTIVES = {
     "sum": "global_sum",
@@ -256,6 +258,7 @@ _DIAGNOSTIC_COLLECTIVES = {
     "min": "global_min",
     "max": "global_max",
     "abs_max": "global_max",
+    "step_change_l2": "global_sum",
 }
 
 
@@ -468,8 +471,10 @@ class ConsumerManifest:
                 "descriptor": first,
                 "references": [value.canonical_identity() for value in resolved_references],
             }, "%s.consumer_data" % where))
-        if diagnostic_rows and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
-            raise ValueError("only ScientificOutput can embed diagnostic providers")
+        if diagnostic_rows and self.kind not in {
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+            raise ValueError(
+                "only ConsoleMonitor or ScientificOutput can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.diagnostic_quantities, tuple) or any(
                 type(value) is not DiagnosticQuantity
@@ -485,9 +490,10 @@ class ConsumerManifest:
         if len(diagnostic_quantities) != len(self.diagnostics):
             raise ValueError(
                 "ConsumerManifest must lower every diagnostic descriptor exactly once")
-        if diagnostic_quantities and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
+        if diagnostic_quantities and self.kind not in {
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
             raise ValueError(
-                "only ScientificOutput can carry embedded diagnostic quantities")
+                "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
         object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")

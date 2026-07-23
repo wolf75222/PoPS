@@ -823,7 +823,7 @@ class AmrSystem {
   void finalize_step_transaction();
   void rollback_step_transaction();
   /// Volume-weighted L2 norm of each block's accepted AMR macro-step change. Collective and valid
-  /// only before the retained outer transaction snapshot is finalized.
+  /// while the retained outer transaction snapshot still owns U^n.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),

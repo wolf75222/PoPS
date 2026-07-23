@@ -1245,6 +1245,18 @@ def test_adaptive_diagnostic_passes_the_exact_selected_levels_to_native_provider
     assert calls == [("fluid", "sum", 1, [0, 2])]
 
 
+def test_step_change_diagnostic_uses_the_native_transaction_snapshot():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Provider:
+        def _step_change_l2(self):
+            return {"fluid": 0.125}
+
+    value, composite = RuntimeConsumerPublisher._native_diagnostic_reduction(
+        SimpleNamespace(), _Provider(), "fluid", "step_change_l2", 0, True, (0, 1))
+    assert (value, composite) == (0.125, True)
+
+
 def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():
     from pops.identity import make_identity
     from pops.output.data import DiagnosticKey, DiagnosticPayload
