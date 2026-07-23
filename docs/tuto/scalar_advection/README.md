@@ -67,6 +67,7 @@ Les autres scripts traitent chacun un point precis :
 | Sorties scientifiques periodiques | [`12_openmp_amr_outputs.py`](12_openmp_amr_outputs.py) |
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
 | Sorties MPI PVD/PVTU et Catalyst collectif | [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py) |
+| Convergence vers la solution analytique | [`15_openmp_convergence.py`](15_openmp_convergence.py) |
 
 Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
 fixent un thread par rang, construisent
@@ -701,6 +702,34 @@ La figure principale montre directement le champ PoPS, la solution analytique, l
 une coupe superposee :
 
 ![PoPS compared with the analytic scalar-advection solution](figures/scalar_advection_analytic_verification.png)
+
+### Etude de convergence
+
+Le script suivant repete exactement le meme probleme sur des grilles de
+$32^2$, $64^2$, $128^2$ et $256^2$ cellules :
+
+```bash
+python docs/tuto/scalar_advection/15_openmp_convergence.py
+```
+
+Le nombre CFL reste constant. Le pas de temps diminue donc avec $\Delta x$ :
+l'etude mesure la convergence conjointe de la discretisation MUSCL et de SSPRK2.
+Entre deux resolutions successives, l'ordre observe est
+
+```math
+p=\frac{\log(E_N/E_{2N})}{\log(2)}.
+```
+
+Le script verifie que les erreurs $L^1$, $L^2$ et $L^\infty$ diminuent a chaque
+raffinement, sauvegarde les valeurs dans `results/15_openmp_convergence.npz` et
+produit la figure suivante :
+
+![Scalar-advection convergence study](figures/scalar_advection_convergence.png)
+
+La solution exacte est echantillonnee aux centres des cellules. Avec un
+limiteur non lineaire comme Van Leer, l'ordre peut etre reduit localement pres
+des extrema de la gaussienne ; la pente mesuree est donc plus informative
+qu'une pente d'ordre deux supposee a priori.
 
 Les deux figures historiques restent utiles pour verifier que les deux ecritures de SSPRK2 sont
 strictement equivalentes. La premiere compare condition initiale, solution advectee et difference
