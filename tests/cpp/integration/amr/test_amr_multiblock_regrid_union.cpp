@@ -34,7 +34,7 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -49,16 +49,11 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var, role density) a charge q. Transport ExB : la densite advecte le long du
+// Modele ExB scalaire (1 var, role density) a charge q. Transport ExB : la densite advecte le long du
 // champ ExB, donc une structure se DEPLACE -> la region taguee bouge -> le layout fin change (cas a).
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -207,17 +202,13 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
   bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "a", rho0,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-regrid-union/block/a/state/U";
-  });
-  detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "b", rho1,
-                                                /*has_density=*/true, 1.4, 1, false, false,
-                                                stride1));
-    blocks.back().state_identity = "test://amr-regrid-union/block/b/state/U";
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q0, B0), "minmod", "rusanov", S, "a",
+                                              rho0, /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/a/state/U";
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q1, B0), "minmod", "rusanov", S, "b",
+                                              rho1, /*has_density=*/true, 1.4, 1, false, false,
+                                              stride1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/b/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2);
@@ -235,16 +226,14 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
   bp.poisson.bc = BCRec{};
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, 3);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "positive", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-regrid-union/block/positive/state/U";
-  });
-  detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "negative", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-regrid-union/block/negative/state/U";
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, 1.0), "minmod", "rusanov", S,
+                                              "positive", rho, /*has_density=*/true, 1.4, 1, false,
+                                              false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/positive/state/U";
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", S,
+                                              "negative", rho, /*has_density=*/true, 1.4, 1, false,
+                                              false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/negative/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2);
@@ -667,12 +656,10 @@ TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriod
   detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
   layout.base_per = Periodicity{false, false};
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "a",
-                                                flat(n, 1.0),
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-regrid-union/non-periodic/block/a/state/U";
-  });
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_charge(+1.0, 1.0), "minmod", "rusanov", layout, "a", flat(n, 1.0),
+      /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/non-periodic/block/a/state/U";
   // This is the precise invalid state under test: a non-periodic sampled state with no prepared
   // authority capable of producing its physical ghosts.
   blocks.front().boundary_plan.reset();

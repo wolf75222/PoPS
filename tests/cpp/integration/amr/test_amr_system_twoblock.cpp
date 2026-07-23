@@ -26,8 +26,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
@@ -44,16 +44,11 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
+// Modele ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
 // de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // A single periodic species needs an explicitly authored neutralizing background: q*n alone has a
@@ -119,15 +114,12 @@ TEST(test_amr_system_twoblock, Runs) {
 
     std::vector<AmrRuntimeBlock> blocks;
     // bloc 0 : ions q=+1, schema none/rusanov.
-    detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-      blocks.push_back(detail::dispatch_amr_block(m, "none", "rusanov", S, "ions", rho0,
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(exb_charge(q0, B0), "none", "rusanov", S, "ions",
+                                                rho0, /*has_density=*/true, 1.4, 1, false, false));
     // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
-    detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-      blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "electrons", rho1,
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(exb_charge(q1, B0), "minmod", "rusanov", S,
+                                                "electrons", rho1, /*has_density=*/true, 1.4, 1,
+                                                false, false));
 
     AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);

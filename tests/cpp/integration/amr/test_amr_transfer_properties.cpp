@@ -4,11 +4,10 @@
 #include "load_balance_test_authority.hpp"
 
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/builders/factory/model_factory.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 
 #include <pops/mesh/layout/refinement.hpp>
 
@@ -40,14 +39,10 @@ SpatialTransferContext context(const Box2D& coarse, int coarse_level = 0, int fi
       coarse, fine_domain, true};
 }
 
-ModelSpec exb_model() {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  spec.B0 = 1.0;
-  return spec;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+
+ExBModel exb_model() {
+  return ExBModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(1)}};
 }
 
 constexpr Real kPreparedBoundarySentinel = Real(37.25);
@@ -94,13 +89,11 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
   params.poisson.bc = BCRec{};
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_model(), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "transport",
-        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
-        false, 1));
-    blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
-  });
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_model(), "minmod", "rusanov", layout, "transport",
+      std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
+      false, 1));
+  blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
   if (install_prepared_boundary) {
     auto& block = blocks.front();
     const std::string state_identity = block.state_identity;

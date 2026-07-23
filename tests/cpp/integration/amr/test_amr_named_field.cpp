@@ -32,8 +32,7 @@
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (per-field RHS closure)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/state/state.hpp>       // kAuxNamedBase
 #include <pops/mesh/layout/refinement.hpp>  // parallel_copy
@@ -208,14 +207,9 @@ class KokkosEnvironment : public ::testing::Environment {
 
 // Scalar ExB block of charge q: transport E x B (advection driven by grad phi), charge density q*n for
 // the default system Poisson (elliptic = "charge" -> elliptic_rhs = q*n).
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // Smooth zero-mean density (solvable in periodic): a centered blob around 1, n*n row-major.
@@ -419,11 +413,9 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                blob(n, 0.25),
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false, false));
   blocks[0].aux_ncomp = kAuxNamedBase + 1;
 
   auto registry = make_default_amr_field_solver_registry();
@@ -493,10 +485,8 @@ TEST(test_amr_named_field, Runs) {
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "plasma", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q, B0), "minmod", "rusanov", S, "plasma",
+                                              rho, /*has_density=*/true, 1.4, 1, false, false));
   // Widen the shared aux channel so the named fields' output components (>= kAuxNamedBase) fit. The
   // native ExB block reads only comps 0..2; the runtime sizes the channel to max(b.aux_ncomp), so a
   // wider value just reserves room (the extra comps are written only by the named solve). This is what a
@@ -755,11 +745,9 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                blob(n, 0.5),
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.5),
+                                              /*has_density=*/true, 1.4, 1, false, false));
   constexpr int phi_component = kAuxNamedBase;
   constexpr int gx_component = kAuxNamedBase + 1;
   constexpr int gy_component = kAuxNamedBase + 2;
@@ -847,11 +835,9 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     params.mesh.coarse_max_grid = 8;
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                  blob(params.mesh.n, 0.25),
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(
+        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
+        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
     test::install_second_order_amr_transfer_authorities(runtime, 1);
@@ -882,11 +868,9 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
         [](Real x, Real y) { return x < Real(0.25) && y < Real(0.25); });
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                  blob(params.mesh.n, 0.25),
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(
+        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
+        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
     blocks[0].aux_ncomp = kAuxNamedBase + 1;
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);

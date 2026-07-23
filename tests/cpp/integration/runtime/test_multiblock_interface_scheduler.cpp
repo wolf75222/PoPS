@@ -2,8 +2,7 @@
 
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/builders/factory/model_factory.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/system/system_block_store.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -113,14 +112,10 @@ AxisAlignedInterface heterogeneous_route() {
   return route;
 }
 
-ModelSpec scalar_model() {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 0.0;
-  spec.B0 = 1.0;
-  return spec;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+
+ExBModel scalar_model() {
+  return ExBModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(0)}};
 }
 
 }  // namespace
@@ -451,12 +446,10 @@ TEST(test_multiblock_interface_scheduler,
   const BoundaryEvaluationPoint point{"clock.fine", 9, 0, 2, 1, amr::Rational(2, 3), 0.125, 0.375};
   std::optional<BoundaryEvaluationPoint> residual_point;
   for (const char* name : {"left", "right"}) {
-    detail::dispatch_model(scalar_model(), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(
-          model, "none", "rusanov", layout, name,
-          std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
-          false, 1));
-    });
+    blocks.push_back(detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
+        false, 1));
     blocks.back().level_rhs = [&full_rhs_calls](MultiFab&, const MultiFab&, const Geometry&,
                                                 MultiFab& rhs) {
       ++full_rhs_calls;
@@ -532,11 +525,9 @@ TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProv
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
   std::vector<AmrRuntimeBlock> blocks;
   for (const char* name : {"a", "b"}) {
-    detail::dispatch_model(scalar_model(), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(model, "none", "rusanov", layout, name,
-                                                  std::vector<double>(9, 1.0), true, 1.4, 1, false,
-                                                  false, 1));
-    });
+    blocks.push_back(detail::dispatch_amr_block(scalar_model(), "none", "rusanov", layout, name,
+                                                std::vector<double>(9, 1.0), true, 1.4, 1, false,
+                                                false, 1));
   }
   const std::string a_state = "case::amr::a::state::U";
   const std::string b_state = "case::amr::b::state::U";

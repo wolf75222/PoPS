@@ -21,10 +21,10 @@
 #include <gtest/gtest.h>
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
@@ -45,9 +45,14 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var) a charge q : advection pilotee par grad phi, densite de charge q n pour le
+// Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi, densite de charge q n pour le
 // Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-static ModelSpec exb_charge(double q, double B0) {
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+static ModelSpec exb_spec(double q, double B0) {
   ModelSpec s;
   s.transport = "exb";
   s.source = "none";
@@ -113,16 +118,12 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, lim0, "rusanov", S, "A", rho0,
-                                                /*has_density=*/true, 1.4, sub0, false, false,
-                                                stride0));
-  });
-  detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, lim1, "rusanov", S, "B", rho1,
-                                                /*has_density=*/true, 1.4, sub1, false, false,
-                                                stride1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), lim0, "rusanov", S, "A", rho0,
+                                              /*has_density=*/true, 1.4, sub0, false, false,
+                                              stride0));
+  blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), lim1, "rusanov", S, "B", rho1,
+                                              /*has_density=*/true, 1.4, sub1, false, false,
+                                              stride1));
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2);
@@ -326,7 +327,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
-      sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+      sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
       sim.advance(0.01, 5);
@@ -343,7 +344,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
-      sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+      sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
       double last = 0;

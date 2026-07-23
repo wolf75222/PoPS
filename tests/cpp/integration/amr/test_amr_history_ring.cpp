@@ -13,13 +13,13 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/core/foundation/allocator.hpp>                    // allocation_event_stats
+#include <pops/core/foundation/allocator.hpp>  // allocation_event_stats
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime + detail::AmrHistoryOps
 #include <pops/runtime/amr_system.hpp>                       // facade transaction boundary
 #include <pops/runtime/program/step_transaction.hpp>        // StepAttemptRejected fault signal
 #include <pops/runtime/program/amr_program_context.hpp>     // native AB2/reflux context
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -40,7 +40,12 @@
 
 using namespace pops;
 
-static ModelSpec exb_charge(double q, double B0) {
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+static ModelSpec exb_spec(double q, double B0) {
   ModelSpec s;
   s.transport = "exb";
   s.source = "none";
@@ -158,18 +163,14 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
   bp.poisson.bc = BCRec{};  // periodic
   detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "a",
-                                                blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-history/block/a/state/U";
-  });
-  detail::dispatch_model(exb_charge(-1.0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "b",
-                                                blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-    blocks.back().state_identity = "test://amr-history/block/b/state/U";
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_model(+1.0, B0), "minmod", "rusanov", S, "a",
+                                              blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
+                                              /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-history/block/a/state/U";
+  blocks.push_back(detail::dispatch_amr_block(exb_model(-1.0, B0), "minmod", "rusanov", S, "b",
+                                              blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
+                                              /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-history/block/b/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2, manifest_ratio);
@@ -182,8 +183,8 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
                                                       int temporal_ratio = 1) {
   install_history_state_authorities(sim);
   sim.set_temporal_relations({temporal_ratio}, {1}, {"integral_only"});
-  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
@@ -381,9 +382,9 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
   AmrSystem sim(cfg);
   install_history_state_authorities(sim);
   sim.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
-  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative",
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative",
                 "explicit", 1);
-  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative",
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative",
                 "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
@@ -770,8 +771,8 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   AmrSystem sim(cfg);
   install_history_state_authorities(sim);
   sim.set_temporal_relations({1}, {1}, {"integral_only"});
-  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
@@ -994,8 +995,8 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   AmrSystem sim(cfg);
   install_history_state_authorities(sim);
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
-  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
@@ -1050,8 +1051,8 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   AmrSystem sim(cfg);
   install_history_state_authorities(sim);
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
-  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));

@@ -27,8 +27,7 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -47,16 +46,11 @@ using namespace pops;
 constexpr double kIonFieldCharge = 0.0;
 constexpr double kNeutralFieldCharge = 0.0;
 
-// Spec ExB scalaire (1 var) a charge q : advection pilotee par grad phi (le couplage Poisson lit q*n).
+// Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi (le couplage Poisson lit q*n).
 // q=0 -> bloc neutre (ne contribue PAS au Poisson), advecte par le MEME phi que les autres.
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // densite a moyenne nulle (solvable en periodique) : un creneau centre +/- amplitude, n*n row-major.
@@ -124,16 +118,12 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(kIonFieldCharge, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "ions", rho_ions,
-                                                /*has_density=*/true, 1.4, 1, false, false,
-                                                stride_ions));
-  });
-  detail::dispatch_model(exb_charge(kNeutralFieldCharge, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "neutrals", rho_neut,
-                                                /*has_density=*/true, 1.4, 1, false, false,
-                                                stride_neut));
-  });
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_charge(kIonFieldCharge, B0), "minmod", "rusanov", S, "ions", rho_ions,
+      /*has_density=*/true, 1.4, 1, false, false, stride_ions));
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_charge(kNeutralFieldCharge, B0), "minmod", "rusanov", S, "neutrals", rho_neut,
+      /*has_density=*/true, 1.4, 1, false, false, stride_neut));
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2);
