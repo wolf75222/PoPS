@@ -2296,7 +2296,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if callable(composite):
             active_depth = getattr(engine, "nlev", None)
             if callable(active_depth):
-                nlev = int(active_depth())
+                nlev = int(cast(Any, active_depth)())
                 levels = tuple(level for level in levels if 0 <= int(level) < nlev)
                 if not levels:
                     raise RuntimeError("adaptive diagnostic selected no active AMR level")
