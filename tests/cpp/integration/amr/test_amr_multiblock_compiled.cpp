@@ -39,6 +39,7 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/config/model_spec.hpp>  // ModelSpec (bloc natif, melange compile + natif)
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -482,6 +483,13 @@ TEST(test_amr_multiblock_compiled, Runs) {
     bool explicit_rejected = false;
     try {
       expl_res = run_stiff_compiled(/*imex=*/false, /*stride=*/1, {});
+    } catch (const runtime::program::StepAttemptRejected& rejection) {
+      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
+          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
+          rejection.reason_code() != 0x53544201u ||
+          rejection.phase() != "stage")
+        throw;
+      explicit_rejected = true;
     } catch (const std::runtime_error& error) {
       if (!is_nonfinite_fv_rejection(error))
         throw;
@@ -522,6 +530,13 @@ TEST(test_amr_multiblock_compiled, Runs) {
     bool partial_rejected = false;
     try {
       imex_mask_mx = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x"});
+    } catch (const runtime::program::StepAttemptRejected& rejection) {
+      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
+          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
+          rejection.reason_code() != 0x53544201u ||
+          rejection.phase() != "stage")
+        throw;
+      partial_rejected = true;
     } catch (const std::runtime_error& error) {
       if (!is_nonfinite_fv_rejection(error))
         throw;

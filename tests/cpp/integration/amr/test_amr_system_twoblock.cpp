@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "load_balance_test_authority.hpp"
+#include "amr_transfer_test_authority.hpp"
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
@@ -133,6 +134,7 @@ TEST(test_amr_system_twoblock, Runs) {
 
     AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
+    test::install_second_order_amr_transfer_authorities(rt, 2);
     rt.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
         0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
     EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";

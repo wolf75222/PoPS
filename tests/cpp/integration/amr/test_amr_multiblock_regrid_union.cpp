@@ -248,11 +248,11 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
   SCOPED_TRACE("three-level bootstrap/regrid/rollback");
   const int N = 32;
-  // Start with data whose tagged region is outside the deterministic central bootstrap seeds.  A
-  // coarse regrid therefore replaces the middle level with a layout that cannot carry the old
-  // finest layout.  The runtime must retire that stale descendant before preparing the new parent
-  // topology, then rebuild it from the new middle level in the same transaction.
-  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.82, 0.50, 0.8, 1.0, 0.08));
+  // Offset the tagged region from the nested central finest seed. A coarse regrid therefore
+  // replaces the middle level with a layout that cannot carry the complete old finest layout. The
+  // runtime must retire that stale descendant before preparing the new parent topology, then
+  // rebuild it from the new middle level in the same transaction.
+  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.levels(0).size(), 3u);
   EXPECT_EQ(rt.patch_boxes().size(), 2u);
@@ -322,10 +322,11 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_EQ(rt.regrid_count(), 1) << "the accepted retry commits one regrid exactly once";
   EXPECT_GT(rt.topology_materialization_generation(), restored_materialization);
 
-  // Empty tags deactivate the complete fine suffix without changing the resolved capacity. Later
-  // tags may reactivate that same capacity, and restart may impose either active prefix exactly.
-  test::install_prepared_threshold_union(
-      rt, {{0, 0, Real(1e30)}, {1, 0, Real(1e30)}});
+  // Coarsening is an explicit decision, not the absence of a refine match. Deactivate the complete
+  // fine suffix without changing the resolved capacity, then reactivate that same capacity.
+  test::install_prepared_threshold_decisions(
+      rt, {{0, 0, Real(1e30)}, {1, 0, Real(1e30)}},
+      {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
   rt.regrid();
   EXPECT_EQ(rt.nlev(), 1);
   EXPECT_EQ(rt.max_levels(), 3);

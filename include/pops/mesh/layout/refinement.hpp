@@ -276,9 +276,23 @@ inline std::shared_ptr<const CopySchedule> get_copy_schedule_collectively(
                  communicator_rank, communicator_identity, message_tag);
   const long local_state = dst.ncomp() != src.ncomp() ? 2L : (schedule ? 0L : 1L);
   const long global_state = all_reduce_max(local_state, communicator);
-  if (global_state >= 2L)
+  if (global_state >= 2L) {
+    const long dst_min = all_reduce_min(static_cast<long>(dst.ncomp()), communicator);
+    const long dst_max = all_reduce_max(static_cast<long>(dst.ncomp()), communicator);
+    const long src_min = all_reduce_min(static_cast<long>(src.ncomp()), communicator);
+    const long src_max = all_reduce_max(static_cast<long>(src.ncomp()), communicator);
+    const auto width = [](std::string_view name, long minimum, long maximum) {
+      std::string result(name);
+      result += "=" + std::to_string(minimum);
+      if (minimum != maximum)
+        result += ".." + std::to_string(maximum);
+      return result;
+    };
     throw std::invalid_argument(
-        "parallel_copy requires identical source and destination provider widths on every rank");
+        "parallel_copy requires identical source and destination provider widths on every rank (" +
+        width("dst.ncomp", dst_min, dst_max) + ", " +
+        width("src.ncomp", src_min, src_max) + ")");
+  }
   if (global_state == 0L) {
     copy_schedule_hit_counter().fetch_add(1, std::memory_order_relaxed);
     return schedule;

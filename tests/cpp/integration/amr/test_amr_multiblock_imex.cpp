@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
@@ -134,10 +135,6 @@ bool all_finite(const std::vector<double>& v) {
     if (!std::isfinite(x))
       return false;
   return true;
-}
-bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
-  return std::string(error.what()).find("produced non-finite finite-volume data") !=
-         std::string::npos;
 }
 double maxabs(const std::vector<double>& v) {
   double m = 0;
@@ -310,8 +307,11 @@ TEST(test_amr_multiblock_imex, Runs) {
     try {
       for (int s = 0; s < K; ++s)
         rt.step(static_cast<Real>(dt));
-    } catch (const std::runtime_error& error) {
-      if (!is_nonfinite_fv_rejection(error))
+    } catch (const FluxEvaluationFailure& failure) {
+      if (failure.status() != EvaluationStatus::kReject ||
+          failure.action() != TransactionFailureAction::kRejectStep ||
+          failure.reason_code() != 0x53544201u ||
+          failure.phase() != "compute_face_fluxes")
         throw;
       explicit_rejected = true;
     }

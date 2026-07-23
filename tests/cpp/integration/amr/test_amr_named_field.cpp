@@ -323,8 +323,15 @@ struct CoarseFineGhostCheck {
   int samples = 0;
 };
 
-static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, const MultiFab& fine,
-                                                    int component) {
+static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
+                                                    const MultiFab& expected_fine,
+                                                    const MultiFab& fine, int component) {
+  if (expected_fine.box_array().boxes() != fine.box_array().boxes() ||
+      expected_fine.dmap().ranks() != fine.dmap().ranks() ||
+      expected_fine.local_size() != fine.local_size() ||
+      expected_fine.ncomp() != fine.ncomp() ||
+      expected_fine.n_grow() != fine.n_grow())
+    throw std::invalid_argument("coarse/fine ghost oracle requires identical fine layouts");
   device_fence();
   CoarseFineGhostCheck result;
   const BoxArray& fine_boxes = fine.box_array();
@@ -336,6 +343,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, cons
   };
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 child = fine.fab(li).const_array();
+    const ConstArray4 expected_child = expected_fine.fab(li).const_array();
     const Box2D valid = fine.box(li), grown = fine.fab(li).grown_box();
     for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
       for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
@@ -346,7 +354,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, cons
         const int parent_box = mf_find_box(coarse, ci, cj);
         if (parent_box < 0)
           continue;
-        const Real expected = coarse.fab(parent_box).const_array()(ci, cj, component);
+        const Real expected = expected_child(i, j, component);
         result.error = std::max(result.error, std::fabs(child(i, j, component) - expected));
         result.reference = std::max(result.reference, std::fabs(expected));
         ++result.samples;
@@ -796,12 +804,34 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
                 runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component),
             Real(1e-8))
       << "the fine FAC solution must differ from full-grown coarse injection for this oracle";
+
+  // Rebuild the expected coarse/fine ghosts from the just-published parent through the exact
+  // authority installed above.  This checks that the persistent runtime workspace refreshes its
+  // parent carrier after the solve without freezing the test to the historical piecewise-constant
+  // fill: the configured second-order authority reconstructs child means from limited parent
+  // slopes.
+  MultiFab expected_fine(runtime.aux(1).box_array(), runtime.aux(1).dmap(),
+                         runtime.aux(1).ncomp(), runtime.aux(1).n_grow());
+  expected_fine.set_val(Real(0));
+  ::pops::runtime::amr::PreparedTransferKernel coarse_fine =
+      ::pops::runtime::amr::prepare_conservative_coarse_fine();
+  ASSERT_TRUE(coarse_fine.prepared_coarse_fine);
+  const CommunicatorView communicator =
+      layout.replicated_coarse ? CommunicatorView{} : world_communicator_view();
+  auto expected_transfer = detail::PreparedConservativeCellTransferWorkspace::prepare(
+      runtime.aux(0), expected_fine, layout.geom.domain,
+      layout.geom.domain.refine(kAmrRefRatio), layout.replicated_coarse,
+      detail::ConservativeCellFillRegion::Ghost, layout.base_per,
+      /*topology_generation=*/0, communicator, coarse_fine.prepared_coarse_fine);
+  expected_transfer.publish_prepared(expected_fine);
+
   const CoarseFineGhostCheck ghosts =
-      coarse_fine_ghost_check(runtime.aux(0), runtime.aux(1), phi_component);
+      coarse_fine_ghost_check(runtime.aux(0), expected_fine, runtime.aux(1), phi_component);
   ASSERT_GT(ghosts.samples, 0) << "the refined patch exposes coarse/fine ghosts";
   ASSERT_GT(ghosts.reference, Real(1e-8)) << "the ghost oracle is nontrivial";
   EXPECT_EQ(ghosts.error, Real(0))
-      << "coarse/fine ghosts must come from the freshly published coarse solution";
+      << "coarse/fine ghosts must come from the freshly published coarse solution through the "
+         "configured spatial authority";
 }
 
 TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresentedTopologies) {

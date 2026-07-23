@@ -43,6 +43,7 @@
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <cmath>
@@ -149,11 +150,6 @@ bool all_finite(const std::vector<double>& a) {
       return false;
   return true;
 }
-bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
-  return std::string(error.what()).find("produced non-finite finite-volume data") !=
-         std::string::npos;
-}
-
 // Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"), DEUX modeles
 // en dur (PotModel pour A, StiffModel pour B) selectionnes par le nom du bloc ("pot" | "stiff:<eps>").
 std::string loader_source() {
@@ -340,8 +336,11 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       // The final runtime is fail-closed: once the unstable explicit state becomes non-finite, the
       // next field solve rejects it before NaNs can be published as a completed step.
       explicit_rejected_nonfinite = true;
-    } catch (const std::runtime_error& error) {
-      if (!is_nonfinite_fv_rejection(error))
+    } catch (const runtime::program::StepAttemptRejected& rejection) {
+      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
+          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
+          rejection.reason_code() != 0x53544201u ||
+          rejection.phase() != "stage")
         throw;
       explicit_rejected_nonfinite = true;
     }
