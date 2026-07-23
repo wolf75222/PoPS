@@ -82,12 +82,9 @@ def run(instance: Any, **controls: Any) -> RunReport:
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
     are recorded by the runtime's run identity. Success returns an immutable :class:`RunReport`;
     terminal failures raise and never manufacture a success report. ``console=False`` disables
-    only the rank-zero presentation. By default, the runtime emits at most ten rank-zero progress
-    lines as accepted macro-steps cross physical-time deciles. Each line includes the
-    volume-weighted ``dU_L2 = ||U^(n+1)-U^n||_2`` for every block. The native Kokkos/MPI reduction
-    is evaluated only for a displayed line. ``progress=False`` disables those reductions, clock
-    reads, formatting and I/O. Both options are presentation-only and never enter the numerical
-    run identity.
+    only the rank-zero launch and completion presentation. Scheduled progress and scalar
+    diagnostics are declared explicitly with :class:`pops.output.ConsoleMonitor`; their cadence
+    belongs to the ConsumerGraph and native reductions run only when that consumer is due.
     """
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(

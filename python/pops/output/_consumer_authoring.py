@@ -18,6 +18,7 @@ from ._consumer_contracts import (
     FailRun,
     ParallelMode,
     _FAILURE_ACTIONS,
+    _console_provider_data,
     _observer_provider_data,
 )
 
@@ -118,8 +119,16 @@ class ConsumerAuthoringNode:
             if operation_data["parallel_mode"] != self.parallel_mode.value:
                 raise ValueError(
                     "Monitor authoring parallel mode differs from its operation provider")
-        elif self.output_format is not None or self.operation is not None:
-            raise ValueError("Diagnostic authoring carries no publication provider")
+        elif self.kind is ConsumerKind.DIAGNOSTIC:
+            if self.output_format is not None or self.operation is None:
+                raise ValueError("Diagnostic authoring requires only its console provider")
+            operation_data = _console_provider_data(
+                self.operation, where="ConsumerAuthoringNode.operation")
+            if operation_data["parallel_mode"] != self.parallel_mode.value:
+                raise ValueError(
+                    "Diagnostic authoring parallel mode differs from its console provider")
+        else:
+            raise ValueError("ConsumerAuthoringNode has an unsupported consumer kind")
         if type(self.failure_action) not in _FAILURE_ACTIONS:
             raise TypeError("ConsumerAuthoringNode.failure_action has an unsupported type")
 

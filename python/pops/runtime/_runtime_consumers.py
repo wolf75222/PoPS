@@ -2305,7 +2305,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return float(cast(Any, native)(block, kind, component)), False
 
     def _diagnostic_values(
-        self, manifest: Any,
+        self,
+        manifest: Any,
+        *,
+        skip_reductions: frozenset[str] = frozenset(),
     ) -> tuple[tuple[DiagnosticPayload, ...], dict[str, float]]:
         names = tuple(self._owner._component_manifests)
         values = []
@@ -2324,6 +2327,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 component, full_state = self._diagnostic_component(
                     variables, roles, execution["role"])
             for operation in execution["operations"]:
+                if operation["reduction"] in skip_reductions:
+                    continue
                 value, composite = self._native_diagnostic_reduction(
                     engine, block, operation["reduction"], component, full_state,
                     quantity.levels)
@@ -2397,35 +2402,55 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
     def _render_console_diagnostics(
         self,
         _effect: AcceptedSideEffect,
+        manifest: Any,
         values: tuple[DiagnosticPayload, ...],
         *,
         unavailable: str | None = None,
     ) -> None:
         if self._rank != 0:
             return
+        from pops.output._console_monitor import ConsoleSample
+
         temporal = getattr(self._owner._executor, "_temporal_restart_state", None)
         last_dt = None if temporal is None else temporal.controller_state.get(
             "last_accepted_dt")
         dt = 0.0 if last_dt is None else float.fromhex(last_dt)
-        parts = [
-            "PoPS monitor",
-            "t=%.12g" % float(self._owner._executor.time()),
-            "step=%d" % int(self._owner._executor.macro_step()),
-            "dt=%.12g" % dt,
-        ]
         names = tuple(self._owner._component_manifests)
+        sample_values: dict[str, float | None] = {}
+        unavailable_values: dict[str, str] = {}
         for value in values:
             block = _block_name(value.key.reference, names)
-            label = (
-                "dU_L2" if value.key.reduction == "step_change_l2"
-                else value.key.reduction
-            )
-            if len(names) > 1:
-                label = "%s[%s]" % (label, block)
-            parts.append("%s=%.6e" % (label, value.value))
+            qualified = "%s.%s" % (block, value.key.reduction)
+            sample_values[qualified] = value.value
+            if len(names) == 1:
+                sample_values[value.key.reduction] = value.value
+                if value.key.reduction == "step_change_l2":
+                    sample_values["dU_L2"] = value.value
         if unavailable is not None:
-            parts.append("dU_L2=n/a (%s)" % unavailable)
-        print(" | ".join(parts), flush=True)
+            for quantity in manifest.diagnostic_quantities:
+                reductions = {
+                    operation["reduction"]
+                    for operation in quantity.execution["operations"]
+                }
+                if "step_change_l2" not in reductions:
+                    continue
+                block = _block_name(quantity.reference, names)
+                qualified = "%s.step_change_l2" % block
+                sample_values[qualified] = None
+                unavailable_values[qualified] = unavailable
+                if len(names) == 1:
+                    sample_values["step_change_l2"] = None
+                    sample_values["dU_L2"] = None
+                    unavailable_values["step_change_l2"] = unavailable
+                    unavailable_values["dU_L2"] = unavailable
+        sample = ConsoleSample(
+            time=float(self._owner._executor.time()),
+            step=int(self._owner._executor.macro_step()),
+            dt=dt,
+            values=sample_values,
+            unavailable=unavailable_values,
+        )
+        manifest.operation.emit(sample)
 
     def _discard_diagnostics(self, effect: AcceptedSideEffect) -> None:
         self._pending.pop(effect.identity.token, None)
@@ -2445,7 +2470,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 unavailable = "initial state"
             else:
                 raise
-            values, baseline_updates = (), {}
+            values, baseline_updates = self._diagnostic_values(
+                manifest, skip_reductions=frozenset({"step_change_l2"}))
         previous = {
             value.key.identity.token: self._diagnostics.get(value.key.identity.token)
             for value in values
@@ -2491,7 +2517,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                         accepted_values: tuple[DiagnosticPayload, ...]) -> None:
                 self._publish_diagnostics(accepted_effect, accepted_values)
                 self._render_console_diagnostics(
-                    accepted_effect, accepted_values, unavailable=unavailable)
+                    accepted_effect, manifest, accepted_values, unavailable=unavailable)
         return _PreparedDiagnostic(
             effect, values, publish, self._discard_diagnostics, rollback)
 

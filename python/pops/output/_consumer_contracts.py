@@ -130,6 +130,38 @@ def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
+    """Authenticate the Python-only renderer of a rank-zero diagnostic consumer."""
+    if getattr(value, "__pops_ir_immutable__", False) is not True:
+        raise TypeError("%s must declare immutable semantic state" % where)
+    consumer_data = getattr(value, "consumer_data", None)
+    if not callable(consumer_data) or not callable(getattr(value, "emit", None)):
+        raise TypeError("%s must implement consumer_data() and emit()" % where)
+    first, second = consumer_data(), consumer_data()
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("%s consumer_data() must return one deterministic dict" % where)
+    expected = {
+        "schema_version", "provider_id", "parallel_mode", "template", "handler",
+    }
+    if set(first) != expected or first["schema_version"] != 1:
+        raise ValueError("%s consumer_data has an unsupported console schema" % where)
+    if first["provider_id"] != "pops.output.console-presentation.v1":
+        raise ValueError("%s has an unsupported console provider" % where)
+    if first["parallel_mode"] != "root":
+        raise ValueError("%s console parallel_mode must be root" % where)
+    template, handler = first["template"], first["handler"]
+    if (template is None) == (handler is None):
+        raise ValueError("%s must declare exactly one console presentation" % where)
+    if template is not None and (not isinstance(template, str) or not template):
+        raise TypeError("%s template must be non-empty text" % where)
+    if handler is not None and (
+            type(handler) is not dict
+            or set(handler) != {"module", "qualname"}
+            or any(not isinstance(item, str) or not item for item in handler.values())):
+        raise TypeError("%s handler must be a canonical function reference" % where)
+    return freeze_data(first, "%s.consumer_data" % where)
+
+
 def validate_checkpoint_snapshot(value: Any, *, where: str = "checkpoint snapshot") -> Any:
     """Require the compensating protocol used before and after checkpoint publication."""
     missing = tuple(
@@ -443,10 +475,16 @@ class ConsumerManifest:
             if operation_data["parallel_mode"] != self.parallel_mode.value:
                 raise ValueError(
                     "ConsumerManifest parallel mode differs from its live observer provider")
+        elif self.kind is ConsumerKind.DIAGNOSTIC:
+            if self.output_format is not None:
+                raise ValueError("Diagnostic consumers have no scientific output_format")
+            format_data = None
+            operation_data = _console_provider_data(
+                self.operation, where="ConsumerManifest.operation")
+            if self.parallel_mode is not ParallelMode.ROOT:
+                raise ValueError("Console diagnostic consumers must use root parallel mode")
         else:
-            if self.output_format is not None or self.operation is not None:
-                raise ValueError("Diagnostic consumers carry no publication provider")
-            format_data = operation_data = None
+            raise ValueError("ConsumerManifest has an unsupported consumer kind")
         object.__setattr__(self, "output_format_data", format_data)
         object.__setattr__(self, "operation_data", operation_data)
         if not isinstance(self.diagnostics, tuple):

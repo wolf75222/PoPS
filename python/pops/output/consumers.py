@@ -171,6 +171,8 @@ class ConsoleMonitor(Descriptor):
         diagnostics: Any,
         levels: Any = None,
         enabled: Any = True,
+        template: str | None = None,
+        handler: Any = None,
         failure_action: Any = None,
     ) -> None:
         if type(enabled) is not bool:
@@ -191,6 +193,8 @@ class ConsoleMonitor(Descriptor):
         self.diagnostics = rows
         self.levels = selected_levels
         self.enabled = enabled
+        from ._console_monitor import ConsolePresentation
+        self.presentation = ConsolePresentation(template=template, handler=handler)
         from ._consumer_contracts import SkipSampleReported
         self.failure_action = (
             SkipSampleReported() if failure_action is None else _failure_action(failure_action)
@@ -225,7 +229,7 @@ class ConsoleMonitor(Descriptor):
             output_format=None,
             parallel_mode=ParallelMode.ROOT,
             levels=self.levels,
-            operation=None,
+            operation=self.presentation,
             diagnostics=self.diagnostics,
             failure_action=self.failure_action,
         ),)
@@ -236,6 +240,7 @@ class ConsoleMonitor(Descriptor):
             "n_diagnostics": len(self.diagnostics),
             "levels": self.levels.to_data(),
             "enabled": self.enabled,
+            "presentation": self.presentation.consumer_data(),
             "failure_action": self.failure_action.to_data(),
         }
 

@@ -1030,7 +1030,6 @@ class RuntimeInstance:
         advance: Any,
         *,
         at_end: Any = False,
-        observe_accepted: Any = None,
     ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
         from pops.time import StepTransactionReport
@@ -1068,13 +1067,6 @@ class RuntimeInstance:
             commit()
             phase = "effect"
             reports, cursors, _all_reports = self._accept_consumers(transactions)
-            if callable(observe_accepted):
-                # This is presentation-only evidence. A missing optional diagnostic must never
-                # roll back an otherwise accepted and externally published numerical step.
-                try:
-                    observe_accepted()
-                except Exception:
-                    pass
             phase = "commit"
             finalize()
             native_active = False
@@ -1146,12 +1138,14 @@ class RuntimeInstance:
             raise
 
     def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
-             output_dir: Any = None, console: bool = True, progress: bool = True,
+             output_dir: Any = None, console: bool = True,
              **controller_controls: Any) -> RunReport:
         if type(console) is not bool:
             raise TypeError("pops.run console= must be an exact bool")
-        if type(progress) is not bool:
-            raise TypeError("pops.run progress= must be an exact bool")
+        if "progress" in controller_controls:
+            raise TypeError(
+                "pops.run progress= was removed; declare a scheduled "
+                "pops.output.ConsoleMonitor instead")
         if "strategy" in controller_controls or "cfl" in controller_controls:
             raise TypeError(
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
@@ -1191,20 +1185,13 @@ class RuntimeInstance:
             if console:
                 from pops.runtime._console_run import safe_begin_console_run
 
-                console_session = safe_begin_console_run(
-                    self, manifest, selected, progress=progress)
+                console_session = safe_begin_console_run(self, manifest, selected)
             begin_post_commit = getattr(
                 self._publisher, "begin_post_commit_consumers", None)
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
-            progress_enabled = (
-                console_session is not None and console_session.show_progress)
-            progress_bucket = 0
-            progress_start_time = float(manifest.start_time)
-            progress_target_time = float(manifest.controls["t_end"])
             while native.time() < t_end and steps < max_steps:
-                step_start_time = float(native.time()) if progress_enabled else 0.0
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
                 _validate_external_grid_deadline(
@@ -1238,58 +1225,12 @@ class RuntimeInstance:
                         )
                     return report, report.attempts
 
-                progress_observation: dict[str, Any] = {}
-
-                def observe_progress(
-                    observation: dict[str, Any] = progress_observation,
-                ) -> None:
-                    nonlocal progress_bucket
-                    if not progress_enabled:
-                        return
-                    from pops.runtime._console_run import progress_fraction_bucket
-
-                    physical_time = float(native.time())
-                    _fraction, bucket = progress_fraction_bucket(
-                        progress_start_time, progress_target_time, physical_time)
-                    if bucket <= progress_bucket:
-                        return
-                    progress_bucket = bucket
-                    provider = getattr(native, "_step_change_l2", None)
-                    if not callable(provider):
-                        observation["error"] = "provider unavailable"
-                        return
-                    try:
-                        values = provider()
-                        observation["values"] = {
-                            str(name): float(value) for name, value in values.items()
-                        }
-                    except Exception as error:
-                        message = str(error)
-                        observation["error"] = (
-                            "AMR regrid" if "topology change" in message else message)
-
                 step_report = self._accepted_step_transaction(
                     advance,
                     at_end=lambda: not (native.time() < t_end),
-                    observe_accepted=observe_progress,
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
-                # This is the only disabled-progress cost: one predictable branch per accepted
-                # macro-step, outside every native/AMR/device loop.  In particular, progress=False
-                # performs no clock read, percentage calculation, string formatting, or I/O.
-                if progress_enabled:
-                    from pops.runtime._console_run import safe_console_progress
-
-                    physical_time = float(native.time())
-                    safe_console_progress(
-                        console_session,
-                        accepted_steps=steps,
-                        physical_time=physical_time,
-                        dt=physical_time - step_start_time,
-                        step_change_l2=progress_observation.get("values"),
-                        step_change_error=progress_observation.get("error"),
-                    )
             if native.time() < t_end:
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "

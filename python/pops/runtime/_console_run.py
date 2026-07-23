@@ -118,52 +118,6 @@ class ConsoleRunSession:
 
     enabled: bool
     started_at: float
-    show_progress: bool = False
-    run_start_time: float = 0.0
-    target_time: float = 0.0
-    _progress_bucket: int = 0
-
-    def progress(
-        self,
-        *,
-        accepted_steps: int,
-        physical_time: float,
-        dt: float,
-        step_change_l2: dict[str, float] | None = None,
-        step_change_error: str | None = None,
-    ) -> None:
-        if not self.enabled or not self.show_progress:
-            return
-        fraction, bucket = progress_fraction_bucket(
-            self.run_start_time, self.target_time, physical_time)
-        if bucket <= self._progress_bucket:
-            return
-        self._progress_bucket = bucket
-        percent = 100.0 * fraction
-        elapsed = perf_counter() - self.started_at
-        change = ""
-        if step_change_l2:
-            if len(step_change_l2) == 1:
-                change = " | dU_L2=%.6e" % next(iter(step_change_l2.values()))
-            else:
-                change = " | dU_L2={%s}" % ", ".join(
-                    "%s=%.6e" % item for item in sorted(step_change_l2.items()))
-        elif step_change_error:
-            change = " | dU_L2=n/a (%s)" % step_change_error
-        print(
-            "PoPS progress | t=%.12g / %.12g (%.1f%%) | step=%d | dt=%.12g"
-            " | wall=%.3fs%s"
-            % (
-                physical_time,
-                self.target_time,
-                percent,
-                accepted_steps,
-                dt,
-                elapsed,
-                change,
-            ),
-            flush=True,
-        )
 
     def completed(self, report: Any) -> None:
         if not self.enabled:
@@ -186,19 +140,6 @@ class ConsoleRunSession:
         print("PoPS run failed after %d accepted step(s) at t=%.12g (%.6f s)" % (
             accepted_steps, final_time, elapsed), file=sys.stderr)
         print("  %s: %s" % (type(error).__name__, error), file=sys.stderr)
-
-
-def progress_fraction_bucket(
-    run_start_time: float,
-    target_time: float,
-    physical_time: float,
-) -> tuple[float, int]:
-    """Rank-identical physical decile for collective sampling and rank-zero rendering."""
-    span = target_time - run_start_time
-    fraction = 1.0 if span <= 0.0 else (
-        (physical_time - run_start_time) / span)
-    fraction = min(1.0, max(0.0, fraction))
-    return fraction, min(10, int(fraction * 10.0 + 1.0e-12))
 
 
 def _rank_size(instance: Any) -> tuple[str, int, int]:
@@ -231,13 +172,11 @@ def begin_console_run(
     instance: Any,
     manifest: Any,
     strategy: Any,
-    *,
-    progress: bool = False,
 ) -> ConsoleRunSession:
     """Print the actual resolved/native configuration once on rank zero."""
     communicator, rank, ranks = _rank_size(instance)
     if rank != 0:
-        return ConsoleRunSession(False, perf_counter(), show_progress=progress)
+        return ConsoleRunSession(False, perf_counter())
     environment = runtime_environment_report()
 
     install = instance._install_plan
@@ -286,52 +225,21 @@ def begin_console_run(
     print("  artifact identity   : %s" % install.artifact.artifact_identity.hexdigest[:16])
     print("  run identity        : %s" % manifest.run_identity.hexdigest[:16])
     print("=" * 64, flush=True)
-    return ConsoleRunSession(
-        True,
-        perf_counter(),
-        show_progress=progress,
-        run_start_time=float(manifest.start_time),
-        target_time=float(manifest.controls["t_end"]),
-    )
+    return ConsoleRunSession(True, perf_counter())
 
 
 def safe_begin_console_run(
     instance: Any,
     manifest: Any,
     strategy: Any,
-    *,
-    progress: bool = False,
 ) -> ConsoleRunSession:
     """Start presentation without letting a terminal failure alter numerical execution."""
 
     try:
-        return begin_console_run(instance, manifest, strategy, progress=progress)
+        return begin_console_run(instance, manifest, strategy)
     except Exception as error:
         _warning("startup", error)
-        return ConsoleRunSession(False, perf_counter(), show_progress=progress)
-
-
-def safe_console_progress(
-    session: ConsoleRunSession,
-    *,
-    accepted_steps: int,
-    physical_time: float,
-    dt: float,
-    step_change_l2: dict[str, float] | None = None,
-    step_change_error: str | None = None,
-) -> None:
-    """Render accepted-step progress without changing numerical execution."""
-
-    try:
-        session.progress(
-            accepted_steps=accepted_steps,
-            physical_time=physical_time,
-            dt=dt,
-            step_change_l2=step_change_l2,
-            step_change_error=step_change_error,
-        )
-    except Exception as error:
-        _warning("progress", error)
+        return ConsoleRunSession(False, perf_counter())
 
 
 def safe_console_completed(session: ConsoleRunSession, report: Any) -> None:

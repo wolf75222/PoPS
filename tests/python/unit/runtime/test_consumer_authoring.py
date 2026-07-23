@@ -126,6 +126,8 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
     assert monitor.parallel_mode is ParallelMode.ROOT
     assert monitor.schedule == schedule
     assert type(monitor.failure_action) is SkipSampleReported
+    assert monitor.operation_data["provider_id"] == "pops.output.console-presentation.v1"
+    assert monitor.operation_data["parallel_mode"] == "root"
     quantity, = monitor.diagnostic_quantities
     assert quantity.execution["operations"] == ({
         "name": "step_change_l2",
@@ -143,6 +145,50 @@ def test_console_monitor_can_be_removed_at_authoring_time():
         enabled=False,
     )
     assert monitor.consumer_authoring() == ()
+
+
+def _collect_console_sample(sample):
+    _collect_console_sample.last = sample
+
+
+def test_console_monitor_presentation_is_typed_and_identity_bearing():
+    case, block, _state = _case()
+    schedule = every(1, clock=Clock("macro", owner=case.owner_path))
+    diagnostic = StepChangeNorm(L2(), block=block)
+    templated = ConsoleMonitor(
+        schedule=schedule,
+        diagnostics=(diagnostic,),
+        template="step={step} dU={tracer.step_change_l2:.3e}",
+    )
+    handled = ConsoleMonitor(
+        schedule=schedule,
+        diagnostics=(diagnostic,),
+        handler=_collect_console_sample,
+    )
+
+    assert templated.options()["presentation"]["template"].startswith("step=")
+    assert handled.options()["presentation"]["handler"] == {
+        "module": __name__,
+        "qualname": "_collect_console_sample",
+    }
+    assert (
+        templated.consumer_authoring()[0].canonical_data(case.resolve)["operation"]
+        != handled.consumer_authoring()[0].canonical_data(case.resolve)["operation"]
+    )
+
+    with pytest.raises(ValueError, match="either template=.*handler"):
+        ConsoleMonitor(
+            schedule=schedule,
+            diagnostics=(diagnostic,),
+            template="step={step}",
+            handler=_collect_console_sample,
+        )
+    with pytest.raises(TypeError, match="named Python function"):
+        ConsoleMonitor(
+            schedule=schedule,
+            diagnostics=(diagnostic,),
+            handler=lambda _sample: None,
+        )
 
 
 def test_consumer_protocol_is_required_and_schedule_authority_is_unique():

@@ -55,7 +55,7 @@ from pops.output import (
     ParallelMode,
     ScientificOutput,
 )
-from pops.diagnostics import StepChangeNorm
+from pops.diagnostics import Integral, StepChangeNorm
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
@@ -209,7 +209,15 @@ consumers = [
     ),
     ConsoleMonitor(
         schedule=every(MONITOR_EVERY, clock=program.clock),
-        diagnostics=(StepChangeNorm(L2(), block=tracer),),
+        diagnostics=(
+            StepChangeNorm(L2(), block=tracer),
+            Integral(block=tracer),
+        ),
+        template=(
+            "step={step} t={time:.4e} dt={dt:.3e} "
+            "dU_L2={tracer.step_change_l2:.3e} "
+            "mass={tracer.integral:.6e}"
+        ),
         enabled=ENABLE_PROGRESS,
     ),
 ]
@@ -275,7 +283,6 @@ report = pops.run(
     t_end=T_END,
     max_steps=MAX_STEPS,
     output_dir=OUTPUT_ROOT,
-    progress=False,
 )
 world.barrier()
 
