@@ -271,6 +271,7 @@
   "tests/python/unit/runtime/test_capacity_limits.py": 0.5,
   "tests/python/unit/runtime/test_check_model.py": 0.5,
   "tests/python/unit/runtime/test_check_model_partition.py": 0.5,
+  "tests/python/unit/runtime/test_console_monitor.py": 0.5,
   "tests/python/unit/runtime/test_consumer_authoring.py": 1.0,
   "tests/python/unit/runtime/test_consumer_transactions.py": 1.0,
   "tests/python/unit/runtime/test_coupled_rate.py": 0.5,
@@ -395,7 +396,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so, local pytest per file (non-compiler tests)",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 226,
+    "estimated_count": 227,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -569,6 +570,7 @@
       "tests/python/unit/runtime/test_bind_validation.py",
       "tests/python/unit/runtime/test_boundary_component_prepare_contract.py",
       "tests/python/unit/runtime/test_canonical_runtime_identity.py",
+      "tests/python/unit/runtime/test_console_monitor.py",
       "tests/python/unit/runtime/test_consumer_authoring.py",
       "tests/python/unit/runtime/test_consumer_transactions.py",
       "tests/python/unit/runtime/test_coupled_rate_program_stability.py",
@@ -624,6 +626,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 391
+    "total_files": 392
   }
 }
