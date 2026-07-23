@@ -91,7 +91,7 @@ concurrency:
   # couperaient mutuellement leurs builds Kokkos lents (interruption SIGTERM, exit 143),
   # marquant master en faux rouge alors que le code est sain. Chaque validation post-merge
   # va donc a son terme (les runs se mettent en file au lieu de s'annuler).
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: pops-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
