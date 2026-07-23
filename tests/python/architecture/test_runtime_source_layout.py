@@ -143,14 +143,19 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
         "pops_dev_options",
         "_pops_EXPORTS",
         "POPS_HEADER_SIG=\"${POPS_NATIVE_HEADER_SIGNATURE}\"",
-        "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>",
-        ":-O0>",
     )
     missing = [fact for fact in required if fact not in SRC_CMAKE]
     assert not missing, "central runtime targets lost compile-contract facts: " + str(missing)
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_test_tu") == 1
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_module_tu") == 1
     assert "elseif(POPS_BUILD_PYTHON)" in SRC_CMAKE
+    assert "target_compile_options(${_runtime_target} PUBLIC" not in SRC_CMAKE
+
+    # Only test executables receive the fast -O0 override.  Central runtime objects keep the same
+    # optimized code path exercised by installed Python/C++ consumers.
+    assert 'option(POPS_TESTS_FAST_O0 "Compile test executables at -O0' in TESTS_CMAKE
+    assert "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>" in TESTS_CMAKE
+    assert ":-O0>" in TESTS_CMAKE
 
     assert "pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL}" in ROOT_CMAKE
     assert "POPS_HEAVY_MODULE_TU_POOL" not in SRC_CMAKE

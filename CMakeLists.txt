@@ -336,18 +336,18 @@ list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
 # de pool duplique dans la propriete GLOBALE JOB_POOLS rend build.ninja invalide
 # ("ninja: error: duplicate pool"). Les consommateurs ne posent que JOB_POOL_COMPILE.
 #
-# La profondeur production reste independante du pool -O0 des tests/runtime declare par src/ quand
-# POPS_BUILD_TESTS=ON. Elle ne doit etre relevee qu'apres mesure de la RSS par TU sur le runner vise.
+# La profondeur production reste independante du pool des objets runtime utilise par les tests
+# quand POPS_BUILD_TESTS=ON. Elle ne doit etre relevee qu'apres mesure de la RSS par TU sur le runner.
 # Les builds Python locaux et les wheels peuvent fournir explicitement une valeur mesuree plus haute.
 set(POPS_HEAVY_MODULE_TU_POOL 1 CACHE STRING
     "Profondeur du pool Ninja des TU lourdes de production _pops (-O3) ; defaut 1 (anti-OOM)")
 set_property(GLOBAL APPEND PROPERTY
   JOB_POOLS pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL})
 
-# Pool distinct pour les TU runtime/tests compilees a -O0. Il n'est declare ni consomme lorsque les
-# tests sont desactives, et ne peut donc pas relever implicitement la concurrence du module -O3.
+# Pool distinct pour les objets runtime optimises des builds de tests et les executables de test
+# lourds compiles a -O0. Il n'est declare ni consomme lorsque les tests sont desactives.
 set(POPS_HEAVY_TEST_TU_POOL 1 CACHE STRING
-    "Profondeur du pool Ninja des TU lourdes runtime/tests (-O0) ; defaut 1 (anti-OOM)")
+    "Profondeur du pool Ninja des TU lourdes runtime/tests ; defaut 1 (anti-OOM)")
 
 # MPI : backend distribue, confine au seam comm (parallel/comm.hpp). Optionnel :
 # par defaut OFF, le build et les tests restent serie (comm.hpp = rang unique).
