@@ -1138,10 +1138,12 @@ class RuntimeInstance:
             raise
 
     def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
-             output_dir: Any = None, console: bool = True,
+             output_dir: Any = None, console: bool = True, progress: bool = True,
              **controller_controls: Any) -> RunReport:
         if type(console) is not bool:
             raise TypeError("pops.run console= must be an exact bool")
+        if type(progress) is not bool:
+            raise TypeError("pops.run progress= must be an exact bool")
         if "strategy" in controller_controls or "cfl" in controller_controls:
             raise TypeError(
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
@@ -1181,13 +1183,17 @@ class RuntimeInstance:
             if console:
                 from pops.runtime._console_run import safe_begin_console_run
 
-                console_session = safe_begin_console_run(self, manifest, selected)
+                console_session = safe_begin_console_run(
+                    self, manifest, selected, progress=progress)
             begin_post_commit = getattr(
                 self._publisher, "begin_post_commit_consumers", None)
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
+            progress_enabled = (
+                console_session is not None and console_session.show_progress)
             while native.time() < t_end and steps < max_steps:
+                step_start_time = float(native.time()) if progress_enabled else 0.0
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
                 _validate_external_grid_deadline(
@@ -1227,6 +1233,19 @@ class RuntimeInstance:
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
+                # This is the only disabled-progress cost: one predictable branch per accepted
+                # macro-step, outside every native/AMR/device loop.  In particular, progress=False
+                # performs no clock read, percentage calculation, string formatting, or I/O.
+                if progress_enabled:
+                    from pops.runtime._console_run import safe_console_progress
+
+                    physical_time = float(native.time())
+                    safe_console_progress(
+                        console_session,
+                        accepted_steps=steps,
+                        physical_time=physical_time,
+                        dt=physical_time - step_start_time,
+                    )
             if native.time() < t_end:
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "

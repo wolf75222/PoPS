@@ -1849,6 +1849,29 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return None
         if submission is not None:
             submission.arm()
+        if manifest.parallel_mode is not ParallelMode.SERIAL:
+            # A Catalyst implementation may enter MPI from its worker thread even when PoPS gives
+            # it a duplicated communicator.  Do not let the next AMR/native step concurrently
+            # enter solver collectives on the main thread: MPICH and third-party VTK internals do
+            # not guarantee progress for that cross-library ordering.  Drain the accepted live
+            # frame locally, then prove every rank has left the worker lane before any rank returns
+            # to the solver.  Serial observers and asynchronous scientific writers remain async.
+            delivery_error = None
+            try:
+                self._observer_queue(manifest, run_identity).flush()
+            except BaseException as error:
+                delivery_error = _exception_text(error)
+            try:
+                _post_commit_root_consensus(
+                    self._communicator,
+                    rank=self._rank,
+                    size=self._size,
+                    error=delivery_error,
+                    phase="collective live delivery",
+                )
+            except BaseException as error:
+                self._record_observer_failure(
+                    manifest.qualified_id, run_identity, error)
         return None
 
     def _drain_observer_manifest(

@@ -1152,8 +1152,10 @@ class LiveVisualization(Descriptor):
     """Stream selected accepted fields to an irreversible post-commit observer.
 
     Catalyst supports either single-rank delivery or one collective frame per MPI rank on a
-    duplicated observer communicator.  ``ROOT`` and ``PER_RANK`` are rejected because Catalyst's
-    lifecycle and data handoff are collective.
+    duplicated observer communicator. Collective delivery is drained before the next native
+    solver step so third-party MPI calls never overlap AMR collectives on another thread.
+    ``ROOT`` and ``PER_RANK`` are rejected because Catalyst's lifecycle and data handoff are
+    collective.
     """
 
     category = "monitor"

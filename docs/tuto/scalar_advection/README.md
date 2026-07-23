@@ -608,7 +608,10 @@ MPI, le provider integre accepte `ParallelMode.COLLECTIVE` : chaque rang fournit
 sur une lane dupliquee et PoPS transmet son handle Fortran par `catalyst/mpi_comm`. `ROOT` et
 `PER_RANK` restent refuses, et une tentative collective ne peut pas etre rejouee
 (`max_attempts=1`). Les sorties progressives PVTU ou HDF5 avec `AsyncScientificOutput` restent une
-voie independante du live.
+voie independante du live. Pour eviter qu'un collectif VTK du worker chevauche le collectif AMR
+suivant, PoPS draine chaque frame live MPI avant de rendre la main au solveur; le live MPI est donc
+synchronise aux instants publies. Le live serie et les sorties scientifiques asynchrones conservent
+leur recouvrement.
 
 Le bundle macOS de ParaView lie ses modules Catalyst a son Python prive. Il ne faut donc pas ajouter
 son dossier `Python` au Python Conda. Le lanceur neutre charge ce Python sans demarrer
@@ -638,9 +641,17 @@ La presentation reproductible `U`/Viridis/`Surface With Edges` reste celle de `P
 `.pvsm` materiel de la sortie fichier. Une pipeline Catalyst qui rend elle-meme des images depuis le
 worker exige une distribution ParaView munie d'un backend de rendu hors-ecran compatible threads.
 
-Le worker PoPS est l'unique couche asynchrone : l'async interne Catalyst est force a zero et un
+Dans le client graphique live, `catalyst: / mesh` est la source distante et
+`builtin: / Extract: mesh` est son extrait local affichable. Selectionner **Extract: mesh** (la ligne
+du haut), appuyer sur la barre d'espace pour activer l'oeil, puis **Reset Camera**. Choisir ensuite
+`Color By: U` et `Surface With Edges`. Le `.pvsm` automatise deja ces choix pour la relecture des
+sorties fichier; le protocole Catalyst Live de ParaView ne transfere pas cet etat de presentation
+client avec les donnees.
+
+Le worker PoPS est l'unique couche de livraison : l'async interne Catalyst est force a zero et un
 `CATALYST_ASYNC_ENABLED` actif est refuse, de sorte que le recu suit la fin de
-`catalyst.execute`. Le provider integre accepte un seul consumer/pipeline combine et un seul run par
+`catalyst.execute`. En MPI collectif, ce worker est draine a chaque frame avant le prochain pas
+solveur; en serie il reste asynchrone. Le provider integre accepte un seul consumer/pipeline combine et un seul run par
 `RuntimeInstance`. Sa reservation process-global n'est jamais relachee : lancer un nouveau
 processus pour un autre run Catalyst. Plusieurs `RuntimeInstance` concurrents dans le meme processus
 ne sont pas supportes avec Catalyst ou HDF5 asynchrone. Comme toute visualisation live, l'envoi est

@@ -82,7 +82,10 @@ def run(instance: Any, **controls: Any) -> RunReport:
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
     are recorded by the runtime's run identity. Success returns an immutable :class:`RunReport`;
     terminal failures raise and never manufacture a success report. ``console=False`` disables
-    only the rank-zero presentation banner and never enters the numerical run identity.
+    only the rank-zero presentation. By default, the runtime emits at most ten rank-zero progress
+    lines as accepted macro-steps cross physical-time deciles. ``progress=False`` disables their
+    clock reads, formatting and I/O. Both options are presentation-only and never enter the
+    numerical run identity.
     """
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(

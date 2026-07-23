@@ -118,6 +118,42 @@ class ConsoleRunSession:
 
     enabled: bool
     started_at: float
+    show_progress: bool = False
+    run_start_time: float = 0.0
+    target_time: float = 0.0
+    _progress_bucket: int = 0
+
+    def progress(
+        self,
+        *,
+        accepted_steps: int,
+        physical_time: float,
+        dt: float,
+    ) -> None:
+        if not self.enabled or not self.show_progress:
+            return
+        span = self.target_time - self.run_start_time
+        fraction = 1.0 if span <= 0.0 else (
+            (physical_time - self.run_start_time) / span)
+        fraction = min(1.0, max(0.0, fraction))
+        bucket = min(10, int(fraction * 10.0 + 1.0e-12))
+        if bucket <= self._progress_bucket:
+            return
+        self._progress_bucket = bucket
+        percent = 100.0 * fraction
+        elapsed = perf_counter() - self.started_at
+        print(
+            "PoPS progress | t=%.12g / %.12g (%.1f%%) | step=%d | dt=%.12g | wall=%.3fs"
+            % (
+                physical_time,
+                self.target_time,
+                percent,
+                accepted_steps,
+                dt,
+                elapsed,
+            ),
+            flush=True,
+        )
 
     def completed(self, report: Any) -> None:
         if not self.enabled:
@@ -168,11 +204,17 @@ def _warning(phase: str, error: Exception) -> None:
         pass
 
 
-def begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRunSession:
+def begin_console_run(
+    instance: Any,
+    manifest: Any,
+    strategy: Any,
+    *,
+    progress: bool = False,
+) -> ConsoleRunSession:
     """Print the actual resolved/native configuration once on rank zero."""
     communicator, rank, ranks = _rank_size(instance)
     if rank != 0:
-        return ConsoleRunSession(False, perf_counter())
+        return ConsoleRunSession(False, perf_counter(), show_progress=progress)
     environment = runtime_environment_report()
 
     install = instance._install_plan
@@ -221,17 +263,48 @@ def begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRun
     print("  artifact identity   : %s" % install.artifact.artifact_identity.hexdigest[:16])
     print("  run identity        : %s" % manifest.run_identity.hexdigest[:16])
     print("=" * 64, flush=True)
-    return ConsoleRunSession(True, perf_counter())
+    return ConsoleRunSession(
+        True,
+        perf_counter(),
+        show_progress=progress,
+        run_start_time=float(manifest.start_time),
+        target_time=float(manifest.controls["t_end"]),
+    )
 
 
-def safe_begin_console_run(instance: Any, manifest: Any, strategy: Any) -> ConsoleRunSession:
+def safe_begin_console_run(
+    instance: Any,
+    manifest: Any,
+    strategy: Any,
+    *,
+    progress: bool = False,
+) -> ConsoleRunSession:
     """Start presentation without letting a terminal failure alter numerical execution."""
 
     try:
-        return begin_console_run(instance, manifest, strategy)
+        return begin_console_run(instance, manifest, strategy, progress=progress)
     except Exception as error:
         _warning("startup", error)
-        return ConsoleRunSession(False, perf_counter())
+        return ConsoleRunSession(False, perf_counter(), show_progress=progress)
+
+
+def safe_console_progress(
+    session: ConsoleRunSession,
+    *,
+    accepted_steps: int,
+    physical_time: float,
+    dt: float,
+) -> None:
+    """Render accepted-step progress without changing numerical execution."""
+
+    try:
+        session.progress(
+            accepted_steps=accepted_steps,
+            physical_time=physical_time,
+            dt=dt,
+        )
+    except Exception as error:
+        _warning("progress", error)
 
 
 def safe_console_completed(session: ConsoleRunSession, report: Any) -> None:

@@ -1205,6 +1205,14 @@ présentation : cette valeur ne rejoint ni le manifeste ni l'identité numériqu
 terminal est signalée sur `stderr`, mais ne peut ni masquer une exception numérique, ni empêcher un
 rollback, ni convertir un run réussi en échec.
 
+Par défaut, le rang zéro ajoute au plus dix lignes de progression lorsque le temps physique accepté
+franchit les déciles de l'intervalle demandé. Cette cadence observe uniquement le pas macro déjà
+commité : elle ne parcourt aucun champ, ne suit pas les sous-pas AMR, ne lance aucun kernel et
+n'ajoute aucun collectif MPI. `progress=False` coupe les lectures d'horloge murale, calculs de
+pourcentage, formatage et I/O ; il ne reste qu'une branche prédictible par pas macro accepté, hors des
+boucles natives. Les kernels uniforme/AMR et OpenMP/GPU utilisent donc exactement le même chemin
+numérique.
+
 Les seules options de compilation sont celles acceptées par `pops.resolve(..., compile_options=...)` :
 `so_path`, `force`, `cxx`, `include`, `std` et `debug`. Le backend est une autorité séparée. Il n'existe
 pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldManifest`.

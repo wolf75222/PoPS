@@ -1424,6 +1424,72 @@ def test_root_frame_detach_failure_is_collective_before_prepare_returns(
     }
 
 
+def test_collective_live_delivery_drains_before_returning_to_solver(monkeypatch):
+    run_identity = _identity("run", "collective-live-drain")
+    manifest = SimpleNamespace(
+        parallel_mode=ParallelMode.COLLECTIVE,
+        qualified_id="monitor/collective-live",
+    )
+    raw_frame = SimpleNamespace(
+        snapshot=SimpleNamespace(
+            provenance=SimpleNamespace(run_identity=run_identity)))
+    events = []
+
+    class Submission:
+        def arm(self):
+            events.append("arm")
+
+        def cancel(self, error):
+            raise AssertionError("successful submission must not be cancelled") from error
+
+    class Queue:
+        def _prepare_detached(self, frame, *, journal, journal_record):
+            assert frame is detached
+            assert journal is None
+            assert journal_record is None
+            events.append("prepare")
+            return Submission()
+
+        def flush(self):
+            events.append("flush")
+            return ()
+
+    detached = object()
+    queue = Queue()
+    publisher = runtime_consumers.RuntimeConsumerPublisher.__new__(
+        runtime_consumers.RuntimeConsumerPublisher)
+    publisher._owner = SimpleNamespace(last_run_identity=run_identity)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = object()
+    publisher._manifest = lambda _effect: manifest
+    publisher._observer_queue = lambda _manifest, _run_identity: queue
+    publisher._record_observer_failure = (
+        lambda *_args: events.append("unexpected-failure"))
+    monkeypatch.setattr(
+        runtime_consumers,
+        "_authenticated_detached_frame",
+        lambda frame: raw_frame if frame is detached else None,
+    )
+
+    def consensus(communicator, *, rank, size, error, phase):
+        assert communicator is publisher._communicator
+        assert (rank, size, error) == (0, 2, None)
+        events.append("consensus:" + phase)
+
+    monkeypatch.setattr(runtime_consumers, "_post_commit_root_consensus", consensus)
+
+    publisher._submit_live_visualization(SimpleNamespace(), detached)
+
+    assert events == [
+        "prepare",
+        "consensus:post-commit journal/enqueue",
+        "arm",
+        "flush",
+        "consensus:collective live delivery",
+    ]
+
+
 def test_detached_frame_does_not_borrow_runtime_geometry_buffers():
     valid = np.ones((2, 2), dtype=np.bool_)
     coverage = np.asarray([[False, True], [False, False]])
