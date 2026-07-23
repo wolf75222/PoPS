@@ -148,6 +148,11 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: prepared boundary component count differs from block '" + name +
           "'");
+    if (!same_periodicity(plan->periodicity(), p_->per_))
+      throw std::runtime_error(
+          "System::mark_bound: prepared boundary plan periodicity disagrees with the domain "
+          "topology for block '" +
+          name + "'");
     (void)plan->has_boundary_linearization();
     runtime::multiblock::BoundaryEvaluationPoint preparation_point;
     preparation_point.clock = plan->identity() + "::bound-runtime";
@@ -198,6 +203,8 @@ std::vector<std::string> System::block_names() const {
 EffectiveOptionsReport System::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "system";
+  report.topology.periodic_x = p_->per_.x;
+  report.topology.periodic_y = p_->per_.y;
   report.poisson.rhs = p_->fields_.p_rhs;
   report.poisson.solver = p_->fields_.p_solver;
   report.poisson.bc = p_->fields_.p_bc;

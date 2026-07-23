@@ -424,6 +424,18 @@ class PolarTensorKrylovSolver {
       res.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
       return res;
     }
+    const auto has_nonfinite_boundary_value = [](BCType type, Real value) {
+      return (type == BCType::Dirichlet || type == BCType::Robin) &&
+             !std::isfinite(static_cast<double>(value));
+    };
+    // Boundary values participate in the affine operator evaluation.  Classify a non-finite
+    // value through the same SolveReport contract as a non-finite RHS instead of leaking the
+    // lower-level halo-fill preflight exception past the solver boundary.
+    if (has_nonfinite_boundary_value(bc_.xlo, bc_.xlo_val) ||
+        has_nonfinite_boundary_value(bc_.xhi, bc_.xhi_val)) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     ensure_coeffs();
     prepare_offset();  // c_bc = apply_operator(0) for nonzero Dirichlet/Robin boundary data
     // MULTI-RANK MPI: ALL ranks (including those without a box, local_size()==0) execute the SAME

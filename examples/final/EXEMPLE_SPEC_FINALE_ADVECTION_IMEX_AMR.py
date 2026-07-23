@@ -35,6 +35,7 @@ from pops.params import Interval, Positive, RuntimeParam
 from pops.representations import Conservative
 from pops.solvers import DenseLU
 from pops.solvers.elliptic import GeometricMG
+from pops.solvers.options import CompositeFAC
 from pops.solvers.tolerances import Relative
 from pops.spaces import CellState
 from pops.time import (
@@ -366,7 +367,13 @@ def build_authoring(
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),),
             solver=(field_solver if field_solver is not None else GeometricMG(
-                tolerance=Relative(1.0e-6), max_cycles=100)),
+                tolerance=Relative(1.0e-6),
+                max_cycles=100,
+                # The level-local MG and composite-FAC solvers own distinct stopping
+                # contracts.  Author the same physical field tolerance for both hierarchy
+                # shapes instead of inheriting FAC's independently stricter native default.
+                fac=CompositeFAC(rel_tol=1.0e-6),
+            )),
             hierarchy_policy=CompositeHierarchySolve(),
         ),
     )

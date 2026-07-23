@@ -581,7 +581,7 @@ def test_install_program_rejects_mismatched_abi(
     from pops.runtime._system import System  # validation-only bad-ABI install seam
 
     n = 4
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
 
     # A hand-written shared module whose ABI function returns a deliberately wrong key. Compiler and
     # loader errors are real test failures; only the session fixtures may report absent prerequisites.

@@ -38,7 +38,7 @@ def _density(n):
 
 def phi_set_poisson(eps, n=64):
     density = _density(n)
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("gas", model=_charge_model(n0=float(density.mean())),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
     sim.set_density("gas", density.reshape(-1).tolist())
@@ -59,7 +59,7 @@ def main():
 
     # meme resultat via l'EPM compose (div_eps_grad(2.0))
     density = _density(n)
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("gas", model=_charge_model(n0=float(density.mean())),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
     sim.set_density("gas", density.reshape(-1).tolist())
@@ -91,7 +91,7 @@ def variable_epsilon_tests():
     f = -(1.0 + 0.5 * X) * 2.0 * PI ** 2 * s_xy + 0.5 * PI * np.cos(PI * X) * np.sin(PI * Y)
 
     def solve(eps_field, solver="geometric_mg"):
-        s = System(n=n, L=1.0, periodic=False)
+        s = System(n=n, L=1.0, periodicity=(False, False))
         s.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
@@ -119,7 +119,7 @@ def variable_epsilon_tests():
     print("OK  non-regression : champ eps uniforme=1 == operateur sans eps (gap %.1e)" % gap)
 
     # eps(x) variable + solveur 'fft' (coefficient constant) : refus explicite au solve.
-    sp = System(n=n, L=1.0, periodic=True)
+    sp = System(n=n, L=1.0, periodicity=(True, True))
     sp.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     # Keep the periodic RHS explicitly in the range of the Laplacian so this branch reaches the

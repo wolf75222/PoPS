@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
 
 #include <pops/core/state/state.hpp>
@@ -93,9 +95,11 @@ TEST(test_amr_composite_poisson, Runs) {
   Geometry gf = g.refine(r);
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
 
   auto [bac, dm] =
-      detail::coupler_make_coarse_layout(n, /*distribute=*/false, 0);  // mono-box replique
+      detail::coupler_make_coarse_layout(n, /*distribute=*/false, 0,
+                                         *load_balance);  // mono-box replique
   const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
   Box2D fb{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
   BoxArray baf(std::vector<Box2D>{fb});
@@ -110,7 +114,7 @@ TEST(test_amr_composite_poisson, Runs) {
 
   ScalarCharge model;
   AmrCouplerMP<ScalarCharge> cpl(model, g, bac, bc, std::move(levels), {},
-                                 /*replicated_coarse=*/true);
+                                 /*replicated_coarse=*/true, load_balance);
   set_state_f(cpl.coarse(), g);
   set_state_f(cpl.levels()[1].U, gf);
 
@@ -140,7 +144,8 @@ TEST(test_amr_composite_poisson, Runs) {
     std::vector<AmrLevelMP> lv2;
     lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
     lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
-    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, std::move(lv2), {}, true);
+    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, std::move(lv2), {}, true,
+                                   load_balance);
     set_state_f(ref.coarse(), g);
     set_state_f(ref.levels()[1].U, gf);
     ref.compute_aux();  // Option A (composite OFF par defaut)

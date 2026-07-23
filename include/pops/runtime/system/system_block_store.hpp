@@ -135,10 +135,9 @@ class SystemBlockStore {
     std::function<void(MultiFab&)> project_masked;
     // FLUX-ONLY residual R <- -div F(U) (NO default/composite source), Poisson frozen (ADC-425). The
     // SAME transport assembly as rhs_into evaluated on SourceFreeModel<Model> (zero source), so the
-    // flux / ghost / geometry handling is bit-identical -- only the source is dropped (with
-    // limiter='none'; the HLL wave-speed cache -- rejected on the aot/production backends compiled
-    // Programs use -- is the only path where cached cell-center speeds differ from the per-face
-    // reconstruction). Read by
+    // flux / ghost / geometry handling is bit-identical -- only the source is dropped. The optional
+    // HLL cache stores exact reconstructed-face speeds and therefore preserves every limiter route.
+    // Read by
     // System::block_neg_div_flux_into, which a compiled time Program's hyperbolic stage calls so a
     // Lie/Strang split assembles "flux but no source" (spec criterion 17). EMPTY (default) for paths
     // that do not build it (the host .so prototype loader); block_neg_div_flux_into fails loud then.
@@ -146,8 +145,8 @@ class SystemBlockStore {
     std::function<void(MultiFab&, MultiFab&)> rhs_flux_only;
     // NAMED elliptic-field RHS closures (ADC-428): field name -> (+= elliptic_field_rhs(U)). A model
     // declaring m.elliptic_field("phi2", rhs=...) carries here a SECOND Poisson right-hand side
-    // (distinct from add_poisson_rhs, the default Poisson coupling), assembled the same way (host loop,
-    // += per cell). EMPTY (default) -> no named elliptic field: bit-identical to the historical block.
+    // (distinct from add_poisson_rhs, the default Poisson coupling), assembled by the same generic
+    // Kokkos pointwise accumulation. EMPTY (default) -> no named elliptic field.
     // The SystemFieldSolver gathers these per field (sum over blocks) into a SEPARATE elliptic solve
     // whose phi/grad are written to the field's OWN aux channel. Trailing + empty default: the
     // positional aggregate init of the other members stays unchanged.

@@ -34,11 +34,14 @@
 #include <gtest/gtest.h>
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+
+#include "amr_transfer_test_authority.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -133,10 +136,6 @@ bool all_finite(const std::vector<double>& v) {
       return false;
   return true;
 }
-bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
-  return std::string(error.what()).find("produced non-finite finite-volume data") !=
-         std::string::npos;
-}
 double maxabs(const std::vector<double>& v) {
   double m = 0;
   for (double x : v)
@@ -160,6 +159,8 @@ double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
 AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
                            const std::vector<double>& rho, int substeps = 1) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
@@ -176,6 +177,7 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
       /*recon_prim=*/false, /*imex=*/false, /*stride=*/1));
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;
@@ -305,8 +307,11 @@ TEST(test_amr_multiblock_imex, Runs) {
     try {
       for (int s = 0; s < K; ++s)
         rt.step(static_cast<Real>(dt));
-    } catch (const std::runtime_error& error) {
-      if (!is_nonfinite_fv_rejection(error))
+    } catch (const FluxEvaluationFailure& failure) {
+      if (failure.status() != EvaluationStatus::kReject ||
+          failure.action() != TransactionFailureAction::kRejectStep ||
+          failure.reason_code() != 0x53544201u ||
+          failure.phase() != "compute_face_fluxes")
         throw;
       explicit_rejected = true;
     }
@@ -404,7 +409,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});

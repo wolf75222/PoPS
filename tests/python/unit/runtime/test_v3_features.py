@@ -65,7 +65,7 @@ print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
 rho16 = gaussian(n)
 rho16_mean = float(rho16.mean())
-sim = System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodicity=(True, True))
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 # This density-exchange fixture sources the potential from the conserved total-density contrast.
 # Both blocks therefore use the same elliptic sign while retaining their opposite force charges.
@@ -103,7 +103,7 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
 
 # --- (B) options Newton sur AMR ------------------------------------------------------
 print("== (B) AMR : options Newton et diagnostics cablees en mono ET multi-blocs ==")
-amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
@@ -111,24 +111,24 @@ amr.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(li
               time=engine.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
 amr.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
               time=engine.Explicit())
-amr.set_density("e1", rho16.ravel())
-amr.set_density("e2", rho16.ravel())
+amr.set_density("e1", rho16)
+amr.set_density("e2", rho16)
 amr.step(2e-3)
 chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
-mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+mono = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 mono.set_temporal_relations([2], [1], ["integral_only"])
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 mono.set_refinement(1e30)
 mono.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
-mono.set_density("e", rho16.ravel())
+mono.set_density("e", rho16)
 mono.step(2e-3)  # build paresseux mono-bloc : les options sont threadees au coupleur, ne leve plus
 chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
 # newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
-amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amrd = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amrd.set_temporal_relations([2], [1], ["integral_only"])
 amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amrd.set_refinement(1e30)
@@ -136,21 +136,21 @@ amrd.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(l
                time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
 amrd.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.Explicit())
-amrd.set_density("e1", rho16.ravel())
-amrd.set_density("e2", rho16.ravel())
+amrd.set_density("e1", rho16)
+amrd.set_density("e2", rho16)
 amrd.step(2e-3)
 rep = amrd.newton_report("e1")
 chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0,
     f"multi-blocs : newton_report dict coherent (residu {rep['max_residual']:.2e}, "
     f"converged {rep['converged']})")
 # newton_diagnostics en MONO-BLOC : le coupleur publie lui aussi un rapport natif coherent.
-monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+monod = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 monod.set_temporal_relations([2], [1], ["integral_only"])
 monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 monod.set_refinement(1e30)
 monod.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                 time=engine.IMEX(newton_diagnostics=True))
-monod.set_density("e", rho16.ravel())
+monod.set_density("e", rho16)
 monod.step(2e-3)
 mono_report = monod.newton_report("e")
 chk(
@@ -163,7 +163,7 @@ chk(
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
-amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr3 = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr3.set_refinement(1e30)
@@ -172,7 +172,7 @@ amr3.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(l
 rho0 = rho16
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))
-amr3.set_density("e2", rho0.ravel())
+amr3.set_density("e2", rho0)
 d_before = np.asarray(amr3.density("e1")).reshape(16, 16).copy()
 amr3.step(2e-3)
 d_after = np.asarray(amr3.density("e1")).reshape(16, 16)
@@ -220,7 +220,7 @@ try:
     cm_h = iso3_dsl("iso3_hllc", hllc=True).compile(os.path.join(tmp, "iso3_hllc.so"), INCLUDE,
                                                     backend="production")
     chk(getattr(cm_h, "has_hllc", False), "CompiledModel.has_hllc = True (capability emise)")
-    sh = System(n=24, L=1.0, periodic=True)
+    sh = System(n=24, L=1.0, periodicity=(True, True))
     sh.set_poisson()
     sh.add_equation("f", model=cm_h, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC()),
                     time=engine.Explicit())
@@ -233,7 +233,7 @@ try:
     cm_nh = iso3_dsl("iso3_nohllc").compile(os.path.join(tmp, "iso3_nohllc.so"), INCLUDE,
                                             backend="production")
     try:
-        s2 = System(n=16, L=1.0, periodic=True)
+        s2 = System(n=16, L=1.0, periodicity=(True, True))
         s2.add_equation("f", model=cm_nh, spatial=engine.Spatial(limiter=Minmod(),
                                                                    flux=HLLC()))
         chk(False, "hllc sans capability sur 3-var aurait du lever")
@@ -248,7 +248,7 @@ try:
     cm_f = cm_f.compile(os.path.join(tmp, "iso3_fd.so"), INCLUDE, backend="production")
 
     def run_imex(cm):
-        s = System(n=16, L=1.0, periodic=True)
+        s = System(n=16, L=1.0, periodicity=(True, True))
         s.set_poisson()
         s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=Minmod()),
                        time=engine.IMEX())

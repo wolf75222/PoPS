@@ -8,6 +8,7 @@
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -265,6 +266,14 @@ class InterfaceFluxScheduler {
                                    collective_identity,
                                    InterfaceFluxEvaluator{},
                                    0};
+      const std::size_t packed_size = static_cast<std::size_t>(left_faces) *
+                                      static_cast<std::size_t>(component_count);
+      if (packed_size > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 2)
+        throw std::overflow_error(
+            "multi-block interface trace batch exceeds the native MPI count domain");
+      prepared.traces.assign(2 * packed_size, Real(0));
+      prepared.flux.assign(packed_size, std::numeric_limits<Real>::quiet_NaN());
+      prepared.consensus.assign(packed_size, Real(0));
     } catch (...) {
       materialization_failure = std::current_exception();
     }
@@ -413,6 +422,11 @@ class InterfaceFluxScheduler {
     std::string collective_identity;
     InterfaceFluxEvaluator evaluator;
     std::size_t evaluation_count = 0;
+    // Persistent host ABI scratch.  The current external NumericalFlux ABI is explicitly host
+    // memory, but a fixed interface must not allocate and copy whole trace vectors on every stage.
+    std::vector<Real> traces;
+    std::vector<Real> flux;
+    std::vector<Real> consensus;
   };
   static_assert(std::is_nothrow_move_constructible_v<PreparedInterface>);
 
@@ -597,9 +611,12 @@ class InterfaceFluxScheduler {
            field.local_size() == expected_local_size && field.ncomp() == component_count;
   }
 
-  static void require_distributed_flux_consensus_(std::vector<Real>& flux) {
+  static void require_distributed_flux_consensus_(std::vector<Real>& flux,
+                                                  std::vector<Real>& reference) {
 #ifdef POPS_HAS_MPI
-    std::vector<Real> reference = flux;
+    if (reference.size() != flux.size())
+      throw std::logic_error("multi-block interface consensus scratch changed size");
+    std::copy(flux.begin(), flux.end(), reference.begin());
     ::pops::detail::require_mpi_success(
         MPI_Bcast(reference.data(), static_cast<int>(reference.size()), MPI_DOUBLE, 0,
                   MPI_COMM_WORLD),
@@ -608,7 +625,7 @@ class InterfaceFluxScheduler {
     if (all_reduce_sum(equal ? 0L : 1L) != 0)
       throw std::runtime_error(
           "multi-block interface evaluator returned rank-dependent shared flux");
-    flux.swap(reference);
+    std::copy(reference.begin(), reference.end(), flux.begin());
 #else
     (void)flux;
     throw std::logic_error(
@@ -649,10 +666,14 @@ class InterfaceFluxScheduler {
     if (packed_size > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 2)
       throw std::overflow_error(
           "multi-block interface trace batch exceeds the native MPI count domain");
-    std::vector<Real> traces(2 * packed_size, Real(0));
-    Real* const left = traces.data();
-    Real* const right = traces.data() + packed_size;
-    std::vector<Real> flux(packed_size, std::numeric_limits<Real>::quiet_NaN());
+    if (prepared.traces.size() != 2 * packed_size || prepared.flux.size() != packed_size ||
+        prepared.consensus.size() != packed_size)
+      throw std::logic_error("multi-block interface prepared scratch changed size");
+    std::fill(prepared.traces.begin(), prepared.traces.end(), Real(0));
+    std::fill(prepared.flux.begin(), prepared.flux.end(),
+              std::numeric_limits<Real>::quiet_NaN());
+    Real* const left = prepared.traces.data();
+    Real* const right = prepared.traces.data() + packed_size;
     for (int face = 0; face < prepared.face_count; ++face) {
       const int mapped_face =
           prepared.route.tangential_orientation == TangentialOrientation::Aligned
@@ -682,9 +703,9 @@ class InterfaceFluxScheduler {
       }
     }
     if (prepared.distributed)
-      all_reduce_sum_inplace(traces.data(), static_cast<int>(traces.size()));
+      all_reduce_sum_inplace(prepared.traces.data(), prepared.traces.size());
 
-    const InterfaceFluxBatch batch{left, right, flux.data(), prepared.face_count,
+    const InterfaceFluxBatch batch{left, right, prepared.flux.data(), prepared.face_count,
                                    prepared.component_count};
     std::exception_ptr evaluator_failure;
     try {
@@ -699,13 +720,13 @@ class InterfaceFluxScheduler {
       std::rethrow_exception(evaluator_failure);
     }
     bool finite_flux = true;
-    for (const Real value : flux)
+    for (const Real value : prepared.flux)
       finite_flux = finite_flux && std::isfinite(static_cast<double>(value));
     if (prepared.distributed) {
       if (all_reduce_sum(finite_flux ? 0L : 1L) != 0)
         throw std::runtime_error(
             "multi-block interface evaluator returned a non-finite flux on one or more MPI ranks");
-      require_distributed_flux_consensus_(flux);
+      require_distributed_flux_consensus_(prepared.flux, prepared.consensus);
     } else if (!finite_flux) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
@@ -725,7 +746,7 @@ class InterfaceFluxScheduler {
               static_cast<std::size_t>(face) * static_cast<std::size_t>(prepared.component_count) +
               static_cast<std::size_t>(component);
           left_out(left_cell.i, left_cell.j, component) -=
-              flux[offset] / prepared.left_normal_spacing;
+              prepared.flux[offset] / prepared.left_normal_spacing;
         }
       }
       if (right_cell.local_box >= 0) {
@@ -736,7 +757,7 @@ class InterfaceFluxScheduler {
               static_cast<std::size_t>(component);
           right_out(right_cell.i, right_cell.j,
                     prepared.route.right_component_for_left[static_cast<std::size_t>(component)]) +=
-              flux[offset] / prepared.right_normal_spacing;
+              prepared.flux[offset] / prepared.right_normal_spacing;
         }
       }
     }

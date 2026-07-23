@@ -53,7 +53,7 @@
 ///        Extracted VERBATIM from python/system.cpp: no change to the numerics, to the order of
 ///        operations, to fill_ghosts/fill_boundary, to device_fence or to tolerance. STRICTLY
 ///        bit-identical -- the code is moved as is, only access to the SHARED members of Impl
-///        (aux, sp, cfg, geom, pgeom_, ba, dm, bc_, dom, per_, periodic_, polar_) goes through the
+///        (aux, sp, cfg, geom, pgeom_, ba, dm, bc_, dom, per_, polar_) goes through the
 ///        back-pointer owner_->.
 ///
 /// CONTRACT / INVARIANTS
@@ -113,11 +113,53 @@ struct SystemNamedAuxCopyKernel {
   const Real* field;
   int component;
   int row_width;
+  int origin_i;
+  int origin_j;
 
   POPS_HD void operator()(int i, int j) const {
-    aux(i, j, component) = field[static_cast<std::int64_t>(j) * row_width + i];
+    aux(i, j, component) =
+        field[static_cast<std::int64_t>(j - origin_j) * row_width + (i - origin_i)];
   }
 };
+
+/// Recomputes the electron temperature aux component from one compressible conservative state.
+/// The functor is intentionally independent of any concrete model type: the prepared runtime has
+/// already authenticated the canonical (rho, rho*u, rho*v, E) component contract and gamma.
+struct SystemElectronTemperatureKernel {
+  Array4 aux;
+  ConstArray4 state;
+  Real gamma_minus_one;
+  int component;
+
+  POPS_HD void operator()(int i, int j) const {
+    const Real rho = state(i, j, 0);
+    const Real mx = state(i, j, 1);
+    const Real my = state(i, j, 2);
+    const Real energy = state(i, j, 3);
+    const Real pressure =
+        gamma_minus_one * (energy - Real(0.5) * (mx * mx + my * my) / rho);
+    aux(i, j, component) = pressure / rho;
+  }
+};
+
+/// Copies one component between fields over an explicitly supplied valid region.  This is used by
+/// the polar potential materialization seam, where the source component lives in the shared aux
+/// channel while the destination is a dedicated one-ghost scalar field.
+struct SystemFieldComponentCopyKernel {
+  Array4 destination;
+  ConstArray4 source;
+  int destination_component;
+  int source_component;
+
+  POPS_HD void operator()(int i, int j) const {
+    destination(i, j, destination_component) = source(i, j, source_component);
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<SystemNamedFieldPostprocessKernel>);
+static_assert(std::is_trivially_copyable_v<SystemNamedAuxCopyKernel>);
+static_assert(std::is_trivially_copyable_v<SystemElectronTemperatureKernel>);
+static_assert(std::is_trivially_copyable_v<SystemFieldComponentCopyKernel>);
 }  // namespace detail
 namespace field_solver {
 
@@ -381,7 +423,7 @@ class SystemFieldSolver {
   // PolarPoissonSolver stores only valid cells, whereas centered tensor/gradient operators need one
   // ghost layer. In Cartesian geometry this buffer is inert.
   std::optional<MultiFab> phi_src_polar_;
-  std::vector<Real> bz_field_;  // field B_z(x) n*n row-major (empty if not provided)
+  NamedAuxField bz_field_;  // field B_z(x) n*n row-major, device-addressable (empty if absent)
   int te_src_ = -1;             // index of the fluid block source of T_e (-1 = none)
   // NAMED aux fields (ADC-70 phase 1) provided by the user via System::set_aux_field: key =
   // canonical component (>= kAuxNamedBase = 5), value = field n*n (cartesian) / nr*ntheta (polar)
@@ -689,10 +731,7 @@ class SystemFieldSolver {
     void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan,
                   FieldNullspaceWorkspace& nullspace) override {
       nullspace.apply_gauge(phi_);
-      if (owner.owner_->periodic_)
-        fill_boundary(phi_, owner.owner_->dom, owner.owner_->per_);
-      else
-        fill_ghosts(phi_, owner.owner_->dom, owner.named_field_bc(plan));
+      fill_ghosts(phi_, owner.owner_->dom, owner.named_field_bc(plan));
     }
     void reset_diagnostics() override {}
     [[nodiscard]] RuntimeDiagnosticsReport diagnostics_report() const override {
@@ -1830,12 +1869,12 @@ class SystemFieldSolver {
     // LOCAL population on the owner rank (cf. solve_fields): iteration over the local fabs of the
     // aux channel instead of fab(0) hardcoded (no-op on a rank without a local box at np>1, bit-identical to the
     // owner).
+    sync_device();
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          a(i, j, kAuxBaseComps) = bz_field_[static_cast<std::size_t>(j) * row + i];
+      for_each_cell(v, detail::SystemNamedAuxCopyKernel{a, bz_field_.data(), kAuxBaseComps, row,
+                                                        owner_->dom.lo[0], owner_->dom.lo[1]});
     }
   }
 
@@ -1855,12 +1894,7 @@ class SystemFieldSolver {
       const ConstArray4 us = s.U.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          const Real rho = us(i, j, 0), mx = us(i, j, 1), my = us(i, j, 2), E = us(i, j, 3);
-          const Real p = gm1 * (E - Real(0.5) * (mx * mx + my * my) / rho);
-          a(i, j, kTeComp) = p / rho;  // T = p / rho
-        }
+      for_each_cell(v, detail::SystemElectronTemperatureKernel{a, us, gm1, kTeComp});
     }
   }
 
@@ -1884,7 +1918,23 @@ class SystemFieldSolver {
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for_each_cell(v, detail::SystemNamedAuxCopyKernel{a, field.data(), comp, row});
+      for_each_cell(v, detail::SystemNamedAuxCopyKernel{a, field.data(), comp, row,
+                                                        owner_->dom.lo[0], owner_->dom.lo[1]});
+    }
+  }
+
+  /// Publish a solved Cartesian scalar potential and its centered gradient into the shared aux
+  /// channel.  This single Kokkos route is shared by the ordinary and simultaneous multi-block
+  /// solves so neither path can regress to host cell loops independently.
+  void derive_cartesian_aux(const MultiFab& phi) {
+    const Real dx = owner_->geom.dx();
+    const Real dy = owner_->geom.dy();
+    for (int li = 0; li < owner_->aux.local_size(); ++li) {
+      const ConstArray4 p = phi.fab(li).const_array();
+      Array4 a = owner_->aux.fab(li).array();
+      const Box2D valid = owner_->aux.box(li);
+      for_each_cell(valid, detail::SystemNamedFieldPostprocessKernel{
+                               a, p, 0, 1, 2, Real(1), dx, dy, true});
     }
   }
 
@@ -1896,14 +1946,24 @@ class SystemFieldSolver {
   }
 
   // --- elliptic solver (system Poisson) -----------------------------
-  /// Resolves the BC mode into a BCRec: "auto" -> dirichlet if wall/non-periodic, otherwise periodic;
+  /// Resolves the BC mode into a BCRec. ``auto`` preserves periodic axes and applies a physical
+  /// Dirichlet condition only on the remaining axes.
   /// "periodic"|"dirichlet"|"neumann" (Foextrap). @throws std::runtime_error on an unknown mode.
+  BCRec topology_bc(BCType physical) const {
+    BCRec result;
+    if (!owner_->per_.x)
+      result.xlo = result.xhi = physical;
+    if (!owner_->per_.y)
+      result.ylo = result.yhi = physical;
+    return result;
+  }
+
   BCRec poisson_bc() {
     if (p_has_explicit_bc)
       return p_explicit_bc;
     std::string mode = p_bc;
     if (mode == "auto")
-      mode = (p_wall == "circle" || !owner_->cfg.periodic) ? "dirichlet" : "periodic";
+      return topology_bc(BCType::Dirichlet);
     BCRec b;
     if (mode == "periodic")
       return b;
@@ -1923,7 +1983,7 @@ class SystemFieldSolver {
       return plan.explicit_bc;
     std::string mode = plan.bc;
     if (mode == "auto")
-      mode = !owner_->cfg.periodic ? "dirichlet" : "periodic";
+      return topology_bc(BCType::Dirichlet);
     BCRec result;
     if (mode == "periodic")
       return result;
@@ -1949,13 +2009,16 @@ class SystemFieldSolver {
       throw std::invalid_argument("system elliptic coefficient has invalid materialized extent");
     MultiFab field(owner_->ba, owner_->dm, 1, 0);
     const int n = owner_->cfg.n;
+    NamedAuxField device_values(values.begin(), values.end());
+    sync_device();
     for (int local = 0; local < field.local_size(); ++local) {
       Array4 output = field.fab(local).array();
       const Box2D valid = field.box(local);
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-          output(i, j, 0) = static_cast<Real>(values[static_cast<std::size_t>(j) * n + i]);
+      for_each_cell(valid, detail::SystemNamedAuxCopyKernel{
+                               output, device_values.data(), 0, n, owner_->dom.lo[0],
+                               owner_->dom.lo[1]});
     }
+    device_fence();
     return field;
   }
 
@@ -2056,9 +2119,7 @@ class SystemFieldSolver {
         const ConstArray4 a = owner_->aux.fab(li).const_array();
         Array4 p = phi_src_polar_->fab(li).array();
         const Box2D v = phi_src_polar_->box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            p(i, j, 0) = a(i, j, 0);  // aux[0] = phi^n
+        for_each_cell(v, detail::SystemFieldComponentCopyKernel{p, a, 0, 0});
       }
       return *phi_src_polar_;
     }
@@ -2174,7 +2235,7 @@ class SystemFieldSolver {
     }
   }
 
-  /// POLAR solve_fields: assembles f = Sum_s elliptic_rhs_s(U_s) (host loop per cell), solves the
+  /// POLAR solve_fields: assembles f = Sum_s elliptic_rhs_s(U_s) on Kokkos, solves the
   /// polar Poisson, then DERIVES the aux in the local basis (e_r, e_theta):
   ///   aux[0] = phi;  aux[1] = grad_r = d phi/dr;  aux[2] = grad_theta = (1/r) d phi/d theta.
   /// This is the layout expected by ExBVelocityPolar (v_r = -grad_theta/B, v_theta = grad_r/B).
@@ -2251,7 +2312,6 @@ class SystemFieldSolver {
     trace_mark("solve_fields: after ell_solve, before device_fence");
     device_fence();
     trace_mark("solve_fields: after device_fence (aux derivation)");
-    const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     // Per-cell derivation (phi, grad phi) -> aux channel: LOCAL to the owner rank. System
     // distributes ONE box (round-robin DistributionMapping(1, n_ranks())), so at np>1 a single rank
     // owns it; the others have local_size()==0 and HAVE NO fab to derive. We iterate over the LOCAL
@@ -2261,25 +2321,11 @@ class SystemFieldSolver {
     MultiFab& phi_mf = ell_phi();
     p_nullspace_workspace_->apply_gauge(phi_mf);
     device_fence();
-    for (int li = 0; li < owner_->aux.local_size(); ++li) {
-      const ConstArray4 p = phi_mf.fab(li).const_array();
-      Array4 a = owner_->aux.fab(li).array();
-      const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          a(i, j, 0) = p(i, j);
-          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-        }
-    }
+    derive_cartesian_aux(phi_mf);
     trace_mark("solve_fields: after aux derivation (phi, grad phi)");
     apply_te();  // T_e = p/rho of the fluid block source, recomputed on each solve (B_z, comp 3, preserved)
     trace_mark("solve_fields: after apply_te");
-    if (owner_->periodic_)
-      fill_boundary(owner_->aux, owner_->dom, owner_->per_);
-    else
-      fill_ghosts(owner_->aux, owner_->dom,
-                  owner_->bc_);  // extrapolation at the boundary (wall / free outflow)
+    fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();  // ADC-369: per-field halo override (after the shared fill; no-op if none)
     trace_mark("solve_fields: end (fill ghosts aux)");
     return report;
@@ -2359,26 +2405,12 @@ class SystemFieldSolver {
       }
     }
     device_fence();
-    const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     MultiFab& phi_mf = ell_phi();
     p_nullspace_workspace_->apply_gauge(phi_mf);
     device_fence();
-    for (int li = 0; li < owner_->aux.local_size(); ++li) {
-      const ConstArray4 p = phi_mf.fab(li).const_array();
-      Array4 a = owner_->aux.fab(li).array();
-      const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          a(i, j, 0) = p(i, j);
-          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-        }
-    }
+    derive_cartesian_aux(phi_mf);
     apply_te();
-    if (owner_->periodic_)
-      fill_boundary(owner_->aux, owner_->dom, owner_->per_);
-    else
-      fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+    fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();
     return report;
   }
@@ -2538,10 +2570,7 @@ class SystemFieldSolver {
     // then the per-field halo override (ADC-369). This re-fills ALL components -- the shared phi/grad
     // were last written by the default solve_fields, so their valid cells are unchanged and only the
     // halos are recomputed (idempotent for those components).
-    if (owner_->periodic_)
-      fill_boundary(owner_->aux, owner_->dom, owner_->per_);
-    else
-      fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+    fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();
     return report;
   }

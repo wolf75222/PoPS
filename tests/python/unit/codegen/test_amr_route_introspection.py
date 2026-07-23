@@ -27,6 +27,9 @@ from pops.model import Module  # noqa: E402
 from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
+from tests.python.support.native_execution_context import (  # noqa: E402
+    artifact_execution_context,
+)
 
 
 def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
@@ -49,7 +52,8 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         cons_names=["rho", "mx", "my"],
         cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux,
-        params=params, caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k",
+        params=params, caps={"cpu": True, "amr": True, "mpi": mpi},
+        abi_key=pops._pops.abi_key(),
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
@@ -120,6 +124,7 @@ def test_bind_creates_exact_install_plan_without_mutating_compiled_components():
         },
         params=params,
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
     assert type(install.bind_inputs) is BindInputs
     assert type(install.params) is ResolvedBindings

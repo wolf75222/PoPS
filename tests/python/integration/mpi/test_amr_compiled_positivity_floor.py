@@ -111,7 +111,7 @@ def smooth_state():
 def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
-    s = AmrSystem(n=N, L=1.0, periodic=True)
+    s = AmrSystem(n=N, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
@@ -162,20 +162,27 @@ def main():
         # --- (3) multi-block: the floor rides the AmrCompiledBlockBuilder slot too --------------------
         # Two compiled blocks switch the single-block AmrCouplerMP for the multi-block AmrRuntime engine:
         # the floor flows through build_multi -> AmrCompiledBlockBuilder -> dispatch_amr_block (a DIFFERENT
-        # routing than (1)-(2)). set_conservative_state is single-block only, so seed via set_density
-        # (u=0): the floor stays inactive but the new slot's threading + arity are exercised end to end.
+        # routing than (1)-(2)). set_conservative_state is single-block only, so seed the density from
+        # the smooth profile above (u=0). The floor stays inactive, while the exact effective-options
+        # report authenticates its value and the five native steps exercise the compiled builder arity.
         print("== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder ==")
-        band = np.full((N, N), 1e-6)
-        band[:, N // 3:2 * N // 3] = 1.0
-        sm = AmrSystem(n=N, L=1.0, periodic=True)
+        density = smooth_state()[0]
+        sm = AmrSystem(n=N, L=1.0, periodicity=(True, True))
         sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.set_refinement(1e30)
         sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
         sm.add_equation("b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
-        sm.set_density("a", band.ravel().copy())
-        sm.set_density("b", band.ravel().copy())
+        sm.set_density("a", density.copy())
+        sm.set_density("b", density.copy())
+        effective_blocks = sm.effective_options_report()["blocks"]
+        chk(
+            len(effective_blocks) == 2
+            and all(row["compiled"] is True for row in effective_blocks)
+            and all(row["positivity_floor"] == 1e-8 for row in effective_blocks),
+            "multi-block compiled floor: exact native options retained",
+        )
         for _ in range(5):
             sm.step(DT)
         chk(np.all(np.isfinite(np.asarray(sm.density("a")))), "multi-block compiled floor: block a finite")

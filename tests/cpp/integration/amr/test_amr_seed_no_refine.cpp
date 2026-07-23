@@ -91,7 +91,7 @@ TEST(test_amr_seed_no_refine, Runs) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   // (A) SANS set_refinement (refine_threshold == 1e30) sur la config amr_scale (regrid_every=0) :
   //     hierarchie MONO-NIVEAU, aucun patch fin seed -> n_patches() == 0.

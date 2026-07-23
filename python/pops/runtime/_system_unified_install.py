@@ -527,26 +527,19 @@ class _SystemUnifiedInstall(_System):
 
     def _validate_riemann_capability(self, model: Any, spatial: Any) -> Any:
         """Section 24 capability check: reject the selected Riemann flux when a compiled model does
-        not back it. Delegates to the SHARED gate pops.runtime.routes.check_riemann_capability
-        (ADC-642) -- the SAME predicate System.add_equation / AmrSystem.add_equation call -- plus the
-        HLL wave-speed cross-checks; one source, three call sites, zero divergence. A private native
-        ``ModelSpec`` skips it because the C++ requires-gate validates at first use."""
+        not back its descriptor-owned requirements. The same capability-predicate protocol is used
+        by System, AMR and pre-runtime availability, including third-party descriptors. A private
+        native ``ModelSpec`` skips it because the C++ requires-gate validates at first use."""
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
         if not isinstance(model, CompiledModel):
             return
-        from pops.runtime.routes import check_riemann_capability
-        check_riemann_capability(spatial.flux, model, "install")
-        flux = getattr(spatial, "flux", "rusanov")
-        if flux == "hll":
-            provider = getattr(spatial, "waves_provider", None)
-            if provider is not None:
-                from pops.numerics.riemann.waves import check_hll_waves
-                check_hll_waves(provider, model, "install")
-            if not getattr(model, "has_wave_speeds", True):
-                raise ValueError(
-                    "pops.bind: riemann 'hll' requires signed wave speeds: declare "
-                    "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
-                    "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'.")
+        from pops.runtime.routes import check_riemann_requirement_contract
+        check_riemann_requirement_contract(
+            spatial.riemann_capability_contract,
+            model,
+            "pops.bind",
+            flux=spatial.flux,
+        )
 
     def _install_field_plan(self, field: Any, field_plan: Any, *,
                             install_plan: Any = None) -> None:

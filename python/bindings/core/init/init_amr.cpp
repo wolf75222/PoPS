@@ -72,6 +72,23 @@ py::dict prepared_provider_options_to_python(const pops::PreparedProviderOptions
   return result;
 }
 
+void require_amr_cell_array_shape(const AmrSystem& system, const py::array& array,
+                                  std::string_view operation) {
+  const auto expected_ny = static_cast<py::ssize_t>(system.ny());
+  const auto expected_nx = static_cast<py::ssize_t>(system.nx());
+  if (array.ndim() != 2)
+    throw py::value_error(std::string(operation) +
+                          ": expected one 2D Cartesian cell array of shape (ny, nx) = (" +
+                          std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
+                          "); got ndim=" + std::to_string(array.ndim()));
+  if (array.shape(0) != expected_ny || array.shape(1) != expected_nx)
+    throw py::value_error(std::string(operation) +
+                          ": expected Cartesian cell shape (ny, nx) = (" +
+                          std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
+                          "); got (" + std::to_string(array.shape(0)) + ", " +
+                          std::to_string(array.shape(1)) + ")");
+}
+
 pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dict& row,
                                                                    const py::dict& execution) {
   pops::runtime::amr::PreparedTaggerSpec spec;
@@ -87,6 +104,28 @@ pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dic
       py::cast<std::vector<std::string>>(capability["indicator_stencil_routes"]);
   spec.maximum_stencil_terms = py::cast<std::size_t>(capability["maximum_stencil_terms"]);
   spec.maximum_instruction_count = py::cast<std::size_t>(capability["maximum_instruction_count"]);
+  const std::string execution_mode = py::cast<std::string>(capability["execution_mode"]);
+  if (execution_mode == "native_backend")
+    spec.execution_mode = POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2;
+  else if (execution_mode == "host")
+    spec.execution_mode = POPS_TAGGER_EXECUTION_HOST_V2;
+  else
+    throw std::invalid_argument("AMR Tagger declares an unknown execution_mode");
+  const std::string collective_scope = py::cast<std::string>(capability["collective_scope"]);
+  if (collective_scope != "none")
+    throw std::invalid_argument("AMR Tagger callbacks must be explicitly noncollective");
+  spec.collective_scope = POPS_TAGGER_COLLECTIVE_NONE_V2;
+  for (const std::string& memory_space :
+       py::cast<std::vector<std::string>>(capability["memory_spaces"])) {
+    if (memory_space == "host")
+      spec.memory_spaces.push_back(POPS_MEMORY_SPACE_HOST_V1);
+    else if (memory_space == "managed")
+      spec.memory_spaces.push_back(POPS_MEMORY_SPACE_MANAGED_V1);
+    else if (memory_space == "device")
+      spec.memory_spaces.push_back(POPS_MEMORY_SPACE_DEVICE_V1);
+    else
+      throw std::invalid_argument("AMR Tagger declares an unknown memory space");
+  }
   const std::string non_finite_policy = py::cast<std::string>(capability["non_finite_policy"]);
   if (non_finite_policy != "reject")
     throw std::invalid_argument("AMR Tagger native adapter requires non_finite_policy='reject'");
@@ -157,7 +196,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
              double newton_damping, const std::string& newton_fail_policy, bool newton_diagnostics,
-             double positivity_floor) {
+             double positivity_floor, double weno_epsilon, bool wave_speed_cache) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
@@ -167,7 +206,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             newton.fail_policy =
                 newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
-                        implicit_roles, newton, newton_diagnostics, positivity_floor);
+                        implicit_roles, newton, newton_diagnostics, positivity_floor,
+                        weno_epsilon, wave_speed_cache);
           },
           py::arg("name"), py::arg("model"), py::arg("limiter") = "minmod",
           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
@@ -188,7 +228,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
-          py::arg("positivity_floor") = 0.0)
+          py::arg("positivity_floor") = 0.0,
+          py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
+          py::arg("wave_speed_cache") = false)
       .def(
           "_install_boundary_plan",
           [](AmrSystem& system, const std::string& name, const std::string& identity,
@@ -335,20 +377,27 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("params") = std::vector<double>{},
            // Zhang-Shu positivity floor (ADC-322): marshaled down the regenerated .so loader
            // (pops_install_native_amr). 0 (default) = inactive, bit-identical.
-           py::arg("positivity_floor") = 0.0)
+           py::arg("positivity_floor") = 0.0,
+           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
+           py::arg("wave_speed_cache") = false)
+      .def("_install_external_riemann_block", &AmrSystem::add_external_riemann_block,
+           py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"),
+           py::arg("limiter"), py::arg("recon"), py::arg("time"), py::arg("gamma"),
+           py::arg("substeps"), py::arg("stride"), py::arg("expected_nvars"),
+           py::arg("expected_naux"), py::arg("expected_model_identity"),
+           py::arg("positivity_floor") = 0.0,
+           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       // Regrid criterion: refine where the SELECTED variable exceeds threshold. Default = component 0
       // (historical density), bit-identical 1e30 no-op. ADC-296: select it PER BLOCK by NAME (variable=)
-      // or physical ROLE (role=); a block lacking it raises at build (no silent comp-0 fallback). A
-      // non-default selector is MULTI-BLOCK only (mono-block / compiled .so refine on component 0).
+      // or physical ROLE (role=); a block lacking it raises at build (no silent comp-0 fallback).
+      // Native and compiled runtime blocks carry the same exact VariableSet descriptor.
       .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"),
            py::arg("variable") = "", py::arg("role") = "",
            "Refine where the selected conserved variable exceeds threshold. variable=/role= pick "
            "it per "
            "block by name or physical role (default: component 0, the historical density). "
            "Selecting by "
-           "name and role at once, or a name/role absent from a block, raises. Non-default "
-           "selector is "
-           "multi-block only.")
+           "name and role at once, or a name/role absent from a block, raises.")
       .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement, py::arg("block"),
            py::arg("variable"), py::arg("threshold"), py::arg("provider_identity"))
       .def(
@@ -377,9 +426,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
           py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
           py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
-      // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
-      // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
-      // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
+      // Shared-potential gradient leaf appended to the prepared regrid graph. It uses the same
+      // native Kokkos/MPI Tagger route as model-state criteria; <= 0 keeps the leaf absent.
       .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
       .def(
           "set_poisson",
@@ -508,22 +556,26 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
-      // B_z accepts a flattened numpy (n, n) and populates the Program-visible aux channel.
+      // Python owns the Cartesian orientation: exactly (ny, nx), then one explicit flattening at
+      // the vector-valued C++ boundary.
       .def(
           "set_magnetic_field",
           [](AmrSystem& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            require_amr_cell_array_shape(s, arr, "AmrSystem.set_magnetic_field");
             s.set_magnetic_field(flat(arr));
           },
-          py::arg("bz"))
+          py::arg("bz"), "Set the coarse magnetic field from exactly one (ny, nx) array.")
       // ADC-291: model-NAMED aux field at a resolved channel component (>= kAuxNamedBase). The Python
-      // facade (AmrSystem.set_aux_field) resolves the name -> comp and reshapes (n, n) -> flat n*n.
+      // facade resolves the name -> comp and flattens the exact (ny, nx) Cartesian field.
       .def(
           "set_aux_field_component",
           [](AmrSystem& s, int comp,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            require_amr_cell_array_shape(s, arr, "AmrSystem.set_aux_field_component");
             s.set_aux_field_component(comp, flat(arr));
           },
-          py::arg("comp"), py::arg("field"))
+          py::arg("comp"), py::arg("field"),
+          "Set one coarse auxiliary component from exactly one (ny, nx) array.")
       // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2).
       .def(
           "set_aux_field_halo_component",
@@ -535,26 +587,30 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           "set_density",
           [](AmrSystem& s, const std::string& name,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            require_amr_cell_array_shape(s, arr, "AmrSystem.set_density");
             s.set_density(name, flat(arr));
           },
-          py::arg("name"), py::arg("rho"))
-      // Full initial conservative state (ncomp, n, n) -> starts the AMR from the paper's drift
+          py::arg("name"), py::arg("rho"),
+          "Set a block's coarse density from exactly one (ny, nx) array.")
+      // Full initial conservative state (ncomp, ny, nx) -> starts the AMR from the paper's drift
       // state (rho, rho*u, rho*v) instead of m=0. Keeps ndim==3 EXPLICIT: flat() flattens
-      // any C-contiguous array, so a 2D density (n, n) passed by mistake would become a
+      // any C-contiguous array, so a 2D density (ny, nx) passed by mistake would become a
       // 1-component state (comp 0 = density, momentum left at 0) -- a silent density masquerade
-      // with the wrong physics. We require (ncomp, n, n). flat() then flattens in
-      // component-major c*n*n + j*n + i (same convention as to_3d / set_state).
+      // with the wrong physics. flat() then flattens in component-major c*cells + j*nx + i.
       .def(
           "set_conservative_state",
           [](AmrSystem& s, const std::string& name,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             if (arr.ndim() != 3)
               throw std::runtime_error(
-                  "AmrSystem.set_conservative_state: state expected of shape (ncomp, n, n); got "
+                  "AmrSystem.set_conservative_state: state expected of shape (ncomp, ny, nx); got "
                   "a " +
                   std::to_string(arr.ndim()) +
                   "D array (a 2D density? use "
                   "set_density)");
+            if (arr.shape(1) != s.ny() || arr.shape(2) != s.nx())
+              throw std::runtime_error(
+                  "AmrSystem.set_conservative_state: spatial shape differs from (ny, nx)");
             s.set_conservative_state(name, flat(arr));
           },
           py::arg("name"), py::arg("U"))
@@ -830,10 +886,10 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Structured effective numerical/solver/physical options for this AmrSystem.")
       .def("n_patches", &AmrSystem::n_patches)
       // Index-space footprints of the fine patches: list of tuples (level, ilo, jlo, ihi, jhi), INCLUSIVE
-      // corners, in the index space of the level (n << level cells/direction, ratio 2). SAME
+      // corners, in the axis-resolved index space of the level (ratio 2). SAME
       // source as n_patches() (the GLOBAL fine BoxArray) -> rank-independent, MPI-safe. Query between
-      // steps, zero cost on the hot path. The Python wrapper converts to [0, L]^2 (it knows n via nx() and
-      // L); cf. AmrSystem.patch_rectangles() on the facade side.
+      // steps, zero cost on the hot path. The Python wrapper converts with the exact x/y bounds;
+      // cf. AmrSystem.patch_rectangles() on the facade side.
       .def("patch_boxes",
            [](AmrSystem& s) {
              py::list out;
@@ -854,25 +910,24 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "mass", [](AmrSystem& s, const std::string& name) { return s.mass(name); },
           py::arg("name"))
-      // AMR: SQUARE domain (n x n), no polar geometry -> rows == cols == nx() (unchanged).
-      .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.nx(), s.nx()); })
+      .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.ny(), s.nx()); })
       .def(
           "density",
           [](AmrSystem& s, const std::string& name) {
-            return to_2d(s.density(name), s.nx(), s.nx());
+            return to_2d(s.density(name), s.ny(), s.nx());
           },
           py::arg("name"))
-      // phi of the coarse (base) level, (n, n). SAME observable as System.potential(): level 0
+      // phi of the coarse (base) level, (ny, nx). SAME observable as System.potential(): level 0
       // covers the whole domain -> enough to sample a median circle (azimuthal FFT). In
       // multi-block, phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located), shared by all.
-      .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx(), s.nx()); })
+      .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
       // ADC-428: solved potential of a NAMED elliptic field (m.elliptic_field) on the coarse level,
-      // (n, n). Read-back counterpart of potential() for a second elliptic field; the Python
+      // (ny, nx). Read-back counterpart of potential() for a second elliptic field; the Python
       // AmrSystem.field(name) resolves the field name to this. Solves the hierarchy if needed.
       .def(
           "named_field_values",
           [](AmrSystem& s, const std::string& field) {
-            return to_2d(s.named_field_values(field), s.nx(), s.nx());
+            return to_2d(s.named_field_values(field), s.ny(), s.nx());
           },
           py::arg("field"))
       // AMR CHECKPOINT / RESTART single-rank (ADC-65): full conservative state per level + phi
@@ -882,6 +937,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // flatten any C-contiguous array (flat). set_hierarchy: list of tuples
       // (level, ilo, jlo, ihi, jhi) like patch_boxes() (the coupler filters level 1).
       .def("n_levels", &AmrSystem::n_levels)
+      .def("max_levels", &AmrSystem::max_levels)
       .def("n_vars", [](AmrSystem& s) { return s.n_vars(); })
       .def(
           "level_state", [](AmrSystem& s, int k) { return s.level_state(k); }, py::arg("k"))
@@ -1063,6 +1119,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &AmrSystem::history_initialized, py::arg("name"))
+      .def("history_fill_count", &AmrSystem::history_fill_count, py::arg("name"))
       .def(
           "restore_history",
           [](AmrSystem& s, const std::string& name, int slot,
@@ -1072,6 +1129,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &AmrSystem::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
+      .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count,
+           py::arg("name"), py::arg("fill_count"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))
@@ -1096,13 +1155,21 @@ void init_amr(py::module_& m) {
   py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
       .def_readwrite("n", &AmrSystemConfig::n)
+      .def_readwrite("ny", &AmrSystemConfig::ny)
       .def_readwrite("L", &AmrSystemConfig::L)
+      .def_readwrite("Ly", &AmrSystemConfig::Ly)
       .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
       .def_readwrite("level_count", &AmrSystemConfig::level_count)
       .def_readwrite("regrid_grow", &AmrSystemConfig::regrid_grow)
       .def_readwrite("regrid_margin", &AmrSystemConfig::regrid_margin)
       .def_readwrite("explicit_bootstrap", &AmrSystemConfig::explicit_bootstrap)
-      .def_readwrite("periodic", &AmrSystemConfig::periodic)
+      .def_property(
+          "periodicity", [](const AmrSystemConfig& config) {
+            return periodicity_to_python(config.periodicity);
+          },
+          [](AmrSystemConfig& config, const py::handle& value) {
+            config.periodicity = periodicity_from_python(value, "AmrSystemConfig");
+          })
       .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
       .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid)
       // ADC-616: Berger-Rigoutsos clustering params (<= 0 = the historical {0.7, 1, 32} default).
@@ -1110,7 +1177,22 @@ void init_amr(py::module_& m) {
       .def_readwrite("cluster_min_box_size", &AmrSystemConfig::cluster_min_box_size)
       .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size)
       .def_readwrite("xlo", &AmrSystemConfig::xlo)
-      .def_readwrite("ylo", &AmrSystemConfig::ylo);
+      .def_readwrite("ylo", &AmrSystemConfig::ylo)
+      .def(
+          "_set_load_balance_provider",
+          [](AmrSystemConfig& config, const std::string& route,
+             const std::string& semantic_identity, const std::string& option_schema_identity,
+             const py::dict& options) {
+            if (route.empty() || semantic_identity.empty())
+              throw py::value_error(
+                  "AMR load-balance route and semantic identity must be non-empty");
+            config.load_balance_route = route;
+            config.load_balance_identity = semantic_identity;
+            config.load_balance_options =
+                prepared_provider_options_from_python(option_schema_identity, options);
+          },
+          py::arg("route"), py::arg("semantic_identity"),
+          py::arg("option_schema_identity"), py::arg("options"));
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystem> cls(m, "AmrSystem");

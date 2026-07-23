@@ -23,10 +23,12 @@ void System::store_history(const std::string& name, const MultiFab& value) {
   // Copy the valid cells of value into the current slot [0] (identical layout: ring slots and the
   // block state share (ba, dm); lincomb(dst, 1, src, 0, src) is a valid-cell deep copy).
   pops::lincomb(ring[0], Real(1), value, Real(0), value);
-  // PER-SLOT dt (ADC-626): tag slot 0 with the dt that produced it (the last dt the stepper handed to
-  // program_.step_). slot_dt is co-sized with the ring and rotated alongside it, so a selective-
-  // persistence restart re-steps the recomputed slots with the exact dt sequence. Grown lazily here so
-  // a program that never uses a checkpoint policy still pays only a small scalar vector.
+  // PER-SLOT outgoing dt (ADC-626): keep_history stores U^n before the tail commit, so the current
+  // step dt is the interval that advances this sample to the next accepted sample. slot_dt rotates
+  // alongside the ring; after rotation slot k therefore carries the exact interval from slot k to
+  // slot k-1. A selective restart reconstructing slot j from slot j+1 uses slot_dt[j+1]. Grown
+  // lazily here so a program that never uses a checkpoint policy still pays only a small scalar
+  // vector.
   std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
   if (dts.size() != ring.size())
     dts.assign(ring.size(), Real(0));
@@ -41,6 +43,7 @@ void System::store_history(const std::string& name, const MultiFab& value) {
     }
     p_->program_.hist_.initialized[name] = true;
   }
+  p_->program_.hist_.store_pending[name] = true;
 }
 
 void System::rotate_histories() {
@@ -93,6 +96,12 @@ bool System::history_initialized(const std::string& name) const {
     throw std::runtime_error("System::history_initialized: unknown history '" + name + "'");
   return it->second;
 }
+int System::history_fill_count(const std::string& name) const {
+  auto it = p_->program_.hist_.fill_count.find(name);
+  if (it == p_->program_.hist_.fill_count.end())
+    throw std::runtime_error("System::history_fill_count: unknown history '" + name + "'");
+  return it->second;
+}
 void System::restore_history(const std::string& name, int slot, const std::vector<double>& values) {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end()) {
@@ -130,13 +139,29 @@ void System::set_history_initialized(const std::string& name, bool initialized) 
     throw std::runtime_error("System::set_history_initialized: unknown history '" + name +
                              "' (restore its slots first)");
   it->second = initialized;
+  p_->program_.hist_.fill_count[name] =
+      initialized ? p_->program_.hist_.depth.at(name) : 0;
+  p_->program_.hist_.store_pending[name] = false;
+}
+void System::restore_history_fill_count(const std::string& name, int fill_count) {
+  auto depth = p_->program_.hist_.depth.find(name);
+  if (depth == p_->program_.hist_.depth.end())
+    throw std::runtime_error("System::restore_history_fill_count: unknown history '" + name +
+                             "' (restore its slots first)");
+  if (fill_count < 0 || fill_count > depth->second)
+    throw std::runtime_error("System::restore_history_fill_count: fill count " +
+                             std::to_string(fill_count) + " is outside [0, " +
+                             std::to_string(depth->second) + "] for history '" + name + "'");
+  p_->program_.hist_.fill_count[name] = fill_count;
+  p_->program_.hist_.initialized[name] = fill_count > 0;
+  p_->program_.hist_.store_pending[name] = false;
 }
 
 // Selective history persistence + deterministic ring replay (ADC-626). A history-persistence policy
 // (pops.time.Dense / Interval / Revolve) stores only a SUBSET of a ring's slots in a checkpoint; the
-// per-slot dt is serialized alongside so the restart can replay the recomputed slots with the exact dt
-// sequence (variable-dt histories round-trip bit-for-bit). rebuild_history_slots reconstructs the
-// missing slots by re-stepping the installed Program from the nearest older stored slot.
+// per-slot outgoing interval is serialized alongside so restart can replay the recomputed slots with
+// the exact dt sequence (variable-dt histories round-trip bit-for-bit). rebuild_history_slots
+// reconstructs the missing slots by re-stepping the installed Program from the nearest older slot.
 double System::history_slot_dt(const std::string& name, int slot) const {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
@@ -168,11 +193,12 @@ void System::restore_history_slot_dt(const std::string& name, int slot, double d
 
 int System::rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots) {
   // Contract (ADC-626): the STORED slots of ring `name` are already restored (restore_history), the
-  // per-slot dt is restored (restore_history_slot_dt), and the SAME Program the checkpoint recorded is
-  // installed (the program-hash guard upstream ensures this). The ring stores the block-0 state (the
-  // keep_history lowering emits store_history(name, U.n)), so a stored slot IS that block's state at
-  // that lag. We reconstruct the missing slots by seeding block 0 from the nearest OLDER stored slot
-  // and re-stepping the installed Program forward, capturing the intermediate block states.
+  // per-slot outgoing dt is restored (restore_history_slot_dt), and the SAME Program the checkpoint
+  // recorded is
+  // installed (the program-hash guard upstream ensures this). A selective ring is owner-qualified
+  // by keep_history, so a stored slot IS that exact block's state at that lag. We reconstruct the
+  // missing slots by seeding the qualified owner from the nearest OLDER stored slot and re-stepping
+  // the installed Program forward, capturing the intermediate owner states.
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::rebuild_history_slots: unknown history '" + name + "'");
@@ -190,10 +216,23 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
         "System::rebuild_history_slots: the oldest slot " + std::to_string(depth - 1) +
         " of history '" + name + "' is not stored; the ring is unreconstructable (nothing older to "
         "replay it from). The persistence policy must store the oldest slot.");
+  if (anchors.front() != 0)
+    throw std::runtime_error(
+        "System::rebuild_history_slots: the newest slot 0 of history '" + name +
+        "' is not stored; slots newer than the first anchor are unbracketed. The persistence "
+        "policy must store the newest slot.");
   // A fully-stored ring (Dense): nothing to recompute.
   const std::size_t stored_count = anchors.size();
   if (static_cast<int>(stored_count) == depth)
     return 0;
+  const auto owner_it = p_->program_.hist_.owner.find(name);
+  if (owner_it == p_->program_.hist_.owner.end() || owner_it->second < 0 ||
+      owner_it->second >= static_cast<int>(p_->sp.size()))
+    throw std::runtime_error(
+        "System::rebuild_history_slots: selective replay requires an exact owner-qualified "
+        "keep_history ring (legacy/unowned history '" +
+        name + "' must use Dense())");
+  const std::size_t owner = static_cast<std::size_t>(owner_it->second);
   // SAVE bracket: deep-copy every block state, the scheduler cache, and the WHOLE history subsystem
   // (rings + slot_dt + initialized) so the replay's own store_history / rotate_histories side effects
   // are fully undone -- the live state U and cache_ are identity after replay, and only the missing
@@ -205,10 +244,10 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
   const pops::runtime::program::CacheManager saved_cache = p_->program_.cache_;
   const pops::runtime::program::HistoryManager saved_hist = p_->program_.hist_;
 
-  // The per-slot dt each store produced, captured from the SAVED snapshot into a stable local vector.
+  // The per-slot outgoing dt, captured from the SAVED snapshot into a stable local vector.
   // CRITICAL: the replay's own store_history / rotate_histories MUTATE p_->program_.hist_.slot_dt, so
-  // reading the live map inside the loop would give a moving target -- dts[j] is the dt that produced
-  // the state now in slot j on the ORIGINAL forward run, which is exactly what re-stepping needs.
+  // reading the live map inside the loop would give a moving target. keep_history snapshots the
+  // pre-commit state, so dts[j+1] is the interval that produced slot j from older slot j+1.
   std::vector<Real> dts(static_cast<std::size_t>(depth), Real(0));
   auto saved_dt_it = saved_hist.slot_dt.find(name);
   if (saved_dt_it != saved_hist.slot_dt.end()) {
@@ -217,34 +256,42 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
       dts[static_cast<std::size_t>(k)] = sd[static_cast<std::size_t>(k)];
   }
 
-  // Reconstruct the block-0 state trajectory: for each gap between adjacent anchors (older anchor at a
-  // LARGER index, newer at a SMALLER one; time increases as the index decreases), seed block 0 from the
-  // older stored slot then step forward, recording the post-step block state into each intervening slot.
-  // Placement is BY INDEX (no rotate) -> the ADC-538 rotation-invalidation edge is sidestepped.
+  // Reconstruct the owner state trajectory: for each gap between adjacent anchors (older anchor at a
+  // LARGER index, newer at a SMALLER one; time increases as the index decreases), restore the same
+  // accepted image, seed the owner from the older stored slot, then step forward through omitted
+  // slots. Placement is BY INDEX (no rotate) -> the ADC-538 rotation-invalidation edge is sidestepped.
   std::vector<MultiFab> reconstructed(static_cast<std::size_t>(depth));
-  for (std::size_t a = 0; a + 1 < anchors.size(); ++a) {
-    const int older = anchors[a + 1];  // larger index = further back in time
-    const int newer = anchors[a];       // smaller index = closer to now
-    // Seed block 0 with the older stored slot's state (the ring holds the block-0 state at that lag).
-    pops::lincomb(p_->sp[0].U, Real(1), saved_hist.histories.at(name)[static_cast<std::size_t>(older)],
-                  Real(0), p_->sp[0].U);
-    // Step forward from `older` down to `newer`, capturing each intermediate slot. The dt for the store
-    // that produced slot j is dts[j] (recorded on the forward run), so re-stepping with it reproduces a
-    // variable-dt history exactly.
-    for (int j = older - 1; j >= newer; --j) {
-      p_->program_.last_dt_ = dts[static_cast<std::size_t>(j)];
-      p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j)]));
-      // Record the fresh block state for slot j. Slot `newer` is a stored anchor (its restored value is
-      // reinstated below), so recording it here is harmless; the non-anchor slots are the real output.
-      reconstructed[static_cast<std::size_t>(j)] = p_->sp[0].U;  // deep copy the fresh block state
+  const auto restore_saved = [&] {
+    for (std::size_t b = 0; b < p_->sp.size(); ++b)
+      p_->sp[b].U = saved_states[b];
+    p_->program_.cache_ = saved_cache;
+    p_->program_.hist_ = saved_hist;
+  };
+  try {
+    for (std::size_t a = 0; a + 1 < anchors.size(); ++a) {
+      const int older = anchors[a + 1];  // larger index = further back in time
+      const int newer = anchors[a];       // smaller index = closer to now
+      restore_saved();
+      // Seed the qualified owner with the older stored slot's state.
+      pops::lincomb(p_->sp[owner].U, Real(1),
+                    saved_hist.histories.at(name)[static_cast<std::size_t>(older)], Real(0),
+                    p_->sp[owner].U);
+      // Adjacent anchors bracket only omitted slots. Stop before `newer`: that exact checkpoint
+      // value needs no Program execution. The interval from slot j+1 to j is dts[j+1].
+      for (int j = older - 1; j > newer; --j) {
+        p_->program_.last_dt_ = dts[static_cast<std::size_t>(j + 1)];
+        p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]));
+        reconstructed[static_cast<std::size_t>(j)] =
+            p_->sp[owner].U;  // deep copy the fresh owner state
+      }
     }
+  } catch (...) {
+    restore_saved();
+    throw;
   }
 
   // RESTORE bracket: undo every replay side effect (block states, cache, whole history subsystem).
-  for (std::size_t b = 0; b < p_->sp.size(); ++b)
-    p_->sp[b].U = std::move(saved_states[b]);
-  p_->program_.cache_ = saved_cache;
-  p_->program_.hist_ = saved_hist;
+  restore_saved();
 
   // Place ONLY the recomputed slots (the anchors keep their restored values). Re-fetch the ring after
   // restoring hist_ (the restore replaced the vector).

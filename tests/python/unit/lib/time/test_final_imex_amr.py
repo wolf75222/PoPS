@@ -274,17 +274,23 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
         time_interpolation = built_in.time_interpolation
 
         def amr_transfer_policy_data(self):
+            routes = {}
+            for name in (
+                "prolongation", "restriction", "coarse_fine", "time_interpolation"
+            ):
+                kernel = getattr(self, name)
+                candidates = getattr(kernel, "amr_transfer_kernel_candidates", None)
+                routes[name] = (
+                    [candidate.amr_transfer_kernel_data() for candidate in candidates()]
+                    if callable(candidates)
+                    else kernel.amr_transfer_kernel_data()
+                )
             return {
                 "schema_version": 1,
                 "authority_type": "amr_transfer_policy",
                 "policy_kind": "state",
                 "provider": "tests.external.state-transfer.v1",
-                "routes": {
-                    name: getattr(self, name).amr_transfer_kernel_data()
-                    for name in (
-                        "prolongation", "restriction", "coarse_fine", "time_interpolation"
-                    )
-                },
+                "routes": routes,
             }
 
     registry = AMRTransfer()

@@ -3,8 +3,8 @@
 A Spec 3 brick is native / generated / macro / external-C++. These tests cover
 the last category: ``pops.descriptors.load_cpp_library(path)`` dlopens a user ``.so``,
 reads its JSON manifest (over the C++ ``BrickRegistry``), and registers the ids
-in an in-process catalog; ``pops.numerics.riemann.User(id)`` / ``pops.descriptors.external(id)``
-then surface an ``external_cpp`` descriptor carrying the manifest's requirements.
+in an in-process catalog. Riemann rows additionally need the authenticated v2 numerical ABI;
+manifest-only Riemann identities are rejected rather than published as executable descriptors.
 An id that was never loaded raises a CLEAR error.
 
 The manifest-parsing seam (``_register_manifest``) is exercised directly so the
@@ -13,7 +13,6 @@ top of it. The real functions are used -- pops is never faked.
 """
 import os
 import json
-import shutil
 import subprocess
 import types
 
@@ -32,29 +31,39 @@ lib = types.SimpleNamespace(
     _clear_external_catalog=_desc._clear_external_catalog,
 )
 
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import default_cxx, repo_include, require_native_or_skip
 _INCLUDE = repo_include()
 
-# A minimal external brick .so: POPS_REGISTER_BRICK populates the host registry at static-init time and
-# POPS_DEFINE_BRICK_MANIFEST exports the C reader load_cpp_library dlopens. No numerics here -- the
-# manifest path only needs the identity + requirements (the static-dispatch ABI is the C++ test).
+# A minimal non-numerical external brick .so exercises the generic manifest path. The real Riemann
+# static-dispatch ABI is compiled and executed by test_external_riemann_dispatch.cpp.
 _BRICK_SRC = """
 #include <pops/runtime/program/external_brick.hpp>
 #include <string>
-POPS_REGISTER_BRICK("my_so_riemann", "riemann", "pressure,wave_speeds");
+POPS_REGISTER_BRICK("my_so_preconditioner", "preconditioner", "linear_operator");
 POPS_DEFINE_BRICK_MANIFEST();
 """
 
+_LEGACY_RIEMANN_SRC = """
+#include <pops/runtime/program/external_brick.hpp>
+POPS_REGISTER_BRICK("legacy_riemann", "riemann", "physical_flux");
+POPS_DEFINE_BRICK_MANIFEST();
+extern "C" void pops_brick_residual() {}
+"""
 
-def _compile_brick_so(workdir):
-    """Compile the minimal brick to a .so; return its path, or None if the toolchain is unusable."""
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+
+def _compile_brick_so(workdir, source=_BRICK_SRC, stem="external_brick"):
+    """Compile the minimal brick to a .so; a compiler failure is never converted to a skip."""
+    cxx = default_cxx()
     if not cxx or not os.path.isdir(_INCLUDE):
-        return None
-    src = os.path.join(workdir, "my_so_riemann.cpp")
-    so = os.path.join(workdir, "my_so_riemann.so")
+        require_native_or_skip(
+            f"native brick prerequisites unavailable: compiler={cxx!r}, include={_INCLUDE}",
+            optional_skip=pytest.skip,
+        )
+        raise AssertionError("require_native_or_skip must not return")
+    src = os.path.join(workdir, stem + ".cpp")
+    so = os.path.join(workdir, stem + ".so")
     with open(src, "w") as f:
-        f.write(_BRICK_SRC)
+        f.write(source)
     flags = ["-shared", "-fPIC", "-std=c++20", "-O0", "-I", _INCLUDE]
     # ADC-622: on GCC compile the brick .so with -fno-gnu-unique so the header-only BrickRegistry
     # singleton is never emitted STB_GNU_UNIQUE (the loader would otherwise unify it across every
@@ -66,11 +75,8 @@ def _compile_brick_so(workdir):
     if os.uname().sysname == "Darwin":
         flags.append("-undefined")
         flags.append("dynamic_lookup")
-    try:
-        subprocess.run([cxx, *flags, src, "-o", so], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except (subprocess.CalledProcessError, OSError):
-        return None
+    subprocess.run([cxx, *flags, src, "-o", so], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return so
 
 
@@ -172,13 +178,11 @@ def test_load_cpp_library_rejects_a_missing_path():
         lib.load_cpp_library("/no/such/brick.so")
 
 
-def test_load_cpp_library_dlopens_a_real_so_and_surfaces_the_descriptor(tmp_path):
+def test_load_cpp_library_dlopens_a_real_non_numerical_brick_so(tmp_path):
     """The deferred half: compile a REAL brick .so, dlopen it via load_cpp_library, and assert
-    riemann.User surfaces its manifest. Self-skips if no C++ compiler / pops headers are present
-    (the registry-seam tests above cover the parsing without a toolchain)."""
+    riemann.User surfaces its manifest. Missing prerequisites may skip only in an explicitly optional
+    source-only lane; once compilation starts, every compiler error fails the test."""
     so = _compile_brick_so(str(tmp_path))
-    if so is None:
-        pytest.skip("no C++ compiler or pops headers to build the brick .so")
     # The registry .so is header-light (only external_brick.hpp): plain flags, no Kokkos needed.
     n = lib.load_cpp_library(so)
     # ADC-622: this .so's manifest describes exactly ITS OWN one brick. The BrickRegistry singleton is
@@ -188,19 +192,34 @@ def test_load_cpp_library_dlopens_a_real_so_and_surfaces_the_descriptor(tmp_path
     # dlopen'd .so, so n was the process-wide count). The C++ two-fixture proof is
     # test_external_brick_isolation.cpp.
     assert n == 1
-    d = lib.riemann.User("my_so_riemann")
+    d = lib.external("my_so_preconditioner")
     assert d.brick_type == "external_cpp"
-    assert d.category == "riemann"
-    assert d.native_id == "my_so_riemann"
-    assert d.requirements == {"capabilities": ["pressure", "wave_speeds"]}
+    assert d.category == "preconditioner"
+    assert d.native_id == "my_so_preconditioner"
+    assert d.requirements == {"capabilities": ["linear_operator"]}
+
+
+def test_load_cpp_library_rejects_legacy_unversioned_riemann_abi(tmp_path):
+    so = _compile_brick_so(
+        str(tmp_path), source=_LEGACY_RIEMANN_SRC, stem="legacy_riemann"
+    )
+    with pytest.raises(ValueError) as exc:
+        lib.load_cpp_library(so)
+    message = str(exc.value)
+    assert "legacy_riemann" in message
+    assert "legacy/unversioned" in message
+    with pytest.raises(LookupError):
+        lib.riemann.User("legacy_riemann")
 
 
 def test_load_cpp_library_rejects_a_non_brick_so(tmp_path):
     """A loadable library that does NOT export pops_brick_manifest() is rejected clearly (it is not an
     pops brick .so), never silently treated as carrying zero bricks."""
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    cxx = default_cxx()
     if not cxx:
-        pytest.skip("no C++ compiler to build the non-brick .so")
+        require_native_or_skip("no C++ compiler to build the non-brick .so",
+                               optional_skip=pytest.skip)
+        raise AssertionError("require_native_or_skip must not return")
     src = os.path.join(str(tmp_path), "not_a_brick.cpp")
     so = os.path.join(str(tmp_path), "not_a_brick.so")
     with open(src, "w") as f:
@@ -208,11 +227,8 @@ def test_load_cpp_library_rejects_a_non_brick_so(tmp_path):
     flags = ["-shared", "-fPIC", "-O0"]
     if os.uname().sysname == "Darwin":
         flags += ["-undefined", "dynamic_lookup"]
-    try:
-        subprocess.run([cxx, *flags, src, "-o", so], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except (subprocess.CalledProcessError, OSError):
-        pytest.skip("could not build the non-brick .so")
+    subprocess.run([cxx, *flags, src, "-o", so], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     with pytest.raises(ValueError) as exc:
         lib.load_cpp_library(so)
     assert "pops_brick_manifest" in str(exc.value)

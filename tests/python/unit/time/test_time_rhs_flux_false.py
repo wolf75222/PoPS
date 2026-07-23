@@ -223,7 +223,7 @@ chk(rejected, "flux=False with named fluxes is rejected (no flux base to divide)
 
 
 # ---- (B) end-to-end probe: skips unless the full toolchain is present ----
-if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
     if fails:
         raise AssertionError(
             "%d pure-Python acceptance(s) failed before the native capability skip" % fails
@@ -243,7 +243,7 @@ N = 16
 
 
 def make_sim(name):
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     try:
         compiled_model = advect_model("adv_block_%s" % name, A, C).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible

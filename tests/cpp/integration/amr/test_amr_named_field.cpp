@@ -32,13 +32,14 @@
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (per-field RHS closure)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/state/state.hpp>       // kAuxNamedBase
 #include <pops/mesh/layout/refinement.hpp>  // parallel_copy
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
+
+#include "amr_transfer_test_authority.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -206,14 +207,9 @@ class KokkosEnvironment : public ::testing::Environment {
 
 // Scalar ExB block of charge q: transport E x B (advection driven by grad phi), charge density q*n for
 // the default system Poisson (elliptic = "charge" -> elliptic_rhs = q*n).
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // Smooth zero-mean density (solvable in periodic): a centered blob around 1, n*n row-major.
@@ -327,8 +323,15 @@ struct CoarseFineGhostCheck {
   int samples = 0;
 };
 
-static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, const MultiFab& fine,
-                                                    int component) {
+static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
+                                                    const MultiFab& expected_fine,
+                                                    const MultiFab& fine, int component) {
+  if (expected_fine.box_array().boxes() != fine.box_array().boxes() ||
+      expected_fine.dmap().ranks() != fine.dmap().ranks() ||
+      expected_fine.local_size() != fine.local_size() ||
+      expected_fine.ncomp() != fine.ncomp() ||
+      expected_fine.n_grow() != fine.n_grow())
+    throw std::invalid_argument("coarse/fine ghost oracle requires identical fine layouts");
   device_fence();
   CoarseFineGhostCheck result;
   const BoxArray& fine_boxes = fine.box_array();
@@ -340,6 +343,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, cons
   };
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 child = fine.fab(li).const_array();
+    const ConstArray4 expected_child = expected_fine.fab(li).const_array();
     const Box2D valid = fine.box(li), grown = fine.fab(li).grown_box();
     for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
       for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
@@ -350,7 +354,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse, cons
         const int parent_box = mf_find_box(coarse, ci, cj);
         if (parent_box < 0)
           continue;
-        const Real expected = coarse.fab(parent_box).const_array()(ci, cj, component);
+        const Real expected = expected_child(i, j, component);
         result.error = std::max(result.error, std::fabs(child(i, j, component) - expected));
         result.reference = std::max(result.reference, std::fabs(expected));
         ++result.samples;
@@ -408,6 +412,8 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   constexpr int n = 16;
   constexpr Real charge = Real(-1);
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -415,11 +421,9 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                blob(n, 0.25),
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false, false));
   blocks[0].aux_ncomp = kAuxNamedBase + 1;
 
   auto registry = make_default_amr_field_solver_registry();
@@ -431,6 +435,7 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall,
                      registry);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   AmrFieldSolveConfig plan;
   plan.plan_identity = "tests.amr.field-solver.graph-identity.plan@4";
   plan.provider_identity = "tests:plasma/graph-identity";
@@ -479,6 +484,8 @@ TEST(test_amr_named_field, Runs) {
 
   // --- single ExB block on a frozen one-level shared hierarchy (default Poisson f = q*rho) ---
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;
@@ -486,10 +493,8 @@ TEST(test_amr_named_field, Runs) {
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "plasma", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q, B0), "minmod", "rusanov", S, "plasma",
+                                              rho, /*has_density=*/true, 1.4, 1, false, false));
   // Widen the shared aux channel so the named fields' output components (>= kAuxNamedBase) fit. The
   // native ExB block reads only comps 0..2; the runtime sizes the channel to max(b.aux_ncomp), so a
   // wider value just reserves room (the extra comps are written only by the named solve). This is what a
@@ -739,6 +744,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   constexpr Real reaction = Real(2);
   constexpr double charge = -1.0;
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -746,11 +753,9 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(charge, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                blob(n, 0.5),
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.5),
+                                              /*has_density=*/true, 1.4, 1, false, false));
   constexpr int phi_component = kAuxNamedBase;
   constexpr int gx_component = kAuxNamedBase + 1;
   constexpr int gy_component = kAuxNamedBase + 2;
@@ -758,6 +763,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
 
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   AmrFieldSolveConfig plan;
@@ -798,12 +804,34 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
                 runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component),
             Real(1e-8))
       << "the fine FAC solution must differ from full-grown coarse injection for this oracle";
+
+  // Rebuild the expected coarse/fine ghosts from the just-published parent through the exact
+  // authority installed above.  This checks that the persistent runtime workspace refreshes its
+  // parent carrier after the solve without freezing the test to the historical piecewise-constant
+  // fill: the configured second-order authority reconstructs child means from limited parent
+  // slopes.
+  MultiFab expected_fine(runtime.aux(1).box_array(), runtime.aux(1).dmap(),
+                         runtime.aux(1).ncomp(), runtime.aux(1).n_grow());
+  expected_fine.set_val(Real(0));
+  ::pops::runtime::amr::PreparedTransferKernel coarse_fine =
+      ::pops::runtime::amr::prepare_conservative_coarse_fine();
+  ASSERT_TRUE(coarse_fine.prepared_coarse_fine);
+  const CommunicatorView communicator =
+      layout.replicated_coarse ? CommunicatorView{} : world_communicator_view();
+  auto expected_transfer = detail::PreparedConservativeCellTransferWorkspace::prepare(
+      runtime.aux(0), expected_fine, layout.geom.domain,
+      layout.geom.domain.refine(kAmrRefRatio), layout.replicated_coarse,
+      detail::ConservativeCellFillRegion::Ghost, layout.base_per,
+      /*topology_generation=*/0, communicator, coarse_fine.prepared_coarse_fine);
+  expected_transfer.publish_prepared(expected_fine);
+
   const CoarseFineGhostCheck ghosts =
-      coarse_fine_ghost_check(runtime.aux(0), runtime.aux(1), phi_component);
+      coarse_fine_ghost_check(runtime.aux(0), expected_fine, runtime.aux(1), phi_component);
   ASSERT_GT(ghosts.samples, 0) << "the refined patch exposes coarse/fine ghosts";
   ASSERT_GT(ghosts.reference, Real(1e-8)) << "the ghost oracle is nontrivial";
   EXPECT_EQ(ghosts.error, Real(0))
-      << "coarse/fine ghosts must come from the freshly published coarse solution";
+      << "coarse/fine ghosts must come from the freshly published coarse solution through the "
+         "configured spatial authority";
 }
 
 TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresentedTopologies) {
@@ -829,19 +857,20 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
 
   {
     AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
     params.mesh.n = 16;
     params.mesh.regrid_every = 0;
     params.mesh.distribute_coarse = true;
     params.mesh.coarse_max_grid = 8;
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                  blob(params.mesh.n, 0.25),
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(
+        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
+        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
     std::string diagnostic;
     try {
       runtime.install_field_plan("distributed-composite",
@@ -860,6 +889,8 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
 
   {
     AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
     params.mesh.n = 16;
     params.mesh.regrid_every = 0;
     params.poisson.wall = ActiveRegionProvider2D::trusted_extension(
@@ -867,14 +898,13 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
         [](Real x, Real y) { return x < Real(0.25) && y < Real(0.25); });
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
-      blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                  blob(params.mesh.n, 0.25),
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(
+        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
+        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
     blocks[0].aux_ncomp = kAuxNamedBase + 1;
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
     runtime.install_field_plan("wall-field",
                                make_plan("wall-field", level_local_hierarchy_policy()));
     runtime.register_named_field("plasma", "wall-field", kAuxNamedBase, -1, -1,

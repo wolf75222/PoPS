@@ -102,6 +102,36 @@ else
   "$PKG" env create -n "$ENV_NAME" -f "$HERE/environment.yml"
 fi
 
+# --- native distributed stack postcondition ---------------------------------------------------------
+# Environment names are mutable and may be shared by several worktrees.  Trust the solved artifacts,
+# not the requested YAML: fail immediately if another setup left this env on Open MPI, a non-MPICH
+# HDF5 variant, or a serial/missing wrapper.
+POPS_PREFIX="$(conda run -n "$ENV_NAME" printenv CONDA_PREFIX 2>/dev/null || true)"
+[ -n "$POPS_PREFIX" ] || POPS_PREFIX="$(conda env list | awk -v n="$ENV_NAME" '$1 == n {print $NF}')"
+mpi_provider="$(conda list -n "$ENV_NAME" mpi 2>/dev/null | awk '$1 == "mpi" {print $3; exit}')"
+mpich_version="$(conda list -n "$ENV_NAME" mpich 2>/dev/null | awk '$1 == "mpich" {print $2; exit}')"
+hdf5_build="$(conda list -n "$ENV_NAME" hdf5 2>/dev/null | awk '$1 == "hdf5" {print $3; exit}')"
+h5pcc="$POPS_PREFIX/bin/h5pcc"
+if [[ "$mpi_provider" != "mpich" || -z "$mpich_version" || "$hdf5_build" != mpi_mpich_* ]]; then
+  echo "ERROR: env '$ENV_NAME' does not contain the requested MPICH/HDF5 ABI pair." >&2
+  echo "       mpi provider='$mpi_provider', mpich='$mpich_version', hdf5 build='$hdf5_build'" >&2
+  echo "       Re-run this setup from the authoritative worktree or use a dedicated POPS_ENV_NAME." >&2
+  exit 1
+fi
+if [[ ! -x "$h5pcc" ]]; then
+  echo "ERROR: the parallel HDF5 wrapper is missing from env '$ENV_NAME': $h5pcc" >&2
+  exit 1
+fi
+hdf5_configuration="$("$h5pcc" -showconfig 2>&1)" || {
+  echo "ERROR: $h5pcc -showconfig failed." >&2
+  exit 1
+}
+if ! printf '%s\n' "$hdf5_configuration" | grep -Eqi 'Parallel HDF5:[[:space:]]*(yes|on)'; then
+  echo "ERROR: env '$ENV_NAME' HDF5 wrapper is not parallel: $h5pcc" >&2
+  exit 1
+fi
+echo "MPI/HDF5 ABI: MPICH $mpich_version; HDF5 $hdf5_build (parallel h5pcc)."
+
 # --- safety net: reject a CUDA Kokkos build in CPU mode ----------------------------------------------
 if [[ "$POPS_WITH_CUDA" == "0" ]]; then
   kbuild="$(conda list -n "$ENV_NAME" kokkos 2>/dev/null | awk '$1 == "kokkos" {print $3}')"
@@ -138,6 +168,33 @@ case "$(uname)" in
     ;;
 esac
 
+# Compile and execute the actual collective API, not just h5pcc's metadata report.  This catches a
+# broken wrapper compiler and a parallel-looking HDF5 package that cannot link against this env's
+# MPI runtime before PoPS spends minutes compiling.
+probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/pops-hdf5-mpi.XXXXXX")"
+probe_source="$probe_dir/probe.c"
+probe_binary="$probe_dir/probe"
+printf '%s\n' \
+  '#include <mpi.h>' \
+  '#include <hdf5.h>' \
+  'int main(int argc, char **argv) {' \
+  '  if (MPI_Init(&argc, &argv) != MPI_SUCCESS) return 1;' \
+  '  hid_t access = H5Pcreate(H5P_FILE_ACCESS);' \
+  '  int failed = access < 0 || H5Pset_fapl_mpio(access, MPI_COMM_WORLD, MPI_INFO_NULL) < 0;' \
+  '  if (access >= 0) H5Pclose(access);' \
+  '  MPI_Finalize();' \
+  '  return failed;' \
+  '}' >"$probe_source"
+if ! conda run -n "$ENV_NAME" "$h5pcc" "$probe_source" -o "$probe_binary" >/dev/null 2>&1 ||
+   ! conda run -n "$ENV_NAME" "$probe_binary" >/dev/null 2>&1; then
+  rm -rf "$probe_dir"
+  echo "ERROR: env '$ENV_NAME' cannot compile and execute the native MPI/HDF5 collective API." >&2
+  echo "       Check the MPICH wrapper compiler and the mpi_mpich HDF5 package." >&2
+  exit 1
+fi
+rm -rf "$probe_dir"
+echo "MPI/HDF5 native probe: compile, link and one-rank collective API execution passed."
+
 # --- persist the DSL runtime variables in the env (exported on each `conda activate pops`) ------------
 # POPS_INCLUDE   : the pops headers for the DSL production/aot backend (here: the source checkout).
 # POPS_KOKKOS_ROOT / Kokkos_ROOT : the Kokkos install the DSL .so compiles against (the env Kokkos;
@@ -145,8 +202,6 @@ esac
 # POPS_CACHE_DIR : a stable cache for the compiled DSL .so.
 # CMAKE_PREFIX_PATH : point find_package at the env prefix (env Kokkos/pybind11/MPI) even outside an
 #                 activated shell or when a system CMAKE_PREFIX_PATH would otherwise win.
-POPS_PREFIX="$(conda run -n "$ENV_NAME" printenv CONDA_PREFIX 2>/dev/null || true)"
-[ -n "$POPS_PREFIX" ] || POPS_PREFIX="$(conda env list | awk -v n="$ENV_NAME" '$1 == n {print $NF}')"
 conda env config vars set -n "$ENV_NAME" \
   POPS_INCLUDE="$HERE/include" \
   POPS_KOKKOS_ROOT="$POPS_PREFIX" \
@@ -178,15 +233,22 @@ echo "    pip install . -v -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=$_ncpu     
 echo "    (leave it at the default 1 on memory-constrained machines -- it is the OOM guard.)"
 echo ""
 # ADC-647: a previous wheel install may already exist. On Darwin, authenticate the exact extension
-# a clean `import pops` will resolve before the probe below can load it. A missing package is normal
-# during first-time setup; a present package with a missing/bad extension is not.
+# a clean native import will resolve before the probe below can load it. The top-level package is
+# intentionally lazy, so `import pops` alone cannot distinguish a healthy extension from a stale MPI
+# or HDF5 ABI. A missing package is normal during first-time setup; a present package with a
+# missing/bad extension is not.
 conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/codesign_pops_extensions.py" --if-present
 if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-    python -c "import pops" >/dev/null 2>&1; then
+    python "$HERE/scripts/verify_installed_native.py" >/dev/null 2>&1; then
 echo "--- pops.runtime.doctor.doctor() ---"
   conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
 python -c "from pops.runtime.doctor import doctor; doctor()" || true
+elif conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+    python -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('pops') else 1)"; then
+  echo "An existing pops install no longer loads after the environment update."
+  echo "Its native MPI/HDF5 dependencies may have changed; rebuild that extension now:"
+  echo "    bash scripts/build_python.sh          # add --mpi for the distributed backend"
 else
   echo "pops is not installed in '$ENV_NAME' yet. Install it, then check the environment:"
   echo "    conda activate $ENV_NAME"

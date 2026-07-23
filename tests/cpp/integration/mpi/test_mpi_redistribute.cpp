@@ -76,6 +76,31 @@ static int pops_run_test_mpi_redistribute(int argc, char** argv) {
           ++fails;
   }
 
+  // A replicated field encodes every owner as the current rank. The raw DistributionMapping is
+  // therefore rank-local metadata, while the physical layout and values are globally identical.
+  // parallel_copy must authenticate that representation collectively and keep the copy local on
+  // every rank rather than rejecting the legitimate owner-number difference.
+  DistributionMapping replica_dm(std::vector<int>(tiles.size(), me));
+  MultiFab replica_source(tiles, replica_dm, 1, 0);
+  MultiFab replica_destination(tiles, replica_dm, 1, 0);
+  replica_destination.set_val(-1.0);
+  for (int li = 0; li < replica_source.local_size(); ++li) {
+    Fab2D& values = replica_source.fab(li);
+    const Box2D box = values.box();
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        values(i, j) = f(i, j);
+  }
+  parallel_copy(replica_destination, replica_source);
+  for (int li = 0; li < replica_destination.local_size(); ++li) {
+    const Fab2D& values = replica_destination.fab(li);
+    const Box2D box = values.box();
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        if (std::fabs(values(i, j) - f(i, j)) > 1e-12)
+          ++fails;
+  }
+
   const long gfails = all_reduce_sum(fails);
   if (me == 0) {
     if (gfails == 0)

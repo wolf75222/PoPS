@@ -11,7 +11,7 @@ from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  #
 
 
 def test_system_inspect_is_structured_and_array_free():
-    sim = System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodicity=(True, True))
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["schema_version"] == 1
@@ -35,7 +35,7 @@ def test_system_inspect_is_structured_and_array_free():
 
 
 def test_amr_system_inspect_composes_amr_snapshot():
-    sim = AmrSystem(n=8, L=1.0, periodic=True)
+    sim = AmrSystem(n=8, L=1.0, periodicity=(True, True))
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["runtime"] == "amr_system"

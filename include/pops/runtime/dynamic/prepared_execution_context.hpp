@@ -52,6 +52,18 @@ class PreparedExecutionContextV1 final {
 
   [[nodiscard]] const std::string& identity() const noexcept { return execution_identity_; }
 
+  /// Remove every communicator and datatype handle while retaining the exact device/stream.
+  ///
+  /// This is not a serial communicator.  It is an explicitly noncollective execution authority
+  /// for callbacks invoked independently per local patch; all MPI consensus remains in PoPS.
+  [[nodiscard]] PreparedExecutionContextV1 without_collective_authority() const {
+    return PreparedExecutionContextV1(
+        execution_identity_ + "/noncollective", context_version_, memory_space_,
+        backend_identity_, device_identity_, scalar_type_, storage_precision_, compute_precision_,
+        accumulation_precision_, reduction_precision_, stream_handle_, stream_identity_, 0, 0,
+        POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1, "none");
+  }
+
   /// Derive the exact ABI execution authority for one materialized native lane.
   ///
   /// The RuntimeInstance identity, precision policy, device and stream remain unchanged. Only the

@@ -89,6 +89,7 @@ struct SerializedHistory {
   int depth = 0;
   int ncomp = 0;
   bool initialized = false;
+  int fill_count = 0;
   std::vector<std::vector<double>> slots;  // slots[s] = global component-major buffer of slot s
 };
 
@@ -101,6 +102,7 @@ std::vector<SerializedHistory> serialize(const System& s) {
     h.depth = s.history_depth(name);
     h.ncomp = s.history_ncomp(name);
     h.initialized = s.history_initialized(name);
+    h.fill_count = s.history_fill_count(name);
     for (int slot = 0; slot < h.depth; ++slot) {
       h.slots.push_back(s.history_global(name, slot));
     }
@@ -117,6 +119,7 @@ void deserialize(System& s, const std::vector<SerializedHistory>& hist) {
       s.restore_history(h.name, slot, h.slots[static_cast<std::size_t>(slot)]);
     }
     s.set_history_initialized(h.name, h.initialized);
+    s.restore_history_fill_count(h.name, h.fill_count);
   }
 }
 
@@ -132,10 +135,24 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System src(cfg);
   add_gas(src);
+
+  // A cold-start broadcast is valid for multistep evaluation but does not make the copied slots
+  // authentic replay anchors. The accepted-store count advances once per store and saturates only
+  // after every logical slot has been replaced.
+  src.register_history("fill_age", /*lag=*/3);
+  EXPECT_EQ(src.history_fill_count("fill_age"), 0);
+  for (int accepted_store = 1; accepted_store <= 4; ++accepted_store) {
+    src.store_history("fill_age", src.block_state(0));
+    src.rotate_histories();
+    EXPECT_EQ(src.history_fill_count("fill_age"), accepted_store);
+  }
+  src.store_history("fill_age", src.block_state(0));
+  src.rotate_histories();
+  EXPECT_EQ(src.history_fill_count("fill_age"), 4) << "fill count saturates at ring depth";
 
   // Register a ring with max lag 2 (depth 3): slot 0 = current, slot 1 = R_{n-1}, slot 2 = R_{n-2}.
   src.register_history("rhs_prev", /*lag=*/2);
@@ -177,6 +194,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
       EXPECT_TRUE(h.depth == 3) << "serialized_depth";
       EXPECT_TRUE(h.ncomp == kNcomp) << "serialized_ncomp";
       EXPECT_TRUE(h.initialized) << "serialized_initialized";
+      EXPECT_TRUE(h.fill_count == h.depth) << "serialized_fill_count";
       EXPECT_TRUE(h.slots.size() == 3) << "serialized_slot_count";
     }
   }

@@ -202,7 +202,10 @@ class ConsolePresentation:
         context.update({
             block: _Namespace(values) for block, values in blocks.items()
         })
-        print(self.template.format_map(context), flush=True)
+        template = self.template
+        if template is None:
+            raise RuntimeError("template presentation lost its normalized template")
+        print(template.format_map(context), flush=True)
 
 
 __all__ = ["ConsolePresentation", "ConsoleSample"]

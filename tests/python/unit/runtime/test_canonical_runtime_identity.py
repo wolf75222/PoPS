@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops import _pops
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
 from pops.runtime._bound_snapshot import (
@@ -46,11 +48,17 @@ def _bound_snapshot():
 
 def _exact_install_plan():
     fixture = artifact_fixture()
+    native_abi = _pops.abi_key()
+    if not isinstance(native_abi, str) or not native_abi:
+        raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
     for block in fixture.blocks:
         block.model.definition_identity = {
             "protocol": "pops.test.compiled-model-definition.v1",
             "block": block.name,
         }
+        block.model.abi_key = native_abi
+    for row in fixture.layout_programs:
+        row.program.abi_key = native_abi
     artifact = type(fixture)(
         plan=fixture.plan,
         program=fixture.program,
@@ -67,6 +75,7 @@ def _exact_install_plan():
         params=artifact.bind_schema.resolve_bind(
             {}, compile_values=artifact.plan.compile_values),
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
 
 

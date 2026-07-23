@@ -64,7 +64,7 @@ N = 32
 def make_sim(cache, riemann=None, limiter=None, time=None):
     riemann = riemann if riemann is not None else HLL()
     limiter = limiter if limiter is not None else FirstOrder()
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.add_block("ions",
                   Model(state=FluidState("isothermal", cs2=CS2),
                         transport=IsothermalFlux(), source=NoSource(),
@@ -94,7 +94,7 @@ chk(not np.array_equal(A_off, U0), "l'etat a reellement evolue (test non creux)"
 chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'etat final")
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
-s_def = System(n=N, L=1.0, periodic=True)
+s_def = System(n=N, L=1.0, periodicity=(True, True))
 s_def.add_block("ions",
                 Model(state=FluidState("isothermal", cs2=CS2),
                       transport=IsothermalFlux(), source=NoSource(),
@@ -130,7 +130,7 @@ def make_disc_sim_then_mode():
 
 
 def make_mode_then_cache():
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=CutCell()))
     sim.add_block("ions",
                   Model(state=FluidState("isothermal", cs2=CS2),
@@ -160,7 +160,7 @@ fake = CompiledModel(so_path="/inexistant.so", backend="production",
                      wave_speed_provider="explicit_pair")
 
 def add_eq_cache():
-    s = System(n=16, L=1.0, periodic=True)
+    s = System(n=16, L=1.0, periodicity=(True, True))
     s.add_equation("g", fake, spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
                                                wave_speed_cache=True),
                    time=Explicit())

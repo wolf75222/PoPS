@@ -20,12 +20,15 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+#include "amr_transfer_test_authority.hpp"
+
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
@@ -42,16 +45,21 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
+// Modele ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
 // de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+static ModelSpec exb_spec(double q, double B0) {
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = q;
+  spec.B0 = B0;
+  return spec;
 }
 
 // A single periodic species needs an explicitly authored neutralizing background: q*n alone has a
@@ -107,6 +115,8 @@ TEST(test_amr_system_twoblock, Runs) {
   // ============================================================================================
   {
     AmrBuildParams bp;
+    bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    bp.mesh.periodicity = Periodicity{true, true};
     bp.mesh.n = N;
     bp.mesh.L = L;
     bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs PR1)
@@ -115,18 +125,16 @@ TEST(test_amr_system_twoblock, Runs) {
 
     std::vector<AmrRuntimeBlock> blocks;
     // bloc 0 : ions q=+1, schema none/rusanov.
-    detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-      blocks.push_back(detail::dispatch_amr_block(m, "none", "rusanov", S, "ions", rho0,
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), "none", "rusanov", S, "ions",
+                                                rho0, /*has_density=*/true, 1.4, 1, false, false));
     // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
-    detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-      blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "electrons", rho1,
-                                                  /*has_density=*/true, 1.4, 1, false, false));
-    });
+    blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), "minmod", "rusanov", S,
+                                                "electrons", rho1, /*has_density=*/true, 1.4, 1,
+                                                false, false));
 
     AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
+    test::install_second_order_amr_transfer_authorities(rt, 2);
     rt.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
         0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
     EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
@@ -169,13 +177,13 @@ TEST(test_amr_system_twoblock, Runs) {
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie figee
 
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
+    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);  // SCHEMA DIFFERENT du bloc 0
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
@@ -229,8 +237,8 @@ TEST(test_amr_system_twoblock, Runs) {
     cfg.regrid_every = 10;  // > 0
     AmrSystem sim(cfg);
     sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
+    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
@@ -248,7 +256,7 @@ TEST(test_amr_system_twoblock, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_neutralized_charge(q0, B0, mono_background), "none", "rusanov",

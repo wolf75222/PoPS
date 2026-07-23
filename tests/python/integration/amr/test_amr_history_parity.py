@@ -95,7 +95,7 @@ def _ring_slots(sim, depth):
 
 
 def _system_run(u0):
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         require_native_or_skip(
             "test_amr_history_parity requires System install_program/history_names bindings")

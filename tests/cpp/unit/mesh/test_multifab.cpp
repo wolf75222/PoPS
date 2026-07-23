@@ -10,6 +10,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
+#include <vector>
 
 using namespace pops;
 
@@ -50,4 +51,23 @@ TEST(test_multifab, allocate_fill_and_reduce) {
     }
   }
   EXPECT_TRUE(found) << "cell_located";
+}
+
+TEST(test_multifab, set_val_fills_every_local_fab_valid_and_ghost_cells) {
+  const BoxArray boxes(std::vector<Box2D>{{{-9, 4}, {-6, 7}}, {{3, -8}, {7, -5}}});
+  const DistributionMapping owners(
+      std::vector<int>(static_cast<std::size_t>(boxes.size()), my_rank()));
+  MultiFab field(boxes, owners, /*ncomp=*/3, /*ngrow=*/2);
+
+  field.set_val(Real(6.5));
+
+  ASSERT_EQ(field.local_size(), boxes.size());
+  for (int local = 0; local < field.local_size(); ++local) {
+    const Fab2D& fab = field.fab(local);
+    const Box2D grown = fab.grown_box();
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+        for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+          EXPECT_DOUBLE_EQ(fab(i, j, component), Real(6.5));
+  }
 }

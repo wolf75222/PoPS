@@ -39,7 +39,7 @@ def build(n=16):
     X, Y = np.meshgrid(x, x, indexing="xy")
     ions = 1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))
     slow = 1.0 + 0.3 * np.exp(-50.0 * ((X - 0.6) ** 2 + (Y - 0.5) ** 2))
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.add_equation("ions",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),

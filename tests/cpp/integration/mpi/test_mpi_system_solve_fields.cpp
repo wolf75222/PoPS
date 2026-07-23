@@ -89,7 +89,7 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System sys(cfg);
   add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",

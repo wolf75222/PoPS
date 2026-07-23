@@ -11,7 +11,9 @@ from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
-def _uniform_system_values(mesh: Any) -> tuple[int, float, bool, float, float]:
+def _uniform_system_values(
+    mesh: Any,
+) -> tuple[int, float, tuple[bool, bool], float, float]:
     """Project exactly the uniform mesh shapes representable by native ``SystemConfig``."""
     from pops.mesh.grid import CartesianGrid
 
@@ -27,14 +29,11 @@ def _uniform_system_values(mesh: Any) -> tuple[int, float, bool, float, float]:
         raise NotImplementedError(
             "native SystemConfig has one L and cannot represent anisotropic CartesianGrid extents")
     periodic_axes = mesh.topology.periodic_axes
-    if periodic_axes and len(periodic_axes) != len(mesh.axes):
-        raise NotImplementedError(
-            "native SystemConfig has one global periodic flag and cannot represent a partially "
-            "periodic CartesianGrid topology")
+    periodic_indices = {axis.index for axis in periodic_axes}
     return (
         int(mesh.cells[0]),
         float(lengths[0]),
-        bool(periodic_axes),
+        (0 in periodic_indices, 1 in periodic_indices),
         float(mesh.frame.lower[0]),
         float(mesh.frame.lower[1]),
     )
@@ -44,11 +43,11 @@ def system_config_from_layout(layout: Any) -> Any:
     """Build the native uniform config from an authenticated layout descriptor."""
     from pops._bootstrap import SystemConfig
 
-    n, extent, periodic, xlo, ylo = _uniform_system_values(layout.mesh)
+    n, extent, periodicity, xlo, ylo = _uniform_system_values(layout.mesh)
     cfg = SystemConfig()
     cfg.n = n
     cfg.L = extent
-    cfg.periodic = periodic
+    cfg.periodicity = periodicity
     cfg.xlo = xlo
     cfg.ylo = ylo
     return cfg

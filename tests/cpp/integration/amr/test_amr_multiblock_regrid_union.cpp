@@ -25,17 +25,20 @@
 // CHOIX DE COMPILABILITE (nvcc-safe, comme test_amr_coupled_source_role_strict / test_amr_multiblock_
 // compiled) : on construit l'AmrRuntime DIRECTEMENT via detail::make_shared_amr_layout +
 // detail::dispatch_amr_block (le noyau AMR reste capture par une fonction template NOMMEE, pas une
-// lambda etendue cross-TU). Les PREDICATS DE TAG sont des FONCTEURS NOMMES (structs concrets), jamais
-// des lambdas generiques sous concept : ils sont evalues dans la boucle HOTE de tag_cells (pas sur
-// device), donc une std::function les capturant est licite et compile partout (CPU + Kokkos).
+// lambda etendue cross-TU). Les criteres de test sont installes comme un graphe de tagging prepare,
+// identique au chemin Case -> bind -> run : le champ est lu dans un noyau Kokkos, jamais par une
+// std::function cellule par cellule sur l'hote.
 
 #include <gtest/gtest.h>
 
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/config/model_spec.hpp>
+
+#include "amr_transfer_test_authority.hpp"
+#include "amr_tagging_test_authority.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,43 +47,14 @@
 #include <string>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
-
 using namespace pops;
 
-// Spec ExB scalaire (1 var, role density) a charge q. Transport ExB : la densite advecte le long du
+// Modele ExB scalaire (1 var, role density) a charge q. Transport ExB : la densite advecte le long du
 // champ ExB, donc une structure se DEPLACE -> la region taguee bouge -> le layout fin change (cas a).
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
-
-// ------------------------------------------------------------------------------------------------
-// PREDICATS DE TAG : FONCTEURS NOMMES (structs concrets), nvcc-safe (evalues cote hote dans tag_cells).
-// ------------------------------------------------------------------------------------------------
-
-// Tag si la densite (composante 0) du bloc depasse un seuil. Critere PAR BLOC de base.
-struct TagDensityAbove {
-  Real thr;
-  bool operator()(const ConstArray4& a, int i, int j) const { return a(i, j, 0) > thr; }
-};
-
-// Tag si |grad phi| > seuil, lu sur l'aux partage (composantes 1,2 = grad phi en x,y). Critere de phi
-// SEPARE (D4) : on tague le BORD des structures (le gradient du potentiel), pas le potentiel lui-meme.
-struct TagGradPhiAbove {
-  Real thr;
-  bool operator()(const ConstArray4& a, int i, int j) const {
-    const Real gx = a(i, j, 1), gy = a(i, j, 2);
-    return std::sqrt(gx * gx + gy * gy) > thr;
-  }
-};
 
 // ------------------------------------------------------------------------------------------------
 // densites initiales : un disque gaussien centre en (cx, cy) du domaine [0,1]^2, amplitude amp + base.
@@ -152,6 +126,38 @@ static double dmax_field(const std::vector<double>& a, const std::vector<double>
   return d;
 }
 
+static void install_regrid_state_authorities(AmrSystem& sim) {
+  struct StateRoute {
+    const char* block;
+    const char* subject;
+  };
+  const StateRoute routes[] = {{"a", "test://amr-regrid-union/block/a/state/U"},
+                               {"b", "test://amr-regrid-union/block/b/state/U"}};
+  for (const StateRoute& route : routes)
+    sim.install_block_state_route(route.block, route.subject);
+  for (const StateRoute& route : routes) {
+    const std::string prefix = std::string("test://amr-regrid-union/block/") + route.block +
+                               "/transfer/";
+    sim.register_bootstrap_transfer_route(
+        prefix + "prolongation", {route.subject}, "test::amr-regrid-union-transfer@1", "cell",
+        "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1},
+        2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "restriction", {route.subject}, "test::amr-regrid-union-transfer@1", "cell",
+        "cell", "conservative", "dense", "restriction", "volume_average", 1, {0}, 2,
+        kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "coarse-fine", {route.subject}, "test::amr-regrid-union-transfer@1", "cell",
+        "cell", "conservative", "dense", "coarse_fine_fill", "conservative_coarse_fine", 2,
+        {2}, 2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(
+        prefix + "temporal", {route.subject}, "test::amr-regrid-union-transfer@1", "cell",
+        "cell", "conservative", "dense", "temporal_interpolation",
+        "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
+    sim.bind_bootstrap_block_subject(route.subject, route.block);
+  }
+}
+
 // Bounding box (coords du niveau FIN) de la BoxArray fine du bloc 0 (layout partage : identique pour
 // tous les blocs). Permet de verifier la couverture spatiale du layout d'union (cas b/c).
 static Box2D fine_bbox(AmrRuntime& rt) {
@@ -174,12 +180,21 @@ static bool same_box_list(const std::vector<Box2D>& a, const std::vector<Box2D>&
   return true;
 }
 
+static bool layout_covers(const BoxArray& layout, const Box2D& required) {
+  std::int64_t covered = 0;
+  for (const Box2D& box : layout.boxes())
+    covered += box.intersect(required).num_cells();
+  return covered == required.num_cells();
+}
+
 // Construit un AmrRuntime a deux blocs ExB scalaires sur une hierarchie 2 niveaux N x N (un patch fin
 // central seed). Densites initiales fournies. q0/q1 : charges (signe inclus) pour le Poisson somme.
 static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q1,
                                  const std::vector<double>& rho0, const std::vector<double>& rho1,
                                  int stride1 = 1) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every =
@@ -187,17 +202,16 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
   bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "a", rho0,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "b", rho1,
-                                                /*has_density=*/true, 1.4, 1, false, false,
-                                                stride1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q0, B0), "minmod", "rusanov", S, "a",
+                                              rho0, /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/a/state/U";
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(q1, B0), "minmod", "rusanov", S, "b",
+                                              rho1, /*has_density=*/true, 1.4, 1, false, false,
+                                              stride1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/b/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;
@@ -205,21 +219,24 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
 
 static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& rho) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = 1.0;
   bp.poisson.bc = BCRec{};
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, 3);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "positive", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "negative", rho,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, 1.0), "minmod", "rusanov", S,
+                                              "positive", rho, /*has_density=*/true, 1.4, 1, false,
+                                              false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/positive/state/U";
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", S,
+                                              "negative", rho, /*has_density=*/true, 1.4, 1, false,
+                                              false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/block/negative/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations(
       {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
                                              ::pops::amr::RemainderPolicy::IntegralOnly),
@@ -231,6 +248,10 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
   SCOPED_TRACE("three-level bootstrap/regrid/rollback");
   const int N = 32;
+  // Offset the tagged region from the nested central finest seed. A coarse regrid therefore
+  // replaces the middle level with a layout that cannot carry the complete old finest layout. The
+  // runtime must retire that stale descendant before preparing the new parent topology, then
+  // rebuild it from the new middle level in the same transaction.
   AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.levels(0).size(), 3u);
@@ -241,7 +262,7 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_TRUE(
       same_box_list(rt.levels(0)[2].U.box_array().boxes(), rt.levels(1)[2].U.box_array().boxes()));
   {
-    SCOPED_TRACE("three-level initial parent/child injection");
+    SCOPED_TRACE("three-level initial parent/child conservative prolongation");
     const MultiFab& parent = rt.levels(0)[1].U;
     const MultiFab& child = rt.levels(0)[2].U;
     const Box2D fine = child.box(0);
@@ -249,25 +270,54 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
     const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
     const int parent_box = mf_find_box(parent, ci, cj);
     ASSERT_GE(parent_box, 0);
-    EXPECT_EQ(child.fab(0)(i, j, 0), parent.fab(parent_box)(ci, cj, 0))
-        << "level-2 initialization is injected from its immediate parent";
+    const int first_i = 2 * ci;
+    const int first_j = 2 * cj;
+    Real child_average = Real(0);
+    for (int child_j = 0; child_j < 2; ++child_j)
+      for (int child_i = 0; child_i < 2; ++child_i)
+        child_average += child.fab(0)(first_i + child_i, first_j + child_j, 0);
+    child_average /= Real(4);
+    EXPECT_NEAR(child_average, parent.fab(parent_box)(ci, cj, 0), 2e-14)
+        << "level-2 initialization conservatively prolongs its immediate parent";
   }
 
   rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
-  rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.25)});
-  rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.25)});
+  // Regridding is decision based: a false refine root holds the accepted fine coverage. The
+  // complementary roots below deliberately replace it, so the displaced threshold region can
+  // invalidate the old level-2 parent. Equality remains Hold and the roots never conflict.
+  test::install_prepared_threshold_decisions(
+      rt,
+      {{0, 0, Real(1.25), test::PreparedThresholdRelation::Above},
+       {1, 0, Real(1.25), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.25), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(1.25), test::PreparedThresholdRelation::Below}},
+      "test::prepared-replacement-threshold@1");
   rt.step(Real(1e-4));  // macro step zero never regrids
   EXPECT_EQ(rt.regrid_count(), 0);
 
   const AmrRuntime::StepSnapshot accepted = rt.step_snapshot();
   const std::uint64_t accepted_materialization = rt.topology_materialization_generation();
+  const std::vector<Box2D> accepted_middle = rt.levels(0)[1].U.box_array().boxes();
   const std::vector<Box2D> accepted_finest = rt.levels(0)[2].U.box_array().boxes();
-  rt.step(Real(1e-4));  // regrids the finest level from tags on its level-1 parent
+  ASSERT_TRUE(std::all_of(
+      accepted_finest.begin(), accepted_finest.end(), [&](const Box2D& accepted_child) {
+        return layout_covers(rt.levels(0)[1].U.box_array(),
+                             accepted_child.coarsen(kAmrRefRatio));
+      }))
+      << "the accepted descendant must initially be supported by its parent";
+  rt.step(Real(1e-4));  // regrids every active transition, coarse to fine
   const std::uint64_t regridded_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.regrid_count(), 1);
   EXPECT_GT(regridded_materialization, accepted_materialization);
+  EXPECT_FALSE(same_box_list(accepted_middle, rt.levels(0)[1].U.box_array().boxes()));
   EXPECT_FALSE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
+  EXPECT_TRUE(std::any_of(
+      accepted_finest.begin(), accepted_finest.end(), [&](const Box2D& stale_child) {
+        return !layout_covers(rt.levels(0)[1].U.box_array(),
+                              stale_child.coarsen(kAmrRefRatio));
+      }))
+      << "the regression must replace a parent that cannot support the stale descendant";
   EXPECT_TRUE(all_level_states_finite(rt));
 
   // This is the exact engine operation the AmrSystem accepted-attempt coordinator invokes after a
@@ -278,6 +328,7 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_EQ(rt.regrid_count(), 0);
   EXPECT_GT(restored_materialization, regridded_materialization)
       << "restoring an older epoch still invalidates concrete layout-bound resources";
+  EXPECT_TRUE(same_box_list(accepted_middle, rt.levels(0)[1].U.box_array().boxes()));
   EXPECT_TRUE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
 
   rt.step(Real(1e-4));
@@ -285,7 +336,83 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_EQ(rt.regrid_count(), 1) << "the accepted retry commits one regrid exactly once";
   EXPECT_GT(rt.topology_materialization_generation(), restored_materialization);
 
+  // Coarsening is an explicit decision, not the absence of a refine match. Deactivate the complete
+  // fine suffix without changing the resolved capacity, then reactivate that same capacity.
+  test::install_prepared_threshold_decisions(
+      rt, {{0, 0, Real(1e30)}, {1, 0, Real(1e30)}},
+      {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
+  rt.regrid();
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.max_levels(), 3);
+
+  test::install_prepared_threshold_union(
+      rt, {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
+  rt.regrid();
+  ASSERT_EQ(rt.nlev(), 3);
+  ASSERT_EQ(rt.max_levels(), 3);
+
+  const std::uint64_t full_layout_generation = rt.topology_materialization_generation();
+  const int full_layout_regrids = rt.regrid_count();
+  rt.regrid();
+  EXPECT_EQ(rt.topology_materialization_generation(), full_layout_generation)
+      << "an identical regrid must preserve layout-bound caches and storage";
+  EXPECT_EQ(rt.regrid_count(), full_layout_regrids)
+      << "an identical regrid is not a topology replacement";
+
+  std::vector<std::vector<PatchBox>> checkpoint_boxes(3);
+  std::vector<std::vector<int>> checkpoint_owners(3);
+  for (int level = 1; level < 3; ++level) {
+    for (const Box2D& box : rt.levels(0)[static_cast<std::size_t>(level)].U.box_array().boxes())
+      checkpoint_boxes[static_cast<std::size_t>(level)].push_back(
+          PatchBox{level, box.lo[0], box.lo[1], box.hi[0], box.hi[1]});
+    checkpoint_owners[static_cast<std::size_t>(level)] = rt.level_owner_ranks(level);
+  }
+
+  const std::uint64_t accepted_generation = rt.topology_materialization_generation();
+  const std::vector<PatchBox> accepted_patches = rt.patch_boxes();
+  std::vector<std::vector<PatchBox>> misaligned(2);
+  std::vector<std::vector<int>> misaligned_owners(2);
+  misaligned[1].push_back(PatchBox{1, 1, 0, 16, 15});
+  misaligned_owners[1].push_back(0);
+  EXPECT_THROW(rt.rebuild_hierarchy(misaligned, misaligned_owners), std::runtime_error);
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.topology_materialization_generation(), accepted_generation);
+  EXPECT_EQ(rt.patch_boxes(), accepted_patches);
+
+  std::vector<std::vector<PatchBox>> unnested(3);
+  std::vector<std::vector<int>> unnested_owners(3);
+  unnested[1].push_back(PatchBox{1, 8, 8, 23, 23});
+  unnested[2].push_back(PatchBox{2, 0, 0, 3, 3});
+  unnested_owners[1].push_back(0);
+  unnested_owners[2].push_back(0);
+  EXPECT_THROW(rt.rebuild_hierarchy(unnested, unnested_owners), std::runtime_error);
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.topology_materialization_generation(), accepted_generation);
+  EXPECT_EQ(rt.patch_boxes(), accepted_patches);
+
+  rt.rebuild_hierarchy(std::vector<std::vector<PatchBox>>(1),
+                       std::vector<std::vector<int>>(1));
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.max_levels(), 3);
+  rt.rebuild_hierarchy(checkpoint_boxes, checkpoint_owners);
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.max_levels(), 3);
+  for (int level = 1; level < 3; ++level) {
+    const auto& restored = rt.levels(0)[static_cast<std::size_t>(level)].U.box_array().boxes();
+    ASSERT_EQ(restored.size(), checkpoint_boxes[static_cast<std::size_t>(level)].size());
+    for (std::size_t patch = 0; patch < restored.size(); ++patch) {
+      const PatchBox& expected = checkpoint_boxes[static_cast<std::size_t>(level)][patch];
+      EXPECT_EQ(restored[patch].lo[0], expected.ilo);
+      EXPECT_EQ(restored[patch].lo[1], expected.jlo);
+      EXPECT_EQ(restored[patch].hi[0], expected.ihi);
+      EXPECT_EQ(restored[patch].hi[1], expected.jhi);
+    }
+    EXPECT_EQ(rt.level_owner_ranks(level), checkpoint_owners[static_cast<std::size_t>(level)]);
+  }
+
   AmrBuildParams invalid;
+  invalid.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  invalid.mesh.periodicity = Periodicity{true, true};
   invalid.mesh.n = N;
   EXPECT_THROW(detail::make_shared_amr_layout_levels(invalid, 0), std::runtime_error);
   invalid.mesh.n = 2;
@@ -293,11 +420,9 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
 }
 
 TEST(test_amr_multiblock_regrid_union, Runs) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
+  // AmrRuntime owns the process-wide lazy Kokkos initialization.  A local ScopeGuard would
+  // finalize Kokkos when this TEST returns and make the following TEST construct storage after
+  // finalization, which Kokkos deliberately forbids.
 
   check_three_level_bootstrap_step_regrid_and_rollback();
 
@@ -315,8 +440,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
                                      blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
       // set_regrid(0) explicite : meme avec des predicats enregistres, regrid_every_==0 -> figee.
       rt.set_regrid(0);
-      rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.3)});
-      rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.3)});
+      test::install_prepared_threshold_union(
+          rt, {{0, 0, Real(1.3)}, {1, 0, Real(1.3)}});
       const std::vector<Box2D> fb_before = fine_boxes(rt);
       for (int s = 0; s < 8; ++s)
         rt.step(Real(0.01));
@@ -331,7 +456,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
                                    blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
     rt.set_regrid(0);
-    rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.3)});
+    test::install_prepared_threshold_union(rt, {{0, 0, Real(1.3)}});
     for (int s = 0; s < 8; ++s)
       rt.step(Real(0.01));
     EXPECT_EQ(rt.regrid_count(), 0) << "e_regrid_count_zero_when_frozen";
@@ -346,8 +471,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
                                    blob(N, 0.70, 0.5, 1.0, 1.0, 0.07));
     rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
-    rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.5)});
-    rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.5)});
+    test::install_prepared_threshold_union(
+        rt, {{0, 0, Real(1.5)}, {1, 0, Real(1.5)}});
     // ADC-607: wire a profiler so the regrid data-structure counters emit. The regrid site records
     // tag_density (dense TagBox fill, permille), box_hash_rebuilds + copy_cache_hits/misses
     // (parallel_copy schedule-cache engagement). We only assert the counters exist and are
@@ -396,8 +521,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.25, 0.5, 1.2, 1.0, 0.06),
                                    blob(N, 0.75, 0.5, 1.2, 1.0, 0.06));
     rt.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
-    rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.6)});  // tague le blob gauche (A)
-    rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.6)});  // tague le blob droit (B)
+    test::install_prepared_threshold_union(
+        rt, {{0, 0, Real(1.6)}, {1, 0, Real(1.6)}});
     // phi NON enregistre ici : on isole l'union A OU B. Le premier step (macro_step_=0) ne regrid PAS
     // (la grille est fraichement construite, convention mono-bloc) ; le 2e step (macro_step_=1, every=1)
     // declenche le regrid d'union.
@@ -425,9 +550,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     AmrRuntime rtp =
         make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.5, 0.5, 1.5, 1.0, 0.06), flat(N, 1.0));
     rtp.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
-    // AUCUN set_block_tag_predicate : les blocs ne taguent rien de leur cote -> seul phi pilote l'union.
-    rtp.set_phi_tag_predicate(
-        TagGradPhiAbove{Real(1e-6)});  // |grad phi| > epsilon -> tague le bord
+    // Aucun critere de bloc : la feuille gradient du champ aux partage pilote seule l'union.
+    test::install_prepared_shared_aux_gradient(rtp, 2, Real(1e-6));
     const std::vector<Box2D> fb_seed_phi = fine_boxes(rtp);
     rtp.step(Real(0.005));
     rtp.step(Real(0.005));
@@ -450,8 +574,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
                                    blob(N, 0.70, 0.5, 1.0, 1.0, 0.07), /*stride1=*/4);
     rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
-    rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.5)});  // bloc A (rapide) tague
-    rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.5)});  // bloc B (stride=4) tague aussi
+    test::install_prepared_threshold_union(
+        rt, {{0, 0, Real(1.5)}, {1, 0, Real(1.5)}});
     // Avance jusqu'a un macro-pas de regrid (macro_step_=2, every=2) ou B est TENU ((2+1)%4 != 0).
     for (int s = 0; s < 3; ++s)
       rt.step(Real(0.01));
@@ -492,9 +616,10 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 2;  // AVANT cette PR : ensure_built LEVAIT en multi-blocs
       AmrSystem sim(cfg);
+      install_regrid_state_authorities(sim);
       sim.set_temporal_relations({2}, {1}, {"integral_only"});
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -513,9 +638,10 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;  // hierarchie figee
       AmrSystem sim(cfg);
+      install_regrid_state_authorities(sim);
       sim.set_temporal_relations({2}, {1}, {"integral_only"});
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -535,6 +661,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
 TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriodicGhosts) {
   constexpr int n = 16;
   AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
@@ -543,16 +671,16 @@ TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriod
   detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
   layout.base_per = Periodicity{false, false};
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "a",
-                                                flat(n, 1.0),
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_charge(+1.0, 1.0), "minmod", "rusanov", layout, "a", flat(n, 1.0),
+      /*has_density=*/true, 1.4, 1, false, false, 1));
+  blocks.back().state_identity = "test://amr-regrid-union/non-periodic/block/a/state/U";
   // This is the precise invalid state under test: a non-periodic sampled state with no prepared
   // authority capable of producing its physical ghosts.
   blocks.front().boundary_plan.reset();
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
 

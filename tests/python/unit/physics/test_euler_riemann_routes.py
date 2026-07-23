@@ -35,7 +35,7 @@ def _compiled(*, n_vars, prim_names, hllc=False, roe=False):
 
 def _validate(model, flux_desc):
     """Run the unified-install riemann capability gate on a fake compiled model."""
-    System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+    System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
         model, engine.Spatial(flux=flux_desc))
 
 

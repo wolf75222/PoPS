@@ -100,7 +100,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 4;  // re-raffinement periodique : exerce le regrid distribue plusieurs fois
 
   // Modele euler_poisson COMPILE branche sur la hierarchie AMR (chemin de production add_compiled_model).

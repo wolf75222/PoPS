@@ -79,14 +79,14 @@ def _synthetic_compiled():
 def test_system_print_is_readable():
     """str(System) is a short block-registry summary, never a Fab dump or a bare address."""
     print("== System prints readably ==")
-    sim = System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodicity=(True, True))
     _assert_readable("System", sim)
 
 
 def test_amr_system_print_is_readable():
     """str(AmrSystem) is a short block-registry summary on the AMR hierarchy (frozen, no regrid)."""
     print("== AmrSystem prints readably ==")
-    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
     _assert_readable("AmrSystem", sim)
 
 

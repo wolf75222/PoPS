@@ -20,7 +20,7 @@ namespace {
 // registre minimal a la disposition de Reg / RegMP (champs lus par route_reflux).
 struct RegLite {
   int I0, I1, J0, J1;
-  std::vector<Real> cL, cR, cB, cT, fL, fR, fB, fT;
+  RefluxStorage<Real> cL, cR, cB, cT, fL, fR, fB, fT;
 };
 }  // namespace
 
@@ -36,7 +36,7 @@ TEST(test_cf_interface, Runs) {
   // --- CoarseFineInterface : couverture depuis un BoxArray fin ---
   // patch fin [4..11]^2 -> empreinte grossiere [2..5]^2 (PatchRange). Region grossiere 8x8.
   BoxArray fine(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
-  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine);
+  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine, Periodicity{false, false});
   EXPECT_TRUE(cfi.covered(2, 2) && cfi.covered(5, 5) && cfi.covered(3, 4)) << "cfi_couvert_dedans";
   EXPECT_TRUE(!cfi.covered(1, 2) && !cfi.covered(6, 5)) << "cfi_non_couvert_bordant";
   EXPECT_TRUE(!cfi.covered(-1, -1) && !cfi.covered(8, 8)) << "cfi_hors_region";
@@ -64,6 +64,7 @@ TEST(test_cf_interface, Runs) {
   // registre grossier sur l'interface (boite englobante crue de 1, clampee).
   FluxRegister ref(Box2D{{1, 1}, {6, 6}}, nc);
   cfi.route_reflux(g, dx, dy, dt, ref, nc);
+  device_fence();
 
   // bord gauche I0-1 = 1 (non couvert) : -(fL - cL*dt)/dx = -(10 - 1*2)/0.5 = -16.
   EXPECT_EQ(ref.at(1, 2, 0), -(Real(10) - Real(1) * dt) / dx) << "reflux_gauche";
@@ -79,10 +80,11 @@ TEST(test_cf_interface, Runs) {
   // [4..11]x[4..11] et [12..19]x[4..11] -> empreintes [2..5] et [6..9] en x. Le bord droit du
   // premier (I1+1 = 6) est alors couvert par le second.
   BoxArray two(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}, Box2D{{12, 4}, {19, 11}}});
-  CoarseFineInterface cfi2(Box2D{{0, 0}, {15, 7}}, two);
+  CoarseFineInterface cfi2(Box2D{{0, 0}, {15, 7}}, two, Periodicity{false, false});
   EXPECT_TRUE(cfi2.covered(6, 2)) << "cfi2_joint_couvert";
   FluxRegister ref2(Box2D{{1, 1}, {10, 6}}, nc);
   cfi2.route_reflux(g, dx, dy, dt, ref2, nc);  // g = premier patch (empreinte [2..5])
+  device_fence();
   EXPECT_EQ(ref2.at(6, 2, 0), Real(0)) << "reflux_joint_supprime";  // bord droit couvert -> rien
   EXPECT_EQ(ref2.at(1, 2, 0), -(Real(10) - Real(1) * dt) / dx) << "reflux_gauche_libre";  // libre
 }

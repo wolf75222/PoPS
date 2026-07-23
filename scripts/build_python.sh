@@ -68,6 +68,15 @@ fi
 conda activate "$ENV_NAME"
 echo "--- env '$ENV_NAME' active (CONDA_PREFIX=$CONDA_PREFIX) ---"
 
+# Conda's macOS OpenMPI wrappers remember the compiler used to build the package, which is not part
+# of this deliberately AppleClang-based environment.  OpenMPI's documented override keeps mpicc,
+# mpicxx and therefore h5pcc executable with the exact compiler used by PoPS.  Respect explicit
+# caller choices and leave Linux/toolchain-module wrappers untouched.
+if [[ "$(uname)" == "Darwin" ]]; then
+  export OMPI_CC="${OMPI_CC:-${CC:-/usr/bin/clang}}"
+  export OMPI_CXX="${OMPI_CXX:-${CXX:-/usr/bin/clang++}}"
+fi
+
 # --- heavy-TU pool: cores capped by RAM (each -O3 leaf peaks ~3-4 GB) --------------------------------
 ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -129,7 +138,20 @@ if [[ $WITH_MPI -eq 1 ]]; then
     export MPICH_CC="${MPICH_CC:-${CC:-/usr/bin/clang}}"
     export MPICH_CXX="${MPICH_CXX:-${CXX:-/usr/bin/clang++}}"
   fi
+  # Keep FindHDF5 inside the active environment.  Honour an explicit caller override byte-for-byte;
+  # otherwise a host hdf5-config.cmake (for example Homebrew) could preempt this env's h5pcc.
+  if [[ -z "${HDF5_ROOT+x}" ]]; then
+    export HDF5_ROOT="$CONDA_PREFIX"
+  fi
   echo "MPI backend: ON; native parallel HDF5: ON"
+  echo "HDF5 root: ${HDF5_ROOT:-<explicit empty override>}"
+else
+  # A build script invocation is a complete backend request, not an overlay on the caller's shell.
+  # Clear stale feature exports left by a preceding distributed build so the ordinary path cannot
+  # accidentally rebuild/install an MPI artifact and only discover the mismatch after installation.
+  export POPS_USE_MPI=OFF
+  export POPS_USE_HDF5=OFF
+  echo "MPI backend: OFF; native parallel HDF5: OFF"
 fi
 cd "$HERE"
 if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
@@ -184,8 +206,16 @@ fi
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
 # output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
 # verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH='' PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
+PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
+native_verify_args=()
+if [[ $WITH_MPI -eq 1 ]]; then
+  native_verify_args=(--expect-mpi --expect-parallel-hdf5)
+else
+  native_verify_args=(--expect-serial)
+fi
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
-PYTHONPATH='' PYTHONNOUSERSITE=1 \
+PYTHONPATH= PYTHONNOUSERSITE=1 \
   python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"

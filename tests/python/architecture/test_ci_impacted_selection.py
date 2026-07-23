@@ -318,7 +318,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 72
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 76
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -687,18 +687,33 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     ):
         assert python_control in python_filter
 
+    cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split(
+        "\n  # GATE C++", 1)[0]
     cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
         "\n  # Check historique", 1)[0]
+    assert "timeout-minutes: 22" in cpp_prewarm_block
+    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in cpp_prewarm_block
+    assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
+    assert "--contract-file" in cpp_prewarm_block
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in cpp_prewarm_block
+    assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in cpp_prewarm_block
+    assert 'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m' in cpp_prewarm_block
+    assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
     assert '--targets "${cpp_targets[@]}"' in cpp_shards_block
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"
     )
-    assert "timeout-minutes: 60" in cpp_shards_block
-    assert "timeout-minutes: 50" in cpp_shards_block
+    assert "timeout-minutes: 40" in cpp_shards_block
+    assert "timeout-minutes: 30" in cpp_shards_block
+    assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
+    assert "actions/download-artifact@v8" in cpp_shards_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in cpp_shards_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in cpp_shards_block
+    assert "--verify-contracts" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 38m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
@@ -720,9 +735,28 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "needs.mpi.result" in gate_block
     assert "needs.kokkos-openmp.result" in gate_block
 
+    mpi_prewarm_block = workflow.split("\n  gate-mpi-prewarm:\n", 1)[1].split(
+        "\n  # Agregation REQUISE", 1
+    )[0]
+    assert "runs-on: ubuntu-24.04" in mpi_prewarm_block
+    assert "timeout-minutes: 22" in mpi_prewarm_block
+    assert "needs: [set-mode, changes]" in mpi_prewarm_block
+    assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
+    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in mpi_prewarm_block
+    assert "cmake --preset ci-mpi" in mpi_prewarm_block
+    assert "scripts/ci_python_module_objects.py" in mpi_prewarm_block
+    assert "--contract-file" in mpi_prewarm_block
+    assert 'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m' in mpi_prewarm_block
+    assert "compression-level: 0" in mpi_prewarm_block
+
     mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  kokkos-openmp:\n", 1)[0]
-    assert "needs: [set-mode, changes]" in mpi_block
+    assert "needs: [set-mode, changes, gate-mpi-prewarm]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
+    assert "actions/download-artifact@v8" in mpi_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in mpi_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in mpi_block
+    assert "--verify-contracts" in mpi_block
+    assert "timeout --signal=TERM --kill-after=30s 18m" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
     assert "--label mpi" in mpi_block

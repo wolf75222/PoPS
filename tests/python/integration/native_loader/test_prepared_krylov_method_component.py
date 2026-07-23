@@ -316,7 +316,7 @@ def test_external_krylov_provider_compiles_and_executes_its_native_recurrence(
     compiled_model = _passive_model("external_krylov_block_model").compile(
         backend="production", include=repo_include(), cxx=default_cxx()
     )
-    simulation = System(n=8, L=1.0, periodic=True)
+    simulation = System(n=8, L=1.0, periodicity=(True, True))
     simulation.add_equation(
         "blk",
         compiled_model,

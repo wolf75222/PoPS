@@ -121,9 +121,9 @@ def _ab2_program(model, name="adc631_ckpt_ab2"):
 def _state3_program(model, name="adc631_ckpt_state3"):
     """A 3-slot STATE ring (max lag 2, Interval(2) -> stores slots {0,2}, replays slot 1).
 
-    The commit is a MARKOV forward-Euler recurrence U^{n+1} = U^n + dt*_C*U^n -- it depends ONLY on U^n,
-    not on the lagged slots -- so re-stepping from ANY seeded state reproduces the exact next state and
-    the deterministic replay reconstructs slot 1 BIT-FOR-BIT. The 3-slot ring is declared by a
+    The commit is the strictly affine recurrence U^{n+1} = U^n + dt*_C*U^n -- it depends only on U^n,
+    with no RHS/field/operator context -- so re-stepping from any seeded state reproduces the exact
+    next state and replay reconstructs slot 1 bit-for-bit. The 3-slot ring is declared by a
     zero-weight read of U.prev(2): it drives _histories to lag 2 (so Interval(2) selects the proper
     subset {0,2}) WITHOUT making the recurrence multi-term (a k-term recurrence would need k seed states,
     which the single-seed replay cannot supply -- the documented replay class). No phi / no flux, so the
@@ -131,26 +131,24 @@ def _state3_program(model, name="adc631_ckpt_state3"):
     P = pops.Program(name)
     _case, states = program_states(P, model, ("blk",))
     U = states["blk"]
-    rate = model.module.operator_handle("source_rate")
     P.keep_history(U, depth=2, checkpoint_policy=Interval(2))
-    # Markov forward-Euler on the linear source (reads U.n only), + a zero-weight prev(2) read that
-    # declares the 3-slot ring without breaking the single-step reconstructability of the replay.
+    # Strictly affine growth (reads U.n only), + a zero-weight prev(2) read that declares the 3-slot
+    # ring without breaking the single-step reconstructability of the replay.
     nxt = P.value(
-        "Un", U.n + P.dt * rate(U.n) + 0.0 * U.prev(2), at=U.next.point)
+        "Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(2), at=U.next.point)
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
 
 
 def _state5_program(model, name="adc631_ckpt_state5"):
-    """A 5-slot Markov ring with two independently replayed Interval(2) gaps."""
+    """A 5-slot strictly affine ring with two independently replayed Interval(2) gaps."""
     P = pops.Program(name)
     _case, states = program_states(P, model, ("blk",))
     U = states["blk"]
-    rate = model.module.operator_handle("source_rate")
     P.keep_history(U, depth=4, checkpoint_policy=Interval(2))
     nxt = P.value(
-        "Un", U.n + P.dt * rate(U.n) + 0.0 * U.prev(4), at=U.next.point)
+        "Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(4), at=U.next.point)
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P

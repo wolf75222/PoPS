@@ -542,7 +542,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // Same registry shape and token lengths, but different bytes: both facades reject uniformly.
   {
     const std::string token = rank == 0 ? "plan-rank-0" : "plan-rank-1";
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     install(system, "field-slot", token);
     require(bind_rejected(system));
   }
@@ -556,7 +556,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // A caller token is provenance, not an authority.  Equal slot/token bytes cannot hide a
   // rank-local difference in the resolved provider pack.
   {
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     install(system, "field-slot", "shared-plan", true, rank == 0 ? 1.0 : 2.0);
     require(bind_rejected(system));
   }
@@ -569,7 +569,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // The slot participates independently in the pair; an equal plan token cannot hide slot drift.
   {
     const std::string slot = rank == 0 ? "field-rank-0" : "field-rank-1";
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     install(system, slot, "shared-plan");
     require(bind_rejected(system));
   }
@@ -583,7 +583,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // Component length disagreement returns before the byte collective.
   {
     const std::string token = rank == 0 ? "x" : "plan-with-another-length";
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     install(system, "field-slot", token);
     require(bind_rejected(system));
   }
@@ -597,7 +597,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // A missing/extra plan agrees the pair count first. This is the case that deadlocked when the
   // setter itself was collective: rank 1 executes one more local setter than rank 0.
   {
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     install(system, "field-a", "plan-a");
     if (rank == 1)
       install(system, "field-b", "plan-b");
@@ -613,7 +613,7 @@ int run_field_plan_consensus(int argc, char** argv) {
 
   // Setter order is not semantic: std::map canonicalization produces the same two pairs.
   {
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     if (rank == 0) {
       install(system, "field-b", "plan-b");
       install(system, "field-a", "plan-a");
@@ -638,7 +638,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   // Duplicate slots are a local structural error, including byte-identical repeats; no collective
   // is entered and no partially overwritten plan survives.
   {
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     require(duplicate_rejected(system));
   }
   {
@@ -648,7 +648,7 @@ int run_field_plan_consensus(int argc, char** argv) {
 
   // Native finite/domain guards remain authoritative even if a caller bypasses Python schemas.
   {
-    System system(SystemConfig{16, 1.0, true});
+    System system(SystemConfig{16, 1.0, Periodicity{true, true}});
     bool rejected = false;
     try {
       system.register_configured_field_solver_provider(

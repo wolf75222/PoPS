@@ -78,3 +78,36 @@ TEST(test_fill_boundary, single_box_periodic_wraps) {
   EXPECT_EQ(f(-1, -1, 0), g(7, 7)) << "wrap_corner";
   EXPECT_EQ(f(8, 8, 0), g(0, 0)) << "wrap_corner2";
 }
+
+TEST(test_fill_boundary, periodic_halo_deeper_than_one_cell_domain) {
+  constexpr int ng = 5;
+  const Box2D dom = Box2D::from_extents(1, 1);
+  const BoxArray ba = BoxArray::from_domain(dom, 1);
+  ASSERT_EQ(ba.size(), 1);
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  mf.fab(0)(0, 0, 0) = 17.25;
+
+  fill_boundary(mf, dom, Periodicity{true, true});
+
+  const Fab2D& f = mf.fab(0);
+  const Box2D grown = dom.grow(ng);
+  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+      EXPECT_EQ(f(i, j, 0), 17.25) << "deep periodic ghost at (" << i << ", " << j << ")";
+}
+
+TEST(test_fill_boundary, deep_periodic_wrap_preserves_nonzero_index_origin) {
+  constexpr int ng = 4;
+  const Box2D dom{{-7, 11}, {-7, 11}};
+  const BoxArray ba(std::vector<Box2D>{dom});
+  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
+  mf.fab(0)(dom.lo[0], dom.lo[1], 0) = -3.75;
+
+  fill_boundary(mf, dom, Periodicity{true, true});
+
+  const Box2D grown = dom.grow(ng);
+  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+      EXPECT_EQ(mf.fab(0)(i, j, 0), -3.75)
+          << "deep periodic ghost at nonzero-origin index (" << i << ", " << j << ")";
+}

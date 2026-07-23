@@ -1,6 +1,8 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/coupling/base/elliptic_rhs.hpp>
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>  // PolarGeometry
 #include <pops/mesh/storage/multifab.hpp>
@@ -8,6 +10,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/operators/polar_operator.hpp>  // assemble_rhs_polar (REUSED verbatim)
+#include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (core RK math)
 #include <pops/parallel/comm.hpp>          // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
@@ -177,51 +180,23 @@ struct PolarRhsInto {
 };
 
 /// Max wave-speed functor of the POLAR block: reduction over the valid cells of
-/// max_wave_speed(model, U, aux) in both directions (r, theta). Pure HOST loop (no device kernel)
-/// -- the polar speed comes from the aux (grad_r, grad_theta) already host-resident after
-/// solve_fields; that is enough for the CFL step. Counterpart of cartesian detail::MaxSpeed.
+/// max_wave_speed(model, U, aux) in both directions (r, theta), reduced on the configured Kokkos
+/// backend and then collectively across MPI ranks. Counterpart of cartesian detail::MaxSpeed.
 template <class Model>
 struct PolarMaxSpeed {
   Model m;
   const MultiFab* aux;
-  Real operator()(const MultiFab& U) const {
-    Real wmax = Real(0);
-    for (int li = 0; li < U.local_size(); ++li) {
-      const ConstArray4 u = U.fab(li).const_array();
-      const ConstArray4 a = aux->fab(li).const_array();
-      const Box2D v = U.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          const typename Model::State us = load_state<Model>(u, i, j);
-          const Aux ac = load_aux<aux_comps<Model>()>(a, i, j);
-          for (int dir = 0; dir < 2; ++dir) {
-            const Real w = m.max_wave_speed(us, ac, dir);
-            if (w > wmax)
-              wmax = w;
-          }
-        }
-    }
-    return static_cast<Real>(all_reduce_max(static_cast<double>(wmax)));
-  }
+  Real operator()(const MultiFab& U) const { return max_wave_speed_mf(m, U, *aux); }
 };
 
-/// POLAR Poisson contribution functor: rhs += elliptic_rhs(U) (pure HOST loop). IDENTICAL to the
+/// POLAR Poisson contribution functor: rhs += elliptic_rhs(U) on Kokkos. IDENTICAL to the
 /// cartesian detail::PoissonRhs: the elliptic brick (charge q n) carries no geometry; the polar
 /// metric (volume r dr dtheta) is carried by the PolarPoissonSolver solver, not by the per-cell
 /// pointwise RHS (the solver expects f as-is, like the cartesian FFT solver).
 template <class Model>
 struct PolarPoissonRhs {
   Model m;
-  void operator()(const MultiFab& U, MultiFab& rhs) const {
-    for (int li = 0; li < rhs.local_size(); ++li) {
-      Array4 r = rhs.fab(li).array();
-      const ConstArray4 u = U.fab(li).const_array();
-      const Box2D b = rhs.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          r(i, j) += m.elliptic_rhs(load_state<Model>(u, i, j));
-    }
-  }
+  void operator()(const MultiFab& U, MultiFab& rhs) const { add_model_elliptic_rhs(m, U, rhs); }
 };
 
 }  // namespace detail
@@ -234,36 +209,52 @@ struct PolarPoissonRhs {
 /// We thus NEVER read a radial index out of domain: the radial derivative is CENTERED in the interior and
 /// one-sided second order at both walls (i = lo: forward; i = hi: backward), without touching phi(lo-1) /
 /// phi(hi+1). In theta (PERIODIC) we wrap the index (j-1 -> jhi, j+1 -> jlo) instead of reading the
-/// nonexistent azimuthal ghost. Pure HOST loop (phi host-resident after solve()). Does NOT fill the ghosts of
-/// the aux: the caller does it AFTER (fill_ghosts: theta periodic, r physical) for the transport.
+/// nonexistent azimuthal ghost. A named Kokkos kernel keeps the solve/postprocess path on the selected
+/// backend. It does NOT fill aux ghosts: the caller does that afterwards (theta periodic, r physical).
 /// PRECONDITION nr >= 3 (the one-sided second-order stencil reads p(i+2)/p(i-2) at the walls): IMPOSED
 /// upstream by check_geometry (python/system.cpp) and pops.mesh.PolarMesh (nr >= 3), not merely assumed.
+struct DerivePolarAuxKernel {
+  ConstArray4 phi;
+  Array4 aux;
+  PolarGeometry geometry;
+  int ilo = 0;
+  int ihi = -1;
+  int jlo = 0;
+  int jhi = -1;
+
+  POPS_HD void operator()(int i, int j) const {
+    const int jm = (j == jlo) ? jhi : j - 1;
+    const int jp = (j == jhi) ? jlo : j + 1;
+    const Real dr = geometry.dr();
+    aux(i, j, 0) = phi(i, j);
+    if (i == ilo)
+      aux(i, j, 1) =
+          (Real(-3) * phi(i, j) + Real(4) * phi(i + 1, j) - phi(i + 2, j)) /
+          (Real(2) * dr);
+    else if (i == ihi)
+      aux(i, j, 1) =
+          (Real(3) * phi(i, j) - Real(4) * phi(i - 1, j) + phi(i - 2, j)) /
+          (Real(2) * dr);
+    else
+      aux(i, j, 1) = (phi(i + 1, j) - phi(i - 1, j)) / (Real(2) * dr);
+    aux(i, j, 2) = (phi(i, jp) - phi(i, jm)) /
+                   (Real(2) * geometry.dtheta() * geometry.r_cell(i));
+  }
+};
+
 inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeometry& g) {
-  const Real dr = g.dr(), dth = g.dtheta();
+  if (phi.box_array().boxes() != aux.box_array().boxes() ||
+      phi.dmap().ranks() != aux.dmap().ranks() || phi.box_array().size() != 1 ||
+      phi.box_array()[0] != g.domain || phi.ncomp() != 1 || aux.ncomp() < 3)
+    throw std::invalid_argument(
+        "derive_aux_polar requires one exact-domain scalar potential and co-distributed "
+        "three-component aux");
+  if (g.domain.nx() < 3 || g.domain.ny() < 2)
+    throw std::invalid_argument("derive_aux_polar requires nr >= 3 and ntheta >= 2");
   for (int li = 0; li < aux.local_size(); ++li) {
-    const ConstArray4 p = phi.fab(li).const_array();
-    Array4 a = aux.fab(li).array();
     const Box2D v = aux.box(li);
-    const int ilo = v.lo[0], ihi = v.hi[0], jlo = v.lo[1], jhi = v.hi[1];
-    for (int j = jlo; j <= jhi; ++j) {
-      const int jm = (j == jlo) ? jhi : j - 1;  // theta periodic: index wrap (no ghost)
-      const int jp = (j == jhi) ? jlo : j + 1;
-      for (int i = ilo; i <= ihi; ++i) {
-        const Real ri = g.r_cell(i);
-        a(i, j, 0) = p(i, j);
-        Real
-            gr;  // grad_r = d phi/dr: centered in the interior, one-sided second order at the walls (phi without ghost in r)
-        if (i == ilo)
-          gr = (Real(-3) * p(i, j) + Real(4) * p(i + 1, j) - p(i + 2, j)) / (Real(2) * dr);
-        else if (i == ihi)
-          gr = (Real(3) * p(i, j) - Real(4) * p(i - 1, j) + p(i - 2, j)) / (Real(2) * dr);
-        else
-          gr = (p(i + 1, j) - p(i - 1, j)) / (Real(2) * dr);
-        a(i, j, 1) = gr;
-        a(i, j, 2) = (p(i, jp) - p(i, jm)) /
-                     (Real(2) * dth * ri);  // grad_theta = (1/r) d phi/d theta (already /r)
-      }
-    }
+    for_each_cell(v, DerivePolarAuxKernel{phi.fab(li).const_array(), aux.fab(li).array(), g,
+                                          v.lo[0], v.hi[0], v.lo[1], v.hi[1]});
   }
 }
 
@@ -424,7 +415,7 @@ std::function<Real(const MultiFab&)> make_stability_dt_polar(const Model& m, con
     return {};
 }
 
-/// Block contribution to the POLAR Poisson right-hand side: rhs += elliptic_rhs(U) (host loop).
+/// Block contribution to the POLAR Poisson right-hand side: rhs += elliptic_rhs(U) on Kokkos.
 template <class Model>
 std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs_polar(const Model& m) {
   return detail::PolarPoissonRhs<Model>{m};

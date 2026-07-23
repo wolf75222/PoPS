@@ -90,6 +90,8 @@ struct AmrBlockBuildArgs {
   bool newton_diagnostics;
   int time_method;  // stable AmrTimeMethod wire: 0=euler, 1=ssprk3, 2=ssprk2
   double pos_floor;
+  double weno_epsilon;
+  bool wave_speed_cache;
 };
 
 /// VERBATIM build_multi visitor body with the transport pinned: resolve the partial IMEX mask against the
@@ -106,7 +108,8 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
     const AmrTimeMethod tmethod = amr_time_method_from_wire(a.time_method);
     out = dispatch_amr_block(m, a.limiter, a.riemann, S, a.name, a.density, a.has_density, a.gamma,
                              a.substeps, a.recon_prim, a.imex, a.stride, impl_components, a.newton,
-                             a.state, a.newton_diagnostics, tmethod, a.pos_floor);
+                             a.state, a.newton_diagnostics, tmethod, a.pos_floor, a.weno_epsilon,
+                             a.wave_speed_cache);
   });
   return out;
 }

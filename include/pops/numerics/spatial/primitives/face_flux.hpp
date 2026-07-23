@@ -19,6 +19,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/primitives/positivity.hpp>
@@ -28,41 +29,97 @@
 
 namespace pops {
 
+namespace detail {
+
+/// Device-callable view of one conservative component along the oriented reconstruction line.
+/// The policy chooses every integer offset; this adapter alone translates it into mesh indices.
+/// It is a trivially copyable kernel value and performs no allocation or host/device transfer.
+struct ConservativeStencilSampler {
+  ConstArray4 values;
+  int i;
+  int j;
+  int direction;
+  int orientation;
+  int component;
+
+  POPS_HD Real operator()(int offset) const {
+    const int displacement = orientation * offset;
+    return direction == 0 ? values(i + displacement, j, component)
+                          : values(i, j + displacement, component);
+  }
+};
+
+/// Fixed-capacity, kernel-stack cache for primitive states.  Capacity comes from the storage
+/// contract, while the policy's independent envelope controls which offsets are materialized.
+/// Each requested state is converted exactly once, not once per component.
+template <class Model, class Reconstruction>
+struct PrimitiveStencilCache {
+  static_assert(stencil_envelope_fits_storage<Reconstruction>,
+                "sampled reconstruction offsets exceed the declared ghost-storage capacity");
+  static constexpr int radius = Reconstruction::n_ghost - 1;
+  static constexpr int capacity = radius > 0 ? 2 * radius + 1 : 1;
+  typename Model::Prim values[capacity]{};
+
+  POPS_HD typename Model::Prim& at(int offset) { return values[offset + radius]; }
+};
+
+template <class Model, class Reconstruction>
+struct CachedPrimitiveComponentSampler {
+  const PrimitiveStencilCache<Model, Reconstruction>* cache;
+  int component;
+
+  POPS_HD Real operator()(int offset) const {
+    return cache->values[offset + PrimitiveStencilCache<Model, Reconstruction>::radius][component];
+  }
+};
+
+}  // namespace detail
+
 /// reconstruct<Model,Limiter>: face value at (i,j) extrapolated in direction dir.
 ///
 /// sgn = +1 -> +dir face of (i,j); sgn = -1 -> -dir face. Reconstructs in PRIMITIVE
 /// variables if prim == true AND if Model exposes HasPrimitiveVars (positivity of rho and p
 /// for Euler); otherwise in conservative variables. The returned state is ALWAYS conservative.
-/// NoSlope (n_ghost == 1): zero slope, prim has no effect -- pure conservative path.
+/// The reconstruction policy selects its pointwise algorithm through one explicit protocol;
+/// n_ghost is used only to validate the storage envelope.
 /// INVARIANT: POINTWISE function, does NOT loop over the grid. POPS_HD.
 template <class Model, class Limiter>
 POPS_HD inline typename Model::State reconstruct(const Model& model, const ConstArray4& u, int i,
                                                  int j, int dir, Real sgn, const Limiter& lim,
                                                  bool prim) {
-  if constexpr (HasPrimitiveVars<Model> && Limiter::n_ghost >= 2) {
+  static_assert(
+      ReconstructionPolicy<Limiter>,
+      "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
+      "exactly one pointwise protocol");
+  static_assert(stencil_envelope_fits_storage<Limiter>,
+                "sampled reconstruction offsets exceed Limiter::n_ghost storage capacity");
+  if constexpr (HasPrimitiveVars<Model> && !CellValueReconstruction<Limiter>) {
     if (prim) {  // convert the stencil U->P, limit on P, convert back P->U
       using Prim = typename Model::Prim;
-      const Prim P0 = model.to_primitive(load_state<Model>(u, i, j));
       Prim Pf{};
-      if constexpr (Limiter::n_ghost == 2) {
+      if constexpr (SlopeReconstruction<Limiter>) {
+        const Prim P0 = model.to_primitive(load_state<Model>(u, i, j));
         const Prim Pm =
             model.to_primitive(load_state<Model>(u, dir == 0 ? i - 1 : i, dir == 0 ? j : j - 1));
         const Prim Pp =
             model.to_primitive(load_state<Model>(u, dir == 0 ? i + 1 : i, dir == 0 ? j : j + 1));
         for (int c = 0; c < Model::n_vars; ++c)
-          Pf[c] = P0[c] + sgn * Real(0.5) * lim(P0[c] - Pm[c], Pp[c] - P0[c]);
-      } else {  // WENO5 on the 5-point stencil in primitive variables
-        const int d = (sgn > Real(0)) ? 1 : -1;
-        const Prim Pm2 = model.to_primitive(
-            load_state<Model>(u, dir == 0 ? i - 2 * d : i, dir == 0 ? j : j - 2 * d));
-        const Prim Pm1 =
-            model.to_primitive(load_state<Model>(u, dir == 0 ? i - d : i, dir == 0 ? j : j - d));
-        const Prim Pp1 =
-            model.to_primitive(load_state<Model>(u, dir == 0 ? i + d : i, dir == 0 ? j : j + d));
-        const Prim Pp2 = model.to_primitive(
-            load_state<Model>(u, dir == 0 ? i + 2 * d : i, dir == 0 ? j : j + 2 * d));
-        for (int c = 0; c < Model::n_vars; ++c)
-          Pf[c] = weno5z(Pm2[c], Pm1[c], P0[c], Pp1[c], Pp2[c], lim.eps);
+          Pf[c] =
+              P0[c] + sgn * Real(0.5) * lim.limited_slope(P0[c] - Pm[c], Pp[c] - P0[c]);
+      } else if constexpr (StencilReconstruction<Limiter>) {
+        const int orientation = (sgn > Real(0)) ? 1 : -1;
+        detail::PrimitiveStencilCache<Model, Limiter> cache{};
+        for (int offset = Limiter::stencil_min_offset; offset <= Limiter::stencil_max_offset;
+             ++offset) {
+          const int displacement = orientation * offset;
+          const auto state = load_state<Model>(u, dir == 0 ? i + displacement : i,
+                                               dir == 0 ? j : j + displacement);
+          cache.at(offset) = model.to_primitive(state);
+        }
+        for (int c = 0; c < Model::n_vars; ++c) {
+          const detail::CachedPrimitiveComponentSampler<Model, Limiter> sample{&cache, c};
+          Pf[c] = lim.stencil_face_value(sample);
+        }
       }
       return model.to_conservative(Pf);
     }
@@ -70,25 +127,23 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
   (void)model;
   (void)prim;
   typename Model::State s = load_state<Model>(u, i, j);
-  if constexpr (Limiter::n_ghost == 2) {
+  if constexpr (CellValueReconstruction<Limiter>) {
+    for (int c = 0; c < Model::n_vars; ++c)
+      s[c] = lim.cell_face_value(s[c]);
+  } else if constexpr (SlopeReconstruction<Limiter>) {
     // MUSCL: per-component limited slope (order 2).
     for (int c = 0; c < Model::n_vars; ++c) {
       const Real am = (dir == 0) ? u(i, j, c) - u(i - 1, j, c) : u(i, j, c) - u(i, j - 1, c);
       const Real ap = (dir == 0) ? u(i + 1, j, c) - u(i, j, c) : u(i, j + 1, c) - u(i, j, c);
-      s[c] += sgn * Real(0.5) * lim(am, ap);
+      s[c] += sgn * Real(0.5) * lim.limited_slope(am, ap);
     }
-  } else if constexpr (Limiter::n_ghost >= 3) {
-    // WENO5 (order 5): face value from a 5-point stencil oriented by sgn
-    // (sgn>0 -> +dir face; sgn<0 -> -dir face, reversed stencil). lim unused.
-    (void)lim;
-    const int d = (sgn > Real(0)) ? 1 : -1;
+  } else if constexpr (StencilReconstruction<Limiter>) {
+    // Generic sampled reconstruction (sgn<0 reverses the sampler orientation).  The policy, not
+    // the operator, chooses how many values to read and at which offsets.
+    const int orientation = (sgn > Real(0)) ? 1 : -1;
     for (int c = 0; c < Model::n_vars; ++c) {
-      if (dir == 0)
-        s[c] = weno5z(u(i - 2 * d, j, c), u(i - d, j, c), u(i, j, c), u(i + d, j, c),
-                      u(i + 2 * d, j, c), lim.eps);
-      else
-        s[c] = weno5z(u(i, j - 2 * d, c), u(i, j - d, c), u(i, j, c), u(i, j + d, c),
-                      u(i, j + 2 * d, c), lim.eps);
+      const detail::ConservativeStencilSampler sample{u, i, j, dir, orientation, c};
+      s[c] = lim.stencil_face_value(sample);
     }
   }
   return s;
@@ -119,6 +174,12 @@ namespace detail {
 /// ghosts that size the stencil.
 template <class Limiter>
 inline void require_reconstruction_ghosts(const MultiFab& U) {
+  static_assert(
+      ReconstructionPolicy<Limiter>,
+      "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
+      "exactly one pointwise protocol");
+  static_assert(stencil_envelope_fits_storage<Limiter>,
+                "sampled reconstruction offsets exceed Limiter::n_ghost storage capacity");
   if (U.n_grow() < Limiter::n_ghost)
     throw std::runtime_error(
         "spatial operator: the state must carry at least Limiter::n_ghost ghost layers "
@@ -156,7 +217,8 @@ struct FaceFluxXKernel {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const auto L =
         reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
@@ -164,6 +226,7 @@ struct FaceFluxXKernel {
     const FaceContext face = FaceContext::axis_aligned(0);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fx(i, j, c) = F[c];
@@ -172,6 +235,9 @@ struct FaceFluxXKernel {
       for (int c = 0; c < Model::n_vars; ++c)
         fx(i, j, c) += -nu * (u(i, j, c) - u(i - 1, j, c)) / dx;
     }
+    if (evaluation.succeeded())
+      for (int c = 0; c < Model::n_vars; ++c)
+        failures.record_nonfinite(fx(i, j, c), failure);
   }
 };
 /// FaceFluxYKernel: device kernel for the flux at the y face (between j-1 and j).
@@ -188,7 +254,8 @@ struct FaceFluxYKernel {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const auto L =
         reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
@@ -196,6 +263,7 @@ struct FaceFluxYKernel {
     const FaceContext face = FaceContext::axis_aligned(1);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fy(i, j, c) = F[c];
@@ -204,6 +272,9 @@ struct FaceFluxYKernel {
       for (int c = 0; c < Model::n_vars; ++c)
         fy(i, j, c) += -nu * (u(i, j, c) - u(i, j - 1, c)) / dy;
     }
+    if (evaluation.succeeded())
+      for (int c = 0; c < Model::n_vars; ++c)
+        failures.record_nonfinite(fy(i, j, c), failure);
   }
 };
 }  // namespace detail
@@ -240,24 +311,28 @@ struct FaceFluxYKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& aux, MultiFab& Fx,
                          MultiFab& Fy, Real dx = 0, Real dy = 0, bool recon_prim = false,
-                         Real pos_floor = Real(0)) {
+                         Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon) {
   detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
-  const Limiter lim{};
+  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
   const NumericalFlux nflux{};
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
+  FluxEvaluationTracker failures{process_world_flux_collective};
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     Array4 fx = Fx.fab(li).array();
     Array4 fy = Fy.fab(li).array();
     const Box2D v = U.box(li);
-    for_each_cell(xface_box(v),
-                  detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
-                      model, u, ax, fx, dx, lim, nflux, recon_prim, pos_floor, pos_comp});
-    for_each_cell(yface_box(v),
-                  detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
-                      model, u, ax, fy, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
+    failures.merge(reduce_max_uint64_cell(
+        xface_box(v), detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
+                          model, u, ax, fx, dx, lim, nflux, recon_prim, pos_floor, pos_comp,
+                          failures.recorder()}));
+    failures.merge(reduce_max_uint64_cell(
+        yface_box(v), detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
+                          model, u, ax, fy, dy, lim, nflux, recon_prim, pos_floor, pos_comp,
+                          failures.recorder()}));
   }
+  failures.throw_if_failed("compute_face_fluxes");
 }
 
 }  // namespace pops

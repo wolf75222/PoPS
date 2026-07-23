@@ -54,7 +54,7 @@ def test_two_model_program_emits_each_models_own_source_kernel():
 
     assert source.count('ctx.require_cartesian_generated_operator(') == 2
     assert source.index('ctx.require_cartesian_generated_operator(') < source.index(
-        'ctx.rhs_scratch_like('
+        'ctx.rhs_scratch('
     )
     assert "first_physics" in source and "second_physics" in source
     assert "pops::Real(-2) * u" in source

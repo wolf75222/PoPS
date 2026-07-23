@@ -57,14 +57,14 @@ def _model_pressure():
     return m
 
 
-def _compiled(*, wave_speeds=True, wave_speed_provider="explicit_pair", n_vars=2):
+def _compiled(*, wave_speeds=True, wave_speed_provider="explicit_pair", n_vars=2, hllc=False):
     """A REAL detached CompiledModel (no .so) with authenticated provider metadata."""
     cons = ["w1", "w2", "w3"][:n_vars]
     c = CompiledModel(
         so_path="/no/such/pops-ws-provider.so", backend="production",
         cons_names=cons, cons_roles=["custom"] * n_vars, prim_names=[], n_vars=n_vars, gamma=1.4,
         n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="mh",
-        cxx="c++", std="c++23", wave_speeds=wave_speeds,
+        cxx="c++", std="c++23", wave_speeds=wave_speeds, hllc=hllc,
         wave_speed_provider=(wave_speed_provider if wave_speeds else None), target="system")
     return c
 
@@ -220,8 +220,81 @@ def test_no_silent_flux_swap_on_missing_wave_speeds():
     spatial = engine.Spatial(limiter=FirstOrder(), flux=HLL())
     assert spatial.flux == "hll"  # the descriptor stays HLL, no silent swap
     with pytest.raises(ValueError, match="wave_speeds"):
-        System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+        System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
             _compiled(wave_speeds=False), spatial)
+
+
+def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
+    from pops.descriptors import BrickDescriptor
+
+    authority = {
+        "library_path": "/tmp/external-riemann.so",
+        "library_sha256": "0" * 64,
+        "abi_version": 2,
+        "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+        "native_abi_key": "host-native-abi",
+        "supported_layouts": ("uniform", "amr"),
+        "model_identity": "compiled-model-hash",
+    }
+
+    required = BrickDescriptor(
+        "acme.self_describing_flux", "external_cpp", category="riemann",
+        native_id="acme_flux", scheme="user",
+        requirements={"capabilities": ["wave_speeds"]},
+        options=authority,
+    )
+    spatial = engine.Spatial(flux=required)
+    assert spatial.flux == "user"
+    assert spatial.riemann_capability_contract.requires("wave_speeds")
+    with pytest.raises(ValueError, match="requires signed wave speeds"):
+        System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
+            _compiled(wave_speeds=False), spatial)
+    System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
+        _compiled(wave_speeds=True), spatial)
+
+    # A misleading external id cannot activate the gate: only the explicit capability contract can.
+    self_contained = BrickDescriptor(
+        "hll", "external_cpp", category="riemann",
+        native_id="acme_self_contained", scheme="user",
+        options=authority,
+    )
+    System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
+        _compiled(wave_speeds=False), engine.Spatial(flux=self_contained))
+
+
+def test_external_flux_reuses_standard_model_predicates_without_a_route_name():
+    from pops.descriptors import BrickDescriptor
+
+    external = BrickDescriptor(
+        "acme.contact_resolving", "external_cpp", category="riemann",
+        native_id="acme_contact_flux", scheme="user",
+        requirements={"capabilities": ["hllc_star_state"]},
+        options={
+            "library_path": "/tmp/external-riemann.so",
+            "library_sha256": "0" * 64,
+            "abi_version": 2,
+            "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+            "native_abi_key": "host-native-abi",
+            "supported_layouts": ("uniform", "amr"),
+            "model_identity": "compiled-model-hash",
+        },
+    )
+    spatial = engine.Spatial(flux=external)
+    with pytest.raises(ValueError, match="hllc_star_state"):
+        System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
+            _compiled(hllc=False), spatial)
+    System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
+        _compiled(hllc=True), spatial)
+
+
+def test_riemann_availability_reports_only_capabilities_the_model_actually_lacks():
+    from pops.numerics import riemann
+
+    model = _compiled(wave_speeds=True, hllc=False)
+    availability = riemann.available(riemann.HLLC(), {"compiled": model})
+
+    assert availability.status == "no"
+    assert availability.missing == ["hllc_star_state"]
 
 
 if __name__ == "__main__":

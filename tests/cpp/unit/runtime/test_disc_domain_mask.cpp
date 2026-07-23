@@ -237,7 +237,10 @@ TEST_F(DiscDomainMask, NonFiniteRoeCannotReachMaskedStateOrAmrFaceLedger) {
 
   MultiFab flux_x(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 1, 0);
   MultiFab flux_y(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 1, 0);
-  compute_face_fluxes<NoSlope, RoeFlux>(failed_roe, U, aux, flux_x, flux_y, geom.dx(), geom.dy());
-  EXPECT_THROW(mf_eval_rhs(failed_roe, U, aux, flux_x, flux_y, geom.dx(), geom.dy(), residual),
-               std::runtime_error);
+  // Face materialisation is itself the conservation-ledger publication boundary: a failed
+  // provider must be rejected there, not encoded as NaN and discovered only by a later divergence.
+  EXPECT_THROW(
+      (compute_face_fluxes<NoSlope, RoeFlux>(failed_roe, U, aux, flux_x, flux_y, geom.dx(),
+                                             geom.dy())),
+      FluxEvaluationFailure);
 }

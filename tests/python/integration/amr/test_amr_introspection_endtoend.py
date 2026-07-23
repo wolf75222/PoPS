@@ -36,6 +36,9 @@ from pops.layouts import Uniform  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
+from tests.python.support.native_execution_context import (  # noqa: E402
+    artifact_execution_context,
+)
 from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
 
 
@@ -51,7 +54,8 @@ def _amr_metadata_fixture():
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1,
         params={"alpha": alpha},
-        caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
+        caps={"cpu": True, "amr": True, "mpi": True},
+        abi_key=pops._pops.abi_key(), model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
     resolved = resolved_amr_plan(
@@ -75,6 +79,7 @@ def _amr_metadata_fixture():
         instances={"ne": {"model": handle, "spatial": resolved.blocks[0].spatial}},
         params=schema.resolve_bind({}, compile_values=resolved.compile_values),
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
     install.verify()
     return artifact
@@ -121,7 +126,7 @@ def test_static_metadata_inspection_surfaces_the_carried_refine_regrid_tags():
 
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
-    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
+    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
                                    engine.BackgroundDensity(alpha=1.0, n0=1.0)),

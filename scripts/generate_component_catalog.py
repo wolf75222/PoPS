@@ -149,7 +149,8 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             raise CatalogError(
                 f"unsupported native component {label} ABI version")
     tagging = _exact(data["tagging_program_abi"], {
-        "version", "leaf_opcodes", "logical_opcodes", "candidate_outputs",
+        "version", "execution_modes", "collective_scopes", "memory_spaces", "leaf_opcodes", "logical_opcodes",
+        "candidate_outputs",
         "indicator_stencil_routes", "maximum_stencil_terms",
         "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
     }, "tagging_program_abi")
@@ -159,6 +160,16 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
     if tagging["non_finite_policy"] != "reject":
         raise CatalogError(
             "tagging_program_abi v1 requires fail-closed non-finite rejection")
+    execution_modes = tagging["execution_modes"]
+    if execution_modes != {"native_backend": 1, "host": 2}:
+        raise CatalogError(
+            "tagging_program_abi execution_modes must be the canonical v2 executor mapping")
+    if tagging["collective_scopes"] != {"none": 0}:
+        raise CatalogError(
+            "tagging_program_abi collective_scopes must forbid component collectives")
+    if tagging["memory_spaces"] != ["host", "managed", "device"]:
+        raise CatalogError(
+            "tagging_program_abi memory_spaces must be the canonical component ABI spaces")
     opcode_ids: set[int] = set()
     for family in ("leaf_opcodes", "logical_opcodes"):
         values = tagging[family]
@@ -419,7 +430,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                 raise CatalogError(f"{name}.{token}.metadata must be an object")
             metadata_fields = {
                 "riemann": {"needs_wave_speeds", "needs_hllc_struct", "needs_roe_diss", "polar_ok"},
-                "limiter": {"n_ghost"},
+                "limiter": {"n_ghost", "formal_order", "muscl_compatible"},
                 "transport": {"n_vars", "polar_ok", "parameters", "summary"},
                 "source": {"min_vars", "parameters", "summary"},
                 "elliptic": {"parameters", "summary"},
@@ -427,14 +438,17 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             _exact(route["metadata"], metadata_fields, f"{name}.{token}.metadata")
             if "parameters" in route["metadata"]:
                 _strings(route["metadata"]["parameters"], f"{name}.{token}.metadata.parameters")
-            for key in ("n_ghost", "n_vars", "min_vars"):
+            for key in ("n_ghost", "formal_order", "n_vars", "min_vars"):
                 if key in route["metadata"] and (
                     isinstance(route["metadata"][key], bool)
                     or not isinstance(route["metadata"][key], int)
                     or route["metadata"][key] < 1
                 ):
                     raise CatalogError(f"{name}.{token}.metadata.{key} must be an integer >= 1")
-            for key in ("polar_ok", "needs_wave_speeds", "needs_hllc_struct", "needs_roe_diss"):
+            for key in (
+                "polar_ok", "needs_wave_speeds", "needs_hllc_struct", "needs_roe_diss",
+                "muscl_compatible",
+            ):
                 if key in route["metadata"] and not isinstance(route["metadata"][key], bool):
                     raise CatalogError(f"{name}.{token}.metadata.{key} must be boolean")
             if "summary" in route["metadata"] and (
@@ -612,6 +626,14 @@ def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
         "case POPS_TAGGING_%s_V1:" % name.upper()
         for name in tagging["logical_opcodes"]
     )
+    tagging_execution_mode_rows = "\n".join(
+        "  POPS_TAGGER_EXECUTION_%s_V2 = %d," % (name.upper(), value)
+        for name, value in tagging["execution_modes"].items()
+    ).rstrip(",")
+    tagging_collective_scope_rows = "\n".join(
+        "  POPS_TAGGER_COLLECTIVE_%s_V2 = %d," % (name.upper(), value)
+        for name, value in tagging["collective_scopes"].items()
+    ).rstrip(",")
     tagging_stencil_route_rows = "\n".join(
         '#define POPS_TAGGING_STENCIL_ROUTE_%s "%s"'
         % (route.upper(), route)
@@ -784,6 +806,7 @@ typedef enum PopsPrecisionV1 {{
   POPS_PRECISION_FLOAT32_V1 = 3,
   POPS_PRECISION_FLOAT64_V1 = 4
 }} PopsPrecisionV1;
+#define POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 "pops::execution::noncollective"
 typedef struct PopsExecutionContextV1 {{
   uint32_t struct_size;
   uint32_t context_version;
@@ -978,8 +1001,23 @@ typedef struct PopsTaggingProgramV1 {{
   int32_t conflict_policy;
   int32_t non_finite_policy;
 }} PopsTaggingProgramV1;
-typedef struct PopsTaggerRequestV1 {{
+typedef enum PopsTaggerExecutionModeV2 {{
+{tagging_execution_mode_rows}
+}} PopsTaggerExecutionModeV2;
+typedef enum PopsTaggerCollectiveScopeV2 {{
+{tagging_collective_scope_rows}
+}} PopsTaggerCollectiveScopeV2;
+typedef struct PopsTaggerMaskViewV2 {{
   uint32_t struct_size;
+  uint8_t* data;
+  size_t size;
+  PopsMemorySpaceV1 memory_space;
+  PopsFieldOwnershipV1 ownership;
+}} PopsTaggerMaskViewV2;
+typedef struct PopsTaggerRequestV2 {{
+  uint32_t struct_size;
+  PopsTaggerExecutionModeV2 execution_mode;
+  PopsTaggerCollectiveScopeV2 collective_scope;
   size_t state_count;
   const PopsQualifiedConstFieldV1* states;
   PopsTaggingProgramV1 program;
@@ -988,18 +1026,23 @@ typedef struct PopsTaggerRequestV1 {{
   int64_t domain_upper[3];
   double cell_size[3];
   uint32_t periodic_axes;
-  PopsByteViewV1 refine_candidates;
-  PopsByteViewV1 coarsen_candidates;
-  PopsByteViewV1 refine_equalities;
-  PopsByteViewV1 coarsen_equalities;
+  PopsTaggerMaskViewV2 refine_candidates;
+  PopsTaggerMaskViewV2 coarsen_candidates;
+  PopsTaggerMaskViewV2 refine_equalities;
+  PopsTaggerMaskViewV2 coarsen_equalities;
   PopsLogicalTimeV1 logical_time;
   PopsExecutionContextV1 execution;
-}} PopsTaggerRequestV1;
-typedef int32_t (*PopsTagBatchFnV1)(void*, const PopsTaggerRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsTaggerApiV1 {{
+}} PopsTaggerRequestV2;
+// Tagger callbacks are strictly patch-local and noncollective. The execution context deliberately
+// carries no communicator authority; MPI failure consensus and mask reductions remain runtime-only.
+// Native-backend callbacks must complete every mask write on the supplied execution stream before
+// returning. Host callbacks are synchronous. The runtime stages fields only for the explicit host
+// mode; native mode receives the runtime-owned field allocation directly.
+typedef int32_t (*PopsTagBatchFnV2)(void*, const PopsTaggerRequestV2*, PopsComponentStatusV1*);
+typedef struct PopsTaggerApiV2 {{
   PopsComponentTableHeaderV1 header;
-  PopsTagBatchFnV1 tag_batch;
-}} PopsTaggerApiV1;
+  PopsTagBatchFnV2 tag_batch;
+}} PopsTaggerApiV2;
 
 typedef struct PopsClusteringRequestV1 {{
   uint32_t struct_size;

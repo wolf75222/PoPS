@@ -7,8 +7,10 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>  // PolarGeometry
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/spatial/primitives/finite.hpp>
 #include <pops/numerics/spatial_operator.hpp>  // reconstruct<>, load_state/load_aux (REUSED verbatim)
 
 #include <concepts>
@@ -112,7 +114,8 @@ struct PolarFaceFluxRKernel {
   Model model;
   ConstArray4 u, ax;
   Array4 fr;       // output: r_face(i) * Fr at the radial face i (ncomp components)
-  Real r_min, dr;  // radial geometry (r_face(i) = r_min + i*dr)
+  Real r_min, dr;
+  int radial_index_origin;
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
@@ -127,8 +130,9 @@ struct PolarFaceFluxRKernel {
       i_hi_face;  // FACE indices of physical boundaries (lo and hi+1); ignored if !wall_radial
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  POPS_HD void operator()(int i, int j) const {
-    const Real rf = r_min + i * dr;  // r_face(i) (positive on the annulus: r_min >= 0, i >= 0)
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
+    const Real rf = r_min + (Real(i) - Real(radial_index_origin)) * dr;
     if (wall_radial && (i == i_lo_face || i == i_hi_face)) {
       for (int c = 0; c < Model::n_vars; ++c)
         fr(i, j, c) = Real(0);  // wall: zero radial flux
@@ -144,9 +148,17 @@ struct PolarFaceFluxRKernel {
     const FaceContext face = FaceContext::axis_aligned(0, rf);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
+    if (!evaluation.succeeded()) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fr(i, j, c) = Real(0);
+      return;
+    }
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fr(i, j, c) = F[c];
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(fr(i, j, c), failure);
   }
 };
 
@@ -166,7 +178,8 @@ struct PolarFaceFluxThetaKernel {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const auto L =
         reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
@@ -174,9 +187,17 @@ struct PolarFaceFluxThetaKernel {
     const FaceContext face = FaceContext::axis_aligned(1);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
+    if (!evaluation.succeeded()) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        ft(i, j, c) = Real(0);
+      return;
+    }
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       ft(i, j, c) = F[c];
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(ft(i, j, c), failure);
   }
 };
 
@@ -193,8 +214,11 @@ struct PolarAssembleRhsKernel {
   ConstArray4 u, ax, fr, ft;  // state, aux, r-weighted radial flux, azimuthal flux
   Array4 r;                   // output: residual
   Real r_min, dr, dtheta;
-  POPS_HD void operator()(int i, int j) const {
-    const Real ri = r_min + (i + Real(0.5)) * dr;  // r_cell(i)
+  int radial_index_origin;
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
+    const Real ri =
+        r_min + (Real(i) - Real(radial_index_origin) + Real(0.5)) * dr;
     const Real inv_r = Real(1) / ri;
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
     const auto Us = load_state<Model>(u, i, j);
@@ -209,6 +233,8 @@ struct PolarAssembleRhsKernel {
       const Real div_t = (ft(i, j + 1, c) - ft(i, j, c)) / dtheta;  // d_theta(Ftheta) discrete
       r(i, j, c) = S[c] + Sg[c] - inv_r * (div_r + div_t);
     }
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(r(i, j, c), failure);
   }
 };
 
@@ -263,6 +289,7 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
   }
   MultiFab Fr(BoxArray(std::move(rfaces)), U.dmap(), Model::n_vars, 0);
   MultiFab Ft(BoxArray(std::move(tfaces)), U.dmap(), Model::n_vars, 0);
+  FluxEvaluationTracker failures{process_world_flux_collective};
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
@@ -270,12 +297,16 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
     Array4 ft = Ft.fab(li).array();
     const Box2D v = R.box(li);
     // Radial faces: i in [lo..hi+1], j in [lo..hi] (cf. xface_box).
-    for_each_cell(xface_box(v), detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
-                                    model, u, ax, fr, r_min, dr, lim, nflux, recon_prim,
-                                    wall_radial, i_lo_face, i_hi_face, pos_floor, pos_comp});
+    failures.merge(reduce_max_uint64_cell(
+        xface_box(v), detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
+                          model, u, ax, fr, r_min, dr, geom.domain.lo[0], lim, nflux,
+                          recon_prim, wall_radial, i_lo_face, i_hi_face, pos_floor, pos_comp,
+                          failures.recorder()}));
     // Azimuthal faces: i in [lo..hi], j in [lo..hi+1] (cf. yface_box).
-    for_each_cell(yface_box(v), detail::PolarFaceFluxThetaKernel<Limiter, NumericalFlux, Model>{
-                                    model, u, ax, ft, lim, nflux, recon_prim, pos_floor, pos_comp});
+    failures.merge(reduce_max_uint64_cell(
+        yface_box(v), detail::PolarFaceFluxThetaKernel<Limiter, NumericalFlux, Model>{
+                          model, u, ax, ft, lim, nflux, recon_prim, pos_floor, pos_comp,
+                          failures.recorder()}));
   }
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
@@ -284,9 +315,11 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
     const ConstArray4 ft = Ft.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(
-        v, detail::PolarAssembleRhsKernel<Model>{model, u, ax, fr, ft, r, r_min, dr, dtheta});
+    failures.merge(reduce_max_uint64_cell(
+        v, detail::PolarAssembleRhsKernel<Model>{model, u, ax, fr, ft, r, r_min, dr, dtheta,
+                                                 geom.domain.lo[0], failures.recorder()}));
   }
+  failures.throw_if_failed("assemble_rhs_polar");
 }
 
 }  // namespace pops

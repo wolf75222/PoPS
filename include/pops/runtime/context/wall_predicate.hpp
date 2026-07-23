@@ -10,9 +10,9 @@
 
 /// @file
 /// @brief ELLIPTIC conductor-wall predicate shared by the System and AmrSystem runtimes (the wall acts
-///        on the Poisson side). Both derived the same predicate from the same parameters (wall, radius,
-///        L); only the error-message prefix differed. Centralized here by PURE extraction: the body
-///        (centered circle, std::hypot < R comparison) is reused identically.
+///        on the Poisson side). Both derive the same predicate from the wall, radius and exact
+///        Cartesian bounds; only the error-message prefix differs. The square overload preserves the
+///        historical direct-C++ contract while the axis-resolved overload centres on Lx/Ly.
 ///
 ///        The TRANSPORT-side domain descriptor (detail::DiscDomain) and its generic contract moved to
 ///        numerics/embedded_boundary.hpp (ADC-327); this header re-includes it so existing includers
@@ -39,21 +39,24 @@ struct CircleWallActiveRegionSource2D {
   }
 };
 
-/// Builds the "inside the conductor" predicate (embedded wall for the Poisson solver)
-/// from the wall mode @p wall, the radius @p wall_radius, and the Cartesian domain bounds.
-///   - "none": no wall -> empty predicate.
-///   - "circle": disc centered in [xlo,xlo+L] x [ylo,ylo+L] with radius @p wall_radius.
-///   - other: error, prefixed by @p err_context (e.g. "System::set_poisson").
-/// Body reused identically from the System / AmrSystem runtimes (bit-identical).
-inline ActiveRegionProvider2D wall_predicate(const std::string& wall, double wall_radius, double L,
-                                             const std::string& err_context, double xlo = 0.0,
-                                             double ylo = 0.0) {
+/// Axis-resolved Cartesian overload.  A circular wall remains circular; only its centre follows the
+/// independent physical bounds of the rectangular domain.
+inline ActiveRegionProvider2D wall_predicate(const std::string& wall, double wall_radius, double Lx,
+                                             double Ly, const std::string& err_context,
+                                             double xlo = 0.0, double ylo = 0.0) {
   if (wall == "none")
     return {};
   if (wall == "circle")
     return ActiveRegionProvider2D(CircleWallActiveRegionSource2D{
-        Real(wall_radius), Real(xlo + 0.5 * L), Real(ylo + 0.5 * L)});
+        Real(wall_radius), Real(xlo + 0.5 * Lx), Real(ylo + 0.5 * Ly)});
   throw std::runtime_error(err_context + ": unknown wall '" + wall + "'");
+}
+
+/// Historical square-domain shorthand retained for the uniform runtime and direct C++ callers.
+inline ActiveRegionProvider2D wall_predicate(const std::string& wall, double wall_radius, double L,
+                                             const std::string& err_context, double xlo = 0.0,
+                                             double ylo = 0.0) {
+  return wall_predicate(wall, wall_radius, L, L, err_context, xlo, ylo);
 }
 
 }  // namespace detail

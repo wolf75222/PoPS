@@ -128,7 +128,7 @@ def test_board_primitive_state_rejects_foreign_arity_and_rolls_back_builder_fail
 
 
 def _runtime(name, model):
-    runtime = System(n=N, L=L, periodic=True)
+    runtime = System(n=N, L=L, periodicity=(True, True))
     runtime.add_equation(
         name,
         model,

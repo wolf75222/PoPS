@@ -35,7 +35,8 @@ class _AmrSystemIO(_AmrSystem):
         from pops.runtime._amr_checkpoint_v3 import write_v3
 
         return write_v3(
-            self, self._s, path, self._L, self._regrid_every,
+            self, self._s, path, (self._L, self._Ly), (self._xlo, self._ylo),
+            self._regrid_every,
             getattr(self, "_history_persistence", None) or {})
 
     def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
@@ -51,7 +52,8 @@ class _AmrSystemIO(_AmrSystem):
             raise ValueError(
                 "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
         return _PreparedAMRSystemRestart(
-            identity, prepare_v3(self, self._s, data, self._L))
+            identity, prepare_v3(
+                self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo)))
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:

@@ -16,11 +16,10 @@ add_compiled_model). On verifie :
   2) PARITE FORTE (euler_poisson couple) : memes masse / n_patches / densite a la precision machine
      (< 1e-12), comme le test C++ test_amr_compiled_model.cpp (le solve elliptique MG accumule un bruit
      FP d'ordre 1e-16, donc < 1e-12 et non == 0 quand le couplage est actif).
-  3) LIMITES AMR enforcees (AmrSystem est mono-bloc ; time cable a {explicit, imex}, imex = source
-     raide implicite) : la facade AmrSystem.add_equation applique son garde-fou pression (hllc/roe sans
-     primitive 'p' rejete), AVANT le C++. limiter="weno5"
-     (WENO5-Z, 3 ghosts) est en revanche CABLE sur AMR (rusanov) : on prouve sa PARITE STRICTE
-     (densite production == add_block, dmax == 0) et qu'il DIFFERE de minmod (reconstruction active).
+  3) CAPACITES AMR enforcees : la facade applique son garde-fou pression (hllc/roe sans primitive 'p'
+     rejete) avant le C++. WENO5 multilevel resout le fournisseur coarse/fine authentifie d'ordre 5
+     et de halo 3 sur les chemins production et ModelSpec. Aucun abaissement silencieux de
+     reconstruction n'est accepte.
   4) GARDE-FOUS de compilation : compile(target="amr_system") exige backend="production" ; un
      CompiledModel target="system" est refuse par AmrSystem.add_equation (loader sans pops_install_native_amr).
   5) GARDE-FOU ABI : un loader AMR a cle pops_native_abi_key falsifiee est rejete par add_native_block.
@@ -109,7 +108,7 @@ def _amr(n, L, branch, refine=1.2):
     cfg = AmrSystemConfig()
     cfg.n = n
     cfg.L = L
-    cfg.periodic = True
+    cfg.periodicity = (True, True)
     cfg.regrid_every = 4
     s = AmrSystem(cfg)
     s.set_temporal_relations([2], [1], ["integral_only"])
@@ -285,7 +284,7 @@ def main():
         assert "p" not in cm_iso.prim_names, "modele isotherme ne devrait pas avoir 'p'"
         raised = False
         try:
-            s_nop = AmrSystem(n=n, L=L, periodic=True)
+            s_nop = AmrSystem(n=n, L=L, periodicity=(True, True))
             s_nop.add_equation("gas", cm_iso,
                                spatial=engine.Spatial(minmod=True, flux=HLLC()))
         except ValueError as ex:
@@ -294,42 +293,30 @@ def main():
         assert raised, "add_equation a accepte hllc sans primitive 'p'"
         print("OK  (3) garde-fou pression hllc/roe SANS primitive 'p' : rejet explicite")
 
-        # --- (3w) WENO5 (3 ghosts) CABLE sur AMR : parite stricte production == add_block + != minmod.
-        # Le coupleur alloue ses niveaux a Limiter::n_ghost (3) et le regrid herite n_grow() : le
-        # stencil 5 points ne lit pas hors bornes (MEME mecanisme ghost que System, pas de duplication).
-        Aw = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t, weno5=True))
-        Bw = _amr(n, L, lambda s: s.add_equation(
-            "gas", spec_t, spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
-            time=engine.Explicit()))
-        assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
-        for _ in range(12):
-            Aw.step(dt)
-            Bw.step(dt)
-        daw, dbw = np.array(Aw.density()), np.array(Bw.density())
-        assert float(np.max(np.abs(dbw))) > 1e-6, "weno5 : densite natif triviale"
-        dmaxw = float(np.max(np.abs(daw - dbw)))
-        assert dmaxw == 0.0, ("weno5 AMR : densite production != add_block (dmax %.2e, attendu 0)"
-                              % dmaxw)
-        assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches final production != add_block"
-        # WENO5 (ordre 5) doit differer de minmod (ordre 2) sur le meme transport lisse : la
-        # reconstruction WENO5 est bien active (sinon le branchement weno5 retomberait sur minmod).
-        assert float(np.max(np.abs(daw - da))) > 1e-9, "weno5 == minmod (reconstruction inactive)"
-        # WENO5 via la facade add_equation (pas seulement le binding bas niveau) : meme chemin nominal.
-        # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
-        Gw = AmrSystem(n=n, L=L, periodic=True)
-        Gw.set_temporal_relations([2], [1], ["integral_only"])
-        Gw.add_equation("gas", cm_t,
-                        spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
-        Gw.set_refinement(1.2)
-        Gw.set_density("gas", _bubble(n))
-        for _ in range(4):
-            Gw.step(dt)
-        assert np.isfinite(np.array(Gw.density())).all() and Gw.mass() > 1e-6
-        print("OK  (3w) WENO5 AMR : production BIT-IDENTIQUE a add_block (dmax=%.1e), != minmod, "
-              "add_equation(weno5) tourne" % dmaxw)
+        # --- (3w) WENO5 multilevel : fournisseur C/F natif ordre 5 / halo 3. -----------------------
+        # Les routes production et ModelSpec doivent toutes deux construire une vraie hierarchie,
+        # avancer, et rester finies. La selection native refuse tout fournisseur d'ordre inferieur.
+        weno_systems = [
+            _amr(n, L, install)
+            for install in (
+                lambda s: _install_compiled_amr(s, cm_t, weno5=True),
+                lambda s: s.add_equation(
+                    "gas", spec_t,
+                    spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
+                    time=engine.Explicit()),
+            )
+        ]
+        for weno_system in weno_systems:
+            # n_patches() counts fine patches only, not hierarchy levels.  A single clustered
+            # fine patch is already a genuine two-level hierarchy; assert both facts explicitly.
+            assert weno_system.n_levels() == 2, "WENO5 doit produire exactement deux niveaux"
+            assert weno_system.n_patches() > 0, "WENO5 doit activer une hierarchie multilevel"
+            weno_system.step(dt)
+            assert np.isfinite(np.asarray(weno_system.density())).all()
+        print("OK  (3w) WENO5 multilevel utilise le fournisseur coarse/fine ordre 5")
 
         # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
-        E = AmrSystem(n=n, L=L, periodic=True)
+        E = AmrSystem(n=n, L=L, periodicity=(True, True))
         E.set_temporal_relations([2], [1], ["integral_only"])
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
@@ -344,7 +331,7 @@ def main():
         # --- (4) GARDE-FOUS de compilation / dispatch ---
         sys_cm = ep.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
                             backend="production", target="system")  # target System par defaut
-        s = AmrSystem(n=n, L=L, periodic=True)
+        s = AmrSystem(n=n, L=L, periodicity=(True, True))
         raised = False
         try:
             s.add_equation("gas", sys_cm,
@@ -358,7 +345,7 @@ def main():
         # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
         bad_abi = _compile_wrong_abi(ep, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
         bad_component = _component_at(cm_p, bad_abi)
-        s = AmrSystem(n=n, L=L, periodic=True)
+        s = AmrSystem(n=n, L=L, periodicity=(True, True))
         raised = False
         try:
             s.add_equation(

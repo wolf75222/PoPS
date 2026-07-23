@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 #include "test_harness.hpp"
 
 #include <pops/runtime/config/route_ids.hpp>
@@ -43,31 +44,11 @@ std::string stub_source() {
          parameter_names(count) + "\"; }\n";
 }
 
-bool compile_stub(const std::string& source, const std::string& library) {
-#if defined(__APPLE__)
-  const std::string compiler = "/usr/bin/c++";
-#else
-  const std::string compiler = POPS_TEST_CXX;
-#endif
-  std::string command =
-      compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 " + source + " -o " + library;
-#if defined(__APPLE__)
-  command += " -undefined dynamic_lookup";
-#endif
-  command += " 2> /dev/null";
-  return std::system(command.c_str()) == 0;
-}
-
 }  // namespace
 
 static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   (void)argc;
   (void)argv;
-  if (std::string(POPS_TEST_CXX).empty()) {
-    std::printf("skip test_native_loader_param_overflow (no C++ compiler)\n");
-    return 0;
-  }
-
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/native_package_param_overflow_" +
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source = stem + ".cpp";
@@ -76,15 +57,16 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
     std::ofstream output(source);
     output << stub_source();
   }
-  if (!compile_stub(source, library)) {
-    std::printf("skip test_native_loader_param_overflow (stub compilation failed)\n");
-    return 0;
+  const auto package = pops::test::native_dso::compile_shared(source, library);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_native_loader_param_overflow", package);
+    return 1;
   }
 
   SystemConfig config;
   config.n = 8;
   config.L = 1.0;
-  config.periodic = true;
+  config.periodicity = {true, true};
   System system(config);
   std::vector<double> params(static_cast<std::size_t>(kMaxRuntimeParams + 1), 0.0);
 

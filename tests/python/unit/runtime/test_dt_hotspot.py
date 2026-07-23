@@ -37,7 +37,7 @@ CS2 = 0.5
 
 
 def make_sim(n=32):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation(
         "ions",
         engine.Model(

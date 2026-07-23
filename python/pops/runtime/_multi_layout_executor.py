@@ -20,6 +20,16 @@ class _PreparedMultiLayoutRestart:
     children: tuple[Any, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeTransferRoute:
+    transfer: Any
+    source_block: str
+    target_block: str
+    session: Any
+    source_element_count: int
+    destination_element_count: int
+
+
 def _common_exact(values: Any, *, where: str) -> Any:
     rows = tuple(values)
     if not rows:
@@ -70,6 +80,23 @@ def _mapping_block(subject: Any) -> str:
     return name
 
 
+def _mapping_blocks(plan: Any, transfer: Any) -> tuple[str, str]:
+    matches = tuple(
+        row
+        for row in plan.artifact.layout_plan.mappings
+        if row.requirement.qualified_id == transfer.mapping_id
+    )
+    if len(matches) != 1:
+        raise RuntimeError(
+            "runtime Transfer must resolve to exactly one authenticated layout mapping"
+        )
+    requirement = matches[0].requirement
+    return (
+        _mapping_block(requirement.source_port.subject),
+        _mapping_block(requirement.target_port.subject),
+    )
+
+
 def _require_unique_transfer_targets(transfers: Any) -> None:
     """Defend install against order-dependent overwrite transfers in a forged runtime plan."""
     writers: dict[tuple[str, str, str], str] = {}
@@ -99,7 +126,27 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
             "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical extents; select a mapped "
             "Transfer operation/provider for distinct geometries"
         )
-    if bool(source.periodic) != bool(target.periodic):
+    if float(source.xlo) != float(target.xlo) or float(source.ylo) != float(target.ylo):
+        raise ValueError(
+            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical origins; select a mapped "
+            "Transfer operation/provider for translated geometries"
+        )
+    source_periodicity = source.periodicity
+    target_periodicity = target.periodicity
+    for label, periodicity in (
+        ("source", source_periodicity),
+        ("target", target_periodicity),
+    ):
+        if (
+            type(periodicity) is not tuple
+            or len(periodicity) != 2
+            or any(type(axis) is not bool for axis in periodicity)
+        ):
+            raise TypeError(
+                "CONSERVATIVE_CELL_AVERAGE_V1 requires an exact (x, y) periodicity tuple "
+                f"on the {label} layout"
+            )
+    if source_periodicity != target_periodicity:
         raise ValueError(
             "CONSERVATIVE_CELL_AVERAGE_V1 requires identical boundary topology; select a mapped "
             "Transfer operation/provider for distinct topologies"
@@ -155,28 +202,6 @@ def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
             "RuntimePlanBundle Transfers differ from the authenticated compiled LayoutPlan"
         )
     _require_unique_transfer_targets(transfers)
-
-
-def _transfer_descriptor(values: Any, *, layout_id: str, block: str) -> dict[str, Any]:
-    import numpy as np
-
-    array = np.ascontiguousarray(values, dtype=np.float64)
-    if array.ndim != 3:
-        raise ValueError("native layout transfer values must have (components, axis0, axis1) shape")
-    return {
-        "values": array,
-        "dimension": 2,
-        "extents": (int(array.shape[1]), int(array.shape[2]), 1),
-        "layout_identity": layout_id,
-        "patch_identity": block,
-        "centering": 1,
-        "centering_axes": 0,
-        "ghost_lower": (0, 0, 0),
-        "ghost_upper": (0, 0, 0),
-        "scalar_type": 2,
-        "memory_space": 1,
-        "ownership": 1,
-    }
 
 
 class _CompositeTemporalRestartState:
@@ -241,17 +266,23 @@ class _MultiLayoutUniformExecutor:
     """Atomic coordinator for independently compiled Uniform layout Systems."""
 
     def __init__(
-        self, plan: Any, runtime_plan: Any, engines: dict[str, Any], blocks: dict[str, str]
+        self, plan: Any, runtime_plan: Any, engines: dict[str, Any], blocks: dict[str, str],
+        transfer_routes: tuple[_NativeTransferRoute, ...],
     ) -> None:
         self._plan = plan
         self._execution_context = plan.execution_context
         self._runtime_plan = runtime_plan
         self._engines = dict(engines)
         self._block_layouts = dict(blocks)
+        self._transfer_routes = tuple(transfer_routes)
         self._mapping_evaluations = {
             row.mapping_id: 0 for row in runtime_plan.communication.transfers
         }
         self._mapping_snapshot = None
+        self._transfer_generation = 0
+        self._active_transfer_generation = None
+        self._transfer_attempt = 0
+        self._last_mapping_receipts = ()
         self._last_run_manifest = None
         self._last_run_identity = None
         self._last_restart_identity = None
@@ -343,97 +374,95 @@ class _MultiLayoutUniformExecutor:
         return self
 
     def _mapping_blocks(self, transfer: Any) -> tuple[str, str]:
-        matches = tuple(
-            row
-            for row in self._plan.artifact.layout_plan.mappings
-            if row.requirement.qualified_id == transfer.mapping_id
-        )
-        if len(matches) != 1:
-            raise RuntimeError(
-                "runtime Transfer must resolve to exactly one authenticated layout mapping"
-            )
-        requirement = matches[0].requirement
-        return (
-            _mapping_block(requirement.source_port.subject),
-            _mapping_block(requirement.target_port.subject),
-        )
+        return _mapping_blocks(self._plan, transfer)
 
-    def _capture_mapping_source(self, transfer: Any) -> dict[str, Any]:
-        source_block, _target_block = self._mapping_blocks(transfer)
-        source_engine = self.executor_for_layout(transfer.source_layout_id)
-        import numpy as np
-
-        # Force an owned copy.  Every before-step Transfer reads the same pre-transfer state even
-        # when another mapping writes this layout first (A->B->C and explicit cycles included).
-        source_flat = np.array(
-            source_engine.state_global(source_block), dtype=np.float64, copy=True, order="C"
-        )
-        source_shape = (
-            source_flat.size // (source_engine.nx() * source_engine.ny()),
-            source_engine.ny(),
-            source_engine.nx(),
-        )
-        return _transfer_descriptor(
-            source_flat.reshape(source_shape),
-            layout_id=transfer.source_layout_id,
-            block=source_block,
-        )
-
-    def _apply_mapping(self, transfer: Any, source: dict[str, Any] | None = None) -> dict[str, Any]:
-        source_block, target_block = self._mapping_blocks(transfer)
-        target_engine = self.executor_for_layout(transfer.target_layout_id)
-        import numpy as np
-
-        if source is None:
-            source = self._capture_mapping_source(transfer)
-        target_flat = np.asarray(target_engine.state_global(target_block), dtype=np.float64)
-        target_shape = (
-            target_flat.size // (target_engine.nx() * target_engine.ny()),
-            target_engine.ny(),
-            target_engine.nx(),
-        )
-        target = _transfer_descriptor(
-            target_flat.reshape(target_shape),
-            layout_id=transfer.target_layout_id,
-            block=target_block,
-        )
-        ratios = []
-        for source_extent, target_extent in zip(
-            source["extents"][:2], target["extents"][:2], strict=True
-        ):
-            if source_extent % target_extent:
-                raise ValueError("layout transfer grids are not integer-aligned fine-to-coarse")
-            ratios.append(source_extent // target_extent)
+    def _authenticate_mapping_receipt(
+        self, route: _NativeTransferRoute, receipt: Any, *, generation: int, attempt: int,
+    ) -> None:
+        transfer = route.transfer
         component = self._plan.components[transfer.component_id]
-        apply = getattr(component.native_handle, "_transfer_apply", None)
-        if not callable(apply):
-            raise TypeError("installed Transfer component exposes no native _transfer_apply seam")
-        receipt = apply(
-            source,
-            target,
-            tuple(ratios),
-            transfer.operation_abi,
-            component_execution_data(self._plan.execution_context),
-        )
-        if (
-            not isinstance(receipt, dict)
-            or receipt.get("applied") is not True
-            or receipt.get("provider_component_id") != transfer.component_id
-        ):
-            raise RuntimeError("native Transfer component returned an unauthenticated receipt")
-        target_engine.set_state(target_block, target["values"].reshape(-1))
-        self._mapping_evaluations[transfer.mapping_id] += 1
-        return receipt
+        expected = {
+            "applied": True,
+            "mapping_identity": transfer.mapping_id,
+            "provider_identity": transfer.provider_id,
+            "provider_component_identity": transfer.component_id,
+            "provider_manifest_identity": component.component_manifest.token,
+            "source_layout_identity": transfer.source_layout_id,
+            "target_layout_identity": transfer.target_layout_id,
+            "source_block": route.source_block,
+            "target_block": route.target_block,
+            "execution_identity": self._plan.execution_context.identity.token,
+            "operation": transfer.operation_abi,
+            "generation": generation,
+            "attempt": attempt,
+            "source_element_count": route.source_element_count,
+            "destination_element_count": route.destination_element_count,
+        }
+        for name, value in expected.items():
+            if getattr(receipt, name, object()) != value:
+                raise RuntimeError(
+                    "native Transfer receipt does not authenticate %s for mapping %s"
+                    % (name, transfer.mapping_id)
+                )
+
+    def _restore_rejected_native_attempt(self, generation: int, attempt: int) -> None:
+        """Restore every child to the outer accepted snapshot before a controller retries."""
+        for route in self._transfer_routes:
+            route.session.reject_attempt(generation, attempt)
+        rollback_errors = []
+        for engine in reversed(tuple(self._engines.values())):
+            try:
+                engine._rollback_step_transaction()
+            except BaseException as error:
+                rollback_errors.append(error)
+        if rollback_errors:
+            raise RuntimeError(
+                "multi-layout rejected-attempt rollback failed: %s"
+                % "; ".join(map(str, rollback_errors))
+            )
+        begun = []
+        try:
+            for engine in self._engines.values():
+                engine._begin_step_transaction()
+                begun.append(engine)
+        except BaseException as begin_error:
+            for engine in reversed(begun):
+                try:
+                    engine._rollback_step_transaction()
+                except BaseException:
+                    pass
+            raise RuntimeError(
+                "multi-layout rejected-attempt transaction restart failed"
+            ) from begin_error
 
     def step(self, dt: float) -> None:
         from pops.runtime._native_step_target import native_step_target
+        from pops._bootstrap import StepAttemptRejected
 
-        transfers = tuple(self._runtime_plan.communication.transfers)
-        sources = tuple(self._capture_mapping_source(transfer) for transfer in transfers)
-        for transfer, source in zip(transfers, sources, strict=True):
-            self._apply_mapping(transfer, source)
-        for engine in self._engines.values():
-            native_step_target(engine).step(dt)
+        generation = self._active_transfer_generation
+        if not isinstance(generation, int) or generation <= 0:
+            raise RuntimeError("multi-layout native step requires an active transfer transaction")
+        self._transfer_attempt += 1
+        attempt = self._transfer_attempt
+        # Snapshot every source before any destination changes.  Cycles therefore observe one
+        # common pre-transfer state and never depend on mapping declaration order.
+        for route in self._transfer_routes:
+            route.session.capture(generation, attempt)
+        receipts = []
+        try:
+            for route in self._transfer_routes:
+                receipt = route.session.apply(generation, attempt)
+                self._authenticate_mapping_receipt(
+                    route, receipt, generation=generation, attempt=attempt)
+                receipts.append(receipt)
+            for engine in self._engines.values():
+                native_step_target(engine).step(dt)
+        except StepAttemptRejected:
+            self._restore_rejected_native_attempt(generation, attempt)
+            raise
+        for route in self._transfer_routes:
+            self._mapping_evaluations[route.transfer.mapping_id] += 1
+        self._last_mapping_receipts = tuple(receipts)
         self._common_clock("time")
         self._common_clock("macro_step")
 
@@ -450,13 +479,25 @@ class _MultiLayoutUniformExecutor:
         self._synchronize_child_temporal_states()
         self._mapping_snapshot = dict(self._mapping_evaluations)
         begun = []
+        begun_routes = []
         try:
             for engine in self._engines.values():
                 engine._begin_step_transaction()
                 begun.append(engine)
+            self._transfer_generation += 1
+            generation = self._transfer_generation
+            for route in self._transfer_routes:
+                route.session.begin_transaction(generation)
+                begun_routes.append(route)
+            self._active_transfer_generation = generation
+            self._transfer_attempt = 0
         except BaseException:
+            for route in reversed(begun_routes):
+                route.session.rollback_transaction(self._transfer_generation)
             for engine in reversed(begun):
                 engine._rollback_step_transaction()
+            self._active_transfer_generation = None
+            self._transfer_attempt = 0
             self._mapping_snapshot = None
             raise
 
@@ -471,6 +512,12 @@ class _MultiLayoutUniformExecutor:
         # two-phase transaction while making the no-fail boundary explicit.
         for engine in self._engines.values():
             engine._finalize_step_transaction()
+        generation = self._active_transfer_generation
+        if isinstance(generation, int):
+            for route in self._transfer_routes:
+                route.session.finalize_transaction(generation)
+        self._active_transfer_generation = None
+        self._transfer_attempt = 0
         self._mapping_snapshot = None
 
     def _rollback_step_transaction(self) -> None:
@@ -480,9 +527,15 @@ class _MultiLayoutUniformExecutor:
                 engine._rollback_step_transaction()
             except BaseException as caught:
                 error = error or caught
+        generation = self._active_transfer_generation
+        if isinstance(generation, int):
+            for route in reversed(self._transfer_routes):
+                route.session.rollback_transaction(generation)
         if self._mapping_snapshot is not None:
             self._mapping_evaluations = self._mapping_snapshot
         self._mapping_snapshot = None
+        self._active_transfer_generation = None
+        self._transfer_attempt = 0
         if error is not None:
             raise error
 
@@ -843,9 +896,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         ):
             raise NotImplementedError("native multi-layout transfer operation is unsupported")
         component = plan.components.get(transfer.component_id)
-        apply = getattr(getattr(component, "native_handle", None), "_transfer_apply", None)
-        if not callable(apply):
-            raise TypeError("mapping Transfer component is not loaded with _transfer_apply")
+        if getattr(component, "native_handle", None) is None:
+            raise TypeError("mapping Transfer component has no authenticated native handle")
         source = configs[transfer.source_layout_id]
         target = configs[transfer.target_layout_id]
         _require_conservative_cell_average_geometry(source, target)
@@ -875,7 +927,62 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             initial_sources=selected_initials,
         )
         engines[layout_id] = engine
-    return _MultiLayoutUniformExecutor(plan, runtime_plan, engines, blocks)
+
+    execution = component_execution_data(plan.execution_context)
+    transfer_routes = []
+    for transfer in runtime_plan.communication.transfers:
+        source_block, target_block = _mapping_blocks(plan, transfer)
+        source_engine = engines[transfer.source_layout_id]
+        target_engine = engines[transfer.target_layout_id]
+        source_nx, source_ny = int(source_engine.nx()), int(source_engine.ny())
+        target_nx, target_ny = int(target_engine.nx()), int(target_engine.ny())
+        if (
+            source_nx < target_nx
+            or source_ny < target_ny
+            or source_nx % target_nx
+            or source_ny % target_ny
+        ):
+            raise ValueError(
+                "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
+            )
+        ratio = (source_ny // target_ny, source_nx // target_nx)
+        component = plan.components[transfer.component_id]
+        source_native = source_engine._native_step_target()
+        target_native = target_engine._native_step_target()
+        session = source_native._prepare_layout_transfer(
+            target_native,
+            component.native_handle,
+            {
+                "mapping_identity": transfer.mapping_id,
+                "provider_identity": transfer.provider_id,
+                "provider_component_identity": transfer.component_id,
+                "provider_manifest_identity": component.component_manifest.token,
+                "source_layout_identity": transfer.source_layout_id,
+                "target_layout_identity": transfer.target_layout_id,
+                "source_block": source_block,
+                "target_block": target_block,
+                "source_representation": transfer.source_representation_uri,
+                "target_representation": transfer.target_representation_uri,
+                "synchronization_identity": transfer.synchronization_uri,
+                "refinement_ratio": ratio,
+                "operation": transfer.operation_abi,
+            },
+            execution,
+        )
+        source_components = int(source_engine.n_vars(source_block))
+        target_components = int(target_engine.n_vars(target_block))
+        if source_components != target_components or source_components <= 0:
+            raise ValueError("layout transfer source/target component counts differ")
+        transfer_routes.append(_NativeTransferRoute(
+            transfer=transfer,
+            source_block=source_block,
+            target_block=target_block,
+            session=session,
+            source_element_count=source_components * source_nx * source_ny,
+            destination_element_count=target_components * target_nx * target_ny,
+        ))
+    return _MultiLayoutUniformExecutor(
+        plan, runtime_plan, engines, blocks, tuple(transfer_routes))
 
 
 __all__ = ["install_multi_layout_uniform"]

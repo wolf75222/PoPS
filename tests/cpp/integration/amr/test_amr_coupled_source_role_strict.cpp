@@ -23,10 +23,11 @@
 #include <gtest/gtest.h>
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
-#include <pops/runtime/config/model_spec.hpp>
+
+#include "amr_transfer_test_authority.hpp"
 
 #include <cstdio>
 #include <stdexcept>
@@ -39,16 +40,11 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var, role density) a charge q. Bloc scalaire : conservative_vars() == {density},
+// Modele ExB scalaire (1 var, role density) a charge q. Bloc scalaire : conservative_vars() == {density},
 // donc momentum_x est CANONIQUE mais NON EXPOSE -> support du cas (B).
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // densite a moyenne nulle (solvable en periodique) : creneau centre, n*n row-major.
@@ -68,20 +64,20 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
                                  const std::vector<double>& rho_neut,
                                  const char* ions_user_role = nullptr) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "ions", rho_ions,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  detail::dispatch_model(exb_charge(0.0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "neutrals", rho_neut,
-                                                /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, B0), "minmod", "rusanov", S,
+                                              "ions", rho_ions, /*has_density=*/true, 1.4, 1,
+                                              false, false, 1));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(0.0, B0), "minmod", "rusanov", S,
+                                              "neutrals", rho_neut, /*has_density=*/true, 1.4, 1,
+                                              false, false, 1));
   // ADC-292: optionally ADD a USER-DEFINED role label on the "ions" density component (keeping the
   // canonical Density role, so the ExB charge coupling is untouched). The coupled-source resolver must
   // then go through the string user-role layer (index_of(string)) to map this label to component 0.
@@ -90,6 +86,7 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
     blocks[0].cons_vars.user_roles = {ions_user_role};
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;

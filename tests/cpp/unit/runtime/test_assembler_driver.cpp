@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
@@ -313,8 +315,10 @@ TEST(AssemblerDriver, ExactMappingReachesUniformAndAmrFactories) {
   std::vector<AmrLevelMP> levels;
   levels.push_back(AmrLevelMP{std::move(coarse), nullptr, geom.dx(), geom.dy()});
   FactoryProbe amr_probe;
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   AmrCouplerMP<Scalar, FactoryOnlyElliptic> amr(Scalar{}, geom, ba, bc, std::move(levels), {},
                                                 /*replicated_coarse=*/false,
+                                                load_balance,
                                                 FactoryOnlyEllipticBuilder{&amr_probe});
   EXPECT_EQ(amr_probe.mapping, mapping.ranks());
   EXPECT_EQ(amr_probe.distribution, FieldDistribution::Distributed);
@@ -328,7 +332,8 @@ TEST(AssemblerDriver, ExactMappingReachesUniformAndAmrFactories) {
   FactoryProbe replicated_probe;
   AmrCouplerMP<Scalar, FactoryOnlyElliptic> replicated_amr(
       Scalar{}, geom, ba, bc, std::move(replicated_levels), {},
-      /*replicated_coarse=*/true, FactoryOnlyEllipticBuilder{&replicated_probe});
+      /*replicated_coarse=*/true, load_balance,
+      FactoryOnlyEllipticBuilder{&replicated_probe});
   EXPECT_EQ(replicated_probe.mapping, replicated_mapping.ranks());
   EXPECT_EQ(replicated_probe.distribution, FieldDistribution::Replicated);
 }

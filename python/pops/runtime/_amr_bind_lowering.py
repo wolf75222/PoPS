@@ -38,22 +38,45 @@ def _regrid_every(data: dict[str, Any]) -> int:
 
 def _native_amr_grid_values(
     data: Any,
-) -> tuple[tuple[int, int], tuple[float, float], tuple[float, float], bool]:
-    """Authenticate one Cartesian grid and project only native-representable topology.
-
-    The native AMR config has one global periodic flag. A partial axis partition is therefore an
-    unavailable backend route, never a reason to erase the authored topology.
-    """
+) -> tuple[
+    tuple[int, int], tuple[float, float], tuple[float, float], tuple[bool, bool]
+]:
+    """Authenticate one Cartesian grid without collapsing its axis topology."""
     from pops.mesh.grid import CartesianGrid
 
     grid = CartesianGrid.from_dict(data)
     periodic_axes = grid.topology.periodic_axes
-    if periodic_axes and len(periodic_axes) != len(grid.axes):
-        raise NotImplementedError(
-            "native AmrSystemConfig has one global periodic flag and cannot represent a partially "
-            "periodic CartesianGrid topology"
-        )
-    return grid.cells, grid.frame.lower, grid.frame.upper, bool(periodic_axes)
+    periodic_indices = {axis.index for axis in periodic_axes}
+    return (
+        grid.cells,
+        grid.frame.lower,
+        grid.frame.upper,
+        (0 in periodic_indices, 1 in periodic_indices),
+    )
+
+
+def _physical_patch_rectangles(
+    patch_boxes: Any,
+    *,
+    cells: tuple[int, int],
+    lengths: tuple[float, float],
+    lower: tuple[float, float],
+) -> list[tuple[float, float, float, float]]:
+    """Map inclusive AMR index boxes to exact Cartesian physical rectangles."""
+    nx, ny = cells
+    lx, ly = lengths
+    xlo, ylo = lower
+    result: list[tuple[float, float, float, float]] = []
+    for level, ilo, jlo, ihi, jhi in patch_boxes:
+        dx = lx / (nx << level)
+        dy = ly / (ny << level)
+        result.append((
+            xlo + ilo * dx,
+            ylo + jlo * dy,
+            (ihi - ilo + 1) * dx,
+            (jhi - jlo + 1) * dy,
+        ))
+    return result
 
 
 def _native_binary64(value: Any, *, where: str) -> float:
@@ -93,19 +116,25 @@ def _native_patch_generation_values(options: Any) -> tuple[bool, int]:
     return distribute_coarse, authored_max_grid
 
 
+def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Decode the canonical provider value language into the native variant ABI."""
+    result: dict[str, Any] = {}
+    for key, value in options.items():
+        if type(value) is dict and set(value) == {"binary64"}:
+            result[key] = float.fromhex(value["binary64"])
+        else:
+            result[key] = value
+    return result
+
+
 def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
     from pops.mesh._amr import ResolvedHierarchy
 
     data = _runtime_data(layout)
-    cells, lower, upper, periodic = _native_amr_grid_values(data["grid"])
+    cells, lower, upper, periodicity = _native_amr_grid_values(data["grid"])
     lengths = (upper[0] - lower[0], upper[1] - lower[1])
-    if cells[0] != cells[1] or lengths[0] != lengths[1]:
-        raise NotImplementedError(
-            "the installed native AMR provider currently requires a square Cartesian grid; "
-            "the full rectangular grid remains authenticated and is never collapsed"
-        )
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
@@ -114,10 +143,12 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
 
     cfg = AmrSystemConfig()
     cfg.n = cells[0]
+    cfg.ny = cells[1]
     cfg.L = lengths[0]
+    cfg.Ly = lengths[1]
     cfg.xlo = lower[0]
     cfg.ylo = lower[1]
-    cfg.periodic = periodic
+    cfg.periodicity = periodicity
     cfg.level_count = native_hierarchy.level_count
     cfg.regrid_margin = native_hierarchy.nesting_buffer
     cfg.regrid_grow = native_hierarchy.nesting_lookahead
@@ -129,19 +160,37 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     patches = hierarchy.plan.patch_generation.options.to_data()
     balance = hierarchy.plan.load_balance.options.to_data()
     distribute_coarse, coarse_max_grid = _native_patch_generation_values(patches)
-    if not isinstance(clustering_provider, dict) \
-            or clustering_provider.get("provider_type") not in {
-                "builtin_amr_clustering", "external_amr_clustering"} \
-            or balance != {"native_route": "round_robin"}:
-        raise NotImplementedError("resolved hierarchy selected an unavailable native provider")
-    if clustering_provider["provider_type"] == "builtin_amr_clustering":
-        cfg.cluster_min_efficiency = _native_binary64(
-            clustering_provider["minimum_efficiency"],
-            where="AMR clustering minimum_efficiency")
-        cfg.cluster_min_box_size = int(clustering_provider["minimum_box_size"])
-        cfg.cluster_max_box_size = int(clustering_provider["maximum_box_size"])
+    if type(balance) is not dict or set(balance) != {"provider"}:
+        raise TypeError(
+            "resolved AMR load balance must preserve one exact provider authority")
+    from pops.amr._load_balance_contract import validate_load_balance_provider_data
+    from pops.amr.providers import prepare_amr_provider_native_config
+
+    balance_provider = validate_load_balance_provider_data(balance["provider"])
+    if data.get("load_balance") != balance_provider:
+        raise ValueError(
+            "resolved hierarchy load balance differs from the adaptive layout authority")
+    prepared_clustering = prepare_amr_provider_native_config(clustering_provider)
+    if prepared_clustering.role != "clustering":
+        raise ValueError("resolved hierarchy selected a non-clustering provider")
+    native_config_converters = {
+        "cluster_min_efficiency": lambda value: _native_binary64(
+            value, where="AMR clustering minimum_efficiency"),
+        "cluster_min_box_size": int,
+        "cluster_max_box_size": int,
+    }
+    if not set(prepared_clustering.config) <= set(native_config_converters):
+        raise NotImplementedError("AMR clustering provider emitted an unsupported native control")
+    for name, value in prepared_clustering.config.items():
+        setattr(cfg, name, native_config_converters[name](value))
     cfg.distribute_coarse = distribute_coarse
     cfg.coarse_max_grid = coarse_max_grid
+    cfg._set_load_balance_provider(
+        balance_provider["native_route"],
+        balance_provider["provider_identity"],
+        balance_provider["option_schema_identity"],
+        _native_load_balance_options(balance_provider["options"]),
+    )
     return cfg
 
 

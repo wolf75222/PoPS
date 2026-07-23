@@ -23,6 +23,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -134,9 +135,16 @@ def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
     artifact.verify()
     initial = np.ones((2, N, N), dtype=np.float64)
     initial[1] = 0.25
-    simulation = pops.bind(artifact, initial_state={"toy": initial})
+    simulation = pops.bind(
+        artifact,
+        initial_state={"toy": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
-    with pytest.raises(RuntimeError, match="non-finite finite-volume data"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"solve status=invalid_evaluation.*numerical flux evaluation reject",
+    ):
         pops.run(simulation, t_end=DT, max_steps=1)
     np.testing.assert_array_equal(
         np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(initial.shape),

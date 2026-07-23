@@ -141,7 +141,7 @@ static int pops_run_test_mpi_system_fft(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   if (np == 1) {
     // np=1 : "fft" doit marcher. solve_fields() construit le solveur FFT mono-rang et resout.

@@ -6,6 +6,7 @@
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -54,18 +55,14 @@ class PreparedInterfaceFluxComponent final {
       throw std::invalid_argument("prepared NumericalFlux received an incomplete face batch");
     const auto faces = static_cast<std::size_t>(batch.face_count);
     const auto components = static_cast<std::size_t>(batch.component_count);
+    prepare_scratch_(faces);
     const std::string& patch = spec_.interface_identity;
     const PopsConstFieldViewV1 left =
         const_view_(batch.left_state, faces, components, spec_.canonical_layout_identity, patch);
     const PopsConstFieldViewV1 right =
         const_view_(batch.right_state, faces, components, spec_.canonical_layout_identity, patch);
-    std::vector<double> normals(faces * 2u, 0.0);
-    for (std::size_t face = 0; face < faces; ++face)
-      normals[face * 2u + static_cast<std::size_t>(spec_.normal_axis)] =
-          static_cast<double>(spec_.outward_sign);
     const PopsConstFieldViewV1 normal_view =
-        const_view_(normals.data(), faces, 2u, spec_.canonical_layout_identity, patch);
-    std::vector<double> measures(faces, spec_.face_measure);
+        const_view_(normals_.data(), faces, 2u, spec_.canonical_layout_identity, patch);
     const PopsLogicalTimeV1 time{sizeof(PopsLogicalTimeV1),
                                  point.clock.c_str(),
                                  point.tick,
@@ -80,16 +77,17 @@ class PreparedInterfaceFluxComponent final {
                                              left,
                                              right,
                                              normal_view,
-                                             measures.data(),
+                                             measures_.data(),
                                              time,
                                              spec_.execution->view()};
-    std::vector<double> stability(faces, std::numeric_limits<double>::quiet_NaN());
-    std::vector<PopsComponentActionV1> actions(faces, POPS_COMPONENT_CONTINUE_V1);
+    std::fill(stability_.begin(), stability_.end(),
+              std::numeric_limits<double>::quiet_NaN());
+    std::fill(actions_.begin(), actions_.end(), POPS_COMPONENT_CONTINUE_V1);
     PopsNumericalFluxResultV1 result{
         sizeof(PopsNumericalFluxResultV1),
         field_view_(batch.shared_flux, faces, components, spec_.canonical_layout_identity, patch),
-        stability.data(),
-        actions.data(),
+        stability_.data(),
+        actions_.data(),
         {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
     const auto& api = component_->table<PopsNumericalFluxApiV1>(
         POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, spec_.interface_version);
@@ -98,9 +96,9 @@ class PreparedInterfaceFluxComponent final {
       throw std::runtime_error(result.status.reason == nullptr ? "native NumericalFlux failed"
                                                                : result.status.reason);
     for (std::size_t face = 0; face < faces; ++face) {
-      if (actions[face] != POPS_COMPONENT_CONTINUE_V1)
+      if (actions_[face] != POPS_COMPONENT_CONTINUE_V1)
         throw std::runtime_error("native NumericalFlux returned a non-continue per-face action");
-      if (!std::isfinite(stability[face]) || stability[face] < 0.0)
+      if (!std::isfinite(stability_[face]) || stability_[face] < 0.0)
         throw std::runtime_error(
             "native NumericalFlux returned an invalid per-face stability bound");
     }
@@ -111,6 +109,22 @@ class PreparedInterfaceFluxComponent final {
   }
 
  private:
+  void prepare_scratch_(std::size_t faces) const {
+    if (scratch_faces_ == faces)
+      return;
+    if (scratch_faces_ != 0)
+      throw std::invalid_argument(
+          "prepared NumericalFlux face count changed after its first authenticated batch");
+    normals_.assign(faces * 2u, 0.0);
+    for (std::size_t face = 0; face < faces; ++face)
+      normals_[face * 2u + static_cast<std::size_t>(spec_.normal_axis)] =
+          static_cast<double>(spec_.outward_sign);
+    measures_.assign(faces, spec_.face_measure);
+    stability_.assign(faces, std::numeric_limits<double>::quiet_NaN());
+    actions_.assign(faces, POPS_COMPONENT_CONTINUE_V1);
+    scratch_faces_ = faces;
+  }
+
   static PopsConstFieldViewV1 const_view_(const void* data, std::size_t faces,
                                           std::size_t components, const std::string& layout,
                                           const std::string& patch) {
@@ -172,6 +186,13 @@ class PreparedInterfaceFluxComponent final {
   PreparedInterfaceFluxSpec spec_;
   std::shared_ptr<component::LoadedComponent> component_;
   void* state_ = nullptr;
+  // One scheduler host thread owns an installed provider.  Reuse its exact ABI buffers after the
+  // first authenticated face batch instead of allocating normals/status arrays at every stage.
+  mutable std::size_t scratch_faces_ = 0;
+  mutable std::vector<double> normals_;
+  mutable std::vector<double> measures_;
+  mutable std::vector<double> stability_;
+  mutable std::vector<PopsComponentActionV1> actions_;
 };
 
 }  // namespace pops::runtime::multiblock

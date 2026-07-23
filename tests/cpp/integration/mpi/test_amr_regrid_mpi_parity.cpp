@@ -12,8 +12,8 @@
 // BoxArray multi-box round-robin) : c'est le seul chemin ou (R4) est active (en grossier REPLIQUE,
 // chaque rang a deja la grille de tags complete, all_reduce_or serait l'identite). regrid_every=2 :
 // la grille se re-grille effectivement pendant la sequence, en suivant l'union des tags densite par
-// bloc + le tag de phi sur |grad phi| (set_phi_refinement, le predicat cable depuis la facade par CE
-// suivi). On avance plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
+// bloc + le tag de phi sur |grad phi| (set_phi_refinement, feuille aux du graphe prepare). On avance
+// plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
 //
 // ASSERTIONS :
 //   (1) CONSISTANCE CROSS-RANG (dans CHAQUE run) : la densite grossiere de chaque bloc est reconstruite
@@ -91,7 +91,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 2;          // REGRID ACTIF : la hierarchie se re-grille pendant la sequence
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).

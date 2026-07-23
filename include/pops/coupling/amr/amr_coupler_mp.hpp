@@ -6,10 +6,12 @@
 #include <pops/coupling/amr/amr_level_storage.hpp>   // AmrLevelStack
 #include <pops/coupling/amr/amr_regrid_coupler.hpp>  // amr_regrid_finest (Berger-Rigoutsos)
 #include <pops/coupling/single/coupler.hpp>  // detail::coupler_eval_rhs (f = model.elliptic_rhs(U))
+#include <pops/coupling/base/aux_fill.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>  // COMPOSITE FAC 2-level Poisson solver (opt-in)
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
+#include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -20,14 +22,17 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
 #include <pops/parallel/comm.hpp>  // all_reduce_sum / all_reduce_max (distributed mass/drift)
+#include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams: NATIVE per-block runtime params (ADC-514)
 #include <pops/runtime/output_piece.hpp>
 
 #include <algorithm>   // std::max
-#include <cmath>       // std::hypot
 #include <cstddef>     // std::size_t
 #include <functional>  // std::function (conducting-wall predicate passed to the MG)
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied by compute_aux
+#include <memory>
+#include <optional>
+#include <span>
 #include <stdexcept>  // std::runtime_error (density size guard)
 #include <type_traits>  // std::void_t / if constexpr detection of a brick's runtime-param member (ADC-514)
 #include <utility>  // std::pair, std::move
@@ -49,81 +54,68 @@
 namespace pops {
 
 namespace detail {
-// Coupling primitive (not policy): piecewise-constant injection of aux from
-// multi-box parent -> multi-box child (valid + ghosts). DISTRIBUTED, same scheme as
-// mf_fill_fine_ghosts_mb. Two parent cases:
-//  - REPLICATED (level 0, replicated_parent=true): parent fully local on each rank,
-//    direct read via mf_find_box. This is the replicated coarse (per-rank dmap): parallel_copy
-//    would violate the replicated-metadata assumption. Bit-identical path to the historical one.
-//  - DISTRIBUTED (intermediate, replicated_parent=false): the parent may be on another rank,
-//    we bring its valid regions onto a LOCAL child-coarsen grid via parallel_copy, then
-//    inject. A child cell outside the parent coverage (GLOBAL box_array) is left
-//    intact, like the replicated path (which skipped it via mf_find_box < 0).
-// In serial both paths are identical (parent local everywhere, parallel_copy = memory copy).
+inline void coupler_conservative_linear_to_fine_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& logical_coarse_domain,
+    const Box2D& logical_fine_domain, const std::vector<int>& coarse_origin,
+    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio,
+    bool replicated_parent = false, Periodicity periodicity = {});
+inline void coupler_conservative_linear_fill_ghosts_mb(const MultiFab& coarse, MultiFab& fine,
+                                                       const Box2D& logical_coarse_domain,
+                                                       const Box2D& logical_fine_domain,
+                                                       bool replicated_parent,
+                                                       Periodicity periodicity = {});
+inline void coupler_conservative_linear_fill_all_mb(const MultiFab& coarse, MultiFab& fine,
+                                                     const Box2D& logical_coarse_domain,
+                                                     const Box2D& logical_fine_domain,
+                                                     bool replicated_parent,
+                                                     Periodicity periodicity = {});
+inline void coupler_conservative_polynomial5_to_fine_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& logical_coarse_domain,
+    const Box2D& logical_fine_domain, const std::vector<int>& coarse_origin,
+    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio,
+    bool replicated_parent = false, Periodicity periodicity = {});
+inline void coupler_conservative_polynomial5_fill_ghosts_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& logical_coarse_domain,
+    const Box2D& logical_fine_domain, bool replicated_parent,
+    Periodicity periodicity = {});
+
+// Cell-centred aux publication uses the same certified conservative-linear spatial provider as
+// state prolongation.  This covers phi, gradients and named aux uniformly; valid cells and every
+// parent-supported ghost are materialized, with no piecewise-constant lower route.
 inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
-                                  bool replicated_parent = true) {
-  const int nc = child.ncomp();
-  if (replicated_parent) {
-    device_fence();
-    for (int lc = 0; lc < child.local_size(); ++lc) {
-      Array4 c = child.fab(lc).array();
-      const Box2D g = child.fab(lc).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-          const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-          const int pb = mf_find_box(parent, ci, cj);
-          if (pb < 0)
-            continue;
-          const ConstArray4 pp = parent.fab(pb).const_array();
-          for (int k = 0; k < nc; ++k)
-            c(i, j, k) = pp(ci, cj, k);
-        }
-    }
-    return;
-  }
-  const BoxArray& pba = parent.box_array();  // GLOBAL: rank-independent coverage
-  auto covered = [&](int ci, int cj) {
-    for (int b = 0; b < pba.size(); ++b)
-      if (pba[b].contains(ci, cj))
-        return true;
-    return false;
-  };
-  const BoxArray ccoarse = coarsen_grown(child.box_array(), child.n_grow(), kAmrRefRatio);
-  MultiFab Pc(ccoarse, child.dmap(), parent.ncomp(), 0);
-  parallel_copy(Pc, parent);  // parent regions (from any rank) -> local grid
-  device_fence();
-  for (int lc = 0; lc < child.local_size(); ++lc) {
-    Array4 c = child.fab(lc).array();
-    const ConstArray4 pp = Pc.fab(lc).const_array();
-    const Box2D g = child.fab(lc).grown_box();
-    for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-      for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-        const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-        if (!covered(ci, cj))
-          continue;  // outside coverage -> keep the child value
-        for (int k = 0; k < nc; ++k)
-          c(i, j, k) = pp(ci, cj, k);
-      }
-  }
+                                  const Box2D& logical_parent_domain,
+                                  const Box2D& logical_child_domain,
+                                  bool replicated_parent = true, Periodicity periodicity = {}) {
+  if (parent.ncomp() != child.ncomp())
+    throw std::runtime_error("aux conservative-linear prolongation component mismatch");
+  coupler_conservative_linear_fill_all_mb(parent, child, logical_parent_domain,
+                                           logical_child_domain, replicated_parent, periodicity);
 }
-// Writes an initial density (component 0, n*n row-major in GLOBAL indices) on the coarse
+// Writes an initial density (component 0, ny*nx row-major in GLOBAL indices) on the coarse
 // level, MULTI-BOX and DISTRIBUTION-AWARE: each rank touches only its LOCAL fabs and reads
 // rho at the cell GLOBAL index (i,j). For Euler (ncomp 4) it also sets zero momentum
 // + thermal energy r/(gamma-1); ncomp 1 touches only density. Replicated mono-box:
 // a single fab covering the domain, global == local indices -> bit-identical to the historical
 // direct write. Distributed multi-box: each local box reads its window of rho.
-inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, int n, int ncomp,
-                                 double gamma) {
-  if (static_cast<int>(rho.size()) != n * n)
-    throw std::runtime_error("AMR coupler: initial density of size != n*n");
+inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, int nx, int ny,
+                                 int ncomp, double gamma) {
+  const std::size_t cells = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
+  if (rho.size() != cells)
+    throw std::runtime_error("AMR coupler: initial density of size != ny*nx");
+  const Box2D logical_domain = U.box_array().bounding_box();
+  if (logical_domain.nx() != nx || logical_domain.ny() != ny)
+    throw std::runtime_error("AMR coupler: density shape disagrees with coarse logical domain");
   const Real gm1 = Real(gamma) - Real(1);
-  device_fence();
+  // One-time host initialization from caller-owned contiguous storage. This is an explicit
+  // host/device data boundary, not a time-stepping kernel.
+  U.sync_host();
   for (int li = 0; li < U.local_size(); ++li) {
     Array4 u = U.fab(li).array();
     const Box2D v = U.box(li);
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        const Real r = rho[static_cast<std::size_t>(j) * n + i];
+        const Real r = rho[static_cast<std::size_t>(j - logical_domain.lo[1]) * nx +
+                           static_cast<std::size_t>(i - logical_domain.lo[0])];
         u(i, j, 0) = r;
         if (ncomp >= 3) {
           u(i, j, 1) = 0;
@@ -133,181 +125,436 @@ inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, in
           u(i, j, 3) = r / gm1;
       }
   }
+  U.sync_device();
+}
+
+inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, int n, int ncomp,
+                                 double gamma) {
+  coupler_write_coarse(U, rho, n, n, ncomp, gamma);
 }
 
 // Writes the FULL INITIAL CONSERVATIVE STATE (all components) on the coarse level from a
-// flat component-major field @p state (c*n*n + j*n + i), of size ncomp*n*n. Counterpart of
+// flat component-major field @p state (c*ny*nx + j*nx + i), of size ncomp*ny*nx. Counterpart of
 // coupler_write_coarse for the multi-component seed: same box traversal (replicated mono-box
 // AND distributed multi-box, GLOBAL indices (i,j)), only the per-cell write differs -- here we copy
 // the ncomp components positionally (no density/momentum/energy wiring; the caller already provides
 // the conservative, e.g. [rho, rho*u, rho*v]). gamma omitted (no energy derived). Index computed
 // in std::size_t (no int overflow at large n, unlike the int validation of
 // coupler_write_coarse). Used for the drift seed (set_conservative_state).
-inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int n,
-                                       int ncomp) {
-  const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
-  if (state.size() != nn * static_cast<std::size_t>(ncomp))
+inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int nx,
+                                       int ny, int ncomp) {
+  const std::size_t cells = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
+  if (state.size() != cells * static_cast<std::size_t>(ncomp))
     throw std::runtime_error(
-        "AMR coupler: initial state of size != ncomp*n*n (full conservative "
+        "AMR coupler: initial state of size != ncomp*ny*nx (full conservative "
         "state; ncomp == model n_vars)");
-  device_fence();
+  const Box2D logical_domain = U.box_array().bounding_box();
+  if (logical_domain.nx() != nx || logical_domain.ny() != ny)
+    throw std::runtime_error("AMR coupler: state shape disagrees with coarse logical domain");
+  // One-time host initialization from caller-owned contiguous storage.
+  U.sync_host();
   for (int li = 0; li < U.local_size(); ++li) {
     Array4 u = U.fab(li).array();
     const Box2D v = U.box(li);
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
         for (int c = 0; c < ncomp; ++c)
-          u(i, j, c) = state[static_cast<std::size_t>(c) * nn +
-                             static_cast<std::size_t>(j) * static_cast<std::size_t>(n) +
-                             static_cast<std::size_t>(i)];
+          u(i, j, c) = state[static_cast<std::size_t>(c) * cells +
+                             static_cast<std::size_t>(j - logical_domain.lo[1]) *
+                                 static_cast<std::size_t>(nx) +
+                             static_cast<std::size_t>(i - logical_domain.lo[0])];
   }
+  U.sync_device();
 }
 
-// Reads the coarse density (component 0) into a GLOBAL n*n row-major field, MULTI-BOX and
-// DISTRIBUTION-AWARE. Each rank writes its local cells into an n*n buffer initialized to 0
+
+inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int n,
+                                       int ncomp) {
+  coupler_write_coarse_state(U, state, n, n, ncomp);
+}
+
+// Reads the coarse density (component 0) into a GLOBAL ny*nx row-major field, MULTI-BOX and
+// DISTRIBUTION-AWARE. Each rank writes its local cells into a ny*nx buffer initialized to 0
 // then, if distributed, all_reduce_sum_inplace recomposes the full field on ALL ranks (the
 // boxes are disjoint -> the cross-rank sum reconstructs the field exactly). Replicated mono-box:
 // a single fab covers everything, the buffer is already complete, all_reduce would be the identity
 // -> we avoid it (bit-identical to the historical direct read fab(0)).
-inline std::vector<double> coupler_read_coarse(const MultiFab& U, int n, bool replicated) {
-  device_fence();
-  std::vector<double> out(static_cast<std::size_t>(n) * n, 0.0);
+inline std::vector<double> coupler_read_coarse(const MultiFab& U, int nx, int ny,
+                                               bool replicated) {
+  // Explicit output packing: make the device result host-visible once before the linear pack.
+  U.sync_host();
+  const Box2D logical_domain = U.box_array().bounding_box();
+  if (logical_domain.nx() != nx || logical_domain.ny() != ny)
+    throw std::runtime_error("AMR coarse read shape disagrees with logical domain");
+  std::vector<double> out(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny), 0.0);
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const Box2D v = U.box(li);
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        out[static_cast<std::size_t>(j) * n + i] = u(i, j, 0);
+        out[static_cast<std::size_t>(j - logical_domain.lo[1]) * nx +
+            static_cast<std::size_t>(i - logical_domain.lo[0])] = u(i, j, 0);
   }
   if (!replicated)
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    all_reduce_sum_inplace(out.data(), out.size());
   return out;
 }
 
+inline std::vector<double> coupler_read_coarse(const MultiFab& U, int n, bool replicated) {
+  return coupler_read_coarse(U, n, n, replicated);
+}
+
 // Reads the coarse-level potential phi (component 0 of aux(0), written by compute_aux after the
-// Poisson solve) into a GLOBAL n*n row-major field, MULTI-BOX and DISTRIBUTION-AWARE. aux(0) shares
+// Poisson solve) into a GLOBAL ny*nx row-major field, MULTI-BOX and DISTRIBUTION-AWARE. aux(0) shares
 // EXACTLY the layout of the coarse U (same BoxArray + DistributionMapping, cf. amr_level_storage:
 // aux_[0] is built on U.box_array()/U.dmap()), so the recomposition is identical to
-// coupler_read_coarse: local n*n buffer, all_reduce_sum if distributed (disjoint boxes -> exact
+// coupler_read_coarse: local ny*nx buffer, all_reduce_sum if distributed (disjoint boxes -> exact
 // sum), avoided in replicated mono-box (field already complete). PRECONDITION: update()/compute_aux
 // has run at least once (otherwise aux(0) is 0). Strict counterpart of coupler_read_coarse for phi.
-inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n, bool replicated) {
-  device_fence();
-  std::vector<double> out(static_cast<std::size_t>(n) * n, 0.0);
+inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int nx, int ny,
+                                                   bool replicated) {
+  // Explicit output packing, outside the numerical hot path.
+  aux0.sync_host();
+  const Box2D logical_domain = aux0.box_array().bounding_box();
+  if (logical_domain.nx() != nx || logical_domain.ny() != ny)
+    throw std::runtime_error("AMR coarse potential shape disagrees with logical domain");
+  std::vector<double> out(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny), 0.0);
   for (int li = 0; li < aux0.local_size(); ++li) {
     const ConstArray4 a = aux0.fab(li).const_array();
     const Box2D v = aux0.box(li);
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        out[static_cast<std::size_t>(j) * n + i] = a(i, j, 0);
+        out[static_cast<std::size_t>(j - logical_domain.lo[1]) * nx +
+            static_cast<std::size_t>(i - logical_domain.lo[0])] = a(i, j, 0);
   }
   if (!replicated)
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    all_reduce_sum_inplace(out.data(), out.size());
   return out;
 }
 
-// Injects the coarse into the valid cells of a fine patch (piecewise constant, ratio 2),
+inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n,
+                                                   bool replicated) {
+  return coupler_read_coarse_phi(aux0, n, n, replicated);
+}
+
+// Prolongs the coarse state into the valid cells of a fine patch (conservative linear, ratio 2),
 // MULTI-BOX and DISTRIBUTION-AWARE. Makes the hierarchy consistent before the first sync_down (the
 // seed patch is at 0). Replicated mono-box: coarse fully local, direct read via
 // mf_find_box (always found); no collective -> bit-identical to the historical fab(0).
 // Distributed multi-box: we bring the needed coarse regions onto a LOCAL child-coarsen grid
-// via parallel_copy (same scheme as coupler_inject_aux_mb), then inject.
-inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, bool replicated) {
-  const int nc = Uf.ncomp();
-  if (replicated) {
-    device_fence();
-    for (int li = 0; li < Uf.local_size(); ++li) {
-      Array4 f = Uf.fab(li).array();
-      const Box2D v = Uf.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-          const int pb = mf_find_box(Uc, ci, cj);
-          if (pb < 0)
-            continue;
-          const ConstArray4 c = Uc.fab(pb).const_array();
-          for (int k = 0; k < nc; ++k)
-            f(i, j, k) = c(ci, cj, k);
-        }
-    }
-    return;
-  }
-  const BoxArray ccoarse = coarsen(Uf.box_array(), kAmrRefRatio);  // coarse footprint (valid cells)
-  MultiFab Pc(ccoarse, Uf.dmap(), Uc.ncomp(), 0);
-  parallel_copy(Pc, Uc);  // coarse regions (from any rank) -> local grid
-  device_fence();
-  for (int li = 0; li < Uf.local_size(); ++li) {
-    Array4 f = Uf.fab(li).array();
-    const ConstArray4 c = Pc.fab(li).const_array();
-    const Box2D v = Uf.box(li);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-        for (int k = 0; k < nc; ++k)
-          f(i, j, k) = c(ci, cj, k);
-      }
-  }
+// via parallel_copy (same scheme as coupler_inject_aux_mb), then reconstruct.
+inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf,
+                                             const Box2D& coarse_domain,
+                                             const Box2D& fine_domain, bool replicated,
+                                             Periodicity periodicity = {}) {
+  if (Uc.ncomp() != Uf.ncomp())
+    throw std::runtime_error("initial conservative-linear prolongation component mismatch");
+  coupler_conservative_linear_to_fine_mb(
+      Uc, Uf, coarse_domain, fine_domain, {coarse_domain.lo[0], coarse_domain.lo[1]},
+      {fine_domain.lo[0], fine_domain.lo[1]}, {kAmrRefRatio, kAmrRefRatio}, replicated,
+      periodicity);
 }
 
-struct ConservativeLinearProlongKernel {
-  Array4 fine;
-  ConstArray4 coarse;
-  Box2D coarse_domain;
-  Box2D fine_domain;
-  int component;
+enum class ConservativeCellFillRegion : unsigned char { Valid, Ghost, ValidAndGhost };
 
-  POPS_HD void operator()(int i, int j) const {
-    const int ci = coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
-    const int cj = coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
-    const Real center = coarse(ci, cj, component);
-    Real sx = Real(0), sy = Real(0);
-    if (ci > coarse_domain.lo[0] && ci < coarse_domain.hi[0]) {
-      const Real left = center - coarse(ci - 1, cj, component);
-      const Real right = coarse(ci + 1, cj, component) - center;
-      if (left * right > Real(0))
-        sx = ((left < Real(0) ? -left : left) < (right < Real(0) ? -right : right)) ? left : right;
-    }
-    if (cj > coarse_domain.lo[1] && cj < coarse_domain.hi[1]) {
-      const Real down = center - coarse(ci, cj - 1, component);
-      const Real up = coarse(ci, cj + 1, component) - center;
-      if (down * up > Real(0))
-        sy = ((down < Real(0) ? -down : down) < (up < Real(0) ? -up : up)) ? down : up;
-    }
-    const Real ox = ((i - fine_domain.lo[0]) & 1) ? Real(0.25) : Real(-0.25);
-    const Real oy = ((j - fine_domain.lo[1]) & 1) ? Real(0.25) : Real(-0.25);
-    fine(i, j, component) = center + ox * sx + oy * sy;
+/// Persistent parent carrier for one exact conservative-linear transfer topology. Preparation
+/// allocates the carrier and periodic image catalogue once and warms the redistribution schedule;
+/// stable apply() calls only refresh values and launch reconstruction kernels. The workspace is
+/// owned by the coupler/runtime that owns the hierarchy, never by a process-global cache.
+class PreparedConservativeCellTransferWorkspace {
+ public:
+  PreparedConservativeCellTransferWorkspace(
+      const PreparedConservativeCellTransferWorkspace&) = delete;
+  PreparedConservativeCellTransferWorkspace& operator=(
+      const PreparedConservativeCellTransferWorkspace&) = delete;
+  PreparedConservativeCellTransferWorkspace(
+      PreparedConservativeCellTransferWorkspace&&) noexcept = default;
+  PreparedConservativeCellTransferWorkspace& operator=(
+      PreparedConservativeCellTransferWorkspace&&) noexcept = default;
+
+  static PreparedConservativeCellTransferWorkspace prepare(
+      const MultiFab& coarse, const MultiFab& fine, const Box2D& coarse_domain,
+      const Box2D& fine_domain, bool replicated_parent, ConservativeCellFillRegion region,
+      Periodicity periodicity, std::uint64_t topology_generation,
+      const CommunicatorView& communicator) {
+    return prepare(coarse, fine, coarse_domain, fine_domain, replicated_parent, region,
+                   periodicity, topology_generation, communicator,
+                   std::make_shared<const PreparedCoarseFineOperator>(
+                       prepare_limited_linear_coarse_fine_operator()));
   }
+
+  static PreparedConservativeCellTransferWorkspace prepare(
+      const MultiFab& coarse, const MultiFab& fine, const Box2D& coarse_domain,
+      const Box2D& fine_domain, bool replicated_parent, ConservativeCellFillRegion region,
+      Periodicity periodicity, std::uint64_t topology_generation,
+      const CommunicatorView& communicator,
+      std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator) {
+    if (fine.ncomp() != coarse.ncomp())
+      throw std::invalid_argument(
+          "prepared conservative cell transfer component mismatch");
+    if (coarse_domain.empty() || fine_domain != coarse_domain.refine(kAmrRefRatio))
+      throw std::invalid_argument(
+          "prepared conservative cell transfer has inconsistent logical domains");
+    if (!prepared_operator)
+      throw std::invalid_argument("prepared conservative cell transfer lacks its operator");
+    prepared_operator->validate_domain(coarse_domain);
+    if (replicated_parent && communicator.active())
+      throw std::invalid_argument(
+          "replicated conservative parent requires a rank-local communicator");
+
+    const bool includes_ghosts = region != ConservativeCellFillRegion::Valid;
+    // BoxArray growth is currently isotropic.  Grow by the larger directional reach (safe
+    // over-allocation for an anisotropic provider), while retaining directional validation below.
+    const int reach =
+        std::max(prepared_operator->parent_reach_x, prepared_operator->parent_reach_y);
+    const int fine_growth = checked_coarse_fine_carrier_growth(
+        includes_ghosts ? fine.n_grow() : 0, kAmrRefRatio, reach);
+    const BoxArray parent_boxes =
+        coarsen_grown(fine.box_array(), fine_growth, kAmrRefRatio);
+    for (const Box2D& box : parent_boxes.boxes())
+      if (box.nx() < prepared_operator->minimum_axis_cells_x ||
+          box.ny() < prepared_operator->minimum_axis_cells_y)
+        throw std::invalid_argument(
+            "prepared conservative carrier cannot hold the selected directional stencil");
+    DistributionMapping parent_mapping = fine.dmap();
+    if (replicated_parent)
+      parent_mapping = DistributionMapping(
+          std::vector<int>(static_cast<std::size_t>(parent_boxes.size()), my_rank()));
+
+    PreparedConservativeCellTransferWorkspace workspace(
+        MultiFab(parent_boxes, parent_mapping, coarse.ncomp(), 0), fine, coarse_domain,
+        fine_domain, replicated_parent, region, periodicity, topology_generation,
+        std::move(prepared_operator));
+    workspace.copy_plan_.emplace(PreparedPeriodicCopyPlan::prepare(
+        workspace.parent_carrier_, coarse, coarse_domain, periodicity, topology_generation,
+        communicator));
+    return workspace;
+  }
+
+  void apply(const MultiFab& coarse, MultiFab& fine, std::uint64_t topology_generation,
+             const CommunicatorView& communicator) {
+    validate_(coarse, fine, topology_generation);
+    copy_plan_->apply(parent_carrier_, coarse, topology_generation, communicator);
+    fill_components_(fine, {});
+  }
+
+  void apply(const MultiFab& coarse, MultiFab& fine, std::span<const int> components,
+             std::uint64_t topology_generation, const CommunicatorView& communicator) {
+    validate_(coarse, fine, topology_generation);
+    for (const int component : components)
+      if (component < 0 || component >= fine.ncomp())
+        throw std::out_of_range(
+            "prepared conservative-linear selected component is out of range");
+    copy_plan_->apply(parent_carrier_, coarse, topology_generation, communicator);
+    fill_components_(fine, components);
+  }
+
+  /// Publishes the source snapshot already materialized by prepare(). Intended for one-shot setup
+  /// routes; persistent owners call apply() for every later state.
+  void publish_prepared(MultiFab& fine) {
+    validate_fine_(fine, topology_generation_);
+    fill_components_(fine, {});
+  }
+
+  [[nodiscard]] const std::shared_ptr<const PreparedCoarseFineOperator>& prepared_operator()
+      const noexcept {
+    return prepared_operator_;
+  }
+
+ private:
+  PreparedConservativeCellTransferWorkspace(
+      MultiFab parent_carrier, const MultiFab& fine, Box2D coarse_domain, Box2D fine_domain,
+      bool replicated_parent, ConservativeCellFillRegion region, Periodicity periodicity,
+      std::uint64_t topology_generation,
+      std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator)
+      : parent_carrier_(std::move(parent_carrier)),
+        fine_boxes_(fine.box_array().boxes()),
+        fine_ranks_(fine.dmap().ranks()),
+        fine_ncomp_(fine.ncomp()),
+        fine_ngrow_(fine.n_grow()),
+        coarse_domain_(coarse_domain),
+        fine_domain_(fine_domain),
+        transform_{coarse_domain.lo[0], coarse_domain.lo[1], fine_domain.lo[0],
+                   fine_domain.lo[1], kAmrRefRatio, kAmrRefRatio},
+        replicated_parent_(replicated_parent),
+        region_(region),
+        periodicity_(periodicity),
+        topology_generation_(topology_generation),
+        prepared_operator_(std::move(prepared_operator)) {}
+
+  void validate_fine_(const MultiFab& fine, std::uint64_t topology_generation) const {
+    if (fine.box_array().boxes() != fine_boxes_ || fine.dmap().ranks() != fine_ranks_ ||
+        fine.ncomp() != fine_ncomp_ || fine.n_grow() != fine_ngrow_)
+      throw std::invalid_argument(
+          "prepared conservative cell transfer crossed an exact fine layout");
+    if (topology_generation != topology_generation_)
+      throw std::invalid_argument(
+          "prepared conservative cell transfer crossed a topology generation");
+  }
+
+  void validate_(const MultiFab& coarse, const MultiFab& fine,
+                 std::uint64_t topology_generation) const {
+    validate_fine_(fine, topology_generation);
+    if (!copy_plan_ || coarse.ncomp() != fine_ncomp_)
+      throw std::invalid_argument(
+          "prepared conservative cell transfer has incompatible parent storage");
+  }
+
+  void fill_components_(MultiFab& fine, std::span<const int> selected) {
+    const bool includes_ghosts = region_ != ConservativeCellFillRegion::Valid;
+    const bool fill_valid = region_ != ConservativeCellFillRegion::Ghost;
+    const bool fill_ghost = region_ != ConservativeCellFillRegion::Valid;
+    for (int local_fine = 0; local_fine < fine.local_size(); ++local_fine) {
+      const int local_parent_index =
+          replicated_parent_ ? fine.global_index(local_fine) : local_fine;
+      Array4 destination = fine.fab(local_fine).array();
+      const ConstArray4 source = parent_carrier_.fab(local_parent_index).const_array();
+      const Box2D valid = fine.box(local_fine);
+      const Box2D target = includes_ghosts ? fine.fab(local_fine).grown_box() : valid;
+      const auto launch = [&](int component) {
+        prepared_operator_->launch_spatial(destination, source, target, valid, coarse_domain_,
+                                           fine_domain_, transform_, component, fill_valid,
+                                           fill_ghost, periodicity_);
+      };
+      if (selected.empty()) {
+        for (int component = 0; component < fine.ncomp(); ++component)
+          launch(component);
+      } else {
+        for (const int component : selected)
+          launch(component);
+      }
+    }
+    // The persistent carrier may be refreshed by the next apply, so all reconstruction reads must
+    // be complete before returning it to the owner.
+    device_fence();
+  }
+
+  MultiFab parent_carrier_;
+  std::optional<PreparedPeriodicCopyPlan> copy_plan_;
+  std::vector<Box2D> fine_boxes_;
+  std::vector<int> fine_ranks_;
+  int fine_ncomp_ = 0;
+  int fine_ngrow_ = 0;
+  Box2D coarse_domain_{};
+  Box2D fine_domain_{};
+  PreparedCoarseFineTransform2D transform_{};
+  bool replicated_parent_ = false;
+  ConservativeCellFillRegion region_ = ConservativeCellFillRegion::Valid;
+  Periodicity periodicity_{};
+  std::uint64_t topology_generation_ = 0;
+  std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator_;
 };
+
+using PreparedConservativeLinearTransferWorkspace =
+    PreparedConservativeCellTransferWorkspace;
+
+/// Materialize a selected region through one migrated parent carrier.  Valid+ghost publication is
+/// intentionally a single pass: aux propagation runs every field update and must not pay for two
+/// parallel_copy schedules, two carrier allocations and four device fences per level.
+inline void coupler_conservative_linear_fill_region_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
+    const Box2D& fine_domain, bool replicated_parent,
+    ConservativeCellFillRegion region, Periodicity periodicity) {
+  const CommunicatorView communicator =
+      replicated_parent ? CommunicatorView{} : world_communicator_view();
+  auto workspace = PreparedConservativeCellTransferWorkspace::prepare(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent, region, periodicity,
+      /*topology_generation=*/0, communicator);
+  workspace.publish_prepared(fine);
+}
 
 /// Ratio-2 conservative piecewise-linear prolongation. The four fine children average exactly to
 /// the parent value; minmod-limited slopes make the operator monotone. Parent regions are first
 /// migrated onto the child DistributionMapping, so the per-patch kernel is MPI/GPU-safe.
 inline void coupler_conservative_linear_to_fine_mb(const MultiFab& coarse, MultiFab& fine,
+                                                   const Box2D& coarse_domain,
+                                                   const Box2D& fine_domain,
                                                    const std::vector<int>& coarse_origin,
                                                    const std::vector<int>& fine_origin,
-                                                   const std::vector<int>& refinement_ratio) {
+                                                   const std::vector<int>& refinement_ratio,
+                                                   bool replicated_parent,
+                                                   Periodicity periodicity) {
   if (fine.ncomp() != coarse.ncomp())
     throw std::runtime_error("conservative-linear prolongation component mismatch");
   if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
       refinement_ratio != std::vector<int>{2, 2})
     throw std::runtime_error(
         "conservative-linear prolongation received an invalid index transform");
-  const BoxArray local_parent_boxes = coarsen_grown(fine.box_array(), 2, refinement_ratio[0]);
-  MultiFab local_parent(local_parent_boxes, fine.dmap(), coarse.ncomp(), 0);
-  parallel_copy(local_parent, coarse);
-  const Box2D coarse_domain = coarse.box_array().bounding_box();
-  const Box2D fine_domain = coarse_domain.refine(refinement_ratio[0]);
+  if (coarse_domain.empty() || fine_domain != coarse_domain.refine(refinement_ratio[0]))
+    throw std::runtime_error("conservative-linear prolongation logical-domain mismatch");
   if (coarse_domain.lo[0] != coarse_origin[0] || coarse_domain.lo[1] != coarse_origin[1] ||
       fine_domain.lo[0] != fine_origin[0] || fine_domain.lo[1] != fine_origin[1])
     throw std::runtime_error("conservative-linear prolongation index origin mismatch");
-  for (int li = 0; li < fine.local_size(); ++li) {
-    Array4 destination = fine.fab(li).array();
-    const ConstArray4 source = local_parent.fab(li).const_array();
-    const Box2D valid = fine.box(li);
-    for (int component = 0; component < fine.ncomp(); ++component)
-      for_each_cell(valid, ConservativeLinearProlongKernel{destination, source, coarse_domain,
-                                                           fine_domain, component});
-  }
+  coupler_conservative_linear_fill_region_mb(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent,
+      ConservativeCellFillRegion::Valid, periodicity);
+}
+
+/// Ratio-2 conservative piecewise-linear coarse/fine ghost production. The provider fills every
+/// requested fine ghost layer that is supported by the parent level and leaves physical ghosts to
+/// the boundary authority. Parent data is migrated onto one grown carrier per fine patch; the
+/// replicated-parent branch deliberately makes that carrier rank-local to avoid asymmetric MPI
+/// schedules from replicated coarse ownership metadata.
+inline void coupler_conservative_linear_fill_ghosts_mb(const MultiFab& coarse, MultiFab& fine,
+                                                       const Box2D& coarse_domain,
+                                                       const Box2D& fine_domain,
+                                                       bool replicated_parent,
+                                                       Periodicity periodicity) {
+  coupler_conservative_linear_fill_region_mb(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent,
+      ConservativeCellFillRegion::Ghost, periodicity);
+}
+
+inline void coupler_conservative_linear_fill_all_mb(const MultiFab& coarse, MultiFab& fine,
+                                                     const Box2D& coarse_domain,
+                                                     const Box2D& fine_domain,
+                                                     bool replicated_parent,
+                                                     Periodicity periodicity) {
+  coupler_conservative_linear_fill_region_mb(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent,
+      ConservativeCellFillRegion::ValidAndGhost, periodicity);
+}
+
+inline void coupler_conservative_polynomial5_fill_region_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
+    const Box2D& fine_domain, bool replicated_parent,
+    ConservativeCellFillRegion region, Periodicity periodicity) {
+  const CommunicatorView communicator =
+      replicated_parent ? CommunicatorView{} : world_communicator_view();
+  auto workspace = PreparedConservativeCellTransferWorkspace::prepare(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent, region, periodicity,
+      /*topology_generation=*/0, communicator,
+      std::make_shared<const PreparedCoarseFineOperator>(
+          prepare_polynomial5_coarse_fine_operator()));
+  workspace.publish_prepared(fine);
+}
+
+inline void coupler_conservative_polynomial5_to_fine_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
+    const Box2D& fine_domain, const std::vector<int>& coarse_origin,
+    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio,
+    bool replicated_parent, Periodicity periodicity) {
+  if (fine.ncomp() != coarse.ncomp())
+    throw std::runtime_error("degree-four conservative prolongation component mismatch");
+  if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
+      refinement_ratio != std::vector<int>{2, 2})
+    throw std::runtime_error(
+        "degree-four conservative prolongation received an invalid index transform");
+  if (coarse_domain.empty() || fine_domain != coarse_domain.refine(2) ||
+      coarse_origin != std::vector<int>{coarse_domain.lo[0], coarse_domain.lo[1]} ||
+      fine_origin != std::vector<int>{fine_domain.lo[0], fine_domain.lo[1]})
+    throw std::runtime_error("degree-four conservative prolongation logical-domain mismatch");
+  coupler_conservative_polynomial5_fill_region_mb(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent,
+      ConservativeCellFillRegion::Valid, periodicity);
+}
+
+inline void coupler_conservative_polynomial5_fill_ghosts_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
+    const Box2D& fine_domain, bool replicated_parent, Periodicity periodicity) {
+  coupler_conservative_polynomial5_fill_region_mb(
+      coarse, fine, coarse_domain, fine_domain, replicated_parent,
+      ConservativeCellFillRegion::Ghost, periodicity);
 }
 
 // Builds the coarse level (BoxArray + DistributionMapping) of the AmrSystem path according to the
@@ -315,19 +562,27 @@ inline void coupler_conservative_linear_to_fine_mb(const MultiFab& coarse, Multi
 //  - replicated (distribute=false, DEFAULT): mono-box covering the domain, dmap = my_rank() everywhere
 //    (the box lives on each rank). In serial my_rank()=0 -> identical to round-robin, bit for bit.
 //    This is the layout GeometricMG(replicated=true) and the historical one expect.
-//  - distributed (distribute=true): multi-box BoxArray::from_domain(dom, max_grid) spread round-robin
-//    DistributionMapping(ba.size(), n_ranks()). Each rank carries only its tiles -> the coarse
-//    Poisson and coarse transport distribute (strong-scaling). max_grid<=0 => n/2 (2x2).
-inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n, bool distribute,
-                                                                           int max_grid) {
-  const Box2D dom = Box2D::from_extents(n, n);
+//  - distributed (distribute=true): multi-box BoxArray::from_domain(dom, max_grid) assigned by the
+//    same prepared ownership authority used for fine seeds and every regrid. Each rank carries only
+//    its tiles -> the coarse Poisson and coarse transport distribute (strong-scaling).
+inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(
+    int nx, int ny, bool distribute, int max_grid,
+    const PreparedLoadBalanceAuthority& load_balance) {
+  const Box2D dom = Box2D::from_extents(nx, ny);
   if (!distribute) {
     BoxArray ba(std::vector<Box2D>{dom});
     return {ba, DistributionMapping(std::vector<int>{my_rank()})};
   }
-  const int mg = (max_grid > 0) ? max_grid : (n / 2 > 0 ? n / 2 : n);
-  BoxArray ba = BoxArray::from_domain(dom, mg);
-  return {ba, DistributionMapping(ba.size(), n_ranks())};
+  const int mgx = (max_grid > 0) ? max_grid : std::max(1, nx / 2);
+  const int mgy = (max_grid > 0) ? max_grid : std::max(1, ny / 2);
+  BoxArray ba = BoxArray::from_domain(dom, mgx, mgy);
+  return {ba, load_balance.distribute(ba, n_ranks())};
+}
+
+inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(
+    int n, bool distribute, int max_grid,
+    const PreparedLoadBalanceAuthority& load_balance) {
+  return coupler_make_coarse_layout(n, n, distribute, max_grid, load_balance);
 }
 
 inline DistributionMapping coupler_authoritative_coarse_mapping(
@@ -339,6 +594,11 @@ inline DistributionMapping coupler_authoritative_coarse_mapping(
     throw std::invalid_argument(
         "AmrCouplerMP coarse BoxArray disagrees with the authoritative level field");
   return coarse.dmap();
+}
+
+inline Geometry coupler_validated_geometry(Geometry geometry) {
+  require_positive_finite_amr_spacing(geometry.dx(), geometry.dy());
+  return geometry;
 }
 
 }  // namespace detail
@@ -361,7 +621,7 @@ class AmrCouplerMP {
   //   true  (performant DEFAULT): coarse mono-box REPLICATED on all ranks. Best coarse
   //          MG solve (no multigrid degeneration), zero communication for the
   //          coarse Poisson, robust reference -> the right default for small/medium cases.
-  //   false (EXPLICIT scalable mode): coarse multi-box DISTRIBUTED round-robin. Lifts the
+  //   false (EXPLICIT scalable mode): coarse multi-box assigned by the prepared authority. Lifts the
   //          O(NX*NY*nranks) memory lock of level 0, required at very large scale. But the
   //          geometric MG degenerates for a finely-split coarse (>2x2 boxes do not tile the
   //          coarsest grid): reserve for cases where the level-0 memory is the lock.
@@ -372,10 +632,12 @@ class AmrCouplerMP {
   template <class FactoryT = DefaultEllipticFactory<Elliptic>>
     requires pops::EllipticFactory<FactoryT, Elliptic>
   AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse, const BCRec& bc,
-               std::vector<AmrLevelMP> levels, ActiveRegionProvider2D active = {},
-               bool replicated_coarse = true, FactoryT elliptic_factory = {})
+               std::vector<AmrLevelMP> levels, ActiveRegionProvider2D active,
+               bool replicated_coarse,
+               std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance,
+               FactoryT elliptic_factory = {})
       : model_(model),
-        geom_(geom),
+        geom_(detail::coupler_validated_geometry(geom)),
         coarse_boxes_(ba_coarse),
         coarse_mapping_(detail::coupler_authoritative_coarse_mapping(ba_coarse, levels)),
         elliptic_bc_(bc),
@@ -383,8 +645,15 @@ class AmrCouplerMP {
             {geom_, coarse_boxes_, coarse_mapping_, elliptic_bc_, std::move(active),
              replicated_coarse ? FieldDistribution::Replicated : FieldDistribution::Distributed},
             std::move(elliptic_factory))),
-        stack_(geom.domain, std::move(levels), aux_comps<Model>()),
-        replicated_coarse_(replicated_coarse) {}
+        stack_(geom_.domain, std::move(levels), aux_comps<Model>()),
+        replicated_coarse_(replicated_coarse),
+        load_balance_authority_(std::move(load_balance)) {
+    if (!load_balance_authority_)
+      throw std::invalid_argument("AmrCouplerMP requires a prepared load-balance authority");
+    for (const AmrLevelMP& level : stack_.levels())
+      detail::require_positive_finite_amr_spacing(level.dx, level.dy);
+    prepare_aux_transfer_workspaces_();
+  }
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   MultiFab& coarse() { return stack_.coarse(); }
@@ -395,11 +664,22 @@ class AmrCouplerMP {
   const MultiFab& aux0() const { return stack_.aux(0); }
 
   /// Registers a model-NAMED aux field (ADC-291) at shared-channel component @p comp (>= kAuxNamedBase),
-  /// as a coarse base-level field @p field (n*n row-major, global cell index j*nx+i). STATIC user field
-  /// re-applied by compute_aux every update (so it persists across regrid) and injected coarse->fine.
+  /// as a coarse base-level field @p field (ny*nx row-major, global cell index j*nx+i). STATIC user field
+  /// installed once on the coarse authority and injected coarse->fine on every update/regrid.
   /// Single-block AMR counterpart of System::set_aux_field_component. The facade validates comp/size and
   /// resolves the name. No-op default (no named field -> empty map -> bit-identical).
   void set_named_aux(int comp, std::vector<Real> field) {
+    if (comp < kAuxNamedBase || comp >= stack_.aux(0).ncomp())
+      throw std::out_of_range("AmrCouplerMP named aux component is outside the model channel");
+    const Box2D logical_domain = stack_.domain();
+    const std::size_t expected = static_cast<std::size_t>(logical_domain.nx()) *
+                                 static_cast<std::size_t>(logical_domain.ny());
+    if (field.size() != expected)
+      throw std::invalid_argument("AmrCouplerMP named aux field shape disagrees with the domain");
+    if (named_aux_.find(comp) == named_aux_.end()) {
+      named_aux_components_.push_back(comp);
+      std::sort(named_aux_components_.begin(), named_aux_components_.end());
+    }
     named_aux_[comp] = std::move(field);
     apply_named_aux();  // stack_ exists at ctor: reflect onto the coarse aux right away
   }
@@ -407,9 +687,19 @@ class AmrCouplerMP {
   /// applies it onto the COARSE aux AFTER the shared fill, overriding only that component's
   /// physical-face ghosts (periodic faces stay periodic). Single-block AMR counterpart of
   /// System::set_aux_field_halo_component. No-op default.
-  void set_named_aux_bc(int comp, AuxHaloPolicy policy) { named_aux_bc_[comp] = policy; }
+  void set_named_aux_bc(int comp, AuxHaloPolicy policy) {
+    if (comp < kAuxNamedBase || comp >= stack_.aux(0).ncomp())
+      throw std::out_of_range("AmrCouplerMP named aux halo component is outside the model channel");
+    named_aux_bc_[comp] = policy;
+  }
   const Box2D& domain() const { return stack_.domain(); }
   int nlev() const { return stack_.nlev(); }
+  void set_transport_boundary_fill(AmrBoundaryFillAuthority authority) {
+    validate_amr_boundary_fill_authority(authority.periodicity, &authority, stack_.L());
+    transport_periodicity_ = authority.periodicity;
+    transport_boundary_fill_ = std::move(authority);
+    prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
+  }
 
   // ----------------------------------------------------------------------------------------------
   // AMR ACCEPTED-STATE CHECKPOINT / RESTART. The mono-block coupler carries the FULL conservative
@@ -419,7 +709,7 @@ class AmrCouplerMP {
   // ----------------------------------------------------------------------------------------------
 
   // Reads the FULL conservative state (all components) of level @p k into a flat
-  // component-major field c*nf*nf + j*nf + i, nf = n << k (n = coarse side). The cells OUTSIDE
+  // component-major field over the exact rectangular level domain. The cells OUTSIDE
   // patches (uncovered fine level) stay at 0: a fine level is only defined within its patches
   // (at restart we rewrite ONLY the patch cells, cf. set_level_state).
   std::vector<double> level_state(int k) {
@@ -428,17 +718,21 @@ class AmrCouplerMP {
       throw std::runtime_error("AmrCouplerMP::level_state: level out of bounds");
     MultiFab& U = L[k].U;
     const int nc = U.ncomp();
-    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
-    std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
-    device_fence();
+    const Box2D level_domain = amr_level_index_domain(stack_.domain(), k);
+    const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+    const std::size_t cells = nx * static_cast<std::size_t>(level_domain.ny());
+    std::vector<double> out(static_cast<std::size_t>(nc) * cells, 0.0);
+    // Checkpoint/output serialization is an explicit host packing boundary.
+    U.sync_host();
     for (int li = 0; li < U.local_size(); ++li) {
       const ConstArray4 u = U.fab(li).const_array();
       const Box2D v = U.box(li);
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
           for (int c = 0; c < nc; ++c)
-            out[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
-                static_cast<std::size_t>(i)] = u(i, j, c);
+            out[static_cast<std::size_t>(c) * cells +
+                static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+                static_cast<std::size_t>(i - level_domain.lo[0])] = u(i, j, c);
     }
     return out;
   }
@@ -453,22 +747,28 @@ class AmrCouplerMP {
       throw std::runtime_error("AmrCouplerMP::set_level_state: level out of bounds");
     MultiFab& U = L[k].U;
     const int nc = U.ncomp();
-    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
-    if (s.size() != static_cast<std::size_t>(nc) * nf * nf)
-      throw std::runtime_error("AmrCouplerMP::set_level_state: state size != ncomp*nf*nf");
-    device_fence();
+    const Box2D level_domain = amr_level_index_domain(stack_.domain(), k);
+    const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+    const std::size_t cells = nx * static_cast<std::size_t>(level_domain.ny());
+    if (s.size() != static_cast<std::size_t>(nc) * cells)
+      throw std::runtime_error(
+          "AmrCouplerMP::set_level_state: state size differs from ncomp*level_cells");
+    // Checkpoint restore is an explicit host unpacking boundary.
+    U.sync_host();
     for (int li = 0; li < U.local_size(); ++li) {
       Array4 u = U.fab(li).array();
       const Box2D v = U.box(li);
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
           for (int c = 0; c < nc; ++c)
-            u(i, j, c) = s[static_cast<std::size_t>(c) * nf * nf +
-                           static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+            u(i, j, c) = s[static_cast<std::size_t>(c) * cells +
+                           static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+                           static_cast<std::size_t>(i - level_domain.lo[0])];
     }
+    U.sync_device();
   }
 
-  // Reads the potential phi of level @p k, flat nf*nf row-major field (nf = n << k), zeros outside patches.
+  // Reads the potential phi of level @p k, flat exact-domain row-major field, zeros outside patches.
   // Level 0: the multigrid WARM-START -- mg_.phi() (VALID cells), the state actually
   // reused by the NEXT solve (GeometricMG::solve keeps phi between calls). Level >= 1:
   // aux(k) component 0 (informational; recomputed at update). It is mg_.phi() level 0 that makes the
@@ -476,16 +776,19 @@ class AmrCouplerMP {
   std::vector<double> level_potential(int k) {
     if (k < 0 || k >= stack_.nlev())
       throw std::runtime_error("AmrCouplerMP::level_potential: level out of bounds");
-    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
-    std::vector<double> out(nf * nf, 0.0);
-    device_fence();
+    const Box2D level_domain = amr_level_index_domain(stack_.domain(), k);
+    const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+    std::vector<double> out(nx * static_cast<std::size_t>(level_domain.ny()), 0.0);
     const MultiFab& P = (k == 0) ? mg_.phi() : stack_.aux(k);
+    // Checkpoint/output serialization is an explicit host packing boundary.
+    P.sync_host();
     for (int li = 0; li < P.local_size(); ++li) {
       const ConstArray4 p = P.fab(li).const_array();
       const Box2D v = P.box(li);
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          out[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)] = p(i, j, 0);
+          out[static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+              static_cast<std::size_t>(i - level_domain.lo[0])] = p(i, j, 0);
     }
     return out;
   }
@@ -496,18 +799,23 @@ class AmrCouplerMP {
   void set_level_potential(int k, const std::vector<double>& p) {
     if (k < 0 || k >= stack_.nlev())
       throw std::runtime_error("AmrCouplerMP::set_level_potential: level out of bounds");
-    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
-    if (p.size() != nf * nf)
-      throw std::runtime_error("AmrCouplerMP::set_level_potential: phi size != nf*nf");
-    device_fence();
+    const Box2D level_domain = amr_level_index_domain(stack_.domain(), k);
+    const std::size_t nx = static_cast<std::size_t>(level_domain.nx());
+    if (p.size() != nx * static_cast<std::size_t>(level_domain.ny()))
+      throw std::runtime_error(
+          "AmrCouplerMP::set_level_potential: phi size differs from level cell count");
     MultiFab& P = (k == 0) ? mg_.phi() : stack_.aux(k);
+    // Warm-start restore is an explicit host unpacking boundary.
+    P.sync_host();
     for (int li = 0; li < P.local_size(); ++li) {
       Array4 q = P.fab(li).array();
       const Box2D v = P.box(li);
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          q(i, j, 0) = p[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+          q(i, j, 0) = p[static_cast<std::size_t>(j - level_domain.lo[1]) * nx +
+                         static_cast<std::size_t>(i - level_domain.lo[0])];
     }
+    P.sync_device();
   }
 
   // GLOBAL variants of level_state / level_potential (ADC-509). Ownership-distributed levels contain
@@ -517,7 +825,7 @@ class AmrCouplerMP {
   std::vector<double> level_state_global(int k) {
     std::vector<double> out = level_state(k);
     if (k > 0 || !replicated_coarse_)
-      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+      all_reduce_sum_inplace(out.data(), out.size());
     return out;
   }
 
@@ -545,13 +853,13 @@ class AmrCouplerMP {
   std::vector<double> level_potential_global(int k) {
     std::vector<double> out = level_potential(k);
     if (k > 0 || !replicated_coarse_)
-      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+      all_reduce_sum_inplace(out.data(), out.size());
     return out;
   }
 
   // Imposes the fine-level hierarchy (restart): rebuilds level 1 on the SAVED @p
   // fine_boxes BoxArray (instead of Berger-Rigoutsos clustering on tags), via the SAME mechanism as
-  // regrid (regrid_field_on_layout: parent interp + fine carry-over), then reattaches the level-1 aux.
+  // regrid (prepared parent interpolation + fine carry-over), then reattaches the level-1 aux.
   // The rebuilt valid content is OVERWRITTEN afterwards by set_level_state (restore as-is): here we
   // rely only on the IMPOSED LAYOUT. SINGLE-RANK, 2-level mono-block hierarchy (so we impose
   // ONLY level 1). Clear rejection if the hierarchy has no fine level or if no box was saved.
@@ -567,22 +875,44 @@ class AmrCouplerMP {
           "fine-patch hierarchy required)");
     const int ngf = L[1].U.n_grow();  // inherit the ghost width of the current fine (scheme parity)
     BoxArray fb(fine_boxes);
-    DistributionMapping dmap(static_cast<int>(fb.size()),
-                             n_ranks());  // single-rank -> all on rank 0
-    L[1].U = regrid_field_on_layout(fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, replicated_coarse_);
+    DistributionMapping dmap = load_balance_authority_->distribute(fb, n_ranks());
+    const RegridProlongation prolong = [base_domain = stack_.domain(),
+                                        periodicity = transport_periodicity_](
+                                          const MultiFab& parent, MultiFab& fine,
+                                          int parent_level, int ratio,
+                                          bool parent_replicated,
+                                          const CommunicatorView&) {
+      const Box2D coarse_domain = amr_level_index_domain(base_domain, parent_level);
+      const Box2D fine_domain = coarse_domain.refine(ratio);
+      detail::coupler_conservative_linear_to_fine_mb(
+          parent, fine, coarse_domain, fine_domain,
+          {coarse_domain.lo[0], coarse_domain.lo[1]},
+          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated,
+          periodicity);
+      (void)parent_level;
+    };
+    L[1].U = regrid_field_on_layout_with_provider(
+        fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, prolong, world_communicator_view(),
+        replicated_coarse_);
     stack_.reattach_aux(1);  // realloc aux[1] on the new layout + rewire L[1].aux
+    prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
   }
 
   void sync_down() {  // average fine -> coarse over the whole hierarchy (multi-box)
     auto& L = stack_.L();
+    if (!average_down_plan_)
+      throw std::logic_error("AmrCouplerMP average-down plan was not prepared");
     for (int k = stack_.nlev() - 1; k >= 1; --k)
-      mf_average_down_mb(L[k].U, L[k - 1].U);
+      mf_average_down_mb(L[k].U, L[k - 1].U,
+                         average_down_plan_->transition_for_child(k),
+                         average_down_plan_->topology_generation(),
+                         world_communicator_view());
   }
 
-  /// OPT-IN: replaces the Option A AMR Poisson (coarse solve + piecewise-constant gradient injection)
-  /// with a COMPOSITE FAC elliptic solve (the fine patch REFINES the elliptic). Cf. CompositeFacPoisson.
-  /// Phase 2 scope: 2 levels, ONE interior mono-box fine patch, replicated coarse (single-rank).
-  /// Outside this scope, compute_aux falls back to Option A (bit-identical).
+  /// OPT-IN: replaces the coarse-only AMR Poisson with a COMPOSITE FAC elliptic solve (the fine
+  /// patch REFINES the elliptic). Cf. CompositeFacPoisson.
+  /// Current certified scope: 2 levels, ONE interior mono-box fine patch and replicated coarse.
+  /// Requests outside that scope are rejected; composite=true never falls back to a coarse-only solve.
   void set_composite_poisson(bool v) { composite_poisson_ = v; }
   bool composite_poisson() const { return composite_poisson_; }
 
@@ -597,46 +927,58 @@ class AmrCouplerMP {
   void compute_aux() {  // coarse Poisson + grad phi + injection to the fine levels
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
-    const Real dx = geom_.dx(), dy = geom_.dy();
-    // COMPOSITE path (opt-in): the fine patch TRULY refines the elliptic. Supported scope = 2 levels,
-    // ONE mono-box fine patch, replicated coarse (Phase 2). Otherwise Option A below (bit-identical).
-    if (composite_poisson_ && replicated_coarse_ && stack_.nlev() == 2 &&
-        L[1].U.box_array().size() == 1) {
+    detail::require_positive_finite_amr_spacing(geom_.dx(), geom_.dy());
+    for (const AmrLevelMP& level : L)
+      detail::require_positive_finite_amr_spacing(level.dx, level.dy);
+    // COMPOSITE path (opt-in): the fine patch truly refines the elliptic. Never replace an unsupported
+    // composite request with the physically different coarse-only solve below.
+    if (composite_poisson_) {
+      if (!replicated_coarse_ || stack_.nlev() != 2 || L[1].U.box_array().size() != 1)
+        throw std::runtime_error(
+            "AmrCouplerMP composite Poisson currently requires exactly two levels, one fine patch "
+            "and a replicated coarse level; coarse-only fallback is forbidden");
       compute_aux_composite();
       return;
     }
     // right-hand side via the model (no copied formula): f = elliptic_rhs(U)
     detail::coupler_eval_rhs(L[0].U, mg_.rhs(), model_);
     mg_.solve();  // leaves phi with its ghosts filled (last gs_rb_sweep -> fill_ghosts)
-    device_fence();
-    // aux = (phi, grad phi) per LOCAL coarse fab: covers the replicated mono-box (1 fab) as well as
-    // the distributed multi-box (de-replication). The box-edge derivatives read the ghosts of
-    // phi filled by the solve (distributed inter-box exchange via fill_boundary). mg_.phi() and
-    // aux(0) share the same layout (same BoxArray + DistributionMapping) -> fab(li) <-> box(li).
-    for (int li = 0; li < mg_.phi().local_size(); ++li) {
-      const ConstArray4 p = mg_.phi().fab(li).const_array();
-      Array4 a = stack_.aux(0).fab(li).array();
-      const Box2D b = stack_.aux(0).box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-          a(i, j, 0) = p(i, j);
-          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-        }
-    }
-    // model-NAMED aux (ADC-291): re-apply the static named fields onto the coarse valid cells BEFORE
-    // fill_boundary (ghosts) and the injection (lines below), so they reach every level and survive a
-    // regrid. The loop above wrote only comps 0..2 (phi/grad), so this never clobbers them. No-op
-    // without a named field (bit-identical).
-    apply_named_aux();
-    fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
+    // Use the same named device kernel as the single-block and composite-FAC paths. This is the
+    // exact centered operation order, handles every local box (including non-zero origins), and
+    // leaves model-named aux components untouched.
+    detail::coupler_grad_phi(mg_.phi(), stack_.aux(0),
+                             Real(1) / (Real(2) * geom_.dx()),
+                             Real(1) / (Real(2) * geom_.dy()));
+    // Named aux components are installed once by set_named_aux. The gradient kernel writes only
+    // comps 0..2, so replaying a host field on every update was redundant. The accepted coarse
+    // values are propagated below and survive fine-level regrids through the same provider.
+    BCRec level_aux_bc = detail::derive_aux_bc(elliptic_bc_);
+    const Periodicity aux_periodicity{
+        level_aux_bc.xlo == BCType::Periodic && level_aux_bc.xhi == BCType::Periodic,
+        level_aux_bc.ylo == BCType::Periodic && level_aux_bc.yhi == BCType::Periodic};
+    fill_ghosts(stack_.aux(0), dom, level_aux_bc);
     apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
                            // shared fill); no-op on a periodic domain / without a policy.
     // parent aux(k-1) replicated only if level 0 is: otherwise it is DISTRIBUTED (multi-box)
     // and the injection goes through parallel_copy. Beyond level 1, the parent is always distributed.
-    for (int k = 1; k < stack_.nlev(); ++k)
-      detail::coupler_inject_aux_mb(stack_.aux(k - 1), stack_.aux(k),
-                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
+    for (int k = 1; k < stack_.nlev(); ++k) {
+      auto& workspace = aux_transfer_workspaces_.at(static_cast<std::size_t>(k - 1));
+      if (!workspace)
+        throw std::logic_error("AMR aux transfer workspace was not prepared");
+      const bool replicated_parent = (k == 1) && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      workspace->apply(stack_.aux(k - 1), stack_.aux(k), transfer_topology_generation_,
+                       communicator);
+      // The C/F provider owns parent-supported cells only. Same-level exchange then overwrites
+      // overlaps and wraps domain-edge ghosts from the accepted fine valid state; leaving these
+      // cells at allocation sentinels would corrupt a patch that touches a periodic seam.
+      const Box2D level_domain = amr_level_index_domain(dom, k);
+      level_aux_bc.dx /= Real(kAmrRefRatio);
+      level_aux_bc.dy /= Real(kAmrRefRatio);
+      fill_ghosts(stack_.aux(k), level_domain, level_aux_bc);
+      apply_named_aux_bc(k);
+    }
   }
 
   /// Updates the hierarchy before a step: sync_down (fine -> coarse) then compute_aux (coarse
@@ -667,11 +1009,15 @@ class AmrCouplerMP {
   /// imex == false (rejected otherwise).
   template <class Disc = FirstOrder>
   void step(Real dt, bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
-            AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+            AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
+            Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false) {
     update();
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_,
-        recon_prim, imex, nopts, tmethod, pos_floor);
+        model_, stack_.L(), stack_.domain(), dt, transport_periodicity_, replicated_coarse_,
+        recon_prim, imex, nopts, tmethod, pos_floor, weno_eps, wave_speed_cache,
+        transport_boundary_fill_ ? &*transport_boundary_fill_ : nullptr,
+        fill_patch_plan_ ? &*fill_patch_plan_ : nullptr,
+        average_down_plan_ ? &*average_down_plan_ : nullptr);
   }
 
   /// TRANSPORT-ONLY ADVANCE (hyperbolic), WITHOUT update() or source. Counterpart of step() stripped
@@ -680,10 +1026,14 @@ class AmrCouplerMP {
   /// SOURCE-FREE (NoSource source brick) so that the source is not counted twice (once
   /// here in forward Euler, once by the Program): this is the transport-only contract.
   template <class Disc = FirstOrder>
-  void advance_transport(Real dt, bool recon_prim = false, Real pos_floor = Real(0)) {
+  void advance_transport(Real dt, bool recon_prim = false, Real pos_floor = Real(0),
+                         Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false) {
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_,
-        recon_prim, /*imex=*/false, NewtonOptions{}, AmrTimeMethod::kEuler, pos_floor);
+        model_, stack_.L(), stack_.domain(), dt, transport_periodicity_, replicated_coarse_,
+        recon_prim, /*imex=*/false, NewtonOptions{}, AmrTimeMethod::kEuler, pos_floor, weno_eps,
+        wave_speed_cache, transport_boundary_fill_ ? &*transport_boundary_fill_ : nullptr,
+        fill_patch_plan_ ? &*fill_patch_plan_ : nullptr,
+        average_down_plan_ ? &*average_down_plan_ : nullptr);
   }
 
   /// Injects the CURRENT native runtime-param values @p rp into the model's bricks (ADC-514): every
@@ -702,8 +1052,33 @@ class AmrCouplerMP {
   // margin = nesting. The coupler only orders the call.
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
-    amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin,
-                      aux_comps<Model>(), replicated_coarse_);
+    const RegridProlongation prolong = [base_domain = stack_.domain(),
+                                        periodicity = transport_periodicity_](
+                                          const MultiFab& parent, MultiFab& fine,
+                                          int parent_level, int ratio,
+                                          bool parent_replicated,
+                                          const CommunicatorView&) {
+      const Box2D coarse_domain = amr_level_index_domain(base_domain, parent_level);
+      const Box2D fine_domain = coarse_domain.refine(ratio);
+      detail::coupler_conservative_linear_to_fine_mb(
+          parent, fine, coarse_domain, fine_domain,
+          {coarse_domain.lo[0], coarse_domain.lo[1]},
+          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated,
+          periodicity);
+      (void)parent_level;
+    };
+    std::optional<RegridPhysicalGhostSupport> physical_support;
+    if (transport_boundary_fill_)
+      physical_support = RegridPhysicalGhostSupport{
+          transport_boundary_fill_->provided_depth,
+          transport_boundary_fill_->fills_all_allocated_ghosts};
+    amr_regrid_finest(
+        stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin, prolong,
+        aux_comps<Model>(), replicated_coarse_, *load_balance_authority_,
+        RegridPeriodicity{transport_periodicity_.x, transport_periodicity_.y},
+        world_communicator_view(),
+        physical_support ? &*physical_support : nullptr);
+    prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
   }
 
   // coarse mass via the shared diagnostic amr_mass_mb (replicated mono-box as well as
@@ -718,8 +1093,10 @@ class AmrCouplerMP {
   // in BOTH cases: under replication the local max is already global (idempotent);
   // distributed, we take the max of the parts.
   Real max_drift_speed() const {
-    const Real v = amr_max_drift_speed_mb(stack_.aux(0), model_.B0);
-    return all_reduce_max(std::max(v, kAmrDriftSpeedFloor));
+    const Real local = amr_max_drift_speed_mb(stack_.aux(0), model_.B0);
+    const Real global = all_reduce_max(local);
+    detail::require_finite_amr_drift_speed(global);
+    return std::max(global, kAmrDriftSpeedFloor);
   }
 
   /// @brief Max wave speed on the coarse level via `model.max_wave_speed`.
@@ -731,35 +1108,63 @@ class AmrCouplerMP {
   /// @return the max over the coarse cells and the two directions, reduced over the ranks.
   /// @note `update()` must have run so that `aux(0)` carries the current `grad phi`.
   Real max_wave_speed() {
-    Real w = kAmrDriftSpeedFloor;
     MultiFab& U = stack_.coarse();
     MultiFab& A = stack_.aux(0);
-    for (int li = 0; li < U.local_size(); ++li) {
-      const ConstArray4 u = U.fab(li).const_array();
-      const ConstArray4 a = A.fab(li).const_array();
-      const Box2D b = U.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-          const auto us = load_state<Model>(u, i, j);
-          const Aux ax = load_aux<aux_comps<Model>()>(a, i, j);
-          w = std::max(
-              w, std::max(model_.max_wave_speed(us, ax, 0), model_.max_wave_speed(us, ax, 1)));
-        }
-    }
-    return all_reduce_max(w);
+    // max_wave_speed_mf is the generic, cross-TU device kernel used by every Cartesian block. It
+    // performs the exact Kokkos max over both directions, validates finite non-negative model
+    // outputs collectively, then executes one MPI max. Do not duplicate that contract here.
+    return std::max(max_wave_speed_mf(model_, U, A), kAmrDriftSpeedFloor);
   }
 
  private:
+  Periodicity aux_periodicity_() const {
+    const BCRec bc = detail::derive_aux_bc(elliptic_bc_);
+    return Periodicity{bc.xlo == BCType::Periodic && bc.xhi == BCType::Periodic,
+                       bc.ylo == BCType::Periodic && bc.yhi == BCType::Periodic};
+  }
+
+  void prepare_aux_transfer_workspaces_() {
+    prepare_aux_transfer_workspaces_(transfer_topology_generation_);
+  }
+
+  void prepare_aux_transfer_workspaces_(std::uint64_t topology_generation) {
+    std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>> prepared(
+        static_cast<std::size_t>(std::max(0, stack_.nlev() - 1)));
+    const Periodicity periodicity = aux_periodicity_();
+    for (int level = 1; level < stack_.nlev(); ++level) {
+      const bool replicated_parent = level == 1 && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      prepared[static_cast<std::size_t>(level - 1)].emplace(
+          detail::PreparedConservativeLinearTransferWorkspace::prepare(
+              stack_.aux(level - 1), stack_.aux(level),
+              amr_level_index_domain(stack_.domain(), level - 1),
+              amr_level_index_domain(stack_.domain(), level), replicated_parent,
+              detail::ConservativeCellFillRegion::ValidAndGhost, periodicity,
+              topology_generation, communicator));
+    }
+    auto fill_patch = PreparedAmrFillPatchPlan::prepare(
+        stack_.L(), stack_.domain(), transport_periodicity_, replicated_coarse_,
+        topology_generation);
+    auto average_down =
+        PreparedAmrAverageDownPlan::prepare(stack_.L(), topology_generation);
+    aux_transfer_workspaces_.swap(prepared);
+    fill_patch_plan_ = std::move(fill_patch);
+    average_down_plan_ = std::move(average_down);
+    transfer_topology_generation_ = topology_generation;
+  }
+
+  std::uint64_t next_transfer_topology_generation_() const noexcept {
+    std::uint64_t next = transfer_topology_generation_ + 1;
+    if (next == 0)
+      ++next;
+    return next;
+  }
+
   /// COMPOSITE FAC Poisson step (opt-in path). Solves the elliptic on coarse + fine patch coupled by
   /// FAC, then sets aux PER LEVEL from the phi OF EACH LEVEL: fine aux = (phi_f, fine grad) where fine
   /// grad = centered diff on phi_f (solved at fine resolution), NOT the constant coarse-grad injection of Option A.
   void compute_aux_composite() {
-    // ADC-291 NOTE: unlike compute_aux (Option A), this opt-in composite-FAC path does NOT re-apply
-    // named aux onto the fine level (it derives each level's aux from the FAC phi, with no coarse->fine
-    // aux injection). The coarse named comp survives (the grad writes touch only comps 0..2), but a
-    // fine-level model reading extra_field(k) would read 0. set_composite_poisson is C++-only and not
-    // facade-reachable, so named aux cannot hit this path today; carrying named aux to the composite
-    // fine level is a documented follow-up (cf. pops.capabilities()['aux']['followups']).
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
     const Box2D fine_box = L[1].U.box_array()[0];
@@ -778,11 +1183,28 @@ class AmrCouplerMP {
     fill_ghosts(fac_->phi_coarse(), dom, elliptic_bc_);
     detail::coupler_grad_phi(fac_->phi_coarse(), stack_.aux(0), Real(1) / (Real(2) * geom_.dx()),
                              Real(1) / (Real(2) * geom_.dy()));
-    fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
+    BCRec coarse_aux_bc = detail::derive_aux_bc(elliptic_bc_);
+    fill_ghosts(stack_.aux(0), dom, coarse_aux_bc);
+    apply_named_aux_bc(0);
     // level-1 aux (fine): phi + grad from phi_fine -> FINE grad (fine centered diff, reads the C-F
     // bilinear ghosts) = the fidelity gain vs the constant coarse grad injected by Option A.
     detail::coupler_grad_phi(fac_->phi_fine(), stack_.aux(1), Real(1) / (Real(2) * L[1].dx),
                              Real(1) / (Real(2) * L[1].dy));
+    if (!named_aux_components_.empty()) {
+      auto& workspace = aux_transfer_workspaces_.at(0);
+      if (!workspace)
+        throw std::logic_error("composite AMR named-aux transfer workspace was not prepared");
+      const CommunicatorView communicator =
+          replicated_coarse_ ? CommunicatorView{} : world_communicator_view();
+      workspace->apply(stack_.aux(0), stack_.aux(1),
+                       std::span<const int>(named_aux_components_),
+                       transfer_topology_generation_, communicator);
+    }
+    BCRec fine_aux_bc = coarse_aux_bc;
+    fine_aux_bc.dx /= Real(kAmrRefRatio);
+    fine_aux_bc.dy /= Real(kAmrRefRatio);
+    fill_ghosts(stack_.aux(1), amr_level_index_domain(dom, 1), fine_aux_bc);
+    apply_named_aux_bc(1);
   }
 
   static bool same_box(const Box2D& a, const Box2D& b) {
@@ -815,6 +1237,9 @@ class AmrCouplerMP {
   AmrLevelStack<AmrLevelMP> stack_;
   bool
       replicated_coarse_;  // level 0 replicated (true) or distributed multi-box (false, de-replication)
+  std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance_authority_;
+  Periodicity transport_periodicity_{true, true};
+  std::optional<AmrBoundaryFillAuthority> transport_boundary_fill_;
   // COMPOSITE FAC Poisson path (opt-in, set_composite_poisson). fac_ built lazily on the
   // current fine patch (rebuilt if the patch changes after regrid). Default OFF -> Option A bit-identical.
   bool composite_poisson_ = false;
@@ -822,10 +1247,16 @@ class AmrCouplerMP {
   std::shared_ptr<CompositeFacPoisson> fac_;
   CompositeFacOptions fac_options_;  ///< ADC-614: FAC knobs applied at build (default = kFAC*).
   Box2D fac_fine_box_{};
+  std::uint64_t transfer_topology_generation_ = 1;
+  std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>>
+      aux_transfer_workspaces_;
+  std::optional<PreparedAmrFillPatchPlan> fill_patch_plan_;
+  std::optional<PreparedAmrAverageDownPlan> average_down_plan_;
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
-  // (n*n row-major). STATIC user fields re-applied by compute_aux each update (so they persist across
-  // regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
+  // (ny*nx row-major). STATIC user fields are installed once; compute_aux writes only comps 0..2 and
+  // every fine regrid is repopulated from the coarse authority. Empty by default -> bit-identical.
   std::map<int, std::vector<Real>> named_aux_;
+  std::vector<int> named_aux_components_;
   // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
   // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;
@@ -837,31 +1268,49 @@ class AmrCouplerMP {
   void apply_named_aux() {
     if (named_aux_.empty())
       return;
-    const int row = stack_.domain().nx();
+    const Box2D logical_domain = stack_.domain();
+    const int row = logical_domain.nx();
+    const std::size_t expected_size =
+        static_cast<std::size_t>(row) * static_cast<std::size_t>(logical_domain.ny());
+    // User-field installation is an explicit host unpacking boundary. It is called by the setter,
+    // never by the time-step/update hot path.
+    stack_.aux(0).sync_host();
     for (const auto& [comp, field] : named_aux_) {
       if (field.empty() || comp >= stack_.aux(0).ncomp())
         continue;
+      if (field.size() != expected_size)
+        throw std::runtime_error("named AMR aux field shape disagrees with the logical domain");
       for (int li = 0; li < stack_.aux(0).local_size(); ++li) {
         Array4 a = stack_.aux(0).fab(li).array();
         const Box2D v = stack_.aux(0).box(li);
         for (int j = v.lo[1]; j <= v.hi[1]; ++j)
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            a(i, j, comp) = field[static_cast<std::size_t>(j) * row + i];
+            a(i, j, comp) =
+                field[static_cast<std::size_t>(j - logical_domain.lo[1]) * row +
+                      static_cast<std::size_t>(i - logical_domain.lo[0])];
       }
     }
+    stack_.aux(0).sync_device();
   }
 
   // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill. Overrides only each
   // declared component's physical-face ghosts; aux_halo_override(elliptic_bc_, policy) keeps periodic faces
   // periodic (so on a periodic domain this is a no-op). Mirror of SystemFieldSolver::apply_named_aux_bc.
-  void apply_named_aux_bc() {
+  void apply_named_aux_bc(int level = 0) {
     if (named_aux_bc_.empty())
       return;
+    if (level < 0 || level >= stack_.nlev())
+      throw std::out_of_range("AmrCouplerMP named aux boundary level is out of range");
+    const Box2D level_domain = amr_level_index_domain(stack_.domain(), level);
+    BCRec level_bc = detail::derive_aux_bc(elliptic_bc_);
+    for (int transition = 0; transition < level; ++transition) {
+      level_bc.dx /= Real(kAmrRefRatio);
+      level_bc.dy /= Real(kAmrRefRatio);
+    }
     for (const auto& [comp, policy] : named_aux_bc_) {
-      if (comp >= stack_.aux(0).ncomp())
+      if (comp >= stack_.aux(level).ncomp())
         continue;
-      fill_physical_bc(stack_.aux(0), stack_.domain(), aux_halo_override(elliptic_bc_, policy),
-                       comp);
+      fill_physical_bc(stack_.aux(level), level_domain, aux_halo_override(level_bc, policy), comp);
     }
   }
 };

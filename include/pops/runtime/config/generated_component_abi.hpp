@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "ef23cc23d5f5fe513612901ece4c020ae72d87678a975eebf6f5fa4729fc5521"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -23,7 +23,7 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1 = 0,
   POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1 = 1,
   POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1 = 2,
-  POPS_NATIVE_INTERFACE_TAGGER_V1 = 3,
+  POPS_NATIVE_INTERFACE_TAGGER_V2 = 3,
   POPS_NATIVE_INTERFACE_CLUSTERING_V1 = 4,
   POPS_NATIVE_INTERFACE_TRANSFER_V1 = 5,
   POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2 = 7,
@@ -170,6 +170,7 @@ typedef enum PopsPrecisionV1 {
   POPS_PRECISION_FLOAT32_V1 = 3,
   POPS_PRECISION_FLOAT64_V1 = 4
 } PopsPrecisionV1;
+#define POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 "pops::execution::noncollective"
 typedef struct PopsExecutionContextV1 {
   uint32_t struct_size;
   uint32_t context_version;
@@ -364,8 +365,24 @@ typedef struct PopsTaggingProgramV1 {
   int32_t conflict_policy;
   int32_t non_finite_policy;
 } PopsTaggingProgramV1;
-typedef struct PopsTaggerRequestV1 {
+typedef enum PopsTaggerExecutionModeV2 {
+  POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 = 1,
+  POPS_TAGGER_EXECUTION_HOST_V2 = 2
+} PopsTaggerExecutionModeV2;
+typedef enum PopsTaggerCollectiveScopeV2 {
+  POPS_TAGGER_COLLECTIVE_NONE_V2 = 0
+} PopsTaggerCollectiveScopeV2;
+typedef struct PopsTaggerMaskViewV2 {
   uint32_t struct_size;
+  uint8_t* data;
+  size_t size;
+  PopsMemorySpaceV1 memory_space;
+  PopsFieldOwnershipV1 ownership;
+} PopsTaggerMaskViewV2;
+typedef struct PopsTaggerRequestV2 {
+  uint32_t struct_size;
+  PopsTaggerExecutionModeV2 execution_mode;
+  PopsTaggerCollectiveScopeV2 collective_scope;
   size_t state_count;
   const PopsQualifiedConstFieldV1* states;
   PopsTaggingProgramV1 program;
@@ -374,18 +391,23 @@ typedef struct PopsTaggerRequestV1 {
   int64_t domain_upper[3];
   double cell_size[3];
   uint32_t periodic_axes;
-  PopsByteViewV1 refine_candidates;
-  PopsByteViewV1 coarsen_candidates;
-  PopsByteViewV1 refine_equalities;
-  PopsByteViewV1 coarsen_equalities;
+  PopsTaggerMaskViewV2 refine_candidates;
+  PopsTaggerMaskViewV2 coarsen_candidates;
+  PopsTaggerMaskViewV2 refine_equalities;
+  PopsTaggerMaskViewV2 coarsen_equalities;
   PopsLogicalTimeV1 logical_time;
   PopsExecutionContextV1 execution;
-} PopsTaggerRequestV1;
-typedef int32_t (*PopsTagBatchFnV1)(void*, const PopsTaggerRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsTaggerApiV1 {
+} PopsTaggerRequestV2;
+// Tagger callbacks are strictly patch-local and noncollective. The execution context deliberately
+// carries no communicator authority; MPI failure consensus and mask reductions remain runtime-only.
+// Native-backend callbacks must complete every mask write on the supplied execution stream before
+// returning. Host callbacks are synchronous. The runtime stages fields only for the explicit host
+// mode; native mode receives the runtime-owned field allocation directly.
+typedef int32_t (*PopsTagBatchFnV2)(void*, const PopsTaggerRequestV2*, PopsComponentStatusV1*);
+typedef struct PopsTaggerApiV2 {
   PopsComponentTableHeaderV1 header;
-  PopsTagBatchFnV1 tag_batch;
-} PopsTaggerApiV1;
+  PopsTagBatchFnV2 tag_batch;
+} PopsTaggerApiV2;
 
 typedef struct PopsClusteringRequestV1 {
   uint32_t struct_size;
@@ -696,7 +718,7 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1: return sizeof(PopsNumericalFluxApiV1);
     case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: return sizeof(PopsGhostBoundaryApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: return sizeof(PopsFieldBoundaryClosureApiV1);
-    case POPS_NATIVE_INTERFACE_TAGGER_V1: return sizeof(PopsTaggerApiV1);
+    case POPS_NATIVE_INTERFACE_TAGGER_V2: return sizeof(PopsTaggerApiV2);
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return sizeof(PopsClusteringApiV1);
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return sizeof(PopsTransferApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return sizeof(PopsFieldSolverApiV2);
@@ -711,7 +733,7 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1: return "PopsNumericalFluxApiV1";
     case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: return "PopsGhostBoundaryApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: return "PopsFieldBoundaryClosureApiV1";
-    case POPS_NATIVE_INTERFACE_TAGGER_V1: return "PopsTaggerApiV1";
+    case POPS_NATIVE_INTERFACE_TAGGER_V2: return "PopsTaggerApiV2";
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return "PopsClusteringApiV1";
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return "PopsTransferApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return "PopsFieldSolverApiV2";

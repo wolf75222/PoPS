@@ -218,7 +218,7 @@ print("PASS test_time_dt_bound Section A")
 # ====================================================================================================
 print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
 
-probe = System(n=8, L=1.0, periodic=True)
+probe = System(n=8, L=1.0, periodicity=(True, True))
 if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cadence"):
     _skip("_pops lacks install_program (rebuild _pops) (A passed)")
 
@@ -237,7 +237,7 @@ CFL = 0.4
 
 
 def make_sim():
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method="euler"))

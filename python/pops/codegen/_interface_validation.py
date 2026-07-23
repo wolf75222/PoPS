@@ -4,6 +4,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, cast
 
+from pops.codegen._rhs_coherence import (
+    groupable_default_rhs,
+    plan_rhs_coherence,
+    uses_default_flux,
+)
 
 _CONTROL_BLOCK_KEYS = (
     "apply_block", "residual_block", "true_block", "false_block", "cond_block", "body_block",
@@ -14,20 +19,6 @@ def _block_name(value: Any) -> str | None:
     block = getattr(value, "block", None)
     name = getattr(block, "local_id", None)
     return name if isinstance(name, str) and name else None
-
-
-def _uses_default_flux(value: Any) -> bool:
-    if getattr(value, "op", None) != "rhs" or not value.attrs.get("flux", True):
-        return False
-    fluxes = value.attrs.get("fluxes")
-    return not fluxes or tuple(fluxes) == ("default",)
-
-
-def _groupable_default_rhs(value: Any) -> bool:
-    if not _uses_default_flux(value):
-        return False
-    requested = value.attrs.get("sources")
-    return not any(source != "default" for source in (requested or ()))
 
 
 def _nested_values(values: Any):
@@ -293,12 +284,12 @@ def validate_shared_interface_program(
     participant_names = frozenset(neighbours)
     for value, path in _nested_control_values(program._values):
         block = _block_name(value)
-        if _uses_default_flux(value) and block in participant_names:
+        if uses_default_flux(value) and block in participant_names:
             raise NotImplementedError(
                 "shared interface RHS %r on block %r is nested under control flow %s; "
                 "the native NumericalFlux scheduler cannot form its required atomic rhs_group "
-                "there. Move every endpoint RHS to one top-level contiguous RHS group at the "
-                "same StagePoint."
+                "there. Move every endpoint RHS to one top-level coherence round at the same "
+                "StagePoint."
                 % (value.name, block, " -> ".join(path))
             )
     for value in _nested_values(program._values):
@@ -310,34 +301,20 @@ def validate_shared_interface_program(
             )
 
     values = list(program._values)
-    index = 0
     covered: set[int] = set()
-    while index < len(values):
-        value = values[index]
+    for value in values:
         block = _block_name(value)
-        if _uses_default_flux(value) and block in participant_names and not _groupable_default_rhs(value):
+        if uses_default_flux(value) and block in participant_names \
+                and not groupable_default_rhs(value):
             raise NotImplementedError(
                 "shared interface RHS %r on block %r mixes the default shared flux with named "
                 "source work; split the named source into a separate Program node"
                 % (value.name, block))
-        if not _groupable_default_rhs(value):
-            index += 1
-            continue
-        end = index + 1
-        while end < len(values) and _groupable_default_rhs(values[end]) \
-                and values[end].point == value.point:
-            end += 1
-        group = values[index:end]
+
+    coherence = plan_rhs_coherence(program, values, block_key=_block_name)
+    for round_ in coherence.rounds:
+        group = round_.values
         names = [_block_name(row) for row in group]
-        if len(names) != len(set(names)):
-            participating = sorted(
-                name for name in set(names)
-                if isinstance(name, str) and name in participant_names
-            )
-            if participating:
-                raise ValueError(
-                    "one simultaneous shared-interface RHS group contains duplicate block(s) %s"
-                    % participating)
         present = set(names)
         for row in group:
             name = _block_name(row)
@@ -347,14 +324,13 @@ def validate_shared_interface_program(
             if missing:
                 raise ValueError(
                     "shared interface RHS %r at %r is one-sided: block %r requires simultaneous "
-                    "endpoint(s) %s in the same contiguous Program group"
-                    % (row.name, row.point, name, sorted(missing)))
+                    "endpoint(s) %s in coherence round %d"
+                    % (row.name, row.point, name, sorted(missing), round_.occurrence))
             covered.add(row.id)
-        index = end
 
     ungrouped = [
         value.name for value in values
-        if _uses_default_flux(value) and _block_name(value) in participant_names
+        if uses_default_flux(value) and _block_name(value) in participant_names
         and value.id not in covered
     ]
     if ungrouped:

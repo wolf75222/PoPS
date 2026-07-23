@@ -62,7 +62,7 @@ def gaussian(n):
 
 
 def build(n=24):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
@@ -107,12 +107,12 @@ print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 
 def build_amr(n=24):
-    amr = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    amr = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
     amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
     amr.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
-    amr.set_density("ions", gaussian(n).ravel())
+    amr.set_density("ions", gaussian(n))
     return amr
 
 
@@ -135,7 +135,7 @@ amr3 = build_amr()
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.add_equation("e2", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                   time=engine.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
-amr3.set_density("e2", gaussian(24).ravel())
+amr3.set_density("e2", gaussian(24))
 amr3.add_dt_bound("cap_multi", lambda: cap_amr)
 dta3 = amr3.step_cfl(0.4)
 chk(dta3 <= cap_amr + 1e-15, f"AMR multi-blocs dt <= borne ({dta3:.3e})")
@@ -171,7 +171,7 @@ def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):
 
 
 def build_dsl(cm, n=16):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("s", model=cm, spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
     sim.set_poisson()
@@ -233,12 +233,12 @@ try:
     print("== (B4) AMR mono-bloc DSL : m.stability_dt cablee (vague 2) ==")
     cm_dt_amr = scalar_model("scal_dt_amr", stab_dt=1e-4).compile(
         os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
-    amr_dsl = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    amr_dsl = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
     amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr_dsl.set_refinement(1e30)
     amr_dsl.add_equation("s", model=cm_dt_amr, spatial=engine.Spatial(limiter=Minmod()),
                          time=engine.Explicit())
-    amr_dsl.set_density("s", gaussian(16).ravel())
+    amr_dsl.set_density("s", gaussian(16))
     dt_amr = amr_dsl.step_cfl(cfl)
     chk(abs(dt_amr - 1e-4) < 1e-12, f"AMR DSL dt = 1e-4 ({dt_amr:.3e})")
     chk(amr_dsl.last_dt_bound() == "stability_dt:s",

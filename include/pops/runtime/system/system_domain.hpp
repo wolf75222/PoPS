@@ -20,7 +20,7 @@
 ///
 /// Extracted from the geometry + mesh-layout members that lived inline on `System::Impl`: the index
 /// geometry (Cartesian `geom` or polar `pgeom_`), the box array / distribution mapping (`ba` / `dm`),
-/// the transport boundary (`bc_`), the index domain (`dom`), the periodicity (`per_` / `periodic_`),
+/// the transport boundary (`bc_`), the index domain (`dom`), the periodicity (`per_`),
 /// the SHARED aux channel (`aux` / `aux_ncomp_`), and the embedded-boundary signed samples, metrics,
 /// mask and routing. It names one subsystem: "where
 /// the System lives and how it is laid out".
@@ -31,7 +31,7 @@
 /// layout through Impl's reference aliases.
 ///
 /// STEPPER / FIELD VISIBILITY: `geom`, `pgeom_`, `polar_`, `aux`, `aux_ncomp_`, `ba`, `dm`, `bc_`,
-/// `dom`, `per_`, `periodic_`, `cfg`, `geometry_mode_` and `eb_set_` are read by SystemStepper /
+/// `dom`, `per_`, `cfg`, `geometry_mode_` and `eb_set_` are read by SystemStepper /
 /// SystemFieldSolver / native_loader via `owner_->` / `P->`. Impl re-exposes EVERY member under its
 /// exact historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom), so the three
 /// dependent headers and the MockImpl stay byte-unchanged -- the block closures that capture `&aux` by
@@ -59,11 +59,9 @@ struct SystemDomain {
   PolarGeometry pgeom_;
   BoxArray ba;
   DistributionMapping dm;
-  BCRec
-      bc_;  // transport BC (periodic or Foextrap per cfg.periodic; polar: physical r, periodic theta)
+  BCRec bc_;  // transport BC per Cartesian axis; polar: physical r, periodic theta
   Box2D dom;
   Periodicity per_;
-  bool periodic_;
   MultiFab aux;
   int aux_ncomp_ = kAuxBaseComps;  // width of the SHARED aux channel (max over blocks; >= 3)
 
@@ -121,13 +119,15 @@ struct SystemDomain {
       b.ylo = b.yhi = BCType::Periodic;
       return b;
     }
-    if (!c.periodic)
-      b.xlo = b.xhi = b.ylo = b.yhi = BCType::Foextrap;
+    if (!c.periodicity.x)
+      b.xlo = b.xhi = BCType::Foextrap;
+    if (!c.periodicity.y)
+      b.ylo = b.yhi = BCType::Foextrap;
     return b;
   }
 
   /// The exact historical System::Impl init-list, verbatim in order: cfg, geom, polar_, pgeom_, ba,
-  /// dm (sizes from ba), bc_, dom, per_, periodic_, aux (allocates on ba/dm). The remaining members
+  /// dm (sizes from ba), bc_, dom, per_, aux (allocates on ba/dm). The remaining members
   /// (eb_* / domain_mask_ / ws_cache_block_ / geometry_mode_) default-construct exactly as before.
   explicit SystemDomain(const SystemConfig& c)
       : cfg(c),
@@ -138,8 +138,7 @@ struct SystemDomain {
         dm(ba.size(), n_ranks()),
         bc_(make_bc(c)),
         dom(index_domain(c)),
-        per_{!polar_ && c.periodic, !polar_ && c.periodic},
-        periodic_(!polar_ && c.periodic),
+        per_{!polar_ && c.periodicity.x, !polar_ && c.periodicity.y},
         aux(ba, dm, kAuxBaseComps, 1) {}
 
   /// Structured report (ADC-578 acceptance): the layout facts a runtime report enumerates.
@@ -148,12 +147,13 @@ struct SystemDomain {
     int nx, ny;
     int n_boxes;
     int aux_ncomp;
-    bool periodic;
+    bool periodic_x;
+    bool periodic_y;
     bool eb_active;
   };
   LayoutReport layout_report() const {
-    return LayoutReport{polar_,     dom.nx(),  dom.ny(), static_cast<int>(ba.size()),
-                        aux_ncomp_, periodic_, eb_set_};
+    return LayoutReport{polar_, dom.nx(), dom.ny(), static_cast<int>(ba.size()),
+                        aux_ncomp_, per_.x, per_.y, eb_set_};
   }
 };
 

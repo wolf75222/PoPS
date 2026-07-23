@@ -51,7 +51,7 @@ inline FieldDistributionReductionStatus reduce_replicated_field_values_inplace(
       consensus[value_count + index] = -value;
     }
   }
-  all_reduce_max_inplace(consensus, static_cast<int>(required), communicator);
+  all_reduce_max_inplace(consensus, required, communicator);
 
   bool inconsistent = false;
   for (std::size_t index = 0; index < value_count; ++index) {
@@ -79,12 +79,10 @@ inline FieldDistributionReductionStatus reduce_field_values_inplace(
     std::size_t consensus_count, const CommunicatorView& communicator) {
   if (!field_distribution_is_valid(distribution))
     throw std::invalid_argument("field reduction received invalid distribution");
-  if (value_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-    throw std::length_error("field reduction exceeds the native MPI collective count capacity");
   if (value_count != 0 && values == nullptr)
     throw std::logic_error("field reduction values are missing");
   if (distribution == FieldDistribution::Distributed) {
-    all_reduce_sum_inplace(values, static_cast<int>(value_count), communicator);
+    all_reduce_sum_inplace(values, value_count, communicator);
     return FieldDistributionReductionStatus::Success;
   }
   return reduce_replicated_field_values_inplace(values, value_count, consensus, consensus_count,

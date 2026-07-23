@@ -52,7 +52,7 @@ Every descriptor exposes an exact `to_dict()` / `from_dict()` round trip and a d
 Boundary geometry identities intentionally remain stable when semantic domain tags are added; Case
 qualification happens later during resolution. Periodicity is never a backend-shaped boolean:
 `PeriodicAxes` accepts only canonical typed axes, and the grid identity records both the periodic
-axes and the derived physical complement. A backend with only a global periodic switch must reject
+axes and the derived physical complement. A backend unable to preserve that partition must reject
 a one-axis topology rather than widening it silently.
 
 `CartesianGrid` is the only public Cartesian-grid descriptor. APIs that consume a grid do not

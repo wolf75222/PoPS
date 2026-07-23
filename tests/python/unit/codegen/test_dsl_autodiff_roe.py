@@ -314,14 +314,14 @@ try:
     rho0 = gaussian(n)
     z = np.zeros((n, n))
 
-    s_hand = System(n=n, L=1.0, periodic=True)
+    s_hand = System(n=n, L=1.0, periodicity=(True, True))
     s_hand.set_poisson()
     s_hand.add_equation("f", model=cm_hand,
                         spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
                         time=engine.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
-    s_ref = System(n=n, L=1.0, periodic=True)
+    s_ref = System(n=n, L=1.0, periodicity=(True, True))
     s_ref.set_poisson()
     s_ref.add_equation("f", model=cm_ref,
                        spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),

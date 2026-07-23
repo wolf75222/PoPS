@@ -40,12 +40,75 @@
 ///
 /// Python composes (brick objects); the per-cell computation (assemble_rhs<L,F>, Newton of the
 /// implicit source, multigrid/FFT) stays C++-compiled and is frozen when the block is added. No
-/// Python callback in the hot path, except a time integrator written in Python via
-/// eval_rhs / get_state / set_state.
+/// Python callback enters the hot path. ``eval_rhs`` / ``get_state`` / ``set_state`` are bulk
+/// inspection, initialization and verification seams; installed time Programs execute natively.
 
 namespace pops {
 
 class WorldCommunicator;
+class PreparedSystemLayoutTransfer;
+
+namespace component {
+class LoadedComponent;
+}
+
+/// Immutable bind-time contract for one native transfer between two Uniform System layouts.
+/// Ratios follow the component ABI axis order (y, x); the runtime validates them against the
+/// actual source/target domains before allocating or launching a kernel.
+struct SystemLayoutTransferSpec {
+  std::string mapping_identity;
+  std::string provider_identity;
+  std::string provider_component_identity;
+  std::string provider_manifest_identity;
+  std::string source_layout_identity;
+  std::string target_layout_identity;
+  std::string source_block;
+  std::string target_block;
+  std::string source_representation;
+  std::string target_representation;
+  std::string synchronization_identity;
+  std::array<std::int32_t, 2> refinement_ratio{1, 1};
+  std::int32_t operation = 0;
+};
+
+/// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.
+struct SystemLayoutTransferExecution {
+  std::uint32_t context_version = 0;
+  std::string execution_identity;
+  std::int32_t memory_space = 0;
+  std::string backend_identity;
+  std::string device_identity;
+  std::int32_t scalar_type = 0;
+  std::int32_t storage_precision = 0;
+  std::int32_t compute_precision = 0;
+  std::int32_t accumulation_precision = 0;
+  std::int32_t reduction_precision = 0;
+  std::uint64_t stream_handle = 0;
+  std::string stream_identity;
+  std::int64_t communicator_f_handle = 0;
+  std::int64_t communicator_datatype_f_handle = 0;
+  std::string communicator_identity;
+  std::string communicator_datatype_identity;
+};
+
+/// Authenticated evidence returned after a prepared native mapping has completed collectively.
+struct SystemLayoutTransferReceipt {
+  bool applied = false;
+  std::string mapping_identity;
+  std::string provider_identity;
+  std::string provider_component_identity;
+  std::string provider_manifest_identity;
+  std::string source_layout_identity;
+  std::string target_layout_identity;
+  std::string source_block;
+  std::string target_block;
+  std::string execution_identity;
+  std::int32_t operation = 0;
+  std::uint64_t generation = 0;
+  std::uint64_t attempt = 0;
+  std::uint64_t source_element_count = 0;
+  std::uint64_t destination_element_count = 0;
+};
 
 namespace runtime::program {
 class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
@@ -69,9 +132,9 @@ struct PreparedInterfaceFluxSpec;
 /// wired through System transport and polar field routes. Polar-only config fields are ignored while
 /// geometry == "cartesian".
 struct SystemConfig {
-  int n = 64;            ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
-  double L = 1.0;        ///< size of the square domain [0,L]^2 (cartesian)
-  bool periodic = true;  ///< periodic domain, otherwise free outflow in transport (cartesian)
+  int n = 64;       ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
+  double L = 1.0;   ///< size of the square domain [0,L]^2 (cartesian)
+  Periodicity periodicity{true, true};  ///< Cartesian topology, independently on x and y
   // --- internal geometry: "cartesian" (default, bit-identical) | "polar" (global ring) ---
   std::string geometry = "cartesian";  ///< internal choice lowered from CartesianGrid or advanced
                                        ///< pops.mesh.PolarMesh authoring
@@ -89,8 +152,7 @@ struct SystemConfig {
   // SCOPE: multi-box transport OK; DIRECT polar Poisson mono-box only (clear UPSTREAM rejection if
   // theta_boxes > 1, cf. ensure_elliptic_polar); polar tensor Schur stage multi-box.
   int theta_boxes = 1;  ///< boxes of the theta split of polar transport (1 = mono-box)
-  // Cartesian physical origin. Appended to preserve positional aggregate initialization of the
-  // historical {n, L, periodic} prefix. Ignored while geometry == "polar".
+  // Cartesian physical origin. Ignored while geometry == "polar".
   double xlo = 0.0;
   double ylo = 0.0;
 };
@@ -167,12 +229,11 @@ class System {
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
   ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
-  /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds ONCE per cell
-  ///                 and direction in a scratch, then bounds each face by min/max of the two neighbor
-  ///                 cells, instead of recalling wave_speeds per face. Net gain when wave_speeds is
-  ///                 expensive (moment hierarchy). With recon='conservative' + limiter 'none' it is
-  ///                 BIT-IDENTICAL to the per-face path; with a 2nd-order+ limiter it is a Davis bound on
-  ///                 the cell values (different result). false (default) = per-face path unchanged. Wired
+  /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
+  ///                 every exact reconstructed face-trace pair, then reuses that interval from both
+  ///                 adjacent residual cells. Net gain when wave_speeds is expensive (moment hierarchy).
+  ///                 BIT-IDENTICAL to the direct HLL path for first-order, MUSCL and WENO reconstruction.
+  ///                 false (default) = direct per-cell face evaluation unchanged. Wired
   ///                 on the FULL cartesian advance only: refused if riemann != 'hll', time IMEX, polar
   ///                 geometry, or a staircase/cutcell disc transport mode is active (explicit error,
   ///                 never a silent ignore).
@@ -225,6 +286,16 @@ class System {
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
                         bool evolve = true, int stride = 1, const std::vector<double>& params = {},
                         double positivity_floor = 0.0);
+
+  /// Installs an authenticated external Riemann policy against its compiled Model on the real
+  /// System storage. The loaded library remains alive until every installed closure is destroyed.
+  void add_external_riemann_block(
+      const std::string& name, const std::string& so_path, const std::string& brick_id,
+      const std::string& sha256, const std::string& limiter, const std::string& recon,
+      const std::string& time, double gamma, int substeps, bool evolve, int stride,
+      int expected_nvars, int expected_naux, const std::string& expected_model_identity,
+      double positivity_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
@@ -813,15 +884,15 @@ class System {
   /// (block_names). They need NOT agree. install_program reads the .so's block names, matches each to
   /// the System block of that name, and stores the resulting program-index -> system-index map here so
   /// ProgramContext::state / rhs_into / commit resolve a Program block index to the name-matched System
-  /// block -- NOT the positional index. An EMPTY map is the identity (a single-block or order-matching
-  /// Program lowers byte-identically; ProgramContext built directly, e.g. in a C++ test, also sees
-  /// identity). Lives in Impl (private to the _pops TU) so it survives the dlopen boundary; the seam is
+  /// block -- NOT the positional index. An EMPTY map means no Program binding is installed;
+  /// ProgramContext fails closed instead of inferring positional identity, including for a single
+  /// block. Lives in Impl (private to the _pops TU) so it survives the dlopen boundary; the seam is
   /// POPS_EXPORT so the generated .so and ProgramContext resolve it from the globally promoted host.
   /// @{
   /// Install the program-index -> system-index map (entry p = the System block index of Program block
-  /// p). Empty clears it (identity). Set by install_program after matching the .so's block names.
+  /// p). Empty clears the binding. Set by install_program after matching the .so's block names.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
-  /// The installed program-index -> system-index map (empty = identity). Read by ProgramContext.
+  /// The installed program-index -> system-index map (empty = unbound). Read by ProgramContext.
   POPS_EXPORT const std::vector<int>& program_block_map() const;
   /// @}
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
@@ -929,9 +1000,10 @@ class System {
   /// @{
   /// Register (idempotent) a history named @p name with maximum lag @p lag (>= 1): a ring buffer of
   /// depth @p lag + 1 (slot 0 = the CURRENT value, slot k = the value k macro-steps back after the
-  /// rotates), each slot a MultiFab co-distributed with block 0 and zero-initialized. @p ncomp is the
-  /// slot component count: the default -1 resolves to block 0's ncomp (the historical multistep ring,
-  /// so a slot can hold a full RHS / state -- byte-identical to the pre-ADC-427 signature), while an
+  /// rotates), each slot a zero-initialized MultiFab on the shared block layout. Qualified calls bind
+  /// the exact owner plus logical state/space/clock/interpolation identities; unqualified calls retain
+  /// the legacy owner=-1 contract and cannot use selective replay. @p ncomp is the slot component
+  /// count: the default -1 resolves to the qualified owner's ncomp (or block 0 for a legacy ring), while an
   /// explicit @p ncomp >= 1 sizes a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
   /// carry). The component count binds at the FIRST register; a later re-register ignores @p ncomp.
   /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
@@ -983,6 +1055,9 @@ class System {
   /// facade records it so a restart restores the initialized state without a phantom re-fill. @throws
   /// if @p name is unknown.
   POPS_EXPORT bool history_initialized(const std::string& name) const;
+  /// Saturating count of authentic accepted stores represented in the ring (0..history_depth).
+  /// Cold-start copies do not advance this count; selective persistence is safe only at full depth.
+  POPS_EXPORT int history_fill_count(const std::string& name) const;
   /// RESTORE (restart) slot @p slot of history @p name from a GLOBAL component-major buffer (same layout
   /// as history_global / set_state): the owner rank writes its box, the others are no-ops (MPI-safe, all
   /// ranks call it). Registers the ring (depth = max(slot)+1) if @p name is unknown yet, so the restart
@@ -993,19 +1068,24 @@ class System {
   /// read at lag without a phantom cold-start re-fill on its first post-restart store. @throws if
   /// @p name is unknown (restore its slots first).
   POPS_EXPORT void set_history_initialized(const std::string& name, bool initialized);
+  /// Restore the exact authentic fill count persisted by a checkpoint. Also restores the derived
+  /// initialized flag (`fill_count > 0`). @throws if outside [0, history_depth].
+  POPS_EXPORT void restore_history_fill_count(const std::string& name, int fill_count);
   /// @}
   /// @name Selective history persistence + deterministic ring replay (ADC-626)
   /// A history-persistence policy (pops.time.Dense / Interval / Revolve) stores only a SUBSET of a
   /// ring's slots in a checkpoint; the restart REBUILDS the missing slots by re-stepping the installed
-  /// Program. The per-slot dt each store produced is exposed so the checkpoint records it and replay
-  /// reproduces a variable-dt history bit-for-bit.
+  /// Program. The per-slot outgoing dt is exposed so the checkpoint records the exact interval
+  /// between adjacent state samples and replay reproduces a variable-dt history bit-for-bit.
   /// @{
-  /// The dt that produced slot @p slot of history @p name (HistoryManager::slot_dt). 0 for a slot that
-  /// was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out of range.
+  /// The outgoing dt from slot @p slot toward its newer neighbour (HistoryManager::slot_dt). 0 for a
+  /// slot that was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out
+  /// of range.
   POPS_EXPORT double history_slot_dt(const std::string& name, int slot) const;
-  /// Restore the dt that produced slot @p slot of history @p name (the inverse of history_slot_dt, used
-  /// at restart so replay re-steps with the exact recorded dt). Grows the per-slot dt vector to fit the
-  /// ring. @throws if @p name is unknown (restore its slots first).
+  /// Restore the outgoing dt recorded with slot @p slot of history @p name (the inverse of
+  /// history_slot_dt, used at restart so replay re-steps with the exact interval from an older anchor
+  /// to its newer neighbour). Grows the per-slot dt vector to fit the ring. @throws if @p name is
+  /// unknown (restore its slots first).
   POPS_EXPORT void restore_history_slot_dt(const std::string& name, int slot, double dt);
   /// REBUILD the MISSING slots of history @p name by deterministic replay (ADC-626). @p stored_slots is
   /// the sorted set of slot indices already restored (via restore_history); every OTHER slot in
@@ -1236,11 +1316,45 @@ class System {
 
  private:
   friend class runtime::program::ProgramContext;
+  friend class PreparedSystemLayoutTransfer;
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(
       const std::array<std::uint64_t, 4>& authority) const noexcept;
   struct Impl;
+  std::unique_ptr<Impl> p_;
+};
+
+/// Persistent System-to-System transfer session with no per-step field allocation or Python staging.
+///
+/// Preparation authenticates both layouts, blocks, representations, provider and execution
+/// context collectively, allocates one source snapshot distributed like the target, and warms its
+/// native MPI/Kokkos copy plan. During a transaction every mapping captures before any mapping is
+/// applied, preserving cycles such as A->B->C->A without Python array materialization. The
+/// enclosing System transactions own target rollback; this object owns the native source snapshot
+/// and strict generation/attempt protocol.
+class POPS_EXPORT PreparedSystemLayoutTransfer final {
+ public:
+  PreparedSystemLayoutTransfer(const PreparedSystemLayoutTransfer&) = delete;
+  PreparedSystemLayoutTransfer& operator=(const PreparedSystemLayoutTransfer&) = delete;
+  ~PreparedSystemLayoutTransfer();
+
+  static std::shared_ptr<PreparedSystemLayoutTransfer> prepare(
+      System& source, System& target,
+      std::shared_ptr<component::LoadedComponent> component,
+      SystemLayoutTransferSpec spec, SystemLayoutTransferExecution execution);
+
+  const SystemLayoutTransferSpec& spec() const noexcept;
+  void begin_transaction(std::uint64_t generation);
+  void capture(std::uint64_t generation, std::uint64_t attempt);
+  SystemLayoutTransferReceipt apply(std::uint64_t generation, std::uint64_t attempt);
+  void reject_attempt(std::uint64_t generation, std::uint64_t attempt);
+  void finalize_transaction(std::uint64_t generation) noexcept;
+  void rollback_transaction(std::uint64_t generation) noexcept;
+
+ private:
+  struct Impl;
+  explicit PreparedSystemLayoutTransfer(std::unique_ptr<Impl> impl) noexcept;
   std::unique_ptr<Impl> p_;
 };
 

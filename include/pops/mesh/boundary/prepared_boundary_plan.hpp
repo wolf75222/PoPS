@@ -128,6 +128,7 @@ class PreparedBoundaryPlan {
     void validate_current() const { validate_current_(); }
 
     void fill_same_level_and_physical(MultiFab& state, const Box2D& domain) const;
+    void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const;
     void fill_same_level_and_physical(
         MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
         const runtime::multiblock::BoundaryEvaluationPoint& point) const;
@@ -218,6 +219,16 @@ class PreparedBoundaryPlan {
     return component_bc_[static_cast<std::size_t>(comp)];
   }
 
+  /// Materialize the immutable face law on one exact grid metric.  BCRec stores spacing because
+  /// Robin extensions need the cell-to-face distance; that spacing is execution geometry, not part
+  /// of a reusable boundary plan's identity.
+  BCRec component_bc(int comp, const Geometry& geometry) const {
+    BCRec result = component_bc(comp);
+    result.dx = geometry.dx();
+    result.dy = geometry.dy();
+    return result;
+  }
+
   void install_ghost_component(PreparedBoundaryComponentSpec spec,
                                std::shared_ptr<component::LoadedComponent> component) {
     install_typed_(ghost_components_, std::move(spec), std::move(component));
@@ -241,6 +252,13 @@ class PreparedBoundaryPlan {
 
   bool has_component_boundaries() const {
     return !ghost_components_.empty() || !residual_components_.empty() || !jvp_components_.empty();
+  }
+
+  /// The built-in BCRec laws fill every ghost layer allocated by the state. A dynamically loaded
+  /// ghost component is prepared only for this plan's authenticated required_depth(), so it keeps
+  /// the bounded-depth contract even though residual/JVP-only components do not affect ghost fill.
+  bool fills_all_allocated_physical_ghosts() const noexcept {
+    return ghost_components_.empty();
   }
 
   /// Whether this plan owns an executable residual/JVP pair for an implicit operator.  A partial
@@ -377,6 +395,13 @@ class PreparedBoundaryPlan {
     return Periodicity{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
   }
 
+  bool requires_grid_metric() const {
+    return std::any_of(component_bc_.begin(), component_bc_.end(), [](const BCRec& bc) {
+      return bc.xlo == BCType::Robin || bc.xhi == BCType::Robin ||
+             bc.ylo == BCType::Robin || bc.yhi == BCType::Robin;
+    });
+  }
+
   /// Same-level/MPI and axis-aligned periodic production are performed by the memoized native halo
   /// schedule. Physical data is then applied per component. AmrRuntime executes the resolved
   /// AMRTransfer coarse/fine producer immediately before this closure on refined levels.
@@ -384,6 +409,9 @@ class PreparedBoundaryPlan {
     if (has_component_boundaries())
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
+    if (requires_grid_metric())
+      throw std::invalid_argument(
+          "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
     validate_for(state);
     fill_boundary(state, domain, periodicity());
     for (int comp = 0; comp < state.ncomp(); ++comp)
@@ -395,10 +423,34 @@ class PreparedBoundaryPlan {
     if (has_component_boundaries())
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
+    if (requires_grid_metric())
+      throw std::invalid_argument(
+          "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
     validate_for(state);
     fill_boundary(state, domain, lane, periodicity());
     for (int comp = 0; comp < state.ncomp(); ++comp)
       fill_physical_bc(state, domain, component_bc(comp), comp);
+  }
+
+  void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const {
+    if (has_component_boundaries())
+      throw std::runtime_error(
+          "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
+    validate_for(state);
+    fill_boundary(state, geometry.domain, periodicity());
+    for (int comp = 0; comp < state.ncomp(); ++comp)
+      fill_physical_bc(state, geometry.domain, component_bc(comp, geometry), comp);
+  }
+
+  void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry,
+                                    const ExecutionLane& lane) const {
+    if (has_component_boundaries())
+      throw std::runtime_error(
+          "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
+    validate_for(state);
+    fill_boundary(state, geometry.domain, lane, periodicity());
+    for (int comp = 0; comp < state.ncomp(); ++comp)
+      fill_physical_bc(state, geometry.domain, component_bc(comp, geometry), comp);
   }
 
   /// One-shot control/diagnostic adapter. It materializes a fresh component session and workspace;
@@ -692,10 +744,25 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(MultiFab
   if (!ghost_components_.empty())
     throw std::invalid_argument(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
+  if (plan_->requires_grid_metric())
+    throw std::invalid_argument(
+        "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
   plan_->validate_for(state);
   fill_boundary(state, domain, *lane_, plan_->periodicity());
   for (int comp = 0; comp < state.ncomp(); ++comp)
     fill_physical_bc(state, domain, plan_->component_bc(comp), comp);
+}
+
+inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
+    MultiFab& state, const Geometry& geometry) const {
+  validate_current_();
+  if (!ghost_components_.empty())
+    throw std::invalid_argument(
+        "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
+  plan_->validate_for(state);
+  fill_boundary(state, geometry.domain, *lane_, plan_->periodicity());
+  for (int comp = 0; comp < state.ncomp(); ++comp)
+    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
@@ -705,7 +772,7 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
   plan_->validate_for(state);
   fill_boundary(state, geometry.domain, *lane_, plan_->periodicity());
   for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp), comp);
+    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
   detail::BoundaryFieldRegistry fields;
   fields.configure_states(plan_->required_state_identities());
   fields.configure_fields(plan_->required_field_identities());
@@ -737,7 +804,7 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   plan_->validate_for(state);
   fill_boundary(state, geometry.domain, *lane_, plan_->periodicity());
   for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp), comp);
+    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
   if (ghost_workspaces_.size() != ghost_components_.size())
     throw std::logic_error(
         "PreparedBoundaryPlan ghost executor was not materialized before numerical execution");

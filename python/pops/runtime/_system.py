@@ -203,10 +203,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         return _ProfileSession(self, profile)
 
     def block_names(self) -> Any:
-        """Names of the added blocks, in order (useful for a Python integrator).
+        """Names of the installed native blocks, in deterministic registry order.
 
-        Delegates to the C++ block registry (single source), so it includes the blocks loaded via
-        blocks installed from a production package, not only direct native blocks.
+        Delegates to the C++ block registry (single source), so it includes blocks installed from a
+        production package as well as direct native blocks. This is a low-level inspection surface;
+        the compiled ``Program`` remains the time-integration authority.
         """
         return list(self._s.block_names())
 

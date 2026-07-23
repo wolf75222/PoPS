@@ -5,10 +5,73 @@ users select physics-level policies and never author compiler ``AccuracyRequirem
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from pops.identity import make_identity
+
+
+class _BuiltinLoadBalance:
+    """Constructor-only value implementing the open AMR load-balance data protocol."""
+
+    __pops_ir_immutable__: ClassVar[bool] = True
+    provider_id: ClassVar[str]
+    native_route: ClassVar[str]
+    option_schema_identity: ClassVar[str]
+    consumes_weights: ClassVar[bool]
+
+    def load_balance_provider_data(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "schema_version": 1,
+            "provider_type": "amr_load_balance_provider",
+            "provider_id": self.provider_id,
+            "native_route": self.native_route,
+            "option_schema_identity": self.option_schema_identity,
+            "options": {},
+            "weight_capability": {
+                "authenticated": True,
+                "consumed": self.consumes_weights,
+            },
+        }
+        data["provider_identity"] = make_identity(
+            "amr-load-balance-provider", data).token
+        return data
+
+    inspect = load_balance_provider_data
+    canonical_identity = load_balance_provider_data
+
+
+@dataclass(frozen=True, slots=True)
+class SpaceFillingCurve(_BuiltinLoadBalance):
+    """Weighted Morton-order partitions; the default locality-preserving policy."""
+
+    provider_id: ClassVar[str] = "pops.lib.amr::space_filling_curve"
+    native_route: ClassVar[str] = "space_filling_curve"
+    option_schema_identity: ClassVar[str] = (
+        "pops.amr.load-balance.space-filling-curve@1"
+    )
+    consumes_weights: ClassVar[bool] = True
+
+
+@dataclass(frozen=True, slots=True)
+class Knapsack(_BuiltinLoadBalance):
+    """Weighted longest-processing-time ownership balancing."""
+
+    provider_id: ClassVar[str] = "pops.lib.amr::knapsack"
+    native_route: ClassVar[str] = "knapsack"
+    option_schema_identity: ClassVar[str] = "pops.amr.load-balance.knapsack@1"
+    consumes_weights: ClassVar[bool] = True
+
+
+@dataclass(frozen=True, slots=True)
+class RoundRobin(_BuiltinLoadBalance):
+    """Index policy; weights are authenticated but intentionally do not select owners."""
+
+    provider_id: ClassVar[str] = "pops.lib.amr::round_robin"
+    native_route: ClassVar[str] = "round_robin"
+    option_schema_identity: ClassVar[str] = "pops.amr.load-balance.round-robin@1"
+    consumes_weights: ClassVar[bool] = False
 
 
 class _ImmutableTransferPolicy:
@@ -37,6 +100,18 @@ class _ImmutableTransferPolicy:
         routes = {}
         for name in getattr(type(self), "__dataclass_fields__", {}):
             value = getattr(self, name)
+            candidates = getattr(value, "amr_transfer_kernel_candidates", None)
+            if callable(candidates):
+                candidate_values = candidates()
+                if not isinstance(candidate_values, Iterable):
+                    raise TypeError(
+                        "AMR transfer kernel candidates must be iterable"
+                    )
+                values = tuple(candidate_values)
+                if not values:
+                    raise ValueError("AMR transfer kernel family must not be empty")
+                routes[name] = [item.amr_transfer_kernel_data() for item in values]
+                continue
             protocol = getattr(value, "amr_transfer_kernel_data", None)
             if callable(protocol):
                 routes[name] = protocol()
@@ -73,14 +148,36 @@ class VolumeAverage(_ImmutableTransferPolicy):
 
 
 @dataclass(frozen=True, slots=True)
-class ConservativeCoarseFine(_ImmutableTransferPolicy):
+class _ConservativeCoarseFineSecondOrder(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "conservative_coarse_fine"
-    order: ClassVar[int] = 1
-    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
+    order: ClassVar[int] = 2
+    ghost_depth: ClassVar[tuple[int, ...]] = (2,)
     dimensions: ClassVar[tuple[int, ...]] = (2,)
     refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
     conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ConservativeCoarseFineFifthOrder(_ImmutableTransferPolicy):
+    native_route: ClassVar[str] = "conservative_polynomial5_coarse_fine"
+    order: ClassVar[int] = 5
+    ghost_depth: ClassVar[tuple[int, ...]] = (3,)
+    dimensions: ClassVar[tuple[int, ...]] = (2,)
+    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
+    conservative: ClassVar[bool] = True
+    temporal: ClassVar[bool] = False
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCoarseFine(_ImmutableTransferPolicy):
+    """Capability family selected from the resolved spatial order and halo."""
+
+    def amr_transfer_kernel_candidates(self) -> tuple[Any, ...]:
+        return (
+            _ConservativeCoarseFineSecondOrder(),
+            _ConservativeCoarseFineFifthOrder(),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +306,26 @@ class SymbolicTagger:
                 "AMR hysteresis min_cycles requires native persistent tagging state; "
                 "it is never accepted then ignored")
 
+    def lower_amr_provider(self, context: Any) -> Any:
+        from pops.amr.providers import (
+            AMRProviderLoweringContext,
+            ResolvedAMRProviderBinding,
+        )
+        from pops.amr.providers import amr_provider_binding_identity
+
+        if type(context) is not AMRProviderLoweringContext:
+            raise TypeError("SymbolicTagger requires an AMRProviderLoweringContext")
+        self.require_component_inputs(context.components)
+        self.require_tagging_graph(context.tagging_graph)
+        data = {
+            **self.runtime_binding_data(),
+            "layout_identity": context.layout_identity,
+            "clock_identity": context.clock_identity,
+            "tagging_graph_identity": context.tagging_graph.qualified_id,
+        }
+        data["provider_identity"] = amr_provider_binding_identity("tagger", data)
+        return ResolvedAMRProviderBinding("tagger", data)
+
     def runtime_binding_data(self) -> dict[str, Any]:
         from pops import interfaces
         from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
@@ -219,6 +336,10 @@ class SymbolicTagger:
         data = {
             "schema_version": 1,
             "provider_type": "builtin_amr_tagger",
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "builtin",
+            },
             "provider_id": "pops.lib.amr::symbolic_tagger",
             "native_interface": interfaces.Tagger.to_data(),
             "tagging_capability": {
@@ -240,6 +361,9 @@ class SymbolicTagger:
                     "non_finite_policy"],
                 "persistent_hysteresis": NATIVE_TAGGING_PROGRAM_ABI[
                     "persistent_hysteresis"],
+                "execution_mode": "native_backend",
+                "collective_scope": "none",
+                "memory_spaces": list(NATIVE_TAGGING_PROGRAM_ABI["memory_spaces"]),
             },
         }
         data["provider_identity"] = make_identity("amr-tagger-provider", data).token
@@ -281,12 +405,34 @@ class BergerRigoutsos:
     def require_component_inputs(self, components: Any) -> None:
         del components
 
+    def lower_amr_provider(self, context: Any) -> Any:
+        from pops.amr.providers import (
+            AMRProviderLoweringContext,
+            ResolvedAMRProviderBinding,
+        )
+
+        if type(context) is not AMRProviderLoweringContext:
+            raise TypeError("BergerRigoutsos requires an AMRProviderLoweringContext")
+        self.require_component_inputs(context.components)
+        from pops.amr.providers import amr_provider_binding_identity
+
+        data = {
+            **self.runtime_binding_data(),
+            "layout_identity": context.layout_identity,
+        }
+        data["provider_identity"] = amr_provider_binding_identity("clustering", data)
+        return ResolvedAMRProviderBinding("clustering", data)
+
     def runtime_binding_data(self) -> dict[str, Any]:
         from pops import interfaces
 
         data = {
             "schema_version": 1,
             "provider_type": "builtin_amr_clustering",
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "builtin",
+            },
             "provider_id": "pops.lib.amr::berger_rigoutsos",
             "native_interface": interfaces.Clustering.to_data(),
             "minimum_efficiency": self.minimum_efficiency,
@@ -314,9 +460,12 @@ __all__ = [
     "EllipticRecompute",
     "FaceTransfer",
     "LinearTimeInterpolation",
+    "Knapsack",
     "NodeTransfer",
     "PatchTopologyRebuild",
     "StateTransfer",
+    "SpaceFillingCurve",
     "SymbolicTagger",
+    "RoundRobin",
     "VolumeAverage",
 ]

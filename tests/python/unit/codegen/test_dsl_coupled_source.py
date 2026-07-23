@@ -56,7 +56,7 @@ def density_block(alpha=1.0, n0=1.0):
 
 
 def make_system(n, ne0, ni0, ng0):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     # n0 = densite uniforme de chaque bloc : f = alpha (n - n0) = 0 a l'init (phi uniforme -> derive nulle)
     # Electrons and ions carry opposite signed charge while neutrals do not contribute to Poisson.
     # Ionization creates electron/ion pairs, so this explicit discrete background remains compatible

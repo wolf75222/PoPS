@@ -5,6 +5,7 @@
 
 #include <pops/runtime/dynamic/component_loader.hpp>
 
+#include <initializer_list>
 #include <limits>
 
 // ADC-365: the System runtime-composition facade bindings.
@@ -17,6 +18,65 @@
 // every System method name here is unique). The class name and the .def names are unchanged, so the
 // legacy-name architecture gate still finds them in this exact file.
 namespace {
+
+void require_exact_keys(const py::dict& value, std::initializer_list<const char*> expected,
+                        const char* where) {
+  if (value.size() != static_cast<py::ssize_t>(expected.size()))
+    throw py::value_error(std::string(where) + " keys are not exact");
+  for (const char* key : expected)
+    if (!value.contains(key))
+      throw py::value_error(std::string(where) + " keys are not exact");
+}
+
+SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
+  require_exact_keys(
+      row,
+      {"mapping_identity", "provider_identity", "provider_component_identity",
+       "provider_manifest_identity", "source_layout_identity", "target_layout_identity",
+       "source_block", "target_block", "source_representation", "target_representation",
+       "synchronization_identity", "refinement_ratio", "operation"},
+      "prepared layout-transfer spec");
+  return {py::cast<std::string>(row["mapping_identity"]),
+          py::cast<std::string>(row["provider_identity"]),
+          py::cast<std::string>(row["provider_component_identity"]),
+          py::cast<std::string>(row["provider_manifest_identity"]),
+          py::cast<std::string>(row["source_layout_identity"]),
+          py::cast<std::string>(row["target_layout_identity"]),
+          py::cast<std::string>(row["source_block"]),
+          py::cast<std::string>(row["target_block"]),
+          py::cast<std::string>(row["source_representation"]),
+          py::cast<std::string>(row["target_representation"]),
+          py::cast<std::string>(row["synchronization_identity"]),
+          py::cast<std::array<std::int32_t, 2>>(row["refinement_ratio"]),
+          py::cast<std::int32_t>(row["operation"])};
+}
+
+SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {
+  require_exact_keys(
+      row,
+      {"execution_identity", "context_version", "memory_space", "backend_identity",
+       "device_identity", "scalar_type", "storage_precision", "compute_precision",
+       "accumulation_precision", "reduction_precision", "stream_handle", "stream_identity",
+       "communicator_f_handle", "communicator_datatype_f_handle", "communicator_identity",
+       "communicator_datatype_identity"},
+      "prepared layout-transfer execution context");
+  return {py::cast<std::uint32_t>(row["context_version"]),
+          py::cast<std::string>(row["execution_identity"]),
+          py::cast<std::int32_t>(row["memory_space"]),
+          py::cast<std::string>(row["backend_identity"]),
+          py::cast<std::string>(row["device_identity"]),
+          py::cast<std::int32_t>(row["scalar_type"]),
+          py::cast<std::int32_t>(row["storage_precision"]),
+          py::cast<std::int32_t>(row["compute_precision"]),
+          py::cast<std::int32_t>(row["accumulation_precision"]),
+          py::cast<std::int32_t>(row["reduction_precision"]),
+          py::cast<std::uint64_t>(row["stream_handle"]),
+          py::cast<std::string>(row["stream_identity"]),
+          py::cast<std::int64_t>(row["communicator_f_handle"]),
+          py::cast<std::int64_t>(row["communicator_datatype_f_handle"]),
+          py::cast<std::string>(row["communicator_identity"]),
+          py::cast<std::string>(row["communicator_datatype_identity"])};
+}
 
 PreparedProviderOptions prepared_provider_options_from_python(const std::string& schema_identity,
                                                               const py::dict& values) {
@@ -241,6 +301,14 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
+      .def("_install_external_riemann_block", &System::add_external_riemann_block,
+           py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"),
+           py::arg("limiter"), py::arg("recon"), py::arg("time"), py::arg("gamma"),
+           py::arg("substeps"), py::arg("evolve"), py::arg("stride"),
+           py::arg("expected_nvars"), py::arg("expected_naux"),
+           py::arg("expected_model_identity"),
+           py::arg("positivity_floor") = 0.0,
+           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
@@ -302,6 +370,7 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &System::history_initialized, py::arg("name"))
+      .def("history_fill_count", &System::history_fill_count, py::arg("name"))
       .def(
           "restore_history",
           [](System& s, const std::string& name, int slot,
@@ -311,6 +380,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &System::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
+      .def("restore_history_fill_count", &System::restore_history_fill_count, py::arg("name"),
+           py::arg("fill_count"))
       // Selective history persistence + deterministic ring replay (ADC-626): the checkpoint stores only
       // the policy-selected slots + the per-slot dt; the restart replays the gaps via
       // rebuild_history_slots (re-stepping the installed Program from the nearest older stored slot).
@@ -688,6 +759,19 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_step_change_l2", &System::step_change_l2)
       .def("_finalize_step_transaction", &System::finalize_step_transaction)
       .def("_rollback_step_transaction", &System::rollback_step_transaction)
+      .def(
+          "_prepare_layout_transfer",
+          [](System& source, System& target,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& spec, const py::dict& execution) {
+            return PreparedSystemLayoutTransfer::prepare(
+                source, target, std::move(component),
+                layout_transfer_spec_from_python(spec),
+                layout_transfer_execution_from_python(execution));
+          },
+          py::arg("target"), py::arg("component"), py::arg("spec"),
+          py::arg("execution_context"), py::keep_alive<0, 1>(), py::keep_alive<0, 2>(),
+          "Prepare one persistent native System-to-System mapping session.")
       .def("step_cfl", &System::step_cfl,
            "Advances by ONE step at dt = cfl * h / max wave speed of the system (also honors the "
            "optional bounds: substeps, stride, source_frequency, couplings, add_dt_bound). Returns "
@@ -737,7 +821,9 @@ void bind_system_stepping(py::class_<System>& cls) {
            "faster "
            "block is sub-cycled n = ceil(w_block / w_min) times. Returns the macro-step.",
            py::arg("cfl"))
-      // Primitives for a CUSTOM time integrator in Python (take_step):
+      // Explicit host inspection/state-transfer primitives.  Production time programs execute in
+      // the prepared native runtime; these bulk copies exist for initialization, checkpoints,
+      // diagnostics and numerical verification, never as a per-cell Python stepping route.
       .def(
           "eval_rhs",
           [](System& s, const std::string& name) {
@@ -894,6 +980,43 @@ void bind_system_data(py::class_<System>& cls) {
 // class exists before the other groups extend it). The per-concern order matches the historical single
 // chain; no overload set spans two concerns.
 void init_system(py::module_& m) {
+  py::class_<SystemLayoutTransferReceipt>(m, "_SystemLayoutTransferReceipt")
+      .def_readonly("applied", &SystemLayoutTransferReceipt::applied)
+      .def_readonly("mapping_identity", &SystemLayoutTransferReceipt::mapping_identity)
+      .def_readonly("provider_identity", &SystemLayoutTransferReceipt::provider_identity)
+      .def_readonly("provider_component_identity",
+                    &SystemLayoutTransferReceipt::provider_component_identity)
+      .def_readonly("provider_manifest_identity",
+                    &SystemLayoutTransferReceipt::provider_manifest_identity)
+      .def_readonly("source_layout_identity",
+                    &SystemLayoutTransferReceipt::source_layout_identity)
+      .def_readonly("target_layout_identity",
+                    &SystemLayoutTransferReceipt::target_layout_identity)
+      .def_readonly("source_block", &SystemLayoutTransferReceipt::source_block)
+      .def_readonly("target_block", &SystemLayoutTransferReceipt::target_block)
+      .def_readonly("execution_identity", &SystemLayoutTransferReceipt::execution_identity)
+      .def_readonly("operation", &SystemLayoutTransferReceipt::operation)
+      .def_readonly("generation", &SystemLayoutTransferReceipt::generation)
+      .def_readonly("attempt", &SystemLayoutTransferReceipt::attempt)
+      .def_readonly("source_element_count",
+                    &SystemLayoutTransferReceipt::source_element_count)
+      .def_readonly("destination_element_count",
+                    &SystemLayoutTransferReceipt::destination_element_count);
+  py::class_<PreparedSystemLayoutTransfer,
+             std::shared_ptr<PreparedSystemLayoutTransfer>>(
+      m, "_PreparedSystemLayoutTransfer")
+      .def("begin_transaction", &PreparedSystemLayoutTransfer::begin_transaction,
+           py::arg("generation"))
+      .def("capture", &PreparedSystemLayoutTransfer::capture, py::arg("generation"),
+           py::arg("attempt"))
+      .def("apply", &PreparedSystemLayoutTransfer::apply, py::arg("generation"),
+           py::arg("attempt"))
+      .def("reject_attempt", &PreparedSystemLayoutTransfer::reject_attempt,
+           py::arg("generation"), py::arg("attempt"))
+      .def("finalize_transaction", &PreparedSystemLayoutTransfer::finalize_transaction,
+           py::arg("generation"))
+      .def("rollback_transaction", &PreparedSystemLayoutTransfer::rollback_transaction,
+           py::arg("generation"));
   py::class_<System> cls(m, "System");
   bind_system_assembly(cls);
   bind_system_program(cls);

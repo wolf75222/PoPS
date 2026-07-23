@@ -23,6 +23,7 @@ ControllerFactory = Callable[
     [StepStrategy, Mapping[str, Any] | None], "StepController[Any]"
 ]
 _CONTROLLER_FACTORIES: dict[type[StepStrategy], ControllerFactory] = {}
+_MISSING = object()
 
 
 def register_step_controller_factory(
@@ -52,13 +53,17 @@ def _stores(engine: Any) -> tuple[str, ...]:
 
 
 def _phase(error: BaseException) -> str:
-    value = getattr(error, "phase", None)
-    if callable(value):
-        value = value()
-    if isinstance(value, str) and value in {
-        "prepare", "stage", "solve", "synchronize", "guard", "effect", "commit",
-    }:
-        return value
+    value = getattr(error, "phase", _MISSING)
+    if value is not _MISSING:
+        if callable(value):
+            value = value()
+        if isinstance(value, str) and value in {
+            "prepare", "stage", "solve", "synchronize", "guard", "effect", "commit",
+        }:
+            return value
+        # Native providers may expose a phase more precise than the report vocabulary.  Keep that
+        # exact value on the exception, but never infer a different phase from its display string.
+        return "solve"
     message = str(error)
     for phase in ("prepare", "stage", "solve", "synchronize", "guard", "effect", "commit"):
         if " during %s:" % phase in message:

@@ -2,6 +2,7 @@
 # ruff: noqa: F405
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 from typing import Any
 
@@ -58,6 +59,33 @@ def _kernel_data(kernel: Any, *, where: str) -> dict[str, Any]:
     return data
 
 
+def _kernel_candidates(kernel: Any, *, where: str) -> tuple[Any, ...]:
+    """Return one authenticated capability family without inspecting concrete classes."""
+    protocol = getattr(kernel, "amr_transfer_kernel_candidates", None)
+    if not callable(protocol):
+        _kernel_data(kernel, where=where)
+        return (kernel,)
+    candidate_values = protocol()
+    if not isinstance(candidate_values, Iterable):
+        raise TypeError("%s kernel candidates must be iterable" % where)
+    candidates = tuple(candidate_values)
+    if not candidates:
+        raise ValueError("%s kernel family must not be empty" % where)
+    rows = tuple(_kernel_data(value, where=where) for value in candidates)
+    identities = {
+        (row["native_route"], row["order"], tuple(row["ghost_depth"])) for row in rows
+    }
+    if len(identities) != len(rows):
+        raise ValueError("%s kernel family contains duplicate capability routes" % where)
+    return candidates
+
+
+def _kernel_family_data(kernel: Any, *, where: str) -> Any:
+    candidates = _kernel_candidates(kernel, where=where)
+    rows = [_kernel_data(value, where=where) for value in candidates]
+    return rows[0] if len(rows) == 1 else rows
+
+
 class AMRTransfer:
     """Object-level public declaration of how AMR values are materialized.
 
@@ -83,7 +111,7 @@ class AMRTransfer:
             raise RuntimeError("AMRTransfer is frozen")
         data = _policy_data(policy, expected_kind="state", where="AMRTransfer.state")
         for route in ("prolongation", "restriction", "coarse_fine", "time_interpolation"):
-            kernel = _kernel_data(
+            kernel = _kernel_family_data(
                 getattr(policy, route, None), where="AMRTransfer.state.%s" % route)
             if data.get("routes", {}).get(route) != kernel:
                 raise ValueError("AMRTransfer.state identity does not authenticate %s" % route)
@@ -275,7 +303,37 @@ class AMRTransfer:
             refinement_ratios=policy.refinement_ratios,
         )
 
-    def resolve(self, layout_plan: LayoutPlan) -> ResolvedAMRTransfer:
+    @staticmethod
+    def _resolved_spatial_accuracy(
+        subject: Handle, numerics: tuple[Any, ...]
+    ) -> tuple[int, tuple[int, ...]] | None:
+        methods = []
+        for plan in numerics:
+            for rate in getattr(plan, "rates", ()):
+                method = getattr(rate, "method", None)
+                variables = getattr(method, "variables", None)
+                state = getattr(variables, "options", {}).get("state") \
+                    if variables is not None else None
+                if isinstance(state, Handle) and state.qualified_id == subject.qualified_id:
+                    methods.append(method)
+        if not methods:
+            return None
+        orders: list[int] = []
+        ghosts: list[int] = []
+        for method in methods:
+            order = getattr(method, "formal_order", None)
+            ghost = getattr(method, "ghost_depth", None)
+            if (isinstance(order, bool) or not isinstance(order, int) or order < 1
+                    or isinstance(ghost, bool) or not isinstance(ghost, int) or ghost < 1):
+                raise TypeError(
+                    "resolved spatial methods must authenticate integer order and ghost depth")
+            orders.append(order)
+            ghosts.append(ghost)
+        return max(orders), (max(ghosts),)
+
+    def resolve(
+        self, layout_plan: LayoutPlan, numerics: tuple[Any, ...] = ()
+    ) -> ResolvedAMRTransfer:
         if not (self._states or self._faces or self._nodes):
             raise ValueError("AMRTransfer requires at least one typed physical policy")
         resolver = AMRTransferBuilder(layout_plan)
@@ -305,8 +363,15 @@ class AMRTransfer:
                     "transition ratios; select a per-transition transfer provider"
                 )
             ratio = ratios[0]
+            spatial_accuracy = self._resolved_spatial_accuracy(subject, tuple(numerics))
+            if numerics and spatial_accuracy is None:
+                raise ValueError(
+                    "AMR cell state %s has no exact resolved spatial method; coarse/fine "
+                    "accuracy cannot be lowered by default" % subject.qualified_id
+                )
             for attribute, operation in operations:
-                kernel = getattr(policy, attribute)
+                kernels = _kernel_candidates(
+                    getattr(policy, attribute), where="AMRTransfer.state.%s" % attribute)
                 key = TransferKey(
                     CELL_SPACE,
                     CELL_CENTERED,
@@ -316,24 +381,41 @@ class AMRTransfer:
                 )
                 provider = TransferProvider(
                     provider_handle((subject,), attribute, "amr_transfer_provider"),
-                    (
+                    tuple(
                         TransferProviderRoute(
                             key,
                             self._capabilities(kernel),
                             CanonicalOptions({"native_route": kernel.native_route}),
-                        ),
+                        )
+                        for kernel in kernels
                     ),
                 )
                 resolver.register(provider)
-                resolver.require(
-                    subject,
-                    key,
-                    accuracy=self._accuracy(
-                        kernel,
+                requirement_kernel = min(
+                    kernels,
+                    key=lambda value: (value.order, tuple(value.ghost_depth), value.native_route),
+                )
+                if operation == COARSE_FINE_FILL and spatial_accuracy is not None:
+                    required_order, required_ghost = spatial_accuracy
+                    accuracy = AccuracyRequirement(
+                        order=required_order,
+                        ghost_depth=required_ghost,
+                        dimension=dimension,
+                        refinement_ratio=(ratio,) * dimension,
+                        conservative=True,
+                        temporal=False,
+                    )
+                else:
+                    accuracy = self._accuracy(
+                        requirement_kernel,
                         dimension=dimension,
                         ratio=ratio,
                         temporal=operation == TEMPORAL_INTERPOLATION,
-                    ),
+                    )
+                resolver.require(
+                    subject,
+                    key,
+                    accuracy=accuracy,
                     layout=layout,
                     provider=provider,
                 )
@@ -624,19 +706,61 @@ class AMRTransferBuilder:
                             candidates.append((provider, route))
                         else:
                             incompatible.append(provider.qualified_id)
-                if len(candidates) != 1:
-                    if not candidates and incompatible:
-                        raise ValueError(
-                            "incompatible AMR transfer provider(s) for exact requirement: %s"
-                            % sorted(incompatible)
-                        )
-                    if not candidates:
-                        raise ValueError("missing AMR transfer provider for exact key %s" % token)
+                if not candidates and incompatible:
+                    raise ValueError(
+                        "incompatible AMR transfer provider(s) for exact requirement: %s"
+                        % sorted(set(incompatible))
+                    )
+                if not candidates:
+                    raise ValueError("missing AMR transfer provider for exact key %s" % token)
+                providers = {provider.qualified_id for provider, _ in candidates}
+                if len(providers) != 1:
                     raise ValueError(
                         "ambiguous AMR transfer providers; select provider= explicitly: %s"
-                        % sorted(provider.qualified_id for provider, _ in candidates)
+                        % sorted(providers)
                     )
-                provider, route = candidates[0]
+
+                needed_ghost = requirement.accuracy.ghost_depth
+                if len(needed_ghost) == 1:
+                    needed_ghost *= requirement.accuracy.dimension
+
+                def capability_surplus(candidate: Any) -> tuple[Any, ...]:
+                    _, candidate_route = candidate
+                    available = candidate_route.capabilities.ghost_depth
+                    if len(available) == 1:
+                        available *= requirement.accuracy.dimension
+                    return (
+                        candidate_route.capabilities.order - requirement.accuracy.order,
+                        tuple(a - n for a, n in zip(available, needed_ghost, strict=True)),
+                    )
+
+                def dominates(left: Any, right: Any) -> bool:
+                    left_surplus = capability_surplus(left)
+                    right_surplus = capability_surplus(right)
+                    if left_surplus[0] > right_surplus[0]:
+                        return False
+                    if any(a > b for a, b in zip(
+                            left_surplus[1], right_surplus[1], strict=True)):
+                        return False
+                    return left_surplus[0] < right_surplus[0] or any(
+                        a < b for a, b in zip(
+                            left_surplus[1], right_surplus[1], strict=True)
+                    )
+
+                selected = [
+                    candidate for candidate in candidates
+                    if not any(
+                        other is not candidate and dominates(other, candidate)
+                        for other in candidates
+                    )
+                ]
+                if len(selected) != 1:
+                    raise ValueError(
+                        "selected AMR provider has ambiguous non-dominated capability routes: %s"
+                        % sorted(route.options.to_data().get("native_route", "")
+                                 for _, route in selected)
+                    )
+                provider, route = selected[0]
                 consumed_providers.add(provider.qualified_id)
                 group = (token, provider.qualified_id)
                 action = ApplyTransferProvider(provider, route, route.capabilities)

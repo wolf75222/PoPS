@@ -82,7 +82,7 @@ def _isothermal():
 
 
 def test_collision_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.add_equation("a", _compressible(1.4), spatial=engine.Spatial())
     sim.add_equation("b", _compressible(1.4), spatial=engine.Spatial())
@@ -103,7 +103,7 @@ def test_collision_preset_matches_deleted_helper():
 
 
 def test_ionization_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     for name in ("e", "i", "g"):
         sim.add_equation(name, _isothermal(), spatial=engine.Spatial())
@@ -128,7 +128,7 @@ def test_ionization_preset_matches_deleted_helper():
 
 
 def test_thermal_exchange_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.add_equation("a", _compressible(1.4), spatial=engine.Spatial())
     sim.add_equation("b", _compressible(1.6667), spatial=engine.Spatial())

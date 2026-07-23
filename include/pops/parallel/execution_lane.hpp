@@ -675,7 +675,15 @@ inline long all_reduce_min(long value, const ExecutionLane& lane) {
 inline void all_reduce_sum_inplace(double* buffer, int count, const ExecutionLane& lane) {
   all_reduce_sum_inplace(buffer, count, lane.communicator());
 }
+inline void all_reduce_sum_inplace(double* buffer, std::size_t count,
+                                   const ExecutionLane& lane) {
+  all_reduce_sum_inplace(buffer, count, lane.communicator());
+}
 inline void all_reduce_max_inplace(double* buffer, int count, const ExecutionLane& lane) {
+  all_reduce_max_inplace(buffer, count, lane.communicator());
+}
+inline void all_reduce_max_inplace(double* buffer, std::size_t count,
+                                   const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
 inline void all_reduce_or_inplace(char* buffer, std::size_t count, const ExecutionLane& lane) {

@@ -49,7 +49,7 @@ void run_compiled(int n, double L, const std::vector<double>& rho, double rho0, 
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = L;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   System sys(cfg);
   using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
   add_compiled_model(sys, "gas",
@@ -68,7 +68,7 @@ void run_native(int n, double L, const std::vector<double>& rho, double rho0, co
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = L;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   System sys(cfg);
   ModelSpec spec;
   spec.transport = "compressible";

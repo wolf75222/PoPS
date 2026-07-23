@@ -28,6 +28,7 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system.cpp
     runtime/system/system_install.cpp
     runtime/system/system_fields.cpp
+    runtime/system/system_layout_transfer.cpp
     runtime/system/system_io.cpp
     runtime/system/system_profiling.cpp
     runtime/system/system_program.cpp
@@ -46,9 +47,9 @@ set(POPS_RUNTIME_OUTPUT_SOURCES
 
 # Compile the runtime ABI authority exactly once, then expose it through two deliberate link forms:
 # C++ facade consumers receive the archive transitively, while _pops embeds the object directly.
-# pybind11's exception translator does not create a strong undefined reference to the key function,
-# so linking only the archive may discard this TU and leave generated components with an unresolved
-# StepAttemptRejected destructor at dlopen.
+# pybind11's exception translator does not create a strong undefined reference to every key function,
+# so linking only the archive may discard this TU and leave generated components with unresolved
+# StepAttemptRejected / FluxEvaluationFailure destructors at dlopen.
 add_library(pops_runtime_core_objects OBJECT ${POPS_RUNTIME_CORE_SOURCES})
 set_target_properties(pops_runtime_core_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(pops_runtime_core STATIC $<TARGET_OBJECTS:pops_runtime_core_objects>)
@@ -63,7 +64,7 @@ foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
   target_link_libraries(${_runtime_target} PUBLIC pops::pops ${CMAKE_DL_LIBS})
   target_compile_features(${_runtime_target} PRIVATE cxx_std_${POPS_CXX_STD})
   # These targets own every out-of-line POPS_EXPORT runtime seam. The shared-exception switch keeps
-  # StepAttemptRejected declaration-only and BUILDING selects dllexport on Windows; both propagate to
+  # Shared runtime exceptions declaration-only and BUILDING selects dllexport on Windows; both propagate to
   # the final module/executable embedding these static/object targets. Generated native components
   # receive only the shared switch from the authenticated loader manifest and therefore import it.
   target_compile_definitions(${_runtime_target} PUBLIC
@@ -71,7 +72,8 @@ foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
     POPS_EXPORT_BUILDING_MODULE)
 endforeach()
 
-# The transaction control-flow types are shared runtime ABI, not System implementation detail.
+# The transaction control-flow types and their internal flux-failure carrier are shared runtime ABI,
+# not System implementation detail.
 # PUBLIC linkage makes the single key-function/typeinfo authority follow either facade into every
 # final executable, including AMR-only consumers, without compiling a duplicate definition.  The
 # Python module additionally embeds pops_runtime_core_objects directly so its host ABI cannot depend
@@ -81,19 +83,18 @@ target_link_libraries(pops_runtime_amr PUBLIC pops_runtime_core)
 target_link_libraries(pops_runtime_output PUBLIC pops_runtime_core)
 
 if(POPS_BUILD_TESTS)
-  # Preserve the historical test-runtime compilation contract: the heavy implementation objects and
-  # their consumers use -O0 in optimized configurations, and only heavy objects occupy this Ninja
-  # pool. This test-only pool is intentionally independent from the production module's -O3 pool.
+  # Test executables may use POPS_TESTS_FAST_O0, but the shared runtime objects must keep the
+  # production optimization contract.  In particular, GCC's -O0 path for the large AmrSystem TU
+  # consumes substantially more memory than -O3 and can exhaust a public runner.  The dedicated
+  # pool still serializes those production objects while the tests compile independently at -O0.
   set_property(GLOBAL APPEND PROPERTY
     JOB_POOLS pops_heavy_test_tu=${POPS_HEAVY_TEST_TU_POOL})
   foreach(_runtime_target IN LISTS POPS_RUNTIME_OBJECT_TARGETS)
-    target_compile_options(${_runtime_target} PUBLIC
-      $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
     set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_test_tu)
   endforeach()
 elseif(POPS_BUILD_PYTHON)
-  # A Python-only build compiles these production objects at -O3. When tests are enabled they stay
-  # on the independent -O0 test pool above, even if the same objects also feed the Python module.
+  # A Python-only build uses the production module pool.  Test-enabled builds use the independent
+  # runtime pool above, even if the same optimized objects also feed the Python module.
   foreach(_runtime_target IN LISTS POPS_RUNTIME_OBJECT_TARGETS)
     set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_module_tu)
   endforeach()

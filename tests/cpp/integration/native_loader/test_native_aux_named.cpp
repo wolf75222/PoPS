@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 
 #include <pops/core/state/state.hpp>
 #include <pops/runtime/system.hpp>
@@ -73,31 +74,11 @@ std::string package_source() {
   )CPP";
 }
 
-bool compile_package(const std::string& source, const std::string& library) {
-#if defined(__APPLE__)
-  const std::string compiler = "/usr/bin/c++";
-#else
-  const std::string compiler = POPS_TEST_CXX;
-#endif
-  std::string command = compiler + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
-                        POPS_TEST_INCLUDE + " " + source + " -o " + library;
-#if defined(__APPLE__)
-  command += " -undefined dynamic_lookup";
-#endif
-  command += " 2> /dev/null";
-  return std::system(command.c_str()) == 0;
-}
-
 }  // namespace
 
 static int pops_run_test_native_aux_named(int argc, char** argv) {
   (void)argc;
   (void)argv;
-  if (std::string(POPS_TEST_CXX).empty()) {
-    std::printf("skip test_native_aux_named (no C++ compiler)\n");
-    return 0;
-  }
-
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/native_named_aux_" +
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source = stem + ".cpp";
@@ -106,9 +87,10 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
     std::ofstream output(source);
     output << package_source();
   }
-  if (!compile_package(source, library)) {
-    std::printf("skip test_native_aux_named (package compilation failed)\n");
-    return 0;
+  const auto package = pops::test::native_dso::compile_shared(source, library);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_native_aux_named", package);
+    return 1;
   }
 
   constexpr int n = 8;
@@ -117,7 +99,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   SystemConfig config;
   config.n = n;
   config.L = 1.0;
-  config.periodic = true;
+  config.periodicity = {true, true};
 
   System system(config);
   system.add_native_block("scalar", library, "none", "rusanov", "conservative", "euler");

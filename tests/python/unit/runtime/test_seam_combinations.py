@@ -82,7 +82,7 @@ def _seed_density(runtime: System | AmrSystem, name: str, n: int) -> None:
 @pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)
 def test_system_generated_seam_advances(transport: str, flux: str | None) -> None:
     n = 32
-    runtime = System(n=n, L=1.0, periodic=True)
+    runtime = System(n=n, L=1.0, periodicity=(True, True))
     runtime.add_equation(
         "block",
         _model(transport),
@@ -96,7 +96,7 @@ def test_system_generated_seam_advances(transport: str, flux: str | None) -> Non
 @pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)
 def test_amr_generated_seam_advances(transport: str, flux: str | None) -> None:
     n = 32
-    runtime = AmrSystem(n=n, regrid_every=0, periodic=True)
+    runtime = AmrSystem(n=n, regrid_every=0, periodicity=(True, True))
     runtime.add_equation(
         "block",
         _model(transport),

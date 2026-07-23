@@ -61,6 +61,10 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert routes["checkpoint:accepted_state_v3"].layout == "uniform|amr"
     assert routes["checkpoint:amr_dynamic_regrid"].status == "available"
     assert "checkpoint:system_v1" not in routes
+    weno = routes["reconstruction:weno5"]
+    assert weno.layout == "uniform|amr"
+    assert "ratio-2 2D AMR" in weno.limitation
+    assert "order-5" in weno.limitation
 
 
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):

@@ -33,6 +33,17 @@ TEST(test_box_array, nondivisible_domain_splits_evenly) {
   EXPECT_TRUE(ba2[0].nx() == 4 && ba2[1].nx() == 3 && ba2[2].nx() == 3) << "ndiv_even_split";
 }
 
+TEST(test_box_array, rectangular_domain_accepts_independent_axis_tile_limits) {
+  const Box2D domain = Box2D::from_extents(12, 6);
+  const BoxArray boxes = BoxArray::from_domain(domain, 6, 2);
+  ASSERT_EQ(boxes.size(), 6);
+  EXPECT_TRUE(boxes.tiles_exactly(domain));
+  for (int box = 0; box < boxes.size(); ++box) {
+    EXPECT_EQ(boxes[box].nx(), 6);
+    EXPECT_EQ(boxes[box].ny(), 2);
+  }
+}
+
 TEST(test_box_array, accepts_irregular_exact_tiling_and_shared_edges) {
   const Box2D domain{{-2, -3}, {3, 2}};
   const BoxArray boxes({Box2D{{-2, -3}, {-1, 2}}, Box2D{{0, -3}, {3, -1}}, Box2D{{0, 0}, {3, 2}}});
@@ -64,4 +75,28 @@ TEST(test_box_array, empty_layout_tiles_only_empty_domain) {
   EXPECT_TRUE(BoxArray{}.tiles_exactly(Box2D{}));
   EXPECT_FALSE(BoxArray{}.tiles_exactly(Box2D::from_extents(1, 1)));
   EXPECT_FALSE(BoxArray({Box2D{}}).tiles_exactly(Box2D{}));
+}
+
+TEST(test_box_array, from_domain_validates_tile_count_before_allocation) {
+  constexpr int lo = std::numeric_limits<int>::min();
+  constexpr int hi = std::numeric_limits<int>::max();
+  const Box2D full{{lo, lo}, {hi, hi}};
+
+  EXPECT_THROW((void)BoxArray::from_domain(Box2D::from_extents(1, 1), 0), std::invalid_argument);
+  EXPECT_THROW((void)BoxArray::from_domain(full, 1), std::length_error);
+
+  // A large coordinate interval remains a valid geometric object when it can be represented by a
+  // bounded number of tiles.  No hi + 1 signed-int arithmetic is used while splitting it.
+  const BoxArray tiled = BoxArray::from_domain(full, hi);
+  EXPECT_EQ(tiled.size(), 9);
+  EXPECT_TRUE(tiled.tiles_exactly(full));
+}
+
+TEST(test_box_array, num_cells_rejects_single_box_and_sum_overflow) {
+  constexpr int lo = std::numeric_limits<int>::min();
+  constexpr int hi = std::numeric_limits<int>::max();
+  EXPECT_THROW((void)BoxArray({Box2D{{lo, lo}, {hi, hi}}}).num_cells(), std::overflow_error);
+
+  const Box2D large = Box2D::from_extents(hi, hi);
+  EXPECT_THROW((void)BoxArray({large, large, large}).num_cells(), std::overflow_error);
 }
