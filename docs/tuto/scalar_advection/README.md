@@ -670,7 +670,17 @@ python docs/tuto/scalar_advection/13_openmp_amr_restart.py
 Le checkpoint est ecrit sous
 `docs/tuto/scalar_advection/results/13_openmp_amr_restart/`.
 
-## Figures generees
+## Verification par la solution analytique
+
+Pour une vitesse constante, la solution se calcule exactement en remontant les caracteristiques :
+
+```math
+u(x,y,t)=u_0(x-a_x t,y-a_y t).
+```
+
+Quand le pied de la caracteristique sort du carre unite par une face entrante, la valeur exacte est
+le fond impose `FAR_FIELD`. Les scripts enregistrent les parametres de la gaussienne et le script de
+trace reconstruit cette solution analytique aux memes centres de cellules que la solution PoPS.
 
 Apres les deux simulations OpenMP :
 
@@ -678,8 +688,23 @@ Apres les deux simulations OpenMP :
 python docs/tuto/scalar_advection/plot_openmp_results.py
 ```
 
-La premiere figure compare les deux executions OpenMP : condition initiale, solution advectee et
-difference entre les deux ecritures de SSPRK2.
+Le script calcule les erreurs ponderees par l'aire des cellules :
+
+```math
+\|e\|_1=\sum_{ij}|e_{ij}|\,\Delta x\Delta y,\qquad
+\|e\|_2=\left(\sum_{ij}e_{ij}^2\,\Delta x\Delta y\right)^{1/2},\qquad
+\|e\|_\infty=\max_{ij}|e_{ij}|.
+```
+
+Il verifie aussi que l'erreur L2 relative a la perturbation gaussienne reste inferieure a `0.10`.
+La figure principale montre directement le champ PoPS, la solution analytique, l'erreur absolue et
+une coupe superposee :
+
+![PoPS compared with the analytic scalar-advection solution](figures/scalar_advection_analytic_verification.png)
+
+Les deux figures historiques restent utiles pour verifier que les deux ecritures de SSPRK2 sont
+strictement equivalentes. La premiere compare condition initiale, solution advectee et difference
+entre les deux programmes temporels.
 
 ![Initial state, final state and SSPRK2 parity](figures/scalar_advection_fields.png)
 

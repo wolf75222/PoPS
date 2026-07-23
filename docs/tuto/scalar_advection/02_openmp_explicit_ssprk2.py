@@ -38,6 +38,10 @@ NY = 64
 AX = 1.0
 AY = 0.25
 FAR_FIELD = 0.05
+GAUSSIAN_AMPLITUDE = 0.95
+GAUSSIAN_BETA = 120.0
+GAUSSIAN_CENTER_X = 0.30
+GAUSSIAN_CENTER_Y = 0.35
 CFL = 0.45
 MAX_DT = 1.0e-2
 T_END = 0.20
@@ -165,8 +169,11 @@ x = (np.arange(NX, dtype=np.float64) + 0.5) / NX
 y = (np.arange(NY, dtype=np.float64) + 0.5) / NY
 xx, yy = np.meshgrid(x, y, indexing="xy")
 
-initial_u = FAR_FIELD + 0.95 * np.exp(
-    -120.0 * ((xx - 0.30) ** 2 + (yy - 0.35) ** 2)
+initial_u = FAR_FIELD + GAUSSIAN_AMPLITUDE * np.exp(
+    -GAUSSIAN_BETA * (
+        (xx - GAUSSIAN_CENTER_X) ** 2
+        + (yy - GAUSSIAN_CENTER_Y) ** 2
+    )
 )
 initial_state = np.ascontiguousarray(initial_u[np.newaxis, :, :], dtype=np.float64)
 
@@ -201,6 +208,11 @@ np.savez_compressed(
     ny=NY,
     ax=AX,
     ay=AY,
+    far_field=FAR_FIELD,
+    gaussian_amplitude=GAUSSIAN_AMPLITUDE,
+    gaussian_beta=GAUSSIAN_BETA,
+    gaussian_center_x=GAUSSIAN_CENTER_X,
+    gaussian_center_y=GAUSSIAN_CENTER_Y,
     cfl=CFL,
     t_end=T_END,
 )
