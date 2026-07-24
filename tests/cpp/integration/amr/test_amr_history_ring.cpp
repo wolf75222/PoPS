@@ -784,8 +784,9 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_refinement(1.2);
-  sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
-  sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
+  const auto neutral_density = blob(n, 0.5, 0.5, 0.5, 1.0, 0.12);
+  sim.set_density("a", neutral_density);
+  sim.set_density("b", neutral_density);
   sim.set_program_block_map({0, 1});
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();

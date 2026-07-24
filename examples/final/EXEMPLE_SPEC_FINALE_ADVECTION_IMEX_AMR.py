@@ -372,7 +372,7 @@ def build_authoring(
                 # The level-local MG and composite-FAC solvers own distinct stopping
                 # contracts.  Author the same physical field tolerance for both hierarchy
                 # shapes instead of inheriting FAC's independently stricter native default.
-                fac=CompositeFAC(rel_tol=1.0e-6),
+                fac=CompositeFAC(rel_tol=1.0e-6, max_iters=120),
             )),
             hierarchy_policy=CompositeHierarchySolve(),
         ),

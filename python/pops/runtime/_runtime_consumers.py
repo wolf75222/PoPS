@@ -2294,7 +2294,9 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return float(values[block]), True
         composite = getattr(engine, "composite_reduce", None)
         if callable(composite):
-            active_depth = getattr(engine, "nlev", None)
+            active_depth = getattr(engine, "n_levels", None)
+            if not callable(active_depth):
+                active_depth = getattr(engine, "nlev", None)
             if callable(active_depth):
                 nlev = int(cast(Any, active_depth)())
                 levels = tuple(level for level in levels if 0 <= int(level) < nlev)
@@ -2675,6 +2677,19 @@ class RuntimeOutputSnapshot:
         reducer = getattr(entry["native_engine"], reduction_method)
         return _NativeCompositeIntegral(
             family_identity, levels, float(reducer(*entry["reduction_args"])))
+
+    @staticmethod
+    def _active_reduction_levels(engine: Any, levels: tuple[int, ...]) -> tuple[int, ...]:
+        active_depth = getattr(engine, "n_levels", None)
+        if not callable(active_depth):
+            active_depth = getattr(engine, "nlev", None)
+        if not callable(active_depth):
+            return levels
+        nlev = int(cast(Any, active_depth)())
+        selected = tuple(level for level in levels if 0 <= int(level) < nlev)
+        if not selected:
+            raise RuntimeError("scientific output selected no active AMR level")
+        return selected
 
     def _layout(self, layout_id: str) -> Any:
         rows = [row for row in self._owner._layout_plan.layouts
@@ -3096,6 +3111,11 @@ class RuntimeOutputSnapshot:
                             if native_cartesian_integral and len(components) == 1 else None
                         reduction_args = (block, "sum", 0, list(levels))
                     native_engine = engine._s
+                    reduction_levels = self._active_reduction_levels(
+                        native_engine, tuple(levels)) if reduction_method is not None \
+                        else tuple(levels)
+                    if reduction_method is not None:
+                        reduction_args = tuple(reduction_args[:3]) + (list(reduction_levels),)
                     if not callable(getattr(native_engine, method_name, None)):
                         raise RuntimeError(
                             "installed native provider lacks required %s() output view"
@@ -3115,7 +3135,7 @@ class RuntimeOutputSnapshot:
                         "components": components,
                         "reduction_method": reduction_method,
                         "reduction_args": reduction_args,
-                        "reduction_levels": tuple(levels),
+                        "reduction_levels": reduction_levels,
                     }
                     entries.append(entry)
             diagnostic_schema = []
