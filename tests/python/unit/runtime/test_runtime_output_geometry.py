@@ -186,6 +186,19 @@ def test_runtime_output_composite_integral_forwards_exact_levels_to_native_reduc
     assert calls == [("fluid", "sum", 0, [0, 2])]
 
 
+def test_runtime_output_selects_only_active_amr_levels():
+    engine = SimpleNamespace(n_levels=lambda: 2)
+
+    assert RuntimeOutputSnapshot._active_levels(engine, (0, 1, 2)) == (0, 1)
+
+
+def test_runtime_output_rejects_selection_without_an_active_amr_level():
+    engine = SimpleNamespace(n_levels=lambda: 1)
+
+    with pytest.raises(RuntimeError, match="selected no active AMR level"):
+        RuntimeOutputSnapshot._active_levels(engine, (1, 2))
+
+
 def test_runtime_output_uses_exact_polar_annulus_cell_areas():
     result = _geometry(
         Uniform(PolarMesh(r_min=1.0, r_max=3.0, nr=4, ntheta=8)),

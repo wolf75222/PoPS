@@ -2679,7 +2679,7 @@ class RuntimeOutputSnapshot:
             family_identity, levels, float(reducer(*entry["reduction_args"])))
 
     @staticmethod
-    def _active_reduction_levels(engine: Any, levels: tuple[int, ...]) -> tuple[int, ...]:
+    def _active_levels(engine: Any, levels: tuple[int, ...]) -> tuple[int, ...]:
         active_depth = getattr(engine, "n_levels", None)
         if not callable(active_depth):
             active_depth = getattr(engine, "nlev", None)
@@ -3077,11 +3077,18 @@ class RuntimeOutputSnapshot:
             for quantity in manifest.quantities:
                 layout = self._layout(quantity.layout_id)
                 levels = quantity.levels or tuple(row.index for row in layout.levels)
+                block = _block_name(quantity.reference, component_names)
+                level_engine = self._owner._executor_for_layout(
+                    layout.handle.qualified_id) \
+                    if isinstance(quantity.reference, FieldHandle) \
+                    else self._owner._executor_for_block(block)
+                if layout.adaptive:
+                    levels = self._active_levels(
+                        level_engine._s, tuple(levels))
                 native_cartesian_integral = (
                     layout.adaptive
                     and layout.geometry.cell_measure == CARTESIAN_CELL_AREA
                 )
-                block = _block_name(quantity.reference, component_names)
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:
                     geometry = self._geometry(layout, level)
@@ -3111,7 +3118,7 @@ class RuntimeOutputSnapshot:
                             if native_cartesian_integral and len(components) == 1 else None
                         reduction_args = (block, "sum", 0, list(levels))
                     native_engine = engine._s
-                    reduction_levels = self._active_reduction_levels(
+                    reduction_levels = self._active_levels(
                         native_engine, tuple(levels)) if reduction_method is not None \
                         else tuple(levels)
                     if reduction_method is not None:
@@ -3142,6 +3149,11 @@ class RuntimeOutputSnapshot:
             for quantity in manifest.diagnostic_quantities:
                 layout = self._layout(quantity.layout_id)
                 levels = quantity.levels or tuple(row.index for row in layout.levels)
+                if layout.adaptive:
+                    block = _block_name(quantity.reference, component_names)
+                    engine = self._owner._executor_for_block(block)
+                    levels = self._active_levels(
+                        engine._s, tuple(levels))
                 for level in levels:
                     geometry = self._geometry(layout, level)
                     geometries[geometry.key] = geometry
