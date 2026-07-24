@@ -8,7 +8,7 @@ are refused.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _V3
 
@@ -78,7 +78,7 @@ def _checkpoint_amr_level_envelope(sim, payload):
         stored_files = keys()
     elif callable(stored_files):
         stored_files = stored_files()
-    files = set(stored_files)
+    files = set(cast(Any, stored_files))
     if "n_levels" not in files:
         raise ValueError("restart: AMR checkpoint lacks level-envelope key 'n_levels'")
     checkpoint_active = int(payload["n_levels"])
