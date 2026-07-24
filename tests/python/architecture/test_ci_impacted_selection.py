@@ -756,14 +756,17 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#cache_archives[@]}\" -eq 4" in mpi_block
     assert "test \"${#compile_contracts[@]}\" -eq 4" in mpi_block
     assert "--verify-contracts" in mpi_block
-    assert "timeout --signal=TERM --kill-after=30s 18m" in mpi_block
+    assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
+    assert 'run_with_heartbeat "MPI native test build" 8m' in mpi_block
+    assert "mem_available=" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
     assert "--label mpi" in mpi_block
     assert "--ctest-groups-file build-mpi/mpi-ctest-groups.tsv" in mpi_block
     assert "scripts/ci_select_tests.py python-mpi" in mpi_block
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
-    assert '--target _pops "${mpi_targets[@]}"' in mpi_block
+    assert "--parallel 1 --target _pops" in mpi_block
+    assert '--parallel 4 --target "${mpi_targets[@]}"' in mpi_block
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
