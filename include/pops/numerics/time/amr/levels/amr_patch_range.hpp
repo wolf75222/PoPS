@@ -26,6 +26,8 @@
 ///   all_reduce_sum_inplace; in serial all_reduce is the identity -> bit-for-bit identical;
 /// - CoverageMask prevents double-reflux of a fine-fine joint (only true fine-coarse interfaces
 ///   are corrected);
+/// - CoarseFineInterface canonicalizes coverage queries and reflux destinations across periodic
+///   seams, expanding its compact register region to include the opposite boundary when needed;
 /// - AvgDownMultiKernel / route_reflux are NAMED functors/functions (no generic lambda)
 ///   -> safe under nvcc;
 /// - fill_periodic_local serves the REPLICATED coarse (per-rank dmap): purely local folding
@@ -201,40 +203,101 @@ struct SubcyclingSchedule {
 // in amr_step_2level_multipatch and subcycle_level_mp. Builds the mask on the GLOBAL
 // box_array() of the fine patches (MPI-safe). route_reflux is a template on the register
 // type (Reg / RegMP, same field layout): named function (no generic lambda), thus
-// safe under nvcc. Arithmetic bit-identical to the previous bodies.
+// safe under nvcc. Periodic seams are ordinary neighbour relations: coverage is queried on the
+// wrapped cell and a real C/F correction is deposited on that wrapped coarse cell. Interior and
+// non-periodic arithmetic stays bit-identical to the previous bodies.
 struct CoarseFineInterface {
   CoverageMask cmask;
+  Box2D coarse_region;
+  Periodicity periodicity;
+  Box2D coverage_bounds{{0, 0}, {-1, -1}};
   // region = coarse footprint of the level (origin (0,0), dims NX x NY); fine_ba = GLOBAL
   // fine patches (all the boxes, known to all ranks). We mark the coarse PatchRange footprint
   // of each patch.
-  CoarseFineInterface(const Box2D& coarse_region, const BoxArray& fine_ba) : cmask(coarse_region) {
-    for (int g = 0; g < fine_ba.size(); ++g)
-      cmask.mark(PatchRange(fine_ba[g]).box());
+  CoarseFineInterface(const Box2D& region, const BoxArray& fine_ba,
+                      Periodicity per = Periodicity{})
+      : cmask(region), coarse_region(region), periodicity(per) {
+    for (int g = 0; g < fine_ba.size(); ++g) {
+      const Box2D footprint = PatchRange(fine_ba[g]).box().intersect(coarse_region);
+      if (footprint.empty())
+        continue;
+      cmask.mark(footprint);
+      if (coverage_bounds.empty()) {
+        coverage_bounds = footprint;
+      } else {
+        coverage_bounds.lo[0] = std::min(coverage_bounds.lo[0], footprint.lo[0]);
+        coverage_bounds.lo[1] = std::min(coverage_bounds.lo[1], footprint.lo[1]);
+        coverage_bounds.hi[0] = std::max(coverage_bounds.hi[0], footprint.hi[0]);
+        coverage_bounds.hi[1] = std::max(coverage_bounds.hi[1], footprint.hi[1]);
+      }
+    }
   }
-  bool covered(int I, int J) const { return cmask.covered(I, J); }
 
-  // Pours the reflux correction of ONE fine patch (register g, parent coords) into the
-  // coarse register ref: on each BORDERING coarse cell not covered by another patch,
-  // (time-integrated fine flux - coarse flux x dt) / dx|dy. Same formulas, same order
-  // (left/right in x, bottom/top in y) as the original inline bodies.
+  int canonical_x(int I) const {
+    if (!periodicity.x || (I >= coarse_region.lo[0] && I <= coarse_region.hi[0]))
+      return I;
+    const int extent = coarse_region.nx();
+    const int offset = (I - coarse_region.lo[0]) % extent;
+    return coarse_region.lo[0] + (offset < 0 ? offset + extent : offset);
+  }
+
+  int canonical_y(int J) const {
+    if (!periodicity.y || (J >= coarse_region.lo[1] && J <= coarse_region.hi[1]))
+      return J;
+    const int extent = coarse_region.ny();
+    const int offset = (J - coarse_region.lo[1]) % extent;
+    return coarse_region.lo[1] + (offset < 0 ? offset + extent : offset);
+  }
+
+  bool covered(int I, int J) const { return cmask.covered(canonical_x(I), canonical_y(J)); }
+
+  // Smallest single-box register containing the local C/F interface and every periodic image that
+  // may receive a reflux correction.  A patch touching a periodic edge routes one correction to the
+  // opposite edge; a single rectangular FluxRegister must therefore span that complete axis.  The
+  // non-periodic and interior-patch cases retain the historical interface-sized allocation.
+  Box2D reflux_register_region() const {
+    if (coverage_bounds.empty())
+      return coarse_region;
+    Box2D result{
+        {std::max(coverage_bounds.lo[0] - 1, coarse_region.lo[0]),
+         std::max(coverage_bounds.lo[1] - 1, coarse_region.lo[1])},
+        {std::min(coverage_bounds.hi[0] + 1, coarse_region.hi[0]),
+         std::min(coverage_bounds.hi[1] + 1, coarse_region.hi[1])}};
+    if (periodicity.x && (coverage_bounds.lo[0] == coarse_region.lo[0] ||
+                          coverage_bounds.hi[0] == coarse_region.hi[0])) {
+      result.lo[0] = coarse_region.lo[0];
+      result.hi[0] = coarse_region.hi[0];
+    }
+    if (periodicity.y && (coverage_bounds.lo[1] == coarse_region.lo[1] ||
+                          coverage_bounds.hi[1] == coarse_region.hi[1])) {
+      result.lo[1] = coarse_region.lo[1];
+      result.hi[1] = coarse_region.hi[1];
+    }
+    return result;
+  }
+
+  // Pours the reflux correction of ONE fine patch (register g, parent coords) into the coarse
+  // register ref: on each BORDERING coarse cell not covered by another patch,
+  // (time-integrated fine flux - coarse flux x dt) / dx|dy. Periodic destinations are canonicalized
+  // before the deposit. Same formulas and face order as the original inline bodies.
   template <class Reg>
   void route_reflux(const Reg& g, Real dx, Real dy, Real dt, FluxRegister& ref, int nc) const {
     for (int J = g.J0; J <= g.J1; ++J)
       for (int k = 0; k < nc; ++k) {
         if (!covered(g.I0 - 1, J))
-          ref.add(g.I0 - 1, J, k,
+          ref.add(canonical_x(g.I0 - 1), canonical_y(J), k,
                   -(g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k] * dt) / dx);
         if (!covered(g.I1 + 1, J))
-          ref.add(g.I1 + 1, J, k,
+          ref.add(canonical_x(g.I1 + 1), canonical_y(J), k,
                   +(g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k] * dt) / dx);
       }
     for (int I = g.I0; I <= g.I1; ++I)
       for (int k = 0; k < nc; ++k) {
         if (!covered(I, g.J0 - 1))
-          ref.add(I, g.J0 - 1, k,
+          ref.add(canonical_x(I), canonical_y(g.J0 - 1), k,
                   -(g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k] * dt) / dy);
         if (!covered(I, g.J1 + 1))
-          ref.add(I, g.J1 + 1, k,
+          ref.add(canonical_x(I), canonical_y(g.J1 + 1), k,
                   +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k] * dt) / dy);
       }
   }
@@ -251,16 +314,20 @@ struct CoarseFineInterface {
     for (int J = g.J0; J <= g.J1; ++J)
       for (int k = 0; k < nc; ++k) {
         if (!covered(g.I0 - 1, J))
-          ref.add(g.I0 - 1, J, k, -(g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k]) / dx);
+          ref.add(canonical_x(g.I0 - 1), canonical_y(J), k,
+                  -(g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k]) / dx);
         if (!covered(g.I1 + 1, J))
-          ref.add(g.I1 + 1, J, k, +(g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k]) / dx);
+          ref.add(canonical_x(g.I1 + 1), canonical_y(J), k,
+                  +(g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k]) / dx);
       }
     for (int I = g.I0; I <= g.I1; ++I)
       for (int k = 0; k < nc; ++k) {
         if (!covered(I, g.J0 - 1))
-          ref.add(I, g.J0 - 1, k, -(g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k]) / dy);
+          ref.add(canonical_x(I), canonical_y(g.J0 - 1), k,
+                  -(g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k]) / dy);
         if (!covered(I, g.J1 + 1))
-          ref.add(I, g.J1 + 1, k, +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k]) / dy);
+          ref.add(canonical_x(I), canonical_y(g.J1 + 1), k,
+                  +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k]) / dy);
       }
   }
 };

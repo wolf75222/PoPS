@@ -1020,6 +1020,44 @@ class AmrProgramContext {
     apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
   // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
+  // Generated Programs qualify reductions with their owning block.  AMR currently uses the same
+  // full valid-cell measure for every block on a level, but still validates the authored owner so
+  // forged/cross-block references fail exactly as they do in ProgramContext.
+  Real sum_component(int owner, const MultiFab& u, int comp) const {
+    (void)sys_block(owner);
+    return pops::reduce_sum(u, comp);
+  }
+  Real max_component(int owner, const MultiFab& u, int comp) const {
+    (void)sys_block(owner);
+    return pops::reduce_max(u, comp);
+  }
+  Real min_component(int owner, const MultiFab& u, int comp) const {
+    (void)sys_block(owner);
+    return pops::reduce_min(u, comp);
+  }
+  Real abs_sum_component(int owner, const MultiFab& u, int comp) const {
+    (void)sys_block(owner);
+    return pops::reduce_abs_sum(u, comp);
+  }
+  Real norm2(int owner, const MultiFab& u) const {
+    (void)sys_block(owner);
+    return std::sqrt(pops::dot(u, u, 0));
+  }
+  Real norm_inf(int owner, const MultiFab& u) const {
+    (void)sys_block(owner);
+    return pops::reduce_norm_inf(u, 0, RelativeCellMeasure{});
+  }
+  Real dot(int owner, const MultiFab& left, const MultiFab& right) const {
+    (void)sys_block(owner);
+    return pops::dot(left, right, 0);
+  }
+  Real sum(int owner, const MultiFab& u) const { return sum_component(owner, u, 0); }
+  Real max(int owner, const MultiFab& u) const { return max_component(owner, u, 0); }
+  Real min(int owner, const MultiFab& u) const { return min_component(owner, u, 0); }
+  Real abs_sum(int owner, const MultiFab& u) const {
+    return abs_sum_component(owner, u, 0);
+  }
+
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
   Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
@@ -1130,7 +1168,11 @@ class AmrProgramContext {
     pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value,
                                                static_cast<Real>(facade_->program_last_dt()));
     record_history_clock_(name);
-    if (capturing())
+    // Publish an explicit empty strip on a temporarily flat hierarchy as well.  A later AMR regrow
+    // must rotate the zero-flux history in exact lockstep with the native values; retaining the last
+    // pre-shrink C/F contribution here would associate an obsolete interface with a newer flat-level
+    // slot. A permanently uniform composition keeps the historical zero-capture fast path.
+    if (capturing() || eng_->configured_nlev() > 1)
       save_ring_flux_(name, value, owner);
   }
   void rotate_histories() const {
@@ -1144,6 +1186,12 @@ class AmrProgramContext {
       rotate_pending_ = true;  // couple_levels executes it after the reflux + slot-0 resync
       return;
     }
+    // A hierarchy may temporarily collapse to its coarse level and grow fine levels again later.
+    // Keep the Program-owned semantic rings in lockstep with the engine data ring even while there
+    // is no C/F interface to capture.  Otherwise a later regrow would attach stale lag clocks and
+    // exact-contribution slots to the newly prolonged history values.
+    rotate_ring_flux_();
+    rotate_ring_clocks_();
     pops::detail::AmrHistoryOps::rotate_histories(*eng_);
   }
   void rotate_histories(const std::string& clock_identity) const {
@@ -1517,15 +1565,17 @@ class AmrProgramContext {
   enum class ResidualCapture { FullRate, FluxOnly };
   using FluxContribution = AmrProgramFluxContribution;
   static void require_supported_program_refinement_ratios_(const AmrRuntime& eng) {
-    for (int child = 1; child < eng.nlev(); ++child) {
-      const int parent_refinement = eng.level_refinement(child - 1);
-      const int child_refinement = eng.level_refinement(child);
-      const int ratio = child_refinement / parent_refinement;
-      if (child_refinement != parent_refinement * ratio || ratio != kAmrRefRatio)
+    // Validate the complete configured envelope, not only its currently active prefix. A context
+    // restored while fine levels are absent must still reject an unsupported transition before that
+    // level can regrow during a later accepted step.
+    for (int parent = 0; parent < eng.configured_nlev() - 1; ++parent) {
+      const int child = parent + 1;
+      const int ratio = eng.configured_refinement_ratio(parent);
+      if (ratio != kAmrRefRatio)
         throw std::runtime_error(
             "AmrProgramContext: the native Program reflux/average-down provider supports only "
             "refinement ratio " +
-            std::to_string(kAmrRefRatio) + "; transition " + std::to_string(child - 1) + "->" +
+            std::to_string(kAmrRefRatio) + "; transition " + std::to_string(parent) + "->" +
             std::to_string(child) + " resolved ratio " + std::to_string(ratio) +
             ". Select a provider whose declared capabilities cover that transition.");
     }
@@ -1654,10 +1704,15 @@ class AmrProgramContext {
       return;
     const double accepted_time =
         level_clocks_.empty() ? facade_->time() : level_clocks_[0].physical_time;
-    level_clocks_.clear();
-    level_clocks_.reserve(static_cast<std::size_t>(nlev()));
-    for (int k = 0; k < nlev(); ++k)
-      level_clocks_.push_back({k, macro_step(), amr::Rational(0, 1), accepted_time});
+    const std::int64_t accepted_step =
+        level_clocks_.empty() ? macro_step() : level_clocks_[0].macro_step;
+    const std::size_t retained =
+        std::min(level_clocks_.size(), static_cast<std::size_t>(nlev()));
+    level_clocks_.resize(static_cast<std::size_t>(nlev()));
+    for (std::size_t k = 0; k < retained; ++k)
+      level_clocks_[k].level = static_cast<int>(k);
+    for (std::size_t k = retained; k < level_clocks_.size(); ++k)
+      level_clocks_[k] = {static_cast<int>(k), accepted_step, amr::Rational(0, 1), accepted_time};
   }
 
   template <class Advance>
@@ -1728,7 +1783,7 @@ class AmrProgramContext {
         accepted_sync_report_.push_back({event.parent_level, event.child_level, event.block,
                                          event.phase == SyncPhase::Reflux ? 0 : 1, event.clock});
       conservative_ledger_.clear();
-      level_ = saved_level;
+      level_ = std::min(saved_level, nlev() - 1);
       stage_time_ = saved_stage_time;
       active_parent_ = saved_active_parent;
       current_window_ = saved_window;
@@ -2315,15 +2370,15 @@ class AmrProgramContext {
     auto& contribution_ring = ring_flux_contributions_[name];
     const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
     if (static_cast<int>(ring.size()) != depth)
-      ring.assign(static_cast<std::size_t>(depth < 1 ? 1 : depth), {});
+      ring.resize(static_cast<std::size_t>(depth < 1 ? 1 : depth));
     if (static_cast<int>(contribution_ring.size()) != depth)
-      contribution_ring.assign(static_cast<std::size_t>(depth < 1 ? 1 : depth), {});
+      contribution_ring.resize(static_cast<std::size_t>(depth < 1 ? 1 : depth));
     for (auto& slot : ring)
-      if (static_cast<int>(slot.size()) < nlev())
-        slot.assign(static_cast<std::size_t>(nlev()), {});
+      if (static_cast<int>(slot.size()) != nlev())
+        slot.resize(static_cast<std::size_t>(nlev()));
     for (auto& slot : contribution_ring)
-      if (static_cast<int>(slot.size()) < nlev())
-        slot.assign(static_cast<std::size_t>(nlev()), {});
+      if (static_cast<int>(slot.size()) != nlev())
+        slot.resize(static_cast<std::size_t>(nlev()));
     const auto it = flux_ledger_.find(key_(&value));
     EdgeFlux ef = (it != flux_ledger_.end()) ? it->second : EdgeFlux{};
     const auto contribution = flux_contributions_.find(key_(&value));
@@ -2335,8 +2390,8 @@ class AmrProgramContext {
     // then on only slot 0 is written (the ring rotate carries the older slots). Tracked with our own flag
     // set, independent of the engine's hist_init_ (which is already set by the engine store above).
     std::vector<char>& init = ring_flux_init_[name];
-    if (static_cast<int>(init.size()) < nlev())
-      init.assign(static_cast<std::size_t>(nlev()), 0);
+    if (static_cast<int>(init.size()) != nlev())
+      init.resize(static_cast<std::size_t>(nlev()), 0);
     ring[0][static_cast<std::size_t>(level_)] = ef;
     contribution_ring[0][static_cast<std::size_t>(level_)] = exact;
     if (!init[static_cast<std::size_t>(level_)]) {
@@ -2435,6 +2490,76 @@ class AmrProgramContext {
     return false;
   }
 
+  void resize_history_level_axes_(int old_levels, int new_levels) const {
+    if (old_levels < 1 || new_levels < 1)
+      throw std::runtime_error("AMR history metadata requires at least one active level");
+    for (const auto& [name, owner] : history_owners_) {
+      (void)owner;
+      const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
+      auto& clocks = ring_clocks_[name];
+      auto& identities = ring_identities_[name];
+      auto& fluxes = ring_flux_[name];
+      auto& contributions = ring_flux_contributions_[name];
+      clocks.resize(static_cast<std::size_t>(depth));
+      identities.resize(static_cast<std::size_t>(depth));
+      fluxes.resize(static_cast<std::size_t>(depth));
+      contributions.resize(static_cast<std::size_t>(depth));
+      const int first_added = std::min(old_levels, new_levels);
+      for (int slot = 0; slot < depth; ++slot) {
+        auto& slot_clocks = clocks[static_cast<std::size_t>(slot)];
+        auto& slot_identities = identities[static_cast<std::size_t>(slot)];
+        slot_clocks.resize(static_cast<std::size_t>(new_levels));
+        slot_identities.resize(static_cast<std::size_t>(new_levels));
+        fluxes[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(new_levels));
+        contributions[static_cast<std::size_t>(slot)].resize(
+            static_cast<std::size_t>(new_levels));
+        // Runtime history values for a reactivated child are prolonged independently for every
+        // temporal slot.  Qualify that new value with the corresponding parent slot clock; there is
+        // no new accepted time merely because spatial coverage reappeared.
+        for (int level = first_added; level < new_levels; ++level) {
+          const std::size_t child = static_cast<std::size_t>(level);
+          const std::size_t parent = static_cast<std::size_t>(level - 1);
+          if (!slot_identities[parent])
+            continue;
+          amr::ClockStamp child_clock = slot_clocks[parent];
+          child_clock.level = level;
+          amr::HistoryIdentity child_identity = *slot_identities[parent];
+          child_identity.level = level;
+          child_identity.clock = child_clock;
+          slot_clocks[child] = child_clock;
+          slot_identities[child] = std::move(child_identity);
+        }
+      }
+      auto& initialized = ring_flux_init_[name];
+      initialized.resize(static_cast<std::size_t>(new_levels), 0);
+      for (int level = first_added; level < new_levels; ++level)
+        initialized[static_cast<std::size_t>(level)] =
+            initialized[static_cast<std::size_t>(level - 1)];
+    }
+  }
+
+  void invalidate_history_transition_flux_(const std::string& name, int parent,
+                                           int child) const {
+    auto flux_ring = ring_flux_.find(name);
+    if (flux_ring != ring_flux_.end())
+      for (auto& slot : flux_ring->second) {
+        if (parent >= 0 && parent < static_cast<int>(slot.size()))
+          clear_parent_interface_(slot[static_cast<std::size_t>(parent)]);
+        if (child >= 0 && child < static_cast<int>(slot.size()))
+          clear_child_interface_(slot[static_cast<std::size_t>(child)]);
+      }
+    auto contributions = ring_flux_contributions_.find(name);
+    if (contributions != ring_flux_contributions_.end())
+      for (auto& slot : contributions->second) {
+        if (parent >= 0 && parent < static_cast<int>(slot.size()))
+          for (FluxContribution& contribution : slot[static_cast<std::size_t>(parent)])
+            clear_parent_interface_(contribution.payload);
+        if (child >= 0 && child < static_cast<int>(slot.size()))
+          for (FluxContribution& contribution : slot[static_cast<std::size_t>(child)])
+            clear_child_interface_(contribution.payload);
+      }
+  }
+
   /// A compact lagged EdgeFlux stores only the interface that existed when the rate was evaluated.
   /// Once that interface moves, missing new faces cannot be invented. For a ring with a conservative
   /// flux authority, add a parent-constant correction to each child group so the lagged fine average
@@ -2444,43 +2569,45 @@ class AmrProgramContext {
   /// example a phi/state carry) keep the engine's normal overlap-preserving remap and are untouched.
   void rebind_history_flux_topology_(const HistoryFluxTopology& before,
                                      const HistoryFluxTopology& after) const {
-    if (before.boxes.size() != after.boxes.size() || before.owners.size() != after.owners.size())
+    if (before.boxes.size() != before.owners.size() ||
+        after.boxes.size() != after.owners.size() || before.boxes.empty() ||
+        after.boxes.empty())
       throw std::runtime_error(
-          "AMR lagged-flux topology rebind cannot change the resolved hierarchy depth");
-    for (int child = 1; child < nlev(); ++child) {
-      const std::size_t k = static_cast<std::size_t>(child);
-      const int parent = child - 1;
-      const std::size_t p = static_cast<std::size_t>(parent);
-      const bool parent_changed =
-          before.boxes[p] != after.boxes[p] || before.owners[p] != after.owners[p];
-      const bool child_changed =
-          before.boxes[k] != after.boxes[k] || before.owners[k] != after.owners[k];
-      if (!parent_changed && !child_changed)
+          "AMR lagged-flux topology rebind received an invalid hierarchy image");
+    const int old_levels = static_cast<int>(before.boxes.size());
+    const int new_levels = static_cast<int>(after.boxes.size());
+    std::set<std::string> conservative_histories;
+    for (const auto& [name, owner] : history_owners_) {
+      (void)owner;
+      if (has_lagged_conservative_flux_authority_(name))
+        conservative_histories.insert(name);
+    }
+
+    resize_history_level_axes_(old_levels, new_levels);
+
+    const int transitions = std::max(old_levels, new_levels) - 1;
+    for (int parent = 0; parent < transitions; ++parent) {
+      const int child = parent + 1;
+      const bool existed_before = child < old_levels;
+      const bool exists_after = child < new_levels;
+      bool changed = existed_before != exists_after;
+      if (existed_before && exists_after) {
+        const std::size_t p = static_cast<std::size_t>(parent);
+        const std::size_t k = static_cast<std::size_t>(child);
+        changed = before.boxes[p] != after.boxes[p] ||
+                  before.owners[p] != after.owners[p] ||
+                  before.boxes[k] != after.boxes[k] ||
+                  before.owners[k] != after.owners[k];
+      }
+      if (!changed)
         continue;
-      for (const auto& [name, owner] : history_owners_) {
-        (void)owner;
-        if (!has_lagged_conservative_flux_authority_(name))
-          continue;
-        pops::detail::AmrHistoryOps::match_conservative_ring_average_to_parent(*eng_, name, child,
-                                                                               parent);
-        auto flux_ring = ring_flux_.find(name);
-        if (flux_ring != ring_flux_.end())
-          for (auto& slot : flux_ring->second) {
-            if (parent < static_cast<int>(slot.size()))
-              clear_parent_interface_(slot[static_cast<std::size_t>(parent)]);
-            if (child < static_cast<int>(slot.size()))
-              clear_child_interface_(slot[k]);
-          }
-        auto contributions = ring_flux_contributions_.find(name);
-        if (contributions != ring_flux_contributions_.end())
-          for (auto& slot : contributions->second) {
-            if (parent < static_cast<int>(slot.size()))
-              for (FluxContribution& contribution : slot[static_cast<std::size_t>(parent)])
-                clear_parent_interface_(contribution.payload);
-            if (child < static_cast<int>(slot.size()))
-              for (FluxContribution& contribution : slot[k])
-                clear_child_interface_(contribution.payload);
-          }
+      for (const std::string& name : conservative_histories) {
+        if (exists_after)
+          pops::detail::AmrHistoryOps::match_conservative_ring_average_to_parent(
+              *eng_, name, child, parent);
+        // For a removed transition only its retained parent can remain in the resized axis. For a
+        // replaced or newly activated transition both sides exist, and both obsolete roles vanish.
+        invalidate_history_transition_flux_(name, parent, child);
       }
       ++history_flux_topology_rebind_count_;
     }
@@ -2519,8 +2646,7 @@ class AmrProgramContext {
     const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
     auto& ring = ring_clocks_[name];
     if (static_cast<int>(ring.size()) != depth)
-      ring.assign(static_cast<std::size_t>(depth),
-                  std::vector<amr::ClockStamp>(static_cast<std::size_t>(nlev())));
+      ring.resize(static_cast<std::size_t>(depth));
     for (auto& slot : ring)
       if (static_cast<int>(slot.size()) != nlev())
         slot.resize(static_cast<std::size_t>(nlev()));
@@ -2530,9 +2656,7 @@ class AmrProgramContext {
                                         level_, current_window_->end};
     auto& identities = ring_identities_[name];
     if (static_cast<int>(identities.size()) != depth)
-      identities.assign(
-          static_cast<std::size_t>(depth),
-          std::vector<std::optional<amr::HistoryIdentity>>(static_cast<std::size_t>(nlev())));
+      identities.resize(static_cast<std::size_t>(depth));
     for (auto& slot : identities)
       if (static_cast<int>(slot.size()) != nlev())
         slot.resize(static_cast<std::size_t>(nlev()));

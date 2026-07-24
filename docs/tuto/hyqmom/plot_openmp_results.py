@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trace les champs ecrits par 01_openmp_diocotron_hll.py."""
+"""Trace les etats grossiers initial et final des sept cas HyQMOM AMR."""
 
 from pathlib import Path
 
@@ -8,42 +8,77 @@ import numpy as np
 
 
 HERE = Path(__file__).resolve().parent
-RESULT_FILE = HERE / "results" / "01_openmp_diocotron_hll.npz"
-FIGURE_FILE = HERE / "figures" / "hyqmom15_diocotron.png"
-
-with np.load(RESULT_FILE, allow_pickle=False) as result:
-    initial = np.asarray(result["initial"], dtype=np.float64)
-    final = np.asarray(result["final"], dtype=np.float64)
-    potential = np.asarray(result["last_stage_potential"], dtype=np.float64)
-    x = np.asarray(result["x"], dtype=np.float64)
-    y = np.asarray(result["y"], dtype=np.float64)
-
-density = final[0]
-if not np.isfinite(final).all() or not np.isfinite(potential).all():
-    raise RuntimeError("the saved HyQMOM result contains a non-finite value")
-if np.any(density <= 0.0):
-    raise RuntimeError("the saved HyQMOM density is not strictly positive")
-velocity_x = final[1] / density
-velocity_y = final[5] / density
-speed = np.hypot(velocity_x, velocity_y)
-extent = (float(x[0]), float(x[-1]), float(y[0]), float(y[-1]))
-
-figure, axes = plt.subplots(2, 2, figsize=(11, 9), constrained_layout=True)
-fields = (
-    (initial[0], "Densite initiale"),
-    (density, "Densite finale"),
-    (potential, "Potentiel au debut du dernier pas"),
-    (speed, "Vitesse moyenne finale"),
+RESULTS = HERE / "results"
+FIGURES = HERE / "figures"
+CASES = (
+    "01_openmp_diocotron_hll",
+    "02_openmp_constant_hll",
+    "03_openmp_fluid_wave_hll",
+    "04_openmp_electrostatic_wave_hll",
+    "05_openmp_magnetic_wave_hll",
+    "06_openmp_shock_tube_hll",
+    "07_openmp_crossing_jets_hll",
 )
 
-for axis, (field, title) in zip(axes.flat, fields, strict=True):
-    image = axis.imshow(field, origin="lower", extent=extent, cmap="viridis")
-    axis.set_title(title)
-    axis.set_xlabel("x")
-    axis.set_ylabel("y")
-    axis.set_aspect("equal")
-    figure.colorbar(image, ax=axis)
 
-FIGURE_FILE.parent.mkdir(parents=True, exist_ok=True)
-figure.savefig(FIGURE_FILE, dpi=180)
-print("Figure written to %s" % FIGURE_FILE)
+def load_case(name):
+    path = RESULTS / f"{name}.npz"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} is missing; run the corresponding MPI tutorial first"
+        )
+    with np.load(path, allow_pickle=False) as result:
+        initial = np.asarray(result["initial"], dtype=np.float64)
+        final = np.asarray(result["final"], dtype=np.float64)
+    if initial.shape != final.shape or initial.shape[0] != 15:
+        raise RuntimeError(f"{path} does not contain two 15-moment states")
+    if not np.isfinite(initial).all() or not np.isfinite(final).all():
+        raise RuntimeError(f"{path} contains a non-finite value")
+    return initial, final
+
+
+FIGURES.mkdir(parents=True, exist_ok=True)
+overview, overview_axes = plt.subplots(
+    len(CASES), 2, figsize=(8, 3 * len(CASES)), constrained_layout=True,
+)
+
+for row, name in enumerate(CASES):
+    initial, final = load_case(name)
+    density = final[0]
+    safe_density = np.maximum(np.abs(density), np.finfo(np.float64).tiny)
+    speed = np.hypot(final[1] / safe_density, final[5] / safe_density)
+    change = density - initial[0]
+
+    figure, axes = plt.subplots(2, 2, figsize=(10, 8), constrained_layout=True)
+    fields = (
+        (initial[0], "M00 initial"),
+        (density, "M00 final"),
+        (change, "Variation de M00"),
+        (speed, "Norme de la vitesse moyenne"),
+    )
+    for axis, (field, title) in zip(axes.flat, fields, strict=True):
+        image = axis.imshow(field.T, origin="lower", cmap="viridis")
+        axis.set_title(title)
+        axis.set_xlabel("indice x du niveau grossier")
+        axis.set_ylabel("indice y du niveau grossier")
+        axis.set_aspect("equal")
+        figure.colorbar(image, ax=axis)
+    destination = FIGURES / f"{name}.png"
+    figure.savefig(destination, dpi=180)
+    plt.close(figure)
+    print("Figure written to %s" % destination)
+
+    for axis, field, title in (
+        (overview_axes[row, 0], density, "M00 final"),
+        (overview_axes[row, 1], change, "Variation de M00"),
+    ):
+        image = axis.imshow(field.T, origin="lower", cmap="viridis")
+        axis.set_title(f"{name}\n{title}")
+        axis.set_xticks(())
+        axis.set_yticks(())
+        overview.colorbar(image, ax=axis)
+
+overview_path = FIGURES / "hyqmom_amr_overview.png"
+overview.savefig(overview_path, dpi=160)
+plt.close(overview)
+print("Overview written to %s" % overview_path)

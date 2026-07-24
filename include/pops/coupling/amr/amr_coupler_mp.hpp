@@ -699,11 +699,13 @@ class AmrCouplerMP {
 
   // Regrid of the FINE level by Berger-Rigoutsos (delegated to amr_regrid_finest):
   // rebuilds the patches (carry over fine data, otherwise parent interp) + the aux.
-  // margin = nesting. The coupler only orders the call.
+  // Empty tags retire the active fine layout without removing its configured high-water slot, so
+  // later tags can repopulate it. margin = nesting. The coupler only orders the call.
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
     amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin,
-                      aux_comps<Model>(), replicated_coarse_);
+                      aux_comps<Model>(), replicated_coarse_, /*periodic_x=*/true,
+                      /*periodic_y=*/true);
   }
 
   // coarse mass via the shared diagnostic amr_mass_mb (replicated mono-box as well as

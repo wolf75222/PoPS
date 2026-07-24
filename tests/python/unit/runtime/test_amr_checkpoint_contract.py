@@ -12,6 +12,11 @@ from pops.runtime._amr_checkpoint_contract import (
     preflight_contract,
     validate_restored_contract,
 )
+from pops.runtime._amr_checkpoint_v3 import (
+    _checkpoint_amr_level_envelope,
+    _live_amr_level_envelope,
+    _require_exact_field_provider_depth,
+)
 from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
 
 
@@ -23,9 +28,17 @@ class _Payload(dict):
 
 class _Sim:
     program_hash = "ab" * 32
+    active_levels = 3
+    configured_levels = 3
 
     def installed_program_hash(self):
         return self.program_hash
+
+    def n_levels(self):
+        return self.active_levels
+
+    def configured_n_levels(self):
+        return self.configured_levels
 
     def checkpoint_temporal_relations(self):
         return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
@@ -133,6 +146,58 @@ def test_native_route_requires_no_program_blob_and_compiled_route_requires_one()
     native = _payload(native_sim)
     native["program_accepted_state"] = np.array([], dtype=np.uint8)
     assert preflight_contract(native_sim, native)[0] == b""
+
+
+def test_checkpoint_level_envelope_accepts_derefined_active_depth():
+    sim = _Sim()
+    sim.active_levels = 1
+    assert _live_amr_level_envelope(sim) == (1, 3)
+
+    # A fresh runtime may still carry the complete configured hierarchy. Restart authenticates the
+    # immutable envelope while allowing the checkpoint to rebuild its smaller accepted live depth.
+    sim.active_levels = 3
+    assert _checkpoint_amr_level_envelope(
+        sim, {"n_levels": np.array(1), "configured_n_levels": np.array(3)}
+    ) == (1, 3)
+
+
+def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
+    sim = _Sim()
+    with pytest.raises(ValueError, match="configured AMR depth"):
+        _checkpoint_amr_level_envelope(
+            sim, {"n_levels": np.array(1), "configured_n_levels": np.array(2)}
+        )
+    with pytest.raises(ValueError, match=r"outside its configured \[1, 3\]"):
+        _checkpoint_amr_level_envelope(
+            sim, {"n_levels": np.array(4), "configured_n_levels": np.array(3)}
+        )
+
+
+def test_legacy_v3_level_envelope_uses_files_without_eager_keys_lookup():
+    class _FilesOnlyPayload:
+        files = ("n_levels",)
+
+        def __getitem__(self, key):
+            if key != "n_levels":
+                raise KeyError(key)
+            return np.array(3)
+
+    sim = _Sim()
+    assert _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload()) == (3, 3)
+
+
+def test_legacy_v3_level_envelope_requires_its_fixed_depth_to_match_configuration():
+    sim = _Sim()
+    with pytest.raises(ValueError, match="legacy v3.*installed configured depth"):
+        _checkpoint_amr_level_envelope(sim, {"n_levels": np.array(1)})
+
+
+@pytest.mark.parametrize("phase", ["checkpoint capture", "restart"])
+def test_field_provider_depth_must_equal_the_complete_active_hierarchy(phase):
+    assert _require_exact_field_provider_depth(
+        "electric", 3, 3, phase=phase) is None
+    with pytest.raises(ValueError, match=r"expected exactly the 3 active AMR levels"):
+        _require_exact_field_provider_depth("electric", 2, 3, phase=phase)
 
 
 def test_topology_owner_alignment_is_level_local_and_strict():

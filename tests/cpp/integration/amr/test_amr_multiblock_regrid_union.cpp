@@ -36,6 +36,7 @@
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -49,6 +50,13 @@
 #endif
 
 using namespace pops;
+
+#if defined(POPS_HAS_KOKKOS)
+static Kokkos::ScopeGuard& kokkos_scope() {
+  static Kokkos::ScopeGuard guard;
+  return guard;
+}
+#endif
 
 // Spec ExB scalaire (1 var, role density) a charge q. Transport ExB : la densite advecte le long du
 // champ ExB, donc une structure se DEPLACE -> la region taguee bouge -> le layout fin change (cas a).
@@ -292,14 +300,86 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_THROW(detail::make_shared_amr_layout_levels(invalid, 3), std::runtime_error);
 }
 
+static void check_dynamic_level_removal_and_regrow() {
+  SCOPED_TRACE("dynamic active depth shrink/regrow");
+  const int N = 32;
+  const std::vector<double> rho = blob(N, 0.30, 0.50, 0.8, 1.0, 0.08);
+  AmrRuntime rt = make_three_level_two_block(N, rho);
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.configured_nlev(), 3);
+  const Real mass_before = rt.mass(0);
+
+  // An installed criterion that resolves to zero tags is different from no criterion: it removes
+  // the now-unneeded child and every descendant.
+  rt.set_block_tag_predicate(0, TagDensityAbove{Real(1e9)});
+  rt.set_block_tag_predicate(1, TagDensityAbove{Real(1e9)});
+  rt.regrid();
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.configured_nlev(), 3);
+  EXPECT_EQ(rt.levels(0).size(), 1u);
+  EXPECT_TRUE(rt.patch_boxes().empty());
+  EXPECT_EQ(rt.n_patches(), 0);
+  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_TRUE(all_level_states_finite(rt));
+  EXPECT_NEAR(rt.mass(0), mass_before, 5e-13);
+
+  const std::uint64_t shrunk_generation = rt.topology_materialization_generation();
+  rt.regrid();  // already empty at the first inactive transition: exact topology no-op
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_EQ(rt.topology_materialization_generation(), shrunk_generation);
+
+  // The direct C++ restart seam must reject the complete malformed manifest before changing the
+  // accepted coarse-only hierarchy.  In particular, a bad owner on a deeper level must not leave
+  // level 1 appended as a partial mutation.
+  const std::vector<std::vector<PatchBox>> invalid_boxes{
+      {}, {{1, 0, 0, 7, 7}}, {{2, 0, 0, 15, 15}}};
+  const std::vector<std::vector<int>> invalid_owners{{}, {0}, {n_ranks()}};
+  EXPECT_THROW(rt.rebuild_hierarchy(invalid_boxes, invalid_owners), std::runtime_error);
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.configured_nlev(), 3);
+  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_EQ(rt.topology_materialization_generation(), shrunk_generation);
+
+  const AmrRuntime::StepSnapshot coarse_only = rt.step_snapshot();
+  rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.05)});
+  rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.05)});
+  rt.regrid();
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.configured_nlev(), 3);
+  EXPECT_EQ(rt.levels(0).size(), 3u);
+  EXPECT_FALSE(rt.patch_boxes().empty());
+  EXPECT_EQ(rt.regrid_count(), 2);
+  EXPECT_TRUE(all_level_states_finite(rt));
+  EXPECT_NEAR(rt.mass(0), mass_before, 5e-13);
+
+  // Accepted-state rollback must restore both the active prefix and the immutable configured
+  // envelope, while still invalidating concrete layout-bound resources monotonically.
+  const std::uint64_t regrown_generation = rt.topology_materialization_generation();
+  rt.restore_step_snapshot(coarse_only);
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.configured_nlev(), 3);
+  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_GT(rt.topology_materialization_generation(), regrown_generation);
+  EXPECT_TRUE(rt.patch_boxes().empty());
+
+  // With no installed criterion, regrid remains a true frozen-hierarchy no-op.
+  AmrRuntime no_criterion = make_three_level_two_block(N, rho);
+  const std::uint64_t untouched_generation =
+      no_criterion.topology_materialization_generation();
+  no_criterion.regrid();
+  EXPECT_EQ(no_criterion.nlev(), 3);
+  EXPECT_EQ(no_criterion.regrid_count(), 0);
+  EXPECT_EQ(no_criterion.topology_materialization_generation(), untouched_generation);
+}
+
 TEST(test_amr_multiblock_regrid_union, Runs) {
 #if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
+  (void)kokkos_scope();
 #endif
 
   check_three_level_bootstrap_step_regrid_and_rollback();
+  check_dynamic_level_removal_and_regrow();
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;
@@ -533,6 +613,9 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
 }
 
 TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriodicGhosts) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
   constexpr int n = 16;
   AmrBuildParams params;
   params.mesh.n = n;
@@ -576,4 +659,74 @@ TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriod
     EXPECT_NE(std::string(error.what()).find("complete prepared ghost-production authority"),
               std::string::npos);
   }
+}
+
+TEST(test_amr_multiblock_regrid_union, ThreeLevelRegridMovesEveryIntermediateLayout) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
+  const std::vector<Box2D> seed_level_one = layout.ba[1].boxes();
+
+  std::vector<AmrRuntimeBlock> blocks;
+  // A neutral ExB block keeps the Poisson RHS compatible with the periodic nullspace; this test
+  // exercises the topology rebuild itself, not the field solve.
+  detail::dispatch_model(exb_charge(0.0, 1.0), [&](auto model) {
+    blocks.push_back(detail::dispatch_amr_block(
+        model, "minmod", "rusanov", layout, "moving",
+        blob(n, 0.15, 0.50, 1.0, 1.0, 0.07), /*has_density=*/true, 1.2, 1, false,
+        false, 1));
+  });
+  // The second transition is tagged on the newly moved level-one state with a centered gradient.
+  // Install a persistent prepared boundary session so that evaluation really consumes ghost cells;
+  // retaining the session materialized on the seed layout would exercise a stale topology.
+  const std::string state_identity = "test::three-level-moving::state";
+  blocks.front().state_identity = state_identity;
+  blocks.front().boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "test::three-level-moving::boundary", /*required_depth=*/1,
+      std::vector<BCRec>{BCRec{}}, std::vector<int>{}, state_identity);
+  blocks.front().boundary_field_registry =
+      std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  runtime.install_boundary_storage_routes({});
+  runtime.set_parent_child_temporal_relations(
+      {::pops::amr::ParentChildClockRelation(
+           0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly),
+       ::pops::amr::ParentChildClockRelation(
+           1, 2, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  runtime.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
+  using Program = runtime::amr::PreparedTaggingProgram;
+  const std::vector<Program::Stencil> stencils{
+      Program::Stencil{"test::three-level-centered-gradient",
+                       POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
+                       "l2",
+                       "inverse_cell_size",
+                       "ghost_extension",
+                       2,
+                       {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
+                        Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
+  runtime.set_tagging_program(
+      stencils, {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.1, 0}},
+      {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0, "test::three-level-clock",
+      "test::three-level-gradient-tagger");
+
+  runtime.regrid();
+
+  const auto& levels = runtime.levels(0);
+  ASSERT_EQ(levels.size(), 3u);
+  EXPECT_FALSE(same_box_list(seed_level_one, levels[1].U.box_array().boxes()))
+      << "the first intermediate level must follow the coarse tagged structure";
+  EXPECT_LT(levels[1].U.box_array().bounding_box().lo[0], seed_level_one.front().lo[0])
+      << "the first intermediate patch moves toward the left-side feature";
+  const Box2D level_one_domain = layout.geom.domain.refine(2);
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
+      levels[2].U.box_array(), levels[1].U.box_array(), level_one_domain,
+      /*refinement_ratio=*/2, /*margin=*/1));
+  EXPECT_TRUE(all_level_states_finite(runtime));
 }

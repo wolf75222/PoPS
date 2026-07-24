@@ -4,12 +4,18 @@
 # ruff: noqa: E402
 
 from pathlib import Path
+import os
 import time
 
 import numpy as np
 import pops
 
-pops.set_threads(7)
+pops.set_threads(int(os.environ.get("POPS_THREADS", "4")))
+
+from _amr_hybrid import (
+    BASE_CELLS, FINE_CELLS, add_static_refinement_marker, bind_hybrid,
+    build_layout, coarse_state, paraview_output, prepare_output_root, require_pvd,
+)
 
 from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
@@ -21,22 +27,26 @@ from pops.fields import (
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
-from pops.layouts import Uniform
 from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+from pops.moments import (
+    CartesianVelocityMoments,
+    HyQMOM15Closure,
+    RealizabilityProjection,
+)
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.output import ConsoleMonitor, ConsumerGraph
 from pops.params import RuntimeParam
 from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
-from pops.solvers.elliptic import FFT
+from pops.solvers.elliptic import GeometricMG
+from pops.solvers.options import CompositeFAC
 from pops.time import AdaptiveCFL, FailRun, every
 
 
 # Parametres du cas diocotron de l'archive MATLAB.
-CELLS = 128
+CELLS = BASE_CELLS
 X_MIN = -0.5
 X_MAX = 0.5
 Y_MIN = -0.5
@@ -54,11 +64,12 @@ OMEGA_C = -20.0
 CFL = 0.5
 MONITOR_EVERY = 100
 ENABLE_MONITOR = True
-T_END = 1.0
+T_END = float(os.environ.get("POPS_T_END", "1.0"))
 MAX_STEPS = 200_000_000
 
 HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "01_openmp_diocotron_hll.npz"
+OUTPUT_ROOT = HERE / "results" / "01_openmp_diocotron_hll_amr"
 
 
 # 1. Domaine periodique et grille cartesienne.
@@ -81,8 +92,8 @@ grid = CartesianGrid(
 hierarchy = CartesianVelocityMoments(
     4,
     closure=HyQMOM15Closure(),
-    robust=False,
-    exact_speeds=True,
+    robust=True,
+    exact_speeds=False,
 )
 hierarchy.add_poisson_coupling(
     phi="phi",
@@ -92,6 +103,10 @@ hierarchy.add_poisson_coupling(
 hierarchy.add_vlasov_electric_source("grad_x", "grad_y", q_over_m=1.0)
 hierarchy.add_magnetic_source(omega_c=OMEGA_C)
 model = hierarchy.build("hyqmom15_diocotron", frame=frame)
+# Le spectre HyQMOM contient des racines multiples. Sur le Jacobien dense 15 x 15,
+# l'algorithme QR natif peut produire une partie imaginaire d'arrondi bien que le
+# spectre physique soit reel. La tolerance ne change ni HLL ni le Jacobien utilise.
+model.wave_speeds_from_jacobian(im_tol=1.0e-5)
 
 state = model.states["U"]
 physical_flux = model.fluxes["transport"]
@@ -111,7 +126,7 @@ numerics = DiscretizationPlan()
 numerics.rates.add(explicit_rate, finite_volume)
 
 
-# 4. Bloc plasma et solveur de Poisson spectral periodique.
+# 4. Bloc plasma et solveur de Poisson composite sur la hierarchie AMR.
 case = pops.Case("tutorial_hyqmom15_diocotron")
 plasma = case.block("plasma", model=model)
 plasma_state = plasma[state]
@@ -122,7 +137,7 @@ plasma_field = case.field(
     FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-        solver=FFT(spectral=True),
+        solver=GeometricMG(fac=CompositeFAC()),
         nullspace=ConstantNullspace(),
         gauge=MeanValueGauge(0.0),
     ),
@@ -139,7 +154,13 @@ candidate = program.value(
     moments.n + program.dt * rhs,
     at=moments.next.point,
 )
+candidate = RealizabilityProjection().guard_hyqmom15_candidate(
+    program,
+    candidate,
+    terminal_action=FailRun(),
+)
 program.commit(moments.next, candidate)
+_, marker_state = add_static_refinement_marker(case, frame, program)
 
 # La premiere borne est la CFL hyperbolique native. Cette seconde expression reproduit
 # dt_electrostatic=CFL*h*vmax/OMEGA_P**2 ; le runtime prend le minimum des deux.
@@ -166,6 +187,7 @@ case.consumers(ConsumerGraph.from_consumers((
         ),
         enabled=ENABLE_MONITOR,
     ),
+    paraview_output(program, plasma_state, T_END),
 )))
 
 
@@ -222,36 +244,38 @@ initial_state[14] = rho * (velocity_y**4 + 6.0 * velocity_y**2 + 3.0)
 
 
 # 7. Cycle public final : validate -> resolve -> compile -> bind -> run.
+layout = build_layout(case, grid, program, plasma_state, marker_state)
 validated = pops.validate(case)
 neutralizing_density = validated.resolve(neutralizing_density)
-resolved = pops.resolve(validated, layout=Uniform(grid))
+resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-simulation = pops.bind(
+simulation, world, rank = bind_hybrid(
     artifact,
-    initial_state={"plasma": initial_state},
+    plasma_state,
+    initial_state,
     params={neutralizing_density: neutralizing_density_value},
 )
 
 (field_slot,) = tuple(simulation.field_provider_slots())
 initial_potential = np.asarray(
-    simulation.field_potential_global(field_slot), dtype=np.float64
+    simulation.field_potential_level_global(field_slot, 0), dtype=np.float64
 ).reshape(CELLS, CELLS)
 initial_mass = dx * dy * float(np.sum(initial_state[0], dtype=np.float64))
+prepare_output_root(OUTPUT_ROOT, world, rank)
 start = time.perf_counter()
 report = pops.run(
     simulation,
     t_end=T_END,
     max_steps=MAX_STEPS,
+    output_dir=OUTPUT_ROOT,
 )
 elapsed_seconds = time.perf_counter() - start
 
 
 # 8. Les tableaux ne reviennent en Python qu'apres le calcul natif.
-final_state = np.asarray(
-    simulation.state_global("plasma"), dtype=np.float64
-).reshape(initial_state.shape)
+final_state = coarse_state(simulation, "plasma", initial_state.shape)
 last_stage_potential = np.asarray(
-    simulation.field_potential_global(field_slot), dtype=np.float64
+    simulation.field_potential_level_global(field_slot, 0), dtype=np.float64
 ).reshape(CELLS, CELLS)
 
 final_mass = dx * dy * float(np.sum(final_state[0], dtype=np.float64))
@@ -263,35 +287,30 @@ if np.any(final_state[0] <= 0.0):
 if not np.isfinite(last_stage_potential).all():
     raise RuntimeError("the last-stage potential contains a non-finite value")
 
-RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
-np.savez_compressed(
-    RESULT_FILE,
-    initial=initial_state,
-    final=final_state,
-    initial_potential=initial_potential,
-    last_stage_potential=last_stage_potential,
-    x=x,
-    y=y,
-    omega_p=OMEGA_P,
-    omega_c=OMEGA_C,
-    cfl=CFL,
-    t_end=T_END,
-    accepted_steps=report.accepted_steps,
-    elapsed_seconds=elapsed_seconds,
-    initial_mass=initial_mass,
-    final_mass=final_mass,
-    mass_error=mass_error,
-)
-
-print("PoPS HyQMOM15 diocotron tutorial finished")
-print("  closure          : polynomial HyQMOM order 4 -> 5")
-print("  Riemann solver   : HLL, full 15 x 15 Jacobian")
-print("  field solver     : periodic spectral FFT")
-print("  time program     : explicit Forward Euler")
-print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
-print("  requested threads: 7 via pops.set_threads")
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  final time       : %.12e" % simulation.time())
-print("  mass error       : %.12e" % mass_error)
-print("  elapsed          : %.6f s" % elapsed_seconds)
-print("  result           : %s" % RESULT_FILE)
+if rank == 0:
+    RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        RESULT_FILE, initial=initial_state, final=final_state,
+        initial_potential=initial_potential,
+        last_stage_potential=last_stage_potential, x=x, y=y,
+        omega_p=OMEGA_P, omega_c=OMEGA_C, cfl=CFL, t_end=T_END,
+        accepted_steps=report.accepted_steps, elapsed_seconds=elapsed_seconds,
+        initial_mass=initial_mass, final_mass=final_mass, mass_error=mass_error,
+    )
+    pvd_path = require_pvd(OUTPUT_ROOT)
+    print("PoPS HyQMOM15 diocotron AMR tutorial finished")
+    print("  closure          : polynomial HyQMOM order 4 -> 5")
+    print("  Riemann solver   : HLL, full 15 x 15 Jacobian")
+    print("  field solver     : CompositeFAC")
+    print("  AMR hierarchy    : %d x %d -> %d x %d" % (
+        BASE_CELLS, BASE_CELLS, FINE_CELLS, FINE_CELLS,
+    ))
+    print("  MPI ranks        : %d" % world.size)
+    print("  time program     : explicit Forward Euler")
+    print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
+    print("  accepted steps   : %d" % report.accepted_steps)
+    print("  final time       : %.12e" % simulation.time())
+    print("  mass error       : %.12e" % mass_error)
+    print("  elapsed          : %.6f s" % elapsed_seconds)
+    print("  result           : %s" % RESULT_FILE)
+    print("  ParaView series  : %s" % pvd_path)

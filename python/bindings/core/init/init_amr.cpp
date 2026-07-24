@@ -882,6 +882,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // flatten any C-contiguous array (flat). set_hierarchy: list of tuples
       // (level, ilo, jlo, ihi, jhi) like patch_boxes() (the coupler filters level 1).
       .def("n_levels", &AmrSystem::n_levels)
+      .def("configured_n_levels", &AmrSystem::configured_n_levels)
       .def("n_vars", [](AmrSystem& s) { return s.n_vars(); })
       .def(
           "level_state", [](AmrSystem& s, int k) { return s.level_state(k); }, py::arg("k"))

@@ -86,3 +86,66 @@ TEST(test_cf_interface, Runs) {
   EXPECT_EQ(ref2.at(6, 2, 0), Real(0)) << "reflux_joint_supprime";  // bord droit couvert -> rien
   EXPECT_EQ(ref2.at(1, 2, 0), -(Real(10) - Real(1) * dt) / dx) << "reflux_gauche_libre";  // libre
 }
+
+TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
+  const Box2D coarse{{0, 0}, {7, 7}};
+  const int nc = 1;
+  const Real dx = Real(0.5), dy = Real(0.25), dt = Real(2);
+
+  auto register_for = [](int I0, int I1, int J0, int J1) {
+    RegLite g;
+    g.I0 = I0;
+    g.I1 = I1;
+    g.J0 = J0;
+    g.J1 = J1;
+    const int nJ = J1 - J0 + 1, nI = I1 - I0 + 1;
+    g.cL.assign(nJ, Real(1));
+    g.cR.assign(nJ, Real(2));
+    g.cB.assign(nI, Real(3));
+    g.cT.assign(nI, Real(4));
+    g.fL.assign(nJ, Real(10));
+    g.fR.assign(nJ, Real(20));
+    g.fB.assign(nI, Real(30));
+    g.fT.assign(nI, Real(40));
+    return g;
+  };
+
+  // Partial fine footprint [0..3]x[2..5] touches x-low only.  Its left C/F neighbour is coarse
+  // cell x=7 through the periodic seam, so the correction must be deposited at (7,J).
+  const BoxArray xlow(std::vector<Box2D>{Box2D{{0, 4}, {7, 11}}});
+  const CoarseFineInterface cfix(coarse, xlow, Periodicity{true, false});
+  EXPECT_FALSE(cfix.covered(-1, 2)) << "wrapped x-high cell remains coarse";
+  EXPECT_EQ(cfix.reflux_register_region().lo[0], 0);
+  EXPECT_EQ(cfix.reflux_register_region().hi[0], 7);
+  FluxRegister refx(cfix.reflux_register_region(), nc);
+  const RegLite gx = register_for(0, 3, 2, 5);
+  cfix.route_reflux(gx, dx, dy, dt, refx, nc);
+  EXPECT_EQ(refx.at(7, 2, 0), -(Real(10) - Real(1) * dt) / dx)
+      << "x-low correction wraps onto x-high coarse cell";
+  FluxRegister refx_integrated(cfix.reflux_register_region(), nc);
+  cfix.route_reflux_integrated(gx, dx, dy, refx_integrated, nc);
+  EXPECT_EQ(refx_integrated.at(7, 2, 0), -(Real(10) - Real(1)) / dx)
+      << "compiled-Program integrated reflux wraps onto x-high coarse cell";
+
+  // If another fine patch covers the opposite x edge at the same J, the periodic seam is fine-fine:
+  // coverage wrapping must suppress the correction rather than double-reflux it.
+  const BoxArray xboth(std::vector<Box2D>{Box2D{{0, 4}, {7, 11}},
+                                         Box2D{{12, 4}, {15, 11}}});
+  const CoarseFineInterface cfix_both(coarse, xboth, Periodicity{true, false});
+  EXPECT_TRUE(cfix_both.covered(-1, 2)) << "x-low neighbour wraps into covered x-high cell";
+  FluxRegister refx_both(cfix_both.reflux_register_region(), nc);
+  cfix_both.route_reflux(gx, dx, dy, dt, refx_both, nc);
+  EXPECT_EQ(refx_both.at(7, 2, 0), Real(0)) << "periodic fine-fine seam is not refluxed";
+
+  // Symmetric y-low case: footprint [2..5]x[0..3], bottom correction lands at y=7.
+  const BoxArray ylow(std::vector<Box2D>{Box2D{{4, 0}, {11, 7}}});
+  const CoarseFineInterface cfiy(coarse, ylow, Periodicity{false, true});
+  EXPECT_FALSE(cfiy.covered(2, -1)) << "wrapped y-high cell remains coarse";
+  EXPECT_EQ(cfiy.reflux_register_region().lo[1], 0);
+  EXPECT_EQ(cfiy.reflux_register_region().hi[1], 7);
+  FluxRegister refy(cfiy.reflux_register_region(), nc);
+  const RegLite gy = register_for(2, 5, 0, 3);
+  cfiy.route_reflux(gy, dx, dy, dt, refy, nc);
+  EXPECT_EQ(refy.at(2, 7, 0), -(Real(30) - Real(3) * dt) / dy)
+      << "y-low correction wraps onto y-high coarse cell";
+}

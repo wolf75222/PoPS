@@ -150,6 +150,15 @@ def _check_amr_flux_weights(program: Any) -> None:
                 # contribution.  The explicit RHS still reaches the commit through its authored
                 # tableau weight and remains proved independently below.
                 current = frozenset()
+            elif value.op == "branch":
+                # The scalar predicate selects an arm but contributes no physical flux to the
+                # returned state.  Only the two state results carry the conservative ledger.
+                # Including the condition here would turn reductions used by acceptance guards
+                # into an artificial unknown flux ancestry and reject ProjectAndRecheck on AMR.
+                current = merged([
+                    powers.get(value.attrs[key].id, frozenset())
+                    for key in ("true_result", "false_result")
+                ])
             elif value.op in alias_first_input and value.inputs:
                 current = powers.get(value.inputs[0].id, frozenset())
             else:

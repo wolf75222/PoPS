@@ -1036,6 +1036,7 @@ class AmrSystem {
   /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
   int n_levels();  ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
+  int configured_n_levels();  ///< maximum resolved depth; active n_levels() may be smaller
   int n_vars();    ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.

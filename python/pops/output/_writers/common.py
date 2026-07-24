@@ -221,9 +221,84 @@ def output_series_family_identity(
     return make_identity("scientific-output-series-family", {
         "format": format_name,
         "representation": _series_representation_data(format_data),
-        "selection": thaw_data(selection),
+        "selection": _series_selection_authority(selection),
         "run_identity": run_identity,
     })
+
+
+def _series_selection_authority(selection: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a live request onto its immutable configured consumer/topology authority.
+
+    AMR output frames carry only currently active levels, so their exact field keys legitimately
+    change after de-refinement or regrowth. The resolved consumer id already authenticates the
+    configured level selection. Series identity therefore retains that id and the publication
+    topology while leaving the active intersection to each member's own output identity.
+    """
+    from pops.output._consumer_contracts import ParallelMode
+
+    data = thaw_data(selection)
+    if type(data) is not dict:
+        raise TypeError("scientific output series selection must be canonical mapping data")
+    consumer_id = data.get("consumer_id")
+    if not isinstance(consumer_id, str) or not consumer_id \
+            or consumer_id.strip() != consumer_id:
+        raise ValueError("scientific output series selection has no canonical consumer id")
+    try:
+        mode = ParallelMode(data.get("parallel_mode"))
+    except (TypeError, ValueError):
+        raise ValueError(
+            "scientific output series selection has an invalid parallel mode") from None
+    size = data.get("size")
+    if isinstance(size, bool) or type(size) is not int or size < 1:
+        raise ValueError("scientific output series selection has an invalid rank count")
+    if mode is ParallelMode.SERIAL:
+        if size != 1 or data.get("rank") != 0 or "ranks" in data:
+            raise ValueError(
+                "SERIAL scientific output series selection has an invalid topology")
+        topology = {"rank": 0}
+    else:
+        rank = data.get("rank")
+        if rank is not None and (
+            isinstance(rank, bool) or type(rank) is not int
+            or rank < 0 or rank >= size
+        ):
+            raise ValueError(
+                "distributed scientific output series selection has an invalid rank")
+        ranks = data.get("ranks")
+        if ranks is not None and ranks != list(range(size)):
+            raise ValueError(
+                "distributed scientific output series selection has an invalid rank set")
+        if rank is None and ranks is None:
+            raise ValueError(
+                "distributed scientific output series selection has no rank authority")
+        topology = {"ranks": list(range(size))}
+    families = {}
+    for name in ("selection", "diagnostics"):
+        rows = data.get(name)
+        if not isinstance(rows, list):
+            raise ValueError(
+                "scientific output series selection has no canonical %s list" % name)
+        normalized = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise TypeError(
+                    "scientific output series %s entries must be mappings" % name)
+            family = dict(row)
+            level = family.pop("level", None)
+            if isinstance(level, bool) or type(level) is not int or level < 0:
+                raise ValueError(
+                    "scientific output series %s entry has an invalid level" % name)
+            token = json_text(family)
+            normalized[token] = family
+        families[name] = [normalized[token] for token in sorted(normalized)]
+    return {
+        "consumer_id": consumer_id,
+        "parallel_mode": mode.value,
+        "size": size,
+        "field_families": families["selection"],
+        "diagnostic_families": families["diagnostics"],
+        **topology,
+    }
 
 
 def _snapshot_series_family_identity(

@@ -55,19 +55,34 @@ TagBox tag_cells(const MultiFab& mf, const Box2D& domain, Crit crit) {
 /// @param n dilation radius (buffer); used for nesting and to anticipate the motion of structures.
 /// @param domain bounds the neighborhood: no tag is placed outside the domain.
 /// @return new TagBox over in.box, marked over the union of the square neighborhoods of the tagged cells.
-inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain) {
+inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain, bool periodic_x,
+                        bool periodic_y) {
   TagBox out(in.box);
   const Box2D& b = in.box;
+  const auto wrap = [](int index, int lo, int extent) {
+    const int offset = (index - lo) % extent;
+    return lo + (offset < 0 ? offset + extent : offset);
+  };
   for (int j = b.lo[1]; j <= b.hi[1]; ++j)
     for (int i = b.lo[0]; i <= b.hi[0]; ++i)
       if (in(i, j))
         for (int dj = -n; dj <= n; ++dj)
           for (int di = -n; di <= n; ++di) {
-            const int ii = i + di, jj = j + dj;
+            int ii = i + di;
+            int jj = j + dj;
+            if (periodic_x)
+              ii = wrap(ii, domain.lo[0], domain.nx());
+            if (periodic_y)
+              jj = wrap(jj, domain.lo[1], domain.ny());
             if (b.contains(ii, jj) && domain.contains(ii, jj))
               out(ii, jj) = 1;
           }
   return out;
+}
+
+/// Non-periodic compatibility route: growth is clipped at every physical boundary.
+inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain) {
+  return grow_tags(in, n, domain, false, false);
 }
 
 /// Regrid parameters (configuration object).

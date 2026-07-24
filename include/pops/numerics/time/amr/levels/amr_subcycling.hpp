@@ -71,7 +71,8 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   // coarse-fine interface: coverage (coarse cells shadowed by a fine patch) + bordering reflux
   // routing. Coverage built on the GLOBAL BoxArray (all boxes, known to all ranks) -> correct
   // under MPI.
-  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, fine.box_array());
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, fine.box_array(),
+                                Periodicity{true, true});
   auto covered = [&](int I, int J) { return cfi.covered(I, J); };
 
   MultiFab Uc_old = coarse;
@@ -137,7 +138,11 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
 
   for (int s = 0; s < sched.count(); ++s) {
     mf_fill_fine_ghosts_multi(fine, Uc_old, coarse, sched.frac(s));
-    fill_boundary(fine, fdom, Periodicity{false, false});  // fine-fine halos
+    // A dynamically regridded patch may touch (or cover) a periodic physical boundary.  Parent
+    // interpolation supplies coarse/fine ghosts first; the level's own periodic exchange must then
+    // overwrite physical-periodic ghosts from the opposite fine edge.  Treating every fine level as
+    // non-periodic leaks conservation as soon as a patch reaches the domain boundary.
+    fill_boundary(fine, fdom, Periodicity{true, true});  // fine-fine + physical-periodic halos
     compute_face_fluxes<Limiter, NumericalFlux>(m, fine, auxf, fxf, fyf, dxf, dyf);
     mf_advance_faces(fine, fxf, fyf, dxf, dyf, dtf);
     mf_apply_source(m, fine, auxf, dtf);  // source S(U,aux) at the substep
@@ -176,13 +181,9 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   // and it is bit-for-bit identical to the direct path (0 + average = average exactly; advance +
   // correction). Cost: two NX*NY*nc buffers per rank (coarse replication).
   device_fence();
-  // register restricted to the coarse-fine INTERFACE (bounding box of the fine footprints, grown
-  // by 1 for the bordering reflux cells, clamped to the domain): the gather all_reduce goes from
-  // O(NX*NY) to O(interface). Bit-identical: cells outside the interface were zero (uncovered,
-  // without a face), skipped at application.
-  const Box2D fpc = coarsen(fine.box_array(), kAmrRefRatio).bounding_box();
-  const Box2D rbox{{std::max(fpc.lo[0] - 1, 0), std::max(fpc.lo[1] - 1, 0)},
-                   {std::min(fpc.hi[0] + 1, NX - 1), std::min(fpc.hi[1] + 1, NY - 1)}};
+  // The CFI normally restricts the register to the interface.  If an interface touches a periodic
+  // seam, it also includes the opposite boundary where the wrapped correction is deposited.
+  const Box2D rbox = cfi.reflux_register_region();
   FluxRegister avg(rbox, nc);  // average-down (overwrite of covered cells)
   FluxRegister ref(rbox, nc);  // reflux (addition to bordering cells)
   for (int li = 0; li < fine.local_size(); ++li) {
@@ -562,7 +563,7 @@ inline void ssprk_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_do
     mf_fill_fine_ghosts_mb(U, *pOld, *pNew, frac, (lev == 1) && coarse_replicated, pos_floor,
                            pos_comp);
     const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
-    fill_boundary(U, fdom, Periodicity{false, false});
+    fill_boundary(U, fdom, base_per);
   }
 }
 
@@ -733,7 +734,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                            /*replicated_parent=*/(lev == 1) && coarse_replicated, pos_floor,
                            pos_comp);
     const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
-    fill_boundary(lv.U, fdom, Periodicity{false, false});  // fine-fine halos
+    fill_boundary(lv.U, fdom, base_per);  // fine-fine + physical-periodic halos
   }
 
   // face-box per GLOBAL box + same dmap (cf. amr_step_2level_multipatch): BoxArray and
@@ -810,7 +811,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   // COARSE role for lev+1: coarse-fine interface (GLOBAL MPI-safe coverage + bordering reflux
   // routing) + registers + saved coarse flux.
   const int NX = base_dom.nx() << lev, NY = base_dom.ny() << lev;
-  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, L[lev + 1].U.box_array());
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}},
+                                L[lev + 1].U.box_array(), base_per);
   auto covered = [&](int I, int J) { return cfi.covered(I, J); };
 
   // Distributed point 2: the coarse flux fx/fy lives on the PARENT dmap (lv.U), so fx.fab is on
@@ -934,11 +936,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   // each cell has only one owner: no double counting). In serial all_reduce is the identity and
   // application is direct -> bit-for-bit identical.
   device_fence();
-  // register restricted to the INTERFACE: bounding box of the fine footprints (coarsen of level
-  // lev+1), grown by 1, clamped to level lev. all_reduce O(interface), bit-identical.
-  const Box2D fpcn = coarsen(L[lev + 1].U.box_array(), kAmrRefRatio).bounding_box();
-  const Box2D rbox{{std::max(fpcn.lo[0] - 1, 0), std::max(fpcn.lo[1] - 1, 0)},
-                   {std::min(fpcn.hi[0] + 1, NX - 1), std::min(fpcn.hi[1] + 1, NY - 1)}};
+  // The CFI owns the compact register region and expands it across a periodic seam when needed.
+  const Box2D rbox = cfi.reflux_register_region();
   FluxRegister ref(rbox, nc);  // N-level reflux (interface)
   for (int lc = 0; lc < static_cast<int>(regs.size()); ++lc)
     cfi.route_reflux(regs[lc], lv.dx, lv.dy, dt, ref, nc);  // coverage-aware bordering reflux

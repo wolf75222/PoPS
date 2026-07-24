@@ -29,6 +29,7 @@ from pops.output import (
     read_npz,
 )
 from pops.output._consumer_contracts import (
+    ConsumerCursorSet,
     ConsumerGraph,
     ConsumerKind,
     ConsumerManifest,
@@ -1173,6 +1174,58 @@ def test_checkpoint_provider_requires_a_compensatable_snapshot_protocol(tmp_path
         )
     with pytest.raises(TypeError, match="discard/rollback"):
         RestartV3().validate_snapshot(object())
+
+
+def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(monkeypatch):
+    from pops.output import _checkpoint_collective
+
+    events = []
+
+    class _Publisher:
+        @staticmethod
+        def validate_diagnostic_restart_state(data):
+            assert data == {"schema_version": 1}
+            return ("canonical",)
+
+        @staticmethod
+        def restore_diagnostic_restart_state(data):
+            assert data == ("canonical",)
+            events.append("diagnostics")
+
+    class _SnapshotBuilder:
+        @staticmethod
+        def invalidate_geometry_cache():
+            events.append("geometry")
+
+    def restore_checkpoint_payload(owner, executor, payload, *, phase_prefix):
+        assert executor is native
+        assert payload == b"checkpoint"
+        assert phase_prefix == "native restart"
+        events.append("native")
+        return "restored"
+
+    native = object()
+    monkeypatch.setattr(
+        _checkpoint_collective,
+        "decode_checkpoint_bytes",
+        lambda payload: {
+            "runtime_consumer_diagnostics": np.array(
+                json.dumps({"schema_version": 1}))
+        },
+    )
+    monkeypatch.setattr(
+        _checkpoint_collective, "restore_checkpoint_payload", restore_checkpoint_payload)
+    cursors = ConsumerCursorSet()
+    owner = SimpleNamespace(
+        _executor=native,
+        _snapshot_builder=_SnapshotBuilder(),
+        _publisher=_Publisher(),
+        _consumer_cursors=None,
+    )
+
+    assert RuntimeInstance._restore_checkpoint(owner, b"checkpoint", cursors) == "restored"
+    assert owner._consumer_cursors is cursors
+    assert events == ["native", "geometry", "diagnostics"]
 
 
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):

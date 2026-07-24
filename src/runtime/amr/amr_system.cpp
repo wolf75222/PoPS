@@ -644,9 +644,10 @@ struct AmrSystem::Impl {
       throw std::runtime_error(
           "AmrSystem : explicit AMR execution lacks a temporal relation for an active "
           "coarse/fine transition");
-    runtime->set_parent_child_temporal_relations(std::vector<::pops::amr::ParentChildClockRelation>(
-        temporal_relations_.begin(),
-        temporal_relations_.begin() + static_cast<std::ptrdiff_t>(active_transition_count)));
+    // Retain the complete configured chain in the runtime. Its execution plan is prepared only for
+    // the active prefix, so a temporarily de-refined hierarchy can regrow without losing the authored
+    // clock relations and checkpoints keep authenticating the same composition.
+    runtime->set_parent_child_temporal_relations(temporal_relations_);
   }
 
   // Builds the unique runtime engine (AmrRuntime): one common SharedAmrLayout, then EACH block
@@ -681,6 +682,7 @@ struct AmrSystem::Impl {
     const bool single_level = blocks.size() == 1 && !refinement_active;
     const int initial_levels = cfg.explicit_bootstrap ? 1 : (single_level ? 1 : 2);
     detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
+    S.base_per = Periodicity{cfg.periodic, cfg.periodic};
     S.boundary_plans = &boundary_plans_;
     std::vector<pops::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
@@ -3778,6 +3780,10 @@ int AmrSystem::n_levels() {
   p_->ensure_built();
   return p_->runtime->nlev();
 }
+int AmrSystem::configured_n_levels() {
+  p_->ensure_built();
+  return p_->runtime->configured_nlev();
+}
 int AmrSystem::n_vars() {
   p_->ensure_built();
   if (p_->blocks.size() != 1)
@@ -3831,17 +3837,26 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
   if (owner_ranks.size() != boxes.size())
     throw std::runtime_error(
         "AmrSystem::rebuild_hierarchy : boxes and owner_ranks length mismatch");
-  const int nlev = p_->runtime->nlev();
-  std::vector<std::vector<PatchBox>> level_boxes(static_cast<std::size_t>(nlev));
-  std::vector<std::vector<int>> level_owners(static_cast<std::size_t>(nlev));
+  // Level zero is implicit in the checkpoint patch list. An empty list therefore means an active
+  // coarse-only hierarchy, not a malformed manifest.
+  int target_nlev = 1;
+  for (const PatchBox& box : boxes)
+    target_nlev = std::max(target_nlev, box.level + 1);
+  const int configured_nlev = p_->runtime->configured_nlev();
+  if (target_nlev > configured_nlev)
+    throw std::runtime_error(
+        "AmrSystem::rebuild_hierarchy : checkpoint depth exceeds configured hierarchy");
+  std::vector<std::vector<PatchBox>> level_boxes(static_cast<std::size_t>(target_nlev));
+  std::vector<std::vector<int>> level_owners(static_cast<std::size_t>(target_nlev));
   for (std::size_t idx = 0; idx < boxes.size(); ++idx) {
     const int k = boxes[idx].level;
-    if (k < 0 || k >= nlev)
+    if (k < 0 || k >= target_nlev)
       throw std::runtime_error("AmrSystem::rebuild_hierarchy : box level out of range");
     level_boxes[static_cast<std::size_t>(k)].push_back(boxes[idx]);
     level_owners[static_cast<std::size_t>(k)].push_back(owner_ranks[idx]);
   }
   p_->runtime->rebuild_hierarchy(level_boxes, level_owners);
+  p_->install_active_temporal_relations();
 }
 
 void AmrSystem::begin_restart_transaction() {

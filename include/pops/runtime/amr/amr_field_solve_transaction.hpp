@@ -157,12 +157,24 @@ inline void AmrRuntime::publish_aux_components(const std::vector<int>& component
   if (components.empty())
     return;
   std::vector<MultiFab> packed = pack_aux_components(components);
-  fill_ghosts_profiled(packed[0], dom_, aux_bc_);
+  Box2D level_domain = dom_;
+  BCRec level_bc = aux_bc_;
+  fill_ghosts_profiled(packed[0], level_domain, level_bc);
   apply_named_aux_bc(packed[0], components);
-  for (int level = 1; level < nlev_; ++level)
+  for (int level = 1; level < nlev_; ++level) {
+    level_domain = level_domain.refine(kAmrRefRatio);
+    level_bc.dx /= Real(kAmrRefRatio);
+    level_bc.dy /= Real(kAmrRefRatio);
     detail::coupler_inject_aux_mb(packed[static_cast<std::size_t>(level - 1)],
                                   packed[static_cast<std::size_t>(level)],
                                   /*replicated_parent=*/(level == 1) && replicated_coarse_);
+    // Injection supplies the coarse-authoritative values and coarse/fine ghosts, but physical
+    // periodic ghosts lie outside the parent index space.  Finish each level with its own halo
+    // exchange so a patch touching a periodic boundary reads the opposite fine edge, exactly as the
+    // transported state does.  Without this, opposite boundary fluxes see different aux values and
+    // a full-domain fine patch slowly leaks a conserved quantity.
+    fill_ghosts_profiled(packed[static_cast<std::size_t>(level)], level_domain, level_bc);
+  }
   unpack_aux_components(packed, components);
 }
 

@@ -148,25 +148,55 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
   if (level_owner_ranks.size() != level_boxes.size())
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : level_boxes and level_owner_ranks length mismatch");
-  // The level count cannot exceed what the composition allocated (nlev_ set at build from the config
-  // / refinement). A checkpoint replayed against a DIFFERENT max-levels composition is refused verbatim.
-  if (n_levels > nlev_)
+  // A checkpoint carries the ACTIVE prefix, which may be shallower than the freshly built runtime.
+  // It may never exceed the composition's configured high-water envelope.
+  if (n_levels > configured_nlev_)
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : checkpoint has " + std::to_string(n_levels) +
-        " levels but the replayed composition allocates " + std::to_string(nlev_) +
+        " levels but the replayed composition configures " + std::to_string(configured_nlev_) +
         " (a mismatched max-levels replay); replay the SAME composition before restart");
 
-  // For each FINE level k >= 1: build BoxArray fb_k + DistributionMapping dmap_k from the manifest and
-  // reallocate every block's level MultiFab on it (inherited ghost width, the R6 rule), then rebuild
-  // the shared aux and rewire each block's aux pointer (the R7 steps). No prolong: the per-level state
-  // restore overwrites every valid cell afterwards.
+  // Validate and materialize the complete requested fine hierarchy before mutating the live one.
+  // This gives the low-level C++ route the same fail-before-mutation guarantee as the Python restart
+  // transaction for malformed manifests (missing boxes, mismatched owners or invalid MPI ranks).
+  std::vector<BoxArray> rebuilt_boxes(static_cast<std::size_t>(n_levels));
+  std::vector<DistributionMapping> rebuilt_maps(static_cast<std::size_t>(n_levels));
   for (int k = 1; k < n_levels; ++k) {
     std::vector<Box2D> boxes;
     boxes.reserve(level_boxes[k].size());
     for (const PatchBox& pb : level_boxes[k])
       boxes.push_back(Box2D{{pb.ilo, pb.jlo}, {pb.ihi, pb.jhi}});
-    BoxArray fb(boxes);
-    DistributionMapping dmap(level_owner_ranks[k]);
+    if (boxes.empty())
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_hierarchy : active fine level has no patches");
+    if (level_owner_ranks[k].size() != boxes.size())
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_hierarchy : fine boxes and owner ranks length mismatch");
+    for (const int owner : level_owner_ranks[k])
+      if (owner < 0 || owner >= n_ranks())
+        throw std::runtime_error(
+            "AmrRuntime::rebuild_hierarchy : fine owner rank is outside the communicator");
+    rebuilt_boxes[static_cast<std::size_t>(k)] = BoxArray(std::move(boxes));
+    rebuilt_maps[static_cast<std::size_t>(k)] = DistributionMapping(level_owner_ranks[k]);
+  }
+
+  device_fence();
+  if (n_levels < nlev_)
+    truncate_active_hierarchy_(n_levels);
+
+  // For each FINE level k >= 1: build BoxArray fb_k + DistributionMapping dmap_k from the manifest.
+  // Existing active storage is replaced; an inactive configured child is appended. No prolong: the
+  // per-level state/history payload restore overwrites every valid cell afterwards.
+  for (int k = 1; k < n_levels; ++k) {
+    const BoxArray& fb = rebuilt_boxes[static_cast<std::size_t>(k)];
+    const DistributionMapping& dmap = rebuilt_maps[static_cast<std::size_t>(k)];
+    const int refinement_ratio = configured_refinement_ratio_(k - 1);
+
+    if (k == nlev_) {
+      append_active_level_(fb, dmap, refinement_ratio, /*prolong=*/false);
+      continue;
+    }
+
     // The hierarchy is the unique topology/ownership authority used by patch inspection, composite
     // masks, transfer contexts and the next regrid. Reallocating only the block MultiFabs would leave
     // those consumers on the seed layout even though checkpoint data was written onto the saved one.
@@ -188,7 +218,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     // interpolation: rebuild_hierarchy imposes both layout AND data (the per-slot restore overwrites
     // every valid cell afterwards). At a v3 restart the rings are registered lazily AFTER this, so
     // this is a no-op there; it holds the invariant when rings already exist at a rebuild.
-    remap_history_rings_(fb, dmap, k, k - 1, /*prolong=*/false);
+    remap_history_rings_(fb, dmap, k, k - 1, /*prolong=*/false, refinement_ratio);
   }
 
   // (V3) shared-layout invariant: every block on the SAME (boxes, order, rank) after the rebuild.

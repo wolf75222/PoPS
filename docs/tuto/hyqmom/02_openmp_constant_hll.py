@@ -3,18 +3,29 @@
 
 # ruff: noqa: E402
 
+import os
 from pathlib import Path
 import time
 
 import numpy as np
 import pops
 
-pops.set_threads(7)
+pops.set_threads(int(os.environ.get("POPS_THREADS", "4")))
 
+from _amr_hybrid import (
+    BASE_CELLS,
+    FINE_CELLS,
+    add_static_refinement_marker,
+    bind_hybrid,
+    build_layout,
+    coarse_state,
+    paraview_output,
+    prepare_output_root,
+    require_pvd,
+)
 from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.layouts import Uniform
 from pops.linalg.norms import L2
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -27,7 +38,7 @@ from pops.runtime_environment import runtime_environment_report
 from pops.time import AdaptiveCFL, every
 
 
-CELLS = 64
+CELLS = BASE_CELLS
 X_MIN = -0.5
 X_MAX = 0.5
 Y_MIN = -0.5
@@ -40,6 +51,7 @@ MAX_STEPS = 2_000_000
 
 HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "02_openmp_constant_hll.npz"
+OUTPUT_ROOT = HERE / "results" / "02_openmp_constant_hll_amr"
 
 MOMENT_COMPONENTS = (
     "M00", "M10", "M20", "M30", "M40",
@@ -154,6 +166,7 @@ rhs = explicit_rate(moments.n)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
 program.commit(moments.next, candidate)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
+_, marker_state = add_static_refinement_marker(case, frame, program)
 case.program(program)
 
 case.consumers(ConsumerGraph.from_consumers((
@@ -170,6 +183,7 @@ case.consumers(ConsumerGraph.from_consumers((
         ),
         enabled=ENABLE_MONITOR,
     ),
+    paraview_output(program, plasma_state, T_END),
 )))
 
 base = np.array(
@@ -180,30 +194,48 @@ initial_state = np.zeros((15, CELLS, CELLS), dtype=np.float64)
 for component in range(15):
     initial_state[component, :, :] = base[component]
 
-validated = pops.validate(case)
-resolved = pops.resolve(validated, layout=Uniform(grid))
-artifact = pops.compile(resolved)
-simulation = pops.bind(artifact, initial_state={"plasma": initial_state})
+layout = build_layout(case, grid, program, plasma_state, marker_state)
 
+validated = pops.validate(case)
+resolved = pops.resolve(validated, layout=layout)
+artifact = pops.compile(resolved)
+simulation, world, rank = bind_hybrid(
+    artifact,
+    plasma_state,
+    initial_state,
+)
+
+prepare_output_root(OUTPUT_ROOT, world, rank)
 start = time.perf_counter()
-report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
+report = pops.run(
+    simulation,
+    t_end=T_END,
+    max_steps=MAX_STEPS,
+    output_dir=OUTPUT_ROOT,
+)
 elapsed_seconds = time.perf_counter() - start
 
-final_state = np.asarray(simulation.state_global("plasma"), dtype=np.float64).reshape(initial_state.shape)
+final_state = coarse_state(simulation, "plasma", initial_state.shape)
 if not np.isfinite(final_state).all():
     raise RuntimeError("the HyQMOM15 state contains a non-finite value")
 
-RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
-np.savez_compressed(
-    RESULT_FILE,
-    initial=initial_state,
-    final=final_state,
-    accepted_steps=report.accepted_steps,
-    elapsed_seconds=elapsed_seconds,
-)
-
-print("PoPS HyQMOM15 constant tutorial finished")
-print("  Riemann solver   : HLL, full 15 x 15 Jacobian")
-print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  result           : %s" % RESULT_FILE)
+if rank == 0:
+    RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        RESULT_FILE,
+        initial=initial_state,
+        final=final_state,
+        accepted_steps=report.accepted_steps,
+        elapsed_seconds=elapsed_seconds,
+    )
+    pvd_path = require_pvd(OUTPUT_ROOT)
+    print("PoPS HyQMOM15 constant AMR hybrid tutorial finished")
+    print("  Riemann solver   : HLL, full 15 x 15 Jacobian")
+    print("  hierarchy        : %d x %d -> %d x %d locally"
+          % (CELLS, CELLS, FINE_CELLS, FINE_CELLS))
+    print("  MPI ranks        : %d" % int(world.size))
+    print("  OpenMP threads   : %d" % int(os.environ.get("POPS_THREADS", "4")))
+    print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
+    print("  accepted steps   : %d" % report.accepted_steps)
+    print("  time series      : %s" % pvd_path)
+    print("  result           : %s" % RESULT_FILE)

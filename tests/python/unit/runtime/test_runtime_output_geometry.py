@@ -15,7 +15,10 @@ from pops.mesh._layout_plan_contracts import LayoutLevel
 from pops.identity import make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
 from pops.output import FieldKey
-from pops.runtime._runtime_consumers import RuntimeOutputSnapshot
+from pops.runtime._runtime_consumers import (
+    _active_output_levels,
+    RuntimeOutputSnapshot,
+)
 
 
 class _Engine:
@@ -27,6 +30,7 @@ class _Engine:
         self.geometry_calls = 0
         self.topology_epoch = 0
         self.boxes = ()
+        self.active_levels = 1
 
     def nx(self) -> int:
         return self._nx
@@ -36,6 +40,9 @@ class _Engine:
 
     def checkpoint_topology_epoch(self) -> int:
         return self.topology_epoch
+
+    def n_levels(self) -> int:
+        return self.active_levels
 
     def _output_geometry_snapshot(self, *args):
         self.geometry_calls += 1
@@ -130,6 +137,40 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
     assert third is not first
     assert engine.geometry_calls == 2
     assert tuple(builder._geometry_cache) == ((third.layout_identity.token, 0, 1),)
+
+    # Restart can reuse an old epoch number for a different accepted hierarchy.
+    engine.boxes = ((1, 0, 0, 3, 3),)
+    builder.invalidate_geometry_cache()
+    fourth = builder._geometry(layout, 0)
+    assert fourth is not third
+    assert engine.geometry_calls == 3
+
+
+def test_runtime_output_intersects_authored_levels_with_live_amr_depth():
+    frame = Rectangle("dynamic-depth", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    plan = normalize_layout_plan(
+        Uniform(CartesianGrid(frame=frame, cells=(4, 4))),
+        owner=OwnerPath.case("dynamic-depth-output"),
+    )
+    layout = replace(
+        plan.layouts[0],
+        adaptive=True,
+        transition_ratios=(2, 2),
+        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2), LayoutLevel(2, 4)),
+    )
+    engine = _Engine(4, 4)
+    engine.active_levels = 2
+    owner = SimpleNamespace(
+        _executor_for_layout=lambda layout_id: engine,
+    )
+
+    assert _active_output_levels(owner, layout, (0, 1, 2)) == (0, 1)
+    with pytest.raises(RuntimeError, match="no currently active AMR level"):
+        _active_output_levels(owner, layout, (2,))
+
+    engine.active_levels = 4
+    with pytest.raises(RuntimeError, match="outside the configured"):
+        _active_output_levels(owner, layout, (0, 1, 2))
 
 
 def test_runtime_output_composite_integral_forwards_exact_levels_to_native_reducer():

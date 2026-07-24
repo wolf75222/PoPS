@@ -147,6 +147,44 @@ def _layout_identity(layout: Any) -> Identity:
     return make_identity("layout", _identity_payload(layout.to_data()))
 
 
+def _active_output_levels(
+    owner: Any,
+    layout: Any,
+    selected: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Intersect one authored AMR selection with the accepted live hierarchy depth."""
+    configured = tuple(level.index for level in layout.levels)
+    if configured != tuple(range(len(configured))):
+        raise ValueError(
+            "scientific output requires contiguous configured levels starting at zero")
+    if not layout.adaptive:
+        if configured != (0,) or selected != (0,):
+            raise ValueError("uniform scientific output accepts exactly configured level 0")
+        return selected
+
+    engine = owner._executor_for_layout(layout.handle.qualified_id)
+    provider = getattr(engine, "n_levels", None)
+    if not callable(provider):
+        raise RuntimeError(
+            "adaptive scientific output requires the native active-level provider")
+    raw_active = provider()
+    if isinstance(raw_active, bool) or not isinstance(raw_active, int):
+        raise TypeError("native active AMR level count must be an exact integer")
+    active = raw_active
+    if active < 1 or active > len(configured):
+        raise RuntimeError(
+            "native active AMR depth %d lies outside the configured [1, %d] envelope"
+            % (active, len(configured))
+        )
+    result = tuple(level for level in selected if level < active)
+    if not result:
+        raise RuntimeError(
+            "scientific output selection %r contains no currently active AMR level"
+            % (selected,)
+        )
+    return result
+
+
 _NATIVE_CELL_MEASURES = frozenset({
     CARTESIAN_CELL_AREA,
     POLAR_ANNULUS_CELL_AREA,
@@ -2316,6 +2354,18 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         for quantity in manifest.diagnostic_quantities:
             block = _block_name(quantity.reference, names)
             engine = self._owner._executor_for_block(block)
+            layout = next(
+                (
+                    row for row in self._owner._layout_plan.layouts
+                    if row.handle.qualified_id == quantity.layout_id
+                ),
+                None,
+            )
+            if layout is None:
+                raise KeyError(
+                    "diagnostic selected unknown layout %s" % quantity.layout_id)
+            levels = _active_output_levels(
+                self._owner, layout, tuple(quantity.levels))
             variables, roles = _conservative_metadata(self._owner, block)
             execution = quantity.execution
             reductions = {
@@ -2331,7 +2381,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     continue
                 value, composite = self._native_diagnostic_reduction(
                     engine, block, operation["reduction"], component, full_state,
-                    quantity.levels)
+                    levels)
                 if operation["metric_weighted"]:
                     value *= self._diagnostic_metric_factor(
                         quantity, composite=composite)
@@ -2379,7 +2429,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     quantity.handle,
                     self._owner._component_manifests[block].manifest_digest,
                     self._owner.layout_identity(quantity.layout_id),
-                    min(quantity.levels) if quantity.levels else 0,
+                    min(levels),
                     quantity.identity.token,
                     reduction_name,
                 )
@@ -2643,6 +2693,10 @@ class RuntimeOutputSnapshot:
     def __init__(self, owner: Any) -> None:
         self._owner = owner
         self._geometry_cache: dict[tuple[str, int, int], LevelGeometry] = {}
+
+    def invalidate_geometry_cache(self) -> None:
+        """Drop geometry snapshots when restart replaces topology under a reused epoch."""
+        self._geometry_cache.clear()
 
     @staticmethod
     def _native_composite_integral(
@@ -3047,7 +3101,9 @@ class RuntimeOutputSnapshot:
 
             for quantity in manifest.quantities:
                 layout = self._layout(quantity.layout_id)
-                levels = quantity.levels or tuple(row.index for row in layout.levels)
+                selected = quantity.levels or tuple(row.index for row in layout.levels)
+                levels = _active_output_levels(
+                    self._owner, layout, tuple(selected))
                 native_cartesian_integral = (
                     layout.adaptive
                     and layout.geometry.cell_measure == CARTESIAN_CELL_AREA
@@ -3107,7 +3163,9 @@ class RuntimeOutputSnapshot:
             diagnostic_schema = []
             for quantity in manifest.diagnostic_quantities:
                 layout = self._layout(quantity.layout_id)
-                levels = quantity.levels or tuple(row.index for row in layout.levels)
+                selected = quantity.levels or tuple(row.index for row in layout.levels)
+                levels = _active_output_levels(
+                    self._owner, layout, tuple(selected))
                 for level in levels:
                     geometry = self._geometry(layout, level)
                     geometries[geometry.key] = geometry

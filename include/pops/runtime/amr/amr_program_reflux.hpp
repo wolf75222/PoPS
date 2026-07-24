@@ -355,13 +355,14 @@ inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const Ed
     return;
   const Geometry gc = eng.level_geom(k - 1);
   const int NX = gc.domain.nx(), NY = gc.domain.ny();
-  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, child_ba);
-  // Interface register restricted to the coarse footprint of the fine patches, grown by 1 for the
-  // bordering reflux cells, clamped to the coarse domain (the native rbox, amr_subcycling.hpp:169-171).
-  const Box2D fpc = coarsen(child_ba, kAmrRefRatio).bounding_box();
-  const Box2D rbox{{std::max(fpc.lo[0] - 1, 0), std::max(fpc.lo[1] - 1, 0)},
-                   {std::min(fpc.hi[0] + 1, NX - 1), std::min(fpc.hi[1] + 1, NY - 1)}};
-  FluxRegister ref(rbox, nc);
+  const BCRec bc = eng.transport_bc();
+  const Periodicity periodicity{
+      bc.xlo == BCType::Periodic && bc.xhi == BCType::Periodic,
+      bc.ylo == BCType::Periodic && bc.yhi == BCType::Periodic};
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {NX - 1, NY - 1}}, child_ba, periodicity);
+  // The CFI owns the register-region contract: an interface touching a periodic boundary needs the
+  // opposite boundary in the register because that is where the wrapped correction is deposited.
+  FluxRegister ref(cfi.reflux_register_region(), nc);
   const std::size_t np = static_cast<std::size_t>(child_ba.size());
   for (std::size_t g = 0; g < np; ++g) {
     const EdgeStrip c = (g < coarse_role.coarse.size()) ? coarse_role.coarse[g] : EdgeStrip{};

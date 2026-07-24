@@ -925,6 +925,8 @@ class AmrRuntime {
     std::vector<char> has_newton_report;
     std::string last_dt_reason;
     int nlev = 0;
+    int configured_nlev = 0;
+    std::vector<int> configured_refinement_ratios;
     int macro_step = 0;
     int solve_count = 0;
     int regrid_count = 0;
@@ -979,6 +981,8 @@ class AmrRuntime {
         hierarchy_.dy.size() != hierarchy_.ba.size() ||
         hierarchy_.refinement_ratios.size() + 1 != hierarchy_.ba.size())
       throw std::runtime_error("AmrRuntime : invalid runtime-owned hierarchy manifest");
+    configured_nlev_ = nlev_;
+    configured_refinement_ratios_ = hierarchy_.refinement_ratios;
     for (std::size_t level = 0; level < hierarchy_.refinement_ratios.size(); ++level) {
       const int ratio = hierarchy_.refinement_ratios[level];
       if (ratio < 2 || hierarchy_.dx[level] != hierarchy_.dx[level + 1] * Real(ratio) ||
@@ -1163,6 +1167,12 @@ class AmrRuntime {
   }
 
   int nlev() const { return nlev_; }
+  /// Maximum hierarchy depth resolved by the composition. Dynamic regridding may temporarily make
+  /// fewer levels active, but it may never exceed this envelope and can regrow up to it later.
+  int configured_nlev() const { return configured_nlev_; }
+  int configured_refinement_ratio(int parent_level) const {
+    return configured_refinement_ratio_(parent_level);
+  }
   int level_refinement(int level) const {
     if (level < 0 || level >= nlev_)
       throw std::runtime_error("AmrRuntime::level_refinement level out of bounds");
@@ -1173,16 +1183,14 @@ class AmrRuntime {
   }
   void set_parent_child_temporal_relations(
       std::vector<::pops::amr::ParentChildClockRelation> relations) {
-    auto prepared =
-        detail::PreparedAmrTemporalPlan::prepare(relations, static_cast<int>(hierarchy_.ba.size()));
     temporal_relations_ = std::move(relations);
-    temporal_execution_plan_ = std::move(prepared);
+    prepare_active_temporal_plan_();
   }
   const ::pops::amr::ParentChildClockRelation& parent_child_temporal_relation(
       int child_level) const {
     if (child_level < 1 || child_level >= nlev_)
       throw std::runtime_error("AmrRuntime::parent_child_temporal_relation level out of bounds");
-    if (temporal_relations_.size() != hierarchy_.refinement_ratios.size())
+    if (temporal_relations_.size() < hierarchy_.refinement_ratios.size())
       throw std::runtime_error(
           "AMR Program execution lacks explicit parent/child temporal relations; spatial "
           "refinement ratios are never reused as time-subcycling ratios");
@@ -1740,6 +1748,8 @@ class AmrRuntime {
     out.bootstrap_caches = bootstrap_caches_;
     out.last_dt_reason = last_dt_reason_;
     out.nlev = nlev_;
+    out.configured_nlev = configured_nlev_;
+    out.configured_refinement_ratios = configured_refinement_ratios_;
     out.macro_step = macro_step_;
     out.solve_count = solve_count_;
     out.regrid_count = regrid_count_;
@@ -1761,9 +1771,14 @@ class AmrRuntime {
     // boundary: complete device work before the first copy or destruction.
     device_fence();
 
+    // A failed topology rematerialization may already have cleared boundary_sessions before it
+    // throws.  The immutable authored plan, not the transient session vector, is therefore the
+    // authority for deciding whether rollback must rebuild layout-bound sessions.
     const bool rematerialize_boundary_sessions =
         std::any_of(blocks_.begin(), blocks_.end(),
-                    [](const AmrRuntimeBlock& block) { return !block.boundary_sessions.empty(); });
+                    [](const AmrRuntimeBlock& block) {
+                      return static_cast<bool>(block.boundary_plan);
+                    });
     for (std::size_t b = 0; b < blocks_.size(); ++b) {
       *blocks_[b].levels = saved.block_levels[b];
       const bool had_report = b < saved.has_newton_report.size() && saved.has_newton_report[b];
@@ -1776,6 +1791,8 @@ class AmrRuntime {
       }
     }
     nlev_ = saved.nlev;
+    configured_nlev_ = saved.configured_nlev;
+    configured_refinement_ratios_ = saved.configured_refinement_ratios;
     hierarchy_ = saved.hierarchy;
     aux_ = saved.aux;
     for (auto& block : blocks_)
@@ -1823,6 +1840,7 @@ class AmrRuntime {
     solve_count_ = saved.solve_count;
     regrid_count_ = saved.regrid_count;
     topology_epoch_ = saved.topology_epoch;
+    prepare_active_temporal_plan_();
     advance_topology_materialization_generation_();
     if (saved.has_profiler && profiler_ != nullptr)
       *profiler_ = saved.profiler;
@@ -3493,6 +3511,10 @@ class AmrRuntime {
   TagBox current_fine_coverage(const Box2D& parent_domain, int fine_level,
                                int refinement_ratio) const {
     TagBox current(parent_domain);
+    // A previously removed child has no retained coverage.  Starting from an all-zero mask lets the
+    // same refine/coarsen decision machinery regrow it without indexing inactive hierarchy storage.
+    if (fine_level < 0 || fine_level >= nlev_)
+      return current;
     for (const Box2D& fine : hierarchy_.ba[static_cast<std::size_t>(fine_level)].boxes()) {
       const Box2D parent = fine.coarsen(refinement_ratio).intersect(parent_domain);
       for (int j = parent.lo[1]; j <= parent.hi[1]; ++j)
@@ -3647,7 +3669,8 @@ class AmrRuntime {
     }
     if (parts.empty())
       throw std::runtime_error("AmrRuntime::bootstrap_next_level : no resolved tagging predicate");
-    TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+    TagBox grown =
+        grow_tags(tag_union(parts), regrid_grow_, pdom, base_per_.x, base_per_.y);
     const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
     auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, *clustering_provider_,
@@ -3674,6 +3697,8 @@ class AmrRuntime {
     hierarchy_.refinement_ratios.push_back(refinement_ratio);
     aux_.push_back(std::move(fine_aux));
     ++nlev_;
+    configured_nlev_ = nlev_;
+    configured_refinement_ratios_ = hierarchy_.refinement_ratios;
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
@@ -3758,12 +3783,14 @@ class AmrRuntime {
   /// predicate, D1) + the phi tags (on |grad phi|, D4), followed by ONE SINGLE Berger-Rigoutsos
   /// clustering -> ONE SINGLE new fine layout applied to ALL blocks (including those held by their
   /// stride, D3) AND to the shared aux. Maintains the shared-layout PRECONDITION (same_layout_or_throw)
-  /// after the regrid. For an N-level hierarchy, only the finest level is rebuilt from tags on its
-  /// immediate parent; no-op if nlev < 2 or if the union of tags is empty.
+  /// after the regrid. For an N-level hierarchy, every parent -> child transition is rebuilt
+  /// coarse-to-fine so that intermediate patches follow moving tagged structures instead of
+  /// constraining the finest level to a stale bootstrap layout. The active hierarchy is a prefix of
+  /// the configured hierarchy: an empty transition removes that child and every deeper level, while
+  /// later non-empty tags regrow them from the retained configured ratios.
   void regrid() {
-    if (nlev_ < 2)
-      return;                               // nothing to re-grid in a single-level hierarchy
-    const int fk = nlev_ - 1, pk = fk - 1;  // finest level + its immediate parent
+    if (configured_nlev_ < 2)
+      return;  // the composition has no fine transition to rebuild
 
     // AMR PROFILING (Spec 5 criterion 43): time the WHOLE regrid attempt (tag + cluster + prolong +
     // re-solve) into the "regrid" scope. RAII -> the scope covers EVERY early-return path below (empty
@@ -3783,85 +3810,110 @@ class AmrRuntime {
     // mass snapshot is NOT needed by the engine (conservation is checked test-side V1).
     require_solved_field_report(solve_fields(), "AmrRuntime::regrid precondition");
 
-    // (R1)+(R2) Resolved tagging VM, or the legacy per-block/phi predicates for callers that have not
-    // installed a final provider graph. The resolved path evaluates refine + coarsen roots and keeps
-    // HOLD cells from the current fine coverage; it never flattens coarsening to a refine-only test.
-    const Box2D pdom = dom_.refine(level_refinement(pk));
-    std::vector<TagBox> parts;
-    parts.reserve(blocks_.size() + 1);
-    const int refinement_ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
-    if (external_tagger_) {
-      parts.push_back(execute_external_regrid_tagging(pk, fk, pdom, refinement_ratio));
-    } else if (tagging_program_.prepared) {
-      parts.push_back(execute_runtime_tagging_program(pk, fk, pdom, refinement_ratio));
-    } else {
-      for (std::size_t b = 0; b < blocks_.size(); ++b) {
-        const TagPredicate& crit = block_tag_[b];
-        if (!crit)
-          continue;
-        parts.push_back(tag_cells((*blocks_[b].levels)[pk].U, pdom, crit));
+    bool rebuilt_any_level = false;
+    for (int pk = 0; pk < configured_nlev_ - 1 && pk < nlev_; ++pk) {
+      const int fk = pk + 1;
+
+      // (R1)+(R2) Resolve tags on the CURRENT parent layout. Since the loop has already remapped
+      // every coarser transition, a moving feature is sampled on the newly positioned parent rather
+      // than on the stale bootstrap patch.
+      const Box2D pdom = dom_.refine(level_refinement(pk));
+      std::vector<TagBox> parts;
+      parts.reserve(blocks_.size() + 1);
+      const int refinement_ratio = configured_refinement_ratio_(pk);
+      if (external_tagger_) {
+        parts.push_back(execute_external_regrid_tagging(pk, fk, pdom, refinement_ratio));
+      } else if (tagging_program_.prepared) {
+        parts.push_back(execute_runtime_tagging_program(pk, fk, pdom, refinement_ratio));
+      } else {
+        for (std::size_t b = 0; b < blocks_.size(); ++b) {
+          const TagPredicate& crit = block_tag_[b];
+          if (!crit)
+            continue;
+          parts.push_back(tag_cells((*blocks_[b].levels)[pk].U, pdom, crit));
+        }
+        if (phi_tag_)
+          parts.push_back(tag_cells(aux_[pk], pdom, phi_tag_));
       }
-      if (phi_tag_)
-        parts.push_back(tag_cells(aux_[pk], pdom, phi_tag_));
-    }
-    if (parts.empty())
-      return;  // no active criterion -> no tagged cell -> grid unchanged
+      if (parts.empty()) {
+        if (!rebuilt_any_level)
+          return;  // no active criterion -> hierarchy unchanged
+        break;
+      }
 
-    // (R3) UNION (OR) of the tags + dilation (nesting + anticipation of the structures moving).
-    TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+      // (R3) UNION (OR) of the tags + periodicity-aware dilation.
+      TagBox grown =
+          grow_tags(tag_union(parts), regrid_grow_, pdom, base_per_.x, base_per_.y);
 
-    // AMR PROFILING (ADC-607): tag density = tagged cells / total parent cells (x1000, integer
-    // permille). Records how full the DENSE TagBox is -- the decision to keep TagBox dense (a sparse
-    // grid would degrade Berger-Rigoutsos on a high-density front) is measured, not assumed. count()
-    // and box.num_cells() are the same dense buffer this regrid already walks; no extra sweep.
-    if (profiler_ != nullptr) {
-      const std::int64_t total = grown.box.num_cells();
-      if (total > 0)
-        profiler_->count("tag_density", (grown.count() * 1000) / total);
-    }
+      if (profiler_ != nullptr) {
+        const std::int64_t total = grown.box.num_cells();
+        if (total > 0)
+          profiler_->count("tag_density", (grown.count() * 1000) / total);
+      }
 
-    // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
-    // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
-    // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
-    const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
-    auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
-        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, *clustering_provider_,
-        refinement_ratio, parents);
+      // (R4)+(R5) The newly rebuilt parent layout is the proper-nesting authority for the next
+      // transition. Distributed parents globally OR their tags before deterministic clustering.
+      const BoxArray* parents = pk > 0 ? &hierarchy_.ba[static_cast<std::size_t>(pk)] : nullptr;
+      auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
+          std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_,
+          *clustering_provider_, refinement_ratio, parents);
 #ifdef POPS_HAS_MPI
-    // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
-    // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
-    // must cluster from the SAME gathered tags. Count it as one reduction (np>1 only; serial / single
-    // rank issues no collective). np==1 is bit-identical with no count.
-    if (profiler_ != nullptr && n_ranks() > 1)
-      profiler_->count("mpi_reductions");
+      if (profiler_ != nullptr && n_ranks() > 1)
+        profiler_->count("mpi_reductions");
 #endif
-    if (fb.size() == 0)
-      return;  // nothing to refine: we keep the current grid (no-op)
+      if (fb.size() == 0) {
+        // The globally reduced tag set is empty.  Remove the existing child and all descendants;
+        // keeping their old boxes would make the mesh stop following a moving feature.  If this
+        // transition is already inactive, the attempt is a true no-op.
+        if (fk < nlev_) {
+          truncate_active_hierarchy_(fk);
+          // Boundary sessions own topology-dependent executor workspaces.  Publish the truncated
+          // hierarchy now; the common tail deliberately does not publish them a second time.
+          advance_topology_materialization_generation_();
+          materialize_boundary_sessions_();
+          rebuilt_any_level = true;
+        }
+        break;
+      }
 
-    // (R6) COHERENT PROLONG / RESTRICT of ALL blocks on the SAME fb/dmap (including the blocks held by
-    // their stride: their frozen state is present everywhere and contributes to the Poisson, D3). The
-    // ghost width is INHERITED per block (a MUSCL order-2 block carries 2 ghosts; a Minmod block and a
-    // VanLeer one may differ), so the scheme does not read out of bounds at the next step (V2 / risk
-    // X4).
-    for (auto& b : blocks_) {
-      auto& L = *b.levels;
-      const int ngf = L[fk].U.n_grow();
-      L[fk].U = regrid_field_on_layout(fb, dmap, L[pk].U, L[fk].U, pk, ngf, replicated_coarse_,
-                                       refinement_ratio);
+      // (R6) Apply the same child layout to every block. Parent interpolation makes the newly
+      // exposed part of a moving patch immediately usable; overlap with the previous child carries
+      // the more accurate fine state.
+      if (fk == nlev_) {
+        append_active_level_(fb, dmap, refinement_ratio, /*prolong=*/true);
+      } else {
+        for (auto& b : blocks_) {
+          auto& L = *b.levels;
+          const int ngf = L[fk].U.n_grow();
+          L[fk].U =
+              regrid_field_on_layout(fb, dmap, L[pk].U, L[fk].U, pk, ngf,
+                                     replicated_coarse_, refinement_ratio);
+        }
+
+        // (R7) Remap aux as data, rather than zeroing it, so a tagger on an intermediate level can
+        // safely inspect inherited fields before the final composite solve refreshes every level.
+        aux_[fk] = regrid_field_on_layout(fb, dmap, aux_[pk], aux_[fk], pk,
+                                          aux_[fk].n_grow(), replicated_coarse_,
+                                          refinement_ratio);
+        hierarchy_.ba[static_cast<std::size_t>(fk)] = fb;
+        hierarchy_.dm[static_cast<std::size_t>(fk)] = dmap;
+        for (auto& b : blocks_)
+          (*b.levels)[fk].aux = &aux_[fk];
+
+        remap_history_rings_(fb, dmap, fk, pk, /*prolong=*/true, refinement_ratio);
+      }
+      // Level fk is the parent sampled by the next coarse-to-fine iteration.  Its previous prepared
+      // boundary session was materialized against the bootstrap/old layout and cannot produce
+      // gradient ghosts on the replacement MultiFab.  Rebind every level immediately after the
+      // layout mutation, before fk can be tagged.  The runtime generation also invalidates cached
+      // qualified field routes used while the new sessions are prepared.
+      advance_topology_materialization_generation_();
+      materialize_boundary_sessions_();
+      rebuilt_any_level = true;
     }
 
-    // (R7) REBUILD OF THE SHARED AUX (one only, width aux_ncomp_) on the new layout + RE-WIRING of the
-    // aux pointer of EACH block. The address &aux_[fk] stays stable (in-place reallocation of the
-    // MultiFab in the existing std::vector) -> the pointers of the other levels do not move.
-    aux_[fk] = MultiFab(fb, dmap, aux_ncomp_, 1);
-    hierarchy_.ba[static_cast<std::size_t>(fk)] = fb;
-    hierarchy_.dm[static_cast<std::size_t>(fk)] = dmap;
-    for (auto& b : blocks_)
-      (*b.levels)[fk].aux = &aux_[fk];
-
-    // (R7b, ADC-631) remap every history ring's fine slot onto the new (fb, dmap) with the SAME
-    // machinery the live U uses, so prev(k) reads stay layout-consistent with U across the regrid.
-    remap_history_rings_(fb, dmap, fk, pk, /*prolong=*/true);
+    if (!rebuilt_any_level)
+      return;
 
     // (V3) SHARED-LAYOUT INVARIANT: all blocks MUST live on EXACTLY the same fb/dmap (boxes, order,
     // rank per box) after the regrid. Collective guard (cross-block); catches any inconsistent
@@ -3884,7 +3936,6 @@ class AmrRuntime {
     // restores the covered coarse cells (otherwise a mass diagnostic, sum of the coarse only, would
     // count a phantom coarse value under the new patch, X5).
     require_solved_field_report(solve_fields(), "AmrRuntime::regrid publication");
-    materialize_boundary_sessions_();
     ++regrid_count_;
     // AMR PROFILING (Spec 5 criterion 43): a regrid COMPLETED -> bump the per-run "regrid" counter
     // (parity with regrid_count_). The "regrid" TIMING scope (_rg above) already covered the whole
@@ -4492,6 +4543,112 @@ class AmrRuntime {
  private:
   bool has_explicit_temporal_relations_() const { return !temporal_relations_.empty(); }
 
+  void prepare_active_temporal_plan_() {
+    if (!has_explicit_temporal_relations_()) {
+      temporal_execution_plan_.reset();
+      return;
+    }
+    const std::size_t transitions = static_cast<std::size_t>(std::max(0, nlev_ - 1));
+    if (temporal_relations_.size() < transitions)
+      throw std::runtime_error(
+          "AMR explicit temporal relation chain is shorter than the active hierarchy");
+    std::vector<::pops::amr::ParentChildClockRelation> active(
+        temporal_relations_.begin(),
+        temporal_relations_.begin() + static_cast<std::ptrdiff_t>(transitions));
+    temporal_execution_plan_ = detail::PreparedAmrTemporalPlan::prepare(active, nlev_);
+  }
+
+  int configured_refinement_ratio_(int parent_level) const {
+    if (parent_level < 0 ||
+        parent_level >= static_cast<int>(configured_refinement_ratios_.size()))
+      throw std::runtime_error("AMR configured refinement transition is out of bounds");
+    return configured_refinement_ratios_[static_cast<std::size_t>(parent_level)];
+  }
+
+  void rewire_aux_levels_() {
+    for (auto& block : blocks_)
+      for (int level = 0; level < nlev_; ++level)
+        (*block.levels)[static_cast<std::size_t>(level)].aux =
+            &aux_[static_cast<std::size_t>(level)];
+  }
+
+  /// Remove every level above @p keep_levels while retaining the configured high-water envelope.
+  /// The caller owns topology invalidation, field re-solve and boundary-session publication.
+  void truncate_active_hierarchy_(int keep_levels) {
+    if (keep_levels < 1 || keep_levels > nlev_)
+      throw std::runtime_error("AMR active hierarchy truncation depth is invalid");
+    if (keep_levels == nlev_)
+      return;
+    device_fence();
+    truncate_history_rings_(keep_levels);
+    for (auto& block : blocks_)
+      block.levels->resize(static_cast<std::size_t>(keep_levels));
+    aux_.resize(static_cast<std::size_t>(keep_levels));
+    hierarchy_.ba.resize(static_cast<std::size_t>(keep_levels));
+    hierarchy_.dm.resize(static_cast<std::size_t>(keep_levels));
+    hierarchy_.dx.resize(static_cast<std::size_t>(keep_levels));
+    hierarchy_.dy.resize(static_cast<std::size_t>(keep_levels));
+    hierarchy_.refinement_ratios.resize(static_cast<std::size_t>(keep_levels - 1));
+    nlev_ = keep_levels;
+    rewire_aux_levels_();
+    prepare_active_temporal_plan_();
+  }
+
+  /// Append the next configured level.  With @p prolong=true, parent values seed live state, aux and
+  /// histories; checkpoint rebuild uses false because payload restore is the data authority.
+  void append_active_level_(const BoxArray& fb, const DistributionMapping& dmap,
+                            int refinement_ratio, bool prolong) {
+    if (nlev_ >= configured_nlev_)
+      throw std::runtime_error("AMR active hierarchy would exceed its configured depth");
+    const int pk = nlev_ - 1;
+    const int fk = nlev_;
+    if (refinement_ratio != configured_refinement_ratio_(pk))
+      throw std::runtime_error("AMR active hierarchy regrow uses a different refinement ratio");
+
+    for (auto& block : blocks_) {
+      auto& levels = *block.levels;
+      const MultiFab& parent = levels[static_cast<std::size_t>(pk)].U;
+      const int ng = parent.n_grow();
+      MultiFab child;
+      if (prolong) {
+        MultiFab no_old_fine(BoxArray{}, DistributionMapping{}, parent.ncomp(), ng);
+        child = regrid_field_on_layout(fb, dmap, parent, no_old_fine, pk, ng,
+                                       replicated_coarse_, refinement_ratio);
+      } else {
+        child = MultiFab(fb, dmap, parent.ncomp(), ng);
+        child.set_val(Real(0));
+      }
+      levels.push_back(AmrLevelMP{std::move(child), nullptr,
+                                  levels[static_cast<std::size_t>(pk)].dx /
+                                      Real(refinement_ratio),
+                                  levels[static_cast<std::size_t>(pk)].dy /
+                                      Real(refinement_ratio)});
+    }
+
+    MultiFab child_aux;
+    if (prolong) {
+      MultiFab no_old_aux(BoxArray{}, DistributionMapping{}, aux_ncomp_, aux_[pk].n_grow());
+      child_aux =
+          regrid_field_on_layout(fb, dmap, aux_[pk], no_old_aux, pk, aux_[pk].n_grow(),
+                                 replicated_coarse_, refinement_ratio);
+    } else {
+      child_aux = MultiFab(fb, dmap, aux_ncomp_, aux_[pk].n_grow());
+      child_aux.set_val(Real(0));
+    }
+    append_history_level_(fb, dmap, fk, pk, prolong, refinement_ratio);
+    hierarchy_.ba.push_back(fb);
+    hierarchy_.dm.push_back(dmap);
+    hierarchy_.dx.push_back(hierarchy_.dx[static_cast<std::size_t>(pk)] /
+                            Real(refinement_ratio));
+    hierarchy_.dy.push_back(hierarchy_.dy[static_cast<std::size_t>(pk)] /
+                            Real(refinement_ratio));
+    hierarchy_.refinement_ratios.push_back(refinement_ratio);
+    aux_.push_back(std::move(child_aux));
+    ++nlev_;
+    rewire_aux_levels_();
+    prepare_active_temporal_plan_();
+  }
+
   /// Completes every check that could reject the explicit native route before solve/regrid/state
   /// mutation.  A block built by an older low-level consumer can still use the separate legacy route
   /// when no relations are installed, but it cannot silently ignore an installed relation chain.
@@ -4538,7 +4695,10 @@ class AmrRuntime {
   // Regrid / rebuild_hierarchy ring remap hook (member so the INLINE regrid() can call it before
   // detail::AmrHistoryOps is complete); body in amr_history.hpp forwards to AmrHistoryOps::remap_rings.
   void remap_history_rings_(const BoxArray& fb, const DistributionMapping& dmap, int fk, int pk,
-                            bool prolong);
+                            bool prolong, int refinement_ratio = kAmrRefRatio);
+  void truncate_history_rings_(int keep_levels);
+  void append_history_level_(const BoxArray& fb, const DistributionMapping& dmap, int fk, int pk,
+                             bool prolong, int refinement_ratio = kAmrRefRatio);
 
   // Fills @p out (zero-initialized, size nc*nf*nf) from the LOCAL valid cells of @p U at GLOBAL
   // component-major indices c*nf*nf + j*nf + i. Shared by block_level_state and its _global gather
@@ -5068,6 +5228,10 @@ class AmrRuntime {
   std::int64_t component_tick_ = 0;
   double component_physical_time_ = 0.0;
   int aux_ncomp_ = kAuxBaseComps;
+  // Dynamic regrid owns an ACTIVE prefix of this configured hierarchy envelope.  Only active
+  // levels have MultiFab storage; the immutable high-water ratios make exact regrowth possible.
+  int configured_nlev_ = 0;
+  std::vector<int> configured_refinement_ratios_;
   int nlev_ = 0;
   int macro_step_ = 0;
   mutable int solve_count_ = 0;

@@ -56,14 +56,29 @@ namespace pops {
 /// clustering so every rank constructs the identical layout. When @p proper_nesting_parents is
 /// supplied, each child cluster is built inside one parent patch shrunk by @p margin: a provider
 /// cannot return a geometrically non-nested layout and leave the failure to a downstream stencil.
+inline Box2D nesting_admissible_region(const Box2D& parent, const Box2D& domain, int margin) {
+  Box2D region = parent.intersect(domain);
+  if (margin <= 0 || region.empty())
+    return region;
+  for (int axis = 0; axis < 2; ++axis) {
+    if (region.lo[axis] > domain.lo[axis])
+      region.lo[axis] += margin;
+    if (region.hi[axis] < domain.hi[axis])
+      region.hi[axis] -= margin;
+  }
+  return region;
+}
+
 inline void validate_fine_layout_proper_nesting(const BoxArray& fine, const BoxArray& parents,
-                                                int refinement_ratio, int margin) {
+                                                const Box2D& domain, int refinement_ratio,
+                                                int margin) {
   if (refinement_ratio < 2)
     throw std::runtime_error("validate_fine_layout_proper_nesting: refinement_ratio must be >= 2");
   if (margin < 0)
     throw std::runtime_error("validate_fine_layout_proper_nesting: margin must be >= 0");
   for (int child = 0; child < fine.size(); ++child) {
-    const Box2D required_parent_region = fine[child].coarsen(refinement_ratio).grow(margin);
+    const Box2D required_parent_region =
+        fine[child].coarsen(refinement_ratio).grow(margin).intersect(domain);
     bool nested = false;
     for (int parent = 0; parent < parents.size(); ++parent)
       if (parents[parent].contains(required_parent_region)) {
@@ -93,17 +108,16 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
   // bridging two adjacent parent patches. The provider only returns parent boxes; PoPS retains
   // nesting, deterministic ordering and fine-layout publication.
   std::vector<Box2D> admissible;
-  const Box2D domain_interior = pdom.grow(-margin);
   if (proper_nesting_parents != nullptr) {
     admissible.reserve(static_cast<std::size_t>(proper_nesting_parents->size()));
     for (int parent = 0; parent < proper_nesting_parents->size(); ++parent) {
       const Box2D region =
-          (*proper_nesting_parents)[parent].grow(-margin).intersect(domain_interior);
+          nesting_admissible_region((*proper_nesting_parents)[parent], pdom, margin);
       if (!region.empty())
         admissible.push_back(region);
     }
-  } else if (!domain_interior.empty()) {
-    admissible.push_back(domain_interior);
+  } else if (!pdom.empty()) {
+    admissible.push_back(pdom);
   }
 
   std::vector<Box2D> cl;
@@ -129,7 +143,8 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
     return {BoxArray{}, DistributionMapping{}};  // nothing to refine
   BoxArray ba(fb);
   if (proper_nesting_parents != nullptr)
-    validate_fine_layout_proper_nesting(ba, *proper_nesting_parents, refinement_ratio, margin);
+    validate_fine_layout_proper_nesting(ba, *proper_nesting_parents, pdom, refinement_ratio,
+                                        margin);
   return {ba, DistributionMapping(static_cast<int>(ba.size()), n_ranks())};
 }
 
@@ -210,7 +225,13 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
 /// Regrid the finest level (L.back()) by Berger-Rigoutsos on the criterion @p crit applied to the
 /// parent: rebuilds the patches (fine data carry-over otherwise parent interp) + the aux. @p grow:
 /// tag dilation; @p margin: nesting; @p aux_ncomp: rebuilt aux width;
-/// @p coarse_replicated: ownership policy of level 0. NO-OP if < 2 levels or no patch.
+/// @p coarse_replicated: ownership policy of level 0. NO-OP if < 2 configured levels.
+///
+/// A configured fine-level slot is a high-water envelope: when no cell is tagged, its field and
+/// aux layouts become empty instead of retaining stale patches. The slot keeps its component count,
+/// ghost width and geometry, so a later call can populate it again from the current parent state.
+/// Keeping the slot (rather than resizing the vectors) also preserves AmrLevelStack's stable aux
+/// addresses and its fixed configured-level contract.
 ///
 /// aux_ncomp: width of the rebuilt aux channel (default kAuxBaseComps = 3). The coupler,
 /// which knows the Model, propagates aux_comps<Model>() so that a model reading extra
@@ -220,7 +241,8 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
 template <class Crit>
 void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, const Box2D& dom,
                        Crit crit, int grow, int margin, int aux_ncomp = kAuxBaseComps,
-                       bool coarse_replicated = true) {
+                       bool coarse_replicated = true, bool periodic_x = false,
+                       bool periodic_y = false) {
   const int nlev = static_cast<int>(L.size());
   if (nlev < 2)
     return;
@@ -228,18 +250,26 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
   const int PNX = dom.nx() << pk, PNY = dom.ny() << pk;
   const Box2D pdom = Box2D::from_extents(PNX, PNY);
   TagBox tags = tag_cells(L[pk].U, pdom, crit);
-  TagBox grown = grow_tags(tags, grow, pdom);
+  TagBox grown = grow_tags(tags, grow, pdom, periodic_x, periodic_y);
   // (1) Compute the fine layout (tags -> grow [already done] -> all_reduce_or -> clustering -> clamp).
   const BoxArray* parents = pk > 0 ? &L[pk].U.box_array() : nullptr;
   auto [fb, dmap] =
       regrid_compute_fine_layout(std::move(grown), pdom, pk, margin, coarse_replicated,
                                  ClusterParams{}, kAmrRefRatio, parents);
-  if (fb.size() == 0)
-    return;  // nothing to refine: keep the current grid
   // The new patches INHERIT the ghost width of the level being replaced (not a frozen 1): a
   // level rebuilt in 2nd-order MUSCL (Minmod / VanLeer) carries 2 ghosts, which the regrid must
   // preserve, otherwise the reconstruction would read out of bounds after re-refinement.
   const int ngf = L[fk].U.n_grow();
+  const int ncomp = L[fk].U.ncomp();
+  if (fb.size() == 0) {
+    // AmrLevelStack fixes the number of configured levels and keeps pointers into aux stable.
+    // Retire only the active layout: no stale patch remains visible, while the empty fine field
+    // retains the metadata needed by regrid_field_on_layout when tags appear again.
+    L[fk].U = MultiFab(BoxArray{}, DistributionMapping{}, ncomp, ngf);
+    aux[fk] = MultiFab(BoxArray{}, DistributionMapping{}, aux_ncomp, 1);
+    L[fk].aux = &aux[fk];
+    return;
+  }
   // (2) Re-grid the field U on this layout (parent interp + fine carry-over): SAME body as before,
   // so the single-block path stays BIT-IDENTICAL (chaining of (1) then (2) on a single block).
   L[fk].U = regrid_field_on_layout(fb, dmap, L[pk].U, L[fk].U, pk, ngf, coarse_replicated);

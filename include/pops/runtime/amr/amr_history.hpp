@@ -335,7 +335,8 @@ struct AmrHistoryOps {
   // interpolation (the per-slot restore overwrites every valid cell afterwards); the coarse slot
   // (level pk) is stable. No-op when no ring exists.
   static void remap_rings(AmrRuntime& eng, const BoxArray& fb, const DistributionMapping& dmap,
-                          int fk, int pk, bool prolong) {
+                          int fk, int pk, bool prolong,
+                          int refinement_ratio = kAmrRefRatio) {
     for (auto& [name, ring] : eng.hist_rings_) {
       (void)name;
       for (auto& slot : ring) {  // slot = per-level vector<MultiFab>
@@ -343,10 +344,55 @@ struct AmrHistoryOps {
         const int ngf = fine.n_grow();
         if (prolong)
           fine = regrid_field_on_layout(fb, dmap, slot[static_cast<std::size_t>(pk)], fine, pk, ngf,
-                                        eng.replicated_coarse_);
+                                        eng.replicated_coarse_, refinement_ratio);
         else
           fine = MultiFab(fb, dmap, fine.ncomp(), ngf);
       }
+    }
+  }
+
+  // Remove inactive fine levels from every slot and from the per-level initialization mask.  The
+  // ring depth and per-slot dt are temporal properties and therefore stay unchanged.
+  static void truncate_levels(AmrRuntime& eng, int keep_levels) {
+    if (keep_levels < 1 || keep_levels > eng.nlev_)
+      throw std::runtime_error("AmrRuntime::truncate_history_rings invalid active depth");
+    for (auto& [name, ring] : eng.hist_rings_) {
+      for (auto& slot : ring)
+        slot.resize(static_cast<std::size_t>(keep_levels));
+      auto initialized = eng.hist_init_.find(name);
+      if (initialized != eng.hist_init_.end())
+        initialized->second.resize(static_cast<std::size_t>(keep_levels));
+    }
+  }
+
+  // Materialize one newly active child in every history slot.  Live regrid prolongs each slot's own
+  // parent authority; checkpoint rebuild allocates zero storage because payload restore follows.
+  static void append_level(AmrRuntime& eng, const BoxArray& fb, const DistributionMapping& dmap,
+                           int fk, int pk, bool prolong,
+                           int refinement_ratio = kAmrRefRatio) {
+    if (fk != pk + 1 || pk < 0 || fk != eng.nlev_)
+      throw std::runtime_error("AmrRuntime::append_history_level requires the next active level");
+    for (auto& [name, ring] : eng.hist_rings_) {
+      for (auto& slot : ring) {
+        if (slot.size() != static_cast<std::size_t>(fk))
+          throw std::runtime_error("AMR history ring depth disagrees with active hierarchy");
+        const MultiFab& parent = slot[static_cast<std::size_t>(pk)];
+        const int ng = parent.n_grow();
+        if (prolong) {
+          MultiFab no_old_fine(BoxArray{}, DistributionMapping{}, parent.ncomp(), ng);
+          slot.push_back(regrid_field_on_layout(fb, dmap, parent, no_old_fine, pk, ng,
+                                                eng.replicated_coarse_, refinement_ratio));
+        } else {
+          MultiFab child(fb, dmap, parent.ncomp(), ng);
+          child.set_val(Real(0));
+          slot.push_back(std::move(child));
+        }
+      }
+      std::vector<char>& initialized = eng.hist_init_[name];
+      if (initialized.size() != static_cast<std::size_t>(fk))
+        throw std::runtime_error("AMR history initialization mask disagrees with active hierarchy");
+      const char parent_initialized = initialized[static_cast<std::size_t>(pk)];
+      initialized.push_back(prolong ? parent_initialized : char(0));
     }
   }
 
@@ -548,8 +594,19 @@ struct AmrHistoryOps {
 // complete detail::AmrHistoryOps. Keeps the ring logic in one place while sidestepping the
 // incomplete-type call from regrid()'s in-class body.
 inline void AmrRuntime::remap_history_rings_(const BoxArray& fb, const DistributionMapping& dmap,
-                                             int fk, int pk, bool prolong) {
-  detail::AmrHistoryOps::remap_rings(*this, fb, dmap, fk, pk, prolong);
+                                             int fk, int pk, bool prolong,
+                                             int refinement_ratio) {
+  detail::AmrHistoryOps::remap_rings(*this, fb, dmap, fk, pk, prolong, refinement_ratio);
+}
+
+inline void AmrRuntime::truncate_history_rings_(int keep_levels) {
+  detail::AmrHistoryOps::truncate_levels(*this, keep_levels);
+}
+
+inline void AmrRuntime::append_history_level_(const BoxArray& fb, const DistributionMapping& dmap,
+                                              int fk, int pk, bool prolong,
+                                              int refinement_ratio) {
+  detail::AmrHistoryOps::append_level(*this, fb, dmap, fk, pk, prolong, refinement_ratio);
 }
 
 }  // namespace pops
