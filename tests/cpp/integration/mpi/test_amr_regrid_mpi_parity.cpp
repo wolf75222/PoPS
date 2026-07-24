@@ -40,6 +40,9 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
+#include "amr_tagging_test_authority.hpp"
+#include "amr_transfer_test_authority.hpp"
+#include "load_balance_test_authority.hpp"
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
 
 #include <cmath>
@@ -77,13 +80,6 @@ static std::vector<double> blob(int n, double cx, double cy, double amp, double 
   return rho;
 }
 
-struct TagDensityAbove {
-  Real threshold = Real(0);
-  bool operator()(const ConstArray4& values, int i, int j) const {
-    return values(i, j, 0) > threshold;
-  }
-};
-
 /// Real distributed proof of the dynamic active-prefix contract.  Empty collective tags remove the
 /// two fine levels, a coarse-only step remains valid, and later tags regrow both levels on the same
 /// MPI hierarchy without changing the configured high-water depth or the conserved mass.
@@ -93,6 +89,7 @@ static int check_dynamic_active_depth_mpi(int n, int me, int np) {
   params.mesh.L = 1.0;
   params.mesh.distribute_coarse = true;
   params.mesh.coarse_max_grid = n / 2;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
   params.poisson.bc = BCRec{};
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
 
@@ -103,8 +100,10 @@ static int check_dynamic_active_depth_mpi(int n, int me, int np) {
         model, "minmod", "rusanov", layout, "moving", density,
         /*has_density=*/true, 1.4, 1, false, false, 1));
   });
+  blocks.back().state_identity = "test://mpi-active-depth/block/moving/state/U";
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations(
       {::pops::amr::ParentChildClockRelation(
            0, 1, ::pops::amr::Rational(2, 1),
@@ -114,16 +113,22 @@ static int check_dynamic_active_depth_mpi(int n, int me, int np) {
            ::pops::amr::RemainderPolicy::IntegralOnly)});
 
   const double initial_mass = runtime.mass(0);
-  runtime.set_block_tag_predicate(0, TagDensityAbove{Real(1e9)});
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
+      "test::mpi-active-depth-coarsen@1");
   runtime.regrid();
-  const bool removed = runtime.nlev() == 1 && runtime.configured_nlev() == 3 &&
+  const bool removed = runtime.nlev() == 1 && runtime.max_levels() == 3 &&
                        runtime.n_patches() == 0;
   const double removed_mass = runtime.mass(0);
 
   runtime.step(Real(1e-4));  // exercise the temporarily uniform hierarchy before regrowth
-  runtime.set_block_tag_predicate(0, TagDensityAbove{Real(1.05)});
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1.05), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.05), test::PreparedThresholdRelation::Below}},
+      "test::mpi-active-depth-regrow@1");
   runtime.regrid();
-  const bool regrown = runtime.nlev() == 3 && runtime.configured_nlev() == 3 &&
+  const bool regrown = runtime.nlev() == 3 && runtime.max_levels() == 3 &&
                        runtime.n_patches() > 0;
   const double regrown_mass = runtime.mass(0);
 
@@ -142,7 +147,7 @@ static int check_dynamic_active_depth_mpi(int n, int me, int np) {
     std::printf(
         "AMRDEPTH np=%d | removed=%d regrown=%d | active=%d configured=%d patches=%d | "
         "dm_remove=%.3e dm_regrow=%.3e spread=%.3e\n",
-        np, removed ? 1 : 0, regrown ? 1 : 0, runtime.nlev(), runtime.configured_nlev(),
+        np, removed ? 1 : 0, regrown ? 1 : 0, runtime.nlev(), runtime.max_levels(),
         runtime.n_patches(), std::fabs(removed_mass - initial_mass),
         std::fabs(regrown_mass - initial_mass), cross_rank_spread);
   }
