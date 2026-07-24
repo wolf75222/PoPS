@@ -49,7 +49,8 @@ def _array_evidence(value: Any) -> dict[str, Any]:
     })
     digest = hashlib.sha256()
     digest.update(header)
-    digest.update(memoryview(cast(Any, array)).cast("B"))
+    if array.size:
+        digest.update(memoryview(cast(Any, array)).cast("B"))
     return {
         "dtype": array.dtype.str,
         "shape": list(array.shape),

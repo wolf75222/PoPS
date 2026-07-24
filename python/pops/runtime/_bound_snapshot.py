@@ -115,7 +115,8 @@ def _array_evidence(value: Any, *, where: str) -> dict[str, Any]:
     })
     digest = hashlib.sha256()
     digest.update(header)
-    digest.update(memoryview(cast(Any, contiguous)).cast("B"))
+    if contiguous.size:
+        digest.update(memoryview(cast(Any, contiguous)).cast("B"))
     return {
         "dtype": contiguous.dtype.str,
         "shape": list(contiguous.shape),
