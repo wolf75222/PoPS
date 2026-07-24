@@ -33,16 +33,10 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/builders/factory/model_factory.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
-#include "amr_tagging_test_authority.hpp"
-#include "amr_transfer_test_authority.hpp"
-#include "load_balance_test_authority.hpp"
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
 
 #include <cmath>
@@ -78,80 +72,6 @@ static std::vector<double> blob(int n, double cx, double cy, double amp, double 
       rho[static_cast<std::size_t>(j) * n + i] = base + amp * std::exp(-r2 / (width * width));
     }
   return rho;
-}
-
-/// Real distributed proof of the dynamic active-prefix contract.  Empty collective tags remove the
-/// two fine levels, a coarse-only step remains valid, and later tags regrow both levels on the same
-/// MPI hierarchy without changing the configured high-water depth or the conserved mass.
-static int check_dynamic_active_depth_mpi(int n, int me, int np) {
-  AmrBuildParams params;
-  params.mesh.n = n;
-  params.mesh.L = 1.0;
-  params.mesh.distribute_coarse = true;
-  params.mesh.coarse_max_grid = n / 2;
-  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  params.poisson.bc = BCRec{};
-  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
-
-  std::vector<AmrRuntimeBlock> blocks;
-  const std::vector<double> density = blob(n, 0.28, 0.50, 0.8, 1.0, 0.08);
-  detail::dispatch_model(exb_charge(0.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "moving", density,
-        /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  blocks.back().state_identity = "test://mpi-active-depth/block/moving/state/U";
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 1);
-  runtime.set_parent_child_temporal_relations(
-      {::pops::amr::ParentChildClockRelation(
-           0, 1, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly),
-       ::pops::amr::ParentChildClockRelation(
-           1, 2, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly)});
-
-  const double initial_mass = runtime.mass(0);
-  test::install_prepared_threshold_decisions(
-      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
-      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
-      "test::mpi-active-depth-coarsen@1");
-  runtime.regrid();
-  const bool removed = runtime.nlev() == 1 && runtime.max_levels() == 3 &&
-                       runtime.n_patches() == 0;
-  const double removed_mass = runtime.mass(0);
-
-  runtime.step(Real(1e-4));  // exercise the temporarily uniform hierarchy before regrowth
-  test::install_prepared_threshold_decisions(
-      runtime, {{0, 0, Real(1.05), test::PreparedThresholdRelation::Above}},
-      {{0, 0, Real(1.05), test::PreparedThresholdRelation::Below}},
-      "test::mpi-active-depth-regrow@1");
-  runtime.regrid();
-  const bool regrown = runtime.nlev() == 3 && runtime.max_levels() == 3 &&
-                       runtime.n_patches() > 0;
-  const double regrown_mass = runtime.mass(0);
-
-  auto spread = [](double value) {
-    return all_reduce_max(value) - (-all_reduce_max(-value));
-  };
-  const double cross_rank_spread =
-      std::fmax(spread(static_cast<double>(runtime.nlev())),
-                std::fmax(spread(static_cast<double>(runtime.n_patches())),
-                          std::fmax(spread(removed_mass), spread(regrown_mass))));
-  const bool conserved = std::fabs(removed_mass - initial_mass) < 1e-10 &&
-                         std::fabs(regrown_mass - initial_mass) < 1e-10;
-  const long local_failure = removed && regrown && conserved && cross_rank_spread == 0.0 ? 0L : 1L;
-  const long failure = all_reduce_max(local_failure);
-  if (me == 0) {
-    std::printf(
-        "AMRDEPTH np=%d | removed=%d regrown=%d | active=%d configured=%d patches=%d | "
-        "dm_remove=%.3e dm_regrow=%.3e spread=%.3e\n",
-        np, removed ? 1 : 0, regrown ? 1 : 0, runtime.nlev(), runtime.max_levels(),
-        runtime.n_patches(), std::fabs(removed_mass - initial_mass),
-        std::fabs(regrown_mass - initial_mass), cross_rank_spread);
-  }
-  return failure == 0 ? 0 : 1;
 }
 
 static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
@@ -267,7 +187,6 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   } else {
     (void)sp;
   }
-  fails += check_dynamic_active_depth_mpi(/*n=*/16, me, np);
   comm_finalize();
   return fails ? 1 : 0;
 }

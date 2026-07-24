@@ -190,6 +190,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_rank_parity = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_dynamic_active_depth"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_dynamic_active_depth.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "medium"]

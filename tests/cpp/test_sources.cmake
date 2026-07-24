@@ -127,6 +127,7 @@ set(POPS_CPP_TEST_SOURCE_test_module_metadata "tests/cpp/integration/runtime/tes
 set(POPS_CPP_TEST_SOURCE_test_multiblock_interface_scheduler "tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_compiled_parity "tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_distributed_coarse "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_amr_dynamic_active_depth "tests/cpp/integration/mpi/test_mpi_amr_dynamic_active_depth.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_program_reflux "tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_twoblock_parity "tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_array_reduce "tests/cpp/integration/mpi/test_mpi_array_reduce.cpp")
