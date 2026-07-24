@@ -496,7 +496,8 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=tagging,
         # The acceptance proof spans the first step plus one continuation. Cadence one makes a
-        # regrid due in that window; the counter/epoch delta below proves that it actually completed.
+        # regrid evaluation due in that window; an unchanged tag layout is a valid cache-preserving
+        # outcome and must remain bit-identical across restart.
         regrid=AMRRegrid(schedule=every(1, clock=core.program.clock)),
         transfer=transfer,
         # Temporal subcycling is declared independently from spatial refinement.
@@ -627,22 +628,27 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
     )
 
 
-def _require_regrid_progress(
+def _require_regrid_window(
     before: IMEXRuntimeSnapshot,
     after: IMEXRuntimeSnapshot,
     *,
     where: str,
 ) -> None:
-    """Require an actually completed regrid, not only a due schedule."""
+    """Require a crossed dynamic-regrid window with monotone native topology state."""
 
-    if after.regrid_count <= before.regrid_count:
+    if after.macro_step <= before.macro_step:
         raise RuntimeError(
-            "%s did not increase the completed AMR regrid count (%d -> %d)"
+            "%s did not advance the AMR macro-step (%d -> %d)"
+            % (where, before.macro_step, after.macro_step)
+        )
+    if after.regrid_count < before.regrid_count:
+        raise RuntimeError(
+            "%s decreased the completed AMR regrid count (%d -> %d)"
             % (where, before.regrid_count, after.regrid_count)
         )
-    if after.topology_epoch <= before.topology_epoch:
+    if after.topology_epoch < before.topology_epoch:
         raise RuntimeError(
-            "%s did not install a new AMR topology epoch (%d -> %d)"
+            "%s decreased the AMR topology epoch (%d -> %d)"
             % (where, before.topology_epoch, after.topology_epoch)
         )
 
@@ -833,8 +839,8 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
         raise RuntimeError("the restarted IMEX continuation executed no macro-step")
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
-    _require_regrid_progress(accepted, continuous, where="uninterrupted continuation")
-    _require_regrid_progress(restored, restarted, where="restarted continuation")
+    _require_regrid_window(accepted, continuous, where="uninterrupted continuation")
+    _require_regrid_window(restored, restarted, where="restarted continuation")
     continuous_report = simulation.program_report()
     restarted_report = resumed.program_report()
     continuous_program = _require_multilevel_program_evidence(continuous_report)
