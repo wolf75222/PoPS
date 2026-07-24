@@ -822,9 +822,11 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
 
   const std::vector<Box2D> middle_before_partial_shrink =
       rt->level_state(0, 1).box_array().boxes();
-  rt->level_state(0, 0).set_val(Real(2));
-  rt->level_state(0, 1).set_val(Real(1));
-  rt->level_state(0, 2).set_val(Real(1));
+  for (int block = 0; block < 2; ++block) {
+    rt->level_state(block, 0).set_val(Real(2));
+    rt->level_state(block, 1).set_val(Real(1));
+    rt->level_state(block, 2).set_val(Real(1));
+  }
   test::install_prepared_threshold_decisions(
       *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
@@ -847,7 +849,8 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
     EXPECT_EQ(slot.size(), 2u);
   EXPECT_EQ(middle.ring_flux_initialized.at("a.rate").size(), 2u);
 
-  rt->level_state(0, 0).set_val(Real(1));
+  for (int block = 0; block < 2; ++block)
+    rt->level_state(block, 0).set_val(Real(1));
   test::install_prepared_threshold_decisions(
       *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
