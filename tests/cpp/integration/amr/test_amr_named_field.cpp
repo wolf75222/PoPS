@@ -40,6 +40,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include "amr_transfer_test_authority.hpp"
+#include "load_balance_test_authority.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -834,13 +835,16 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
          "configured spatial authority";
 }
 
-TEST(test_amr_named_field, CoarseAuthoritativeAuxAtNonPeriodicFineBoundaryUsesFineFoextrap) {
+TEST(test_amr_named_field,
+     CoarseAuthoritativeAuxUsesPreparedTransferAndComponentBcOnFineBoundary) {
   constexpr int n = 16;
   constexpr int component = kAuxNamedBase;
+  constexpr Real boundary_value = Real(-50);
   AmrBuildParams params;
   params.mesh.n = n;
   params.mesh.L = 1.0;
   params.mesh.regrid_every = 0;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
   BCRec nonperiodic;
   nonperiodic.xlo = nonperiodic.xhi = BCType::Dirichlet;
   nonperiodic.ylo = nonperiodic.yhi = BCType::Dirichlet;
@@ -855,11 +859,9 @@ TEST(test_amr_named_field, CoarseAuthoritativeAuxAtNonPeriodicFineBoundaryUsesFi
   layout.dm[1] = DistributionMapping(boundary_fine.size(), n_ranks());
 
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
-                                                blob(n, 0.25),
-                                                /*has_density=*/true, 1.4, 1, false, false));
-  });
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma", blob(n, 0.25),
+      /*has_density=*/true, 1.4, 1, false, false));
   blocks[0].aux_ncomp = component + 1;
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
@@ -869,33 +871,43 @@ TEST(test_amr_named_field, CoarseAuthoritativeAuxAtNonPeriodicFineBoundaryUsesFi
     for (int i = 0; i < n; ++i)
       field[static_cast<std::size_t>(j) * n + i] = 1.0 + i + 10.0 * j;
   runtime.set_named_aux(component, field);
-  // AuxHalo is intentionally coarse-only. Its Dirichlet ghost differs from the fine shared
-  // Foextrap ghost, proving that the post-injection fine halo fill actually ran.
+  // The component BC is authoritative on every active level. Its Dirichlet ghost therefore
+  // differs from the coarse transfer's reconstructed boundary value.
   runtime.set_named_aux_bc(
-      component, AuxHaloPolicy{BCType::Dirichlet, Real(-50)});
+      component, AuxHaloPolicy{BCType::Dirichlet, boundary_value});
   device_fence();
 
   const MultiFab& coarse = runtime.aux(0);
   const MultiFab& fine = runtime.aux(1);
   ASSERT_EQ(fine.local_size(), 1);
+  MultiFab expected_fine(fine.box_array(), fine.dmap(), fine.ncomp(), fine.n_grow());
+  expected_fine.set_val(Real(0));
+  const CommunicatorView communicator =
+      layout.replicated_coarse ? CommunicatorView{} : world_communicator_view();
+  auto expected_transfer = detail::PreparedConservativeCellTransferWorkspace::prepare(
+      coarse, expected_fine, layout.geom.domain,
+      layout.geom.domain.refine(kAmrRefRatio), layout.replicated_coarse,
+      detail::ConservativeCellFillRegion::Valid, layout.base_per,
+      /*topology_generation=*/0, communicator);
+  expected_transfer.publish_prepared(expected_fine);
+
   const ConstArray4 values = fine.fab(0).const_array();
+  const ConstArray4 expected = expected_fine.fab(0).const_array();
   const Box2D valid = fine.box(0);
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
     for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-      const int ci = coarsen_index(i, kAmrRefRatio);
-      const int cj = coarsen_index(j, kAmrRefRatio);
-      EXPECT_EQ(values(i, j, component),
-                Real(field[static_cast<std::size_t>(cj) * n + ci]))
-          << "coarse-authoritative valid injection at (" << i << "," << j << ")";
+      EXPECT_EQ(values(i, j, component), expected(i, j, component))
+          << "coarse-authoritative prepared transfer at (" << i << "," << j << ")";
     }
 
   const ConstArray4 parent = coarse.fab(0).const_array();
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
     const int cj = coarsen_index(j, kAmrRefRatio);
-    EXPECT_EQ(values(-1, j, component), values(0, j, component))
-        << "fine x-low ghost inherits shared Foextrap";
+    EXPECT_EQ(values(-1, j, component),
+              Real(2) * boundary_value - values(0, j, component))
+        << "fine x-low ghost applies the component Dirichlet authority";
     EXPECT_NE(values(-1, j, component), parent(-1, cj, component))
-        << "fine shared BC must overwrite the injected coarse-only AuxHalo ghost";
+        << "fine component BC must overwrite the injected coarse ghost";
   }
 }
 

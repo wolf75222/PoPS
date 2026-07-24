@@ -117,14 +117,14 @@ TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
   const BoxArray xlow(std::vector<Box2D>{Box2D{{0, 4}, {7, 11}}});
   const CoarseFineInterface cfix(coarse, xlow, Periodicity{true, false});
   EXPECT_FALSE(cfix.covered(-1, 2)) << "wrapped x-high cell remains coarse";
-  EXPECT_EQ(cfix.reflux_register_region().lo[0], 0);
-  EXPECT_EQ(cfix.reflux_register_region().hi[0], 7);
-  FluxRegister refx(cfix.reflux_register_region(), nc);
+  FluxRegister refx(cfix.reflux_register_regions(xlow), nc);
+  EXPECT_TRUE(refx.in(0, 2));
+  EXPECT_TRUE(refx.in(7, 2));
   const RegLite gx = register_for(0, 3, 2, 5);
   cfix.route_reflux(gx, dx, dy, dt, refx, nc);
   EXPECT_EQ(refx.at(7, 2, 0), -(Real(10) - Real(1) * dt) / dx)
       << "x-low correction wraps onto x-high coarse cell";
-  FluxRegister refx_integrated(cfix.reflux_register_region(), nc);
+  FluxRegister refx_integrated(cfix.reflux_register_regions(xlow), nc);
   cfix.route_reflux_integrated(gx, dx, dy, refx_integrated, nc);
   EXPECT_EQ(refx_integrated.at(7, 2, 0), -(Real(10) - Real(1)) / dx)
       << "compiled-Program integrated reflux wraps onto x-high coarse cell";
@@ -135,7 +135,7 @@ TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
                                          Box2D{{12, 4}, {15, 11}}});
   const CoarseFineInterface cfix_both(coarse, xboth, Periodicity{true, false});
   EXPECT_TRUE(cfix_both.covered(-1, 2)) << "x-low neighbour wraps into covered x-high cell";
-  FluxRegister refx_both(cfix_both.reflux_register_region(), nc);
+  FluxRegister refx_both(cfix_both.reflux_register_regions(xboth), nc);
   cfix_both.route_reflux(gx, dx, dy, dt, refx_both, nc);
   EXPECT_EQ(refx_both.at(7, 2, 0), Real(0)) << "periodic fine-fine seam is not refluxed";
 
@@ -143,9 +143,9 @@ TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
   const BoxArray ylow(std::vector<Box2D>{Box2D{{4, 0}, {11, 7}}});
   const CoarseFineInterface cfiy(coarse, ylow, Periodicity{false, true});
   EXPECT_FALSE(cfiy.covered(2, -1)) << "wrapped y-high cell remains coarse";
-  EXPECT_EQ(cfiy.reflux_register_region().lo[1], 0);
-  EXPECT_EQ(cfiy.reflux_register_region().hi[1], 7);
-  FluxRegister refy(cfiy.reflux_register_region(), nc);
+  FluxRegister refy(cfiy.reflux_register_regions(ylow), nc);
+  EXPECT_TRUE(refy.in(2, 0));
+  EXPECT_TRUE(refy.in(2, 7));
   const RegLite gy = register_for(2, 5, 0, 3);
   cfiy.route_reflux(gy, dx, dy, dt, refy, nc);
   EXPECT_EQ(refy.at(2, 7, 0), -(Real(30) - Real(3) * dt) / dy)

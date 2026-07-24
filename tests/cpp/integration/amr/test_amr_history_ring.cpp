@@ -978,12 +978,12 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 1;
   AmrSystem sim(cfg);
   AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
   ASSERT_EQ(rt->nlev(), 2);
-  ASSERT_EQ(rt->configured_nlev(), 2);
+  ASSERT_EQ(rt->max_levels(), 2);
 
   runtime::program::AmrProgramContext context(rt, &sim);
   install_native_ab2_program(context);
@@ -991,8 +991,12 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
 
   // Empty tags remove the child before the next Program body.  The accepted image must expose only
   // active levels in every context-owned axis; no stale child clock/identity/flux survives.
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.0e9)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.0e9)});
+  test::install_prepared_threshold_decisions(
+      *rt,
+      {{0, 0, Real(1.0e9)}, {1, 0, Real(1.0e9)}},
+      {{0, 0, Real(1.0e9), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(1.0e9), test::PreparedThresholdRelation::Below}},
+      "test::history-metadata-coarsen@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 1);
   const auto shrunk =
@@ -1012,8 +1016,12 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   // Exercise one accepted flat rotation before reactivation.  New child slots are prolonged from
   // the matching parent temporal slot and receive a level-qualified copy of that exact clock.
   sim.step(dt);
-  rt->set_block_tag_predicate(0, TagDensityAbove{Real(-1)});
-  rt->set_block_tag_predicate(1, TagDensityAbove{Real(-1)});
+  test::install_prepared_threshold_decisions(
+      *rt,
+      {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
+      {{0, 0, Real(-1), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(-1), test::PreparedThresholdRelation::Below}},
+      "test::history-metadata-regrow@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 2);
   const auto regrown =
