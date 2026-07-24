@@ -1707,6 +1707,37 @@ jobs:
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
           mpi_cmake_args=()
           if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
             # FindMPI propagates these preflags to every manifest-owned CTest launch.
@@ -1728,8 +1759,13 @@ jobs:
             --verify-contracts "${compile_contracts[@]}"
           read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          timeout --signal=TERM --kill-after=30s 18m \
-            cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
+          # The monolithic Python module link is memory-heavy. Keep it isolated
+          # from test compilation/linking so a small hosted runner cannot evict
+          # its own worker under peak memory pressure.
+          run_with_heartbeat "MPI Python module link" 14m \
+            cmake --build --preset ci-mpi --parallel 1 --target _pops
+          run_with_heartbeat "MPI native test build" 8m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
 
       - name: Installed package smoke (MPI-only + collective HDF5)
         run: |
