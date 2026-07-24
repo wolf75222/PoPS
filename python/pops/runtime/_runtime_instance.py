@@ -625,6 +625,16 @@ class RuntimeInstance:
             "adaptive runtime provider does not expose its native hierarchy level count"
         )
 
+    def configured_n_levels(self) -> int:
+        provider: Any = getattr(self._executor, "configured_n_levels", None)
+        if callable(provider):
+            return int(cast(Any, provider()))
+        if not any(row.adaptive for row in self._layout_plan.layouts):
+            return 1
+        raise NotImplementedError(
+            "adaptive runtime provider does not expose its configured hierarchy depth"
+        )
+
     def patch_boxes(self) -> Any:
         return self._executor.patch_boxes()
 
@@ -1480,6 +1490,9 @@ class RuntimeInstance:
 
         result = restore_checkpoint_payload(
             self, self._executor, payload, phase_prefix="native restart")
+        # A checkpoint can restore an older topology epoch whose integer value was already cached
+        # by this RuntimeInstance for a different hierarchy.  Never expose that stale geometry.
+        self._snapshot_builder.invalidate_geometry_cache()
         self._consumer_cursors = cursors
         self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
         return result

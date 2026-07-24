@@ -972,6 +972,84 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
       << "the remapped lagged residual and zero-mismatch flux authority must conserve AB2 mass";
 }
 
+TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHierarchy) {
+  constexpr int n = 8;
+  constexpr double dt = 1.0e-3;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  cfg.regrid_every = 1;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
+  ASSERT_EQ(rt->nlev(), 2);
+  ASSERT_EQ(rt->configured_nlev(), 2);
+
+  runtime::program::AmrProgramContext context(rt, &sim);
+  install_native_ab2_program(context);
+  sim.step(dt);  // initialize both temporal slots on the bootstrap hierarchy
+
+  // Empty tags remove the child before the next Program body.  The accepted image must expose only
+  // active levels in every context-owned axis; no stale child clock/identity/flux survives.
+  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.0e9)});
+  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.0e9)});
+  sim.step(dt);
+  ASSERT_EQ(rt->nlev(), 1);
+  const auto shrunk =
+      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
+  ASSERT_EQ(shrunk.level_clocks.size(), 1u);
+  ASSERT_EQ(shrunk.ring_flux_initialized.at("a.rate").size(), 1u);
+  for (std::size_t slot = 0; slot < shrunk.ring_clocks.at("a.rate").size(); ++slot) {
+    ASSERT_EQ(shrunk.ring_clocks.at("a.rate")[slot].size(), 1u);
+    ASSERT_EQ(shrunk.ring_identities.at("a.rate")[slot].size(), 1u);
+    ASSERT_EQ(shrunk.ring_flux.at("a.rate")[slot].size(), 1u);
+    ASSERT_EQ(shrunk.ring_flux_contributions.at("a.rate")[slot].size(), 1u);
+    EXPECT_TRUE(shrunk.ring_flux.at("a.rate")[slot][0].empty());
+    for (const auto& contribution : shrunk.ring_flux_contributions.at("a.rate")[slot][0])
+      EXPECT_TRUE(contribution.payload.empty());
+  }
+
+  // Exercise one accepted flat rotation before reactivation.  New child slots are prolonged from
+  // the matching parent temporal slot and receive a level-qualified copy of that exact clock.
+  sim.step(dt);
+  rt->set_block_tag_predicate(0, TagDensityAbove{Real(-1)});
+  rt->set_block_tag_predicate(1, TagDensityAbove{Real(-1)});
+  sim.step(dt);
+  ASSERT_EQ(rt->nlev(), 2);
+  const auto regrown =
+      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
+  ASSERT_EQ(regrown.level_clocks.size(), 2u);
+  ASSERT_EQ(regrown.ring_flux_initialized.at("a.rate").size(), 2u);
+  EXPECT_EQ(regrown.ring_flux_initialized.at("a.rate")[1], 1)
+      << "the reactivated child inherits an initialized temporal ring and must not cold-broadcast";
+  ASSERT_EQ(regrown.ring_flux_contributions.at("a.rate").size(), 2u);
+  for (const auto& contribution : regrown.ring_flux_contributions.at("a.rate")[0][1])
+    EXPECT_TRUE(contribution.payload.empty())
+        << "the pre-regrow flat lag has no invented fine-interface flux";
+  bool accepted_child_flux = false;
+  for (const auto& contribution : regrown.ring_flux_contributions.at("a.rate")[1][1])
+    accepted_child_flux = accepted_child_flux || !contribution.payload.empty();
+  EXPECT_TRUE(accepted_child_flux)
+      << "the first post-regrow rate publishes only the newly accepted temporal slot";
+  for (std::size_t slot = 0; slot < regrown.ring_clocks.at("a.rate").size(); ++slot) {
+    const auto& clocks = regrown.ring_clocks.at("a.rate")[slot];
+    const auto& identities = regrown.ring_identities.at("a.rate")[slot];
+    ASSERT_EQ(clocks.size(), 2u);
+    ASSERT_EQ(identities.size(), 2u);
+    ASSERT_TRUE(identities[0].has_value());
+    ASSERT_TRUE(identities[1].has_value());
+    EXPECT_EQ(clocks[0].macro_step, clocks[1].macro_step);
+    EXPECT_EQ(clocks[0].phase, clocks[1].phase);
+    EXPECT_DOUBLE_EQ(clocks[0].physical_time, clocks[1].physical_time);
+    EXPECT_EQ(clocks[1].level, 1);
+    EXPECT_EQ(identities[1]->level, 1);
+    EXPECT_EQ(identities[1]->clock, clocks[1]);
+    ASSERT_EQ(regrown.ring_flux.at("a.rate")[slot].size(), 2u);
+    ASSERT_EQ(regrown.ring_flux_contributions.at("a.rate")[slot].size(), 2u);
+  }
+  EXPECT_GE(context.history_flux_topology_rebind_count(), 2);
+}
+
 TEST(test_amr_history_ring, RejectedAb2RegridRestoresTopologyHistoryFluxAndStateExactly) {
   constexpr int n = 16;
   constexpr double dt = 2.0e-3;

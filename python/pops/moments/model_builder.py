@@ -218,6 +218,15 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
     expressions = moment_flux_expressions(
         m, tuple(state), order, closure,
         robust=robust, eps_m00=eps_m00, eps_cov=eps_cov)
+    if robust and order == 4:
+        from pops.moments.projection import RealizabilityProjection
+        m.projection(
+            RealizabilityProjection(
+                eps_m00=eps_m00,
+                eps_cov=eps_cov,
+                robust=True,
+            ).hyqmom15_projection_expressions(expressions.moments)
+        )
     flux = m.flux(
         "transport",
         frame=selected_frame,

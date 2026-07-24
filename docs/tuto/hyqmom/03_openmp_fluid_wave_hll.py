@@ -4,17 +4,29 @@
 # ruff: noqa: E402
 
 from pathlib import Path
+import os
 import time
 
 import numpy as np
 import pops
 
-pops.set_threads(7)
+pops.set_threads(int(os.environ.get("POPS_THREADS", "4")))
+
+from _amr_hybrid import (
+    BASE_CELLS,
+    FINE_CELLS,
+    add_static_refinement_marker,
+    bind_hybrid,
+    build_layout,
+    coarse_state,
+    paraview_output,
+    prepare_output_root,
+    require_pvd,
+)
 
 from pops.diagnostics import Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.layouts import Uniform
 from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
@@ -26,7 +38,7 @@ from pops.runtime_environment import runtime_environment_report
 from pops.time import AdaptiveCFL, every
 
 
-CELLS = 32
+CELLS = BASE_CELLS
 X_MIN = -0.5
 X_MAX = 0.5
 Y_MIN = -0.5
@@ -43,6 +55,7 @@ MAX_STEPS = 200_000_000
 
 HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "03_openmp_fluid_wave_hll.npz"
+OUTPUT_ROOT = HERE / "results" / "03_openmp_fluid_wave_hll_amr"
 
 
 domain = Rectangle("hyqmom_fluid_wave_square", lower=(X_MIN, Y_MIN), upper=(X_MAX, Y_MAX))
@@ -81,6 +94,7 @@ rhs = explicit_rate(moments.n)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
 program.commit(moments.next, candidate)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
+_, marker_state = add_static_refinement_marker(case, frame, program)
 case.program(program)
 
 case.consumers(ConsumerGraph.from_consumers((
@@ -97,6 +111,7 @@ case.consumers(ConsumerGraph.from_consumers((
         ),
         enabled=ENABLE_MONITOR,
     ),
+    paraview_output(program, plasma_state, T_END),
 )))
 
 base = np.array(
@@ -162,33 +177,41 @@ X, Y = np.meshgrid(x, y, indexing="ij")
 phase = KX * X + KY * Y
 initial_state = base[:, None, None] + EPSILON * eigenvector[:, None, None] * np.sin(phase)[None, :, :]
 
+layout = build_layout(case, grid, program, plasma_state, marker_state)
 validated = pops.validate(case)
-resolved = pops.resolve(validated, layout=Uniform(grid))
+resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
-simulation = pops.bind(artifact, initial_state={"plasma": initial_state})
+simulation, world, rank = bind_hybrid(artifact, plasma_state, initial_state)
 
+prepare_output_root(OUTPUT_ROOT, world, rank)
 start = time.perf_counter()
-report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS)
+report = pops.run(simulation, t_end=T_END, max_steps=MAX_STEPS, output_dir=OUTPUT_ROOT)
 elapsed_seconds = time.perf_counter() - start
 
-final_state = np.asarray(simulation.state_global("plasma"), dtype=np.float64).reshape(initial_state.shape)
+final_state = coarse_state(simulation, "plasma", initial_state.shape)
 if not np.isfinite(final_state).all():
     raise RuntimeError("the HyQMOM15 state contains a non-finite value")
 
-RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
-np.savez_compressed(
-    RESULT_FILE,
-    initial=initial_state,
-    final=final_state,
-    eigenvalues=eigenvalues,
-    selected_eigenvector=eigenvector,
-    accepted_steps=report.accepted_steps,
-    elapsed_seconds=elapsed_seconds,
-)
-
-print("PoPS HyQMOM15 fluid-wave tutorial finished")
-print("  Riemann solver   : HLL")
-print("  selected mode    : %d" % MODE)
-print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
-print("  accepted steps   : %d" % report.accepted_steps)
-print("  result           : %s" % RESULT_FILE)
+if rank == 0:
+    RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        RESULT_FILE,
+        initial=initial_state,
+        final=final_state,
+        eigenvalues=eigenvalues,
+        selected_eigenvector=eigenvector,
+        accepted_steps=report.accepted_steps,
+        elapsed_seconds=elapsed_seconds,
+    )
+    pvd_path = require_pvd(OUTPUT_ROOT)
+    print("PoPS HyQMOM15 fluid-wave AMR tutorial finished")
+    print("  Riemann solver   : HLL")
+    print("  AMR hierarchy    : %d x %d -> %d x %d" % (
+        BASE_CELLS, BASE_CELLS, FINE_CELLS, FINE_CELLS,
+    ))
+    print("  MPI ranks        : %d" % world.size)
+    print("  selected mode    : %d" % MODE)
+    print("  Kokkos backend   : %s" % runtime_environment_report()["kokkos_backend"])
+    print("  accepted steps   : %d" % report.accepted_steps)
+    print("  result           : %s" % RESULT_FILE)
+    print("  ParaView series  : %s" % pvd_path)

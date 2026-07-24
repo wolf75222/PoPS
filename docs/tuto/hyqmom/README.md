@@ -1,17 +1,19 @@
 # HyQMOM a 15 moments
 
 Ce dossier reprend les cas principaux de `RieMOM2D_Electrostatic_periodic` avec l'API publique
-PoPS. Chaque fichier est separe pour rester lisible : pas de selecteur de cas, pas de factory
-commune cachee. Les scripts declarent le domaine, le modele, les numeriques, le programme de temps
-et les donnees initiales dans l'ordre ou ils sont utilises.
+PoPS. Les sept simulations utilisent une vraie hierarchie AMR hybride : grille
+grossiere $16\times16$, niveau fin localement equivalent a $32\times32$, patches
+distribues par MPI et kernels Kokkos/OpenMP dans chaque rang. Le petit module
+`_amr_hybrid.py` ne contient aucune physique : il factorise uniquement cette
+infrastructure d'execution et les sorties ParaView.
 
 | Fichier | Cas |
 |---|---|
-| `01_openmp_diocotron_hll.py` | diocotron periodique avec Poisson FFT et source cyclotron |
+| `01_openmp_diocotron_hll.py` | diocotron periodique avec Poisson CompositeFAC et source cyclotron |
 | `02_openmp_constant_hll.py` | etat Maxwellien constant et fermeture HyQMOM ecrite en Python |
 | `03_openmp_fluid_wave_hll.py` | onde fluide lineaire avec flux HLL |
-| `04_openmp_electrostatic_wave_hll.py` | onde electrostatique avec Poisson FFT |
-| `05_openmp_magnetic_wave_hll.py` | onde magnetique avec Poisson FFT et source cyclotron |
+| `04_openmp_electrostatic_wave_hll.py` | onde electrostatique avec Poisson CompositeFAC |
+| `05_openmp_magnetic_wave_hll.py` | onde magnetique avec Poisson CompositeFAC et source cyclotron |
 | `06_openmp_shock_tube_hll.py` | tube a choc 2D avec relaxation15 |
 | `07_openmp_crossing_jets_hll.py` | jets croises 2D avec relaxation15 |
 
@@ -21,13 +23,13 @@ utilises par `main.m` :
 | Element | Valeur |
 |---|---|
 | Domaine | $[-0.5,0.5]^2$, periodique |
-| Maillage | $128 \times 128$ |
+| Maillage | AMR $16^2 \rightarrow 32^2$ localement |
 | Moments | 15 moments cartesiens, jusqu'a l'ordre quatre |
 | Fermeture | HyQMOM d'ordre quatre, six moments fermes d'ordre cinq |
 | Flux numerique | HLL, spectre du Jacobien complet |
 | Reconstruction | constante par cellule |
 | Temps | Euler explicite, CFL $0.5$, $t_{max}=1$ |
-| Champ | Poisson FFT spectral, potentiel de moyenne nulle |
+| Champ | Poisson CompositeFAC AMR, potentiel de moyenne nulle |
 | Frequences | $\omega_p=20$, $\omega_c=-20$ |
 
 Les scripts n'utilisent pas HLLC.
@@ -91,12 +93,18 @@ def user_hyqmom15_closure(S):
     }
 ```
 
-`CartesianVelocityMoments(4, closure=user_hyqmom15_closure)` construit ensuite
-en Python les quinze inconnues, les transformations des moments bruts vers les
-moments centres puis standardises, les flux fermes et leurs Jacobiennes. La
-fonction utilisateur est evaluee une seule fois sur les expressions symboliques
-pendant la construction. Son arithmetique est incorporee dans l'AST compile :
-il n'existe aucun callback Python dans les cellules ou les pas de temps.
+Le tutoriel n'appelle pas non plus la facade `CartesianVelocityMoments`. La
+fonction `build_user_hyqmom15_model()` declare explicitement l'etat
+`M00, M10, ..., M04`, construit les flux selon `x` et `y`, demande les vitesses
+HLL au Jacobien puis pose l'equation
+`ddt(U) == -div(flux)`. `moment_flux_expressions()` est le generateur
+algebrique Python generique : il realise les transformations des moments bruts
+vers les moments centres puis standardises et applique la fermeture utilisateur.
+
+La fonction de fermeture est evaluee une seule fois sur les expressions
+symboliques pendant la construction. Son arithmetique est incorporee dans l'AST
+compile : il n'existe aucun callback Python dans les cellules ou les pas de
+temps.
 
 L'exemple conserve `HyQMOM15Closure()` dans les autres cas afin de montrer la
 version concise de la meme physique. Les deux chemins utilisent le meme
@@ -173,9 +181,25 @@ vitesse et multipliee par $\rho$.
 
 ## Ce qui est natif
 
-PoPS execute le flux HLL, l'evaluation du Jacobien $15\times15$, les sources electrique et
-cyclotron, la FFT periodique, le programme Euler, la borne de pas et les mises a jour avec le
-backend C++ natif. Kokkos execute les kernels de cellules.
+PoPS execute le flux HLL, l'evaluation du Jacobien $15\times15$, les sources
+electrique et cyclotron, CompositeFAC, le programme Euler, les transferts AMR
+et les mises a jour avec le backend C++ natif. MPI distribue les patches ;
+Kokkos/OpenMP execute les kernels de cellules dans chaque rang.
+
+## Sorties ParaView
+
+Chaque cas ajoute un `ScientificOutput(ParaView(...))` cadence en temps
+physique. Une execution MPI produit :
+
+- un `.vtu` par piece ;
+- un `.pvtu` qui assemble les pieces MPI de chaque instant ;
+- un `.pvd` qui indexe toute la serie temporelle.
+
+Le preset demande `M00`, la palette `Viridis` et `Surface With Edges`. Ouvrir
+le `.pvd` suffit pour parcourir le temps avec **Play**. Pour distinguer la
+hierarchie AMR, garder `Surface With Edges` puis colorer par
+`vtkCompositeIndex` si cette information est exposee par la version de
+ParaView. Il ne faut pas ouvrir les `.vtu` rang par rang.
 
 Dans le tube a choc et les jets croises, `HyQMOM15Relaxation` declare la transformation symbolique.
 Le programme l'applique une fois apres Euler dans un kernel C++/Kokkos, avant le commit de l'etat.
@@ -203,24 +227,33 @@ lieu d'utiliser une borne qui masquerait une perte d'hyperbolicite.
 Depuis la racine du depot :
 
 ```bash
-bash scripts/setup_env.sh
-bash scripts/build_python.sh
+source "$HOME/miniforge3/etc/profile.d/conda.sh"  # si conda n'est pas deja charge
 conda activate pops
-python docs/tuto/hyqmom/01_openmp_diocotron_hll.py
-python docs/tuto/hyqmom/02_openmp_constant_hll.py
-python docs/tuto/hyqmom/03_openmp_fluid_wave_hll.py
-python docs/tuto/hyqmom/04_openmp_electrostatic_wave_hll.py
-python docs/tuto/hyqmom/05_openmp_magnetic_wave_hll.py
-python docs/tuto/hyqmom/06_openmp_shock_tube_hll.py
-python docs/tuto/hyqmom/07_openmp_crossing_jets_hll.py
+bash scripts/build_python.sh --mpi --clean
+
+export POPS_THREADS=4
+mpiexec -n 2 python docs/tuto/hyqmom/01_openmp_diocotron_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/02_openmp_constant_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/03_openmp_fluid_wave_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/04_openmp_electrostatic_wave_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/05_openmp_magnetic_wave_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/06_openmp_shock_tube_hll.py
+mpiexec -n 2 python docs/tuto/hyqmom/07_openmp_crossing_jets_hll.py
 ```
 
-Les cas `diocotron`, `electrostatic_wave`, `magnetic_wave`, `shock_tube` et `crossing_jets`
-reprennent des tailles proches du MATLAB et peuvent etre nettement plus longs que les petits
-tutoriels d'advection. Les constantes sont rassemblees au debut de chaque fichier si l'on souhaite
-d'abord faire un essai plus court.
+`POPS_THREADS` fixe les threads OpenMP de chaque rang. Le total demande ici
+$2\times4=8$ coeurs logiques. Les horizons physiques, HLL et HyQMOM restent
+ceux des cas ; seule la resolution a ete reduite pour rendre l'essai leger.
 
-Le script ecrit `results/01_openmp_diocotron_hll.npz`. Le potentiel sauvegarde est celui du dernier
+Chaque script affiche le chemin exact de son `.pvd` a la fin. Par exemple :
+
+```bash
+PVD=$(find docs/tuto/hyqmom/results/01_openmp_diocotron_hll_amr \
+  -name '*.pvd' | sort | tail -1)
+"/Applications/ParaView-6.1.1.app/Contents/MacOS/paraview" "$PVD"
+```
+
+Le premier script ecrit aussi `results/01_openmp_diocotron_hll.npz`. Le potentiel sauvegarde est celui du dernier
 debut de pas, puisque le programme resout le champ sur $U^n$ avant de committer $U^{n+1}$, comme
 `main.m`. Pour produire les cartes de densite, de ce potentiel et de vitesse moyenne :
 

@@ -18,7 +18,6 @@ import pops.output as output
 pops.set_threads(1)
 
 from pops.amr import (
-    AMRClockRelation,
     AMRExecution,
     AMRHierarchy,
     AMRRegrid,
@@ -70,8 +69,10 @@ AY = 0.25
 FAR_FIELD = 0.05
 CFL = 0.45
 MAX_DT = 1.0e-2
-T_END = 0.10
+T_END = 8.0
 MAX_STEPS = 10_000
+
+MONITOR_EVERY_DT = 0.05
 
 # Ce tutoriel prouve ParaView en mode MPI PER_RANK. Les formats alternatifs doivent choisir leur
 # propre mode MPI compatible. Quand une installation ParaView est annoncee, produire aussi un vrai
@@ -122,6 +123,7 @@ domain = Rectangle(
 frame = domain.frame(Cartesian2D())
 x_axis, y_axis = frame.axes
 grid = CartesianGrid(frame=frame, cells=(NX, NY))
+
 
 model = pops.Model("scalar_advection_amr_mpi_outputs", frame=frame)
 U = model.state(
@@ -208,7 +210,7 @@ consumers = [
         target="solution/tracer",
     ),
     ConsoleMonitor(
-        schedule=every(MONITOR_EVERY, clock=program.clock),
+        schedule=every_dt(MONITOR_EVERY_DT, clock=program.clock),
         diagnostics=(
             StepChangeNorm(L2(), block=tracer),
             Integral(block=tracer),
@@ -235,7 +237,7 @@ if ENABLE_CATALYST:
 case.consumers(ConsumerGraph.from_consumers(tuple(consumers)))
 
 
-# 5. AMR a deux niveaux avec transfert conservatif et subcycling 2:1.
+# 5. AMR multi-niveaux avec transfert conservatif et horloges synchrones.
 refine_threshold = case.param(RuntimeParam("refine_u", default=0.30))
 coarsen_threshold = case.param(RuntimeParam("coarsen_u", default=0.20))
 tagging = AMRTagging(
@@ -252,11 +254,11 @@ transfer = AMRTransfer()
 transfer.state(tracer_U, StateTransfer())
 layout = AMR(
     grid=grid,
-    hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+    hierarchy=AMRHierarchy(max_levels=5, ratios=(2, 2, 2, 2)),
     tagging=tagging,
     regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
     transfer=transfer,
-    execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+    execution=AMRExecution.synchronous(),
     patch_layout=PatchLayout(
         distribute_coarse=True,
         coarse_max_grid=16,

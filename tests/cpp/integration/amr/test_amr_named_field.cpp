@@ -834,6 +834,71 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
          "configured spatial authority";
 }
 
+TEST(test_amr_named_field, CoarseAuthoritativeAuxAtNonPeriodicFineBoundaryUsesFineFoextrap) {
+  constexpr int n = 16;
+  constexpr int component = kAuxNamedBase;
+  AmrBuildParams params;
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  BCRec nonperiodic;
+  nonperiodic.xlo = nonperiodic.xhi = BCType::Dirichlet;
+  nonperiodic.ylo = nonperiodic.yhi = BCType::Dirichlet;
+  params.poisson.bc = nonperiodic;
+
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+  layout.base_per = Periodicity{false, false};
+  // Coarse footprint [0..7]x[4..11]: the child touches x-low but remains interior in y.
+  const BoxArray boundary_fine(
+      std::vector<Box2D>{Box2D{{0, 8}, {15, 23}}});
+  layout.ba[1] = boundary_fine;
+  layout.dm[1] = DistributionMapping(boundary_fine.size(), n_ranks());
+
+  std::vector<AmrRuntimeBlock> blocks;
+  detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto model) {
+    blocks.push_back(detail::dispatch_amr_block(model, "minmod", "rusanov", layout, "plasma",
+                                                blob(n, 0.25),
+                                                /*has_density=*/true, 1.4, 1, false, false));
+  });
+  blocks[0].aux_ncomp = component + 1;
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+
+  std::vector<double> field(static_cast<std::size_t>(n) * n);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i)
+      field[static_cast<std::size_t>(j) * n + i] = 1.0 + i + 10.0 * j;
+  runtime.set_named_aux(component, field);
+  // AuxHalo is intentionally coarse-only. Its Dirichlet ghost differs from the fine shared
+  // Foextrap ghost, proving that the post-injection fine halo fill actually ran.
+  runtime.set_named_aux_bc(
+      component, AuxHaloPolicy{BCType::Dirichlet, Real(-50)});
+  device_fence();
+
+  const MultiFab& coarse = runtime.aux(0);
+  const MultiFab& fine = runtime.aux(1);
+  ASSERT_EQ(fine.local_size(), 1);
+  const ConstArray4 values = fine.fab(0).const_array();
+  const Box2D valid = fine.box(0);
+  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+      const int ci = coarsen_index(i, kAmrRefRatio);
+      const int cj = coarsen_index(j, kAmrRefRatio);
+      EXPECT_EQ(values(i, j, component),
+                Real(field[static_cast<std::size_t>(cj) * n + ci]))
+          << "coarse-authoritative valid injection at (" << i << "," << j << ")";
+    }
+
+  const ConstArray4 parent = coarse.fab(0).const_array();
+  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
+    const int cj = coarsen_index(j, kAmrRefRatio);
+    EXPECT_EQ(values(-1, j, component), values(0, j, component))
+        << "fine x-low ghost inherits shared Foextrap";
+    EXPECT_NE(values(-1, j, component), parent(-1, cj, component))
+        << "fine shared BC must overwrite the injected coarse-only AuxHalo ghost";
+  }
+}
+
 TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresentedTopologies) {
   auto make_plan = [](const std::string& name,
                       const AmrFieldHierarchyPolicyAuthority& hierarchy_policy) {

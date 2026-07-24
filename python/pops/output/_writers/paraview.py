@@ -30,6 +30,7 @@ from pops.output._writers.common import (
     ReopenedOutput,
     _StagedOutputFile,
     _cleanup_staging_authority,
+    _series_selection_authority,
     authenticate_manifest,
     field_values_on_mask,
     json_text,
@@ -742,8 +743,7 @@ def _series_identity(
     *,
     compression: int | None,
 ) -> Identity:
-    request_data = request.to_data()
-    request_data.pop("rank")
+    request_data = _series_selection_authority(request.publication_data())
     return make_identity("paraview-series", {
         "consumer": request.consumer_id,
         "request_family": request_data,

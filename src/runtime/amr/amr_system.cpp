@@ -4154,6 +4154,9 @@ int AmrSystem::max_levels() {
   p_->ensure_built();
   return p_->runtime->max_levels();
 }
+int AmrSystem::configured_n_levels() {
+  return max_levels();
+}
 int AmrSystem::n_vars() {
   p_->ensure_built();
   if (p_->blocks.size() != 1)
@@ -4227,6 +4230,7 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
     level_owners[static_cast<std::size_t>(k)].push_back(owner_ranks[idx]);
   }
   p_->runtime->rebuild_hierarchy(level_boxes, level_owners);
+  p_->install_active_temporal_relations();
 }
 
 void AmrSystem::begin_restart_transaction() {

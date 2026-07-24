@@ -1352,6 +1352,86 @@ def test_paraview_pvd_is_cumulative_exact_and_transactional(tmp_path):
     assert read_paraview_series(pvd_paths[-1]).output_identity == reopened.output_identity
 
 
+def test_paraview_pvd_keeps_one_series_across_active_depth_3_to_1_to_3(tmp_path):
+    seed, request, foreign_key = _snapshot()
+    selected = seed.select(request)
+    coarse_field = next(field for field in selected if field.key.level == 0)
+    fine_field = next(field for field in selected if field.key.level == 1)
+    coarse_geometry = seed.geometry(coarse_field.key)
+    fine_geometry = seed.geometry(fine_field.key)
+    fine_coverage = np.zeros(fine_geometry.cell_shape, dtype=np.bool_)
+    fine_coverage[1:3, 1:3] = True
+    fine_geometry = replace(fine_geometry, coverage=fine_coverage)
+    level2_geometry = LevelGeometry(
+        fine_field.key.layout_identity,
+        "amr",
+        2,
+        fine_geometry.origin,
+        (fine_geometry.spacing[0] / 2.0, fine_geometry.spacing[1] / 2.0),
+        (8, 8),
+        ((2, 2, 6, 6),),
+        np.zeros((8, 8), dtype=np.bool_),
+        np.full((8, 8), 0.0625, dtype=np.float64),
+    )
+    level2_key = replace(fine_field.key, level=2)
+    level2_field = FieldPayload(
+        level2_key,
+        "cell",
+        fine_field.units,
+        fine_field.component_names,
+        (8, 8),
+        (_piece(np.full((4, 4), 3.0), lower=(2, 2)),),
+    )
+    full_request = replace(
+        request, selection=(coarse_field.key, fine_field.key, level2_key))
+    coarse_request = replace(request, selection=(coarse_field.key,))
+    snapshots = (
+        replace(
+            seed,
+            geometries=(coarse_geometry, fine_geometry, level2_geometry),
+            fields=(coarse_field, fine_field, level2_field),
+        ),
+        replace(
+            seed,
+            clock=OutputClock.at("macro", 0.25, 8, stage="accepted"),
+            geometries=(replace(
+                coarse_geometry,
+                coverage=np.zeros(coarse_geometry.cell_shape, dtype=np.bool_),
+            ),),
+            fields=(coarse_field,),
+        ),
+        replace(
+            seed,
+            clock=OutputClock.at("macro", 0.375, 9, stage="accepted"),
+            geometries=(coarse_geometry, fine_geometry, level2_geometry),
+            fields=(coarse_field, fine_field, level2_field),
+        ),
+    )
+    requests = (full_request, coarse_request, full_request)
+    assert len({
+        _series_identity(snapshot, current_request, compression=6).token
+        for snapshot, current_request in zip(snapshots, requests, strict=True)
+    }) == 1
+    assert _series_identity(
+        seed, replace(request, selection=(foreign_key,)), compression=6
+    ) != _series_identity(seed, request, compression=6)
+
+    writer = ParaViewWriter(compression=6, collection=True)
+    for snapshot, current_request in zip(snapshots, requests, strict=True):
+        target = deterministic_target(
+            tmp_path, "dynamic-depth", current_request, snapshot, ".vtu")
+        prepared = _stage_writer(writer, snapshot, current_request, target)
+        prepared.publish()
+        prepared.finalize()
+
+    indexes = sorted(tmp_path.glob("density-output__series-*__s*.pvd"))
+    assert len(indexes) == 3
+    reopened = [read_paraview_series(path) for path in indexes]
+    assert len({item.manifest["series_identity"] for item in reopened}) == 1
+    assert [row["macro_step"] for row in reopened[-1].manifest["entries"]] == [7, 8, 9]
+    assert [path.suffix for path in reopened[-1].paths] == [".vtu", ".vtu", ".vtu"]
+
+
 def test_paraview_directory_resolution_uses_authenticated_history_not_filename_order(
     tmp_path,
 ):

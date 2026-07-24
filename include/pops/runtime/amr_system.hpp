@@ -1086,6 +1086,7 @@ class AmrSystem {
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
   int n_levels();  ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
   int max_levels();  ///< resolved maximum active hierarchy depth
+  int configured_n_levels();  ///< immutable resolved hierarchy capacity
   int n_vars();    ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.
