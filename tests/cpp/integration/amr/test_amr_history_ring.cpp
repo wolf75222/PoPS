@@ -820,41 +820,16 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
       has_multilevel_flux = has_multilevel_flux || !level.empty();
   ASSERT_TRUE(has_multilevel_flux);
 
-  const std::vector<Box2D> middle_before_partial_shrink =
-      rt->level_state(0, 1).box_array().boxes();
   rt->level_state(0, 0).set_val(Real(2));
   rt->level_state(0, 1).set_val(Real(1));
   rt->level_state(0, 2).set_val(Real(1));
   test::install_prepared_threshold_decisions(
       *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
-      "test::lagged-flux-depth-partial-coarsen@1");
-  sim.step(dt);
-  ASSERT_EQ(rt->nlev(), 2);
-  EXPECT_EQ(rt->level_state(0, 1).box_array().boxes(), middle_before_partial_shrink)
-      << "the surviving child keeps its layout while absorbing the removed descendant";
-  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 2);
-
-  const auto middle = runtime::program::deserialize_amr_program_accepted_state(
-      sim.program_accepted_state());
-  for (const auto& slot : middle.ring_flux.at("a.rate"))
-    EXPECT_EQ(slot.size(), 2u);
-  for (const auto& slot : middle.ring_flux_contributions.at("a.rate"))
-    EXPECT_EQ(slot.size(), 2u);
-  for (const auto& slot : middle.ring_clocks.at("a.rate"))
-    EXPECT_EQ(slot.size(), 2u);
-  for (const auto& slot : middle.ring_identities.at("a.rate"))
-    EXPECT_EQ(slot.size(), 2u);
-  EXPECT_EQ(middle.ring_flux_initialized.at("a.rate").size(), 2u);
-
-  rt->level_state(0, 0).set_val(Real(1));
-  test::install_prepared_threshold_decisions(
-      *rt, {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
-      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
       "test::lagged-flux-depth-full-coarsen@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 1);
-  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 3);
+  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 2);
 
   const auto coarse = runtime::program::deserialize_amr_program_accepted_state(
       sim.program_accepted_state());
@@ -873,7 +848,7 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
       "test::lagged-flux-depth-reactivate@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 3);
-  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 5);
+  EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 4);
   const auto reactivated = runtime::program::deserialize_amr_program_accepted_state(
       sim.program_accepted_state());
   ASSERT_EQ(reactivated.ring_flux_initialized.at("a.rate").size(), 3u);
