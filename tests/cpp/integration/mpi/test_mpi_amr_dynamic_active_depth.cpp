@@ -9,9 +9,6 @@
 #include "gtest_compat.hpp"
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/builders/factory/model_factory.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 
 #include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
@@ -30,50 +27,74 @@ using namespace pops;
 
 namespace {
 
-ModelSpec exb_charge(double q, double B0) {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = q;
-  spec.B0 = B0;
-  return spec;
-}
-
-std::vector<double> blob(int n, double cx, double cy, double amp, double base, double width) {
-  std::vector<double> density(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n;
-      const double y = (j + 0.5) / n;
-      const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      density[static_cast<std::size_t>(j) * n + i] =
-          base + amp * std::exp(-r2 / (width * width));
-    }
-  return density;
-}
-
 int run_dynamic_active_depth(int n, int me, int np) {
-  AmrBuildParams params;
-  params.mesh.n = n;
-  params.mesh.L = 1.0;
-  params.mesh.distribute_coarse = true;
-  params.mesh.coarse_max_grid = n / 2;
-  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  params.poisson.bc = BCRec{};
-  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
+  const Geometry geometry{Box2D::from_extents(n, n), Real(0), Real(1), Real(0), Real(1)};
+  const BoxArray coarse_boxes = BoxArray::from_domain(geometry.domain, n / 2);
+  const Box2D level_one_patch = Box2D{{2, 2}, {n - 3, n - 3}}.refine(2);
+  const Box2D level_two_parent{{level_one_patch.lo[0] + 4, level_one_patch.lo[1] + 4},
+                               {level_one_patch.hi[0] - 4, level_one_patch.hi[1] - 4}};
+  const Box2D level_two_patch = level_two_parent.refine(2);
+
+  auto levels = std::make_shared<std::vector<AmrLevelMP>>();
+  levels->push_back(AmrLevelMP{MultiFab(coarse_boxes,
+                                        DistributionMapping(coarse_boxes.size(), n_ranks()), 1, 1),
+                               nullptr, geometry.dx(), geometry.dy()});
+  levels->push_back(
+      AmrLevelMP{MultiFab(BoxArray({level_one_patch}), DistributionMapping({0}), 1, 1), nullptr,
+                 geometry.dx() / Real(2), geometry.dy() / Real(2)});
+  levels->push_back(
+      AmrLevelMP{MultiFab(BoxArray({level_two_patch}), DistributionMapping({0}), 1, 1), nullptr,
+                 geometry.dx() / Real(4), geometry.dy() / Real(4)});
+
+  for (std::size_t level_index = 0; level_index < levels->size(); ++level_index) {
+    MultiFab& values = (*levels)[level_index].U;
+    const int scale = 1 << static_cast<int>(level_index);
+    for (int local = 0; local < values.local_size(); ++local) {
+      Fab2D& fab = values.fab(local);
+      const Box2D box = values.box(local);
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+          const double x = geometry.x_cell(i / scale);
+          const double y = geometry.y_cell(j / scale);
+          const double r2 = (x - 0.28) * (x - 0.28) + (y - 0.50) * (y - 0.50);
+          fab(i, j, 0) = Real(1.0 + 0.8 * std::exp(-r2 / (0.08 * 0.08)));
+        }
+    }
+  }
+
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  AmrHierarchyLayout hierarchy = AmrHierarchyLayout::from_levels(*levels, load_balance);
+
+  AmrRuntimeBlock block;
+  block.name = "moving";
+  block.state_identity = "test://mpi-active-depth/block/moving/state/U";
+  block.levels = levels;
+  block.advance = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
+                     PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
+                     PreparedAmrAdvanceScratchPlan*) {};
+  block.advance_with_temporal_plan =
+      [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
+         const detail::PreparedAmrTemporalPlan&, PreparedAmrFillPatchPlan*,
+         PreparedAmrAverageDownPlan*, PreparedAmrAdvanceScratchPlan*) {};
+  block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
+  block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };
+  block.mass = [levels, geometry] {
+    Real local_mass = 0;
+    const MultiFab& values = levels->front().U;
+    const Real cell_volume = geometry.dx() * geometry.dy();
+    for (int local = 0; local < values.local_size(); ++local) {
+      const ConstArray4 state = values.fab(local).const_array();
+      local_mass += for_each_cell_reduce_sum(
+          values.box(local),
+          [state, cell_volume] POPS_HD(int i, int j) { return state(i, j, 0) * cell_volume; });
+    }
+    return all_reduce_sum(local_mass);
+  };
 
   std::vector<AmrRuntimeBlock> blocks;
-  const std::vector<double> density = blob(n, 0.28, 0.50, 0.8, 1.0, 0.08);
-  detail::dispatch_model(exb_charge(0.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "moving", density,
-        /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  blocks.back().state_identity = "test://mpi-active-depth/block/moving/state/U";
-
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  blocks.push_back(std::move(block));
+  AmrRuntime runtime(geometry, std::move(hierarchy), BCRec{}, std::move(blocks),
+                     Periodicity{true, true}, /*replicated_coarse=*/false);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations(
       {amr::ParentChildClockRelation(0, 1, amr::Rational(2, 1),
