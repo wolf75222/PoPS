@@ -846,7 +846,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m'
         in openmp_block
     )
-    assert 'cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"' in openmp_block
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in openmp_cpp_build
+    assert (
+        'cmake --build --preset ci-kokkos --parallel 2 --target "${cpp_targets[@]}"'
+        in openmp_block
+    )
     assert "cmake --build --preset ci-kokkos\n" not in openmp_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in openmp_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in openmp_block
