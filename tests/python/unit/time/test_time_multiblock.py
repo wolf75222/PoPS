@@ -116,6 +116,7 @@ def two_block_program(t, model, name="two_block_passive"):
     then b -> runtime indices a=0, b=1."""
     P = t.Program(name)
     dt = P.dt
+    stages = {}
     for blk in ("a", "b"):
         U = typed_state(P, blk, model=model)
         R = P.rhs(
@@ -123,6 +124,9 @@ def two_block_program(t, model, name="two_block_passive"):
             state=U,
             terms=[Flux(), SourceTerm(model.module.operator_handle("decay"))],
         )
+        stages[blk] = (U, R)
+    for blk in ("a", "b"):
+        U, R = stages[blk]
         endpoint = typed_state(P, blk, state_name="U", model=model).next
         P.commit(endpoint, P.value(blk + "_next", U + dt * R, at=endpoint.point))
     return P
@@ -136,16 +140,23 @@ def section_a(t):
     # model, so test the index routing on the default-source flux-only program here).
     P = t.Program("two_block_flux")
     dt = P.dt
+    stages = {}
     for blk in ("a", "b"):
         U = typed_state(P, blk)
         R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+        stages[blk] = (U, R)
+    for blk in ("a", "b"):
+        U, R = stages[blk]
         endpoint = typed_state(P, blk, state_name="U").next
         P.commit(endpoint, P.value(blk + "_next", U + dt * R, at=endpoint.point))
     src = _emit(P)
     chk(
         "ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)"
     )
-    chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
+    chk(
+        "ctx.rhs_group(" in src and "{0, &" in src and "{1, &" in src,
+        "the coherent RHS round carries both exact block indices",
+    )
 
     # A read-only block (declared via P.state, never committed) is allowed: only block 'a' commits.
     Pro = t.Program("readonly_b")
@@ -210,10 +221,11 @@ def section_a(t):
         "solve_fields_from_blocks lowers to the coupled multi-block solve",
     )
     chk(
-        "std::vector<const pops::MultiFab*>" in src_c,
-        "the coupled solve builds a per-block MultiFab pointer vector",
+        "std::vector<const pops::MultiFab*>" not in src_c,
+        "the coupled solve reuses its context-owned native workspace",
     )
-    chk(src_c.count("] = &") >= 2, "each listed block slots its stage state by index")
+    chk("{0, &" in src_c and "{1, &" in src_c,
+        "each listed block carries its exact stage state")
 
     # The callable field handle rejects malformed coupled arguments before outcome creation.
     Pb = t.Program("b")
@@ -275,7 +287,7 @@ def section_b(t):
         require_native_or_skip("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         if fails:
             raise AssertionError(
                 "%d pure-Python acceptance(s) failed before the native capability skip" % fails
@@ -318,7 +330,7 @@ def section_b(t):
     chk(comp_ab.program_name == "two_block_passive", "the 2-block handle carries the program name")
 
     def make_sim(blocks):
-        sim = System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodicity=(True, True))
         for blk in blocks:
             try:
                 cm = passive_model("blk_" + blk).compile(backend="production")

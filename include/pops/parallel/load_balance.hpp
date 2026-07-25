@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <numeric>
+#include <span>
+#include <stdexcept>
 #include <vector>
 
 /// @file
@@ -19,13 +22,14 @@
 /// to the least loaded rank -> minimizes the maximum imbalance). load_imbalance
 /// measures the max load / average load ratio. Morton tooling exposed: part1by1,
 /// morton_key, morton_order.
-/// Contract: a box weight is its cell count (proxy for compute cost).
+/// Contract: a box weight defaults to its cell count (proxy for compute cost), or is supplied by a
+/// prepared ownership authority as one positive integer per box.
 ///
 /// Invariants:
 /// - PURE functions, no MPI: testable in serial; they will feed the comm seam once
 ///   an MPI backend is wired in;
 /// - SFC guarantees that with nboxes >= nranks each rank receives at least one box;
-/// - degenerate cases (n == 0, nranks <= 1): everything is assigned to rank 0.
+/// - an empty BoxArray yields an empty mapping; nranks must otherwise be positive.
 
 namespace pops {
 
@@ -58,49 +62,104 @@ inline std::vector<int> morton_order(const BoxArray& ba) {
   for (int i = 0; i < n; ++i)
     key[i] = morton_key(static_cast<std::uint32_t>(ba[i].lo[0] - bb.lo[0]),
                         static_cast<std::uint32_t>(ba[i].lo[1] - bb.lo[1]));
-  std::sort(order.begin(), order.end(), [&](int a, int b) { return key[a] < key[b]; });
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    return key[a] < key[b] || (key[a] == key[b] && a < b);
+  });
   return order;
 }
 
+namespace detail {
+
+inline std::vector<std::int64_t> load_balance_weights(
+    const BoxArray& boxes, std::span<const std::int64_t> supplied) {
+  if (!supplied.empty() && supplied.size() != static_cast<std::size_t>(boxes.size()))
+    throw std::invalid_argument("load-balance weight count must equal the BoxArray size");
+  std::vector<std::int64_t> weights(static_cast<std::size_t>(boxes.size()));
+  std::int64_t total = 0;
+  for (int index = 0; index < boxes.size(); ++index) {
+    const std::int64_t value = supplied.empty() ? boxes[index].num_cells() : supplied[index];
+    if (value <= 0)
+      throw std::invalid_argument("load-balance weights must be strictly positive");
+    if (value > std::numeric_limits<std::int64_t>::max() - total)
+      throw std::overflow_error("load-balance total weight exceeds int64_t");
+    total += value;
+    weights[static_cast<std::size_t>(index)] = value;
+  }
+  return weights;
+}
+
+inline std::int64_t load_balance_total(std::span<const std::int64_t> weights) {
+  std::int64_t total = 0;
+  for (const auto value : weights) {
+    if (value > std::numeric_limits<std::int64_t>::max() - total)
+      throw std::overflow_error("load-balance total weight exceeds int64_t");
+    total += value;
+  }
+  return total;
+}
+
+/// Exact ceil(total * partitions / rank_count) without overflowing total * partitions.
+inline std::int64_t cumulative_target(std::int64_t total, int partitions, int rank_count) {
+  const std::int64_t quotient = total / rank_count;
+  const std::int64_t remainder = total % rank_count;
+  const std::int64_t remainder_product = remainder * static_cast<std::int64_t>(partitions);
+  const std::int64_t remainder_share =
+      (remainder_product + static_cast<std::int64_t>(rank_count) - 1) / rank_count;
+  return quotient * partitions + remainder_share;
+}
+
+}  // namespace detail
+
 // Z-order distribution: contiguous segments of ~equal load along the SFC.
 // Guarantees that with nboxes >= nranks each rank receives at least one box.
-inline DistributionMapping make_sfc_distribution(const BoxArray& ba, int nranks) {
+inline DistributionMapping make_sfc_distribution(
+    const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
+  if (nranks <= 0)
+    throw std::invalid_argument("SFC load balance requires a positive rank count");
   const int n = ba.size();
   std::vector<int> rank(n, 0);
-  if (n == 0 || nranks <= 1)
+  const auto weights = detail::load_balance_weights(ba, supplied_weights);
+  if (n == 0 || nranks == 1)
     return DistributionMapping(std::move(rank));
 
   const std::vector<int> order = morton_order(ba);
-  std::int64_t total = ba.num_cells();
-  const double target = double(total) / nranks;  // target load per rank
+  const std::int64_t total = detail::load_balance_total(weights);
 
   std::int64_t acc = 0;
   int r = 0;
   for (int k = 0; k < n; ++k) {
     const int b = order[k];
     rank[b] = r;
-    acc += ba[b].num_cells();
+    acc += weights[static_cast<std::size_t>(b)];
     // advance to the next rank if the target share is reached AND enough boxes
     // remain to give at least one box to each remaining rank.
     const int boxes_left = n - 1 - k;
     const int ranks_left = nranks - 1 - r;
-    if (r < nranks - 1 && acc >= target * (r + 1) && boxes_left >= ranks_left)
+    if (r < nranks - 1 &&
+        acc >= detail::cumulative_target(total, r + 1, nranks) && boxes_left >= ranks_left)
       ++r;
   }
   return DistributionMapping(std::move(rank));
 }
 
 // Knapsack distribution (LPT): heaviest box -> least loaded rank.
-inline DistributionMapping make_knapsack_distribution(const BoxArray& ba, int nranks) {
+inline DistributionMapping make_knapsack_distribution(
+    const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
+  if (nranks <= 0)
+    throw std::invalid_argument("knapsack load balance requires a positive rank count");
   const int n = ba.size();
   std::vector<int> rank(n, 0);
-  if (n == 0 || nranks <= 1)
+  const auto weights = detail::load_balance_weights(ba, supplied_weights);
+  if (n == 0 || nranks == 1)
     return DistributionMapping(std::move(rank));
 
   std::vector<int> order(n);
   std::iota(order.begin(), order.end(), 0);
-  std::sort(order.begin(), order.end(),
-            [&](int a, int b) { return ba[a].num_cells() > ba[b].num_cells(); });
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    const auto lhs = weights[static_cast<std::size_t>(a)];
+    const auto rhs = weights[static_cast<std::size_t>(b)];
+    return lhs > rhs || (lhs == rhs && a < b);
+  });
 
   std::vector<std::int64_t> load(nranks, 0);
   for (int b : order) {
@@ -109,18 +168,38 @@ inline DistributionMapping make_knapsack_distribution(const BoxArray& ba, int nr
       if (load[q] < load[r])
         r = q;
     rank[b] = r;
-    load[r] += ba[b].num_cells();
+    load[r] += weights[static_cast<std::size_t>(b)];
   }
   return DistributionMapping(std::move(rank));
 }
 
+inline DistributionMapping make_round_robin_distribution(
+    const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
+  if (nranks <= 0)
+    throw std::invalid_argument("round-robin load balance requires a positive rank count");
+  // This baseline policy is intentionally index based.  Authenticate the same weight contract as
+  // weighted policies so invalid requests never pass silently, then leave ownership independent of
+  // the values.
+  (void)detail::load_balance_weights(ba, supplied_weights);
+  return DistributionMapping(ba.size(), nranks);
+}
+
 // Imbalance = max load / average load (1.0 = perfect).
-inline double load_imbalance(const BoxArray& ba, const DistributionMapping& dm, int nranks) {
-  if (nranks <= 0 || ba.size() == 0)
+inline double load_imbalance(const BoxArray& ba, const DistributionMapping& dm, int nranks,
+                             std::span<const std::int64_t> supplied_weights = {}) {
+  if (nranks <= 0)
+    throw std::invalid_argument("load_imbalance requires a positive rank count");
+  if (dm.size() != ba.size())
+    throw std::invalid_argument("load_imbalance mapping size differs from the BoxArray");
+  const auto weights = detail::load_balance_weights(ba, supplied_weights);
+  if (ba.size() == 0)
     return 1.0;
   std::vector<std::int64_t> load(nranks, 0);
-  for (int i = 0; i < ba.size(); ++i)
-    load[dm[i]] += ba[i].num_cells();
+  for (int i = 0; i < ba.size(); ++i) {
+    if (dm[i] < 0 || dm[i] >= nranks)
+      throw std::invalid_argument("load_imbalance mapping contains an invalid owner rank");
+    load[dm[i]] += weights[static_cast<std::size_t>(i)];
+  }
   std::int64_t mx = 0, sum = 0;
   for (std::int64_t l : load) {
     mx = std::max(mx, l);

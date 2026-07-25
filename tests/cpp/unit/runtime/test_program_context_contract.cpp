@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
@@ -66,9 +67,13 @@ void ensure_kokkos() {
 #endif
 }
 
-void add_gas(System& s) {
-  add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
+void add_gas_block(System& s, const std::string& name) {
+  add_compiled_model(s, name, GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
                      "conservative", "explicit", kGamma);
+}
+
+void add_gas(System& s) {
+  add_gas_block(s, "gas");
   s.set_poisson("charge_density", "geometric_mg");
 }
 
@@ -117,7 +122,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   const std::vector<double> U0 = ic(n);
 
   System ref(cfg);
@@ -159,7 +164,7 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   SystemConfig cfg;
   cfg.n = 2;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   System sim(cfg);
   const std::string a_state = "case::block::a::state::U";
   const std::string b_state = "case::block::b::state::U";
@@ -230,6 +235,157 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
       << "an atomic group identity must never alias one of its member rate nodes";
 }
 
+TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  System sim(cfg);
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  ProgramContext ctx(&sim);
+  MultiFab& state = ctx.state(0);
+
+  MultiFab& rhs = ctx.rhs_scratch(41, 0, state);
+  ASSERT_GT(rhs.local_size(), 0);
+  Real* const rhs_storage = rhs.fab(0).array().p;
+  rhs.set_val(Real(9));
+  const AllocationEventStats before_reuse = allocation_event_stats();
+  MultiFab& reused = ctx.rhs_scratch(41, 0, state);
+  const AllocationEventStats after_reuse = allocation_event_stats();
+  EXPECT_EQ(&reused, &rhs);
+  EXPECT_EQ(reused.fab(0).array().p, rhs_storage);
+  EXPECT_EQ(after_reuse.fab_calls, before_reuse.fab_calls);
+  EXPECT_EQ(after_reuse.fab_bytes, before_reuse.fab_bytes);
+  EXPECT_EQ(reused.fab(0).const_array()(reused.box(0).lo[0], reused.box(0).lo[1], 0), Real(0))
+      << "a retry must not observe provisional scratch bytes";
+
+  MultiFab& other_lane = ctx.rhs_scratch(41, 1, state);
+  MultiFab& provisional_state = ctx.scratch_state(41, 0, state);
+  EXPECT_NE(&other_lane, &rhs);
+  EXPECT_NE(&provisional_state, &rhs);
+  if (other_lane.local_size() > 0)
+    EXPECT_NE(other_lane.fab(0).array().p, rhs_storage);
+  if (provisional_state.local_size() > 0)
+    EXPECT_NE(provisional_state.fab(0).array().p, rhs_storage);
+
+  MultiFab wider(state.box_array(), state.dmap(), state.ncomp(), state.n_grow() + 1);
+  const AllocationEventStats before_layout_change = allocation_event_stats();
+  MultiFab& rebound = ctx.rhs_scratch(41, 0, wider);
+  const AllocationEventStats after_layout_change = allocation_event_stats();
+  EXPECT_EQ(rebound.n_grow(), wider.n_grow());
+  EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls)
+      << "an exact layout change must rematerialize the slot";
+}
+
+TEST(ProgramContextContract,
+     SimultaneousNamedFieldWorkspaceIsPersistentSubsetSafeAndTransactional) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  System sim(cfg);
+  add_gas_block(sim, "a");
+  add_gas_block(sim, "b");
+  sim.set_poisson("charge_density", "geometric_mg");
+  sim.set_program_block_map({0, 1});
+  ProgramContext ctx(&sim);
+
+  MultiFab& live_a = ctx.state(0);
+  MultiFab& live_b = ctx.state(1);
+  live_a.set_val(Real(2));
+  live_b.set_val(Real(3));
+  MultiFab stage_a(live_a.box_array(), live_a.dmap(), live_a.ncomp(), live_a.n_grow());
+  MultiFab stage_b(live_b.box_array(), live_b.dmap(), live_b.ncomp(), live_b.n_grow());
+  stage_a.set_val(Real(7));
+  stage_b.set_val(Real(9));
+  ASSERT_GT(live_a.local_size(), 0);
+  ASSERT_GT(live_b.local_size(), 0);
+  Real* const live_a_storage = live_a.fab(0).array().p;
+  Real* const live_b_storage = live_b.fab(0).array().p;
+
+  auto missing_field_solve = [&]() {
+    return ctx.solve_fields_from_blocks(
+        501, "missing-provider", {{0, &stage_a}, {1, &stage_b}});
+  };
+  EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
+  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
+  EXPECT_EQ(live_a.fab(0).const_array()(live_a.box(0).lo[0], live_a.box(0).lo[1], 0), Real(2));
+  EXPECT_EQ(live_b.fab(0).const_array()(live_b.box(0).lo[0], live_b.box(0).lo[1], 0), Real(3));
+
+  const AllocationEventStats before_retry = allocation_event_stats();
+  EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
+  const AllocationEventStats after_retry = allocation_event_stats();
+  EXPECT_EQ(after_retry.fab_calls, before_retry.fab_calls);
+  EXPECT_EQ(after_retry.fab_bytes, before_retry.fab_bytes);
+  EXPECT_EQ(after_retry.communication_calls, before_retry.communication_calls);
+  EXPECT_EQ(after_retry.communication_bytes, before_retry.communication_bytes);
+  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
+
+  // The complete request is validated before the first substitution: neither a cross-owner live
+  // alias nor one wrong ghost footprint may expose a provisional state.
+  EXPECT_THROW(
+      (void)ctx.solve_fields_from_blocks(
+          502, "missing-provider", {{0, &live_b}, {1, &stage_b}}),
+      std::invalid_argument);
+  MultiFab wrong_layout(stage_b.box_array(), stage_b.dmap(), stage_b.ncomp(),
+                        stage_b.n_grow() + 1);
+  EXPECT_THROW(
+      (void)ctx.solve_fields_from_blocks(
+          503, "missing-provider", {{0, &stage_a}, {1, &wrong_layout}}),
+      std::invalid_argument);
+  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
+  EXPECT_EQ(live_a.fab(0).const_array()(live_a.box(0).lo[0], live_a.box(0).lo[1], 0), Real(2));
+  EXPECT_EQ(live_b.fab(0).const_array()(live_b.box(0).lo[0], live_b.box(0).lo[1], 0), Real(3));
+
+  // A Program may own only a subset of a larger System. The exact block map selects System block b,
+  // while the context-owned native vector retains the required System-sized nullptr padding.
+  sim.set_program_block_map({1});
+  MultiFab& subset_live = ctx.state(0);
+  MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
+                        subset_live.n_grow());
+  subset_stage.set_val(Real(11));
+  auto subset_solve = [&]() {
+    return ctx.solve_fields_from_blocks(
+        504, "missing-subset-provider", {{0, &subset_stage}});
+  };
+  EXPECT_THROW((void)subset_solve(), std::runtime_error);
+  const AllocationEventStats before_subset_retry = allocation_event_stats();
+  EXPECT_THROW((void)subset_solve(), std::runtime_error);
+  const AllocationEventStats after_subset_retry = allocation_event_stats();
+  EXPECT_EQ(after_subset_retry.fab_calls, before_subset_retry.fab_calls);
+  EXPECT_EQ(after_subset_retry.communication_calls, before_subset_retry.communication_calls);
+
+  // Replacing the live layout invalidates exactly the affected published-state slot. It is
+  // rematerialized once, then remains persistent for the next retry.
+  subset_live = MultiFab(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
+                         subset_live.n_grow() + 1);
+  subset_live.set_val(Real(5));
+  MultiFab rebound_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
+                         subset_live.n_grow());
+  rebound_stage.set_val(Real(13));
+  const AllocationEventStats before_layout_change = allocation_event_stats();
+  EXPECT_THROW(
+      (void)ctx.solve_fields_from_blocks(
+          504, "missing-subset-provider", {{0, &rebound_stage}}),
+      std::runtime_error);
+  const AllocationEventStats after_layout_change = allocation_event_stats();
+  EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls);
+  const AllocationEventStats before_rebound_retry = allocation_event_stats();
+  EXPECT_THROW(
+      (void)ctx.solve_fields_from_blocks(
+          504, "missing-subset-provider", {{0, &rebound_stage}}),
+      std::runtime_error);
+  const AllocationEventStats after_rebound_retry = allocation_event_stats();
+  EXPECT_EQ(after_rebound_retry.fab_calls, before_rebound_retry.fab_calls);
+  EXPECT_EQ(after_rebound_retry.communication_calls, before_rebound_retry.communication_calls);
+}
+
 // A 2-stage SSP-RK2 (Heun) Program through ProgramContext is bit-equal to a hand-written SSPRK2
 // reference built from the SAME primitives:
 //   U1        = U^n + dt R(U^n)
@@ -243,7 +399,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   const std::vector<double> U0 = ic(n);
 
   // Reference SSPRK2 on the host via solve_fields + eval_rhs (a fresh solve per stage state).
@@ -308,7 +464,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   const std::vector<double> U0 = ic(n);
 
   System sim(cfg);
@@ -415,7 +571,7 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
   SystemConfig cfg;
   cfg.n = 8;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   System sim(cfg);
   add_gas(sim);
   sim.set_program_block_map({0});

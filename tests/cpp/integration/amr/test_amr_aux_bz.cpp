@@ -121,7 +121,7 @@ TEST(test_amr_aux_bz, Runs) {
     const Real dt = Real(0.05);
     // flux nul -> mf_advance_faces = no-op ; mf_apply_source ajoute dt*B_z*u (Euler avant
     // par sous-pas : le fin fait r=2 sous-pas de dt/2). Grossier : 1 pas dt. Fin : 2 pas dt/2.
-    advance_amr(BzGrow{}, L, dom, dt);
+    advance_amr(BzGrow{}, L, dom, dt, Periodicity{true, true});
 
     // grossier : u <- u + dt*c*u = u0*(1 + dt*c). Verifie sur une cellule NON couverte
     // par le fin (coin (0,0)), pour eviter l'ecrasement average_down par le fin.
@@ -168,7 +168,7 @@ TEST(test_amr_aux_bz, Runs) {
     L.push_back(AmrLevelMP{std::move(Uf), &auxf, dxc / 2, dyc / 2});
 
     const Real m0 = sum(L[0].U) * dxc * dyc;
-    advance_amr(AdvectX{Real(1)}, L, dom, Real(0.01));
+    advance_amr(AdvectX{Real(1)}, L, dom, Real(0.01), Periodicity{true, true});
     const Real m1 = sum(L[0].U) * dxc * dyc;
     EXPECT_TRUE(std::fabs(m1 - m0) < Real(1e-12)) << "base_model_mass_conserved_amr";
   }

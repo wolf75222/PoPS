@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops import _pops
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from tests.python.support.native_execution_context import artifact_execution_context
 from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
 from pops.runtime._bound_snapshot import (
@@ -46,11 +48,17 @@ def _bound_snapshot():
 
 def _exact_install_plan():
     fixture = artifact_fixture()
+    native_abi = _pops.abi_key()
+    if not isinstance(native_abi, str) or not native_abi:
+        raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
     for block in fixture.blocks:
         block.model.definition_identity = {
             "protocol": "pops.test.compiled-model-definition.v1",
             "block": block.name,
         }
+        block.model.abi_key = native_abi
+    for row in fixture.layout_programs:
+        row.program.abi_key = native_abi
     artifact = type(fixture)(
         plan=fixture.plan,
         program=fixture.program,
@@ -67,6 +75,7 @@ def _exact_install_plan():
         params=artifact.bind_schema.resolve_bind(
             {}, compile_values=artifact.plan.compile_values),
         aux={},
+        execution_context=artifact_execution_context(artifact),
     )
 
 
@@ -259,6 +268,7 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
     payload = {
         "pops_checkpoint_version": 3, "t": 0.5, "macro_step": 2,
         "abi_key": "test-abi", "state_tracer": np.arange(4, dtype=np.float64),
+        "inactive_level": np.empty((0, 4), dtype=np.float64),
     }
     monkeypatch.setattr("pops.runtime._engine_descriptors.abi_key", lambda: "test-abi")
     restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
@@ -274,7 +284,9 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
 
     assert authenticate_checkpoint_payload(owner, PayloadView(), runtime_kind="uniform") == restart
     assert str(payload[IDENTITY_KEY]) == restart.token
-    assert json.loads(payload[MANIFEST_KEY])["runtime_kind"] == "uniform"
+    manifest = json.loads(payload[MANIFEST_KEY])
+    assert manifest["runtime_kind"] == "uniform"
+    assert manifest["arrays"]["inactive_level"]["shape"] == [0, 4]
 
     payload["state_tracer"] = np.arange(4, dtype=np.float64) + 1.0
     with pytest.raises(ValueError, match="digest mismatch"):

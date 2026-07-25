@@ -9,6 +9,8 @@
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
+#include <Kokkos_Core.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -19,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -36,7 +39,10 @@ struct PreparedTaggerSpec {
   std::size_t maximum_stencil_terms = 0;
   std::size_t maximum_instruction_count = 0;
   std::int32_t non_finite_policy = 0;
-  std::uint32_t interface_version = 1;
+  PopsTaggerExecutionModeV2 execution_mode = POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2;
+  PopsTaggerCollectiveScopeV2 collective_scope = POPS_TAGGER_COLLECTIVE_NONE_V2;
+  std::vector<PopsMemorySpaceV1> memory_spaces;
+  std::uint32_t interface_version = 2;
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
 
@@ -189,8 +195,11 @@ class PreparedTaggerComponent final {
                           std::shared_ptr<component::LoadedComponent> component)
       : spec_(std::move(spec)), component_(std::move(component)) {
     validate_();
-    state_ = component_->prepared_state(POPS_NATIVE_INTERFACE_TAGGER_V1, spec_.interface_version,
-                                        spec_.execution->view());
+    local_execution_ = std::make_shared<const component::PreparedExecutionContextV1>(
+        spec_.execution->without_collective_authority());
+    state_owner_ = component_->prepare_fresh_state(
+        POPS_NATIVE_INTERFACE_TAGGER_V2, spec_.interface_version, local_execution_->view());
+    state_ = state_owner_.get();
   }
 
   [[nodiscard]] const std::string& provider_identity() const noexcept {
@@ -203,7 +212,7 @@ class PreparedTaggerComponent final {
                                double dy, bool periodic_x, bool periodic_y,
                                bool parent_replicated) const {
     static_assert(sizeof(Real) == sizeof(double),
-                  "Tagger ABI v1 requires the binary64 PoPS backend");
+                  "Tagger ABI v2 requires the binary64 PoPS backend");
     PreparedTaggerCandidates result{TagBox(domain), TagBox(domain), TagBox(domain), TagBox(domain)};
     std::string local_failure;
     try {
@@ -214,9 +223,6 @@ class PreparedTaggerComponent final {
       const std::size_t points = static_cast<std::size_t>(domain.num_cells());
       validate_program_(program, fields);
       validate_layout_(fields, domain);
-      for (const auto& field : fields)
-        field.values->sync_host();
-
       std::vector<std::vector<PopsTaggingAxisStencilV1>> abi_axes(program.stencils.size());
       std::vector<PopsTaggingStencilV1> stencils;
       stencils.reserve(program.stencils.size());
@@ -256,20 +262,48 @@ class PreparedTaggerComponent final {
                                              program.equality_policy,
                                              program.conflict_policy,
                                              program.non_finite_policy};
-      const auto& api = component_->table<PopsTaggerApiV1>(POPS_NATIVE_INTERFACE_TAGGER_V1,
+      const auto& api = component_->table<PopsTaggerApiV2>(POPS_NATIVE_INTERFACE_TAGGER_V2,
                                                            spec_.interface_version);
+      const bool native_execution =
+          spec_.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2;
+      const PopsMemorySpaceV1 field_memory_space =
+          native_execution ? native_storage_memory_space_() : POPS_MEMORY_SPACE_HOST_V1;
       MultiFab& reference = *fields.front().values;
       for (int local = 0; local < reference.local_size(); ++local) {
         const Box2D valid = reference.box(local);
         const int global = reference.global_index(local);
         const std::size_t local_points = static_cast<std::size_t>(valid.num_cells());
-        validate_finite_samples_(fields, program, local, valid);
+        std::vector<std::vector<Real>> host_storage;
+        std::vector<ConstArray4> invocation_values;
+        host_storage.reserve(fields.size());
+        invocation_values.reserve(fields.size());
+        for (const auto& field : fields) {
+          const Fab2D& source = field.values->fab(local);
+          const ConstArray4 values = source.const_array();
+          if (native_execution) {
+            invocation_values.push_back(values);
+          } else {
+            // Host execution is a declared provider capability, never an implicit fallback.  Only
+            // this exact mode stages a host image of the state.
+            host_storage.emplace_back(static_cast<std::size_t>(source.size()));
+            using SharedView = Kokkos::View<const Real*, Kokkos::SharedSpace,
+                                            Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+            using HostView = Kokkos::View<Real*, Kokkos::HostSpace,
+                                          Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+            const SharedView shared(values.p, host_storage.back().size());
+            HostView host(host_storage.back().data(), host_storage.back().size());
+            Kokkos::deep_copy(host, shared);
+            invocation_values.push_back(ConstArray4{host.data(), values.nx_tot, values.comp_stride,
+                                                     values.ig0, values.jg0});
+          }
+        }
         std::vector<std::string> patch_identities;
         std::vector<PopsQualifiedConstFieldV1> states;
         patch_identities.reserve(fields.size());
         states.reserve(fields.size());
-        for (const auto& field : fields) {
-          const ConstArray4 values = field.values->fab(local).const_array();
+        for (std::size_t field_index = 0; field_index < fields.size(); ++field_index) {
+          const auto& field = fields[field_index];
+          const ConstArray4 values = invocation_values[field_index];
           patch_identities.push_back(field.qualified_identity + "@level=" + std::to_string(level) +
                                      "/patch=" + std::to_string(global));
           const std::size_t ghosts = static_cast<std::size_t>(field.values->n_grow());
@@ -286,18 +320,34 @@ class PreparedTaggerComponent final {
                                           {ghosts, ghosts, 0},
                                           {ghosts, ghosts, 0},
                                           POPS_SCALAR_FLOAT64_V1,
-                                          POPS_MEMORY_SPACE_HOST_V1,
+                                          field_memory_space,
                                           spec_.layout_identity.c_str(),
                                           patch_identities.back().c_str(),
                                           POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
           states.push_back(PopsQualifiedConstFieldV1{sizeof(PopsQualifiedConstFieldV1), 1,
                                                      field.qualified_identity.c_str(), view});
         }
-        std::array<std::vector<std::uint8_t>, 4> masks{
-            std::vector<std::uint8_t>(local_points, std::uint8_t{0xff}),
-            std::vector<std::uint8_t>(local_points, std::uint8_t{0xff}),
-            std::vector<std::uint8_t>(local_points, std::uint8_t{0xff}),
-            std::vector<std::uint8_t>(local_points, std::uint8_t{0xff})};
+        if (local_points > std::numeric_limits<std::size_t>::max() / 4u)
+          throw std::overflow_error("external AMR Tagger compact mask size overflow");
+        const std::size_t mask_points = 4u * local_points;
+        if (mask_points > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
+          throw std::overflow_error("external AMR Tagger mask launch range overflow");
+        std::vector<std::uint8_t> compact_masks(mask_points, std::uint8_t{0xff});
+        using NativeMask = Kokkos::View<std::uint8_t*, Kokkos::SharedSpace>;
+        NativeMask native_masks;
+        if (native_execution) {
+          native_masks = NativeMask("pops_external_tagger_masks", mask_points);
+          Kokkos::deep_copy(native_masks, std::uint8_t{0xff});
+        }
+        const auto mask_view = [&](std::size_t output) {
+          return PopsTaggerMaskViewV2{
+              sizeof(PopsTaggerMaskViewV2),
+              native_execution ? native_masks.data() + output * local_points
+                               : compact_masks.data() + output * local_points,
+              local_points,
+              field_memory_space,
+              POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+        };
         const PopsLogicalTimeV1 logical_time{sizeof(PopsLogicalTimeV1),
                                              spec_.clock_identity.c_str(),
                                              tick,
@@ -308,8 +358,10 @@ class PreparedTaggerComponent final {
                                              1,
                                              0.0,
                                              physical_time};
-        const PopsTaggerRequestV1 request{
-            sizeof(PopsTaggerRequestV1),
+        const PopsTaggerRequestV2 request{
+            sizeof(PopsTaggerRequestV2),
+            spec_.execution_mode,
+            spec_.collective_scope,
             states.size(),
             states.data(),
             abi_program,
@@ -318,31 +370,55 @@ class PreparedTaggerComponent final {
             {domain.hi[0], domain.hi[1], 0},
             {dx, dy, 0.0},
             static_cast<std::uint32_t>((periodic_x ? 1u : 0u) | (periodic_y ? 2u : 0u)),
-            {sizeof(PopsByteViewV1), masks[0].data(), local_points},
-            {sizeof(PopsByteViewV1), masks[1].data(), local_points},
-            {sizeof(PopsByteViewV1), masks[2].data(), local_points},
-            {sizeof(PopsByteViewV1), masks[3].data(), local_points},
+            mask_view(0),
+            mask_view(1),
+            mask_view(2),
+            mask_view(3),
             logical_time,
-            spec_.execution->view()};
+            local_execution_->view()};
         PopsComponentStatusV1 status = component::unwritten_component_status();
         const int code = component::tag_batch(api, state_, request, status);
         if (!component::component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
             status.action != POPS_COMPONENT_CONTINUE_V1)
           throw std::runtime_error(status.reason == nullptr ? "native AMR Tagger failed"
                                                             : status.reason);
+        if (native_execution) {
+          std::size_t invalid_values = 0;
+          using MaskPolicy = Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace,
+                                                  Kokkos::IndexType<std::int64_t>>;
+          Kokkos::parallel_reduce(
+              "pops_external_tagger_validate_masks",
+              MaskPolicy(0, static_cast<std::int64_t>(mask_points)),
+              KOKKOS_LAMBDA(std::int64_t point, std::size_t& invalid) {
+                invalid += native_masks(static_cast<std::size_t>(point)) > 1u ? 1u : 0u;
+              },
+              invalid_values);
+          if (invalid_values != 0)
+            throw std::runtime_error("native AMR Tagger returned a non-Boolean candidate value");
+          using HostMask = Kokkos::View<std::uint8_t*, Kokkos::HostSpace,
+                                        Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+          HostMask host(compact_masks.data(), mask_points);
+          Kokkos::deep_copy(host, native_masks);
+        } else if (std::any_of(compact_masks.begin(), compact_masks.end(),
+                               [](std::uint8_t value) { return value > 1u; })) {
+          throw std::runtime_error("host AMR Tagger returned a non-Boolean candidate value");
+        }
         std::array<TagBox*, 4> outputs{&result.refine, &result.coarsen, &result.refine_equalities,
                                        &result.coarsen_equalities};
-        for (std::size_t output = 0; output < masks.size(); ++output) {
-          for (std::size_t point = 0; point < local_points; ++point) {
-            if (masks[output][point] > 1u)
-              throw std::runtime_error(
-                  "native AMR Tagger did not write every candidate or returned a non-Boolean "
-                  "value");
-            const int i = valid.lo[0] + static_cast<int>(point % valid.nx());
-            const int j = valid.lo[1] + static_cast<int>(point / valid.nx());
-            (*outputs[output])(i, j) = static_cast<char>(masks[output][point]);
+        const std::size_t patch_width = static_cast<std::size_t>(valid.nx());
+        const std::size_t domain_width = static_cast<std::size_t>(domain.nx());
+        const std::size_t domain_x_offset =
+            static_cast<std::size_t>(valid.lo[0] - domain.lo[0]);
+        for (std::size_t output = 0; output < outputs.size(); ++output)
+          for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
+            const std::size_t patch_row = static_cast<std::size_t>(j - valid.lo[1]);
+            const std::size_t domain_row = static_cast<std::size_t>(j - domain.lo[1]);
+            const auto* source = compact_masks.data() + output * local_points +
+                                 patch_row * patch_width;
+            auto* destination = outputs[output]->t.data() + domain_row * domain_width +
+                                domain_x_offset;
+            std::copy_n(source, patch_width, destination);
           }
-        }
       }
     } catch (const std::exception& error) {
       local_failure = error.what();
@@ -384,33 +460,10 @@ class PreparedTaggerComponent final {
   }
 
  private:
-  static void validate_finite_samples_(const std::vector<PreparedTaggingField>& fields,
-                                       const PreparedTaggingProgram& program, int local,
-                                       const Box2D& valid) {
-    for (const auto& leaf : program.leaves) {
-      const ConstArray4 values = fields[leaf.state_index].values->fab(local).const_array();
-      const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
-                            leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-          if (!gradient) {
-            if (!std::isfinite(static_cast<double>(values(i, j, static_cast<int>(leaf.component)))))
-              throw std::runtime_error(
-                  "external AMR Tagger rejected a non-finite indicator sample");
-            continue;
-          }
-          const auto& stencil = program.stencils[leaf.stencil_index];
-          for (const auto& axis : stencil.axes)
-            for (const int offset : axis.offsets) {
-              const int x = axis.axis == 0 ? i + offset : i;
-              const int y = axis.axis == 1 ? j + offset : j;
-              if (!std::isfinite(
-                      static_cast<double>(values(x, y, static_cast<int>(leaf.component)))))
-                throw std::runtime_error(
-                    "external AMR Tagger rejected a non-finite gradient sample");
-            }
-        }
-    }
+  static PopsMemorySpaceV1 native_storage_memory_space_() noexcept {
+    if constexpr (std::is_same_v<Kokkos::SharedSpace, Kokkos::HostSpace>)
+      return POPS_MEMORY_SPACE_HOST_V1;
+    return POPS_MEMORY_SPACE_MANAGED_V1;
   }
 
   void validate_program_(const PreparedTaggingProgram& program,
@@ -494,8 +547,33 @@ class PreparedTaggerComponent final {
         spec_.maximum_instruction_count == 0 ||
         spec_.maximum_instruction_count > POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 ||
         spec_.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
-        spec_.interface_version != 1)
+        (spec_.execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
+         spec_.execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) ||
+        spec_.collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
+        spec_.memory_spaces.empty() || spec_.interface_version != 2)
       throw std::invalid_argument("prepared AMR Tagger specification is incomplete");
+    std::vector<PopsMemorySpaceV1> memory_spaces = spec_.memory_spaces;
+    std::sort(memory_spaces.begin(), memory_spaces.end());
+    if (std::adjacent_find(memory_spaces.begin(), memory_spaces.end()) != memory_spaces.end() ||
+        std::any_of(memory_spaces.begin(), memory_spaces.end(), [](PopsMemorySpaceV1 space) {
+          return space != POPS_MEMORY_SPACE_HOST_V1 &&
+                 space != POPS_MEMORY_SPACE_MANAGED_V1 &&
+                 space != POPS_MEMORY_SPACE_DEVICE_V1;
+        }))
+      throw std::invalid_argument("prepared AMR Tagger declares invalid memory spaces");
+    if (spec_.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2) {
+      if (memory_spaces != std::vector<PopsMemorySpaceV1>{POPS_MEMORY_SPACE_HOST_V1})
+        throw std::invalid_argument(
+            "prepared host AMR Tagger must declare exactly HostSpace execution");
+    } else {
+      const PopsMemorySpaceV1 storage_space = native_storage_memory_space_();
+      const PopsExecutionContextV1 execution = spec_.execution->view();
+      if (execution.memory_space != storage_space ||
+          std::find(memory_spaces.begin(), memory_spaces.end(), storage_space) ==
+              memory_spaces.end())
+        throw std::invalid_argument(
+            "prepared native AMR Tagger does not match the runtime field memory space");
+    }
     std::vector<std::string> stencil_routes = spec_.indicator_stencil_routes;
     std::sort(stencil_routes.begin(), stencil_routes.end());
     if (std::adjacent_find(stencil_routes.begin(), stencil_routes.end()) != stencil_routes.end() ||
@@ -515,13 +593,15 @@ class PreparedTaggerComponent final {
         spec_.component_id != api.component_id || spec_.manifest_identity != api.manifest_identity)
       throw std::invalid_argument("prepared AMR Tagger changed native component identity");
     component::require_operation(
-        component_->table<PopsTaggerApiV1>(POPS_NATIVE_INTERFACE_TAGGER_V1, spec_.interface_version)
+        component_->table<PopsTaggerApiV2>(POPS_NATIVE_INTERFACE_TAGGER_V2, spec_.interface_version)
                 .tag_batch != nullptr,
         "tag_batch");
   }
 
   PreparedTaggerSpec spec_;
   std::shared_ptr<component::LoadedComponent> component_;
+  std::shared_ptr<const component::PreparedExecutionContextV1> local_execution_;
+  component::LoadedComponent::PreparedState state_owner_;
   void* state_ = nullptr;
 };
 

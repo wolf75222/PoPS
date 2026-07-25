@@ -32,13 +32,13 @@ def test_bc_strings_and_bad_types_are_rejected():
 @requires_engine
 def test_set_poisson_rejects_string_bc():
     with pytest.raises(TypeError, match="string selectors"):
-        System(n=8, L=1.0, periodic=False).set_poisson(bc="dirichlet")
+        System(n=8, L=1.0, periodicity=(False, False)).set_poisson(bc="dirichlet")
 
 
 @requires_engine
 def test_amr_set_poisson_uses_the_same_typed_contract():
     from pops.mesh.geometry import Disc
-    system = AmrSystem(n=8, L=1.0, periodic=False, regrid_every=0)
+    system = AmrSystem(n=8, L=1.0, periodicity=(False, False), regrid_every=0)
     with pytest.raises(TypeError, match="string selectors"):
         system.set_poisson(bc="dirichlet")
     with pytest.raises(TypeError, match="string selectors"):
@@ -49,7 +49,7 @@ def test_amr_set_poisson_uses_the_same_typed_contract():
 @requires_engine
 def test_set_poisson_typed_bc_executes():
     from pops.mesh.geometry import Disc
-    system = System(n=8, L=1.0, periodic=False)
+    system = System(n=8, L=1.0, periodicity=(False, False))
     system.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
     assert system.poisson_solver() == "geometric_mg"
 

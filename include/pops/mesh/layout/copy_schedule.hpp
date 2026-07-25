@@ -28,6 +28,8 @@
 
 namespace pops {
 
+struct CopyExchangeStorage;
+
 /// One redistribution copy: the overlap @p region of dst box @p gd is filled from the SAME-index
 /// region of src box @p gs (no shift: parallel_copy is a same-domain redistribution). @p gs and @p
 /// gd are GLOBAL box indices (into the src / dst BoxArray respectively), resolved to local fabs when
@@ -41,9 +43,9 @@ struct CopyJob {
 /// A src-layout fingerprint: the src BoxArray boxes AND the src DistributionMapping ranks. The
 /// schedule depends on both (which src box overlaps which dst box, and who owns each), so both are
 /// part of the key. Compared by exact vector equality (not a hash) so a fingerprint collision can
-/// never serve a wrong plan; the vectors are small (one entry per src box). @p nc is deliberately
-/// ABSENT: the region jobs are geometry-only and the component count is supplied at replay (via
-/// min(dst.ncomp, src.ncomp)), exactly like HaloSchedule.
+/// never serve a wrong plan; the vectors are small (one entry per src box). Component width and
+/// communicator identity live on CopySchedule itself so changing either cannot reuse communication
+/// preparation from a different native contract.
 struct SrcLayoutKey {
   std::vector<Box2D> boxes;  // src BoxArray boxes (order significant, = global index)
   std::vector<int> ranks;    // src DistributionMapping owner-rank per box
@@ -57,13 +59,20 @@ struct SrcLayoutKey {
 /// src are owned by this rank; @p send[r]/@p recv[r] hold the jobs exchanged with rank r (both empty
 /// unless built under MPI with n_ranks() > 1). @p key fingerprints the SRC layout it was built for;
 /// the DST layout is implicit because the plan is stored on the dst MultiFab that owns the dst
-/// BoxArray/DistributionMapping (see CopyScheduleCache). The jobs carry only Box2D regions, so the
-/// plan is INDEPENDENT of ncomp (the component count is supplied at replay).
+/// BoxArray/DistributionMapping (see CopyScheduleCache). Although the geometry jobs do not depend
+/// on ncomp, the cache identity deliberately does because its prepared buffers do.
 struct CopySchedule {
   SrcLayoutKey key;
+  int ncomp = 0;
+  int communicator_size = 1;
+  int communicator_rank = 0;
+  std::int64_t communicator_identity = 0;
+  int message_tag = 0;
   std::vector<CopyJob> local;
   std::vector<std::vector<CopyJob>> send;  // [rank]; empty unless MPI && n_ranks() > 1
   std::vector<std::vector<CopyJob>> recv;  // [rank]
+  std::vector<std::int64_t> send_cells;    // [rank], before multiplication by ncomp
+  std::vector<std::int64_t> recv_cells;    // [rank], before multiplication by ncomp
 };
 
 /// Small per-MultiFab cache of copy schedules, one entry per distinct SRC layout. In practice a dst
@@ -79,32 +88,54 @@ class CopyScheduleCache {
  public:
   /// Existing schedule whose SRC-layout fingerprint matches (sba, sdm), or nullptr if none is
   /// cached yet.
-  std::shared_ptr<const CopySchedule> find(const BoxArray& sba,
-                                           const DistributionMapping& sdm) const {
+  std::shared_ptr<const CopySchedule> find(const BoxArray& sba, const DistributionMapping& sdm,
+                                           int ncomp, int communicator_size,
+                                           int communicator_rank,
+                                           std::int64_t communicator_identity,
+                                           int message_tag) const {
     for (const auto& s : entries_) {
-      if (s->key.matches(sba, sdm)) {
+      if (s->key.matches(sba, sdm) && s->ncomp == ncomp &&
+          s->communicator_size == communicator_size &&
+          s->communicator_rank == communicator_rank &&
+          s->communicator_identity == communicator_identity &&
+          s->message_tag == message_tag) {
         return s;
       }
     }
     return nullptr;
   }
 
-  /// Appends a fresh, empty schedule and returns it for the caller to populate.
-  std::shared_ptr<CopySchedule> add() {
-    entries_.push_back(std::make_shared<CopySchedule>());
-    return entries_.back();
+  /// Reserve publication capacity during collective preparation. Once this succeeds on every
+  /// rank, publish_prepared() cannot allocate and the freshly built plan becomes visible
+  /// transactionally only after the common success witness.
+  void reserve_for_append() { entries_.reserve(entries_.size() + 1u); }
+
+  void publish_prepared(std::shared_ptr<CopySchedule> schedule) noexcept {
+    entries_.push_back(std::move(schedule));
   }
 
   /// Drops every cached schedule, forcing a rebuild on the next parallel_copy. Used by tests to
   /// compare the cached path against a fresh rebuild; not needed in production (regrid drops the
   /// whole cache by reassigning the dst MultiFab).
-  void clear() { entries_.clear(); }
+  void clear() {
+    entries_.clear();
+    exchange_pool_.clear();
+  }
 
   /// Number of cached schedules (test/instrumentation hook).
   std::size_t size() const { return entries_.size(); }
+  std::size_t exchange_pool_size() const { return exchange_pool_.size(); }
+
+  /// Borrow communication storage prepared for one exact schedule, provider width, and MPI
+  /// communicator context. Concurrent calls receive distinct leases; sequential calls on a stable
+  /// layout/lane reuse pinned buffer and MPI_Request capacity.
+  std::shared_ptr<CopyExchangeStorage> acquire_exchange(
+      const std::shared_ptr<const CopySchedule>& schedule, int ncomp,
+      std::int64_t communicator_identity);
 
  private:
   std::vector<std::shared_ptr<CopySchedule>> entries_;
+  std::vector<std::shared_ptr<CopyExchangeStorage>> exchange_pool_;
 };
 
 namespace detail {

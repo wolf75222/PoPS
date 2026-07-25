@@ -23,6 +23,7 @@ from tests.python.integration._final_field_program import (
     resolve_periodic_field_program,
     scalar_advection_field_model,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader, pytest.mark.kokkos]
@@ -197,7 +198,10 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     resolved = _resolve(solver)
     artifact = pops.compile(resolved)
 
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     report = pops.run(simulation, t_end=2.0 * _DT, max_steps=2)
 
     assert report.accepted_steps == 2

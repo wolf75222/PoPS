@@ -11,6 +11,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <vector>
 
@@ -23,22 +24,22 @@ static int pops_run_test_mpi_array_reduce(int argc, char** argv) {
 
   // chaque rang contribue (me+1)*(i+1) ; la somme attendue est S*(i+1) avec
   // S = sum_{r=1..np} r = np(np+1)/2 (invariant du nombre de rangs cote resultat).
-  const int n = 17;
+  const std::size_t n = 17;
   std::vector<double> buf(n);
-  for (int i = 0; i < n; ++i)
+  for (std::size_t i = 0; i < n; ++i)
     buf[i] = double(me + 1) * (i + 1);
   all_reduce_sum_inplace(buf.data(), n);
 
   const double S = double(np) * (np + 1) / 2.0;
-  for (int i = 0; i < n; ++i)
+  for (std::size_t i = 0; i < n; ++i)
     if (std::fabs(buf[i] - S * (i + 1)) > 1e-9) {
       ++fails;
       if (me == 0)
-        std::printf("FAIL i=%d : %.3f != %.3f\n", i, buf[i], S * (i + 1));
+        std::printf("FAIL i=%zu : %.3f != %.3f\n", i, buf[i], S * (i + 1));
     }
 
   // n <= 0 : no-op sans crash (buffer nul autorise).
-  all_reduce_sum_inplace(nullptr, 0);
+  all_reduce_sum_inplace(nullptr, std::size_t{0});
 
   if (me == 0) {
     if (fails == 0)

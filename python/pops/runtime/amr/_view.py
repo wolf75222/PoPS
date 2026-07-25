@@ -79,10 +79,11 @@ class AmrRuntimeView:
         """Per-level patch census from patch_boxes() + patch_rectangles(), level 0 = base box."""
         s = self._sim._s
         n_levels = int(s.n_levels())
-        base_n = int(s.nx())
+        base_nx, base_ny = int(s.nx()), int(s.ny())
         # Level 0: the coarse base covers the whole domain; report it as one covering box.
         levels = {
-            0: {"level": 0, "n_patches": 1, "cells": base_n * base_n, "boxes": [], "rectangles": []}
+            0: {"level": 0, "n_patches": 1, "cells": base_nx * base_ny,
+                "boxes": [], "rectangles": []}
         }
         for lvl in range(1, n_levels):
             levels[lvl] = {"level": lvl, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []}
@@ -103,13 +104,19 @@ class AmrRuntimeView:
     def patch_table(self) -> Any:
         """Return a :class:`PatchReport` of the live patches + coarse box distribution."""
         coarse_local, coarse_total = self._coarse_boxes()
+        bounds = (
+            (self._sim._xlo, self._sim._ylo),
+            (self._sim._xlo + self._sim._L, self._sim._ylo + self._sim._Ly),
+        )
         if not self._is_built():
             return PatchReport(
-                built=False, n_levels=None, base_n=None, domain_l=self._sim._L, per_level=[],
+                built=False, n_levels=None, base_cells=(self._sim._s.nx(), self._sim._s.ny()),
+                domain_bounds=bounds, per_level=[],
                 coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
         return PatchReport(
-            built=True, n_levels=int(self._sim._s.n_levels()), base_n=int(self._sim._s.nx()),
-            domain_l=self._sim._L, per_level=self._per_level(),
+            built=True, n_levels=int(self._sim._s.n_levels()),
+            base_cells=(int(self._sim._s.nx()), int(self._sim._s.ny())),
+            domain_bounds=bounds, per_level=self._per_level(),
             coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
 
     def explain_regrid(self) -> Any:

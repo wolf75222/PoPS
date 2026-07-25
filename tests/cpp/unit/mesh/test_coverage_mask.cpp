@@ -35,3 +35,15 @@ TEST(test_coverage_mask, mark_and_query_progression) {
   EXPECT_TRUE(m.covered(18, 7) && m.covered(20, 8)) << "clip_dedans";
   EXPECT_TRUE(!m.covered(21, 8) && !m.covered(20, 9)) << "clip_pas_de_debordement";
 }
+
+TEST(test_coverage_mask, sparse_storage_is_independent_of_region_span) {
+  CoverageMask mask(Box2D{{-1000000000, -1000000000}, {1000000000, 1000000000}});
+  mask.mark(Box2D{{-1000000000, -1000000000}, {-1000000000, -1000000000}});
+  mask.mark(Box2D{{1000000000, 1000000000}, {1000000000, 1000000000}});
+
+  EXPECT_EQ(mask.covered_cell_count(), 2u);
+  EXPECT_LE(mask.lookup_capacity(), 4u);
+  EXPECT_TRUE(mask.covered(-1000000000, -1000000000));
+  EXPECT_TRUE(mask.covered(1000000000, 1000000000));
+  EXPECT_FALSE(mask.covered(0, 0));
+}

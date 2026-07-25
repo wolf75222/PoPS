@@ -59,6 +59,18 @@
   "native_common_abi_version": 1,
   "tagging_program_abi": {
     "version": 1,
+    "execution_modes": {
+      "native_backend": 1,
+      "host": 2
+    },
+    "collective_scopes": {
+      "none": 0
+    },
+    "memory_spaces": [
+      "host",
+      "managed",
+      "device"
+    ],
     "leaf_opcodes": {
       "above": 1,
       "below": 2,
@@ -120,8 +132,8 @@
       "id": 3,
       "name": "tagger",
       "uri": "pops://interfaces/tagger",
-      "version": 1,
-      "cpp_table": "PopsTaggerApiV1",
+      "version": 2,
+      "cpp_table": "PopsTaggerApiV2",
       "hot_path": true,
       "facets": ["lowering", "fallible_evaluation"],
       "operations": ["tag_batch"]
@@ -509,7 +521,8 @@
             "provider_pack",
             "stability_bound",
             "pressure",
-            "euler_2d_layout"
+            "euler_2d_layout",
+            "no_hllc_star_state"
           ],
           "limitations": [
             "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
@@ -532,7 +545,8 @@
             "provider_pack",
             "stability_bound",
             "pressure",
-            "euler_2d_layout"
+            "euler_2d_layout",
+            "no_roe_dissipation"
           ],
           "limitations": [
             "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
@@ -560,8 +574,10 @@
           "requirements": [],
           "limitations": [],
           "aliases": [],
-          "metadata": {
-            "n_ghost": 1
+        "metadata": {
+          "n_ghost": 1,
+          "formal_order": 1,
+          "muscl_compatible": false
           }
         },
         {
@@ -572,8 +588,10 @@
           "requirements": [],
           "limitations": [],
           "aliases": [],
-          "metadata": {
-            "n_ghost": 2
+        "metadata": {
+          "n_ghost": 2,
+          "formal_order": 2,
+          "muscl_compatible": true
           }
         },
         {
@@ -584,22 +602,26 @@
           "requirements": [],
           "limitations": [],
           "aliases": [],
-          "metadata": {
-            "n_ghost": 2
+        "metadata": {
+          "n_ghost": 2,
+          "formal_order": 2,
+          "muscl_compatible": true
           }
         },
         {
           "token": "weno5",
           "wire_id": 3,
           "cpp_id": "kWeno5",
-          "native_entry": "pops::Weno5Z",
+        "native_entry": "pops::Weno5",
           "requirements": [
             "3-cell halo"
           ],
           "limitations": [],
           "aliases": [],
-          "metadata": {
-            "n_ghost": 3
+        "metadata": {
+          "n_ghost": 3,
+          "formal_order": 5,
+          "muscl_compatible": false
           }
         }
       ]

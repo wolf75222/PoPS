@@ -88,7 +88,7 @@ static int pops_run_test_coupled_source_stack_limit(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   // (1) at EXACTLY kCsMaxStack consecutive PushReg (no operator), validate_cs_program_stack's own
   // "leaves exactly one result" check rejects it FIRST (sp == kCsMaxStack != 1) -- so this shape never

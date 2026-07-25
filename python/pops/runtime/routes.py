@@ -15,8 +15,9 @@ this module contains behavior only and cannot drift into a second registry.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable
 
 from ._generated_component_routes import (
     CAPABILITY_VOCAB_VERSION as CAPABILITY_VOCAB_VERSION,
@@ -291,78 +292,96 @@ TIME_IMEXRK_ARS222 = _REGISTRY["time"]["imexrk_ars222"]
 # ["<name>"] directly where a one-off id is needed).
 SOURCE_MAGNETIC = _REGISTRY["source"]["magnetic"]
 
-def euler_layout_ok(compiled: Any, flux: Any) -> bool:
-    """True when @p compiled is a canonical 4-variable Euler transport (n_vars == 4 + primitive 'p')
-    that did NOT emit the generic capability for @p flux -- the acceptance test for the explicit
-    euler_hllc / euler_roe routes (ADC-590). Shared by the System and unified install guards."""
-    emitted = getattr(compiled, "has_hllc" if flux in ("euler_hllc", "hllc") else "has_roe", False)
-    return (getattr(compiled, "n_vars", 0) == 4
-            and "p" in getattr(compiled, "prim_names", []) and not emitted)
+@dataclass(frozen=True, slots=True)
+class _ModelRequirementPredicate:
+    """Runtime meaning of one standardized descriptor requirement token."""
+
+    accepts: Callable[[Any], bool]
+    refusal: str
 
 
-# ADC-642: the ONE per-flux capability-gate catalog. A generic capability-backed Riemann flux is
-# one row {token: (model_flag, capability_token, enable_hint, euler_route)}; the explicit canonical-
-# Euler routes map to their generic counterpart. check_riemann_capability, the System / AMR / unified
-# install guards and pops.numerics.riemann.availability all read THIS -- no per-flux branch re-listing.
-_RIEMANN_CAPABILITY_GATES = {
-    "hllc": ("has_hllc", "hllc_star_state", "m.enable_hllc()", "EulerHLLC2D()"),
-    "roe": ("has_roe", "roe_dissipation", "m.enable_roe()", "EulerRoe2D()"),
-}
-_EULER_ROUTE_GENERIC = {"euler_hllc": "hllc", "euler_roe": "roe"}
+_RIEMANN_MODEL_REQUIREMENT_PREDICATES = MappingProxyType({
+    "wave_speeds": _ModelRequirementPredicate(
+        lambda model: bool(getattr(model, "has_wave_speeds", False)),
+        "requires signed wave speeds: declare Model.wave_speeds(...) with one signed pair per "
+        "typed axis (without pressure), or a primitive 'p' (m.primitive('p', ...))",
+    ),
+    "hllc_star_state": _ModelRequirementPredicate(
+        lambda model: bool(getattr(model, "has_hllc", False)),
+        "requires model capability 'hllc_star_state': call m.enable_hllc() on a generic model "
+        "with fluid roles and primitive 'p'",
+    ),
+    "roe_dissipation": _ModelRequirementPredicate(
+        lambda model: bool(getattr(model, "has_roe", False)),
+        "requires model capability 'roe_dissipation': call m.enable_roe(), "
+        "m.roe_dissipation(...), or m.roe_from_jacobian(...) on the model",
+    ),
+    "euler_2d_layout": _ModelRequirementPredicate(
+        lambda model: (
+            getattr(model, "n_vars", 0) == 4
+            and "p" in getattr(model, "prim_names", ())
+        ),
+        "requires a canonical 4-variable Euler transport (n_vars == 4, primitive 'p', "
+        "layout rho/rho_u/rho_v/E)",
+    ),
+    "no_hllc_star_state": _ModelRequirementPredicate(
+        lambda model: not bool(getattr(model, "has_hllc", False)),
+        "requires absence of the generic 'hllc_star_state' capability; select a provider whose "
+        "contract consumes that capability",
+    ),
+    "no_roe_dissipation": _ModelRequirementPredicate(
+        lambda model: not bool(getattr(model, "has_roe", False)),
+        "requires absence of the generic 'roe_dissipation' capability; select a provider whose "
+        "contract consumes that capability",
+    ),
+})
 
 
-def check_riemann_capability(flux: Any, compiled: Any, ctx: Any) -> None:
-    """Gate the selected Riemann flux against the model's emitted capabilities (ADC-590).
+def check_riemann_requirement_contract(
+    contract: Any, compiled: Any, ctx: Any, *, flux: Any,
+) -> None:
+    """Validate descriptor-owned model requirements without recognising a flux route.
 
-    Shared by System.add_equation and AmrSystem.add_equation (@p flux is a Route or a bare wire
-    token; both compare equal to the token string). Generic hllc/roe are GENERIC-ONLY now: the
-    model MUST carry the capability (``has_hllc`` / ``has_roe``). The canonical 4-variable Euler
-    layout is served by the EXPLICIT euler_hllc / euler_roe routes, which require n_vars == 4 +
-    primitive 'p' and REFUSE a model that emitted the generic capability (no ambiguity). Raises
-    ``ValueError`` with a @p ctx-prefixed message that names the missing capability and both
-    remedies. Reads the ADC-642 :data:`_RIEMANN_CAPABILITY_GATES` catalog (one row per flux). HLL
-    keeps its own wave-speeds guard at the call-site; the ADC-552 provider cross-check rides through
-    :func:`pops.numerics.riemann.waves.check_hll_waves` at the call site (routes.py stays import-free
-    of the pops package).
+    The capability contract is created from the typed numerical-flux descriptor and retained by
+    the private ``Spatial`` adapter.  A builtin and an external C++ provider therefore take the
+    same path.  This gate deliberately switches on capability vocabulary, not on a class, factory
+    or native wire token.
     """
-    def _tail() -> str:
-        return ("[requested route %s -> %s; requires: %s]"
-                % (getattr(flux, "id", flux), getattr(flux, "native_entry", "?"),
-                   ", ".join(getattr(flux, "requirements", ()))))
-    gate = _RIEMANN_CAPABILITY_GATES.get(flux)
-    if gate is not None:
-        model_flag, cap, enable, euler = gate
-        if not getattr(compiled, model_flag, False):
+    from pops.numerics.riemann._contract import RiemannCapabilityContract
+
+    if type(contract) is not RiemannCapabilityContract:
+        raise TypeError("Riemann installation requires an exact capability contract")
+    if contract.wave_speed_provider is not None:
+        from pops.numerics.riemann.waves import check_hll_waves
+
+        check_hll_waves(contract.wave_speed_provider, compiled, ctx)
+    route = getattr(flux, "id", None) or getattr(flux, "name", None) or str(flux)
+    native = getattr(flux, "native_entry", None) or getattr(flux, "native_id", None) or "?"
+    for requirement in contract.required_capabilities:
+        predicate = _RIEMANN_MODEL_REQUIREMENT_PREDICATES.get(requirement)
+        if predicate is not None and not predicate.accepts(compiled):
             raise ValueError(
-                "%s: riemann '%s' requires the model capability '%s': call %s on a generic model "
-                "(roles + primitive 'p'), or select the explicit canonical Euler route riemann=%s "
-                "for a 4-variable Euler (rho,rho_u,rho_v,E) transport; otherwise use "
-                "riemann='rusanov' %s" % (ctx, flux, cap, enable, euler, _tail()))
-    if flux in _EULER_ROUTE_GENERIC and not euler_layout_ok(compiled, flux):
-        generic = _EULER_ROUTE_GENERIC[flux]
-        raise ValueError(
-            "%s: riemann '%s' requires a canonical 4-variable Euler transport (n_vars == 4, "
-            "primitive 'p', layout rho/rho_u/rho_v/E) and NO emitted generic capability; for a "
-            "generic model that called m.enable_hllc()/m.enable_roe() use riemann='%s' instead; "
-            "for a non-Euler model use riemann='rusanov'/'hll' %s"
-            % (ctx, flux, generic, _tail()))
+                "%s: Riemann provider %r %s; otherwise select a provider whose declared model "
+                "requirements match the compiled model [requirement: %s; requested route %s -> %s]"
+                % (ctx, route, predicate.refusal, requirement, route, native))
 
 
-def riemann_missing_capabilities(flux) -> list:
-    """The capability token(s) a model must emit for @p flux (report / availability surface).
+def riemann_missing_capabilities(contract: Any, compiled: Any) -> list:
+    """Return only descriptor requirements the concrete model does not satisfy.
 
-    Reads the ADC-642 :data:`_RIEMANN_CAPABILITY_GATES` catalog; the availability report
-    (:func:`pops.numerics.riemann.availability.flux_available`) reads this instead of re-listing the
-    per-flux capability strings.
+    Availability is evidence about one model, not a copy of the provider manifest.  Reporting every
+    standardized requirement as missing made a partially capable model look less capable than it
+    was (for example HLLC could report ``wave_speeds`` missing when only its star state was absent).
     """
-    gate = _RIEMANN_CAPABILITY_GATES.get(flux)
-    if gate is not None:
-        return [gate[1]]
-    if flux in _EULER_ROUTE_GENERIC:
-        return ["euler_2d_layout"]
-    if flux == "hll":
-        return ["wave_speeds"]
-    return []
+    from pops.numerics.riemann._contract import RiemannCapabilityContract
+
+    if type(contract) is not RiemannCapabilityContract:
+        raise TypeError("Riemann availability requires an exact capability contract")
+    return [
+        requirement for requirement in contract.required_capabilities
+        if requirement in _RIEMANN_MODEL_REQUIREMENT_PREDICATES
+        and not _RIEMANN_MODEL_REQUIREMENT_PREDICATES[requirement].accepts(compiled)
+    ]
 
 
 def check_wave_speed_provider(requested_kind: Any, compiled: Any, ctx: Any,
@@ -408,5 +427,5 @@ def _provider_factory(kind: Any) -> str:
 
 __all__ = ["Route", "resolve", "routes_of", "route_manifest", "component_manifests",
            "component_routes", "component_registry_snapshot",
-           "check_riemann_capability",
-           "check_wave_speed_provider", "euler_layout_ok", "riemann_missing_capabilities"]
+           "check_riemann_requirement_contract", "check_wave_speed_provider",
+           "riemann_missing_capabilities"]

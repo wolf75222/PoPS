@@ -21,6 +21,9 @@ PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
 TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
 PACKAGE_CONFIG = (ROOT / "cmake" / "popsConfig.cmake.in").read_text(encoding="utf-8")
+NATIVE_DSO_COMPILER = (
+    ROOT / "tests" / "cpp" / "support" / "native_dso_compiler.hpp"
+).read_text(encoding="utf-8")
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -140,14 +143,19 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
         "pops_dev_options",
         "_pops_EXPORTS",
         "POPS_HEADER_SIG=\"${POPS_NATIVE_HEADER_SIGNATURE}\"",
-        "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>",
-        ":-O0>",
     )
     missing = [fact for fact in required if fact not in SRC_CMAKE]
     assert not missing, "central runtime targets lost compile-contract facts: " + str(missing)
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_test_tu") == 1
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_module_tu") == 1
     assert "elseif(POPS_BUILD_PYTHON)" in SRC_CMAKE
+    assert "target_compile_options(${_runtime_target} PUBLIC" not in SRC_CMAKE
+
+    # Only test executables receive the fast -O0 override.  Central runtime objects keep the same
+    # optimized code path exercised by installed Python/C++ consumers.
+    assert 'option(POPS_TESTS_FAST_O0 "Compile test executables at -O0' in TESTS_CMAKE
+    assert "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>" in TESTS_CMAKE
+    assert ":-O0>" in TESTS_CMAKE
 
     assert "pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL}" in ROOT_CMAKE
     assert "POPS_HEAVY_MODULE_TU_POOL" not in SRC_CMAKE
@@ -159,3 +167,39 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
     for name in ("ci-kokkos", "ci-mpi"):
         assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "1"
         assert "POPS_HEAVY_MODULE_TU_POOL" not in configure_presets[name]["cacheVariables"]
+
+
+def test_runtime_compiled_test_dsos_replay_the_complete_native_mpi_contract():
+    for authority in (
+        "POPS_NATIVE_MPI_ABI",
+        "POPS_NATIVE_MPI_INCLUDE",
+        "POPS_NATIVE_MPI_COMPILE_OPTIONS",
+        "POPS_NATIVE_MPI_COMPILE_DEFINITIONS",
+        "POPS_NATIVE_MPI_LINK_OPTIONS",
+        "POPS_NATIVE_MPI_LINK_LIBRARIES",
+    ):
+        assert authority in TESTS_CMAKE
+    for replay in (
+        "POPS_TEST_MPI_ABI",
+        "POPS_TEST_MPI_INCLUDE",
+        "POPS_TEST_MPI_COMPILE_OPTIONS",
+        "POPS_TEST_MPI_COMPILE_DEFINITIONS",
+        "POPS_TEST_MPI_LINK_OPTIONS",
+        "POPS_TEST_MPI_LINK_LIBRARIES",
+        "POPS_TEST_HEADER_SIG",
+        "POPS_HAS_MPI",
+        "POPS_MPI_ABI",
+        "POPS_HEADER_SIG",
+    ):
+        assert replay in NATIVE_DSO_COMPILER
+    for forwarded in (
+        "POPS_TEST_MPI_ABI",
+        "POPS_TEST_MPI_INCLUDE",
+        "POPS_TEST_MPI_COMPILE_OPTIONS",
+        "POPS_TEST_MPI_COMPILE_DEFINITIONS",
+        "POPS_TEST_MPI_LINK_OPTIONS",
+        "POPS_TEST_MPI_LINK_LIBRARIES",
+        "POPS_TEST_HEADER_SIG",
+    ):
+        assert forwarded in TESTS_CMAKE
+    assert 'POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}"' in TESTS_CMAKE

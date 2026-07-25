@@ -257,9 +257,9 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     # which alloc_scalar_field already shapes PER LEVEL on AmrProgramContext -- no redirect needed there.
     body = [
         "ctx.fill_boundary(%s);" % _deref(phi_n_var),
-        "pops::MultiFab %s = ctx.alloc_scalar_field(1, 0);" % lap,
+        "pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, rhs),
         "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)),
-        "pops::MultiFab %s = ctx.alloc_scalar_field(1, 0);" % negl,
+        "pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, rhs),
         # -Lap phi^n: negate the bare Laplacian (one inline kernel, no coupling/schur NegateKernel).
         "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
         "  const pops::Array4 nlA = %s.fab(li).array();" % negl,
@@ -268,7 +268,8 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "    nlA(i, j, 0) = -lapA(i, j, 0);",
         "  });",
         "}",
-        "pops::MultiFab %s = ctx.alloc_scalar_field(2, 1);  // F = M^-1 (mx, my), 1 ghost for div" % fx,
+        "pops::MultiFab& %s = ctx.scalar_scratch(%d, 2, %s, 2, 1);  // F = M^-1 (mx, my), 1 ghost for div"
+        % (fx, uid, rhs),
         'pops::MultiFab& %s = ctx.assembly_target(%s, "pops.tensor-elliptic.flux");' % (fxW, fx),
     ]
     _emit_condensed_flux_kernel(body, uid, impl, jblock, th_dt_cpp, subset, fxW, state_var)

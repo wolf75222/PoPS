@@ -25,6 +25,7 @@ from pops.mesh import (
 from pops.model import ComponentManifest
 from pops.time import FixedDt, StagePoint, TimePoint
 from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.native_execution_context import artifact_execution_context
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 DT = 1.0e-3
@@ -172,6 +173,24 @@ def _initial(n: int, phase: float) -> np.ndarray:
     return (1.0 + 0.25 * np.sin(2.0 * np.pi * (xx + phase)) * np.cos(2.0 * np.pi * yy))[None, :, :]
 
 
+def _field_descriptor(values, *, layout_id, patch):
+    array = np.ascontiguousarray(values, dtype=np.float64)
+    return {
+        "values": array,
+        "dimension": 2,
+        "extents": (int(array.shape[1]), int(array.shape[2]), 1),
+        "layout_identity": layout_id,
+        "patch_identity": patch,
+        "centering": 1,
+        "centering_axes": 0,
+        "ghost_lower": (0, 0, 0),
+        "ghost_upper": (0, 0, 0),
+        "scalar_type": 2,
+        "memory_space": 1,
+        "ownership": 1,
+    }
+
+
 @pytest.fixture(scope="module")
 def compiled_multi_layout(tmp_path_factory):
     root = tmp_path_factory.mktemp("multi-layout")
@@ -245,6 +264,7 @@ def _bind(compiled_multi_layout):
         artifact,
         initial_state={"tracer": fine_initial, "coarse": coarse_initial},
         params=params,
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     return instance, artifact, coarse_id, fine_id, mapping_id, fine_initial, coarse_initial
 
@@ -263,26 +283,38 @@ def test_two_native_layouts_execute_sliced_programs_and_exact_transfer(compiled_
         instance.nx()
 
     transfer = instance._runtime_plan.communication.transfers[0]
-    receipt = instance._executor._apply_mapping(transfer)
+    native = instance._executor
+    route, = native._transfer_routes
+    native._begin_step_transaction()
+    generation = native._active_transfer_generation
+    route.session.capture(generation, 1)
+    receipt = route.session.apply(generation, 1)
     expected = fine_initial.reshape(1, 8, 2, 8, 2).mean(axis=(2, 4))
     np.testing.assert_allclose(
         np.asarray(instance.get_state("coarse")).reshape(1, 8, 8), expected, rtol=0.0, atol=1.0e-15
     )
-    assert receipt["applied"] is True
-    assert instance._executor.mapping_report() == {mapping_id: 1}
+    assert receipt.applied is True
+    assert receipt.mapping_identity == mapping_id
+    assert receipt.generation == generation
+    assert receipt.attempt == 1
+    assert receipt.source_element_count == fine_initial.size
+    assert receipt.destination_element_count == coarse_initial.size
+    native._rollback_step_transaction()
+    np.testing.assert_array_equal(
+        np.asarray(instance.get_state("coarse")).reshape(coarse_initial.shape), coarse_initial
+    )
+    assert instance._executor.mapping_report() == {mapping_id: 0}
 
     # The same installed native provider must honor both axes and every component; this rectangular
     # probe catches implementations that accidentally assume a square grid or component zero.
     from pops.runtime._component_execution_context import component_execution_data
-    from pops.runtime._multi_layout_executor import _transfer_descriptor
-
     rectangular = np.arange(2 * 12 * 8, dtype=np.float64).reshape(2, 12, 8)
     reduced = np.empty((2, 4, 4), dtype=np.float64)
     rectangular_receipt = instance._installed_components[
         transfer.component_id
     ].native_handle._transfer_apply(
-        _transfer_descriptor(rectangular, layout_id=fine_id, block="rectangular-source"),
-        _transfer_descriptor(reduced, layout_id=coarse_id, block="rectangular-target"),
+        _field_descriptor(rectangular, layout_id=fine_id, patch="rectangular-source"),
+        _field_descriptor(reduced, layout_id=coarse_id, patch="rectangular-target"),
         (3, 2),
         int(LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1),
         component_execution_data(instance._execution_context),
@@ -291,10 +323,29 @@ def test_two_native_layouts_execute_sliced_programs_and_exact_transfer(compiled_
     np.testing.assert_array_equal(reduced, expected_rectangular)
     assert rectangular_receipt["destination_element_count"] == reduced.size
 
-    instance._executor.set_state("coarse", coarse_initial.reshape(-1))
+    class NoFieldRoundtrip:
+        def __init__(self, native):
+            self.native = native
+
+        def _native_step_target(self):
+            return self.native._native_step_target()
+
+        def state_global(self, *_args):
+            raise AssertionError("per-step transfer called Python state_global")
+
+        def set_state(self, *_args):
+            raise AssertionError("per-step transfer called Python set_state")
+
+        def __getattr__(self, name):
+            return getattr(self.native, name)
+
+    instance._executor._engines = {
+        layout_id: NoFieldRoundtrip(engine)
+        for layout_id, engine in instance._executor._engines.items()
+    }
     run_report = pops.run(instance, t_end=DT, max_steps=1)
     assert run_report.accepted_steps == 1
-    assert instance._executor.mapping_report() == {mapping_id: 2}
+    assert instance._executor.mapping_report() == {mapping_id: 1}
     assert (
         np.max(
             np.abs(

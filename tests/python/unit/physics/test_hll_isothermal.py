@@ -68,7 +68,7 @@ def smooth_rho(n):
 
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
-    s = System(n=n, L=1.0, periodic=True)
+    s = System(n=n, L=1.0, periodicity=(True, True))
     s.add_equation("gas", model=gas(), spatial=engine.Spatial(weno5=True, flux=riemann),
                 time=engine.Explicit())
     s.set_poisson()
@@ -124,7 +124,7 @@ try:
     chk("p" not in cm_p.prim_names, "(3) 'p' hors primitive_vars (hllc/roe le rejetteraient)")
 
     def build(cm, riem):
-        s = System(n=40, L=1.0, periodic=True)
+        s = System(n=40, L=1.0, periodicity=(True, True))
         s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=WENO5(), flux=riem,
                                                               recon=Conservative()),
                        time=engine.Explicit(method="ssprk2"))

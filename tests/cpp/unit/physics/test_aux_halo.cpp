@@ -78,6 +78,16 @@ TEST(AuxHalo, PerFieldOverrideLeavesOtherComponentsUnchanged) {
   }
 }
 
+TEST(AuxHalo, InvalidPerFieldComponentIsRejectedInsteadOfSilentlyClamped) {
+  const Box2D dom = Box2D::from_extents(4, 3);
+  MultiFab mf(BoxArray(std::vector<Box2D>{dom}), DistributionMapping(1, n_ranks()), 2, 1);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Foextrap;
+
+  EXPECT_THROW(fill_physical_bc(mf, dom, bc, -1), std::out_of_range);
+  EXPECT_THROW(fill_physical_bc(mf, dom, bc, 2), std::out_of_range);
+}
+
 // (3) aux_halo_override keeps PERIODIC faces periodic (polar theta / periodic domain), and replaces
 // only the NON-PERIODIC faces with the field policy. This is what makes a per-field policy safe on
 // polar (radial physical, theta periodic) and on a periodic Cartesian domain. Independante de (1)/(2)

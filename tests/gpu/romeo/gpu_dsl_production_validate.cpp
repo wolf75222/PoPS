@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = L;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   step_mark("avant System(cfg)");
   System sim(cfg);
   step_mark("apres System(cfg)");

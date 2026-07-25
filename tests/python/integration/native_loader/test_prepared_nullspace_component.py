@@ -247,7 +247,7 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     compiled_model = _passive_model("external_nullspace_block_model").compile(
         backend="production", include=repo_include(), cxx=default_cxx()
     )
-    simulation = System(n=8, L=1.0, periodic=True)
+    simulation = System(n=8, L=1.0, periodicity=(True, True))
     simulation.add_equation(
         "blk",
         compiled_model,

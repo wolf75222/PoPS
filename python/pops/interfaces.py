@@ -125,17 +125,21 @@ class ComponentInterface:
                 "component %r must export %s" % (manifest.component_id, _TABLE_SYMBOL))
 
     def resolve_native_target(self, component: Any) -> dict[str, Any]:
-        """Select the sole fixed v1 POD target; ambiguity is refused before compilation."""
+        """Select one exact POD target; ambiguity is refused before compilation."""
         from pops.external._package_data import ComponentPackageError
 
         variants = tuple(component.component_manifest.target["variants"])
+        devices = {"cpu"}
+        if self.name == "tagger" and self.version >= 2:
+            devices.update({"cuda", "hip", "sycl", "openmptarget"})
         supported = [dict(row) for row in variants
-                     if row["dimension"] == 2
-                     and row["scalar"] == "float64" and row["device"] == "cpu"]
+                     if row["dimension"] == 2 and row["scalar"] == "float64"
+                     and row["device"] in devices]
         if len(supported) != 1:
             raise ComponentPackageError(
                 "target", "component.target",
-                "native component ABI v1 requires one exact 2D float64 CPU target variant")
+                "native component interface requires one exact supported 2D float64 target "
+                "variant")
         return supported[0]
 
 

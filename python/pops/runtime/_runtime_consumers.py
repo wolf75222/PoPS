@@ -7,7 +7,7 @@ import json
 import stat
 import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -165,12 +165,14 @@ def _active_output_levels(
     engine = owner._executor_for_layout(layout.handle.qualified_id)
     provider = getattr(engine, "n_levels", None)
     if not callable(provider):
+        native = getattr(engine, "_s", None)
+        provider = getattr(native, "n_levels", None)
+    if not callable(provider):
         raise RuntimeError(
             "adaptive scientific output requires the native active-level provider")
-    raw_active = provider()
-    if isinstance(raw_active, bool) or not isinstance(raw_active, int):
+    active = provider()
+    if isinstance(active, bool) or not isinstance(active, int):
         raise TypeError("native active AMR level count must be an exact integer")
-    active = raw_active
     if active < 1 or active > len(configured):
         raise RuntimeError(
             "native active AMR depth %d lies outside the configured [1, %d] envelope"
@@ -251,7 +253,11 @@ def _post_commit_root_consensus(
 
 class _PreparedDiagnostic(PreparedPublication):
     def __init__(self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...],
-                 publish: Any, discard: Any, rollback: Any) -> None:
+                 publish: Callable[
+                     [AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None],
+                 discard: Callable[[AcceptedSideEffect], None],
+                 rollback: Callable[
+                     [AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None]) -> None:
         self._effect, self._values = effect, values
         self._publish, self._discard, self._rollback = publish, discard, rollback
         self._published = self._discarded = False
@@ -1884,6 +1890,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 self._record_observer_failure(
                     manifest.qualified_id, run_identity, consensus_error)
             return None
+        if type(run_identity) is not Identity or run_identity.domain != "run":
+            raise RuntimeError("post-commit consensus accepted no exact run identity")
         if submission is not None:
             submission.arm()
         if manifest.parallel_mode is not ParallelMode.SERIAL:
@@ -2318,12 +2326,22 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             if not callable(native):
                 raise RuntimeError("installed runtime has no native step-change L2 provider")
             values = native()
+            if not isinstance(values, Mapping):
+                raise TypeError("native step-change L2 provider returned no mapping")
             if block not in values:
                 raise RuntimeError(
                     "native step-change L2 provider omitted block %r" % block)
             return float(values[block]), True
         composite = getattr(engine, "composite_reduce", None)
         if callable(composite):
+            active_depth = getattr(engine, "n_levels", None)
+            if not callable(active_depth):
+                active_depth = getattr(engine, "nlev", None)
+            if callable(active_depth):
+                nlev = int(cast(Any, active_depth)())
+                levels = tuple(level for level in levels if 0 <= int(level) < nlev)
+                if not levels:
+                    raise RuntimeError("adaptive diagnostic selected no active AMR level")
             kind = reduction + ("_all" if full_state else "")
             return float(cast(Any, composite)(
                 block, kind, component, list(levels))), True
@@ -2561,15 +2579,19 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
         self._pending[effect.identity.token] = values
         self._pending_baselines[effect.identity.token] = baseline_updates
-        publish = self._publish_diagnostics
+        publish_callback: Callable[
+            [AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None]
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
-            def publish(accepted_effect: AcceptedSideEffect,
-                        accepted_values: tuple[DiagnosticPayload, ...]) -> None:
+            def publish_console(accepted_effect: AcceptedSideEffect,
+                                accepted_values: tuple[DiagnosticPayload, ...]) -> None:
                 self._publish_diagnostics(accepted_effect, accepted_values)
                 self._render_console_diagnostics(
                     accepted_effect, manifest, accepted_values, unavailable=unavailable)
+            publish_callback = publish_console
+        else:
+            publish_callback = self._publish_diagnostics
         return _PreparedDiagnostic(
-            effect, values, publish, self._discard_diagnostics, rollback)
+            effect, values, publish_callback, self._discard_diagnostics, rollback)
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
@@ -2738,11 +2760,7 @@ class RuntimeOutputSnapshot:
         if int(engine.nx()) != base_nx:
             raise ValueError(
                 "runtime x cell count does not match normalized layout geometry")
-        if layout.adaptive:
-            if base_nx != base_ny:
-                raise NotImplementedError(
-                    "adaptive scientific output requires the native square-grid geometry")
-        elif int(engine.ny()) != base_ny:
+        if int(engine.ny()) != base_ny:
             raise ValueError(
                 "runtime y cell count does not match normalized layout geometry")
         scale = layout.levels[level].refinement
@@ -3104,11 +3122,11 @@ class RuntimeOutputSnapshot:
                 selected = quantity.levels or tuple(row.index for row in layout.levels)
                 levels = _active_output_levels(
                     self._owner, layout, tuple(selected))
+                block = _block_name(quantity.reference, component_names)
                 native_cartesian_integral = (
                     layout.adaptive
                     and layout.geometry.cell_measure == CARTESIAN_CELL_AREA
                 )
-                block = _block_name(quantity.reference, component_names)
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:
                     geometry = self._geometry(layout, level)
@@ -3138,6 +3156,7 @@ class RuntimeOutputSnapshot:
                             if native_cartesian_integral and len(components) == 1 else None
                         reduction_args = (block, "sum", 0, list(levels))
                     native_engine = engine._s
+                    reduction_levels = tuple(levels)
                     if not callable(getattr(native_engine, method_name, None)):
                         raise RuntimeError(
                             "installed native provider lacks required %s() output view"
@@ -3157,7 +3176,7 @@ class RuntimeOutputSnapshot:
                         "components": components,
                         "reduction_method": reduction_method,
                         "reduction_args": reduction_args,
-                        "reduction_levels": tuple(levels),
+                        "reduction_levels": reduction_levels,
                     }
                     entries.append(entry)
             diagnostic_schema = []

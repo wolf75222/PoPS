@@ -109,11 +109,8 @@ struct NativeFieldDistributionSource {
                                                      std::span<double> scratch, const char*,
                                                      const ExecutionLane& lane) const noexcept {
     try {
-      if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return PreparedVectorDistributionStatus::failure(
-            1, "native distribution reduction exceeds MPI count capacity");
       if (distribution == FieldDistribution::Distributed) {
-        all_reduce_sum_inplace(values.data(), static_cast<int>(values.size()), lane);
+        all_reduce_sum_inplace(values.data(), values.size(), lane);
         return PreparedVectorDistributionStatus::success();
       }
       const FieldDistributionReductionStatus status = reduce_replicated_field_values_inplace(
@@ -138,10 +135,7 @@ struct NativeFieldDistributionSource {
     if (distribution != FieldDistribution::Distributed)
       return reduce_sum_values(values, scratch, where, lane);
     try {
-      if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return PreparedVectorDistributionStatus::failure(
-            1, "native distribution reduction exceeds MPI count capacity");
-      all_reduce_max_inplace(values.data(), static_cast<int>(values.size()), lane);
+      all_reduce_max_inplace(values.data(), values.size(), lane);
       return PreparedVectorDistributionStatus::success();
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(

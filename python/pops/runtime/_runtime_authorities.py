@@ -417,23 +417,15 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
 
 
 def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
-    """Authenticate and install external AMR providers as one pre-build transaction."""
+    """Install every AMR provider through its authority-carried runtime protocol."""
 
     providers = install_plan.amr_providers
     if not isinstance(providers, Mapping) or tuple(providers) != ("clustering", "tagger"):
         raise ValueError("adaptive runtime requires exact clustering and tagger providers")
     native = getattr(engine, "_s", None)
-    from pops import interfaces
+    from pops.amr.providers import prepare_amr_provider_installation
     from pops.runtime._component_execution_context import component_execution_data
 
-    expected_interfaces = {
-        "clustering": interfaces.Clustering.to_data(),
-        "tagger": interfaces.Tagger.to_data(),
-    }
-    expected_builtin_ids = {
-        "clustering": "pops.lib.amr::berger_rigoutsos",
-        "tagger": "pops.lib.amr::symbolic_tagger",
-    }
     layout_identity = install_plan.artifact.layout_plan.qualified_id
     execution_data = component_execution_data(install_plan.execution_context)
     jobs = []
@@ -441,98 +433,23 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
     resolved_tagging = getattr(
         getattr(install_plan, "bootstrap_plan", None), "tagging", None)
     resolved_tagging_identity = getattr(resolved_tagging, "qualified_id", None)
-    for slot, frozen in providers.items():
-        if not isinstance(frozen, Mapping):
-            raise TypeError("AMR %s provider binding must be an immutable mapping" % slot)
-        binding = dict(frozen)
-        if binding.get("schema_version") != 1 \
-                or not isinstance(binding.get("provider_identity"), str) \
-                or not binding["provider_identity"] \
-                or binding.get("layout_identity") != layout_identity \
-                or binding.get("native_interface") != expected_interfaces[slot]:
-            raise ValueError("AMR %s provider binding is incomplete or unauthenticated" % slot)
-        if slot == "tagger":
-            from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
-
-            capability = binding.get("tagging_capability")
-            maximum_stencil_terms = (
-                capability.get("maximum_stencil_terms")
-                if isinstance(capability, Mapping)
-                else None
-            )
-            if not isinstance(capability, Mapping) \
-                    or tuple(capability.get("candidate_outputs", ())) != tuple(
-                        NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]) \
-                    or not set(capability.get("indicator_stencil_routes", ())) <= set(
-                        NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
-                    or not capability.get("indicator_stencil_routes") \
-                    or isinstance(maximum_stencil_terms, bool) \
-                    or not isinstance(maximum_stencil_terms, int) \
-                    or maximum_stencil_terms < 1 \
-                    or maximum_stencil_terms \
-                    > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"] \
-                    or capability.get("non_finite_policy") \
-                    != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] \
-                    or capability.get("persistent_hysteresis") is not \
-                    NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"] \
-                    or not isinstance(binding.get("tagging_graph_identity"), str) \
-                    or (resolved_tagging_identity is not None
-                        and binding.get("tagging_graph_identity")
-                        != resolved_tagging_identity):
-                raise ValueError(
-                    "AMR Tagger lacks the exact resolved candidate-program authority")
-        provider_type = binding.get("provider_type")
-        if provider_type == "builtin_amr_%s" % slot:
-            if binding.get("provider_id") != expected_builtin_ids[slot] \
-                    or any(name in binding for name in (
-                        "component_id", "component_manifest_identity", "component")):
-                raise ValueError("builtin AMR %s provider is not canonical" % slot)
-        elif provider_type == "external_amr_%s" % slot:
-            component_id = binding.get("component_id")
-            installed = install_plan.components.get(component_id)
-            if installed is None:
-                raise ValueError(
-                    "AMR %s provider requires exact component %r; it is not installed"
-                    % (slot, component_id))
-            if installed.component_manifest.token != binding.get(
-                    "component_manifest_identity"):
-                raise ValueError("AMR %s provider changed component manifest identity" % slot)
-            if installed.interface.to_data() != binding.get("native_interface") \
-                    or installed.interface.version != binding.get("interface_version"):
-                raise ValueError("AMR %s provider changed native interface/version" % slot)
-            if installed.native_handle is None:
-                raise ValueError("AMR %s component must be loaded before installation" % slot)
-            component = binding.get("component")
-            if not isinstance(component, Mapping) \
-                    or component.get("component_id") != component_id \
-                    or component.get("component_manifest") != installed.component_manifest.token \
-                    or component.get("interface") != installed.interface.to_data():
-                raise ValueError("AMR %s provider lost its exact component declaration" % slot)
-            if slot == "tagger":
-                from pops.amr.providers import _normalize_tagger_capability
-                from pops.identity.semantic import semantic_value
-
-                if semantic_value(
-                        binding.get("tagging_capability"),
-                        where="installed AMR Tagger capability") != semantic_value(
-                            _normalize_tagger_capability(
-                                installed.runtime_contract.capabilities),
-                            where="manifest AMR Tagger capability") \
-                        or (resolved_tagging_identity is not None
-                            and binding.get("tagging_graph_identity")
-                            != resolved_tagging_identity) \
-                        or not isinstance(binding.get("clock_identity"), str) \
-                        or not binding["clock_identity"]:
-                    raise ValueError(
-                        "external AMR Tagger lacks its exact graph/capability/clock contract")
-            installer = getattr(native, "_install_amr_%s_component" % slot, None)
-            if not callable(installer):
-                raise NotImplementedError(
-                    "the selected native provider cannot install external AMR %s" % slot)
-            jobs.append((installer, installed.native_handle, binding, execution_data))
-        else:
-            raise ValueError("AMR %s provider kind is not supported" % slot)
-        reports[slot] = MappingProxyType(binding)
+    for role, frozen in providers.items():
+        prepared = prepare_amr_provider_installation(
+            role=role,
+            frozen_binding=frozen,
+            layout_identity=layout_identity,
+            components=install_plan.components,
+            native=native,
+            resolved_tagging_identity=resolved_tagging_identity,
+        )
+        if prepared.installer is not None:
+            jobs.append((
+                prepared.installer,
+                prepared.native_handle,
+                prepared.binding,
+                execution_data,
+            ))
+        reports[prepared.role] = MappingProxyType(prepared.binding)
 
     discard = getattr(native, "_discard_amr_provider_components", None)
     if jobs and not callable(discard):

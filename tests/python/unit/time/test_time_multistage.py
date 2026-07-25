@@ -124,7 +124,7 @@ N = 24
 
 
 def make_sim(method="euler"):
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method=method))
@@ -205,7 +205,7 @@ def rk4_program():
     return P
 
 
-if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
     _skip("_pops lacks the install_program binding (rebuild _pops)")
 
 dt = 2e-3

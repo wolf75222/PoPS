@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -229,7 +231,8 @@ TEST(test_amr_layout_guard, Runs) {
   {
     std::vector<AmrLevelMP> levels = make_two_level_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine,
                                                           dxc / 2, dyc / 2, /*is_e=*/true);
-    const AmrHierarchyLayout L = AmrHierarchyLayout::from_levels(levels);
+    const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+    const AmrHierarchyLayout L = AmrHierarchyLayout::from_levels(levels, load_balance);
     EXPECT_EQ(L.nlev(), 2) << "layout_nlev";
     EXPECT_TRUE(L.ba[0].boxes() == ba_coarse.boxes()) << "layout_coarse_boxes";
     EXPECT_TRUE(L.ba[1].boxes() == ba_fine.boxes()) << "layout_fine_boxes";

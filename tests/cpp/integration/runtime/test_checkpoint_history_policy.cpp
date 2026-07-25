@@ -7,10 +7,9 @@
 // replay), plus the v1 back-compat restore and the verbatim policy/version refusals.
 //
 // It installs a REAL deterministic macro-step closure (install_program_step) that mirrors what a compiled
-// multistep program's step body emits: advance the block-0 state by a conservative increment, store the
-// advanced state into the ring, rotate. So the ring genuinely holds the block-0 state at each lag, and
-// replay (seed from an older stored slot, re-step, capture) reconstructs the gaps. No .so / codegen: the
-// closure is a native lambda, so the whole test runs in the serial suite.
+// keep_history step body emits: store U^n, advance the qualified owner state by a conservative increment,
+// then rotate. Replay seeds that same owner from an older stored slot and reconstructs the gaps. No .so /
+// codegen: the closure is a native lambda, so the whole test runs in the serial suite.
 
 #include <gtest/gtest.h>
 
@@ -53,10 +52,19 @@ struct NoEll {
 using GasModel = CompositeModel<Euler, NoSource, NoEll>;
 constexpr double kGamma = 1.4;
 
-void add_gas(System& s) {
-  add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
+void add_gas_block(System& s, const std::string& name) {
+  add_compiled_model(s, name, GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
                      "conservative", "explicit", kGamma);
+}
+
+void add_gas(System& s) {
+  add_gas_block(s, "gas");
   s.set_poisson("charge_density", "geometric_mg");
+}
+
+void register_state_history(System& s, const std::string& ring, int depth, int owner = 0) {
+  s.register_history(ring, depth - 1, -1, owner, "test.state." + std::to_string(owner),
+                     "test.space", "test.clock", "test.exact");
 }
 
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
@@ -67,21 +75,23 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
   return d;
 }
 
-// Install a deterministic macro-step closure that advances block-0 state by +inc (a conservative
-// increment) then stores the ADVANCED state into the ring and rotates -- exactly the shape a compiled
-// multistep step body emits. `inc` scales with the step dt so a variable-dt run produces distinct,
-// dt-dependent slot values (the slot_dt replay must reproduce them). The closure captures &s; s must
-// outlive it.
-void install_ramp_program(System& s, const std::string& ring, double rate) {
+// Install a deterministic macro-step closure with the exact compiled keep_history phase: snapshot
+// U^n first, advance the qualified owner by +inc, then rotate after the commit. The dt ledger therefore travels
+// with its starting sample (the outgoing interval toward the newer sample). `inc` scales with dt so
+// a variable-dt run with multiple independent gaps proves that exact provenance. The closure
+// captures &s; s must outlive it.
+void install_ramp_program(System& s, const std::string& ring, double rate, int owner = 0,
+                          int* executed_steps = nullptr) {
   System* self = &s;
-  self->install_program_step([self, ring, rate](double dt) {
-    MultiFab& U = self->block_state(0);
+  self->install_program_step([self, ring, rate, owner, executed_steps](double dt) {
+    if (executed_steps != nullptr)
+      ++*executed_steps;
+    MultiFab& U = self->block_state(owner);
+    self->store_history(ring, U);
     // Advance: U += rate*dt (a deterministic, dt-dependent conservative increment on every component).
     MultiFab bump = U;  // same layout
     bump.set_val(Real(rate) * Real(dt));
     pops::saxpy(U, Real(1), bump);
-    // Store the advanced state into the ring and rotate (the multistep step-body idiom).
-    self->store_history(ring, U);
     self->rotate_histories();
   });
 }
@@ -135,7 +145,7 @@ void fill_and_dump(const SystemConfig& cfg, const std::string& ring, int depth, 
                    std::vector<double>& live_state_out) {
   System s(cfg);
   add_gas(s);
-  s.register_history(ring, depth - 1);  // depth = maxlag + 1
+  register_state_history(s, ring, depth);
   install_ramp_program(s, ring, rate);
   for (double dt : dts)
     s.step(dt);
@@ -152,7 +162,10 @@ void restore_replay_dump(const SystemConfig& cfg, const std::string& ring, int d
                          std::vector<double>& live_state_out, int& recomputed_out) {
   System s(cfg);
   add_gas(s);
-  install_ramp_program(s, ring, rate);  // the SAME program must be installed to replay
+  register_state_history(s, ring, depth);
+  int executed_steps = 0;
+  install_ramp_program(s, ring, rate, /*owner=*/0,
+                       &executed_steps);  // the SAME program must be installed to replay
   // Restore only the stored slots + every slot's dt.
   for (int k : stored_slots)
     s.restore_history(ring, k, golden[static_cast<std::size_t>(k)]);
@@ -162,6 +175,8 @@ void restore_replay_dump(const SystemConfig& cfg, const std::string& ring, int d
   // Capture the live state BEFORE replay so the isolation check compares against it.
   const std::vector<double> live_before = s.state_global("gas");
   recomputed_out = s.rebuild_history_slots(ring, stored_slots);
+  EXPECT_EQ(executed_steps, recomputed_out)
+      << "native replay executes exactly one Program step per omitted slot";
   ring_out = dump_ring(s, ring);
   live_state_out = s.state_global("gas");
   // The live state is identity across replay (the save/restore bracket).
@@ -173,7 +188,7 @@ SystemConfig make_cfg() {
   SystemConfig cfg;
   cfg.n = 8;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   return cfg;
 }
 
@@ -253,7 +268,7 @@ TEST(CheckpointHistoryPolicy, VariableDtReplayIsBitExact) {
   // The slot_dt the forward run recorded (read it back from a fresh dense run's ring via the accessor).
   System probe(cfg);
   add_gas(probe);
-  probe.register_history(ring, depth - 1);
+  register_state_history(probe, ring, depth);
   install_ramp_program(probe, ring, rate);
   for (double dt : dts)
     probe.step(dt);
@@ -276,7 +291,51 @@ TEST(CheckpointHistoryPolicy, VariableDtReplayIsBitExact) {
   }
 }
 
-// (C) The oldest slot MUST be stored: a policy whose stored set omits slot depth-1 is refused verbatim.
+// (C) The replay seed/capture follows the ring's qualified owner, not block 0.
+TEST(CheckpointHistoryPolicy, ReplayUsesQualifiedNonzeroOwner) {
+  kokkos();
+  const SystemConfig cfg = make_cfg();
+  const std::string ring = "second_state_prev";
+  const int depth = 5;
+  const double rate = 2.0;
+  const std::vector<double> dts = {0.03, 0.07, 0.05, 0.11, 0.02, 0.09, 0.04};
+
+  System source(cfg);
+  add_gas_block(source, "first");
+  add_gas_block(source, "second");
+  source.set_poisson("charge_density", "geometric_mg");
+  register_state_history(source, ring, depth, /*owner=*/1);
+  install_ramp_program(source, ring, rate, /*owner=*/1);
+  for (double dt : dts)
+    source.step(dt);
+  const std::vector<std::vector<double>> golden = dump_ring(source, ring);
+  std::vector<double> slot_dt(static_cast<std::size_t>(depth));
+  for (int k = 0; k < depth; ++k)
+    slot_dt[static_cast<std::size_t>(k)] = source.history_slot_dt(ring, k);
+
+  System restored(cfg);
+  add_gas_block(restored, "first");
+  add_gas_block(restored, "second");
+  restored.set_poisson("charge_density", "geometric_mg");
+  register_state_history(restored, ring, depth, /*owner=*/1);
+  install_ramp_program(restored, ring, rate, /*owner=*/1);
+  const std::vector<int> stored = {0, 2, 4};
+  for (int k : stored)
+    restored.restore_history(ring, k, golden[static_cast<std::size_t>(k)]);
+  for (int k = 0; k < depth; ++k)
+    restored.restore_history_slot_dt(ring, k, slot_dt[static_cast<std::size_t>(k)]);
+  restored.set_history_initialized(ring, true);
+  const std::vector<double> first_before = restored.state_global("first");
+
+  EXPECT_EQ(restored.rebuild_history_slots(ring, stored), 2);
+  EXPECT_EQ(restored.state_global("first"), first_before);
+  const auto replayed = dump_ring(restored, ring);
+  for (int slot = 0; slot < depth; ++slot)
+    EXPECT_EQ(replayed[static_cast<std::size_t>(slot)], golden[static_cast<std::size_t>(slot)])
+        << "owner=1 slot=" << slot;
+}
+
+// (D) The oldest slot MUST be stored: a policy whose stored set omits slot depth-1 is refused verbatim.
 TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
   kokkos();
   const SystemConfig cfg = make_cfg();
@@ -285,7 +344,7 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
   System s(cfg);
   add_gas(s);
   install_ramp_program(s, ring, 1.0);
-  s.register_history(ring, depth - 1);
+  register_state_history(s, ring, depth);
   s.restore_history(ring, 0, s.history_global(ring, 0));  // register + a token slot
   s.set_history_initialized(ring, true);
   // stored = {0, 2} omits the oldest slot 4 -> unreconstructable.
@@ -302,14 +361,41 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
       << "verbatim_oldest_slot_message: " << what;
 }
 
-// (D) Replay requires an installed Program: rebuild without a program fails loud (never a silent skip).
+// (E) The newest slot MUST be stored: there is no newer anchor from which to fill it backwards.
+TEST(CheckpointHistoryPolicy, RebuildRefusesMissingNewestSlot) {
+  kokkos();
+  const SystemConfig cfg = make_cfg();
+  const std::string ring = "state_prev";
+  const int depth = 5;
+  System s(cfg);
+  add_gas(s);
+  register_state_history(s, ring, depth);
+  install_ramp_program(s, ring, 1.0);
+  const std::vector<double> token = s.history_global(ring, 0);
+  s.restore_history(ring, 2, token);
+  s.restore_history(ring, 4, token);
+  s.set_history_initialized(ring, true);
+  bool threw = false;
+  std::string what;
+  try {
+    s.rebuild_history_slots(ring, std::vector<int>{2, 4});
+  } catch (const std::runtime_error& e) {
+    threw = true;
+    what = e.what();
+  }
+  EXPECT_TRUE(threw) << "missing_newest_slot_refused";
+  EXPECT_TRUE(what.find("newest slot") != std::string::npos)
+      << "verbatim_newest_slot_message: " << what;
+}
+
+// (F) Replay requires an installed Program: rebuild without a program fails loud (never a silent skip).
 TEST(CheckpointHistoryPolicy, RebuildRefusesWithoutInstalledProgram) {
   kokkos();
   const SystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   System s(cfg);
   add_gas(s);
-  s.register_history(ring, /*lag=*/3);
+  register_state_history(s, ring, /*depth=*/4);
   s.restore_history(ring, 0, s.history_global(ring, 0));
   s.restore_history(ring, 3, s.history_global(ring, 3));
   s.set_history_initialized(ring, true);

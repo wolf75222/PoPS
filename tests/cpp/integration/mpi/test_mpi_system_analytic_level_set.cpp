@@ -61,7 +61,7 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   require(local_sampler == (rank == 0 ? 1L : 0L),
           "the single Cartesian patch must be owned by rank zero");
 
-  System system(SystemConfig{20, 1.0, false});
+  System system(SystemConfig{20, 1.0, Periodicity{false, false}});
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0},
                                 "staircase", 0.2, 1e-5, 0.1);
   const std::vector<double> before = system.disc_mask();
@@ -117,7 +117,7 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
 
   // Every rank supplies a locally valid scalar program, but rank one changes one binary64 literal.
   // Exact request consensus must reject before either rank writes the System state.
-  System expression_system(SystemConfig{12, 1.0, true});
+  System expression_system(SystemConfig{12, 1.0, Periodicity{true, true}});
   expression_system.add_block("plasma", analytic_scalar_model());
   bool mismatch_rejected = false;
   std::string mismatch_message;

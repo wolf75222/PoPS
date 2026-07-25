@@ -86,7 +86,7 @@ def test_where_result_type(t):
 def test_where_codegen(t):
     P = _clamp_program(t)
     src = emit_cpp_program(P)
-    for frag in ("ctx.alloc_scalar_field(1, 1)",          # the mask field
+    for frag in ("ctx.scalar_scratch(",                   # persistent mask/output fields
                  "pops::for_each_cell",                      # the per-cell select kernel
                  "fieldA(i, j, 0) >= 0.5",                   # exact threshold lowering
                  "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0)",  # 0/1 mask
@@ -186,7 +186,7 @@ def _run_section_b(t):
         return None
 
     n = 8
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None

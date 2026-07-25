@@ -6,6 +6,7 @@
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 
 #include "component_abi_test_helpers.hpp"
+#include "native_dso_compiler.hpp"
 
 #include <array>
 #include <chrono>
@@ -41,6 +42,7 @@ std::string component_source() {
     int destroy_count = 0;
     int tag_call_count = 0;
     int partial_tag_output = 0;
+    const void* last_tag_state_data = nullptr;
 
     int evaluate(void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
       const auto* left = static_cast<const double*>(request->left.data);
@@ -84,8 +86,24 @@ std::string component_source() {
       return 0;
     }
 
-    int tag_batch(void*, const PopsTaggerRequestV1* request, PopsComponentStatusV1* status) {
+    int tag_batch(void*, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {
       ++tag_call_count;
+      last_tag_state_data = request->states[0].values.data;
+      if ((request->execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
+           request->execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) ||
+          request->collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
+          std::string(request->execution.communicator_identity) !=
+              POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
+          request->execution.communicator_f_handle != 0 ||
+          request->execution.communicator_datatype_f_handle != 0 ||
+          std::string(request->execution.communicator_datatype_identity) != "none" ||
+          request->states[0].values.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+          request->refine_candidates.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+          request->refine_candidates.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1) {
+        *status = {sizeof(PopsComponentStatusV1), 20, POPS_COMPONENT_ABORT_RUN_V1,
+                   "tagger executor contract mismatch"};
+        return 20;
+      }
       if (request->program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1) {
         *status = {sizeof(PopsComponentStatusV1), 21, POPS_COMPONENT_ABORT_RUN_V1,
                    "unsupported non-finite policy"};
@@ -99,8 +117,8 @@ std::string component_source() {
         std::fill_n(request->coarsen_equalities.data, points, std::uint8_t{0});
       }
       const auto evaluate = [&](const int32_t* opcodes, const int32_t* arguments,
-                                std::size_t instruction_count, PopsByteViewV1 candidates,
-                                PopsByteViewV1 equalities) -> bool {
+                                std::size_t instruction_count, PopsTaggerMaskViewV2 candidates,
+                                PopsTaggerMaskViewV2 equalities) -> bool {
         const auto& reference = request->states[0].values;
         const std::size_t nx =
             reference.extents[0] - reference.ghost_lower[0] - reference.ghost_upper[0];
@@ -248,8 +266,8 @@ std::string component_source() {
         {sizeof(PopsGhostBoundaryApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
          POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, &prepare, &destroy},
         &apply_ghost};
-    const PopsTaggerApiV1 tagger{{sizeof(PopsTaggerApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-                                  POPS_NATIVE_INTERFACE_TAGGER_V1, 1, &prepare, &destroy},
+    const PopsTaggerApiV2 tagger{{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
+                                  POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy},
                                  &tag_batch};
     const PopsClusteringApiV1 clustering{
         {sizeof(PopsClusteringApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
@@ -264,7 +282,7 @@ std::string component_source() {
 #endif
         {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer},
         {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
-        {POPS_NATIVE_INTERFACE_TAGGER_V1, 1, sizeof(PopsTaggerApiV1), &tagger},
+        {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger},
         {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1), &clustering}};
     const PopsComponentApiV1 component{
         sizeof(PopsComponentApiV1),
@@ -294,6 +312,9 @@ std::string component_source() {
     extern "C" int pops_test_tag_call_count() {
       return tag_call_count;
     }
+    extern "C" const void* pops_test_last_tag_state_data() {
+      return last_tag_state_data;
+    }
     extern "C" void pops_test_set_partial_tag_output(int value) {
       partial_tag_output = value;
     }
@@ -307,38 +328,26 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
   const auto source = base.string() + ".cpp";
 #if defined(__APPLE__)
   const auto library = base.string() + ".dylib";
-  const std::string compiler = "/usr/bin/c++";
-  const std::string shared = " -dynamiclib";
 #else
   const auto library = base.string() + ".so";
-  const std::string compiler = POPS_TEST_CXX;
-  const std::string shared = " -shared -fPIC";
 #endif
   {
     std::ofstream stream(source);
     stream << component_source();
   }
   std::string fixture_flags;
-#if defined(POPS_HAS_KOKKOS)
-  fixture_flags += " -DPOPS_HAS_KOKKOS";
-#endif
-#if defined(POPS_HAS_MPI)
-  fixture_flags += " -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\\\"";
-  fixture_flags += POPS_MPI_ABI;
-  fixture_flags += "\\\"";
-#endif
   if (fixture == FluxTableFixture::HeaderOnly || fixture == FluxTableFixture::ForgedEntrySize)
     fixture_flags += " -DPOPS_TEST_HEADER_ONLY_FLUX_TABLE";
   if (fixture == FluxTableFixture::ForgedEntrySize)
     fixture_flags += " -DPOPS_TEST_FORGED_FLUX_ENTRY_SIZE";
   if (fixture == FluxTableFixture::WrongAbi)
     fixture_flags += " -DPOPS_TEST_WRONG_COMPONENT_ABI";
-  const std::string command = compiler + shared + fixture_flags + " -std=" + POPS_TEST_CXX_STD +
-                              " -O2 -I\"" + POPS_TEST_INCLUDE + "\" \"" + source + "\" -o \"" +
-                              library + "\"";
-  if (std::system(command.c_str()) != 0) {
-    std::filesystem::remove(source);
-    throw std::runtime_error("failed to compile exact component ABI fixture");
+  const auto package =
+      pops::test::native_dso::compile_shared(source, library, fixture_flags);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_amr_native_loader", package);
+    throw std::runtime_error("failed to compile exact component ABI fixture; log: " +
+                             package.log_path);
   }
   std::filesystem::remove(source);
   return library;
@@ -353,7 +362,7 @@ pops::component::ExpectedNativeComponent expected() {
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
-           {POPS_NATIVE_INTERFACE_TAGGER_V1, 1, sizeof(PopsTaggerApiV1)},
+           {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)},
            {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1)}}};
 }
 
@@ -413,12 +422,16 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
   ASSERT_TRUE(pops::dynlib::valid(inspection));
   using CounterFn = int (*)();
   using SetIntFn = void (*)(int);
+  using PointerFn = const void* (*)();
   const auto tag_call_count =
       reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_tag_call_count"));
   const auto set_partial_tag_output =
       reinterpret_cast<SetIntFn>(pops::dynlib::sym(inspection, "pops_test_set_partial_tag_output"));
+  const auto last_tag_state_data = reinterpret_cast<PointerFn>(
+      pops::dynlib::sym(inspection, "pops_test_last_tag_state_data"));
   ASSERT_NE(tag_call_count, nullptr);
   ASSERT_NE(set_partial_tag_output, nullptr);
+  ASSERT_NE(last_tag_state_data, nullptr);
   {
     auto component = std::make_shared<pops::component::LoadedComponent>(
         pops::component::LoadedComponent::load(library.string(), expected()));
@@ -435,7 +448,10 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
         POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
         128,
         POPS_TAGGING_NON_FINITE_REJECT_V1,
-        1,
+        POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2,
+        POPS_TAGGER_COLLECTIVE_NONE_V2,
+        {POPS_MEMORY_SPACE_HOST_V1},
+        2,
         execution};
     pops::runtime::amr::PreparedClusteringSpec clustering_spec{
         "test::clustering-provider", kComponentId, kManifestIdentity, "case::layout", 1, execution};
@@ -475,10 +491,39 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
                                  1.0 / 3.0, false, false, false);
     pops::TagBox& tags = candidates.refine;
     EXPECT_EQ(tag_call_count() - calls_before, state.local_size());
+    ASSERT_GT(state.local_size(), 0);
+    EXPECT_EQ(last_tag_state_data(), state.fab(state.local_size() - 1).data())
+        << "native-backend Tagger must borrow the resident field instead of staging HostSpace";
     ASSERT_EQ(tags.count(), 2);
     EXPECT_TRUE(tags.tagged(1, 0));
     EXPECT_TRUE(tags.tagged(2, 1));
     ASSERT_EQ(tagger.provider_identity(), "test::tagger-provider");
+
+    pops::runtime::amr::PreparedTaggerSpec host_tagger_spec{
+        "test::host-tagger-provider",
+        kComponentId,
+        kManifestIdentity,
+        "case::layout",
+        "case::clock",
+        {1, 2, 3, 4, 5},
+        {16, 17, 18},
+        {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
+        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
+        128,
+        POPS_TAGGING_NON_FINITE_REJECT_V1,
+        POPS_TAGGER_EXECUTION_HOST_V2,
+        POPS_TAGGER_COLLECTIVE_NONE_V2,
+        {POPS_MEMORY_SPACE_HOST_V1},
+        2,
+        execution};
+    pops::runtime::amr::PreparedTaggerComponent host_tagger(std::move(host_tagger_spec),
+                                                            component);
+    const auto host_candidates =
+        host_tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,
+                        1.0 / 3.0, false, false, false);
+    EXPECT_EQ(host_candidates.refine.count(), candidates.refine.count());
+    EXPECT_NE(last_tag_state_data(), state.fab(state.local_size() - 1).data())
+        << "only an explicitly host-scoped Tagger may receive a staged field image";
 
     set_partial_tag_output(1);
     EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,

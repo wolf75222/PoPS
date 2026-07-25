@@ -362,7 +362,7 @@ inline Real robust_dot_global_value(const MultiFab& left, const MultiFab& right,
                                     bool all_components) {
   RobustDotBands bands{};
   robust_dot_local_payload(left, right, all_components, bands.data());
-  all_reduce_sum_inplace(bands.data(), static_cast<int>(bands.size()));
+  all_reduce_sum_inplace(bands.data(), bands.size());
   if (bands[kRobustDotNonfiniteIndex] != 0.0)
     return std::numeric_limits<Real>::quiet_NaN();
   return robust_dot_reconstruct(bands);

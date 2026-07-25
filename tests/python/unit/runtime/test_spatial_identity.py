@@ -26,7 +26,16 @@ def test_spatial_identity_covers_every_route_and_control_exactly():
         "schema_version": 1,
         "family": "finite_volume",
         "reconstruction": "weno5",
-        "riemann": {"route": "hll", "external_id": None},
+        "riemann": {
+            "route": "hll",
+            "external_id": None,
+            "capability_contract": {
+                "required_capabilities": [
+                    "physical_flux", "provider_pack", "stability_bound", "wave_speeds",
+                ],
+                "wave_speed_provider": "explicit_pair",
+            },
+        },
         "variables": "primitive",
         "positivity_floor": {
             "kind": "rational", "numerator": "1", "denominator": str(10**30),
@@ -65,6 +74,15 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
         return BrickDescriptor(
             brick_id, "external_cpp", category="riemann",
             native_id="pops_external_flux", scheme="user",
+            options={
+                "library_path": "/tmp/external-riemann.so",
+                "library_sha256": "0" * 64,
+                "abi_version": 2,
+                "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+                "native_abi_key": "host-native-abi",
+                "supported_layouts": ("uniform", "amr"),
+                "model_identity": "compiled-model-hash",
+            },
         )
 
     left = engine.Spatial(flux=external("acme.hll.v1"))
@@ -72,6 +90,13 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
 
     assert left.to_data()["riemann"] == {
         "route": "user", "external_id": "acme.hll.v1",
+        "external_library_sha256": "0" * 64,
+        "external_abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+        "external_native_abi_key": "host-native-abi",
+        "external_model_identity": "compiled-model-hash",
+        "capability_contract": {
+            "required_capabilities": [], "wave_speed_provider": None,
+        },
     }
     assert left.identity() != right.identity()
 

@@ -224,6 +224,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "block_names",
         "checkpoint",
         "cleanup_consumer_recovery",
+        "configured_n_levels",
         "consumer_cursors",
         "consumer_graph",
         "consumer_recoveries",

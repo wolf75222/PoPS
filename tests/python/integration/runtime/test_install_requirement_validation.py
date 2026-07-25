@@ -87,7 +87,7 @@ def lie_program(model, name="adc446_prog"):
 
 
 def make_sim(block_model, with_bz):
-    sim = System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.add_equation("plasma", compile_block_model(block_model, target="system"),
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="euler"))
@@ -105,7 +105,7 @@ def main():
     missing = missing_native_compile_requirement(repo_include(), default_cxx())
     if missing:
         require_native_or_skip("test_install_requirement_validation: %s" % missing)
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         require_native_or_skip(
             "test_install_requirement_validation requires System.install_program"
         )

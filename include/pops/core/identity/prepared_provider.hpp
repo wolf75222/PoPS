@@ -245,6 +245,10 @@ class PreparedProvider<Result(Args...)> {
   using Function = std::function<Result(Args...)>;
 
   PreparedProvider() = default;
+  PreparedProvider(const PreparedProvider&) = default;
+  PreparedProvider(PreparedProvider&&) noexcept = default;
+  PreparedProvider& operator=(const PreparedProvider&) = default;
+  PreparedProvider& operator=(PreparedProvider&&) noexcept = default;
 
   template <class Source>
     requires(!std::same_as<std::remove_cvref_t<Source>, PreparedProvider> &&

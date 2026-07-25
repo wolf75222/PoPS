@@ -11,6 +11,7 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
@@ -68,6 +70,15 @@ namespace program {
 
 class ProgramContext {
  public:
+  /// One generated simultaneous-field override.  The block index is the immutable Program block
+  /// identity, not its current System position; the context authenticates and remaps it through the
+  /// installed block map.  Generated code passes these through an initializer_list, so constructing a
+  /// solve request never allocates a host pointer vector.
+  struct FieldStageOverride {
+    int program_block = -1;
+    const MultiFab* state = nullptr;
+  };
+
   /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
   /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
   /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
@@ -311,26 +322,27 @@ class ProgramContext {
   /// Poisson RHS is Sum_s elliptic_rhs_s(U_s), every coupled block reading its OWN stage state (not a
   /// single-target override). @p u_stages is indexed BY BLOCK INDEX (size == n_blocks()); a nullptr
   /// entry uses that block's live state. Forwards to System::solve_fields_from_blocks. The codegen
-  /// lowers P.solve_fields_from_blocks([U0, U1, ...]) to this, building the per-block pointer vector
-  /// from the listed stage-state vars (their declaration order == the block index order, asserted at
-  /// emit time). This is the multi-target counterpart of solve_fields_from_state.
+  /// Manual callers may provide the historical pointer vector. Generated Programs use the exact-IR
+  /// initializer-list overload below, which fills the same context-owned workspace without allocating
+  /// a pointer vector in the step body. This is the multi-target counterpart of solve_fields_from_state.
   SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
     // re-slot each Program entry p at its name-matched System index sys_block(p) (Spec 3 criterion 23,
     // ADC-457). Even an order-matching Program carries an explicit identity map.
-    const std::vector<int>& m = sys_->program_block_map();
-    if (m.empty())
+    const std::vector<int>& block_map = sys_->program_block_map();
+    if (block_map.empty())
       throw block_map_error_(
           "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
           "installed; positional block identity is not supported");
-    if (u_stages.size() < m.size())
+    if (u_stages.size() < block_map.size())
       throw block_map_error_("ProgramContext::solve_fields_from_blocks: received " +
                              std::to_string(u_stages.size()) +
                              " Program stage slots for an explicit block map with " +
-                             std::to_string(m.size()) + " entries");
-    std::vector<const MultiFab*> remapped(static_cast<std::size_t>(sys_->n_blocks()), nullptr);
+                             std::to_string(block_map.size()) + " entries");
+    FieldSolveWorkspace& workspace = manual_default_field_solve_workspace_();
+    fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/false);
     // Iterate the PROGRAM block indices [0, m.size()) -- NOT u_stages.size(), which is the larger
     // SYSTEM block count. The codegen sizes u_stages to ctx.n_blocks() but only fills Program slots
     // [0, n_program_blocks); when the System has MORE blocks than the Program declares (a subset
@@ -338,52 +350,27 @@ class ProgramContext {
     // fallthrough and clobber real entries. m[p] is Program block p's System index (install-validated
     // in range); the unlisted System slots stay nullptr = their live state. sys_block validates every
     // mapped value before it is used as a vector index.
-    for (std::size_t p = 0; p < m.size(); ++p) {
-      const int mapped = sys_block(static_cast<int>(p));
-      remapped[static_cast<std::size_t>(mapped)] = u_stages[p];
-    }
-    return sys_->solve_fields_from_blocks(remapped);
+    return solve_default_field_workspace_(workspace);
   }
 
   SolveReport solve_fields_from_blocks(const std::string& field,
                                        const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
-    const std::vector<int>& map = sys_->program_block_map();
-    if (u_stages.size() != map.size())
-      throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
-    std::vector<MultiFab*> live;
-    std::vector<MultiFab> published;
-    live.reserve(u_stages.size());
-    published.reserve(u_stages.size());
-    int representative = -1;
-    for (std::size_t p = 0; p < u_stages.size(); ++p) {
-      if (u_stages[p] == nullptr)
-        continue;
-      const int system_block = sys_block(static_cast<int>(p));
-      MultiFab& state_value = sys_->block_state(system_block);
-      if (representative < 0)
-        representative = system_block;
-      live.push_back(&state_value);
-      published.push_back(state_value);
-      state_value = *u_stages[p];
-    }
-    if (representative < 0)
-      throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
-    auto restore = [&]() {
-      for (std::size_t i = 0; i < live.size(); ++i)
-        *live[i] = std::move(published[i]);
-    };
-    try {
-      const SolveReport report =
-          sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
-      restore();
-      return report;
-    } catch (...) {
-      restore();
-      throw;
-    }
+    FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
+    fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
+    return solve_named_field_workspace_(field, workspace);
+  }
+
+  /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
+  /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
+  /// old vector overloads above remain available for manual C++ callers.
+  SolveReport solve_fields_from_blocks(
+      std::int64_t value_id, std::string_view field,
+      std::initializer_list<FieldStageOverride> overrides) const {
+    count_kernel();
+    FieldSolveWorkspace& workspace =
+        generated_field_solve_workspace_(value_id, field, overrides);
+    return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
   }
   int n_blocks() const { return sys_->n_blocks(); }
   Real physical_time() const { return static_cast<Real>(sys_->time()); }
@@ -975,13 +962,14 @@ class ProgramContext {
   /// sign flip into @p r. @p fx / @p fy are non-const because the ghost fill writes their halos (the
   /// valid cells are unchanged). This semi-discrete -div F is LINEAR in the flux, so the -div of a SUM
   /// of named fluxes equals the sum of their -div (the named-flux parity guarantee).
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy) const {
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc) const {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(fx, gc.geom.domain, gc.bc);
     fill_ghosts(fy, gc.geom.domain, gc.bc);
-    MultiFab divc(r.box_array(), r.dmap(), 1,
-                  0);  // 1-component divergence scratch (no ghosts needed)
+    if (!scratch_layout_matches_(divc, r, 1, 0))
+      throw std::invalid_argument(
+          "Program named-flux divergence scratch must match the RHS distributed layout");
     for (int c = 0; c < r.ncomp(); ++c) {
       apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);  // divc(.,0) = div(fx_c, fy_c)
       for (int li = 0; li < r.local_size(); ++li) {
@@ -993,12 +981,22 @@ class ProgramContext {
     }
   }
 
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+  /// Historical/manual C++ convenience overload. Generated Programs pass a context-owned persistent
+  /// divergence scratch through the overload above, so their per-step path performs no allocation.
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy) const {
+    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    neg_div_flux_into(r, fx, fy, divc);
+  }
+
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc,
+                         const ExecutionLane& lane) const {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
     fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
-    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    if (!scratch_layout_matches_(divc, r, 1, 0))
+      throw std::invalid_argument(
+          "Program named-flux divergence scratch must match the RHS distributed layout");
     for (int c = 0; c < r.ncomp(); ++c) {
       apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);
       for (int li = 0; li < r.local_size(); ++li) {
@@ -1008,6 +1006,12 @@ class ProgramContext {
         for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
       }
     }
+  }
+
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy,
+                         const ExecutionLane& lane) const {
+    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    neg_div_flux_into(r, fx, fy, divc, lane);
   }
 
   /// A zero-initialized RHS scratch with the SAME layout (box array / distribution / ghosts) as @p u,
@@ -1024,6 +1028,37 @@ class ProgramContext {
   /// multi-stage scheme (SSPRK/RK). Same allocation as rhs_scratch_like; named for the codegen's
   /// intent. Starts at zero, so a stage `sum_i c_i V_i` is built by axpy-ing each term onto it.
   MultiFab scratch_state_like(const MultiFab& u) const { return rhs_scratch_like(u); }
+
+  /// Context-owned scratch selected by the exact generated IR value and one local sub-slot.  Unlike
+  /// rhs_scratch_like(), this is the hot Program path: storage survives macro steps and is replaced
+  /// only when the prototype's complete distributed layout changes.  Acquisition restores the
+  /// historical zero-initialized-scratch semantics, so rejected attempts cannot leak provisional
+  /// bytes into a retry.  The registry belongs to this ProgramContext (and is shared only by copies
+  /// of that context); there is no process-global cache or Python fallback.
+  MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
+    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype,
+                                prototype.ncomp(), prototype.n_grow());
+  }
+
+  /// Persistent state-shaped counterpart of rhs_scratch().  A distinct kind namespace guarantees
+  /// that an IR node asking for both an RHS and a provisional state never aliases accidentally.
+  MultiFab& scratch_state(std::int64_t value_id, int subslot,
+                          const MultiFab& prototype) const {
+    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype,
+                                prototype.ncomp(), prototype.n_grow());
+  }
+
+  /// Persistent scalar/vector field on @p prototype's exact distributed mesh.  Component and ghost
+  /// widths are part of the authenticated layout, rather than inferred from a previous use of the
+  /// same node id.
+  MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
+                           int n_comp = 1, int n_ghost = 1) const {
+    if (n_comp < 1 || n_ghost < 0)
+      throw std::invalid_argument(
+          "Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
+    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp,
+                                n_ghost);
+  }
 
   /// u <- u + a r over the valid cells (linear combine; forwards to pops::saxpy).
   void axpy(MultiFab& u, Real a, const MultiFab& r) const {
@@ -1349,7 +1384,7 @@ class ProgramContext {
   }
   /// Restore node @p node_id's cached aux into the System aux (a held step: no elliptic solve).
   void cache_restore_aux(int node_id) const {
-    *sys_->grid_context().aux = sys_->program_cache().retrieve(node_id);
+    sys_->program_cache().restore_into(node_id, *sys_->grid_context().aux);
   }
 
   /// Store a copy of a NAMED scratch MultiFab (a held rhs / source / linear_combine output) as node
@@ -1361,7 +1396,7 @@ class ProgramContext {
   }
   /// Restore node @p node_id's cached scratch into @p scratch (a held step: no recompute).
   void cache_restore_scratch(int node_id, MultiFab& scratch) const {
-    scratch = sys_->program_cache().retrieve(node_id);
+    sys_->program_cache().restore_into(node_id, scratch);
   }
   /// The current macro step (0-based). Mirrors System::macro_step(); the codegen lowers on_start() to
   /// ``ctx.macro_step() == 0`` and reads it for any step-indexed predicate.
@@ -1386,6 +1421,290 @@ class ProgramContext {
   /// @}
 
  private:
+  struct FieldSolveWorkspace {
+    std::vector<int> program_to_system;
+    std::vector<const MultiFab*> program_stages;
+    std::vector<const MultiFab*> system_stages;
+    std::vector<MultiFab> published_states;
+    std::vector<int> expected_program_blocks;
+    std::string generated_field_identity;
+    bool expected_program_blocks_initialized = false;
+    bool in_use = false;
+  };
+
+  struct FieldSolveWorkspaceRegistry {
+    FieldSolveWorkspace manual_default;
+    std::map<std::string, FieldSolveWorkspace, std::less<>> manual_named;
+    std::map<std::int64_t, FieldSolveWorkspace> generated;
+  };
+
+  void prepare_field_solve_structure_(FieldSolveWorkspace& workspace) const {
+    const std::vector<int>& block_map = sys_->program_block_map();
+    if (block_map.empty())
+      throw block_map_error_(
+          "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
+          "installed; positional block identity is not supported");
+    const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
+    const bool unchanged = workspace.program_to_system == block_map &&
+                           workspace.program_stages.size() == block_map.size() &&
+                           workspace.system_stages.size() == system_blocks &&
+                           workspace.published_states.size() == block_map.size();
+    if (unchanged)
+      return;
+
+    // Authenticate the complete map before releasing a previously valid workspace.  A malformed map
+    // cannot leave a partially reconfigured context behind.
+    for (std::size_t p = 0; p < block_map.size(); ++p)
+      (void)sys_block(static_cast<int>(p));
+    workspace.program_to_system.assign(block_map.begin(), block_map.end());
+    workspace.program_stages.assign(block_map.size(), nullptr);
+    workspace.system_stages.assign(system_blocks, nullptr);
+    workspace.published_states.clear();
+    workspace.published_states.resize(block_map.size());
+    workspace.expected_program_blocks.clear();
+    workspace.expected_program_blocks_initialized = false;
+  }
+
+  void require_field_stage_layout_(int program_block, const MultiFab& stage) const {
+    const MultiFab& live = sys_->block_state(sys_block(program_block));
+    if (!scratch_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires each stage state to match its block's exact "
+          "distributed layout");
+    const std::vector<int>& block_map = sys_->program_block_map();
+    for (std::size_t other = 0; other < block_map.size(); ++other) {
+      if (static_cast<int>(other) == program_block)
+        continue;
+      if (&stage == &sys_->block_state(sys_block(static_cast<int>(other))))
+        throw std::invalid_argument(
+            "Program simultaneous field solve cannot use another block's live state as a stage "
+            "override");
+    }
+  }
+
+  void fill_manual_field_stages_(FieldSolveWorkspace& workspace,
+                                 const std::vector<const MultiFab*>& stages,
+                                 bool require_exact_size) const {
+    prepare_field_solve_structure_(workspace);
+    const std::size_t required = workspace.program_to_system.size();
+    if ((require_exact_size && stages.size() != required) ||
+        (!require_exact_size && stages.size() < required))
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks: stage vector size mismatch");
+    std::fill(workspace.program_stages.begin(), workspace.program_stages.end(), nullptr);
+    for (std::size_t p = 0; p < required; ++p) {
+      const MultiFab* stage = stages[p];
+      if (stage != nullptr)
+        require_field_stage_layout_(static_cast<int>(p), *stage);
+      workspace.program_stages[p] = stage;
+    }
+  }
+
+  FieldSolveWorkspace& manual_default_field_solve_workspace_() const {
+    if (!field_solve_workspace_registry_)
+      throw std::logic_error("Program field-solve workspace registry is unavailable");
+    FieldSolveWorkspace& workspace = field_solve_workspace_registry_->manual_default;
+    prepare_field_solve_structure_(workspace);
+    return workspace;
+  }
+
+  FieldSolveWorkspace& manual_named_field_solve_workspace_(const std::string& field) const {
+    if (field.empty())
+      throw std::invalid_argument("Program named simultaneous field solve requires a field identity");
+    if (!field_solve_workspace_registry_)
+      throw std::logic_error("Program field-solve workspace registry is unavailable");
+    auto& workspaces = field_solve_workspace_registry_->manual_named;
+    auto found = workspaces.find(field);
+    if (found == workspaces.end())
+      found = workspaces.try_emplace(field).first;
+    prepare_field_solve_structure_(found->second);
+    return found->second;
+  }
+
+  FieldSolveWorkspace& generated_field_solve_workspace_(
+      std::int64_t value_id, std::string_view field,
+      std::initializer_list<FieldStageOverride> overrides) const {
+    if (value_id < 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires a non-negative IR identity");
+    if (field.empty())
+      throw std::invalid_argument("generated simultaneous field solve requires a field identity");
+    if (overrides.size() == 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires at least one stage override");
+    if (!field_solve_workspace_registry_)
+      throw std::logic_error("Program field-solve workspace registry is unavailable");
+
+    auto [entry, inserted] = field_solve_workspace_registry_->generated.try_emplace(value_id);
+    FieldSolveWorkspace& workspace = entry->second;
+    if (inserted)
+      workspace.generated_field_identity.assign(field.data(), field.size());
+    else if (std::string_view(workspace.generated_field_identity) != field)
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity was reused for a different field");
+    prepare_field_solve_structure_(workspace);
+
+    const bool learn_blocks = !workspace.expected_program_blocks_initialized;
+    if (learn_blocks) {
+      workspace.expected_program_blocks.clear();
+      workspace.expected_program_blocks.reserve(overrides.size());
+    } else if (workspace.expected_program_blocks.size() != overrides.size()) {
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity changed its block pack");
+    }
+    std::fill(workspace.program_stages.begin(), workspace.program_stages.end(), nullptr);
+    std::size_t ordinal = 0;
+    for (const FieldStageOverride& override_value : overrides) {
+      if (override_value.program_block < 0 ||
+          static_cast<std::size_t>(override_value.program_block) >=
+              workspace.program_stages.size())
+        throw std::out_of_range(
+            "generated simultaneous field solve Program block is out of range");
+      if (override_value.state == nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve stage override cannot be null");
+      if (workspace.program_stages[static_cast<std::size_t>(override_value.program_block)] !=
+          nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve contains a duplicate Program block");
+      if (learn_blocks)
+        workspace.expected_program_blocks.push_back(override_value.program_block);
+      else if (workspace.expected_program_blocks[ordinal] != override_value.program_block)
+        throw std::logic_error(
+            "generated simultaneous field solve IR identity changed its ordered block pack");
+      require_field_stage_layout_(override_value.program_block, *override_value.state);
+      workspace.program_stages[static_cast<std::size_t>(override_value.program_block)] =
+          override_value.state;
+      ++ordinal;
+    }
+    workspace.expected_program_blocks_initialized = true;
+    return workspace;
+  }
+
+  SolveReport solve_default_field_workspace_(FieldSolveWorkspace& workspace) const {
+    std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
+    for (std::size_t p = 0; p < workspace.program_to_system.size(); ++p) {
+      const int mapped = workspace.program_to_system[p];
+      workspace.system_stages[static_cast<std::size_t>(mapped)] = workspace.program_stages[p];
+    }
+    return sys_->solve_fields_from_blocks(workspace.system_stages);
+  }
+
+  int prepare_named_field_snapshots_(FieldSolveWorkspace& workspace) const {
+    int representative = -1;
+    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+      if (workspace.program_stages[p] == nullptr)
+        continue;
+      const int system_block = workspace.program_to_system[p];
+      MultiFab& live = sys_->block_state(system_block);
+      MultiFab& published = workspace.published_states[p];
+      if (!scratch_layout_matches_(published, live, live.ncomp(), live.n_grow())) {
+        published =
+            MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        count_scratch(published);
+      }
+      if (representative < 0)
+        representative = system_block;
+    }
+    if (representative < 0)
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
+
+    // Capture every accepted live image before the first live state is touched.  If any later stage
+    // copy or native solve fails, all blocks can therefore be restored transactionally.
+    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+      if (workspace.program_stages[p] == nullptr)
+        continue;
+      const int system_block = workspace.program_to_system[p];
+      PureFieldAlgebra::copy_allocated(workspace.published_states[p],
+                                       sys_->block_state(system_block));
+    }
+    return representative;
+  }
+
+  void restore_named_field_states_(const FieldSolveWorkspace& workspace) const {
+    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+      if (workspace.program_stages[p] == nullptr)
+        continue;
+      const int system_block = workspace.program_to_system[p];
+      PureFieldAlgebra::copy_allocated(sys_->block_state(system_block),
+                                       workspace.published_states[p]);
+    }
+  }
+
+  SolveReport solve_named_field_workspace_(const std::string& field,
+                                           FieldSolveWorkspace& workspace) const {
+    if (workspace.in_use)
+      throw std::logic_error("Program simultaneous field-solve workspace is already in use");
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(workspace.in_use);
+    const int representative = prepare_named_field_snapshots_(workspace);
+    try {
+      for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+        if (workspace.program_stages[p] == nullptr)
+          continue;
+        PureFieldAlgebra::copy_allocated(
+            sys_->block_state(workspace.program_to_system[p]), *workspace.program_stages[p]);
+      }
+      const SolveReport report =
+          sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
+      restore_named_field_states_(workspace);
+      return report;
+    } catch (...) {
+      const std::exception_ptr failure = std::current_exception();
+      restore_named_field_states_(workspace);
+      std::rethrow_exception(failure);
+    }
+  }
+
+  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
+
+  struct ScratchKey {
+    ScratchKind kind = ScratchKind::Rhs;
+    std::int64_t value_id = -1;
+    int subslot = -1;
+
+    friend bool operator<(const ScratchKey& lhs, const ScratchKey& rhs) noexcept {
+      if (lhs.kind != rhs.kind)
+        return lhs.kind < rhs.kind;
+      if (lhs.value_id != rhs.value_id)
+        return lhs.value_id < rhs.value_id;
+      return lhs.subslot < rhs.subslot;
+    }
+  };
+
+  struct ScratchRegistry {
+    std::map<ScratchKey, MultiFab> fields;
+  };
+
+  static bool scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype,
+                                      int n_comp, int n_ghost) {
+    return field.box_array().boxes() == prototype.box_array().boxes() &&
+           field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
+           field.n_grow() == n_ghost;
+  }
+
+  MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                 const MultiFab& prototype, int n_comp, int n_ghost) const {
+    if (value_id < 0 || subslot < 0)
+      throw std::invalid_argument(
+          "Program persistent scratch requires non-negative IR value and sub-slot identities");
+    if (!scratch_registry_)
+      throw std::logic_error("Program persistent scratch registry is unavailable");
+    const ScratchKey key{kind, value_id, subslot};
+    auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
+    MultiFab& field = entry->second;
+    if (inserted || !scratch_layout_matches_(field, prototype, n_comp, n_ghost)) {
+      field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
+      count_scratch(field);
+    }
+    field.set_val(Real(0));
+    return field;
+  }
+
   RelativeCellMeasure relative_cell_measure_(int owner) const {
     const GridContext context = sys_->grid_context(sys_block(owner));
     if (context.embedded_boundary_set == nullptr || !*context.embedded_boundary_set ||
@@ -1474,6 +1793,10 @@ class ProgramContext {
   mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
+  mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
+      std::make_shared<FieldSolveWorkspaceRegistry>();
+  mutable std::shared_ptr<ScratchRegistry> scratch_registry_ =
+      std::make_shared<ScratchRegistry>();
   System* sys_;
 };
 

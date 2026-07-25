@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/cold.hpp>  // POPS_COLD_FN: COLD block-builder no-optimize attribute (ADC-337)
 #include <pops/core/foundation/types.hpp>
+#include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/execution/for_each.hpp>  // for_each_cell (projection ponctuelle post-pas, ADC-177)
 #include <pops/mesh/geometry/geometry.hpp>
@@ -127,7 +128,9 @@ template <class Limiter, class Flux, class Model>
 inline void assemble_rhs_without_prepared_interfaces(const Model& model, MultiFab& state,
                                                      const GridContext& context, MultiFab& residual,
                                                      bool reconstruct_primitive,
-                                                     Real positivity_floor) {
+                                                     Real positivity_floor,
+                                                     Real weno_epsilon = kWenoEpsilon,
+                                                     const std::shared_ptr<MultiFab>& ws_cache = {}) {
   std::vector<Box2D> xboxes;
   std::vector<Box2D> yboxes;
   xboxes.reserve(static_cast<std::size_t>(state.box_array().size()));
@@ -138,8 +141,21 @@ inline void assemble_rhs_without_prepared_interfaces(const Model& model, MultiFa
   }
   MultiFab fx(BoxArray(std::move(xboxes)), state.dmap(), state.ncomp(), 0);
   MultiFab fy(BoxArray(std::move(yboxes)), state.dmap(), state.ncomp(), 0);
-  compute_face_fluxes<Limiter, Flux>(model, state, *context.aux, fx, fy, context.geom.dx(),
-                                     context.geom.dy(), reconstruct_primitive, positivity_floor);
+  if constexpr (std::is_same_v<Flux, HLLFlux>) {
+    if (ws_cache) {
+      compute_face_fluxes_hll_cached<Limiter>(
+          model, state, *context.aux, fx, fy, *ws_cache, context.geom.dx(), context.geom.dy(),
+          reconstruct_primitive, positivity_floor, weno_epsilon);
+    } else {
+      compute_face_fluxes<Limiter, Flux>(model, state, *context.aux, fx, fy, context.geom.dx(),
+                                         context.geom.dy(), reconstruct_primitive, positivity_floor,
+                                         weno_epsilon);
+    }
+  } else {
+    compute_face_fluxes<Limiter, Flux>(model, state, *context.aux, fx, fy, context.geom.dx(),
+                                       context.geom.dy(), reconstruct_primitive, positivity_floor,
+                                       weno_epsilon);
+  }
   zero_prepared_interface_fluxes(fx, fy, context);
   mf_eval_rhs(model, state, *context.aux, fx, fy, context.geom.dx(), context.geom.dy(), residual);
 }
@@ -157,9 +173,9 @@ struct BlockRhsEval {
   const GridContext* ctx;
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  /// Per-cell wave speed scratch (HLL cache, opt-in). nullptr (default) -> per-face path strictly
-  /// unchanged. Non-null ONLY for the HLL flux (cf. build_block): the cached branch is instantiated
-  /// only for Flux == HLLFlux, so model.wave_speeds is always present there.
+  /// Exact reconstructed-face signal-speed scratch (HLL cache, opt-in). nullptr (default) keeps the
+  /// uncached path. Non-null ONLY for the HLL flux (cf. build_block): four lanes store the lower and
+  /// upper speeds of each x/y face, so model.wave_speeds is always present there.
   std::shared_ptr<MultiFab> ws_cache;
   Real weno_eps =
       kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
@@ -169,7 +185,7 @@ struct BlockRhsEval {
       if (ws_cache) {
         // Re-allocate the scratch at the current layout (4 components, 1 ghost): covers an AMR regrid
         // or a first call (shared_ptr to an empty MultiFab). Otherwise reuse the existing allocation.
-        if (ws_cache->local_size() != U.local_size() || ws_cache->ncomp() != 4)
+        if (!detail::wave_speed_cache_matches(*ws_cache, U))
           *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
         assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
                                          pos_floor, weno_eps);
@@ -204,12 +220,12 @@ struct BlockRhsEval {
   void eval_core_filled(MultiFab& U, MultiFab& R) const {
     if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces()) {
       assemble_rhs_without_prepared_interfaces<Limiter, Flux>(model, U, *ctx, R, recon_prim,
-                                                              pos_floor);
+                                                              pos_floor, weno_eps, ws_cache);
       return;
     }
     if constexpr (std::is_same_v<Flux, HLLFlux>) {
       if (ws_cache) {
-        if (ws_cache->local_size() != U.local_size() || ws_cache->ncomp() != 4)
+        if (!detail::wave_speed_cache_matches(*ws_cache, U))
           *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
         assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
                                          pos_floor, weno_eps);
@@ -971,8 +987,9 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 
 /// Dispatch of the spatial scheme (limiter x Riemann flux) -> compiled closures. HLLC / Roe guarded
 /// by requires: they demand a 4-variable transport exposing pressure (otherwise an explicit error).
-/// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes to
-/// weno5z when Limiter::n_ghost >= 3 (the caller must allocate 3 ghosts, cf. block_n_ghost).
+/// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes
+/// through the policy's explicit stencil protocol (the caller allocates its declared ghost radius,
+/// cf. block_n_ghost).
 /// @p method chooses the EXPLICIT advance (explicit/SSPRK2 by default, ssprk3 | euler optional);
 /// no effect in IMEX.
 /// @p implicit_components: IMEX implicit mask carried by the block (indices; empty = model default,
@@ -1264,20 +1281,11 @@ struct MinStabilityDt {
   }
 };
 
-/// Poisson contribution functor: rhs += elliptic_rhs(U) (pure HOST loop, no device kernel).
+/// Poisson contribution functor: rhs += elliptic_rhs(U), executed by the configured Kokkos backend.
 template <class Model>
 struct PoissonRhs {
   Model m;
-  void operator()(const MultiFab& U, MultiFab& rhs) const {
-    for (int li = 0; li < rhs.local_size(); ++li) {
-      Array4 r = rhs.fab(li).array();
-      const ConstArray4 u = U.fab(li).const_array();
-      const Box2D b = rhs.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          r(i, j) += m.elliptic_rhs(load_state<Model>(u, i, j));
-    }
-  }
+  void operator()(const MultiFab& U, MultiFab& rhs) const { add_model_elliptic_rhs(m, U, rhs); }
 };
 }  // namespace detail
 
@@ -1314,7 +1322,7 @@ std::function<Real(const MultiFab&)> make_stability_dt(const Model& m, const Gri
     return {};
 }
 
-/// Block contribution to the Poisson right-hand side: rhs += elliptic_rhs(U) (host loop).
+/// Block contribution to the Poisson right-hand side: rhs += elliptic_rhs(U) on Kokkos.
 template <class Model>
 std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m) {
   return detail::PoissonRhs<Model>{m};

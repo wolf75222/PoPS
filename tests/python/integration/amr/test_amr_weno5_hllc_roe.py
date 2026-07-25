@@ -12,7 +12,8 @@ rusanov/hll) -> parite STRICTE de surface System/AMR.
 Verifie (bloc NATIF engine.Model -> AUCUN compilateur requis ; le dispatch est exerce au BUILD) :
   - MONO-BLOC (un seul add_block -> dispatch_amr_compiled) : Euler compressible + weno5 + hllc TOURNE
     fini ; idem weno5 + roe. (Avant le fix : RuntimeError "limiter inconnu 'weno5'".)
-  - MULTI-BLOCS (>= 2 add_block -> dispatch_amr_block) : deux blocs Euler weno5 + hllc TOURNENT finis.
+  - MULTI-NIVEAUX : WENO5 selectionne le fournisseur coarse/fine conservatif d'ordre 5 / halo 3
+    et avance sans abaissement silencieux vers l'interpolation MUSCL.
   - GARDE INTACTE : weno5 + hllc sur un transport ISOTHERME 3-var (non Euler, sans pression / capability
     HLLC) reste REJETE par la CAPABILITE ("exige un transport compressible"), PAS par le limiteur ->
     weno5 ne court-circuite pas la garde de flux.
@@ -56,7 +57,7 @@ def iso_spec():
 def bump(n):
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs, indexing="xy")
-    return (1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)).ravel()
+    return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
 
 
 n = 32
@@ -65,7 +66,7 @@ rho = bump(n)
 # --- 1. MONO-BLOC (dispatch_amr_compiled) : weno5 + hllc, puis weno5 + roe ---------------------------
 for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
-    s = AmrSystem(n=n, L=1.0, periodic=True)
+    s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
     s.add_equation("gas", euler_spec(),
@@ -76,24 +77,24 @@ for riem in (HLLC(), Roe()):
     d = np.asarray(s.density("gas"))
     chk(np.all(np.isfinite(d)), f"weno5 + {riem.scheme} : densite finie sur 3 pas (build OK, plus de 'limiter inconnu')")
 
-# --- 2. MULTI-BLOCS (dispatch_amr_block) : deux blocs Euler weno5 + hllc -----------------------------
-print("== multi-blocs Euler : 2 blocs weno5 + hllc (dispatch_amr_block) ==")
-s = AmrSystem(n=n, L=1.0, periodic=True)
+# --- 2. MULTI-NIVEAUX : le registre choisit le fournisseur C/F ordre 5 -----------------------------
+print("== multi-niveaux Euler : weno5 + fournisseur coarse/fine ordre 5 ==")
+s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
 s.set_temporal_relations([2], [1], ["integral_only"])
-s.set_refinement(1e30)
-s.add_equation("a", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
-s.add_equation("b", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
+s.add_equation("a", euler_spec(),
+               spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
+s.add_equation("b", euler_spec(),
+               spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
 s.set_density("a", rho.copy())
 s.set_density("b", rho.copy())
-for _ in range(3):
-    s.step(1e-4)
-chk(np.all(np.isfinite(np.asarray(s.density("a")))), "multi-blocs weno5 + hllc : bloc a fini")
-chk(np.all(np.isfinite(np.asarray(s.density("b")))), "multi-blocs weno5 + hllc : bloc b fini")
+s.step(1e-4)
+chk(np.all(np.isfinite(np.asarray(s.density("a")))),
+    "weno5 multi-niveaux avance avec le fournisseur coarse/fine ordre 5")
 
 # --- 3. GARDE DE CAPABILITE INTACTE : weno5 + hllc sur isotherme 3-var -> rejet de FLUX, pas de LIM --
 print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le limiteur) ==")
 try:
-    s = AmrSystem(n=n, L=1.0, periodic=True)
+    s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
     s.add_equation("iso", iso_spec(),

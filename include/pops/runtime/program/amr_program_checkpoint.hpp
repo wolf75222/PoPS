@@ -187,14 +187,15 @@ inline amr::HistoryIdentity read_identity(Reader& in) {
   return value;
 }
 
-inline void write_reals(Writer& out, const std::vector<Real>& values) {
+template <class Allocator>
+inline void write_reals(Writer& out, const std::vector<Real, Allocator>& values) {
   out.size(values.size());
   for (Real value : values)
     out.real(static_cast<double>(value));
 }
 
-inline std::vector<Real> read_reals(Reader& in) {
-  std::vector<Real> values(in.size());
+inline RefluxStorage<Real> read_reflux_reals(Reader& in) {
+  RefluxStorage<Real> values(in.size());
   for (Real& value : values)
     value = static_cast<Real>(in.real());
   return values;
@@ -221,14 +222,14 @@ inline EdgeStrip read_strip(Reader& in) {
   value.I1 = in.i32();
   value.J0 = in.i32();
   value.J1 = in.i32();
-  value.cL = read_reals(in);
-  value.cR = read_reals(in);
-  value.cB = read_reals(in);
-  value.cT = read_reals(in);
-  value.fL = read_reals(in);
-  value.fR = read_reals(in);
-  value.fB = read_reals(in);
-  value.fT = read_reals(in);
+  value.cL = read_reflux_reals(in);
+  value.cR = read_reflux_reals(in);
+  value.cB = read_reflux_reals(in);
+  value.cT = read_reflux_reals(in);
+  value.fL = read_reflux_reals(in);
+  value.fR = read_reflux_reals(in);
+  value.fB = read_reflux_reals(in);
+  value.fT = read_reflux_reals(in);
   return value;
 }
 

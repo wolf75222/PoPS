@@ -1,14 +1,12 @@
 /// @file
-/// @brief Global wave-speed / step-bound reductions and the HLL wave-speed cache.
+/// @brief Global wave-speed and step-bound reductions.
 ///
 /// CONTRACT: the CFL and step-bound reductions over a whole MultiFab (device reduction + MPI
-/// all_reduce), plus the OPT-IN per-cell wave-speed scratch fill.
+/// all_reduce).
 ///   - max_wave_speed_mf: global max CFL speed (collective under MPI).
 ///   - max_wave_speed_hotspot_mf: cell dominating the CFL bound (diagnostic, ADC-182).
 ///   - max_stability_speed_mf / max_source_frequency_mf / min_stability_dt_mf: optional
 ///     step-bound traits (HasStabilitySpeed / HasSourceFrequency / HasStabilityDt).
-///   - fill_wave_speed_cache: per-cell (lo_x, hi_x, lo_y, hi_y) scratch for the HLL cache path
-///     (the scratch is CONSUMED in cartesian_operator.hpp).
 ///
 /// COLLECTIVE UNDER MPI: every reduction aggregates via all_reduce over ALL ranks; without it
 /// each rank would choose a different dt and the simulation desynchronizes (see notes below).
@@ -579,59 +577,6 @@ inline Real min_stability_dt_mf(const Model& model, const MultiFab& U, const Mul
                                       {model, u, a}, active_cells.fab(li).const_array()}));
   }
   return detail::publish_stability_dt_minimum(local);
-}
-
-// ============================================================================
-// HLL WAVE SPEED CACHE (OPT-IN -- default path strictly untouched)
-// ============================================================================
-// The HLL flux bounds each face by the signal speeds of BOTH adjacent cells (Davis estimates, cf.
-// hll_speeds). The default path recalls model.wave_speeds per face: for a model whose wave speeds are
-// expensive (moment hierarchy + factorizations at each call), wave_speeds is recomputed several times
-// per cell and per RK stage. This OPT-IN path evaluates wave_speeds ONCE per cell and per direction in
-// a scratch (4 components lo_x/hi_x/lo_y/hi_y), then assembles the residual by reading the scratch: the
-// face speed at i-1/2 becomes min/max of the signed speeds of the two neighbor cells (union over the
-// neighbors, as in the per-cell reference). The scratch is CONSUMED by assemble_rhs_hll_cached
-// (cartesian_operator.hpp).
-
-namespace detail {
-/// WaveSpeedCacheKernel: evaluates model.wave_speeds per cell in both directions and stores
-/// (lo_x, hi_x, lo_y, hi_y) in a 4-component scratch. Named functor (device-clean cross-TU, same
-/// emission constraint as MaxWaveSpeedKernel). POPS_HD.
-template <class Model>
-struct WaveSpeedCacheKernel {
-  Model model;
-  ConstArray4 u, a;
-  Array4 ws;
-  POPS_HD void operator()(int i, int j) const {
-    const auto s = load_state<Model>(u, i, j);
-    const Aux ax = load_aux<aux_comps<Model>()>(a, i, j);
-    Real lox, hix, loy, hiy;
-    model.wave_speeds(s, ax, 0, lox, hix);
-    model.wave_speeds(s, ax, 1, loy, hiy);
-    ws(i, j, 0) = lox;
-    ws(i, j, 1) = hix;
-    ws(i, j, 2) = loy;
-    ws(i, j, 3) = hiy;
-  }
-};
-}  // namespace detail
-
-/// fill_wave_speed_cache: fills the per-cell wave speed scratch (lo_x, hi_x, lo_y, hi_y).
-///
-/// Evaluated on the VALID box grown by one ghost (grow(v, 1)): a valid cell's face speed reads the
-/// cached speed of its neighbor, so the scratch must cover one ghost on each side. @p cache must have
-/// the SAME layout as @p U (same BoxArray / DistributionMapping), 4 components and >= 1 ghost. @p U
-/// carries its ghosts already filled (fill_ghosts); @p aux carries at least 1 ghost (read at the
-/// neighbor cells, like assemble_rhs).
-template <class Model>
-inline void fill_wave_speed_cache(const Model& model, const MultiFab& U, const MultiFab& aux,
-                                  MultiFab& cache) {
-  for (int li = 0; li < U.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    const ConstArray4 a = aux.fab(li).const_array();
-    Array4 ws = cache.fab(li).array();
-    for_each_cell(U.box(li).grow(1), detail::WaveSpeedCacheKernel<Model>{model, u, a, ws});
-  }
 }
 
 }  // namespace pops

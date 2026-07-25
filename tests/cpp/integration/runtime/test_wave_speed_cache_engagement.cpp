@@ -1,11 +1,11 @@
 // Cache des vitesses d'onde HLL (opt-in) : PREUVE D'ENGAGEMENT cote coeur C++. Le test Python
 // (tests/python/unit/physics/test_wave_speed_cache.py) verifie ON == OFF + les gardes, mais sa bit-identite
 // reussirait TRIVIALEMENT si le chemin cache devenait un no-op silencieux (repli par face). Ce test
-// instrumente model.wave_speeds par un COMPTEUR et exerce make_block(none, hll) OFF puis ON :
-//   (1) bit-exactitude : NoSlope + recon conservatif -> cache ON == OFF a 0 ulp apres N pas SSPRK2 ;
-//   (2) engagement      : le chemin cache appelle wave_speeds UNE fois par cellule (pre-passe) au lieu
-//       de par face -> calls_on < calls_off STRICTEMENT. Si le wiring ws_cache ou la garde HLLFlux
-//       cassait (cache -> no-op), calls_on == calls_off et CE test echoue (le test Python, lui, non).
+// instrumente model.wave_speeds par un COMPTEUR et exerce le chemin HLL OFF puis ON :
+//   (1) bit-exactitude : les vitesses sont calculees sur les traces reconstruites exactes, donc
+//       cache ON == OFF a 0 ulp avec NoSlope, Minmod et WENO5 ;
+//   (2) engagement      : chaque face partagee est evaluee une seule fois dans la pre-passe ->
+//       calls_on < calls_off STRICTEMENT. Si le cache devenait un no-op, ce test echouerait.
 // Header-only (pops::pops seul), aucun modele physique : le compteur vit dans une Kokkos::View
 // device-accessible (atomic), portable Serial / OpenMP / Cuda.
 
@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
@@ -110,6 +111,65 @@ static long long read_counter(const Counter& c) {
   return h();
 }
 
+template <class Limiter>
+static void expect_reconstructed_face_cache_exact_and_engaged(const char* reconstruction_name) {
+  const int n = 24;
+  const double L = 1.0;
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, L, 0.0, L};
+  const BoxArray ba = BoxArray::from_domain(dom, n);
+  const DistributionMapping dm(ba.size(), n_ranks());
+  BCRec bc;
+  MultiFab state(ba, dm, 3, Limiter::n_ghost);
+  MultiFab aux(ba, dm, 3, 1);
+  MultiFab residual_direct(ba, dm, 3, 0), residual_cached(ba, dm, 3, 0);
+  MultiFab cache(ba, dm, 4, 1);
+  const Box2D xfaces = xface_box(dom), yfaces = yface_box(dom);
+  const BoxArray xba(std::vector<Box2D>{xfaces}), yba(std::vector<Box2D>{yfaces});
+  MultiFab flux_x_direct(xba, dm, 3, 0), flux_y_direct(yba, dm, 3, 0);
+  MultiFab flux_x_cached(xba, dm, 3, 0), flux_y_cached(yba, dm, 3, 0);
+  aux.set_val(0.0);
+  init_state(state, geom, dom);
+  fill_ghosts(state, geom.domain, bc);
+
+  Counter calls("ws_calls_reconstructed");
+  const CountingIsothermal model{Real(1), /*busy=*/0, calls};
+  Kokkos::deep_copy(calls, 0LL);
+  assemble_rhs<Limiter, HLLFlux>(model, state, aux, geom, residual_direct);
+  const long long calls_direct = read_counter(calls);
+
+  Kokkos::deep_copy(calls, 0LL);
+  assemble_rhs_hll_cached<Limiter>(model, state, aux, geom, residual_cached, cache);
+  const long long calls_cached = read_counter(calls);
+
+  device_fence();
+  EXPECT_EQ(count_diff_bits(residual_direct, residual_cached, dom), 0)
+      << reconstruction_name
+      << ": exact face-trace cache must preserve every residual bit";
+  EXPECT_LT(calls_cached, calls_direct)
+      << reconstruction_name << ": shared faces must reduce wave_speeds calls (direct="
+      << calls_direct << ", cached=" << calls_cached << ")";
+  EXPECT_GT(calls_cached, 0) << reconstruction_name << ": cache pre-pass really evaluated waves";
+
+  compute_face_fluxes<Limiter, HLLFlux>(model, state, aux, flux_x_direct, flux_y_direct,
+                                        geom.dx(), geom.dy());
+  compute_face_fluxes_hll_cached<Limiter>(model, state, aux, flux_x_cached, flux_y_cached, cache,
+                                          geom.dx(), geom.dy());
+  device_fence();
+  EXPECT_EQ(count_diff_bits(flux_x_direct, flux_x_cached, xfaces), 0)
+      << reconstruction_name << ": x-face materialization must consume the exact cached interval";
+  EXPECT_EQ(count_diff_bits(flux_y_direct, flux_y_cached, yfaces), 0)
+      << reconstruction_name << ": y-face materialization must consume the exact cached interval";
+}
+
+TEST(WaveSpeedCacheEngagement, MusclCacheMatchesExactReconstructedTraces) {
+  expect_reconstructed_face_cache_exact_and_engaged<Minmod>("Minmod");
+}
+
+TEST(WaveSpeedCacheEngagement, Weno5CacheMatchesExactReconstructedTraces) {
+  expect_reconstructed_face_cache_exact_and_engaged<Weno5>("WENO5-Z");
+}
+
 // (1) bit-exactitude + (2) engagement (comptage), wave_speeds bon marche.
 TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
   const int n = 48;
@@ -155,8 +215,8 @@ TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
   EXPECT_TRUE(evolved > 0) << "l'etat a reellement evolue (test non creux)";
   EXPECT_TRUE(ndiff == 0) << "bit-exact NoSlope+HLL : cache ON == OFF (0 ulp), ndiff_bits="
                           << ndiff;
-  // PREUVE D'ENGAGEMENT : le cache pre-calcule wave_speeds par cellule, le chemin par face le rappelle
-  // pour chaque face -> strictement moins d'appels. calls_on == calls_off signalerait un cache no-op.
+  // PREUVE D'ENGAGEMENT : la pre-passe calcule chaque face partagee une seule fois, contrairement au
+  // residu direct qui la re-evalue depuis chacune de ses deux cellules adjacentes.
   EXPECT_TRUE(calls_on < calls_off)
       << "cache ENGAGE : moins d'appels wave_speeds que le chemin par face (OFF=" << calls_off
       << " ON=" << calls_on << ")";

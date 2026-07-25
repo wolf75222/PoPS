@@ -1,12 +1,12 @@
 // Injection d'aux multi-patch parent -> enfant DISTRIBUEE (coupler_inject_aux_mb,
-// chemin replicated_parent=false via parallel_copy), verifiee contre la valeur
-// ANALYTIQUE attendue : independante du nombre de rangs.
+// chemin replicated_parent=false via parallel_copy), verifiee contre une fonction AFFINE :
+// l'interpolation conservative-lineaire doit etre exacte et independante du nombre de rangs.
 //
 // Au-dela de 2 niveaux, le parent (aux du niveau intermediaire) est multi-box REPARTI :
 // un patch enfant peut avoir son parent sur un AUTRE rang. Sans le FillPatch parallel_copy,
 // mf_find_box rendrait -1 et ces cellules resteraient a leur sentinelle (-12345). On verifie
 // que chaque cellule (valides + ghosts), entierement couverte par le parent, recoit la bonne
-// valeur f(coarsen(i), coarsen(j), k). A np=1 le chemin reste exerce (parallel_copy = copie
+// valeur affine au centre de l'enfant. A np=1 le chemin reste exerce (parallel_copy = copie
 // memoire). DIST == analytique a np=1/2/4 prouve l'invariance a la distribution.
 
 #include <gtest/gtest.h>
@@ -33,6 +33,8 @@ static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
   auto fval = [](int ci, int cj, int k) { return double(ci * 1000 + cj * 10 + k); };
 
   // parent : niveau 1, 4 boites pavant [0,32)^2 (quadrants 16x16), reparti round-robin.
+  const Box2D coarse_domain = Box2D::from_extents(32, 32);
+  const Box2D fine_domain = coarse_domain.refine(2);
   std::vector<Box2D> pb;
   for (int qy = 0; qy < 2; ++qy)
     for (int qx = 0; qx < 2; ++qx) {
@@ -59,7 +61,8 @@ static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
   MultiFab child(cba, cdm, 3, 1);
   child.set_val(-12345.0);  // sentinelle : doit etre ecrasee partout (couverture totale)
 
-  detail::coupler_inject_aux_mb(parent, child, /*replicated_parent=*/false);
+  detail::coupler_inject_aux_mb(parent, child, coarse_domain, fine_domain,
+                                /*replicated_parent=*/false, Periodicity{});
 
   // verification locale contre l'analytique (coarsen du grown box).
   for (int lc = 0; lc < child.local_size(); ++lc) {
@@ -68,8 +71,10 @@ static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
     for (int j = g.lo[1]; j <= g.hi[1]; ++j)
       for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
         const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+        const double ox = (i & 1) ? 0.25 : -0.25;
+        const double oy = (j & 1) ? 0.25 : -0.25;
         for (int k = 0; k < 3; ++k)
-          if (c(i, j, k) != fval(ci, cj, k))
+          if (c(i, j, k) != fval(ci, cj, k) + 1000.0 * ox + 10.0 * oy)
             ++fails;
       }
   }

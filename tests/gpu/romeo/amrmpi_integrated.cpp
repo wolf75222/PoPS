@@ -60,7 +60,7 @@ static int run_mode(int n, bool distribute, const char* tag) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 8;
   cfg.distribute_coarse = distribute;  // reparti => grossier multi-box reparti (strong-scaling)
   cfg.coarse_max_grid = distribute ? n / 2 : 0;  // 2x2 : le decoupage qui ne degrade pas le MG

@@ -46,7 +46,7 @@ TEST(test_program_reflux_ledger, route_reflux_integrated_drops_dt) {
   // -(fL - cL)/dx (NO *dt). We check the integrated variant equals route_reflux with dt == 1.
   const int nc = 1;
   BoxArray fine(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
-  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine);
+  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine, Periodicity{false, false});
   EdgeStrip g = make_strip(2, 5, 2, 5, nc);
   const int nJ = 4 * nc, nI = 4 * nc;
   g.cL.assign(nJ, Real(1));
@@ -60,6 +60,7 @@ TEST(test_program_reflux_ledger, route_reflux_integrated_drops_dt) {
   const Real dx = Real(0.5), dy = Real(0.25);
   FluxRegister ref(Box2D{{1, 1}, {6, 6}}, nc);
   cfi.route_reflux_integrated(g, dx, dy, ref, nc);
+  device_fence();
   // -(fL - cL)/dx = -(10 - 1)/0.5 = -18; +(fR - cR)/dx = (20 - 2)/0.5 = 36.
   EXPECT_EQ(ref.at(1, 2, 0), -(Real(10) - Real(1)) / dx) << "integrated_left";
   EXPECT_EQ(ref.at(6, 2, 0), +(Real(20) - Real(2)) / dx) << "integrated_right";
@@ -69,6 +70,7 @@ TEST(test_program_reflux_ledger, route_reflux_integrated_drops_dt) {
   // Equivalence to route_reflux at dt == 1 (both formulas coincide when the coarse side is not re-scaled).
   FluxRegister ref_dt1(Box2D{{1, 1}, {6, 6}}, nc);
   cfi.route_reflux(g, dx, dy, Real(1), ref_dt1, nc);
+  device_fence();
   EXPECT_EQ(ref.at(1, 2, 0), ref_dt1.at(1, 2, 0)) << "integrated_eq_dt1";
 }
 
@@ -112,6 +114,22 @@ TEST(test_program_reflux_ledger, ssprk2_effective_flux) {
   ASSERT_FALSE(commit.fine.empty());
   EXPECT_EQ(commit.fine[0].fL[0], expected) << "ssprk2_Feff";
   EXPECT_EQ(commit.fine[0].fT[0], expected) << "ssprk2_Feff_top";
+}
+
+TEST(test_program_reflux_ledger, prepared_edge_flux_copy_reuses_pinned_storage) {
+  const EdgeFlux first = fine_flux(Real(3));
+  const EdgeFlux second = fine_flux(Real(7));
+  EdgeFlux resident;
+
+  detail::edge_flux_copy_into(resident, first);  // cold materialisation
+  const AllocationEventStats before = allocation_event_stats();
+  detail::edge_flux_copy_into(resident, second);  // exact-layout hot replay
+  const AllocationEventStats after = allocation_event_stats();
+
+  EXPECT_EQ(after, before);
+  ASSERT_EQ(resident.fine.size(), 1u);
+  EXPECT_EQ(resident.fine[0].fL[0], Real(7));
+  EXPECT_EQ(resident.fine[0].fT[0], Real(7));
 }
 
 TEST(test_program_reflux_ledger, midpoint_effective_flux_is_F1_only) {
@@ -211,9 +229,10 @@ TEST(test_program_reflux_ledger, accepted_exact_ledger_is_the_unique_numerical_r
       << "face measure is audited but route_reflux_integrated applies geometry exactly once";
 
   BoxArray fine(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
-  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine);
+  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine, Periodicity{false, false});
   FluxRegister correction(Box2D{{1, 1}, {6, 6}}, 1);
   cfi.route_reflux_integrated(accepted.fine[0], Real(0.5), Real(0.5), correction, 1);
+  device_fence();
   EXPECT_EQ(correction.at(1, 2, 0), -expected / Real(0.5));
   EXPECT_NE(correction.at(1, 2, 0), -Real(100) * Real(0.2) / Real(0.5))
       << "the rolled-back shadow never participates";

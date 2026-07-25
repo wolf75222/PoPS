@@ -33,7 +33,7 @@ def _scalar_charge(q, B0=1.0):
 
 
 def _build(n=32, regrid_every=0):
-    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
+    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
@@ -76,7 +76,7 @@ def main():
 
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
-        s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+        s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
         s.set_temporal_relations([2], [1], ["integral_only"])
         s.add_equation(
             "ne",

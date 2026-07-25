@@ -9,14 +9,13 @@
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
 // dlopen + ABI-key guard + globally visible host seams with a locally scoped package, end to end.
 //
-// Skips (exit 0) under Kokkos (a nu CPU loader is ABI-incompatible with the device module) or when no
-// C++ compiler is known to the build -- same policy as test_amr_native_loader. CMake injects
-// POPS_TEST_CXX / POPS_TEST_INCLUDE / POPS_TEST_CXX_STD / POPS_TEST_TMPDIR and sets ENABLE_EXPORTS so the
-// .so resolves the exported System seam symbols against this executable.
+// The runtime package is compiled with the exact compiler/Kokkos contract injected by CMake. A
+// missing compiler or a package compilation failure is a test failure: this proof never self-skips.
 
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
@@ -81,9 +80,12 @@ std::string loader_source(bool include_block_identities = true) {
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <cstdint>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
+extern "C" int pops_program_operator_authority_count() { return 0; }
+extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
 extern "C" int pops_module_operator_count() { return 1; }
 extern "C" int pops_module_state_space_count() { return 1; }
 extern "C" int pops_module_field_space_count() { return 0; }
@@ -126,38 +128,11 @@ extern "C" void pops_install_program(void* sys) {
   return source;
 }
 
-bool compile_loader(const std::string& src_path, const std::string& so_path) {
-#if defined(__APPLE__)
-  const std::string cc =
-      "/usr/bin/c++";  // xcrun wrapper: resolves the SDK sysroot (same clang family)
-#else
-  const std::string cc = POPS_TEST_CXX;
-#endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
-                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
-#if defined(__APPLE__)
-  cmd += " -undefined dynamic_lookup";  // undefined System symbols resolved at load from the exe
-#endif
-  cmd += " 2> /dev/null";
-  return std::system(cmd.c_str()) == 0;
-}
-
 }  // namespace
 
 static int pops_run_test_program_loader(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
   (void)argc;
   (void)argv;
-  std::printf("skip test_program_loader (backend Kokkos : nu CPU loader incompatible)\n");
-  return 0;
-#else
-  (void)argc;
-  (void)argv;
-  const char* cxx = POPS_TEST_CXX;
-  if (!cxx || cxx[0] == '\0') {
-    std::printf("skip test_program_loader (aucun compilateur C++ connu du build)\n");
-    return 0;
-  }
 
   const int n = 16;
   const double dt = 1e-3;
@@ -168,7 +143,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
   System ref(cfg);
@@ -195,9 +170,16 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     std::ofstream f(legacy_src);
     f << loader_source(false);
   }
-  if (!compile_loader(src, so) || !compile_loader(legacy_src, legacy_so)) {
-    std::printf("skip test_program_loader (echec de compilation du stub .so -- en-tetes/std ?)\n");
-    return 0;
+  const auto package = pops::test::native_dso::compile_shared(src, so);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader", package);
+    return 1;
+  }
+  const auto legacy_package = pops::test::native_dso::compile_shared(legacy_src, legacy_so);
+  if (!legacy_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader legacy package",
+                                                   legacy_package);
+    return 1;
   }
 
   int fails = 0;
@@ -252,7 +234,6 @@ static int pops_run_test_program_loader(int argc, char** argv) {
         "max|d| = %.2e, change = %.2e)\n",
         err, change);
   return fails ? 1 : 0;
-#endif
 }
 
 TEST(test_program_loader, Runs) {

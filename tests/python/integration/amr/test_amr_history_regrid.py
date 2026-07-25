@@ -5,9 +5,9 @@ An AB2 Program on a 2-level AMR system with ``regrid_every>0``. Two precise asse
 
   (i)  NULL regrid (the active criterion tags the full positive domain, so every scheduled rebuild
        preserves the exact full-domain fine boxes) -> the trajectory equals a no-regrid-window run
-       to round-off: a layout-identical rebuild must not remap either the history ring or its lagged
-       interface-flux authority (the bitwise native invariant is locked by the C++
-       test_amr_history_ring.RegridRemapKeepsSlotsConsistent case);
+       to round-off: a layout-identical rebuild is not a topology replacement and must not remap
+       either the history ring or its lagged interface-flux authority (the bitwise native invariant
+       is locked by the C++ test_amr_history_ring.RegridRemapKeepsSlotsConsistent case);
   (ii) REAL regrid (a moving scalar-advection front tags cells) -> the run is stable (finite, coarse mass
        conserved to round-off) and after the regrids EVERY prev(k) global buffer is defined on the NEW
        layout (its flat size == the current sum_k ncomp*nf_k*nf_k) -- the layout-consistency invariant.
@@ -27,6 +27,7 @@ from tests.python.integration._final_field_program import (
     resolve_periodic_field_program,
     scalar_advection_model,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 ROOT = Path(__file__).resolve().parents[4]
 N = 16
@@ -103,6 +104,7 @@ def _build(regrid_every, refine_thr, u0, tag, native_cxx):
         initial_values={
             bindings[0].subject: np.ascontiguousarray(u0[None, ...], dtype=np.float64),
         },
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     return runtime
 
@@ -126,10 +128,11 @@ def test_null_regrid_matches_no_regrid_to_roundoff(
 ):
     """(i) Full-domain tagging makes each scheduled rebuild topology-null.
 
-    The exact invariant is structural: the dynamic run completes native regrids while its public
-    ``patch_boxes`` stay equal to the bootstrap boxes; the comparison run has the same bootstrap
-    hierarchy but no regrid inside this six-step window.  This does not claim that an empty tag set
-    preserves a frozen seed.
+    The exact invariant is structural: the dynamic schedule evaluates topology-null regrids while
+    its public ``patch_boxes`` stay equal to the bootstrap boxes; the comparison run has the same
+    bootstrap hierarchy but no regrid inside this six-step window. ``regrid_count`` counts accepted
+    topology replacements, not schedule evaluations, so both counters remain unchanged. This does
+    not claim that an empty tag set preserves a frozen seed.
     """
     del isolated_native_cache, kokkos_root
     u0 = _blob(amp=0.2)
@@ -144,7 +147,7 @@ def test_null_regrid_matches_no_regrid_to_roundoff(
     _advance(b, NSTEPS)
     dynamic_regrids_after = a.amr.explain_regrid().regrid_count
     comparison_regrids_after = b.amr.explain_regrid().regrid_count
-    assert dynamic_regrids_after > dynamic_regrids_before
+    assert dynamic_regrids_after == dynamic_regrids_before
     assert comparison_regrids_after == comparison_regrids_before
     assert tuple(a.patch_boxes()) == initial_boxes == tuple(b.patch_boxes())
     da = float(np.abs(_coarse_density(a) - _coarse_density(b)).max())

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace pops {
@@ -33,23 +34,34 @@ struct HaloJob {
   Box2D region{};
 };
 
-/// Memoized schedule for ONE (Periodicity, domain) over a fixed layout. @p local holds the copies
+/// Memoized schedule for ONE (Periodicity, domain, communicator rank space) over a fixed layout.
+/// @p local holds the copies
 /// whose dst AND src are owned by this rank; @p send[r]/@p recv[r] hold the jobs exchanged with rank
 /// r (both empty unless built under MPI with n_ranks() > 1). The fingerprint (per_x, per_y, domain)
-/// identifies the (Periodicity, domain) it was built for; the LAYOUT is implicit because the plan is
-/// stored on the MultiFab that owns the BoxArray/DistributionMapping/n_grow (see HaloScheduleCache).
+/// identifies the (Periodicity, domain) it was built for; communicator size/rank distinguish a
+/// rank-local replay from the process-world schedule. The exact layout is retained once in the plan
+/// so replay and begin/end publication can fail closed without copying it on each exchange.
 /// The jobs carry only Box2D regions, so the plan is INDEPENDENT of ncomp (the component count is
 /// supplied at replay via mf.ncomp() to size buffers); ncomp is intentionally absent from the key.
 struct HaloSchedule {
   bool per_x = false;
   bool per_y = false;
   Box2D domain{};
+  int communicator_size = 1;
+  int communicator_rank = 0;
+  // Exact layout identity, captured once with the prepared schedule.  In-flight handles retain
+  // this shared plan and compare the live MultiFab against it at publication, avoiding a fresh
+  // boxes/ranks copy on every begin/end pair.
+  std::vector<Box2D> boxes;
+  std::vector<int> ranks;
+  int ngrow = 0;
   std::vector<HaloJob> local;
   std::vector<std::vector<HaloJob>> send;  // [rank]; empty unless MPI && n_ranks() > 1
   std::vector<std::vector<HaloJob>> recv;  // [rank]
 };
 
-/// Small per-MultiFab cache of halo schedules, one entry per distinct (Periodicity, domain). In
+/// Small per-MultiFab cache of halo schedules, one entry per distinct
+/// (Periodicity, domain, communicator size/rank). In
 /// practice a MultiFab is filled with a single (Periodicity, domain) for its role, so this holds one
 /// or two entries; lookup is a short linear scan. Entries are shared_ptr so an in-flight
 /// HaloExchange can hold a stable handle to the plan it is replaying even if a later call appends a
@@ -59,20 +71,26 @@ struct HaloSchedule {
 /// fill_boundary path is driven from a single host thread; Kokkos parallelism lives inside for_each).
 class HaloScheduleCache {
  public:
-  /// Existing schedule for (px, py, dom), or nullptr if none is cached yet.
-  std::shared_ptr<const HaloSchedule> find(bool px, bool py, const Box2D& dom) const {
+  /// Existing schedule for (px, py, dom, communicator rank space), or nullptr if none is cached.
+  std::shared_ptr<const HaloSchedule> find(bool px, bool py, const Box2D& dom,
+                                           int communicator_size,
+                                           int communicator_rank) const {
     for (const auto& s : entries_) {
-      if (s->per_x == px && s->per_y == py && s->domain == dom) {
+      if (s->per_x == px && s->per_y == py && s->domain == dom &&
+          s->communicator_size == communicator_size &&
+          s->communicator_rank == communicator_rank) {
         return s;
       }
     }
     return nullptr;
   }
 
-  /// Appends a fresh, empty schedule and returns it for the caller to populate.
-  std::shared_ptr<HaloSchedule> add() {
-    entries_.push_back(std::make_shared<HaloSchedule>());
-    return entries_.back();
+  /// Reserve publication capacity before building a schedule. publish_prepared() is then noexcept:
+  /// a failed build can never leave a partially initialized entry visible to a later replay.
+  void reserve_for_append() { entries_.reserve(entries_.size() + 1u); }
+
+  void publish_prepared(std::shared_ptr<HaloSchedule> schedule) noexcept {
+    entries_.push_back(std::move(schedule));
   }
 
   /// Drops every cached schedule, forcing a rebuild on the next fill_boundary. Used by tests to

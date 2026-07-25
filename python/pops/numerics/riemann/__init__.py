@@ -94,10 +94,10 @@ riemann = SimpleNamespace(
     # that emits the capability (m.enable_hllc()/m.enable_roe()).
     EulerHLLC2D=lambda: _riemann("euler_hllc", "pops::EulerHLLCFlux2D",
                                  ["physical_flux", "provider_pack", "stability_bound", "pressure",
-                                  "euler_2d_layout"]),
+                                  "euler_2d_layout", "no_hllc_star_state"]),
     EulerRoe2D=lambda: _riemann("euler_roe", "pops::EulerRoeFlux2D",
                                 ["physical_flux", "provider_pack", "stability_bound", "pressure",
-                                 "euler_2d_layout"]),
+                                 "euler_2d_layout", "no_roe_dissipation"]),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="riemann"),
 )
 

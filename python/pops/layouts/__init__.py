@@ -303,7 +303,7 @@ _AMR_AUTHORITY_PROTOCOLS = {
 }
 
 _AMR_PROVIDER_PROTOCOL = (
-    "inspect", "resolve_references", "require_component_inputs", "runtime_binding_data",
+    "inspect", "resolve_references", "lower_amr_provider",
 )
 
 
@@ -367,6 +367,13 @@ def _patch_layout_data(value: Any) -> dict[str, Any]:
     return data
 
 
+def _load_balance_data(value: Any) -> dict[str, Any]:
+    """Authenticate one open load-balance provider without naming its implementation."""
+    from pops.amr._load_balance_contract import load_balance_provider_data
+
+    return load_balance_provider_data(value)
+
+
 class AMR(MeshDescriptor):
     """One complete adaptive-layout authority.
 
@@ -386,6 +393,7 @@ class AMR(MeshDescriptor):
         transfer: Any,
         execution: Any,
         patch_layout: Any = None,
+        load_balance: Any = None,
         tagger: Any = None,
         clustering: Any = None,
     ) -> None:
@@ -399,11 +407,13 @@ class AMR(MeshDescriptor):
         self._transfer = transfer
         self._execution = execution
         self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
-        if tagger is None or clustering is None:
-            from pops.lib.amr import BergerRigoutsos, SymbolicTagger
+        if load_balance is None or tagger is None or clustering is None:
+            from pops.lib.amr import BergerRigoutsos, SpaceFillingCurve, SymbolicTagger
 
+            load_balance = SpaceFillingCurve() if load_balance is None else load_balance
             tagger = SymbolicTagger() if tagger is None else tagger
             clustering = BergerRigoutsos() if clustering is None else clustering
+        self._load_balance = load_balance
         self._tagger = tagger
         self._clustering = clustering
 
@@ -436,6 +446,10 @@ class AMR(MeshDescriptor):
         return self._patch_layout
 
     @property
+    def load_balance(self) -> Any:
+        return self._load_balance
+
+    @property
     def tagger(self) -> Any:
         return self._tagger
 
@@ -451,6 +465,7 @@ class AMR(MeshDescriptor):
         }
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         data["patch_layout"] = _patch_layout_data(self.patch_layout)
+        _load_balance_data(self.load_balance)
         _provider_data(self.tagger, "tagger")
         _provider_data(self.clustering, "clustering")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
@@ -498,6 +513,7 @@ class AMR(MeshDescriptor):
             "transfer": self.transfer.inspect(),
             "execution": self.execution.to_data(),
             "patch_layout": _patch_layout_data(self.patch_layout),
+            "load_balance": _load_balance_data(self.load_balance),
             "tagger": self.tagger.inspect(),
             "clustering": self.clustering.inspect(),
         }
@@ -548,6 +564,7 @@ class AMR(MeshDescriptor):
             transfer=self.transfer.resolve_references(resolved),
             execution=self.execution,
             patch_layout=self.patch_layout,
+            load_balance=self.load_balance,
             tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
         )
@@ -563,6 +580,7 @@ class AMR(MeshDescriptor):
             transfer=self.transfer,
             execution=self.execution,
             patch_layout=self.patch_layout,
+            load_balance=self.load_balance,
             tagger=self.tagger,
             clustering=self.clustering,
             context=context,
@@ -577,6 +595,7 @@ class AMR(MeshDescriptor):
             "grid": self.grid.to_dict(),
             "regrid": self.regrid.to_data(),
             "execution": self.execution.to_data(),
+            "load_balance": _load_balance_data(self.load_balance),
         }
 
     def normalized_geometry(self) -> NormalizedGeometry:

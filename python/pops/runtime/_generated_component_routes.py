@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 1
 
-COMPONENT_CATALOG_SHA256 = 'b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5'
+COMPONENT_CATALOG_SHA256 = 'ef23cc23d5f5fe513612901ece4c020ae72d87678a975eebf6f5fa4729fc5521'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'c0459eeaaa751fde07476321a9d9065d1ac0bfff4797454e590af9e8016247d7'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1'
+ROUTE_REGISTRY_SIGNATURE = 'v2:c0459eeaaa751fde07476321a9d9065d1ac0bfff4797454e590af9e8016247d7'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -39,18 +39,28 @@ ROUTE_TABLES = {'riemann': (('rusanov',
               ('polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation',)),
              ('euler_hllc',
               'pops::EulerHLLCFlux2D',
-              ('physical_flux', 'provider_pack', 'stability_bound', 'pressure', 'euler_2d_layout'),
+              ('physical_flux',
+               'provider_pack',
+               'stability_bound',
+               'pressure',
+               'euler_2d_layout',
+               'no_hllc_star_state'),
               ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
                'polar not wired',)),
              ('euler_roe',
               'pops::EulerRoeFlux2D',
-              ('physical_flux', 'provider_pack', 'stability_bound', 'pressure', 'euler_2d_layout'),
+              ('physical_flux',
+               'provider_pack',
+               'stability_bound',
+               'pressure',
+               'euler_2d_layout',
+               'no_roe_dissipation'),
               ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
                'polar not wired',))),
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
-             ('weno5', 'pops::Weno5Z', ('3-cell halo',), ())),
+             ('weno5', 'pops::Weno5', ('3-cell halo',), ())),
  'recon': (('conservative', 'pops::make_block(recon_prim=false)', (), ()),
            ('primitive',
             'pops::make_block(recon_prim=true)',
@@ -137,10 +147,10 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
                            'needs_hllc_struct': False,
                            'needs_roe_diss': False,
                            'polar_ok': False}},
- 'limiter': {'none': {'n_ghost': 1},
-             'minmod': {'n_ghost': 2},
-             'vanleer': {'n_ghost': 2},
-             'weno5': {'n_ghost': 3}},
+ 'limiter': {'none': {'n_ghost': 1, 'formal_order': 1, 'muscl_compatible': False},
+             'minmod': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
+             'vanleer': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
+             'weno5': {'n_ghost': 3, 'formal_order': 5, 'muscl_compatible': False}},
  'recon': {'conservative': {}, 'primitive': {}},
  'time': {'explicit': {}, 'ssprk3': {}, 'euler': {}, 'imex': {}, 'imexrk_ars222': {}},
  'field_solver': {'geometric_mg': {}, 'fft': {}, 'fft_spectral': {}, 'polar': {}},

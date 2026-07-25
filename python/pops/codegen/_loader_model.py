@@ -196,7 +196,7 @@ class CompiledModel:
         from pops.runtime._system import System  # advanced seam (ADC-545: off the public surface)
         from pops.numerics.reconstruction.limiters import Minmod
         from pops.numerics.riemann import Rusanov
-        sim = System(n=int(n), L=1.0, periodic=True)
+        sim = System(n=int(n), L=1.0, periodicity=(True, True))
         sim.set_poisson()
         sim.add_equation("check", model=self,
                          spatial=Spatial(limiter=Minmod(), flux=Rusanov()),

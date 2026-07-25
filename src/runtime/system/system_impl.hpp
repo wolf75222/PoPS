@@ -20,6 +20,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson, REUSED)
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
 #include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: time advance (step/advance/step_cfl/step_adaptive) (Batch B)
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
@@ -84,7 +85,7 @@ inline std::vector<double> gather_global(const MultiFab& mf, int ncomp, int gnx,
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
           out[(static_cast<std::size_t>(c) * gny + j) * gnx + i] = static_cast<double>(u(i, j, c));
   }
-  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  all_reduce_sum_inplace(out.data(), out.size());
   return out;
 }
 
@@ -115,7 +116,8 @@ inline EffectiveBlockOptions make_system_block_options(
     const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
-    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache) {
+    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache,
+    double weno_epsilon) {
   EffectiveBlockOptions out;
   out.name = name;
   out.route = route;
@@ -138,6 +140,7 @@ inline EffectiveBlockOptions make_system_block_options(
   out.newton = effective_newton_options(newton, newton_diagnostics);
   out.positivity_floor = positivity_floor;
   out.wave_speed_cache = wave_speed_cache;
+  out.weno_epsilon = weno_epsilon;
   out.gamma = model.gamma;
   out.B0 = model.B0;
   out.cs2 = model.cs2;
@@ -168,7 +171,7 @@ struct System::Impl {
   // GEOMETRY / LAYOUT + SHARED aux + embedded-boundary domain, EXTRACTED into SystemDomain (ADC-578,
   // include/pops/runtime/system/system_domain.hpp). domain_ is constructed FIRST (before fields_ /
   // stepper_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
-  // periodic_, aux) runs before any back-pointer reads it. Every member is re-exposed under its exact
+  // aux) runs before any back-pointer reads it. Every member is re-exposed under its exact
   // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom): SystemStepper /
   // SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged, and the block closures
   // capture a stable `&aux == &domain_.aux` -> those headers and the MockImpl stay byte-unchanged.
@@ -182,7 +185,6 @@ struct System::Impl {
   BCRec& bc_ = domain_.bc_;
   Box2D& dom = domain_.dom;
   Periodicity& per_ = domain_.per_;
-  bool& periodic_ = domain_.periodic_;
   MultiFab& aux = domain_.aux;
   int& aux_ncomp_ = domain_.aux_ncomp_;
   MultiFab& eb_level_set_values_ = domain_.eb_level_set_values_;
@@ -200,6 +202,9 @@ struct System::Impl {
   // fields_ (SystemFieldSolver, Batch B); the SHARED aux and its width stay here (common channel).
   // Block registry OWNED by the store (Batch B.3). `sp` is a REFERENCE to blocks_.blocks: same
   // object (no copy), so owner_->sp / P->sp in the header templates stay bit-identical.
+  // External DSO ownership MUST precede blocks_: reverse destruction releases every closure first,
+  // then unloads the code those closures reference.
+  std::vector<std::shared_ptr<void>> external_riemann_libraries_;
   SystemBlockStore blocks_;
   std::vector<Species>& sp = blocks_.blocks;
   // ADC-672: immutable per-block ghost-production authorities are installed before any closure is
@@ -295,14 +300,14 @@ struct System::Impl {
   std::size_t aux_field_cell_count() const;
 
   // domain_ (SystemDomain) is constructed FIRST from the config: it owns the exact historical
-  // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, periodic_, aux) so
+  // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, aux) so
   // fields_ / stepper_ back-pointers read a fully-built layout. The reference aliases above then bind
   // to domain_.*, and fields_(this) / stepper_(this) capture Impl (bit-identical addresses).
   explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), stepper_(this) {}
 
   // Elliptic solve + field derivation (Batch B). OWNS the solvers (ell_/pell_), the Poisson
   // config, the coefficient fields and the aux application buffers (B_z, T_e). owner_ = this: the
-  // helper reads the SHARED aux/sp/cfg/geom/pgeom_/ba/dm/bc_/dom/per_/periodic_/polar_ of Impl. None of
+  // helper reads the SHARED aux/sp/cfg/geom/pgeom_/ba/dm/bc_/dom/per_/polar_ of Impl. None of
   // these accesses dereferences Impl at CONSTRUCTION (pure back-pointer) -> init at end of list without
   // ordering dependency. See include/pops/runtime/system_field_solver.hpp.
   field_solver::SystemFieldSolver<Impl> fields_;
@@ -365,8 +370,10 @@ struct System::Impl {
       b.ylo = b.yhi = BCType::Periodic;
       return b;
     }
-    if (!c.periodic)
-      b.xlo = b.xhi = b.ylo = b.yhi = BCType::Foextrap;
+    if (!c.periodicity.x)
+      b.xlo = b.xhi = BCType::Foextrap;
+    if (!c.periodicity.y)
+      b.ylo = b.yhi = BCType::Foextrap;
     return b;
   }
 
@@ -661,6 +668,18 @@ struct System::Impl {
             "System: committed external step transaction must be finalized before another step");
       try {
         return std::forward<Body>(body)();
+      } catch (const FluxEvaluationFailure& failure) {
+        external_step_transaction_->restore(*this);
+        if (failure.action() == TransactionFailureAction::kRetryStep ||
+            failure.action() == TransactionFailureAction::kRejectStep) {
+          const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
+                                       ? runtime::program::StepAttemptDisposition::kRetry
+                                       : runtime::program::StepAttemptDisposition::kReject;
+          throw runtime::program::StepAttemptRejected(
+              SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
+              failure.what());
+        }
+        throw;
       } catch (...) {
         external_step_transaction_->restore(*this);
         throw;
@@ -669,6 +688,18 @@ struct System::Impl {
     AcceptedSnapshot accepted(*this);
     try {
       return std::forward<Body>(body)();
+    } catch (const FluxEvaluationFailure& failure) {
+      accepted.restore(*this);
+      if (failure.action() == TransactionFailureAction::kRetryStep ||
+          failure.action() == TransactionFailureAction::kRejectStep) {
+        const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
+                                     ? runtime::program::StepAttemptDisposition::kRetry
+                                     : runtime::program::StepAttemptDisposition::kReject;
+        throw runtime::program::StepAttemptRejected(
+            SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
+            failure.what());
+      }
+      throw;
     } catch (...) {
       accepted.restore(*this);
       throw;

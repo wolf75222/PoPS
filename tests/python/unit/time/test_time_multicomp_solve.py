@@ -310,7 +310,7 @@ def _run_one(t, pops, np, ncomp, init):
     import pops.runtime._engine_descriptors as engine
 
     n = init.shape[1]
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None

@@ -51,12 +51,16 @@ def _flux_program(t, name, blocks):
     P = t.Program(name)
     module = synthetic_module("%s_state" % name, components=("rho",))
     _case, states = program_states(P, module, blocks)
+    residuals = {}
     for blk in blocks:
         temporal = states[blk]
         U = temporal.n
-        R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+        residuals[blk] = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+    for blk in blocks:
+        temporal = states[blk]
+        U = temporal.n
         P.commit(temporal.next, P.value(
-            blk + "_next", U + P.dt * R, at=temporal.next.point))
+            blk + "_next", U + P.dt * residuals[blk], at=temporal.next.point))
     return P
 
 

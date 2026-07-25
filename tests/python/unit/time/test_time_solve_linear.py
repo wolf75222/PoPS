@@ -378,7 +378,7 @@ def test_native_compiled_cg_matches_offline_periodic_helmholtz(t):
         return None
 
     n = 16
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip(
             '-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --',
@@ -471,7 +471,7 @@ def test_native_gmres_geometric_mg_matches_offline_periodic_helmholtz(t):
         return None
 
     n = 16
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip(
             "-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --",

@@ -125,7 +125,7 @@ TEST(test_amr_ssprk2, facade_routes_and_effective_diagnostics_preserve_each_meth
   pops::AmrSystemConfig config;
   config.n = 8;
   config.L = 1.0;
-  config.periodic = true;
+  config.periodicity = {true, true};
   pops::ModelSpec model;
   model.transport = "exb";
   model.source = "none";
@@ -473,8 +473,58 @@ TEST(test_amr_ssprk2, legacy_two_level_attempt_is_atomic_on_fine_source_failure)
 
   EXPECT_THROW((pops::amr_step_2level_multipatch<NoSlope, RusanovFlux>(
                    model, coarse, coarse_domain, Real(1) / 8, Real(1) / 8, fine, coarse_aux,
-                   fine_aux, Real(1e-3))),
+                   fine_aux, Real(1e-3), Periodicity{true, true})),
                std::runtime_error);
   EXPECT_TRUE(same_complete_storage(coarse, coarse_snapshot));
   EXPECT_TRUE(same_complete_storage(fine, fine_snapshot));
+}
+
+TEST(test_amr_ssprk2, prepared_multilevel_replay_reuses_native_storage_and_transaction) {
+  const Box2D coarse_domain = Box2D::from_extents(8, 8);
+  const BoxArray coarse_layout(std::vector<Box2D>{coarse_domain});
+  const DistributionMapping coarse_ownership(coarse_layout.size(), pops::n_ranks());
+  const Box2D fine_box{{4, 4}, {11, 11}};
+  const BoxArray fine_layout(std::vector<Box2D>{fine_box});
+  const DistributionMapping fine_ownership(fine_layout.size(), pops::n_ranks());
+  const Periodicity periodicity{true, true};
+
+  MultiFab coarse(coarse_layout, coarse_ownership, 1, NoSlope::n_ghost);
+  MultiFab fine(fine_layout, fine_ownership, 1, NoSlope::n_ghost);
+  MultiFab coarse_aux(coarse_layout, coarse_ownership, 3, 1);
+  MultiFab fine_aux(fine_layout, fine_ownership, 3, 1);
+  coarse.set_val(Real(1));
+  fine.set_val(Real(1));
+  coarse_aux.set_val(Real(0));
+  fine_aux.set_val(Real(0));
+  std::vector<AmrLevelMP> levels{
+      AmrLevelMP{std::move(coarse), &coarse_aux, Real(1) / 8, Real(1) / 8},
+      AmrLevelMP{std::move(fine), &fine_aux, Real(1) / 16, Real(1) / 16}};
+
+  constexpr std::uint64_t generation = 41;
+  auto fill = pops::PreparedAmrFillPatchPlan::prepare(
+      levels, coarse_domain, periodicity, /*coarse_replicated=*/true, generation);
+  auto average = pops::PreparedAmrAverageDownPlan::prepare(levels, generation);
+  auto scratch = pops::PreparedAmrAdvanceScratchPlan::prepare(
+      levels, coarse_domain, periodicity, /*coarse_replicated=*/true,
+      /*wave_speed_cache=*/false, generation);
+  const pops::validation::AdvectionDiffusion model{/*ax=*/Real(0.2), /*ay=*/Real(-0.1),
+                                                   /*nu=*/Real(0)};
+
+  const auto step = [&] {
+    pops::advance_amr<NoSlope, RusanovFlux>(
+        model, levels, coarse_domain, Real(1e-3), periodicity,
+        /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/false,
+        pops::NewtonOptions{}, AmrTimeMethod::kSsprk2, /*pos_floor=*/Real(0),
+        pops::kWenoEpsilon, /*wave_speed_cache=*/false, /*boundary_fill=*/nullptr, &fill,
+        &average, &scratch);
+  };
+
+  step();  // materialize backend-internal schedules before observing the stable replay
+  pops::device_fence();
+  const pops::AllocationEventStats before = pops::allocation_event_stats();
+  step();
+  pops::device_fence();
+  const pops::AllocationEventStats after = pops::allocation_event_stats();
+
+  EXPECT_EQ(after, before);
 }

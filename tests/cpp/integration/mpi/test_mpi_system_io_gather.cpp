@@ -128,7 +128,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   // Construction COLLECTIVE (repliquee sur tous les rangs).
   System sys(cfg);

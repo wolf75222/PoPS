@@ -234,6 +234,7 @@ def test_history_persistence_key_scheme():
             self.restored_dt = {}
             self.rebuilt = None
             self.init = None
+            self.fill_count = None
 
         # --- writer side ---
         def history_names(self):
@@ -247,6 +248,9 @@ def test_history_persistence_key_scheme():
 
         def history_initialized(self, name):
             return True
+
+        def history_fill_count(self, name):
+            return depth
 
         def history_global(self, name, slot):
             return full[slot]
@@ -263,6 +267,9 @@ def test_history_persistence_key_scheme():
 
         def set_history_initialized(self, name, initialized):
             self.init = initialized
+
+        def restore_history_fill_count(self, name, fill_count):
+            self.fill_count = int(fill_count)
 
         def rebuild_history_slots(self, name, stored_slots):
             self.rebuilt = list(stored_slots)
@@ -292,6 +299,35 @@ def test_history_persistence_key_scheme():
     assert promoted_ring.storage_mode == "dense_regrid_safety"
     assert promoted_ring.regrid_steps == (4,)
 
+    class FillAgeSystem(FakeSystem):
+        def __init__(self, fill_count):
+            super().__init__(present_slots=None)
+            self._fill_count = int(fill_count)
+
+        def history_initialized(self, name):
+            return self._fill_count > 0
+
+        def history_fill_count(self, name):
+            return self._fill_count
+
+    # Cold registration, first accepted store and depth-1 accepted stores still contain at least
+    # one startup broadcast copy. They persist densely. Only a fully warm ring may use its selective
+    # anchors.
+    for fill_count in (0, 1, depth - 1, depth):
+        fill_plan = prepare_history_capture(
+            FillAgeSystem(fill_count),
+            {hname: Revolve(3)},
+            macro_step=9,
+            regrid_every=0,
+        ).rings[0]
+        assert fill_plan.fill_count == fill_count
+        if fill_count < depth:
+            assert fill_plan.storage_mode == "dense_cold_start_safety"
+            assert fill_plan.stored_slots == tuple(range(depth))
+        else:
+            assert fill_plan.storage_mode == "policy"
+            assert fill_plan.stored_slots == (0, 2, 4)
+
     # READER: round-trip through numpy so the dtypes match, then restore + replay.
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "v2.npz")
@@ -307,6 +343,7 @@ def test_history_persistence_key_scheme():
     assert sorted(reader.restored) == [0, 2, 4], "only the stored slots are restored"
     assert reader.rebuilt == [0, 2, 4], "replay is driven from the stored slots"
     assert len(reader.restored_dt) == depth, "every slot's dt is restored"
+    assert reader.fill_count == depth, "the authentic ring age is restored"
     row = report.histories[0]
     assert row["policy_kind"] == "revolve" and row["stored_slots"] == 3 and row["recomputed_slots"] == 2
 
@@ -363,6 +400,97 @@ def test_history_persistence_key_scheme():
         assert raised, "an unknown policy kind must fail loud at restart"
 
 
+def test_restore_histories_installs_every_ring_before_replay():
+    """Checkpoint key order cannot expose a partially restored Program history image."""
+    try:
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        require_native_or_skip(
+            "-- two-phase history restore skipped: numpy unavailable: %s --" % exc
+        )
+        return
+    from pops.runtime._system_io_history import restore_histories
+    from pops.time._history.persistence import Revolve
+
+    names = ("second.state", "first.state")
+    depth = 5
+    stored = (0, 2, 4)
+    policy = Revolve(3)
+    payload = {
+        "history_names": np.asarray(names),
+        "macro_step": 9,
+        "regrid_every": 0,
+    }
+    for index, name in enumerate(names):
+        payload["history_depth_" + name] = depth
+        payload["history_policy_" + name] = np.array(
+            json.dumps(policy.to_manifest(), sort_keys=True, separators=(",", ":"))
+        )
+        payload["history_requested_stored_slots_" + name] = np.asarray(
+            stored, dtype=np.int64
+        )
+        payload["history_stored_slots_" + name] = np.asarray(stored, dtype=np.int64)
+        payload["history_storage_mode_" + name] = np.array("policy")
+        payload["history_slot_dt_" + name] = np.asarray(
+            [0.01 * (slot + 1) for slot in range(depth)], dtype=np.float64
+        )
+        payload["history_init_" + name] = True
+        payload["history_fill_count_" + name] = depth
+        for slot in stored:
+            payload["history_%s_%d" % (name, slot)] = np.asarray(
+                [100.0 * index + slot], dtype=np.float64
+            )
+
+    class CoupledReplayRuntime:
+        def __init__(self):
+            self.anchors = {name: set() for name in names}
+            self.slot_dt = {name: set() for name in names}
+            self.initialized = {name: False for name in names}
+            self.events = []
+
+        def restore_history(self, name, slot, _values):
+            self.anchors[name].add(int(slot))
+            self.events.append(("anchor", name, int(slot)))
+
+        def restore_history_slot_dt(self, name, slot, _dt):
+            self.slot_dt[name].add(int(slot))
+
+        def set_history_initialized(self, name, initialized):
+            self.initialized[name] = bool(initialized)
+
+        def restore_history_fill_count(self, name, fill_count):
+            assert int(fill_count) == depth
+
+        def rebuild_history_slots(self, name, stored_slots):
+            assert tuple(stored_slots) == stored
+            assert all(self.anchors[ring] == set(stored) for ring in names)
+            assert all(self.slot_dt[ring] == set(range(depth)) for ring in names)
+            assert all(self.initialized.values())
+            self.events.append(("replay", name))
+            return depth - len(stored)
+
+    runtime = CoupledReplayRuntime()
+    report = restore_histories(runtime, payload)
+    first_replay = next(i for i, event in enumerate(runtime.events) if event[0] == "replay")
+    assert all(event[0] == "anchor" for event in runtime.events[:first_replay])
+    assert report.total_recomputed == 4
+    assert report.total_replay_steps == 4
+
+    invalid = dict(payload)
+    invalid["history_stored_slots_first.state"] = np.asarray(
+        [0, 1, 4], dtype=np.int64
+    )
+    untouched = CoupledReplayRuntime()
+    try:
+        restore_histories(untouched, invalid)
+    except RuntimeError as exc:
+        assert "resolved storage plan" in str(exc)
+    else:
+        raise AssertionError("invalid second ring storage plan was accepted")
+    assert untouched.events == []
+    assert all(not anchors for anchors in untouched.anchors.values())
+
+
 # ---- shared engine setup for (B)/(C) ----
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (R = c*rho changes
@@ -383,7 +511,7 @@ def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
     import pops.runtime._engine_descriptors as engine
 
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         require_native_or_skip(
             "test_time_history_checkpoint requires install_program/history_names bindings")

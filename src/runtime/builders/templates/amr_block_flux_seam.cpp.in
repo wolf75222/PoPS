@@ -15,7 +15,7 @@ AmrRuntimeBlock @SEAM_SYMBOL@(const AmrBlockBuildArgs& a, const SharedAmrLayout&
                                         m, aa.limiter, SS, aa.name, aa.density, aa.has_density,
                                         aa.gamma, aa.substeps, aa.recon_prim, aa.imex, aa.stride,
                                         impl, aa.newton, aa.state, aa.newton_diagnostics, tm,
-                                        aa.pos_floor);
+                                        aa.pos_floor, aa.weno_epsilon, aa.wave_speed_cache);
                                   });
 }
 

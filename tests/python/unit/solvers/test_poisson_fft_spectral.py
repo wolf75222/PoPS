@@ -55,7 +55,7 @@ def _model():
 
 
 def _system(n, *, periodic=True, model=None):
-    sim = System(n=n, L=1.0, periodic=periodic)
+    sim = System(n=n, L=1.0, periodicity=(periodic, periodic))
     sim.add_equation(
         "ions",
         _model() if model is None else model,

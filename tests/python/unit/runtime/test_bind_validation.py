@@ -82,13 +82,13 @@ class _AMR:
     """An AMR layout stand-in exposing capabilities() and runtime_layout_data()."""
 
     def __init__(self, n):
-        self.n = n
+        self.cells = (n, n) if isinstance(n, int) else tuple(n)
 
     def capabilities(self):
         return {"layout": "amr"}
 
     def runtime_layout_data(self):
-        return {"grid": {"cells": [self.n, self.n]}}
+        return {"grid": {"cells": list(self.cells)}}
 
 
 class _Array:
@@ -142,6 +142,17 @@ def test_typed_amr_initial_value_requires_complete_state():
         manifest, args, layout, {subject: _Array((4, 64, 64))}) == []
     lines = bv.validate_bound_initial_values(
         manifest, args, layout, {subject: _Array((64, 64))})
+    assert len(lines) == 1
+    assert "BindArray requires the complete state" in lines[0]
+
+
+def test_typed_amr_initial_value_preserves_rectangular_axis_order():
+    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR((24, 10))
+    subject = _BoundSubject("ne")
+    assert bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((4, 10, 24))}) == []
+    lines = bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((4, 24, 10))})
     assert len(lines) == 1
     assert "BindArray requires the complete state" in lines[0]
 

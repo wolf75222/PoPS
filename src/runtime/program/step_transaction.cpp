@@ -2,7 +2,17 @@
 #error "step_transaction.cpp requires the shared runtime exception ABI producer contract"
 #endif
 
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
+
+namespace pops {
+
+// Canonical cross-DSO key function for failures thrown by generated numerical-flux kernels.  The
+// host runtime catches this exact RTTI identity before mapping recoverable results to its public
+// StepAttemptRejected control signal.
+FluxEvaluationFailure::~FluxEvaluationFailure() noexcept = default;
+
+}  // namespace pops
 
 namespace pops::runtime::program {
 

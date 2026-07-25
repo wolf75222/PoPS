@@ -26,6 +26,13 @@ inline PopsExecutionContextV1 host_execution_context() {
           "none"};
 }
 
+inline PopsExecutionContextV1 noncollective_host_execution_context() {
+  auto result = host_execution_context();
+  result.execution_identity = "test::execution-context/noncollective";
+  result.communicator_identity = POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1;
+  return result;
+}
+
 inline PopsLogicalTimeV1 logical_time() {
   return {sizeof(PopsLogicalTimeV1), "test::clock", 7, 0, 0, 0, 1, 1, 0.01, 0.25};
 }

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = 'b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1'
+NATIVE_COMPONENT_CATALOG_SHA256 = 'ef23cc23d5f5fe513612901ece4c020ae72d87678a975eebf6f5fa4729fc5521'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'c0459eeaaa751fde07476321a9d9065d1ac0bfff4797454e590af9e8016247d7'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
+ 'execution_modes': {'native_backend': 1, 'host': 2},
+ 'collective_scopes': {'none': 0},
+ 'memory_spaces': ['host', 'managed', 'device'],
  'leaf_opcodes': {'above': 1,
                   'below': 2,
                   'magnitude_above': 3,
@@ -48,8 +51,8 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
  {'id': 3,
   'name': 'tagger',
   'uri': 'pops://interfaces/tagger',
-  'version': 1,
-  'cpp_table': 'PopsTaggerApiV1',
+  'version': 2,
+  'cpp_table': 'PopsTaggerApiV2',
   'hot_path': True,
   'facets': ('lowering', 'fallible_evaluation'),
   'operations': ('tag_batch',)},

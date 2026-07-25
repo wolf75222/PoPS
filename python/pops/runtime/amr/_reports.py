@@ -30,12 +30,27 @@ class PatchReport:
     patches to report.
     """
 
-    def __init__(self, *, built: Any, n_levels: Any, base_n: Any, domain_l: Any, per_level: Any, coarse_local_boxes: Any,
-                 coarse_total_boxes: Any) -> None:
+    def __init__(self, *, built: Any, n_levels: Any, base_cells: Any, domain_bounds: Any,
+                 per_level: Any, coarse_local_boxes: Any, coarse_total_boxes: Any) -> None:
         self.built = bool(built)
         self.n_levels = n_levels
-        self.base_n = base_n
-        self.domain_l = domain_l
+        self.base_cells = None if base_cells is None else tuple(int(value) for value in base_cells)
+        self.domain_bounds = (
+            None if domain_bounds is None
+            else tuple(tuple(float(value) for value in point) for point in domain_bounds)
+        )
+        # Historical scalar inspection remains truthful for square configurations only.
+        self.base_n = (
+            self.base_cells[0]
+            if self.base_cells is not None and self.base_cells[0] == self.base_cells[1]
+            else None
+        )
+        if self.domain_bounds is None:
+            self.domain_l = None
+        else:
+            lower, upper = self.domain_bounds
+            lengths = (upper[0] - lower[0], upper[1] - lower[1])
+            self.domain_l = lengths[0] if lengths[0] == lengths[1] else None
         # per_level: ordered list of dicts {level, n_patches, cells, boxes=[(ilo,jlo,ihi,jhi)],
         # rectangles=[(x0,y0,w,h)]}; level 0 (the coarse base) is reported as a single covering box.
         self.per_level = list(per_level)
@@ -60,6 +75,8 @@ class PatchReport:
             "n_levels": self.n_levels,
             "base_n": self.base_n,
             "domain_l": self.domain_l,
+            "base_cells": self.base_cells,
+            "domain_bounds": self.domain_bounds,
             "n_patches": self.n_patches,
             "coarse_local_boxes": self.coarse_local_boxes,
             "coarse_total_boxes": self.coarse_total_boxes,
@@ -76,8 +93,8 @@ class PatchReport:
             return ("AMR patch table: hierarchy not built yet (add a block and take a step, or "
                     "set the initial density, to build the levels).")
         lines = ["AMR patch table (built hierarchy):"]
-        lines.append("  base: n=%s on [0, %s]^2, levels=%s"
-                     % (self.base_n, self.domain_l, self.n_levels))
+        lines.append("  base: cells=%s, bounds=%s, levels=%s"
+                     % (self.base_cells, self.domain_bounds, self.n_levels))
         for lvl in self.per_level:
             if lvl["level"] == 0:
                 lines.append("  level 0 (base): %d box(es), %d cells"

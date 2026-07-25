@@ -87,15 +87,18 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
       !valid_precision(context.reduction_precision))
     throw std::invalid_argument(
         "native component execution context has invalid size, identities or precision policy");
-  const bool serial = std::string(context.communicator_identity) == "serial";
-  if (serial) {
+  const std::string communicator_identity(context.communicator_identity);
+  const bool serial = communicator_identity == "serial";
+  const bool noncollective =
+      communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1;
+  if (serial || noncollective) {
     // MPI_Comm_c2f/MPI_Type_c2f may legally return zero for predefined handles.  The explicit
     // identities, not a guessed numeric sentinel, therefore distinguish serial from distributed
     // execution.  Serial retains the canonical all-zero representation.
     if (context.communicator_datatype_f_handle != 0 || context.communicator_f_handle != 0 ||
         std::string(context.communicator_datatype_identity) != "none")
       throw std::invalid_argument(
-          "serial component execution context cannot hide MPI handles or identities");
+          "non-distributed component execution context cannot hide MPI handles or identities");
   } else if (std::string(context.communicator_datatype_identity) != "MPI_DOUBLE") {
     // An execution lane owns a communicator duplicated from the authenticated world-congruent rank
     // space. Its Fortran handle may legally be zero just like a predefined handle, so structural
@@ -105,6 +108,16 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
     throw std::invalid_argument(
         "distributed component execution context requires an exact MPI_DOUBLE datatype authority");
   }
+}
+
+inline void validate_noncollective_execution_context(const PopsExecutionContextV1& context) {
+  validate_execution_context(context);
+  if (std::string(context.communicator_identity) !=
+          POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
+      context.communicator_f_handle != 0 || context.communicator_datatype_f_handle != 0 ||
+      std::string(context.communicator_datatype_identity) != "none")
+    throw std::invalid_argument(
+        "tagger callback execution context must carry no collective authority");
 }
 
 inline void validate_logical_time(const PopsLogicalTimeV1& time) {
@@ -398,12 +411,15 @@ inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, voi
   return operation(state, &request, &status);
 }
 
-inline int tag_batch(const PopsTaggerApiV1& api, void* state, const PopsTaggerRequestV1& request,
+inline int tag_batch(const PopsTaggerApiV2& api, void* state, const PopsTaggerRequestV2& request,
                      PopsComponentStatusV1& status) {
   require_operation(api.tag_batch != nullptr, "tag_batch");
-  validate_execution_context(request.execution);
+  validate_noncollective_execution_context(request.execution);
   validate_logical_time(request.logical_time);
-  if (request.struct_size < sizeof(PopsTaggerRequestV1) || request.state_count == 0 ||
+  if (request.struct_size < sizeof(PopsTaggerRequestV2) ||
+      request.collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
+      (request.execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
+       request.execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) || request.state_count == 0 ||
       request.states == nullptr || request.program.struct_size < sizeof(PopsTaggingProgramV1) ||
       request.program.program_identity == nullptr || request.program.leaf_count == 0 ||
       request.program.leaves == nullptr || request.program.refine_instruction_count == 0 ||
@@ -422,7 +438,12 @@ inline int tag_batch(const PopsTaggerApiV1& api, void* state, const PopsTaggerRe
     if (state_view.struct_size < sizeof(PopsQualifiedConstFieldV1) || state_view.present != 1 ||
         state_view.qualified_id == nullptr)
       throw std::invalid_argument("tagger state route is incomplete");
-    validate_execution_field(request.execution, state_view.values, "tagger state");
+    validate_backend_field_view(state_view.values, "tagger state");
+    if ((request.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
+         state_view.values.memory_space != request.execution.memory_space) ||
+        (request.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2 &&
+         state_view.values.memory_space != POPS_MEMORY_SPACE_HOST_V1))
+      throw std::invalid_argument("tagger state disagrees with its negotiated executor");
     const std::size_t count = field_interior_point_count(state_view.values);
     if (index == 0)
       points = count;
@@ -506,10 +527,15 @@ inline int tag_batch(const PopsTaggerApiV1& api, void* state, const PopsTaggerRe
           stencil.axes[axis].ghost_upper > view.ghost_upper[axis])
         throw std::invalid_argument("tagger graph stencil exceeds the supplied state halo");
   }
-  for (const PopsByteViewV1* output : {&request.refine_candidates, &request.coarsen_candidates,
-                                       &request.refine_equalities, &request.coarsen_equalities})
-    if (output->struct_size < sizeof(PopsByteViewV1) || output->data == nullptr ||
-        output->size != points)
+  for (const PopsTaggerMaskViewV2* output :
+       {&request.refine_candidates, &request.coarsen_candidates,
+        &request.refine_equalities, &request.coarsen_equalities})
+    if (output->struct_size < sizeof(PopsTaggerMaskViewV2) || output->data == nullptr ||
+        output->size != points || output->ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        (request.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
+         output->memory_space != request.execution.memory_space) ||
+        (request.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2 &&
+         output->memory_space != POPS_MEMORY_SPACE_HOST_V1))
       throw std::invalid_argument("tagger candidate output does not match its patch shape");
   return api.tag_batch(state, &request, &status);
 }

@@ -21,13 +21,15 @@
 #include <gtest/gtest.h>
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
+
+#include "amr_transfer_test_authority.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -43,9 +45,14 @@
 
 using namespace pops;
 
-// Spec ExB scalaire (1 var) a charge q : advection pilotee par grad phi, densite de charge q n pour le
+// Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi, densite de charge q n pour le
 // Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-static ModelSpec exb_charge(double q, double B0) {
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double B0) {
+  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+static ModelSpec exb_spec(double q, double B0) {
   ModelSpec s;
   s.transport = "exb";
   s.source = "none";
@@ -103,24 +110,23 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
                                  const std::string& lim0, const std::string& lim1, int sub0,
                                  int sub1, int stride0, int stride1) {
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = N;
   bp.mesh.L = L;
   bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, lim0, "rusanov", S, "A", rho0,
-                                                /*has_density=*/true, 1.4, sub0, false, false,
-                                                stride0));
-  });
-  detail::dispatch_model(exb_charge(q1, B0), [&](auto m) {
-    blocks.push_back(detail::dispatch_amr_block(m, lim1, "rusanov", S, "B", rho1,
-                                                /*has_density=*/true, 1.4, sub1, false, false,
-                                                stride1));
-  });
+  blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), lim0, "rusanov", S, "A", rho0,
+                                              /*has_density=*/true, 1.4, sub0, false, false,
+                                              stride0));
+  blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), lim1, "rusanov", S, "B", rho1,
+                                              /*has_density=*/true, 1.4, sub1, false, false,
+                                              stride1));
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   return runtime;
@@ -162,6 +168,8 @@ static AmrRuntime make_temporal_contract_runtime(int mode,
                                                  const amr::ParentChildClockRelation& relation) {
   constexpr int n = 8;
   AmrBuildParams bp;
+  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  bp.mesh.periodicity = Periodicity{true, true};
   bp.mesh.n = n;
   bp.mesh.L = 1.0;
   bp.mesh.regrid_every = 0;
@@ -174,6 +182,7 @@ static AmrRuntime make_temporal_contract_runtime(int mode,
       /*substeps=*/1, /*recon_prim=*/false, /*imex=*/false));
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations({relation});
   return runtime;
 }
@@ -315,10 +324,10 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
-      sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+      sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
       sim.advance(0.01, 5);
@@ -332,10 +341,10 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystemConfig cfg;
       cfg.n = N;
       cfg.L = L;
-      cfg.periodic = true;
+      cfg.periodicity = {true, true};
       cfg.regrid_every = 0;
       AmrSystem sim(cfg);
-      sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
+      sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
       double last = 0;
@@ -417,5 +426,15 @@ TEST(test_amr_multiblock_substeps, Runs) {
     direct_bound.set_block_level_state(0, 1, fine_state_spike(spike));
     EXPECT_NEAR(direct_bound.cfl_dt(cfl, h), Real(1.5) / spike, 2e-15);
     EXPECT_EQ(direct_bound.last_dt_bound(), "stability_dt:clocked");
+
+    // A coupled frequency is a macro-step authority, but its field expression must still scan every
+    // active AMR level. The coarse state remains one while the fine-only spike sets the global max.
+    AmrRuntime coupled_bound = make_temporal_contract_runtime(/*mode=*/0, ratio_three_halves);
+    coupled_bound.set_block_level_state(0, 1, fine_state_spike(spike));
+    coupled_bound.add_coupled_frequency_expr(
+        "fine_frequency", {"clocked"}, {"scalar"}, {},
+        {static_cast<int>(CsOp::PushReg)}, {0});
+    EXPECT_NEAR(coupled_bound.cfl_dt(cfl, h), cfl / spike, 2e-15);
+    EXPECT_EQ(coupled_bound.last_dt_bound(), "coupled_source:fine_frequency");
   }
 }

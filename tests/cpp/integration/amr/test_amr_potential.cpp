@@ -64,7 +64,7 @@ TEST(test_amr_potential, Runs) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 0;  // pas de re-raffinement apres l'init (seuil enorme de toute facon)
 
   AmrSystem amr(cfg);
@@ -98,7 +98,7 @@ TEST(test_amr_potential, Runs) {
   SystemConfig scfg;
   scfg.n = n;
   scfg.L = 1.0;
-  scfg.periodic = true;
+  scfg.periodicity = {true, true};
   System sys(scfg);
   sys.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "auto");

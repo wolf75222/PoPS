@@ -14,9 +14,51 @@
 #include "bindings_detail.hpp"
 #include <pops/runtime/program/step_transaction.hpp>
 
+#include <exception>
+
+namespace {
+
+using NativeStepAttemptRejected = pops::runtime::program::StepAttemptRejected;
+
+// pybind11's ordinary register_exception translator preserves only what().  Attempt rejection is a
+// control protocol, not an opaque diagnostic: keep its C++ status and retry disposition structured
+// all the way to the Python controller.  The GIL-safe storage follows pybind11's own
+// register_exception_impl lifetime model and avoids a process-global borrowed PyObject pointer.
+PYBIND11_CONSTINIT py::gil_safe_call_once_and_store<py::exception<NativeStepAttemptRejected>>
+    step_attempt_rejected_type;
+
+void translate_step_attempt_rejected(std::exception_ptr error) {
+  if (!error)
+    return;
+  try {
+    std::rethrow_exception(error);
+  } catch (const NativeStepAttemptRejected& rejected) {
+    auto& error_type = step_attempt_rejected_type.get_stored();
+    py::object instance = error_type.attr("__call__")(py::str(rejected.what()));
+    instance.attr("status") = py::str(pops::solve_status_name(rejected.status()));
+    instance.attr("phase") = py::str(rejected.phase());
+    instance.attr("detail") = py::str(rejected.detail());
+    instance.attr("disposition") =
+        py::str(pops::runtime::program::step_attempt_disposition_name(rejected.disposition()));
+    instance.attr("reason_code") = py::int_(rejected.reason_code());
+    PyErr_SetObject(error_type.ptr(), instance.ptr());
+  }
+}
+
+void register_step_attempt_rejected(py::module_& module) {
+  step_attempt_rejected_type
+      .call_once_and_store_result([&] {
+        return py::exception<NativeStepAttemptRejected>(module, "StepAttemptRejected",
+                                                        PyExc_RuntimeError);
+      })
+      .get_stored();
+  py::register_local_exception_translator(&translate_step_attempt_rejected);
+}
+
+}  // namespace
+
 PYBIND11_MODULE(_pops, m) {
-  py::register_exception<pops::runtime::program::StepAttemptRejected>(
-      m, "StepAttemptRejected", PyExc_RuntimeError);
+  register_step_attempt_rejected(m);
   init_core(m);
   init_identity(m);
   init_component_loader(m);

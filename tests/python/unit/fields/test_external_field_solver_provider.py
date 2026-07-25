@@ -99,7 +99,9 @@ def test_external_field_solver_refuses_a_3d_only_pair_member(tmp_path):
     solver = _component(
         tmp_path, name="solver_3d", interface=interfaces.FieldSolver, dimension=3)
 
-    with pytest.raises(ValueError, match="2D float64 CPU"):
+    with pytest.raises(
+        ValueError, match="one exact supported 2D float64 target variant"
+    ):
         ExternalFieldSolver(topology=topology, solver=solver)
 
 

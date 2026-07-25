@@ -79,7 +79,7 @@ def main():
             )
 
         def build_native(limiter, riemann, recon, evolve=True):
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             sys.add_equation(
                 "gas", model=compiled, spatial=spatial(limiter, riemann, recon),
                 time=engine.Explicit(), evolve=evolve,
@@ -88,7 +88,7 @@ def main():
             return sys
 
         def build_ref(limiter, riemann, recon, evolve=True):
-            sys = System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodicity=(True, True))
             sys.add_equation("gas", spec,
                              spatial=spatial(limiter, riemann, recon),
                              time=engine.Explicit(), evolve=evolve)
@@ -135,7 +135,7 @@ def main():
         # valide a la cle differente, ce qui teste exactement la frontiere d'ABI.)
         bad = _compile_wrong_abi(model, os.path.join(tmp, "euler_wrongabi.so"), cxx)
         bad_component = _component_at(compiled, bad)
-        sys = System(n=n, L=L, periodic=True)
+        sys = System(n=n, L=L, periodicity=(True, True))
         raised = False
         try:
             sys.add_equation(

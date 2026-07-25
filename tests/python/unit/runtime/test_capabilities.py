@@ -24,7 +24,7 @@ documentation update:
        (ADC-294 / ADR-0001 Decision 1: the 2D core is an official, introspectable limit, not
        prose); guards against the key silently vanishing or drifting to a non-2D value.
   T7 - the AMR regrid variable is advertised as selectable by name/role (ADC-296 / ADR-0001
-       Decision 5), with the mono-block / compiled .so paths declared component-0 only; guards
+       Decision 5), on native and compiled runtime blocks through one prepared graph; guards
        the "regrid is component-0 only" doc regression now that a selector exists.
 
 The test is pure Python: it only reads ``capabilities()`` and the backend table, so it
@@ -118,14 +118,13 @@ def test_runtime_environment_and_precision_facts():
 
 def test_regrid_variable_selector_advertised():
     # ADC-296 / ADR-0001 Decision 5: the multi-block regrid variable is selectable by name/role
-    # (default = component 0). The mono-block and compiled .so paths stay component-0 only. The
-    # surface mirrors AmrSystem.set_refinement(threshold, variable=, role=).
+    # (default = component 0). Native/compiled and one/many-block paths share the exact descriptor.
     regrid = capabilities()["regrid"]
     assert set(regrid["variable_selector"]) == {"component_0", "by_name", "by_role"}, \
         regrid["variable_selector"]
     assert "by_name" in regrid["multi_block"] and "by_role" in regrid["multi_block"], regrid["multi_block"]
-    assert "component_0 only" in regrid["mono_block"], regrid["mono_block"]
-    assert "component_0 only" in regrid["compiled_so"], regrid["compiled_so"]
+    assert "by_name" in regrid["mono_block"] and "by_role" in regrid["mono_block"]
+    assert "by_name" in regrid["compiled_so"] and "by_role" in regrid["compiled_so"]
 
 
 def test_aux_named_surface_and_limit_parity():

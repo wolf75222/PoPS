@@ -8,7 +8,7 @@ are refused.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _V3
 
@@ -54,13 +54,12 @@ def _live_amr_level_envelope(sim):
     if not callable(active_provider) or not callable(configured_provider):
         raise TypeError(
             "AMR checkpoint requires native n_levels() and configured_n_levels() providers")
-    active_raw = active_provider()
-    configured_raw = configured_provider()
-    if isinstance(active_raw, bool) or not isinstance(active_raw, int):
+    active = active_provider()
+    configured = configured_provider()
+    if isinstance(active, bool) or not isinstance(active, int):
         raise TypeError("native active AMR level count must be an exact integer")
-    if isinstance(configured_raw, bool) or not isinstance(configured_raw, int):
+    if isinstance(configured, bool) or not isinstance(configured, int):
         raise TypeError("native configured AMR level count must be an exact integer")
-    active, configured = active_raw, configured_raw
     if configured < 1 or active < 1 or active > configured:
         raise ValueError(
             "native AMR level envelope is invalid: active=%d configured=%d"
@@ -79,18 +78,14 @@ def _checkpoint_amr_level_envelope(sim, payload):
         stored_files = keys()
     elif callable(stored_files):
         stored_files = stored_files()
-    files = set(stored_files)
+    files = set(cast(Any, stored_files))
     if "n_levels" not in files:
-        raise ValueError(
-            "restart: AMR checkpoint lacks level-envelope key 'n_levels'")
+        raise ValueError("restart: AMR checkpoint lacks level-envelope key 'n_levels'")
     checkpoint_active = int(payload["n_levels"])
     _current_active, current_configured = _live_amr_level_envelope(sim)
     if "configured_n_levels" in files:
         checkpoint_configured = int(payload["configured_n_levels"])
     else:
-        # Checkpoints emitted by the original v3 codec predate a distinct configured-depth key.
-        # They were only valid for a fixed active hierarchy, so accept them exactly when that
-        # historical depth equals the complete hierarchy installed by the current artifact.
         if checkpoint_active != current_configured:
             raise ValueError(
                 "restart: legacy v3 AMR checkpoint lacks configured_n_levels and records %d "
@@ -112,7 +107,6 @@ def _checkpoint_amr_level_envelope(sim, payload):
 
 
 def _require_exact_field_provider_depth(slot, provider_levels, active_levels, *, phase):
-    """Require every qualified field provider to cover the complete active hierarchy."""
     if provider_levels != active_levels:
         raise ValueError(
             "%s: field provider %s has %d levels; expected exactly the %d active AMR levels"
@@ -120,7 +114,7 @@ def _require_exact_field_provider_depth(slot, provider_levels, active_levels, *,
         )
 
 
-def _prepare_capture_v3(owner, sim, path, L, regrid_every, persistence):
+def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persistence):
     """Freeze the complete AMR gather plan without invoking a native collective."""
     import numpy as np
     from pops.identity import make_identity
@@ -194,12 +188,21 @@ def _prepare_capture_v3(owner, sim, path, L, regrid_every, persistence):
     if missing_collectives:
         raise TypeError(
             "checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
+    nx, ny = int(sim.nx()), int(sim.ny())
+    Lx, Ly = (float(value) for value in lengths)
+    xlo, ylo = (float(value) for value in lower)
     out = {
         "pops_amr_checkpoint_version": _V3,
         "t": time,
         "macro_step": macro_step,
-        "n": int(sim.nx()),
-        "L": float(L),
+        # n/L retain their historical meaning as the x-axis values.  The y-axis and origin are
+        # persisted independently so rectangular and shifted Cartesian domains authenticate exactly.
+        "n": nx,
+        "ny": ny,
+        "L": Lx,
+        "Ly": Ly,
+        "xlo": xlo,
+        "ylo": ylo,
         "regrid_every": int(regrid_every),
         "abi_key": abi_key(),
         "blocks": np.array(names),
@@ -224,8 +227,9 @@ def _prepare_capture_v3(owner, sim, path, L, regrid_every, persistence):
         "runtime_kind": "amr",
         "target": str(target),
         "clock": {"time": time.hex(), "macro_step": macro_step},
-        "n": int(out["n"]),
-        "L": float(L).hex(),
+        "cells": [nx, ny],
+        "lower": [xlo.hex(), ylo.hex()],
+        "upper": [(xlo + Lx).hex(), (ylo + Ly).hex()],
         "regrid_every": int(regrid_every),
         "abi_key": str(out["abi_key"]),
         "blocks": [{"name": name, "nvars": value}
@@ -329,7 +333,7 @@ def _capture_v3(owner, sim, prepared):
     return out, identity.token
 
 
-def write_v3(owner, sim, path, L, regrid_every, persistence=None):
+def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
     import numpy as np
@@ -339,7 +343,7 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
 
     def prepare():
         prepared = _prepare_capture_v3(
-            owner, sim, path, L, regrid_every, persistence or {})
+            owner, sim, path, lengths, lower, regrid_every, persistence or {})
         prepared_holder["plan"] = prepared
         return prepared, prepared.capture_identity
 
@@ -361,7 +365,7 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
         owner, "AMR accepted-state capture", prepare, capture, publish)
 
 
-def prepare_v3(owner, sim, d, L):
+def prepare_v3(owner, sim, d, lengths, lower):
     """Validate a v3 AMR payload completely without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
@@ -383,9 +387,9 @@ def prepare_v3(owner, sim, d, L):
             "native rank topology"
             % (checkpoint_ranks, current_ranks)
         )
-    checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
+    checkpoint_levels, checkpoint_configured_levels = \
+        _checkpoint_amr_level_envelope(sim, d)
     selected = dict(d)
-    # Normalize authenticated pre-envelope v3 payloads for the rest of the strict restore path.
     selected["configured_n_levels"] = checkpoint_configured_levels
     for rank in range(checkpoint_ranks):
         state_key = "program_accepted_state_rank_%d" % rank
@@ -425,12 +429,28 @@ def prepare_v3(owner, sim, d, L):
         program_schedule=installed_schedule)
 
     # (2) GUARDS.
-    if int(d["n"]) != sim.nx():
-        raise ValueError("restart : checkpoint grid (n=%d) != system (n=%d)"
-                         % (int(d["n"]), sim.nx()))
-    if float(d["L"]) != L:
-        raise ValueError("restart : checkpoint domain (L=%r) != system (L=%r) -- different dx"
-                         % (float(d["L"]), L))
+    geometry_keys = ("n", "ny", "L", "Ly", "xlo", "ylo")
+    missing_geometry = [key for key in geometry_keys if key not in d]
+    if missing_geometry:
+        raise ValueError(
+            "restart: AMR checkpoint lacks exact Cartesian geometry keys %r"
+            % missing_geometry)
+    current_cells = (int(sim.nx()), int(sim.ny()))
+    checkpoint_cells = (int(d["n"]), int(d["ny"]))
+    if checkpoint_cells != current_cells:
+        raise ValueError("restart : checkpoint grid %r != system grid %r"
+                         % (checkpoint_cells, current_cells))
+    current_lengths = tuple(float(value) for value in lengths)
+    checkpoint_lengths = (float(d["L"]), float(d["Ly"]))
+    if checkpoint_lengths != current_lengths:
+        raise ValueError(
+            "restart : checkpoint domain lengths %r != system lengths %r -- different spacing"
+            % (checkpoint_lengths, current_lengths))
+    current_lower = tuple(float(value) for value in lower)
+    checkpoint_lower = (float(d["xlo"]), float(d["ylo"]))
+    if checkpoint_lower != current_lower:
+        raise ValueError("restart : checkpoint lower bounds %r != system lower bounds %r"
+                         % (checkpoint_lower, current_lower))
     chk_blocks = [str(b) for b in d["blocks"]]
     cur_blocks = list(sim.block_names())
     if chk_blocks != cur_blocks:
@@ -448,6 +468,11 @@ def prepare_v3(owner, sim, d, L):
     # where only the per-block accessors + rebuild_hierarchy work.
     multi = (sim.uses_runtime_engine() if hasattr(sim, "uses_runtime_engine")
              else sim.n_blocks() != 1)
+    if not multi and nlev != int(sim.n_levels()):
+        raise ValueError(
+            "restart: the legacy fixed-hierarchy route cannot change active depth "
+            "(%d checkpoint levels, %d materialized levels)"
+            % (nlev, int(sim.n_levels())))
 
     # Validate the complete qualified provider registry and every persisted level before hierarchy or
     # state mutation.  The checkpoint manifest has already authenticated the payload; this check binds
@@ -476,11 +501,12 @@ def prepare_v3(owner, sim, d, L):
                     "restart: checkpoint lacks level %d potential for field provider %s"
                     % (k, slot))
             width = int(sim.nx()) << k
+            height = int(sim.ny()) << k
             value = np.asarray(d[key], dtype=np.float64).ravel()
-            if value.size != width * width:
+            if value.size != width * height:
                 raise ValueError(
                     "restart: field provider %s level %d potential has size %d, expected %d"
-                    % (slot, k, value.size, width * width))
+                    % (slot, k, value.size, width * height))
             values.append(value)
         field_payload.append((slot, values))
 
@@ -499,9 +525,11 @@ def prepare_v3(owner, sim, d, L):
             raise ValueError(
                 "restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
         width = int(sim.nx()) << level
-        if ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo or ihi >= width or jhi >= width:
-            raise ValueError("restart: invalid level-%d patch box %r for width %d"
-                             % (level, box[1:], width))
+        height = int(sim.ny()) << level
+        if (ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo
+                or ihi >= width or jhi >= height):
+            raise ValueError("restart: invalid level-%d patch box %r for shape (%d, %d)"
+                             % (level, box[1:], height, width))
         for other in per_level_boxes[level]:
             if not (ihi < other[0] or other[2] < ilo or
                     jhi < other[1] or other[3] < jlo):
@@ -551,8 +579,9 @@ def prepare_v3(owner, sim, d, L):
                 raise ValueError("restart: checkpoint lacks state for block '%s' level %d"
                                  % (block, level))
             width = int(sim.nx()) << level
+            height = int(sim.ny()) << level
             state = np.asarray(d[key], dtype=np.float64)
-            expected = current_nvars * width * width
+            expected = current_nvars * width * height
             if state.size != expected:
                 raise ValueError(
                     "restart: block '%s' level %d state has size %d, expected %d"
@@ -562,27 +591,27 @@ def prepare_v3(owner, sim, d, L):
 
     aux_payload = []
     phi_payload = []
-    base_width = int(sim.nx())
-    current_coarse_aux = np.asarray(sim.level_aux_flat(0), dtype=np.float64).ravel()
-    if current_coarse_aux.size % (base_width * base_width):
-        raise RuntimeError(
-            "installed AMR coarse aux storage is not cell-aligned with the configured grid")
-    aux_components = current_coarse_aux.size // (base_width * base_width)
+    coarse_width = int(sim.nx()) * int(sim.ny())
+    coarse_aux_size = len(sim.level_aux_flat(0))
+    if coarse_width < 1 or coarse_aux_size % coarse_width:
+        raise ValueError("restart: installed coarse auxiliary storage has an invalid shape")
+    aux_components = coarse_aux_size // coarse_width
     for level in range(nlev):
         aux_key = "aux_%d" % level
         phi_key = "phi_%d" % level
         if aux_key not in d or phi_key not in d:
             raise ValueError("restart: checkpoint lacks aux or potential payload for level %d" % level)
         aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
-        width = base_width << level
-        expected_aux = aux_components * width * width
+        width = int(sim.nx()) << level
+        height = int(sim.ny()) << level
+        expected_aux = aux_components * width * height
         if aux.size != expected_aux:
             raise ValueError("restart: level %d aux has size %d, expected %d"
                              % (level, aux.size, expected_aux))
         phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
-        if phi.size != width * width:
+        if phi.size != width * height:
             raise ValueError("restart: level %d potential has size %d, expected %d"
-                             % (level, phi.size, width * width))
+                             % (level, phi.size, width * height))
         aux_payload.append(aux)
         phi_payload.append(phi)
 
@@ -616,17 +645,6 @@ def apply_v3(owner, sim, prepared):
         sim.rebuild_hierarchy(prepared.boxes, prepared.owner_ranks)
     elif prepared.levels >= 2:
         sim.set_hierarchy(prepared.boxes)
-    active_levels, configured_levels = _live_amr_level_envelope(sim)
-    if active_levels != prepared.levels \
-            or configured_levels != int(d["configured_n_levels"]):
-        raise RuntimeError(
-            "restart rebuilt AMR level envelope (%d active, %d configured), "
-            "expected (%d active, %d configured)"
-            % (
-                active_levels, configured_levels,
-                prepared.levels, int(d["configured_n_levels"]),
-            )
-        )
 
     # A freshly bound compiled Program has not executed its prelude yet, so its native history
     # rings do not exist.  Materialize the exact qualified registry from the authenticated accepted
@@ -670,12 +688,6 @@ def apply_v3(owner, sim, prepared):
     for level, phi in enumerate(prepared.potential_payload):
         sim.set_level_potential(level, phi)
     for slot, levels in prepared.field_payload:
-        restored_levels = int(sim.field_provider_levels(slot))
-        if restored_levels != len(levels):
-            raise RuntimeError(
-                "restart rebuilt field provider %s with %d levels, expected %d"
-                % (slot, restored_levels, len(levels))
-            )
         for level, value in enumerate(levels):
             sim.set_field_potential_level(slot, level, value)
 
@@ -724,11 +736,21 @@ def _preflight_histories_v3(sim, d, current_ranks):
             raise ValueError(
                 "restart: history '%s' requires depth >= 2 and component count >= 1" % name)
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
-        from pops.runtime._system_io_history import resolve_history_storage
+        from pops.runtime._system_io_history import (
+            history_fill_count_from_payload,
+            resolve_history_storage,
+        )
+        fill_count = history_fill_count_from_payload(
+            d,
+            name,
+            depth,
+            bool(d["history_init_" + name]),
+        )
         expected_requested, expected_stored, expected_mode, expected_steps = \
             resolve_history_storage(
                 policy,
                 depth,
+                fill_count=fill_count,
                 macro_step=int(d["macro_step"]),
                 regrid_every=int(d["regrid_every"]),
             )
@@ -767,7 +789,8 @@ def _preflight_histories_v3(sim, d, current_ranks):
                     "with manifest cadence %r"
                     % (name, recorded, list(expected_steps)))
         expected_values = ncomp * sum(
-            (int(sim.nx()) << level) ** 2 for level in range(int(d["n_levels"])))
+            (int(sim.nx()) << level) * (int(sim.ny()) << level)
+            for level in range(int(d["n_levels"])))
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
             if key not in d:

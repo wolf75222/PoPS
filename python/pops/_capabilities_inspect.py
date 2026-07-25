@@ -328,7 +328,8 @@ def _native_amr_context():
     native_note = (
         "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s; "
         "transitions are 2D isotropic and share one isotropic buffer/lookahead; policy routes are "
-        "shared_n_level / berger_rigoutsos / box_array / round_robin"
+        "shared_n_level / berger_rigoutsos / box_array / prepared load-balance provider "
+        "(space-filling curve default; knapsack and round-robin built in)"
         % ", ".join(map(str, NATIVE_RATIOS))
     )
     return native_depth, tuple(NATIVE_RATIOS), native_note

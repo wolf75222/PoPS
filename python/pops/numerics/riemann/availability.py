@@ -6,12 +6,10 @@ speeds, HLLC without the star-state structure, Roe without a declared dissipatio
 Euler route on a non-Euler layout) is reported BEFORE the runtime is touched.
 
 SINGLE SOURCE. The refusal logic is NOT duplicated here: :func:`flux_available` /
-:func:`flux_validate` delegate to the exact install-time predicates
-(:func:`pops.runtime.routes.check_riemann_capability` and
-:func:`pops.runtime.routes.check_wave_speed_provider`) that ``System.add_equation`` /
-``AmrSystem.add_equation`` already call, and only translate a raised ``ValueError`` into a
-structured :class:`~pops.descriptors.Availability`. So the descriptor surface and the install
-guard can never diverge -- they run the SAME check.
+:func:`flux_validate` delegate to the same route and descriptor-requirement predicates used by
+``System.add_equation`` / ``AmrSystem.add_equation`` and only translate a raised ``ValueError``
+into a structured :class:`~pops.descriptors.Availability`. Builtin and external descriptors use
+the same capability contract.
 
 The predicates read the model from the @p context (a plain ``dict`` with a ``"model"`` /
 ``"compiled"`` key, or the compiled/authoring model itself). NO FALSE POSITIVE: a context that
@@ -23,12 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Availability
-
-# The generic-hooks fluxes and the explicit canonical-Euler routes both refuse through
-# check_riemann_capability; HLL refuses through the wave-speed predicate. A rusanov / user flux
-# has no model capability requirement, so it is unconditionally available.
-_CAPABILITY_FLUXES = ("hllc", "roe", "euler_hllc", "euler_roe")
-
 
 def _model_of(context: Any) -> Any:
     """Extract the compiled / authoring model from a validate/available @p context, or ``None``.
@@ -53,41 +45,23 @@ def _model_of(context: Any) -> Any:
     return model
 
 
-def _scheme_of(flux: Any) -> Any:
-    """The lowered flux token of a riemann descriptor (its ``.scheme``), or ``None``."""
-    return getattr(flux, "scheme", None)
-
-
 def flux_validate(flux: Any, context: Any = None) -> bool:
     """Raise the exact install-time refusal when @p flux cannot serve the model in @p context.
 
-    Delegates to :func:`pops.runtime.routes.check_riemann_capability` (hllc / roe / euler_hllc /
-    euler_roe) and to :func:`pops.runtime.routes.check_wave_speed_provider` (hll) -- the SAME
-    predicates ``add_equation`` runs -- so the descriptor and the install guard never diverge. A
-    context with no model, or a rusanov / user / undeclared flux, passes (no false positive).
+    Delegates to :func:`pops.runtime.routes.check_riemann_requirement_contract` for every
+    descriptor-owned model requirement. This is the SAME predicate ``add_equation`` runs. A
+    context with no model, or a provider with no model requirement, passes (no false positive).
 
     Returns ``True`` when the flux is usable; re-raises the predicate's ``ValueError`` otherwise.
     """
     model = _model_of(context)
     if model is None:
         return True
-    scheme = _scheme_of(flux)
-    if scheme in _CAPABILITY_FLUXES:
-        # Lazy: numerics must not import pops.runtime at module scope (acyclic layering).
-        from pops.runtime.routes import check_riemann_capability
-        check_riemann_capability(scheme, model, "validate")
-    elif scheme == "hll":
-        from pops.runtime.routes import check_wave_speed_provider
-        requested = (getattr(flux, "options", {}) or {}).get("waves")
-        provider = None
-        if requested is not None:
-            from pops.numerics.riemann.waves import provider_of
-            actual = provider_of(model)
-            provider = actual.kind if actual is not None else None
-        # A bare HLL (no pinned provider) still needs the model to emit signed wave speeds; the
-        # predicate raises when has_wave_speeds is False. The estimate providers pass any signed
-        # source, so a None requested kind + has_wave_speeds True is accepted, matching install.
-        check_wave_speed_provider(requested, model, "validate", actual_provider=provider)
+    from pops.numerics.riemann._contract import riemann_capability_contract
+    from pops.runtime.routes import check_riemann_requirement_contract
+
+    check_riemann_requirement_contract(
+        riemann_capability_contract(flux), model, "validate", flux=flux)
     return True
 
 
@@ -98,11 +72,13 @@ def flux_available(flux: Any, context: Any = None) -> Any:
     the missing capability without catching an exception. A context with no model, or a flux with
     no model requirement, is :meth:`Availability.yes`.
     """
+    model = _model_of(context)
     try:
         flux_validate(flux, context)
     except ValueError as err:
+        from pops.numerics.riemann._contract import riemann_capability_contract
         from pops.runtime.routes import riemann_missing_capabilities
-        missing = riemann_missing_capabilities(_scheme_of(flux))
+        missing = riemann_missing_capabilities(riemann_capability_contract(flux), model)
         alternatives = ["pops.numerics.riemann.Rusanov()"]
         return Availability.no(str(err), missing=missing, alternatives=alternatives)
     return Availability.yes()

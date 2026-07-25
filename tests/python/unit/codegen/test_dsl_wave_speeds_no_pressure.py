@@ -164,7 +164,7 @@ chk(dis > 1e-3, f"les references HLL et Rusanov DIFFERENT (dmax = {dis:.3e}) : l
 _RIEMANN = {"hll": HLL(), "rusanov": Rusanov()}
 for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "rusanov")):
     print(f"== {label} : eval_rhs == reference numpy ==")
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("toy", model=compiled,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=_RIEMANN[riemann]),
                      time=engine.Explicit())
@@ -185,7 +185,7 @@ m_eig.primitive_vars(e1, e2)
 m_eig.conservative_from([e1, e2])
 c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="production")
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
-sim = System(n=16, L=1.0, periodic=True)
+sim = System(n=16, L=1.0, periodicity=(True, True))
 msg = err_msg(lambda: sim.add_equation(
     "eig", model=c_eig, spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
     time=engine.Explicit()))
@@ -206,7 +206,7 @@ m_p.primitive_vars(rho, u, v)
 m_p.conservative_from([rho, rho * u, rho * v])
 c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="production")
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
-sim = System(n=16, L=1.0, periodic=True)
+sim = System(n=16, L=1.0, periodicity=(True, True))
 msg = err_msg(lambda: sim.add_equation(
     "gasp", model=c_p, spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
     time=engine.Explicit()))

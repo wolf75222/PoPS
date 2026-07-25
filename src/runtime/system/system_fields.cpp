@@ -424,6 +424,8 @@ MultiFab& System::register_history(
   auto& stored = p_->program_.hist_.histories.emplace(name, std::move(ring)).first->second;
   p_->program_.hist_.depth[name] = want_depth;
   p_->program_.hist_.initialized[name] = false;
+  p_->program_.hist_.fill_count[name] = 0;
+  p_->program_.hist_.store_pending[name] = false;
   p_->program_.hist_.owner[name] = qualified ? owner : -1;
   if (qualified) {
     p_->program_.hist_.state_identity[name] = state_identity;

@@ -12,6 +12,7 @@
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
+#include <pops/runtime/program/external_riemann_brick.hpp>
 #include <cmath>
 
 namespace pops {
@@ -276,7 +277,8 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   EffectiveBlockOptions block_options =
       make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
                                 imex, substeps, evolve, stride, implicit_vars, implicit_roles,
-                                newton, newton_diagnostics, positivity_floor, wave_speed_cache);
+                                newton, newton_diagnostics, positivity_floor, wave_speed_cache,
+                                weno_epsilon);
   block_options.ncomp = ncomp;
   block_options.conservative_vars = cons_vs.names;
   block_options.primitive_vars = prim_vs.names;
@@ -705,6 +707,40 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   opt.evolve = evolve;
   opt.gamma = gamma;
   opt.positivity_floor = positivity_floor;
+}
+
+void System::add_external_riemann_block(
+    const std::string& name, const std::string& so_path, const std::string& brick_id,
+    const std::string& sha256, const std::string& limiter, const std::string& recon,
+    const std::string& time, double gamma, int substeps, bool evolve, int stride,
+    int expected_nvars, int expected_naux, const std::string& expected_model_identity,
+    double positivity_floor, double weno_epsilon) {
+  require_assembling(p_->lifecycle_, "add_external_riemann_block");
+  auto library = std::make_shared<runtime::program::ExternalBrickHandle>(
+      so_path, brick_id, sha256, expected_nvars, expected_naux, expected_model_identity);
+  // Pin before invoking foreign code: even an exception after partial installation may have left a
+  // closure in the System, and unloading its text would turn that recoverable error into UAF.
+  p_->external_riemann_libraries_.push_back(library);
+  library->install_system(this, name, limiter, recon, time, gamma, substeps, evolve, stride,
+                          positivity_floor, weno_epsilon);
+  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
+  opt.route = "external_riemann";
+  opt.compiled = true;
+  opt.transport = "compiled_artifact";
+  opt.source = "compiled_artifact";
+  opt.elliptic = "compiled_artifact";
+  opt.limiter = limiter;
+  opt.riemann = brick_id;
+  opt.recon = recon;
+  opt.time = time;
+  opt.time_method = route_token(parse_time_route(time, "System::add_external_riemann_block"));
+  opt.imex = time == "imex";
+  opt.substeps = substeps;
+  opt.stride = stride;
+  opt.evolve = evolve;
+  opt.gamma = gamma;
+  opt.positivity_floor = positivity_floor;
+  opt.weno_epsilon = weno_epsilon;
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,

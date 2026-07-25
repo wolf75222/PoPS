@@ -32,6 +32,7 @@
 // stay in the runtime, delegating their STORAGE to this struct's hist_ / cache_ members. This header
 // therefore has NO Kokkos / MultiFab-allocation dependency beyond the MultiFab type the rings hold.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -51,26 +52,33 @@ namespace pops::runtime::program {
 
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
-/// A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0], each co-distributed with
-/// block 0's state. The ring MEMORY is allocated by the owning runtime (it needs the block (ba, dm)),
-/// so this struct holds only the storage + the cheap, grid-free bookkeeping (depth, initialized) and
-/// the O(1) rotate. The grid-touching register / read / store / restore bodies live in the runtime
-/// and reach these maps directly. Empty by default -> the single-step paths never touch it.
+/// A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0]. Qualified keep_history
+/// rings carry their exact runtime block owner; legacy internal rings retain owner=-1. The ring MEMORY
+/// is allocated by the owning runtime (it needs the shared block layout), so this struct holds only
+/// storage plus cheap, grid-free bookkeeping and the O(1) rotate. Grid-touching register/read/store/
+/// restore bodies live in the runtime and reach these maps directly. Empty by default.
 struct HistoryManager {
   std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
   std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
   std::map<std::string, bool> initialized;                 // name -> stored at least once
+  /// Number of authentic accepted stores currently represented by logical ring slots. The first
+  /// store cold-fills deeper slots with copies for multistep evaluation, but advances this count by
+  /// one only. Saturates at depth; selective checkpoint replay is valid only at full depth.
+  std::map<std::string, int> fill_count;
+  /// A store has populated slot zero since this ring's last logical rotation. Multiple writes in one
+  /// Program tick still create one accepted logical sample; rotate consumes and clears this flag.
+  std::map<std::string, bool> store_pending;
   std::map<std::string, int> owner;                        // runtime block index (-1 legacy)
   std::map<std::string, std::string> state_identity;
   std::map<std::string, std::string> space_identity;
   std::map<std::string, std::string> clock_identity;
   std::map<std::string, std::string> interpolation_identity;
-  /// PER-SLOT dt (ADC-626). slot_dt[name][s] = the macro-step dt whose commit produced the value now
-  /// in slot s (slot 0 = newest). Filled by the runtime's store_history (which knows the current dt via
-  /// ProgramRuntimeState::last_dt_) and rotated ALONGSIDE the ring, so a selective-persistence restart
-  /// can re-step the recomputed slots with the EXACT recorded dt sequence (variable-dt replay is
-  /// bit-exact). A plain data member (no method the stepper template instantiates) -> MockImpl-safe;
-  /// empty by default so the dense / non-persistence paths never touch it.
+  /// PER-SLOT outgoing dt (ADC-626). keep_history snapshots U^n before the tail commit; after the
+  /// ledger rotates with the ring, slot_dt[name][s] is the macro-step interval from the sample in
+  /// slot s toward the newer sample in slot s-1. Reconstructing omitted slot j from exact older
+  /// anchor j+1 uses slot_dt[j+1]. This preserves exact variable-dt provenance even when a
+  /// run-to-target controller clips only its terminal step. A plain data member (no method the
+  /// stepper template instantiates) -> MockImpl-safe; empty by default so dense paths never touch it.
   std::map<std::string, std::vector<Real>> slot_dt;
 
   /// Shift each ring one step (newest-to-oldest), called ONCE at the end of a macro-step. O(1)
@@ -89,6 +97,11 @@ struct HistoryManager {
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
       }
+      if (store_pending[name]) {
+        fill_count[name] =
+            std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
+        store_pending[name] = false;
+      }
     }
   }
 
@@ -106,6 +119,11 @@ struct HistoryManager {
         std::vector<Real>& dts = dt_it->second;
         for (std::size_t k = dts.size(); k-- > 1;)
           std::swap(dts[k], dts[k - 1]);
+      }
+      if (store_pending[name]) {
+        fill_count[name] =
+            std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
+        store_pending[name] = false;
       }
     }
   }
@@ -144,9 +162,10 @@ struct ProgramRuntimeState {
   int stride_ = 1;
   /// LAST macro-step dt handed to step_ (ADC-626). Set by the stepper right before each
   /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
-  /// store_history can tag the slot it produces with the dt that produced it (HistoryManager::slot_dt).
-  /// A plain data field only assigned by the template (never a new method it instantiates) -> the mock
-  /// System. Default 0 -> no program stepped yet.
+  /// pre-commit store_history can tag its state sample with the outgoing interval that advances it
+  /// toward the next accepted sample (HistoryManager::slot_dt). A plain data field only assigned by
+  /// the template (never a new method it instantiates) -> the mock System. Default 0 -> no program
+  /// stepped yet.
   Real last_dt_ = Real(0);
 
   // --- checkpoint / binding identity ---------------------------------------------------------------

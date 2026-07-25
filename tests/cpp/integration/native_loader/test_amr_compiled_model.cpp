@@ -12,9 +12,11 @@ namespace {
 
 namespace abi = pops::component::test_support;
 
-PopsComponentTableHeaderV1 header(std::size_t size, PopsNativeInterfaceIdV1 id) {
+PopsComponentTableHeaderV1 header(std::size_t size, PopsNativeInterfaceIdV1 id,
+                                  std::uint32_t version = 1) {
   return {
-      static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, 1, nullptr, nullptr};
+      static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, version, nullptr,
+      nullptr};
 }
 
 PopsComponentStatusV1 ok() {
@@ -50,9 +52,9 @@ TEST(test_amr_compiled_model, ExactTransferTablePreservesConservativeDataflow) {
 TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
   const std::array<double, 6> indicator{0.0, 2.0, 3.0, 0.5, 4.0, 0.0};
   std::array<std::uint8_t, 6> tags{};
-  const PopsTaggerApiV1 tagger{
-      header(sizeof(PopsTaggerApiV1), POPS_NATIVE_INTERFACE_TAGGER_V1),
-      +[](void*, const PopsTaggerRequestV1* request, PopsComponentStatusV1* status) {
+  const PopsTaggerApiV2 tagger{
+      header(sizeof(PopsTaggerApiV2), POPS_NATIVE_INTERFACE_TAGGER_V2, 2),
+      +[](void*, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {
         const auto* state = static_cast<const double*>(request->states[0].values.data);
         for (std::size_t point = 0; point < request->refine_candidates.size; ++point)
           request->refine_candidates.data[point] =
@@ -67,8 +69,10 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
                                    POPS_TAGGING_NO_STENCIL_V1};
   const std::int32_t tag_op = 1, tag_arg = 0;
   std::array<std::uint8_t, 6> coarsen{}, refine_equalities{}, coarsen_equalities{};
-  const PopsTaggerRequestV1 tag_request{
-      sizeof(PopsTaggerRequestV1),
+  const PopsTaggerRequestV2 tag_request{
+      sizeof(PopsTaggerRequestV2),
+      POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2,
+      POPS_TAGGER_COLLECTIVE_NONE_V2,
       1,
       &tag_states,
       {sizeof(PopsTaggingProgramV1), "case::tag-program", 0, nullptr, 1, &tag_leaf, 1, &tag_op,
@@ -78,12 +82,16 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
       {1, 2, 0},
       {1.0, 1.0, 0.0},
       0,
-      {sizeof(PopsByteViewV1), tags.data(), tags.size()},
-      {sizeof(PopsByteViewV1), coarsen.data(), coarsen.size()},
-      {sizeof(PopsByteViewV1), refine_equalities.data(), refine_equalities.size()},
-      {sizeof(PopsByteViewV1), coarsen_equalities.data(), coarsen_equalities.size()},
+      {sizeof(PopsTaggerMaskViewV2), tags.data(), tags.size(), POPS_MEMORY_SPACE_HOST_V1,
+       POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
+      {sizeof(PopsTaggerMaskViewV2), coarsen.data(), coarsen.size(),
+       POPS_MEMORY_SPACE_HOST_V1, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
+      {sizeof(PopsTaggerMaskViewV2), refine_equalities.data(), refine_equalities.size(),
+       POPS_MEMORY_SPACE_HOST_V1, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
+      {sizeof(PopsTaggerMaskViewV2), coarsen_equalities.data(), coarsen_equalities.size(),
+       POPS_MEMORY_SPACE_HOST_V1, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
       abi::logical_time(),
-      abi::host_execution_context()};
+      abi::noncollective_host_execution_context()};
   PopsComponentStatusV1 status{};
   ASSERT_EQ(pops::component::tag_batch(tagger, nullptr, tag_request, status), 0);
   EXPECT_EQ(tags, (std::array<std::uint8_t, 6>{0, 1, 1, 0, 1, 0}));

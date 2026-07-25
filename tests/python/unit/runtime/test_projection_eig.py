@@ -324,7 +324,7 @@ def test_system_end_to_end():
         )
 
     def make_sys(component):
-        s = System(n=N, L=L, periodic=True)
+        s = System(n=N, L=L, periodicity=(True, True))
         s.add_equation(
             "toy",
             component,

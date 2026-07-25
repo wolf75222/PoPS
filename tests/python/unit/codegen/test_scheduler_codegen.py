@@ -311,7 +311,7 @@ def test_scratch_hold_caches_named_scratch():
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
-    decl_idx = cpp.index("pops::MultiFab r")
+    decl_idx = cpp.index("pops::MultiFab& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 
@@ -333,7 +333,7 @@ def test_scratch_accumulate_dt_uses_scratch_cache():
 def test_scratch_decl_hoisted_for_skip():
     # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
     cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
-    decl_idx = cpp.index("pops::MultiFab r")
+    decl_idx = cpp.index("pops::MultiFab& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 

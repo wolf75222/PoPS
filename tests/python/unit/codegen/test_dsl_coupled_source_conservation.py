@@ -50,7 +50,7 @@ def density_block(n0=1.0):
 
 
 def make_system(n, na0, nb0):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation(
         "alpha",
         density_block(n0=na0),

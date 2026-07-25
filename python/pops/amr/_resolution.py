@@ -448,11 +448,12 @@ def _combined_requirement(
 def _hierarchy(
     authoring: AMRHierarchy,
     patch_layout: Any,
+    load_balance: Any,
     regrid: AMRRegrid,
     transfer: Any,
     tagging: ResolvedTaggingAuthority,
     context: AMRResolutionContext,
-    clustering: Any,
+    clustering_binding: Any,
 ) -> Any:
     from pops.mesh._amr import (
         CanonicalOptions,
@@ -551,18 +552,23 @@ def _hierarchy(
         raise TypeError("AMR regrid clocks must carry an explicit owner")
     patch_layout_data = _protocol(
         patch_layout, "to_data", where="AMR patch layout authority")()
+    from pops.amr._load_balance_contract import load_balance_provider_data
+
+    load_balance_data = load_balance_provider_data(load_balance)
+    load_balance_identity = load_balance_data.get("provider_identity")
+    if not isinstance(load_balance_identity, str) or not load_balance_identity:
+        raise TypeError("AMR load-balance authority has no canonical provider identity")
     plan = HierarchyPlan(
         transitions=transitions,
         nesting=nesting,
         clustering=ClusteringPolicy(
             provider(
-                "clustering_%s" % clustering.runtime_binding_data()["provider_identity"],
+                "clustering_%s" % clustering_binding["provider_identity"],
                 "amr_clustering_provider",
             ),
             CanonicalOptions({
                 "provider": {
-                    **clustering.runtime_binding_data(),
-                    "layout_identity": context.layout_plan.qualified_id,
+                    **clustering_binding,
                 }
             }),
         ),
@@ -575,8 +581,11 @@ def _hierarchy(
             }),
         ),
         load_balance=LoadBalancePolicy(
-            provider("round_robin", "amr_load_balance_provider"),
-            CanonicalOptions({"native_route": "round_robin"}),
+            provider(
+                "load_balance_%s" % load_balance_identity,
+                "amr_load_balance_provider",
+            ),
+            CanonicalOptions({"provider": load_balance_data}),
         ),
         regrid=RegridSchedule(
             regrid.schedule,
@@ -613,6 +622,7 @@ def resolve_amr_authorities(
     transfer: Any,
     execution: Any,
     patch_layout: Any,
+    load_balance: Any,
     tagger: Any,
     clustering: Any,
     context: AMRResolutionContext,
@@ -625,6 +635,7 @@ def resolve_amr_authorities(
         "transfer": (transfer, ("resolve_references", "resolve", "inspect")),
         "execution": (execution, ("to_data", "runtime_execution_data")),
         "patch_layout": (patch_layout, ("to_data",)),
+        "load_balance": (load_balance, ("load_balance_provider_data",)),
     }
     for slot, (authority, methods) in protocols.items():
         for method in methods:
@@ -632,21 +643,16 @@ def resolve_amr_authorities(
                 raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
-    providers = {"tagger": tagger, "clustering": clustering}
-    for slot, value in providers.items():
-        for method in (
-                "inspect", "resolve_references", "require_component_inputs",
-                "require_tagging_graph", "runtime_binding_data"):
-            if slot == "clustering" and method == "require_tagging_graph":
-                continue
+    providers = (tagger, clustering)
+    for value in providers:
+        for method in ("inspect", "resolve_references", "lower_amr_provider"):
             if not callable(getattr(value, method, None)):
-                raise TypeError("AMR %s provider must implement %s()" % (slot, method))
-    resolved_providers = {
-        slot: value.resolve_references(context.resolve) for slot, value in providers.items()
-    }
-    for value in resolved_providers.values():
-        value.require_component_inputs(context.components)
-    resolved_transfer = transfer.resolve_references(context.resolve).resolve(context.layout_plan)
+                raise TypeError("AMR provider authority must implement %s()" % method)
+    resolved_providers = tuple(
+        value.resolve_references(context.resolve) for value in providers)
+    resolved_transfer = transfer.resolve_references(context.resolve).resolve(
+        context.layout_plan, context.numerics
+    )
     tagging_context = AMRTaggingResolutionContext(
         context.owner,
         context.layout_plan,
@@ -654,15 +660,44 @@ def resolve_amr_authorities(
         context.resolve,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context)
-    resolved_providers["tagger"].require_tagging_graph(resolved_tagging.graph)
+    from pops.amr.providers import (
+        AMRProviderLoweringContext,
+        ResolvedAMRProviderBinding,
+    )
+
+    provider_context = AMRProviderLoweringContext(
+        layout_identity=context.layout_plan.qualified_id,
+        components=context.components,
+        tagging_graph=resolved_tagging.graph,
+        clock_identity=context.program.clock.qualified_id,
+    )
+    provider_bindings = {}
+    for provider_authority in resolved_providers:
+        lowered = provider_authority.lower_amr_provider(provider_context)
+        if type(lowered) is not ResolvedAMRProviderBinding:
+            raise TypeError(
+                "AMR provider lower_amr_provider() must return "
+                "ResolvedAMRProviderBinding"
+            )
+        if lowered.data.get("layout_identity") != provider_context.layout_identity:
+            raise ValueError("resolved AMR provider authenticates another layout")
+        if lowered.role in provider_bindings:
+            raise ValueError("AMR provider roles must be unique")
+        provider_bindings[lowered.role] = lowered.data
+    if set(provider_bindings) != {"clustering", "tagger"}:
+        raise ValueError("AMR resolution requires exact clustering and tagger provider roles")
+    provider_bindings = {
+        role: provider_bindings[role] for role in ("clustering", "tagger")
+    }
     resolved_hierarchy = _hierarchy(
         hierarchy,
         patch_layout,
+        load_balance,
         regrid,
         resolved_transfer,
         resolved_tagging,
         context,
-        resolved_providers["clustering"],
+        provider_bindings["clustering"],
     )
     initial = context.initials.resolve_amr(
         layout_plan=context.layout_plan,
@@ -671,27 +706,6 @@ def resolve_amr_authorities(
         tagging=resolved_tagging.graph,
         constraints=(),
     )
-    provider_bindings = {
-        slot: {
-            **value.runtime_binding_data(),
-            "layout_identity": context.layout_plan.qualified_id,
-        }
-        for slot in ("clustering", "tagger")
-        for value in (resolved_providers[slot],)
-    }
-    provider_bindings["tagger"] = {
-        **provider_bindings["tagger"],
-        "clock_identity": context.program.clock.qualified_id,
-        "tagging_graph_identity": resolved_tagging.graph.qualified_id,
-    }
-    identity_payload = {
-        key: value for key, value in provider_bindings["tagger"].items()
-        if key != "provider_identity"
-    }
-    provider_bindings["tagger"]["provider_identity"] = make_identity(
-        "resolved-amr-tagger-provider",
-        semantic_value(identity_payload, where="resolved AMR Tagger provider"),
-    ).token
     return ResolvedAMRAuthorities(
         hierarchy=resolved_hierarchy,
         transfer=resolved_transfer,

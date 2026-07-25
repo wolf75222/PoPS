@@ -21,6 +21,7 @@
   "tests/python/integration/amr/test_amr_runtime_inspect.py": 0.5,
   "tests/python/integration/amr/test_amr_ssprk3.py": 1.2,
   "tests/python/integration/amr/test_amr_weno5_hllc_roe.py": 0.5,
+  "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py": 0.5,
   "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 189.8,
   "tests/python/integration/bindings/test_name_binding_codegen.py": 0.5,
   "tests/python/integration/bindings/test_name_binding_runtime.py": 50.5,
@@ -218,6 +219,7 @@
   "tests/python/unit/moments/test_hyqmom15_final_contract.py": 60.0,
   "tests/python/unit/moments/test_hyqmom15_relaxation.py": 5.0,
   "tests/python/unit/numerics/test_discretization_plan.py": 1.0,
+  "tests/python/unit/numerics/test_external_reconstruction_contract.py": 0.5,
   "tests/python/unit/numerics/test_finite_volume_composite.py": 1.0,
   "tests/python/unit/numerics/test_indicator_stencils.py": 1.0,
   "tests/python/unit/output/test_async_scientific_output.py": 2.0,
@@ -269,6 +271,7 @@
   "tests/python/unit/runtime/test_capacity_limits.py": 0.5,
   "tests/python/unit/runtime/test_check_model.py": 0.5,
   "tests/python/unit/runtime/test_check_model_partition.py": 0.5,
+  "tests/python/unit/runtime/test_console_monitor.py": 0.5,
   "tests/python/unit/runtime/test_consumer_authoring.py": 1.0,
   "tests/python/unit/runtime/test_consumer_transactions.py": 1.0,
   "tests/python/unit/runtime/test_coupled_rate.py": 0.5,
@@ -393,7 +396,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so, local pytest per file (non-compiler tests)",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 224,
+    "estimated_count": 227,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -408,6 +411,7 @@
       "tests/python/integration/amr/test_amr_native_params.py",
       "tests/python/integration/amr/test_amr_program_parity.py",
       "tests/python/integration/amr/test_amr_program_reflux.py",
+      "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py",
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
       "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py",
       "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py",
@@ -538,6 +542,7 @@
       "tests/python/unit/moments/test_hyqmom15_final_contract.py",
       "tests/python/unit/moments/test_hyqmom15_relaxation.py",
       "tests/python/unit/numerics/test_discretization_plan.py",
+      "tests/python/unit/numerics/test_external_reconstruction_contract.py",
       "tests/python/unit/numerics/test_finite_volume_composite.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
       "tests/python/unit/output/test_async_scientific_output.py",
@@ -565,6 +570,7 @@
       "tests/python/unit/runtime/test_bind_validation.py",
       "tests/python/unit/runtime/test_boundary_component_prepare_contract.py",
       "tests/python/unit/runtime/test_canonical_runtime_identity.py",
+      "tests/python/unit/runtime/test_console_monitor.py",
       "tests/python/unit/runtime/test_consumer_authoring.py",
       "tests/python/unit/runtime/test_consumer_transactions.py",
       "tests/python/unit/runtime/test_coupled_rate_program_stability.py",
@@ -620,6 +626,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 389
+    "total_files": 392
   }
 }

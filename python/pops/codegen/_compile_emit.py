@@ -340,7 +340,8 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                        const char* recon, const char* time,\n'
                    '                                        double gamma, int substeps,\n'
                    '                                        const double* params, int nparams,\n'
-                   '                                        double pos_floor) {\n'
+                   '                                        double pos_floor, double weno_epsilon,\n'
+                   '                                        bool wave_speed_cache) {\n'
                    '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
@@ -349,7 +350,8 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
-                   '                                                    /*implicit_roles=*/{}, pos_floor);\n'
+                   '                                                    /*implicit_roles=*/{}, pos_floor,\n'
+                   '                                                    weno_epsilon, wave_speed_cache);\n'
                    + ell_field_attach_lines +
                    '}\n')
     install += ('POPS_LOADER_API int pops_compiled_nparams() {\n'

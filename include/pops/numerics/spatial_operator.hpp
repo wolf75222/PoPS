@@ -15,7 +15,7 @@
 ///   - spatial/face_flux.hpp        reconstruct, reconstruct_pp, require_reconstruction_ghosts,
 ///                                  xface_box / yface_box, compute_face_fluxes.
 ///   - spatial/wave_speed.hpp       max_wave_speed_mf and step-bound reductions, the hotspot
-///                                  diagnostic, fill_wave_speed_cache.
+///                                  diagnostic.
 ///   - spatial/cartesian_operator.hpp  assemble_rhs, assemble_rhs_hll_cached.
 ///   - spatial/masked_operator.hpp     assemble_rhs_masked.
 ///

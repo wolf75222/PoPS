@@ -45,10 +45,6 @@
 #include <limits>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
-
 using namespace pops;
 
 namespace {
@@ -143,16 +139,13 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
 }  // namespace
 
 TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stage_overrides) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 1;
-  char arg0[] = "test_coupled_fieldsolve";
-  char* argv[] = {arg0, nullptr};
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
+  // System storage initializes Kokkos lazily through the PoPS runtime.  That process-wide lifetime
+  // is finalized at exit, after every local System/MultiFab has been destroyed; a per-test
+  // ScopeGuard would finalize Kokkos here and make the next TEST attempt an illegal reinitialize.
   test::Checker chk(test::Checker::Style::Verbose);
 
   const int n = 32;
-  const SystemConfig cfg{n, 1.0, true};  // periodic Cartesian
+  const SystemConfig cfg{n, 1.0, Periodicity{true, true}};  // periodic Cartesian
   const std::vector<double> q0 = charge_density(n, 1.0, 0.0);
   const std::vector<double> q1 = charge_density(n, 0.6, 0.25);  // distinct from block 0
 
@@ -268,14 +261,8 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
 }
 
 TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 1;
-  char arg0[] = "test_named_gradient_sign";
-  char* argv[] = {arg0, nullptr};
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
   const int n = 32;
-  System system(SystemConfig{n, 1.0, true});
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
   const std::string slot = "signed-gradient-provider";
   const PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
                                                 {{"abs_tol", 0.0},

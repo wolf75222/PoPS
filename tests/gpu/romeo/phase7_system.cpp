@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     SystemConfig cfg;
     cfg.n = n;
     cfg.L = L;
-    cfg.periodic = true;
+    cfg.periodicity = {true, true};
     System sim(cfg);
 
     ModelSpec spec;  // euler_poisson : compressible + gravite (source + couplage elliptique)

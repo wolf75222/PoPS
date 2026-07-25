@@ -9,10 +9,9 @@ Clean hierarchy windows retain selective storage and native deterministic replay
 
 The composition is TWO explicitly program-driven blocks: "blk" (ring, blob above the tag threshold)
 plus a background block "bg" (below threshold, never tagged). Both states advance through the same
-exact conservative rate and therefore have complete Program block/flux-ledger routes. The second block
-keeps a real two-level hierarchy so scheduled regrids genuinely change/remap it; this prevents a
-coarse-only structural no-op from making an unsafe replay appear valid. Its smooth sub-threshold state
-keeps the tag union deterministic.
+strictly affine dt-dependent recurrence. The second block keeps a real two-level hierarchy so scheduled
+regrids genuinely change/remap it; this prevents a coarse-only structural no-op from making an unsafe
+replay appear valid. Its smooth sub-threshold state keeps the tag union deterministic.
 
 The cases (all np.array_equal, no tolerance; a FRESH AmrSystem restart):
 
@@ -104,27 +103,26 @@ def _passive_source_model(name):
 def _state_ring_program(model, depth, k, name):
     """A depth-`depth` STATE ring (keep_history, Interval(k) -> stores a subset, replays the gaps).
 
-    A MARKOV forward-Euler recurrence U^{n+1} = U^n + dt*_C*U^n (depends ONLY on U^n) so re-stepping
-    from any seeded state reproduces the next state bit-for-bit -- the single-seed replay reconstructs
-    the missing slots exactly. A zero-weight prev(depth-1) read declares the ring depth without making
-    the recurrence multi-term (a k-term recurrence would need k seed states the single-seed replay
+    A strictly affine recurrence U^{n+1} = U^n + dt*_C*U^n (depends only on U^n and dt, with no
+    RHS/field/operator context) makes re-stepping from any seeded state reproduce the next state
+    bit-for-bit. A zero-weight prev(depth-1) read declares the ring depth without making the
+    recurrence multi-term (a k-term recurrence would need k seed states the single-seed replay
     cannot supply -- the documented replay class)."""
     P = pops.time.Program(name)
     _case, states = program_states(P, model, ("blk", "bg"))
     U = states["blk"]
     background = states["bg"]
-    rate = model.module.operator_handle("source_rate")
     # The helper argument is the physical slot count; keep_history authoring takes max lag.
     P.keep_history(U, depth=depth - 1, checkpoint_policy=Interval(k))
     nxt = P.value(
         "Un",
-        U.n + P.dt * rate(U.n) + 0.0 * U.prev(depth - 1),
+        U.n + P.dt * _C * U.n + 0.0 * U.prev(depth - 1),
         at=U.next.point,
     )
     P.commit(U.next, nxt)
     background_next = P.value(
         "background_next",
-        background.n + P.dt * rate(background.n),
+        background.n + P.dt * _C * background.n,
         at=background.next.point,
     )
     P.commit(background.next, background_next)

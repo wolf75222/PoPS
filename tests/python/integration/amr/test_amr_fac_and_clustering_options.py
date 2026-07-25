@@ -17,7 +17,7 @@ def _model():
 
 
 def _built(**cfg):
-    sim = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16, **cfg)
+    sim = AmrSystem(n=32, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16, **cfg)
     sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((32, 32))
@@ -31,7 +31,7 @@ def _built(**cfg):
 # --- ADC-616 clustering ------------------------------------------------------
 
 def test_clustering_default_reported_bit_identically():
-    amr = AmrSystem(n=16, L=1.0, periodic=True)
+    amr = AmrSystem(n=16, L=1.0, periodicity=(True, True))
     opts = amr.inspect().to_dict()["options"]["amr"]
     assert opts["cluster_min_efficiency"] == pytest.approx(0.7)
     assert opts["cluster_min_box_size"] == 1
@@ -39,7 +39,7 @@ def test_clustering_default_reported_bit_identically():
 
 
 def test_clustering_override_visible_in_report():
-    amr = AmrSystem(n=32, L=1.0, periodic=True, cluster_min_efficiency=0.9,
+    amr = AmrSystem(n=32, L=1.0, periodicity=(True, True), cluster_min_efficiency=0.9,
                     cluster_min_box_size=2, cluster_max_box_size=16)
     opts = amr.inspect().to_dict()["options"]["amr"]
     assert opts["cluster_min_efficiency"] == pytest.approx(0.9)

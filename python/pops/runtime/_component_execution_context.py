@@ -33,14 +33,29 @@ def component_execution_data(context: Any) -> dict[str, Any]:
     spaces = tuple(context.backend.memory_spaces.require(
         "ExecutionContext.backend.memory_spaces"))
     device = context.device.identity
-    if device in ("host", "cpu") and "host" in spaces:
+    if context.device.handle is None:
+        if device not in ("host", "cpu") or spaces != ("host",):
+            raise ValueError(
+                "native component bridge requires the installed execution resource for device %r"
+                % device)
+        # Metadata-only/unit contexts may represent the canonical synchronous host route. Real
+        # installed RuntimeInstances always carry the non-constructible native resource below.
         memory_space = 1
         stream_handle = 0
         stream_identity = "host::synchronous"
     else:
-        raise ValueError(
-            "native component bridge requires an explicit stream resource for non-host "
-            "device %r" % device)
+        from pops.runtime._platform_manifest import validate_native_device_resource
+
+        resource = validate_native_device_resource(context)
+        memory_codes = {"host": 1, "device": 2, "managed": 3}
+        try:
+            memory_space = memory_codes[resource.memory_space_identity]
+        except KeyError:
+            raise ValueError(
+                "native component ABI cannot represent SharedSpace %r"
+                % resource.memory_space_identity) from None
+        stream_handle = int(resource.stream_handle)
+        stream_identity = resource.stream_identity
     communicator = context.communicator
     if communicator.identity == "serial":
         if communicator.handle is not None:

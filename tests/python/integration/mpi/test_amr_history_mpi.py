@@ -132,7 +132,7 @@ def _ab2_program(state: Any, rate: Any) -> pops.Program:
     return program
 
 
-def _state_ring_program(state: Any, rate: Any) -> pops.Program:
+def _state_ring_program(state: Any, _rate: Any) -> pops.Program:
     program = pops.Program("mpi-public-state-ring")
     temporal = program.state(state)
     # The resulting native ring contains current + three lagged slots.  Interval(3) persists both
@@ -140,7 +140,7 @@ def _state_ring_program(state: Any, rate: Any) -> pops.Program:
     program.keep_history(temporal, depth=3, checkpoint_policy=Interval(3))
     next_value = program.value(
         "state_ring_next",
-        temporal.n + program.dt * rate(temporal.n) + 0.0 * temporal.prev(2),
+        temporal.n + program.dt * _C * temporal.n + 0.0 * temporal.prev(2),
         at=temporal.next.point,
     )
     program.commit(temporal.next, next_value)

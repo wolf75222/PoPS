@@ -34,6 +34,44 @@ def test_runtime_environment_report_shape():
         assert report["kokkos_concurrency"] == 0
 
 
+def test_native_execution_resource_reaches_the_component_bridge_exactly():
+    from pops import _pops
+    from pops._platform_contracts import ExecutionContext, ExecutionResource
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops.runtime._component_execution_context import component_execution_data
+    from pops.runtime._platform_manifest import (
+        native_device_resource,
+        native_runtime_backend_for_route,
+    )
+
+    communicator_name = native_mpi_communicator(_pops)
+    backend = native_runtime_backend_for_route(
+        "production", "system", communicator_name)
+    if communicator_name == "MPI_COMM_WORLD":
+        communicator = _pops.mpi_world()
+        communicator_resource = ExecutionResource(
+            "communicator", communicator_name, handle=communicator)
+        datatype_resource = ExecutionResource(
+            "datatype", "float64", handle=communicator.datatype_float64)
+    else:
+        communicator_resource = ExecutionResource("communicator", "serial")
+        datatype_resource = ExecutionResource("datatype", "float64")
+    context = ExecutionContext(
+        backend=backend,
+        communicator=communicator_resource,
+        datatype=datatype_resource,
+        device=native_device_resource(backend),
+    )
+    projected = component_execution_data(context)
+    resource = context.device.handle
+    assert projected["device_identity"] == resource.device_identity
+    assert projected["memory_space"] == {
+        "host": 1, "device": 2, "managed": 3,
+    }[resource.memory_space_identity]
+    assert projected["stream_handle"] == resource.stream_handle
+    assert projected["stream_identity"] == resource.stream_identity
+
+
 def test_static_runtime_report_does_not_fabricate_kokkos_concurrency(monkeypatch):
     import pops.runtime_environment as environment
 

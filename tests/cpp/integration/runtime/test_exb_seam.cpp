@@ -78,7 +78,7 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   SystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
 
   System sys(cfg);
   sys.add_block("blk", exb_seam_model(n0));  // defaults: minmod / rusanov / conservative / explicit

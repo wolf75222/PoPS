@@ -2,6 +2,14 @@
 # PROJECT_IS_TOP_LEVEL (garde consommateur ci-dessous). L'env conda sert >= 3.27.
 cmake_minimum_required(VERSION 3.21)
 
+# CMake >= 3.27 also honors the upper-case <PACKAGENAME>_ROOT spelling used by several HPC
+# toolchains (for example KOKKOS_ROOT).  Declare the policy explicitly so modern CMake does not emit
+# a warning or silently ignore that standard discovery hint; older supported CMake versions simply
+# do not define the policy.
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+
 project(PoPS
   VERSION 1.0.0  # single source of the version: propagated to the Python module (__version__), the
                  # pip wheel, Doxygen and Sphinx (see docs/VERSIONING.md). Never duplicate elsewhere.
@@ -328,18 +336,18 @@ list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
 # de pool duplique dans la propriete GLOBALE JOB_POOLS rend build.ninja invalide
 # ("ninja: error: duplicate pool"). Les consommateurs ne posent que JOB_POOL_COMPILE.
 #
-# La profondeur production reste independante du pool -O0 des tests/runtime declare par src/ quand
-# POPS_BUILD_TESTS=ON. Elle ne doit etre relevee qu'apres mesure de la RSS par TU sur le runner vise.
+# La profondeur production reste independante du pool des objets runtime utilise par les tests
+# quand POPS_BUILD_TESTS=ON. Elle ne doit etre relevee qu'apres mesure de la RSS par TU sur le runner.
 # Les builds Python locaux et les wheels peuvent fournir explicitement une valeur mesuree plus haute.
 set(POPS_HEAVY_MODULE_TU_POOL 1 CACHE STRING
     "Profondeur du pool Ninja des TU lourdes de production _pops (-O3) ; defaut 1 (anti-OOM)")
 set_property(GLOBAL APPEND PROPERTY
   JOB_POOLS pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL})
 
-# Pool distinct pour les TU runtime/tests compilees a -O0. Il n'est declare ni consomme lorsque les
-# tests sont desactives, et ne peut donc pas relever implicitement la concurrence du module -O3.
+# Pool distinct pour les objets runtime optimises des builds de tests et les executables de test
+# lourds compiles a -O0. Il n'est declare ni consomme lorsque les tests sont desactives.
 set(POPS_HEAVY_TEST_TU_POOL 1 CACHE STRING
-    "Profondeur du pool Ninja des TU lourdes runtime/tests (-O0) ; defaut 1 (anti-OOM)")
+    "Profondeur du pool Ninja des TU lourdes runtime/tests ; defaut 1 (anti-OOM)")
 
 # MPI : backend distribue, confine au seam comm (parallel/comm.hpp). Optionnel :
 # par defaut OFF, le build et les tests restent serie (comm.hpp = rang unique).
@@ -370,10 +378,10 @@ if(POPS_USE_HDF5)
   # Some parallel-HDF5 package configurations reference MPI::MPI_C from their imported targets.
   # Materialize that component only on the collective HDF5 route; MPI without HDF5 stays CXX-only.
   find_package(MPI REQUIRED COMPONENTS C CXX)
-  # FindHDF5 tries an HDF5Config.cmake before compiler wrappers even when the caller requests
-  # MODULE mode.  A system serial config can therefore shadow the active environment's h5pcc.
-  # This route requires the wrapper-authenticated parallel installation, so skip that inner
-  # config-mode probe and prefer h5pcc over h5cc.
+  # FindHDF5 tries an arbitrary hdf5-config.cmake before it interrogates h5pcc.  A serial package
+  # configuration elsewhere on the host (for example Homebrew) can therefore preempt the active
+  # environment's parallel wrapper even with HDF5_PREFER_PARALLEL enabled.  The collective route
+  # authenticates the wrapper flags and HDF5_IS_PARALLEL instead; never accept that config shortcut.
   set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)
   set(HDF5_PREFER_PARALLEL TRUE)
   find_package(HDF5 MODULE REQUIRED COMPONENTS C)

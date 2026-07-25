@@ -97,6 +97,84 @@ py::tuple pipe_tuple(const std::string& serialized) {
   return result;
 }
 
+#ifdef POPS_HAS_KOKKOS
+template <class ExecutionSpace>
+std::uintptr_t native_stream_handle(ExecutionSpace& execution) {
+#if defined(KOKKOS_ENABLE_CUDA)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>)
+    return reinterpret_cast<std::uintptr_t>(execution.cuda_stream());
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>)
+    return reinterpret_cast<std::uintptr_t>(execution.hip_stream());
+#endif
+#if defined(KOKKOS_ENABLE_SYCL)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::SYCL>)
+    return reinterpret_cast<std::uintptr_t>(&execution.sycl_queue());
+#endif
+#if defined(KOKKOS_ENABLE_OPENMPTARGET)
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::OpenMPTarget>)
+    return reinterpret_cast<std::uintptr_t>(execution.impl_internal_space_instance());
+#endif
+  return 0;
+}
+#endif
+
+class NativeExecutionResource final {
+ public:
+  NativeExecutionResource()
+      : execution_backend_(
+#ifdef POPS_HAS_KOKKOS
+            Kokkos::DefaultExecutionSpace::name()
+#else
+            "none"
+#endif
+            ),
+        device_identity_(pops::native_device_identity()),
+        memory_space_identity_(pops::native_field_memory_space_identity()),
+        shared_space_identity_(pops::native_shared_space_identity()),
+        stream_identity_(pops::native_stream_identity()) {
+#ifdef POPS_HAS_KOKKOS
+    pops::detail::ensure_kokkos_initialized();
+    execution_ = new Kokkos::DefaultExecutionSpace();
+    stream_handle_ = native_stream_handle(*execution_);
+#endif
+  }
+
+  [[nodiscard]] const std::string& execution_backend() const noexcept {
+    return execution_backend_;
+  }
+  [[nodiscard]] const std::string& device_identity() const noexcept {
+    return device_identity_;
+  }
+  [[nodiscard]] const std::string& memory_space_identity() const noexcept {
+    return memory_space_identity_;
+  }
+  [[nodiscard]] const std::string& shared_space_identity() const noexcept {
+    return shared_space_identity_;
+  }
+  [[nodiscard]] std::uint64_t stream_handle() const noexcept { return stream_handle_; }
+  [[nodiscard]] const std::string& stream_identity() const noexcept { return stream_identity_; }
+
+ private:
+#ifdef POPS_HAS_KOKKOS
+  // The process-lifetime resource is intentionally leaked, like the managed allocation arena: it
+  // must outlive every Python ExecutionContext and every component DSO callback.
+  Kokkos::DefaultExecutionSpace* execution_ = nullptr;
+#endif
+  std::string execution_backend_;
+  std::string device_identity_;
+  std::string memory_space_identity_;
+  std::string shared_space_identity_;
+  std::uint64_t stream_handle_ = 0;
+  std::string stream_identity_;
+};
+
+const NativeExecutionResource& native_execution_resource() {
+  static const auto* resource = new NativeExecutionResource();
+  return *resource;
+}
+
 void require_freeze_transaction_capability(const py::handle& capability) {
   const py::object expected =
       py::module_::import("pops.problem._freeze_transaction").attr("_FREEZE_CAPABILITY");
@@ -137,6 +215,11 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["kokkos_initialized_by_pops"] = r.kokkos_initialized_by_pops;
   d["kokkos_atexit_finalize_registered"] = r.kokkos_atexit_finalize_registered;
   d["kokkos_backend"] = r.kokkos_backend;
+  d["kokkos_device"] = r.kokkos_device;
+  d["kokkos_shared_space"] = r.kokkos_shared_space;
+  d["field_memory_space"] = r.field_memory_space;
+  d["kokkos_stream"] = r.kokkos_stream;
+  d["kokkos_stream_synchronous"] = r.kokkos_stream_synchronous;
   d["kokkos_concurrency"] = r.kokkos_concurrency;
   d["kokkos_ownership"] = r.kokkos_ownership;
   d["kokkos_lifecycle"] = r.kokkos_lifecycle;
@@ -165,19 +248,23 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
       throw std::runtime_error(
           "serial RuntimeBackendManifest requested while native MPI_COMM_WORLD is active");
     }
-    evidence = "pops.native.2d-float64-host.v1";
+    evidence = "pops.native.2d-float64.serial.v2";
   } else if (communicator == "MPI_COMM_WORLD") {
     if (!runtime.mpi_compiled || !runtime.mpi_active || runtime.communicator != "MPI_COMM_WORLD") {
       throw std::runtime_error(
           "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
           "MPI world launch");
     }
-    evidence = "pops.native.2d-float64-host-mpi-world.v1";
+    evidence = "pops.native.2d-float64.mpi-world.v2";
   } else {
     throw std::invalid_argument("runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
   }
-  const auto manifest =
-      pops::platform::proven_host_backend(backend, target, pops::abi_key(), communicator, evidence);
+  evidence += ";execution=" + runtime.kokkos_backend + ";device=" + runtime.kokkos_device +
+              ";shared=" + runtime.kokkos_shared_space + ";kabi=" + POPS_KOKKOS_ABI;
+  const auto manifest = pops::platform::proven_native_backend(
+      backend, target, pops::abi_key(), runtime.kokkos_device, {runtime.field_memory_space},
+      communicator, runtime.kokkos_backend, runtime.kokkos_shared_space, runtime.kokkos_stream,
+      evidence);
   py::dict precision;
   precision["storage"] =
       pops::platform::require_text(manifest.precision.storage, "precision.storage");
@@ -199,6 +286,14 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
   capabilities["ownership"] = pops::platform::require_text_set(
       pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
   capabilities["generic_field_view"] = true;
+  capabilities["execution_backend"] = pops::platform::require_text(
+      pops::platform::capability(manifest, "execution_backend"),
+      "capabilities.execution_backend");
+  capabilities["shared_space"] = pops::platform::require_text(
+      pops::platform::capability(manifest, "shared_space"), "capabilities.shared_space");
+  capabilities["stream_identity"] = pops::platform::require_text(
+      pops::platform::capability(manifest, "stream_identity"),
+      "capabilities.stream_identity");
   py::dict result;
   result["schema_version"] = pops::platform::kPlatformContractSchemaVersion;
   result["backend"] = pops::platform::require_text(manifest.backend, "backend");
@@ -286,6 +381,22 @@ void init_core(py::module_& m) {
   m.doc() =
       "PoPS (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
+
+  py::class_<NativeExecutionResource>(m, "_NativeExecutionResource")
+      .def_property_readonly("execution_backend",
+                             &NativeExecutionResource::execution_backend)
+      .def_property_readonly("device_identity",
+                             &NativeExecutionResource::device_identity)
+      .def_property_readonly("memory_space_identity",
+                             &NativeExecutionResource::memory_space_identity)
+      .def_property_readonly("shared_space_identity",
+                             &NativeExecutionResource::shared_space_identity)
+      .def_property_readonly("stream_handle", &NativeExecutionResource::stream_handle)
+      .def_property_readonly("stream_identity", &NativeExecutionResource::stream_identity);
+  m.def("native_execution_resource", []() -> const NativeExecutionResource& {
+    return native_execution_resource();
+  }, py::return_value_policy::reference,
+        "Process-lifetime exact Kokkos device, SharedSpace and default execution stream.");
 
   // Exact native distributed resources.  Neither class has a Python constructor: all consumers
   // receive the same process-world singleton and the singleton-owned MPI_DOUBLE identity.  The
@@ -615,8 +726,9 @@ void init_core(py::module_& m) {
 
   m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
         py::arg("target"), py::arg("communicator"),
-        "Explicit 2D/float64/host RuntimeBackendManifest for serial or the active exact "
-        "MPI_COMM_WORLD route. Custom communicators are rejected.");
+        "Explicit 2D/float64 RuntimeBackendManifest derived from the installed Kokkos "
+        "DefaultExecutionSpace/SharedSpace and serial or active exact MPI_COMM_WORLD route. "
+        "Custom communicators are rejected.");
 
   m.def(
       "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },
@@ -668,7 +780,13 @@ void init_core(py::module_& m) {
       .def(py::init<>())
       .def_readwrite("n", &SystemConfig::n)
       .def_readwrite("L", &SystemConfig::L)
-      .def_readwrite("periodic", &SystemConfig::periodic)
+      .def_property(
+          "periodicity", [](const SystemConfig& config) {
+            return periodicity_to_python(config.periodicity);
+          },
+          [](SystemConfig& config, const py::handle& value) {
+            config.periodicity = periodicity_from_python(value, "SystemConfig");
+          })
       // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
       // "polar" = global ring carried by pops.mesh.PolarMesh. Polar fields ignored for cartesian.
       .def_readwrite("geometry", &SystemConfig::geometry)

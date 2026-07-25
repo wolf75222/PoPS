@@ -25,6 +25,8 @@
 
 #include <cstdint>      // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
 #include <cstdlib>      // getenv / strtol: overridable serial fallback threshold (#165)
+#include <limits>
+#include <stdexcept>
 #include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
 
 #ifndef POPS_HAS_KOKKOS
@@ -67,6 +69,18 @@ namespace pops {
 // resweep the threshold without recompiling; default 4096 (same fork/join vs computation
 // trade-off as the old if() clause of the removed OpenMP path).
 namespace detail {
+inline void require_iterable_box(const Box2D& box) {
+  if (box.empty())
+    return;
+  const std::int64_t nx = static_cast<std::int64_t>(box.hi[0]) - box.lo[0] + 1;
+  const std::int64_t ny = static_cast<std::int64_t>(box.hi[1]) - box.lo[1] + 1;
+  if (nx > std::numeric_limits<int>::max() || ny > std::numeric_limits<int>::max() ||
+      box.hi[0] == std::numeric_limits<int>::max() ||
+      box.hi[1] == std::numeric_limits<int>::max())
+    throw std::overflow_error(
+        "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index below INT_MAX");
+}
+
 inline std::int64_t foreach_serial_threshold() {
   static const std::int64_t thr = []() -> std::int64_t {
     if (const char* e = std::getenv("POPS_FOREACH_SERIAL_THRESHOLD")) {
@@ -137,6 +151,9 @@ inline void sync_device() {}
 /// device-callable (annotated POPS_HD, captures POD by value). No order guarantee.
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
+  if (b.empty())
+    return;
+  detail::require_iterable_box(b);
   // SMALL BOXES (#165): under a HOST Kokkos execution space (Serial/OpenMP), the
   // fork/join of a parallel_for on a tiny grid (coarse V-cycle levels,
   // ~2x2..32x32) overwhelms the computation. We then run a sequential host loop (internal
@@ -153,8 +170,9 @@ void for_each_cell(const Box2D& b, F f) {
   // race-free: the existing coherence seams (gs_rb_sweep lays its device_fence around the
   // sweeps, sync_host before the host accesses) stay in place and unchanged.
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
-    const std::int64_t n_cells =
-        static_cast<std::int64_t>(b.hi[0] - b.lo[0] + 1) * (b.hi[1] - b.lo[1] + 1);
+    const std::int64_t nx = static_cast<std::int64_t>(b.hi[0]) - b.lo[0] + 1;
+    const std::int64_t ny = static_cast<std::int64_t>(b.hi[1]) - b.lo[1] + 1;
+    const std::int64_t n_cells = nx * ny;
     if (n_cells < detail::foreach_serial_threshold()) {
       record_fallback(FallbackCounter::kForeachSerialSmallBox);
       for (int j = b.lo[1]; j <= b.hi[1]; ++j)
@@ -199,6 +217,9 @@ void for_each_cell(const Box2D& b, F f) {
 /// not bit-identical to a lexicographic sum), for all Kokkos spaces. Blocking host-side.
 template <class F>
 Real for_each_cell_reduce_sum(const Box2D& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
   Kokkos::parallel_reduce(
@@ -213,6 +234,9 @@ Real for_each_cell_reduce_sum(const Box2D& b, F f) {
 /// is associative/commutative in IEEE754, rounding-free) -> bit-identical across Kokkos spaces. Blocking.
 template <class F>
 Real for_each_cell_reduce_max(const Box2D& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
   Kokkos::parallel_reduce(
@@ -240,6 +264,9 @@ Real for_each_cell_reduce_max(const Box2D& b, F f) {
 /// instantiated cross-TU). Bit-exactness identical to for_each_cell_reduce_max.
 template <class F>
 Real reduce_max_cell(const Box2D& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
   Kokkos::parallel_reduce("pops_reduce_max_cell",
@@ -249,10 +276,31 @@ Real reduce_max_cell(const Box2D& b, F f) {
   return result;
 }
 
+/// Exact integer-control counterpart of reduce_max_cell.  Spatial flux kernels write their field
+/// output and join a packed status/reason value into this reduction, avoiding a hot-path scalar
+/// device allocation and a second scan kernel.  Unsigned max is deterministic on every Kokkos
+/// execution space.
+template <class F>
+std::uint64_t reduce_max_uint64_cell(const Box2D& b, F f) {
+  if (b.empty())
+    return std::uint64_t{0};
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  std::uint64_t result = 0;
+  Kokkos::parallel_reduce("pops_reduce_max_uint64_cell",
+                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+                              {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
+                          f, Kokkos::Max<std::uint64_t>{result});
+  return result;
+}
+
 // MIN variant: exact counterpart of reduce_max_cell for Kokkos::Min (dt_hotspot diagnostic,
 // ADC-182: reduction of the smallest index encoded among the cells that equal the max).
 template <class F>
 Real reduce_min_cell(const Box2D& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
   Kokkos::parallel_reduce("pops_reduce_min_cell",
@@ -274,6 +322,9 @@ Real reduce_min_cell(const Box2D& b, F f) {
 /// guarantees as for_each_cell_reduce_sum (Kokkos::Sum reassociated per tile, deterministic/idempotent).
 template <class F>
 Real reduce_sum_cell(const Box2D& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
   Kokkos::parallel_reduce("pops_reduce_sum_cell",

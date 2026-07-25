@@ -134,7 +134,7 @@ def test_routes_inspection_surface():
 
 def test_set_poisson_refuses_unknown_routes_and_untyped_selectors_before_bind():
     def system():
-        return System(n=8, L=1.0, periodic=True)
+        return System(n=8, L=1.0, periodicity=(True, True))
 
     with pytest.raises(ValueError, match="field_solver") as exc:
         system().set_poisson(solver="bogus_solver")

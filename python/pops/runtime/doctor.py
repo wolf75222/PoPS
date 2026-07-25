@@ -371,13 +371,13 @@ def capabilities() -> Any:
             # ADC-296 / ADR-0001 Decision 5. The MULTI-BLOCK AMR regrid variable is selectable PER BLOCK
             # by name or physical role (set_refinement(threshold, variable=|role=)); default = component
             # 0 (historical density), bit-identical 1e30 no-op. A block lacking the requested name/role
-            # raises at build (no silent component-0 fallback). Mono-block (AmrCouplerMP) and the compiled
-            # .so loader refine on component 0 ONLY (a non-default selector is rejected there).
+            # raises at build (no silent component-0 fallback). Every native or compiled runtime block
+            # carries the same exact conserved-variable descriptor.
             "variable_selector": ["component_0", "by_name", "by_role"],
             "multi_block": "component_0 | by_name (variable=) | by_role (role=)",
-            "mono_block": "component_0 only (selector rejected)",
-            "compiled_so": "component_0 only (selector rejected)",
-            "phi_gradient": "set_phi_refinement(grad_threshold) : |grad phi|, multi-block, unioned",
+            "mono_block": "component_0 | by_name (variable=) | by_role (role=)",
+            "compiled_so": "component_0 | by_name (variable=) | by_role (role=)",
+            "phi_gradient": "set_phi_refinement(grad_threshold) : prepared |grad phi| leaf, unioned",
         },
         "aux": {
             "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "

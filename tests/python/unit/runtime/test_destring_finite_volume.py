@@ -130,6 +130,15 @@ def test_boolean_shortcuts_stay_valid():
     assert (s.limiter, s.flux, s.recon) == ("minmod", "roe", "primitive")
 
 
+def test_boolean_shortcuts_do_not_silently_override_explicit_authorities():
+    with pytest.raises(TypeError, match="mutually exclusive"):
+        engine.Spatial(minmod=True, vanleer=True)
+    with pytest.raises(TypeError, match="not both"):
+        engine.Spatial(limiter=Minmod(), weno5=True)
+    with pytest.raises(TypeError, match="not both"):
+        engine.Spatial(recon=Conservative(), primitive=True)
+
+
 def test_finitevolume_forwards_boolean_shortcuts():
     # The boolean shortcuts of Spatial are forwarded THROUGH FiniteVolume identically, so the
     # docstring claim "primitive= is a FiniteVolume shortcut" is true.

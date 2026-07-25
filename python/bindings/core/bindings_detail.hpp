@@ -31,6 +31,21 @@
 namespace py = pybind11;
 using namespace pops;
 
+inline py::tuple periodicity_to_python(const Periodicity& value) {
+  return py::make_tuple(value.x, value.y);
+}
+
+inline Periodicity periodicity_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != 2)
+    throw py::type_error(std::string(owner) +
+                         ".periodicity must be an exact (x: bool, y: bool) tuple");
+  const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
+  if (!PyBool_Check(tuple[0].ptr()) || !PyBool_Check(tuple[1].ptr()))
+    throw py::type_error(std::string(owner) +
+                         ".periodicity entries must be exact bool values");
+  return Periodicity{tuple[0].ptr() == Py_True, tuple[1].ptr() == Py_True};
+}
+
 // field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
 // with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
 // (UNCHANGED), but nr x ntheta in polar where nr != ntheta. A square reshape (n, n) would allocate nx^2
@@ -258,7 +273,9 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kFFTZeroMeanGauge", "internal_default");
   klass("kFFTDirectDftFallback", "diagnostic_only");
   klass("kEbCutFractionFloor", "public_knob");
-  klass("kWenoEpsilon", "public_knob");  // ADC-645: WENO5(epsilon=) is wired end to end
+  // The knob is public; each resolved layout still proves that its reconstruction and transfer
+  // providers can execute the requested stencil before the value reaches a native kernel.
+  klass("kWenoEpsilon", "public_knob");
   klass("kEbFaceOpenEps", "public_knob");
   klass("kEbKappaMin", "public_knob");
   klass("kAmrDefaultMaxLevels", "internal_default");
@@ -382,6 +399,7 @@ inline py::dict effective_block_options_to_dict(const EffectiveBlockOptions& b) 
   d["newton"] = effective_newton_options_to_dict(b.newton);
   d["positivity_floor"] = b.positivity_floor;
   d["wave_speed_cache"] = b.wave_speed_cache;
+  d["weno_epsilon"] = b.weno_epsilon;
   d["physical"] = physical;
   return d;
 }
@@ -422,17 +440,29 @@ inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
 
 inline py::dict effective_refinement_options_to_dict(const EffectiveRefinementOptions& r) {
   py::dict d;
-  d["threshold"] = r.threshold;
+  if (r.scalar_threshold_available) {
+    d["threshold"] = r.threshold;
+    d["variable"] = r.variable;
+    d["role"] = r.role;
+  }
   d["disabled"] = r.disabled;
   d["disabled_policy"] = r.disabled_policy;
-  d["variable"] = r.variable;
-  d["role"] = r.role;
+  py::dict tagging;
+  tagging["provider_identity"] = r.tagging_provider_identity;
+  tagging["authority"] = r.tagging_authority;
+  tagging["execution_provider_identity"] = r.tagging_execution_provider_identity;
+  d["tagging_provider"] = std::move(tagging);
   d["phi_grad_threshold"] = r.phi_grad_threshold;
   d["phi_refinement_enabled"] = r.phi_refinement_enabled;
-  // ADC-616: effective Berger-Rigoutsos clustering params.
-  d["cluster_min_efficiency"] = r.cluster_min_efficiency;
-  d["cluster_min_box_size"] = r.cluster_min_box_size;
-  d["cluster_max_box_size"] = r.cluster_max_box_size;
+  py::dict clustering;
+  clustering["provider_identity"] = r.clustering_provider_identity;
+  clustering["authority"] = r.clustering_authority;
+  d["clustering_provider"] = std::move(clustering);
+  if (r.clustering_parameters_available) {
+    d["cluster_min_efficiency"] = r.cluster_min_efficiency;
+    d["cluster_min_box_size"] = r.cluster_min_box_size;
+    d["cluster_max_box_size"] = r.cluster_max_box_size;
+  }
   return d;
 }
 
@@ -446,6 +476,10 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   d["defaults"] = numerical_defaults_report_to_dict();
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
+  py::dict topology;
+  topology["periodic_x"] = report.topology.periodic_x;
+  topology["periodic_y"] = report.topology.periodic_y;
+  d["topology"] = std::move(topology);
   d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
   if (report.has_amr)
     d["amr"] = effective_refinement_options_to_dict(report.amr_refinement);

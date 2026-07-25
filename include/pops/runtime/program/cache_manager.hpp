@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,6 +36,47 @@
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab
 
 namespace pops::runtime::program {
+
+namespace detail {
+
+struct CacheValueCopyKernel {
+  Array4 destination;
+  ConstArray4 source;
+  int components = 0;
+
+  POPS_HD void operator()(int i, int j) const {
+    for (int component = 0; component < components; ++component)
+      destination(i, j, component) = source(i, j, component);
+  }
+};
+
+inline bool same_cache_value_layout(const MultiFab& left, const MultiFab& right) noexcept {
+  return left.box_array().boxes() == right.box_array().boxes() &&
+         left.dmap().ranks() == right.dmap().ranks() && left.ncomp() == right.ncomp() &&
+         left.n_grow() == right.n_grow();
+}
+
+/// Copy valid cells and ghosts into persistent storage.  Every local Fab is launched before the
+/// single fence so Kokkos device builds keep this a batched native operation.  Reallocation occurs
+/// only when the exact decomposition/component/ghost contract changes.
+inline void copy_cache_value_into(MultiFab& destination, const MultiFab& source) {
+  if (!same_cache_value_layout(destination, source))
+    destination =
+        MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
+  for (int local = 0; local < destination.local_size(); ++local) {
+    const int global = destination.global_index(local);
+    const int source_local = source.local_index_of(global);
+    if (source_local < 0)
+      throw std::logic_error("cache value copy found inconsistent local ownership");
+    Fab2D& output = destination.fab(local);
+    const Fab2D& input = source.fab(source_local);
+    for_each_cell(output.grown_box(),
+                  CacheValueCopyKernel{output.array(), input.const_array(), source.ncomp()});
+  }
+  device_fence();
+}
+
+}  // namespace detail
 
 // One cached node value plus the bookkeeping the schedule needs.
 struct CacheSlot {
@@ -64,7 +106,7 @@ class CacheManager {
   // (the held value is now fresh).
   void store(int node_id, const MultiFab& value, int macro_step) {
     CacheSlot& s = slots_[node_id];
-    s.value = value;  // deep copy: the cache outlives the live scratch
+    detail::copy_cache_value_into(s.value, value);  // persistent deep copy; never aliases live data
     s.last_update_step = macro_step;
     s.accumulated_dt = Real(0);
     s.valid = true;
@@ -81,6 +123,15 @@ class CacheManager {
 
   // The cached value of `node_id` (must be valid: guard with is_due()==false first).
   const MultiFab& retrieve(int node_id) const { return slots_.at(node_id).value; }
+
+  // Restore into a caller-owned resident field.  Unlike assignment from retrieve(), an exact-layout
+  // destination keeps its Fab and communication-cache addresses stable across every held step.
+  void restore_into(int node_id, MultiFab& destination) const {
+    const CacheSlot& slot = slots_.at(node_id);
+    if (!slot.valid)
+      throw std::logic_error("cannot restore an invalid Program cache slot");
+    detail::copy_cache_value_into(destination, slot.value);
+  }
 
   // Add a skipped step's dt to node `node_id`'s accumulator (accumulate_dt policy). Creates the slot
   // if the node was never stored (a cold accumulate_dt node accumulates from its first skipped step,

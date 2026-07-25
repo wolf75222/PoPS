@@ -33,6 +33,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 using namespace pops;
@@ -109,6 +110,51 @@ TEST(CompositeFacNlevelTest, general_two_level_equals_legacy) {
     std::printf("  [cross-check] max|phi_c general-legacy|=%.3e max|phi_f|=%.3e\n", max_c, max_f);
   EXPECT_EQ(max_c, 0.0) << "coarse potential: general == legacy bit-identical";
   EXPECT_EQ(max_f, 0.0) << "fine potential: general == legacy bit-identical";
+  comm_finalize();
+}
+
+// A fully refined parent has neither uncovered coarse cells nor a C/F interface.  The composite
+// residual must nevertheless retain the finest-level forcing instead of declaring a zero residual.
+TEST(CompositeFacNlevelTest, fully_covered_parent_solves_finest_and_averages_down) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D coarse_domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{coarse_domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(coarse_domain, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+
+  const Geometry fine_geometry = coarse_geometry.refine(r);
+  const Box2D fine_domain = fine_geometry.domain;
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, bc, fine_domain, r);
+  fill_f(fac.rhs_coarse(), coarse_geometry);
+  fill_f(fac.rhs_fine(), fine_geometry);
+
+  const Real residual = fac.solve(/*max_iters=*/100, /*fine_sweeps=*/100,
+                                  /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
+  device_fence();
+
+  double max_fine = 0.0;
+  const ConstArray4 fine = fac.phi_fine().fab(0).const_array();
+  for (int j = fine_domain.lo[1]; j <= fine_domain.hi[1]; ++j)
+    for (int i = fine_domain.lo[0]; i <= fine_domain.hi[0]; ++i)
+      max_fine = std::fmax(max_fine, std::fabs(fine(i, j, 0)));
+
+  double avgdown_error = 0.0;
+  const ConstArray4 coarse = fac.phi_coarse().fab(0).const_array();
+  for (int j = coarse_domain.lo[1]; j <= coarse_domain.hi[1]; ++j)
+    for (int i = coarse_domain.lo[0]; i <= coarse_domain.hi[0]; ++i) {
+      const double fine_average =
+          0.25 * (fine(2 * i, 2 * j, 0) + fine(2 * i + 1, 2 * j, 0) +
+                  fine(2 * i, 2 * j + 1, 0) + fine(2 * i + 1, 2 * j + 1, 0));
+      avgdown_error =
+          std::fmax(avgdown_error, std::fabs(coarse(i, j, 0) - fine_average));
+    }
+
+  EXPECT_TRUE(std::isfinite(residual));
+  EXPECT_LT(residual, 1e-6);
+  EXPECT_GT(all_reduce_max(max_fine), 1e-3);
+  EXPECT_LE(all_reduce_max(avgdown_error), 8.0 * std::numeric_limits<double>::epsilon());
   comm_finalize();
 }
 

@@ -103,6 +103,7 @@ class NativeAMRBootstrapConsumer:
         self._tagged_level = None
         self._clustered = False
         self._pending_level: int | None = None
+        self._inactive_from_level: int | None = None
         self._active = True
         self._engine._s._begin_bootstrap_plan()
         self.bootstrap_consumer_identity = make_identity(
@@ -131,6 +132,14 @@ class NativeAMRBootstrapConsumer:
 
     def consume_bootstrap_action(self, action: Any) -> BootstrapReceipt:
         operation = action.operation
+        if self._inactive_from_level is not None and action.level >= self._inactive_from_level:
+            return self._receipt(
+                action,
+                operation=operation,
+                level=action.level,
+                active=False,
+                reason="parent tagging produced no active fine level",
+            )
         if operation == "initialize_level_zero":
             if action.subject_id not in self._initial:
                 raise ValueError("native bootstrap is missing an authenticated level-zero value")
@@ -194,7 +203,17 @@ class NativeAMRBootstrapConsumer:
                 raise NotImplementedError(
                     "native bootstrap currently requires an isotropic resolved transition"
                 )
-            self._engine._bootstrap_next_level(ratios[0])
+            created = bool(self._engine._bootstrap_next_level(ratios[0]))
+            if not created:
+                self._inactive_from_level = action.level
+                self._pending_level = None
+                return self._receipt(
+                    action,
+                    operation=operation,
+                    level=action.level,
+                    active=False,
+                    patch_boxes=(),
+                )
             self._pending_level = action.level
             if self._engine.n_levels() != action.level + 1:
                 raise ValueError("native bootstrap created an unexpected hierarchy depth")

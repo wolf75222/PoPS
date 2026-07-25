@@ -100,9 +100,9 @@ def test_forward_euler_algorithm(t):
     src = _emit(_forward_euler(t))
     for frag in ('ctx.solve_fields_from_state("potential", 0, ',
                  "= ctx.state(0);",
-                 "ctx.rhs_scratch_like(",
+                 "ctx.rhs_scratch(",
                  "ctx.rhs_into(0, ",
-                 "ctx.scratch_state_like(",
+                 "ctx.scratch_state(",
                  "static_cast<pops::Real>(dt)",
                  "ctx.axpy(",
                  "ctx.commit_many("):
@@ -116,7 +116,7 @@ def test_multistage_lowers(t):
     # weights. (It previously raised NotImplementedError; that restriction is lifted.)
     src = _emit(_ssprk2(t))
     assert src.count("ctx.rhs_into(") >= 2, "SSPRK2 should evaluate the RHS at two stages"
-    assert "ctx.scratch_state_like(" in src, "SSPRK2 needs an intermediate scratch state"
+    assert "ctx.scratch_state(" in src, "SSPRK2 needs an intermediate scratch state"
     assert "ctx.commit_many(" in src, "the committed stage writes every endpoint atomically"
     assert "0.5" in src, "SSPRK2 weights (0.5) should appear in the generated source"
 
@@ -127,6 +127,17 @@ def test_includes_present(t):
                 "pops/runtime/dynamic/abi_key.hpp",
                 "pops/mesh/storage/multifab.hpp"):
         assert ("#include <%s>" % inc) in src, "missing #include <%s>" % inc
+
+
+def test_generated_step_uses_context_owned_persistent_scratch(t):
+    src = _emit(_ssprk2(t))
+    step = src.split("ctx.begin_step(dt);", 1)[1].split("  });", 1)[0]
+    assert "ctx.rhs_scratch(" in step
+    assert "ctx.scratch_state(" in step
+    assert "ctx.rhs_scratch_like(" not in step
+    assert "ctx.scratch_state_like(" not in step
+    assert "ctx.alloc_scalar_field(" not in step
+    assert "pops::MultiFab " not in step, "generated step scratch must bind resident references"
 
 
 def test_named_source_refused(t):
@@ -156,26 +167,25 @@ def test_named_source_refused(t):
 
 
 def test_multiblock_lowers(t):
-    # Two committed blocks (ADC-426): multi-block now LOWERS -- each op routes to its block's index in
-    # declaration order (a=0, b=1). (It previously raised NotImplementedError; that restriction is
-    # lifted.) The default-Poisson solve_fields is per-block (a coupled solve, the block at its stage
-    # state). State / RHS / projection / field solve each target the right index.
+    # Two committed blocks (ADC-426): materialize every stage state first, solve the coupled field
+    # once from the complete block set, then evaluate the occurrence-aligned residual round.  Two
+    # separate field solves around sibling residuals would expose different shared aux values and are
+    # therefore rejected by the coherence planner.
     P = t.Program("two_block")
     dt = P.dt
-    for blk in ("a", "b"):
-        U = typed_state(P, blk)
-        f = solve_field(P, U)
-        R = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
+    states = [(blk, typed_state(P, blk)) for blk in ("a", "b")]
+    fields = solve_field_blocks(P, [state for _, state in states])
+    for blk, U in states:
+        R = P.rhs(state=U, fields=fields, terms=[Flux(), DefaultSource()])
         endpoint = typed_state(P, blk, state_name="U").next
         P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
     src = _emit(P)
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
-    assert "ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block"
-    assert ('ctx.solve_fields_from_state("potential", 0, ' in src
-            and 'ctx.solve_fields_from_state("potential", 1, ' in src), \
-        "per-block field solve routed by index"
+    assert "ctx.rhs_group(" in src, "sibling residuals should execute as one native round"
+    assert 'ctx.solve_fields_from_blocks(' in src, \
+        "coupled blocks should publish one simultaneous field solve"
 
 
 def test_unknown_block_commit_refused(t):
@@ -200,8 +210,8 @@ def test_unknown_block_commit_refused(t):
 
 def test_solve_fields_from_blocks_lowers(t):
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): the
-    # codegen emits ctx.solve_fields_from_blocks(<vec>), a per-block MultiFab pointer vector sized to
-    # ctx.n_blocks() with each listed block slotted at its index (nullptr = the block's live state).
+    # codegen emits one exact-IR initializer-list request. The context owns the persistent per-block
+    # pointer/snapshot workspace, so no host vector is constructed in the generated step.
     P = t.Program("coupled")
     Ua = typed_state(P, "a")
     Ub = typed_state(P, "b")
@@ -216,9 +226,8 @@ def test_solve_fields_from_blocks_lowers(t):
         at=endpoint_b.point))
     src = _emit(P)
     assert "ctx.solve_fields_from_blocks(" in src
-    assert "std::vector<const pops::MultiFab*>" in src
-    assert "ctx.n_blocks()" in src
-    assert src.count("] = &") >= 2  # both listed blocks slot their stage state by index
+    assert "std::vector<const pops::MultiFab*>" not in src
+    assert "{0, &" in src and "{1, &" in src
 
 
 def test_uncommitted_refused(t):

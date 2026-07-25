@@ -10,7 +10,7 @@
 //
 //   (B) add_native_block(loader.so) == add_compiled_model(AmrSystem&) -- chemin .so, autocompile a
 //       l'execution (source du loader AMR, cf. dsl.emit_cpp_native_loader(target="amr_system")).
-//       Auto-saute sous backend Kokkos (ABI incompatible) ; la parite CPU reste couverte par (A).
+//       Le DSO rejoue le contrat exact du backend hote, Kokkos inclus ; aucun auto-skip.
 //
 // Le modele est un Euler PUR (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
 // brique elliptique vaut 0, phi=0 (zero bruit FP), parite STRICTE. La pression est requise pour
@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "native_dso_compiler.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -77,7 +78,7 @@ AmrSystemConfig make_cfg(int n) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 4;
   return cfg;
 }
@@ -137,31 +138,18 @@ extern "C" const char* pops_compiled_param_names() { return ""; }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
                                        double gamma, int substeps, const double*, int,
-                                       double pos_floor) {
+                                       double pos_floor, double weno_epsilon,
+                                       bool wave_speed_cache) {
   pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
   pops::add_compiled_model<pops_generated::ProdModel>(
       *s, name,
       pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
                                pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
+      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
+      wave_speed_cache);
 }
 )CPP";
   // clang-format on
-}
-
-bool compile_loader(const std::string& src_path, const std::string& so_path) {
-#if defined(__APPLE__)
-  const std::string cc = "/usr/bin/c++";
-#else
-  const std::string cc = POPS_TEST_CXX;
-#endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
-                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
-#if defined(__APPLE__)
-  cmd += " -undefined dynamic_lookup";
-#endif
-  cmd += " 2> /dev/null";
-  return std::system(cmd.c_str()) == 0;
 }
 
 }  // namespace
@@ -246,54 +234,45 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
 
   // ============================================================================================
   // (B) CHEMIN .so : add_native_block(loader) == add_compiled_model(AmrSystem&), hllc ET roe.
-  //     Le loader est recompile par un g++ nu -> incompatible avec un module Kokkos : SAUTE.
-  //     (A) a deja couvert la parite CPU complete.
+  //     Le loader est compile avec le meme compilateur et le meme contrat Kokkos que l'hote.
   // ============================================================================================
-#if defined(POPS_HAS_KOKKOS)
-  std::printf("skip (B) loader .so (backend Kokkos : loader CPU nu incompatible)\n");
-#else
-  const char* cxx = POPS_TEST_CXX;
-  if (!cxx || cxx[0] == '\0') {
-    std::printf("skip (B) loader .so (aucun compilateur C++ connu du build)\n");
-  } else {
-    const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_riemann_native_" +
-                            std::to_string(static_cast<long>(std::clock()));
-    const std::string src = tmp + ".cpp";
-    const std::string so = tmp + ".so";
-    {
-      std::ofstream f(src);
-      f << loader_source();
-    }
-    if (!compile_loader(src, so)) {
-      std::printf("skip (B) loader .so (echec de compilation du loader -- en-tetes/std ?)\n");
-    } else {
-      auto parity_loader = [&](const char* riem, const char* recon) {
-        AmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
-        A.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
-        A.set_density("gas", rho);
-        const Snap sa = run(A, nsteps);
-
-        AmrSystem B(make_cfg(n));  // MEME modele installe EN DIRECT
-        add_compiled_model(B, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
-        B.set_density("gas", rho);
-        const Snap sb = run(B, nsteps);
-
-        const double dmax = maxdiff(sa.density, sb.density);
-        char w[200];
-        std::snprintf(w, sizeof w, "[%s/%s] add_native_block == add_compiled_model (dmax==0)", riem,
-                      recon);
-        chk(dmax == 0.0, w);
-        std::snprintf(w, sizeof w, "[%s/%s] n_patches loader == direct", riem, recon);
-        chk(sa.n_patches == sb.n_patches, w);
-      };
-      parity_loader("hllc", "conservative");
-      parity_loader("hllc", "primitive");
-      parity_loader("roe", "conservative");
-      parity_loader("roe", "primitive");
-      std::printf("OK (B) add_native_block(hllc/roe, cons/prim) == add_compiled_model (dmax==0)\n");
-    }
+  const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_riemann_native_" +
+                          std::to_string(static_cast<long>(std::clock()));
+  const std::string src = tmp + ".cpp";
+  const std::string so = tmp + ".so";
+  {
+    std::ofstream f(src);
+    f << loader_source();
   }
-#endif  // POPS_HAS_KOKKOS
+  const auto package = pops::test::native_dso::compile_shared(src, so);
+  if (!package.ok) {
+    pops::test::native_dso::report_compile_failure("test_amr_riemann_native", package);
+    return 1;
+  }
+  auto parity_loader = [&](const char* riem, const char* recon) {
+    AmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
+    A.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
+    A.set_density("gas", rho);
+    const Snap sa = run(A, nsteps);
+
+    AmrSystem B(make_cfg(n));  // MEME modele installe EN DIRECT
+    add_compiled_model(B, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
+    B.set_density("gas", rho);
+    const Snap sb = run(B, nsteps);
+
+    const double dmax = maxdiff(sa.density, sb.density);
+    char w[200];
+    std::snprintf(w, sizeof w, "[%s/%s] add_native_block == add_compiled_model (dmax==0)", riem,
+                  recon);
+    chk(dmax == 0.0, w);
+    std::snprintf(w, sizeof w, "[%s/%s] n_patches loader == direct", riem, recon);
+    chk(sa.n_patches == sb.n_patches, w);
+  };
+  parity_loader("hllc", "conservative");
+  parity_loader("hllc", "primitive");
+  parity_loader("roe", "conservative");
+  parity_loader("roe", "primitive");
+  std::printf("OK (B) add_native_block(hllc/roe, cons/prim) == add_compiled_model (dmax==0)\n");
 
   if (fails == 0)
     std::printf(

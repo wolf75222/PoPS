@@ -26,10 +26,12 @@ from pops.analytic import (
     sqrt,
     where,
 )
-from pops.domain import DomainPreview, Rectangle
+from pops.domain import DomainPreview, Rectangle, RectangleBoundaryNames, preview_domain
 from pops.domain.preview import AnalyticPreviewValue, GeometryPreviewProvider
 from pops.frames import Cartesian2D
-from pops.mesh.geometry import Disc, HalfPlane, LevelSet, NoWall
+from pops.boundary.embedded import ZeroFlux
+from pops.mesh.geometry import Disc, DiscDomain, EmbeddedBoundary, HalfPlane, LevelSet, NoWall
+from pops.mesh.masks import Staircase
 
 
 def test_rectangle_preview_is_typed_read_only_data_without_geometry() -> None:
@@ -102,6 +104,85 @@ def test_preview_accepts_a_structural_third_party_geometry_provider() -> None:
     assert not preview.active_mask[0, 0]
 
 
+def test_preview_accepts_a_structural_bounded_domain_provider() -> None:
+    class ThirdPartyDomain:
+        name = "third_party_box"
+        lower = (-2.0, -1.0)
+        upper = (2.0, 1.0)
+        boundary_names = RectangleBoundaryNames(
+            x_min="west", x_max="east", y_min="south", y_max="north")
+
+        @property
+        def lengths(self) -> tuple[float, float]:
+            return (4.0, 2.0)
+
+        def frame(self, coordinates_system: Cartesian2D) -> object:
+            return Rectangle(
+                self.name, self.lower, self.upper, boundaries=self.boundary_names,
+            ).frame(coordinates_system)
+
+    domain = ThirdPartyDomain()
+
+    preview = preview_domain(
+        domain, geometry=Disc(center=(0.0, 0.0), radius=0.5), resolution=(17, 9))
+
+    assert preview.domain is domain
+    assert preview.resolution == (17, 9)
+    assert preview.active_mask is not None
+    assert preview.active_mask[4, 8]
+
+
+def test_shapes_level_sets_and_csg_preview_without_a_separate_domain() -> None:
+    authoring_domain = Rectangle("authoring", (-1.0, -1.0), (1.0, 1.0))
+    frame = authoring_domain.frame(Cartesian2D())
+    x_value, y_value = coordinates(frame)
+    level_set = LevelSet(hypot(x_value, y_value) - 0.45)
+    disc = Disc(center=(0.0, 0.0), radius=0.55)
+    half_plane = HalfPlane(point=(0.0, 0.0), normal=(1.0, 0.0))
+    geometries = (
+        NoWall(),
+        disc,
+        half_plane,
+        level_set,
+        disc | half_plane,
+        disc & half_plane,
+        disc - Disc(center=(0.0, 0.0), radius=0.2),
+        ~disc,
+        level_set | Disc(center=(0.35, 0.0), radius=0.2),
+    )
+
+    previews = tuple(geometry.preview(resolution=31) for geometry in geometries)
+
+    assert all(preview.geometry is geometry for preview, geometry in zip(
+        previews, geometries, strict=True))
+    assert all(preview.active_mask is not None for preview in previews)
+    assert previews[0].active_mask is not None and previews[0].active_mask.all()
+    assert all(preview.resolution == (31, 31) for preview in previews)
+
+
+def test_disc_transport_domain_uses_the_same_generic_preview_surface() -> None:
+    domain = DiscDomain(center=(2.0, -3.0), radius=0.5)
+
+    preview = domain.preview(resolution=21)
+
+    assert preview.geometry is domain
+    assert preview.active_mask is not None
+    assert preview.active_mask[10, 10]
+
+
+def test_embedded_boundary_uses_its_geometry_preview_contract() -> None:
+    wall = Disc(center=(0.5, -0.25), radius=0.4) \
+        - Disc(center=(0.5, -0.25), radius=0.1)
+    embedded = EmbeddedBoundary(wall, Staircase(), ZeroFlux())
+
+    preview = embedded.preview(resolution=25)
+
+    assert preview.geometry is embedded
+    assert preview.active_mask is not None
+    assert not preview.active_mask[12, 12]
+    assert preview.active_mask.any()
+
+
 def test_scalar_and_predicate_analytic_fields_preview_directly() -> None:
     domain = Rectangle("unit_square", (0.0, 0.0), (1.0, 1.0))
     frame = domain.frame(Cartesian2D())
@@ -143,6 +224,37 @@ def test_preview_accepts_a_structural_canonical_analytic_provider() -> None:
     assert preview.field_kind == "scalar"
     assert preview.field_values is not None
     assert set(np.unique(preview.field_values)) == {1.0, 2.0}
+
+
+def test_preview_authenticates_structural_analytic_data_before_evaluation() -> None:
+    domain = Rectangle("unit_square", (0.0, 0.0), (1.0, 1.0))
+
+    class MalformedField:
+        def to_data(self) -> dict[str, Any]:
+            return {
+                "schema_version": 1,
+                "expression_type": "scalar",
+                "root": {
+                    "kind": "scalar",
+                    "op": "where",
+                    "arguments": [],
+                },
+            }
+
+    with pytest.raises(ValueError, match="analytic where requires three arguments"):
+        domain.preview(field=MalformedField(), resolution=8)
+
+
+def test_preview_where_uses_only_the_selected_branch_validity() -> None:
+    domain = Rectangle("guarded", (-1.0, -1.0), (1.0, 1.0))
+    x_value, _ = coordinates(domain.frame(Cartesian2D()))
+    guarded = where(x_value != 0.0, 1.0 / x_value, 0.0)
+
+    preview = domain.preview(field=guarded, resolution=9)
+
+    assert preview.field_values is not None
+    assert np.isfinite(preview.field_values).all()
+    assert preview.field_values[4, 4] == 0.0
 
 
 def test_preview_covers_the_complete_parameter_free_analytic_grammar() -> None:
@@ -276,3 +388,46 @@ def test_show_with_path_saves_without_opening_an_interactive_window(
     assert result == target
     assert target.is_file()
     assert "<svg" in target.read_text(encoding="utf-8")[:500]
+
+
+def test_composed_geometry_show_exports_png_without_opening_a_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    def forbidden_show() -> None:
+        raise AssertionError("geometry.show(path=...) must not open a window")
+
+    monkeypatch.setattr(plt, "show", forbidden_show)
+    annulus = Disc(center=(3.0, -2.0), radius=0.8) \
+        - Disc(center=(3.0, -2.0), radius=0.3)
+    target = tmp_path / "nested" / "annulus.png"
+
+    result = annulus.show(path=target, resolution=48)
+
+    assert result == target
+    assert target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_domain_preview_export_writes_pdf_without_opening_a_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    def forbidden_show() -> None:
+        raise AssertionError("DomainPreview.export(...) must not open a window")
+
+    monkeypatch.setattr(plt, "show", forbidden_show)
+    preview = Rectangle("box", (-1.0, -0.5), (1.0, 0.5)).preview(resolution=16)
+    target = tmp_path / "nested" / "domain.pdf"
+
+    result = preview.export(target)
+
+    assert result == target
+    assert target.read_bytes().startswith(b"%PDF-")

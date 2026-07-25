@@ -2,13 +2,15 @@
 /// @brief Interface reconstruction policies: MUSCL limiters and WENO5-Z.
 ///
 /// Each policy exposes:
-///   - `n_ghost`: required stencil radius (1 = first order, 2 = linear MUSCL, 3 = WENO5).
-///   - `operator()(am, ap)`: slope limited from the backward (am) and forward (ap) differences.
+///   - `formal_order`: formal accuracy in smooth regions.
+///   - `n_ghost`: required face-operator ghost storage (never used to infer the algorithm).
+///   - exactly one pointwise protocol: cell value, limited slope, or sampled stencil.
 ///
 /// All policies are POPS_HD (no std::, no branch to UB). The limiter is a template parameter
 /// in assemble_rhs / reconstruct (static polymorphism, inlined on device). INVARIANT: a
-/// reconstruction policy is POINTWISE -- it does not loop over the grid and does not access
-/// any global array. The mesh stencil access lives in reconstruct (spatial_operator.hpp).
+/// reconstruction policy is POINTWISE -- it does not own or capture a global array.  A sampled
+/// stencil policy receives a device-callable scalar sampler and chooses the integer offsets it
+/// needs.  The mesh access and orientation remain encapsulated by reconstruct (face_flux.hpp).
 
 #pragma once
 
@@ -16,18 +18,18 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
+#include <concepts>
 #include <type_traits>
 
 namespace pops {
 
 /// First-order reconstruction (piecewise constant): zero slope, 1 ghost.
 ///
-/// Minimal policy: no slope computation, no read of a neighbor at distance >= 2.
-/// The n_ghost == 1 path in reconstruct does not touch the cells at +/-2. POPS_HD.
-/// INVARIANT: always returns Real(0) -- the cell state is not modified.
+/// Minimal policy: no slope computation and no neighbour read. POPS_HD.
 struct NoSlope {
+  static constexpr int formal_order = 1;
   static constexpr int n_ghost = 1;
-  POPS_HD Real operator()(Real, Real) const { return Real(0); }
+  POPS_HD Real cell_face_value(Real value) const { return value; }
 };
 
 /// Explicit embedded-boundary reconstruction capability.
@@ -52,8 +54,11 @@ inline constexpr bool supports_embedded_boundary_reconstruction_v =
 /// std::min / std::abs to stay device-safe (no <cmath> required). Order 1 locally at extrema
 /// (clips smooth peaks): prefer VanLeer when smooth growth modes must survive.
 struct Minmod {
+  static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
-  POPS_HD Real operator()(Real a, Real b) const {
+  POPS_HD Real limited_slope(Real backward, Real forward) const {
+    const Real a = backward;
+    const Real b = forward;
     if (a * b <= Real(0))
       return Real(0);
     const Real fa = a < 0 ? -a : a, fb = b < 0 ? -b : b;  // |.| device-safe
@@ -67,8 +72,11 @@ struct Minmod {
 /// (no std::abs). Preferred over Minmod for preserving smooth growth modes (less
 /// dissipative at the density profile extrema).
 struct VanLeer {
+  static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
-  POPS_HD Real operator()(Real a, Real b) const {
+  POPS_HD Real limited_slope(Real backward, Real forward) const {
+    const Real a = backward;
+    const Real b = forward;
     const Real ab = a * b;
     if (ab <= Real(0))
       return Real(0);
@@ -109,18 +117,132 @@ POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
   return (a0 * q0 + a1 * q1 + a2 * q2) * inv;
 }
 
-/// WENO5 tag policy: marks the stencil at 3 ghosts, delegates to weno5z.
+/// WENO5 policy: declares a three-cell storage requirement and delegates its sampled stencil to
+/// weno5z.
 ///
-/// Does not implement lim(am, ap) in the MUSCL sense (operator() is a no-op): the WENO5
-/// reconstruction reads the 5-point stencil directly from reconstruct (n_ghost >= 3 path).
-/// The dummy operator() is present to satisfy the Limiter concept (compatible with all
-/// template functions that expect a limiter).
+/// The storage requirement is not used to identify WENO; stencil_face_value is the explicit
+/// protocol.  The sampler maps offsets relative to the source cell into the oriented face
+/// direction, so the same policy reconstructs both faces without the core knowing its stencil.
 struct Weno5 {
+  static constexpr int formal_order = 5;
   static constexpr int n_ghost = 3;
+  static constexpr int stencil_min_offset = -2;
+  static constexpr int stencil_max_offset = 2;
   // ADC-645: the WENO-Z smoothness regulariser (default = the historical kWenoEpsilon, so a
   // default-constructed Weno5 is bit-identical); the reconstruction passes it to weno5z.
   Real eps = kWenoEpsilon;
-  POPS_HD Real operator()(Real, Real) const { return Real(0); }
+  POPS_HD void set_smoothness_epsilon(Real value) { eps = value; }
+  template <class Sample>
+  POPS_HD Real stencil_face_value(const Sample& sample) const {
+    const Real vm2 = sample(-2);
+    const Real vm1 = sample(-1);
+    const Real v0 = sample(0);
+    const Real vp1 = sample(1);
+    const Real vp2 = sample(2);
+    return weno5z(vm2, vm1, v0, vp1, vp2, eps);
+  }
 };
+
+/// Small reconstruction-policy protocols.  The ghost count remains a storage-capacity contract;
+/// it never selects the numerical algorithm or the sampled offsets.  A new policy opts into
+/// exactly one pointwise protocol, so a four-ghost MUSCL policy cannot accidentally become a
+/// sampled stencil merely because its storage envelope is wider.
+template <class Reconstruction>
+concept CellValueReconstruction = requires(const Reconstruction& reconstruction, Real value) {
+  { reconstruction.cell_face_value(value) } -> std::convertible_to<Real>;
+};
+
+template <class Reconstruction>
+concept SlopeReconstruction =
+    requires(const Reconstruction& reconstruction, Real backward, Real forward) {
+      { reconstruction.limited_slope(backward, forward) } -> std::convertible_to<Real>;
+    };
+
+/// Minimal compile-time probe for the sampled-stencil protocol.  Production reconstruction passes
+/// an equally small POD sampler backed by ConstArray4.  Policies are expected to use only
+/// `sample(integer_offset)`; they never receive a mesh, direction, component, or host callback.
+struct ReconstructionSamplerProbe {
+  POPS_HD Real operator()(int) const { return Real(0); }
+};
+
+/// SFINAE envelope trait keeps cell-value and slope policies completely free of stencil metadata.
+/// Only a policy that declares both bounds can opt into the sampled-stencil protocol.
+template <class Reconstruction, class = void>
+struct ReconstructionStencilEnvelope {
+  static constexpr bool declared = false;
+  static constexpr bool ordered = false;
+  static constexpr int min_offset = 0;
+  static constexpr int max_offset = -1;
+};
+
+template <class Reconstruction>
+struct ReconstructionStencilEnvelope<
+    Reconstruction,
+    std::void_t<decltype(Reconstruction::stencil_min_offset),
+                decltype(Reconstruction::stencil_max_offset)>> {
+  static constexpr bool declared = true;
+  static constexpr int min_offset = static_cast<int>(Reconstruction::stencil_min_offset);
+  static constexpr int max_offset = static_cast<int>(Reconstruction::stencil_max_offset);
+  static constexpr bool ordered = min_offset <= max_offset;
+};
+
+template <class Reconstruction>
+concept StencilReconstruction =
+    ReconstructionStencilEnvelope<Reconstruction>::declared &&
+    ReconstructionStencilEnvelope<Reconstruction>::ordered &&
+    requires(const Reconstruction& reconstruction, const ReconstructionSamplerProbe& sample) {
+      { reconstruction.stencil_face_value(sample) } -> std::convertible_to<Real>;
+    };
+
+template <class Reconstruction>
+inline constexpr int reconstruction_protocol_count =
+    static_cast<int>(CellValueReconstruction<Reconstruction>) +
+    static_cast<int>(SlopeReconstruction<Reconstruction>) +
+    static_cast<int>(StencilReconstruction<Reconstruction>);
+
+template <class Reconstruction>
+concept ReconstructionMetadata = requires {
+  { Reconstruction::formal_order } -> std::convertible_to<int>;
+  { Reconstruction::n_ghost } -> std::convertible_to<int>;
+  requires Reconstruction::formal_order > 0;
+  requires Reconstruction::n_ghost > 0;
+};
+
+template <class Reconstruction>
+concept ReconstructionPolicy =
+    ReconstructionMetadata<Reconstruction> && reconstruction_protocol_count<Reconstruction> == 1;
+
+/// A sampled policy explicitly declares the envelope it may query.  `n_ghost` remains the storage
+/// capacity required by the surrounding face operator (one cell more than a source-centred
+/// offset at a valid-box edge); it neither selects a protocol nor supplies the offsets.
+template <class Reconstruction>
+consteval bool stencil_envelope_fits_storage_contract() {
+  if constexpr (!StencilReconstruction<Reconstruction>) {
+    return true;
+  } else {
+    using Envelope = ReconstructionStencilEnvelope<Reconstruction>;
+    return Reconstruction::n_ghost > 0 &&
+           Envelope::min_offset >= 1 - Reconstruction::n_ghost &&
+           Envelope::max_offset <= Reconstruction::n_ghost - 1;
+  }
+}
+
+template <class Reconstruction>
+inline constexpr bool stencil_envelope_fits_storage =
+    stencil_envelope_fits_storage_contract<Reconstruction>();
+
+template <class Reconstruction>
+inline Reconstruction configured_reconstruction(Real smoothness_epsilon = kWenoEpsilon) {
+  static_assert(
+      ReconstructionPolicy<Reconstruction>,
+      "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
+      "exactly one pointwise protocol");
+  Reconstruction reconstruction{};
+  if constexpr (requires(Reconstruction& value, Real eps) {
+                  value.set_smoothness_epsilon(eps);
+                })
+    reconstruction.set_smoothness_epsilon(smoothness_epsilon);
+  return reconstruction;
+}
 
 }  // namespace pops

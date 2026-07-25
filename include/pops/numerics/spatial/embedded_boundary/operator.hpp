@@ -212,7 +212,8 @@ struct EbFaceFluxXKernel {
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   Real face_open_eps = kEbFaceOpenEps;  ///< ADC-615: closed-face aperture threshold (default 1e-6).
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const Real alpha = metrics.x_face_aperture(i, j);
     if (alpha < face_open_eps) {  // closed face (immersed wall): zero normal flux
       for (int c = 0; c < Model::n_vars; ++c)
@@ -226,9 +227,20 @@ struct EbFaceFluxXKernel {
     const FaceContext face = FaceContext::axis_aligned(0, alpha);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
+    if (!evaluation.succeeded()) {
+      // This face field is transactional scratch.  Keep later divergence arithmetic finite while
+      // the structured failure travels through the reduction; no zero can be published because the
+      // operator throws before returning.
+      for (int c = 0; c < Model::n_vars; ++c)
+        fx(i, j, c) = Real(0);
+      return;
+    }
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fx(i, j, c) = F[c];
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(fx(i, j, c), failure);
   }
 };
 
@@ -246,7 +258,8 @@ struct EbFaceFluxYKernel {
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   Real face_open_eps = kEbFaceOpenEps;  ///< ADC-615: closed-face aperture threshold (default 1e-6).
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const Real alpha = metrics.y_face_aperture(i, j);
     if (alpha < face_open_eps) {
       for (int c = 0; c < Model::n_vars; ++c)
@@ -260,9 +273,17 @@ struct EbFaceFluxYKernel {
     const FaceContext face = FaceContext::axis_aligned(1, alpha);
     const auto evaluation =
         evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    failures.record(evaluation, failure);
+    if (!evaluation.succeeded()) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fy(i, j, c) = Real(0);
+      return;
+    }
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fy(i, j, c) = F[c];
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(fy(i, j, c), failure);
   }
 };
 
@@ -279,7 +300,8 @@ struct EbAssembleRhsKernel {
   Array4 r;                   // output: residual
   Real dx, dy;
   GeometryMetrics metrics;
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     if (!metrics.active(i, j)) {
       for (int c = 0; c < Model::n_vars; ++c)
         r(i, j, c) = Real(0);
@@ -304,6 +326,8 @@ struct EbAssembleRhsKernel {
       // floating-point associativity and the bit-identity of the default path.
       r(i, j, c) = S[c] - inv_kappa * div_x - inv_kappa * div_y - inv_kappa * wall_flux;
     }
+    for (int c = 0; c < Model::n_vars; ++c)
+      failures.record_nonfinite(r(i, j, c), failure);
   }
 };
 
@@ -338,9 +362,7 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
                                   FaceFluxTransform transform = {}) {
   require_reconstruction_ghosts<Limiter>(U);
   const Real dx = geom.dx(), dy = geom.dy();
-  Limiter lim{};
-  if constexpr (std::is_same_v<Limiter, Weno5>)
-    lim.eps = weno_eps;
+  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
   const NumericalFlux nflux{};
   const int pos_comp = positivity_comp<Model>(pos_floor);
   std::vector<Box2D> xfaces, yfaces;
@@ -352,6 +374,7 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
   }
   MultiFab Fx(BoxArray(std::move(xfaces)), U.dmap(), Model::n_vars, 0);
   MultiFab Fy(BoxArray(std::move(yfaces)), U.dmap(), Model::n_vars, 0);
+  FluxEvaluationTracker failures{process_world_flux_collective};
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
@@ -359,16 +382,16 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
     Array4 fy = Fy.fab(li).array();
     const Box2D v = R.box(li);
     auto metrics = provider.local(li);
-    for_each_cell(
+    failures.merge(reduce_max_uint64_cell(
         xface_box(v),
         EbFaceFluxXKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
             model, u, ax, fx, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
-            face_open_eps});
-    for_each_cell(
+            face_open_eps, failures.recorder()}));
+    failures.merge(reduce_max_uint64_cell(
         yface_box(v),
         EbFaceFluxYKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
             model, u, ax, fy, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
-            face_open_eps});
+            face_open_eps, failures.recorder()}));
   }
   // A shared-interface Program owns selected outer faces in its pair scheduler.  The transform is a
   // zero-cost no-op for ordinary callers and a small host-side face filter for that prepared route;
@@ -382,10 +405,11 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
     auto metrics = provider.local(li);
-    for_each_cell(v, EbAssembleRhsKernel<Model, decltype(metrics)>{
-                         model, u, ax, fx, fy, r, dx, dy, metrics});
+    failures.merge(reduce_max_uint64_cell(
+        v, EbAssembleRhsKernel<Model, decltype(metrics)>{model, u, ax, fx, fy, r, dx, dy,
+                                                         metrics, failures.recorder()}));
   }
-  reject_nonfinite_finite_volume_data("assemble_rhs_eb", R);
+  failures.throw_if_failed("assemble_rhs_eb");
 }
 
 }  // namespace detail

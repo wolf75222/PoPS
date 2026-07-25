@@ -12,7 +12,6 @@ from typing import Any
 
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.routes import (
-    LIMITER_MINMOD, LIMITER_NONE, LIMITER_VANLEER, LIMITER_WENO5,
     RECON_CONSERVATIVE, RECON_PRIMITIVE,
     RIEMANN_EULER_HLLC, RIEMANN_EULER_ROE,
     RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_RUSANOV,
@@ -51,17 +50,13 @@ class ThermalExchange:
 
 # --- Spatial scheme + time treatment (per block) ------------------------
 # Spec 5 sec.7: the spatial scheme is chosen with TYPED descriptors, never bare strings. The
-# tables below map each accepted descriptor scheme to the TYPED NATIVE ROUTE (ADC-584) the
-# lowering layer carries -- a pops.runtime.routes.Route, whose str value IS the canonical token
+# Generated limiter descriptors and the bounded flux/variables tables below lower each accepted
+# selector to the TYPED NATIVE ROUTE (ADC-584) the lowering layer carries -- a
+# pops.runtime.routes.Route, whose str value IS the canonical token
 # the C++ ABI consumes, so the wire crossing stays byte-identical while the identity/requirements
 # become typed. reject_string_selector names the typed alternative a rejected string should point
 # at. The descriptor category gates which slot a descriptor may fill (a riemann flux in the
 # limiter slot is a clear error, not a silent swap).
-_LIMITER_SCHEMES = {  # reconstruction / limiter descriptor scheme -> Spatial.limiter route
-    "none": LIMITER_NONE, "firstorder": LIMITER_NONE,
-    "minmod": LIMITER_MINMOD, "vanleer": LIMITER_VANLEER,
-    "weno5": LIMITER_WENO5, "weno5z": LIMITER_WENO5,
-}
 _FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
     # "user" stays a plain token: an EXTERNAL C++ flux brick resolves through the external-brick
     # catalog manifest (pops.descriptors), not the native route registry.
@@ -111,6 +106,29 @@ def _lower_selector(value: Any, *, param: Any, schemes: Any, suggestion: Any, ca
     return token
 
 
+def _lower_reconstruction_selector(value: Any) -> Any:
+    """Lower only a catalogue-authenticated native reconstruction descriptor."""
+    from pops.descriptors import reject_string_selector
+    from pops.numerics.reconstruction import authenticated_reconstruction_route
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        reject_string_selector(value, "limiter", _LIMITER_SUGGEST)  # always raises
+    try:
+        return authenticated_reconstruction_route(value)
+    except TypeError as error:
+        category = getattr(value, "category", None)
+        scheme = getattr(value, "scheme", None)
+        if category not in ("reconstruction", "limiter"):
+            raise TypeError(
+                "Spatial: limiter expects a reconstruction / limiter descriptor, got a %r "
+                "descriptor (%s). Use %s."
+                % (category, scheme, _LIMITER_SUGGEST)
+            ) from error
+        raise
+
+
 class Spatial:
     """Spatial discretization: reconstruction (limiter) + numerical Riemann flux.
 
@@ -146,11 +164,10 @@ class Spatial:
       so that rho_face >= floor. 0/None (default) = inactive, bit-identical path.
       Motivated by the top-hat jump of contrast 1e6 in the Hoffart diocotron, where WENO5 reconstructs a
       negative density -> NaN. Requires a model exposing the Density role.
-    - ``wave_speed_cache``: flux=HLL() + explicit time ONLY. Pre-computes model.wave_speeds ONCE per
-      cell and direction (instead of per face) then bounds each face by min/max of the two neighbor
-      cells. Net gain when wave_speeds is expensive (moment hierarchy). With limiter=FirstOrder() +
-      recon=Conservative() it is BIT-IDENTICAL to the per-face path; with a 2nd-order+ limiter it is a
-      Davis bound on the cell values (different result, opt-in assumed). False (default) = per-face path
+    - ``wave_speed_cache``: flux=HLL() + explicit time ONLY. Pre-computes model.wave_speeds once for
+      every exact reconstructed face-trace pair, then reuses that interval from both adjacent residual
+      cells. Net gain when wave_speeds is expensive (moment hierarchy). It is BIT-IDENTICAL to the
+      direct HLL path for FirstOrder(), MUSCL and WENO reconstruction. False (default) = direct path
       unchanged. Wired on the FULL cartesian advance only: refused if flux != HLL(), IMEX time, polar
       geometry, or a staircase/cutcell disc transport mode is active (set_disc_domain / set_geometry_mode).
     """
@@ -192,6 +209,13 @@ class Spatial:
             "riemann": {
                 "route": str(self.flux),
                 "external_id": self.external_flux_id,
+                "capability_contract": self.riemann_capability_contract.to_data(),
+                **({
+                    "external_library_sha256": self.external_flux_library_sha256,
+                    "external_abi_key": self.external_flux_abi_key,
+                    "external_native_abi_key": self.external_flux_native_abi_key,
+                    "external_model_identity": self.external_flux_model_identity,
+                } if self.external_flux_id is not None else {}),
             },
             "variables": str(self.recon),
             "positivity_floor": scalar_literal(self.positivity_floor).to_data(),
@@ -225,47 +249,97 @@ class Spatial:
             if limiter is not None:
                 raise TypeError("Spatial: pass limiter= or reconstruction= (the alias), not both")
             limiter = reconstruction
-        lim_tok = _lower_selector(
-            limiter, param="limiter", schemes=_LIMITER_SCHEMES,
-            suggestion=_LIMITER_SUGGEST, categories=("reconstruction", "limiter"))
+        from pops.numerics.reconstruction import FirstOrder, WENO5
+        from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+
+        enabled_limiter_shortcuts = [
+            (label, factory)
+            for label, flag, factory in (
+                ("none", none, FirstOrder),
+                ("minmod", minmod, Minmod),
+                ("vanleer", vanleer, VanLeer),
+                ("weno5", weno5, WENO5),
+            )
+            if flag
+        ]
+        if len(enabled_limiter_shortcuts) > 1:
+            raise TypeError(
+                "Spatial: limiter shortcuts are mutually exclusive (received %s)"
+                % ", ".join(label for label, _ in enabled_limiter_shortcuts)
+            )
+        if enabled_limiter_shortcuts:
+            if limiter is not None:
+                raise TypeError(
+                    "Spatial: pass limiter=/reconstruction= or one limiter shortcut, not both"
+                )
+            limiter = enabled_limiter_shortcuts[0][1]()
+        lim_tok = _lower_reconstruction_selector(limiter)
         flux_tok = _lower_selector(
             flux, param="flux", schemes=_FLUX_SCHEMES,
             suggestion=_FLUX_SUGGEST, categories=("riemann",))
         recon_tok = _lower_selector(
             recon, param="recon", schemes=_RECON_SCHEMES,
             suggestion=_RECON_SUGGEST, categories=("variables",))
-        # Wave-speed provider ride-along (ADC-552): a flux descriptor built with
-        # HLL(waves=<WaveSpeedProvider>) carries the provider kind in options["waves"]. Record it
-        # on the Spatial so the install guard can cross-check the requested provider against the
-        # compiled model's actual wave-speed source (least-invasive: read the descriptor object
-        # here, the lowered route token stays byte-identical). None when no provider was pinned.
-        self.waves_provider = None
+        # Preserve the descriptor-owned capability contract across the private runtime lowering.
+        # Runtime installation consumes this value; it never recognises a flux class, factory name,
+        # or wire token. External C++ descriptors use the same requirements mapping.
+        from pops.numerics.riemann._contract import (
+            RiemannCapabilityContract,
+            riemann_capability_contract,
+        )
+
+        self.riemann_capability_contract = (
+            RiemannCapabilityContract(tuple(RIEMANN_RUSANOV.requirements))
+            if flux is None
+            else riemann_capability_contract(flux)
+        )
+        self.waves_provider = self.riemann_capability_contract.wave_speed_provider
         self.external_flux_id = None
+        self.external_flux_library_path = None
+        self.external_flux_library_sha256 = None
+        self.external_flux_abi_key = None
+        self.external_flux_native_abi_key = None
+        self.external_flux_model_identity = None
+        self.external_flux_supported_layouts = ()
         if flux is not None and not isinstance(flux, str):
-            self.waves_provider = getattr(flux, "options", {}).get("waves")
             if getattr(flux, "scheme", None) == "user":
                 self.external_flux_id = getattr(flux, "name", None)
+                options = getattr(flux, "options", None)
+                required = {
+                    "library_path", "library_sha256", "abi_version", "abi_key", "native_abi_key",
+                    "supported_layouts",
+                    "model_identity",
+                }
+                if not isinstance(options, dict) or set(options) != required:
+                    raise ValueError(
+                        "external Riemann descriptor has no authenticated loaded-library authority; "
+                        "create it with pops.lib.load_cpp_library(...) then riemann.User(id)"
+                    )
+                if options["abi_version"] != 2 \
+                        or options["abi_key"] != \
+                        "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy":
+                    raise ValueError("external Riemann descriptor carries an incompatible ABI")
+                self.external_flux_library_path = options["library_path"]
+                self.external_flux_library_sha256 = options["library_sha256"]
+                self.external_flux_abi_key = options["abi_key"]
+                self.external_flux_native_abi_key = options["native_abi_key"]
+                self.external_flux_supported_layouts = tuple(options["supported_layouts"])
+                self.external_flux_model_identity = options["model_identity"]
         # ADC-645 ride-along (mirror of waves_provider): a reconstruction descriptor built with
         # WENO5(epsilon=...) carries the WENO-Z regulariser in options["epsilon"]. None (the default)
         # keeps the native kWenoEpsilon -> nothing forwarded, byte-identical.
         self.weno_epsilon = None
         if limiter is not None and not isinstance(limiter, str):
             self.weno_epsilon = getattr(limiter, "options", {}).get("epsilon")
-        # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
-        # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
-        if none:
-            lim_tok = LIMITER_NONE
-        elif minmod:
-            lim_tok = LIMITER_MINMOD
-        elif vanleer:
-            lim_tok = LIMITER_VANLEER
-        elif weno5:
-            lim_tok = LIMITER_WENO5
+        if primitive and recon is not None:
+            raise TypeError("Spatial: pass recon= or primitive=True, not both")
         if primitive:
             recon_tok = RECON_PRIMITIVE
         # Canonical defaults (mirror the historical minmod + rusanov + conservative). Every slot
         # holds a TYPED Route (ADC-584) whose str value is the historical token, byte-identical.
-        self.limiter = lim_tok if lim_tok is not None else LIMITER_MINMOD
+        if lim_tok is None:
+            lim_tok = _lower_reconstruction_selector(Minmod())
+        self.limiter = lim_tok
         self.flux = flux_tok if flux_tok is not None else RIEMANN_RUSANOV
         self.recon = recon_tok if recon_tok is not None else RECON_CONSERVATIVE
         self.positivity_floor = (0.0 if positivity_floor is None else exact_real(
@@ -297,7 +371,9 @@ class Spatial:
                 return slot_route.manifest()
             return {"family": "riemann", "id": "riemann.user", "token": str(slot_route),
                     "native_entry": "external brick (pops.descriptors catalog)",
-                    "requirements": [], "limitations": []}
+                    "requirements": list(
+                        self.riemann_capability_contract.required_capabilities),
+                    "limitations": []}
         return {"limiter": _manifest(self.limiter), "riemann": _manifest(self.flux),
                 "recon": _manifest(self.recon)}
 

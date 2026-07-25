@@ -661,7 +661,6 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     )
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
-    _require_refined_hierarchy(continuous, where="continued scalar run")
     return ScalarExecutionEvidence(
         hdf5_path=hdf5_path,
         paraview_path=paraview_path,

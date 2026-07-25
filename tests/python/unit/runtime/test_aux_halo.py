@@ -77,7 +77,7 @@ def test_capabilities_halo():
 
 
 def _cart_rhs(compiled, n, vx2d, halo):
-    sim = System(n=n, L=1.0, periodic=False)
+    sim = System(n=n, L=1.0, periodicity=(False, False))
     sim.add_equation("a", model=compiled,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit())
@@ -140,7 +140,7 @@ def test_amr_halo():
         vx = np.tile((np.arange(n) + 0.5) / n, (n, 1))
 
         def stepped_density(halo):
-            s = AmrSystem(n=n, L=1.0, periodic=False)
+            s = AmrSystem(n=n, L=1.0, periodicity=(False, False))
             s.add_equation("a", model=compiled, spatial=sp, time=engine.Explicit())
             s.set_poisson(bc=Dirichlet())
             s.set_density("a", np.ones((n, n)))

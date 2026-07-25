@@ -10,9 +10,10 @@ from .rectangle import (
     RectangleBoundaryNames,
     RectangleFrame,
 )
-from .preview import DomainPreview
+from .preview import DomainPreview, PreviewDomainProvider, preview_domain, preview_geometry
 
 __all__ = [
     "BoundaryPair", "BoundarySide", "DomainBoundary", "DomainTag", "Rectangle",
     "RectangleBoundaries", "RectangleBoundaryNames", "RectangleFrame", "DomainPreview",
+    "PreviewDomainProvider", "preview_domain", "preview_geometry",
 ]

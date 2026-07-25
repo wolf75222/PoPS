@@ -88,7 +88,8 @@ struct AssembleRhsMaskedKernel {
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   BoundaryFaceOmission omission{};
-  POPS_HD void operator()(int i, int j) const {
+  FluxEvaluationRecorder failures;
+  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     if (!mask_active(mask, i,
                      j)) {  // cell outside the active sub-domain: zero residual, not advanced
       for (int c = 0; c < Model::n_vars; ++c)
@@ -96,6 +97,7 @@ struct AssembleRhsMaskedKernel {
       return;
     }
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
+    bool evaluations_succeeded = true;
 
     // Reconstruct only after the face is proven open.  This ordering is part of the EB policy:
     // inactive storage may contain arbitrary sentinels and must never enter a primitive conversion,
@@ -109,6 +111,8 @@ struct AssembleRhsMaskedKernel {
           reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
       const auto evaluation =
           evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
+      failures.record(evaluation, failure);
+      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
       Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
     }
     if (!omission.omit(0, +1, i, j) && mask_active(mask, i + 1, j)) {
@@ -118,6 +122,8 @@ struct AssembleRhsMaskedKernel {
           reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
       const auto evaluation =
           evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
+      failures.record(evaluation, failure);
+      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
       Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
     }
 
@@ -131,6 +137,8 @@ struct AssembleRhsMaskedKernel {
           reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
       const auto evaluation =
           evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
+      failures.record(evaluation, failure);
+      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
       Fym = apply_face_measure(evaluation.checked_density(), yface).value;
     }
     if (!omission.omit(1, +1, i, j) && mask_active(mask, i, j + 1)) {
@@ -140,12 +148,17 @@ struct AssembleRhsMaskedKernel {
           reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
       const auto evaluation =
           evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
+      failures.record(evaluation, failure);
+      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
       Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
     }
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)
       r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
+    if (evaluations_succeeded)
+      for (int c = 0; c < Model::n_vars; ++c)
+        failures.record_nonfinite(r(i, j, c), failure);
   }
 };
 
@@ -156,22 +169,22 @@ void assemble_rhs_masked_impl(const Model& model, const MultiFab& U, const Multi
                               BoundaryFaceOmission omission) {
   require_reconstruction_ghosts<Limiter>(U);
   const Real dx = geom.dx(), dy = geom.dy();
-  Limiter lim{};
-  if constexpr (std::is_same_v<Limiter, Weno5>)
-    lim.eps = weno_eps;
+  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
   const NumericalFlux nflux{};
   const int pos_comp = positivity_comp<Model>(pos_floor);
+  FluxEvaluationTracker failures{process_world_flux_collective};
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     const ConstArray4 mk = mask.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(
+    failures.merge(reduce_max_uint64_cell(
         v, AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
-               model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp, omission});
+               model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp, omission,
+               failures.recorder()}));
   }
-  reject_nonfinite_finite_volume_data("assemble_rhs_masked", R);
+  failures.throw_if_failed("assemble_rhs_masked");
 }
 }  // namespace detail
 

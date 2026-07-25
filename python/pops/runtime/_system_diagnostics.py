@@ -41,11 +41,18 @@ class _SystemDiagnostics(_System):
             R = np.asarray(self._s.eval_rhs(block), dtype=float)
         except RuntimeError as ex:
             # Native execution is deliberately fail-closed: a non-finite residual is rejected
-            # before it can cross the binding.  The diagnostic API still reports that rejection
-            # alongside the role/conversion failures it can inspect on the original state.
-            if not str(ex).startswith(
+            # before it can cross the binding.  Pointwise providers likewise publish their
+            # structured rejection only after the device/MPI reduction.  Pybind exposes both as
+            # RuntimeError, so accept only these two exact assemble_rhs contracts; unrelated
+            # runtime/infrastructure failures must still escape rather than become a model report.
+            message = str(ex)
+            rejected_rhs = message.startswith(
                 "assemble_rhs produced non-finite finite-volume data;"
-            ):
+            ) or (
+                message.startswith("numerical flux evaluation ")
+                and " during assemble_rhs: reason_code=0x" in message
+            )
+            if not rejected_rhs:
                 raise
             failures.append("residual -div F + S evaluation failed (%s)" % ex)
         else:

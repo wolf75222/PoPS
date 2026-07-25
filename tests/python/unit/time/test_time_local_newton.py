@@ -264,7 +264,7 @@ def section_b(t):
         require_native_or_skip("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
-    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
         if fails:
             raise AssertionError(
                 "%d pure-Python acceptance(s) failed before the native capability skip" % fails
@@ -309,7 +309,7 @@ def section_b(t):
 
     chk(compiled.program_name == "react_step", "handle carries the program name")
 
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     try:
         compiled_model = reaction_model("react_block", k).compile(backend="production")
     except RuntimeError as exc:

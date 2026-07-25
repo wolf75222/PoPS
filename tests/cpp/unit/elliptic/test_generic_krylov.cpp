@@ -1103,7 +1103,7 @@ struct CustomOwnedVectorDistributionSource {
           1, "custom distribution sum scratch was not prepared");
     std::copy(values.begin(), values.end(), scratch.begin());
     try {
-      all_reduce_sum_inplace(scratch.data(), static_cast<int>(values.size()), lane);
+  all_reduce_sum_inplace(scratch.data(), values.size(), lane);
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(2,
                                                        "custom distribution sum collective failed");
@@ -1120,7 +1120,7 @@ struct CustomOwnedVectorDistributionSource {
           3, "custom distribution max scratch was not prepared");
     std::copy(values.begin(), values.end(), scratch.begin());
     try {
-      all_reduce_max_inplace(scratch.data(), static_cast<int>(values.size()), lane);
+  all_reduce_max_inplace(scratch.data(), values.size(), lane);
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(4,
                                                        "custom distribution max collective failed");

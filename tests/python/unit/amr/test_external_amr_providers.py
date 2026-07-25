@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -34,6 +35,9 @@ TAGGER_CAPABILITY = {
         "maximum_instruction_count"],
     "non_finite_policy": NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"],
     "persistent_hysteresis": NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"],
+    "execution_mode": "native_backend",
+    "collective_scope": "none",
+    "memory_spaces": ["host"],
 }
 
 
@@ -72,7 +76,8 @@ def test_tagging_opcode_catalog_is_the_single_python_cpp_authority():
 
 def _component(
     tmp_path: Path, *, name: str, interface, tagger_capability=TAGGER_CAPABILITY,
-    dimension: int = 2, alias: str | None = None,
+    dimension: int = 2, device: str = "cpu", alias: str | None = None, manifest_parameters=(),
+    instance_parameters=None,
 ):
     export_alias = name if alias is None else alias
     root = tmp_path / name
@@ -87,12 +92,13 @@ def _component(
             "native_interface": interface.signature_declaration(),
         },
         interfaces=interface.manifest_declarations(),
+        parameters=manifest_parameters,
         capabilities=(tagger_capability,)
         if interface is interfaces.Tagger and tagger_capability is not None else (),
         target={"variants": [{
             "dimension": dimension,
             "scalar": "float64",
-            "device": "cpu",
+            "device": device,
             "features": [],
         }]},
         determinism={"classification": "bitwise", "scope": ["same-input"]},
@@ -105,7 +111,8 @@ def _component(
         components={export_alias: manifest}, payloads={source_name: ("source", source)})
     package_path = root / (name + ".pops.json")
     package_path.write_text(json.dumps(package_data), encoding="utf-8")
-    return load(package_path).require(export_alias, interface=interface)()
+    factory = load(package_path).require(export_alias, interface=interface)
+    return factory(**({} if instance_parameters is None else instance_parameters))
 
 
 def test_external_amr_provider_refuses_a_3d_only_native_target(tmp_path):
@@ -113,8 +120,25 @@ def test_external_amr_provider_refuses_a_3d_only_native_target(tmp_path):
         tmp_path, name="tagger-3d", alias="tagger_3d",
         interface=interfaces.Tagger, dimension=3)
 
-    with pytest.raises(ValueError, match="2D float64 CPU"):
+    with pytest.raises(ValueError, match="supported 2D float64"):
         TaggerProvider(component)
+
+
+def test_external_tagger_native_backend_accepts_an_exact_gpu_target(tmp_path):
+    component = _component(
+        tmp_path, name="tagger-cuda", alias="tagger_cuda",
+        interface=interfaces.Tagger, device="cuda",
+        tagger_capability={**TAGGER_CAPABILITY, "memory_spaces": ["managed"]})
+
+    provider = TaggerProvider(component)
+    assert provider.inspect()["tagging_capability"]["execution_mode"] == "native_backend"
+    assert provider.inspect()["tagging_capability"]["memory_spaces"] == ["managed"]
+
+    mismatched = _component(
+        tmp_path, name="tagger-cuda-host", alias="tagger_cuda_host",
+        interface=interfaces.Tagger, device="cuda")
+    with pytest.raises(ValueError, match="requires 'managed' field memory"):
+        TaggerProvider(mismatched)
 
 
 def _layout(authored, *, tagger, clustering):
@@ -167,6 +191,81 @@ def test_external_amr_providers_survive_resolution_with_exact_components(tmp_pat
     }
 
 
+def test_third_party_authority_uses_the_open_provider_lowering_protocol(tmp_path):
+    target = _example().build_final_case()
+    tagger_component = _component(
+        tmp_path, name="third_party_tagger", interface=interfaces.Tagger)
+    clustering_component = _component(
+        tmp_path, name="third_party_clustering", interface=interfaces.Clustering)
+
+    @dataclass(frozen=True, slots=True)
+    class ThirdPartyClusteringAuthority:
+        delegate: ClusteringProvider
+        __pops_ir_immutable__ = True
+
+        def inspect(self):
+            return self.delegate.inspect()
+
+        def resolve_references(self, resolver):
+            if not callable(resolver):
+                raise TypeError("resolver must be callable")
+            return self
+
+        def lower_amr_provider(self, context):
+            return self.delegate.lower_amr_provider(context)
+
+    layout = _layout(
+        target.layout,
+        tagger=TaggerProvider(tagger_component),
+        clustering=ThirdPartyClusteringAuthority(
+            ClusteringProvider(clustering_component)),
+    )
+    resolved = pops.resolve(
+        pops.validate(target.authoring.case),
+        layout=layout,
+        components=(tagger_component, clustering_component),
+    )
+
+    assert resolved.amr_providers["clustering"]["component_id"] \
+        == clustering_component.component_manifest.component_id
+    assert resolved.amr_providers["clustering"]["runtime_installation"] == {
+        "schema_version": 1,
+        "protocol": "external_component",
+    }
+
+
+def test_incomplete_third_party_authority_is_rejected_explicitly(tmp_path):
+    target = _example().build_final_case()
+    tagger_component = _component(
+        tmp_path, name="incomplete_tagger", interface=interfaces.Tagger)
+    clustering_component = _component(
+        tmp_path, name="incomplete_clustering", interface=interfaces.Clustering)
+
+    @dataclass(frozen=True, slots=True)
+    class IncompleteClusteringAuthority:
+        delegate: ClusteringProvider
+        __pops_ir_immutable__ = True
+
+        def inspect(self):
+            return self.delegate.inspect()
+
+        def resolve_references(self, resolver):
+            return self
+
+    layout = _layout(
+        target.layout,
+        tagger=TaggerProvider(tagger_component),
+        clustering=IncompleteClusteringAuthority(
+            ClusteringProvider(clustering_component)),
+    )
+    with pytest.raises(TypeError, match="lower_amr_provider"):
+        pops.resolve(
+            pops.validate(target.authoring.case),
+            layout=layout,
+            components=(tagger_component, clustering_component),
+        )
+
+
 def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
     target = _example().build_final_case()
     tagger_component = _component(
@@ -185,6 +284,51 @@ def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
             layout=layout,
             components=(tagger_component,),
         )
+
+
+def test_external_clustering_options_survive_prepared_native_lowering(tmp_path):
+    from pops.amr.providers import (
+        AMRProviderLoweringContext,
+        prepare_amr_provider_native_config,
+    )
+
+    component = _component(
+        tmp_path,
+        name="parameterized_clustering",
+        interface=interfaces.Clustering,
+        manifest_parameters=({"name": "options", "kind": "runtime"},),
+        instance_parameters={"options": {"target_boxes": 12, "strict": True}},
+    )
+    graph = SimpleNamespace(qualified_id="test::tagging-graph")
+    binding = ClusteringProvider(component).lower_amr_provider(
+        AMRProviderLoweringContext(
+            layout_identity="test::layout",
+            components=(component,),
+            tagging_graph=graph,
+            clock_identity="test::clock",
+        )
+    )
+    from pops.identity.semantic import semantic_value
+
+    prepared = prepare_amr_provider_native_config(
+        semantic_value(binding.data, where="test external clustering binding"))
+
+    assert prepared.role == "clustering"
+    assert prepared.config == {}
+    assert prepared.provider_options == {
+        "options": {"target_boxes": 12, "strict": True},
+    }
+
+    forged = dict(binding.data)
+    forged_component = dict(forged["component"])
+    forged_component["parameters"] = {
+        "options": {"target_boxes": 99, "strict": False},
+    }
+    forged["component"] = forged_component
+    from pops.amr import ResolvedAMRProviderBinding
+
+    with pytest.raises(ValueError, match="provider_identity"):
+        ResolvedAMRProviderBinding("clustering", forged)
 
 
 def test_external_amr_provider_roles_are_not_interchangeable(tmp_path):
@@ -210,6 +354,23 @@ def test_external_tagger_requires_exact_candidate_program_capability(tmp_path):
         tagger_capability={**TAGGER_CAPABILITY, "non_finite_policy": "false"})
     with pytest.raises(ValueError, match="reject every non-finite"):
         TaggerProvider(non_finite_fallback)
+    implicit_execution = _component(
+        tmp_path, name="implicit_execution", interface=interfaces.Tagger,
+        tagger_capability={key: value for key, value in TAGGER_CAPABILITY.items()
+                           if key != "execution_mode"})
+    with pytest.raises(ValueError, match="unsupported schema"):
+        TaggerProvider(implicit_execution)
+    collective_execution = _component(
+        tmp_path, name="collective_execution", interface=interfaces.Tagger,
+        tagger_capability={**TAGGER_CAPABILITY, "collective_scope": "rank"})
+    with pytest.raises(ValueError, match="explicitly noncollective"):
+        TaggerProvider(collective_execution)
+    disguised_host_fallback = _component(
+        tmp_path, name="disguised_host_fallback", interface=interfaces.Tagger,
+        tagger_capability={**TAGGER_CAPABILITY, "execution_mode": "host",
+                           "memory_spaces": ["host", "managed"]})
+    with pytest.raises(ValueError, match="exactly the host memory space"):
+        TaggerProvider(disguised_host_fallback)
     advertised_but_unsupported = _component(
         tmp_path, name="persistent_capability", interface=interfaces.Tagger,
         tagger_capability={**TAGGER_CAPABILITY, "persistent_hysteresis": True})
@@ -278,13 +439,20 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
     layout_identity = "test::layout"
     clock_identity = "test::case::clock"
     graph_identity = "test::case::tagging-graph"
-    from pops.amr.providers import _normalize_tagger_capability
+    from pops.amr.providers import (
+        _normalize_tagger_capability,
+        amr_provider_binding_identity,
+    )
     normalized_capability = _normalize_tagger_capability((TAGGER_CAPABILITY,))
 
     def binding(slot, interface, component_id, manifest):
         row = {
             "schema_version": 1,
             "provider_type": "external_amr_%s" % slot,
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "external_component",
+            },
             "provider_identity": "test::%s-provider" % slot,
             "component_id": component_id,
             "component_manifest_identity": manifest,
@@ -303,6 +471,7 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
                 "tagging_graph_identity": graph_identity,
                 "tagging_capability": normalized_capability,
             })
+        row["provider_identity"] = amr_provider_binding_identity(slot, row)
         return row
 
     tagger_handle, clustering_handle = object(), object()

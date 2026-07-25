@@ -92,7 +92,7 @@ def run_compiled_checks():
     compiled = compile_euler_component(model, cells=16)
 
     def build_prod(method):
-        s = System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodicity=(True, True))
         s.add_equation(
             "gas",
             compiled,
@@ -105,7 +105,7 @@ def run_compiled_checks():
         return s
 
     def build_ref_ssprk3():
-        s = System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodicity=(True, True))
         s.add_equation(
             "gas",
             spec,

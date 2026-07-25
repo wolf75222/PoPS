@@ -217,6 +217,10 @@ class _SystemIO(_System):
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
         from pops.time._history.persistence import HistoryPersistence
+        from pops.runtime._system_io_history import (
+            history_fill_count_from_payload,
+            resolve_history_storage,
+        )
 
         d = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
@@ -287,9 +291,36 @@ class _SystemIO(_System):
             ):
                 raise ValueError("restart : history '%s' shape differs from the installed ring" % name)
             policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
+            initialized = bool(d["history_init_" + name])
+            fill_count = history_fill_count_from_payload(
+                d, name, depth, initialized)
+            requested = sorted(
+                int(slot)
+                for slot in d["history_requested_stored_slots_" + name]
+            )
             stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
-            if stored != list(policy.stored_slots(depth)):
-                raise ValueError("restart : history '%s' stored slots differ from its policy" % name)
+            expected_requested, expected_stored, expected_mode, _ = (
+                resolve_history_storage(
+                    policy,
+                    depth,
+                    fill_count=fill_count,
+                    macro_step=int(d["macro_step"]),
+                    regrid_every=0,
+                )
+            )
+            if requested != list(expected_requested):
+                raise ValueError(
+                    "restart : history '%s' requested slots differ from its policy"
+                    % name
+                )
+            if (
+                stored != list(expected_stored)
+                or str(d["history_storage_mode_" + name]) != expected_mode
+            ):
+                raise ValueError(
+                    "restart : history '%s' stored slots/mode differ from its resolved plan"
+                    % name
+                )
             if len(stored) < depth and not hasattr(self._s, "rebuild_history_slots"):
                 raise RuntimeError("runtime cannot rebuild selectively persisted history '%s'" % name)
             for slot in stored:

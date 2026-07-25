@@ -8,7 +8,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 
 def _make_system():
-    sim = System(n=4, L=1.0, periodic=True)
+    sim = System(n=4, L=1.0, periodicity=(True, True))
     sim.add_equation(
         "ne",
         engine.Model(

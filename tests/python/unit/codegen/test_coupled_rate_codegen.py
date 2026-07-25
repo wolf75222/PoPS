@@ -82,7 +82,7 @@ def test_emit_one_multi_state_for_each_cell():
     src = emit_cpp_program(P, model=None)
     assert src.count('ctx.require_cartesian_generated_operator(') == 2
     assert src.index('ctx.require_cartesian_generated_operator(') < src.index(
-        'ctx.rhs_scratch_like('
+        'ctx.rhs_scratch('
     )
     # ONE shared kernel fills both blocks' rate scratches (not two independent single-block rates).
     assert src.count("pops::for_each_cell") == 1
@@ -122,7 +122,7 @@ def test_emit_writes_both_block_rate_scratches():
     _mod, P = _two_fluid_program()
     src = emit_cpp_program(P, model=None)
     # Both blocks' rate scratches are allocated (shaped like their own state) and WRITTEN in the kernel.
-    assert "= ctx.rhs_scratch_like(u0);" in src and "= ctx.rhs_scratch_like(u1);" in src
+    assert "ctx.rhs_scratch(2, 0, u0);" in src and "ctx.rhs_scratch(2, 1, u1);" in src
     # electron rate = [ni - ne, ne, ne]; ion rate = [ne - ni, ni, ni], each into its block's scratch.
     assert "_electronsA(i, j, 0) = (ni - ne);" in src
     assert "_electronsA(i, j, 1) = ne;" in src
@@ -137,10 +137,10 @@ def test_per_block_out_composes_in_a_forward_step():
     # for the ion block. Each coupled_rate_out aliases its block's scratch (no separate compute).
     electron_scratch = next(ln.split("=")[0].strip().split()[-1]
                             for ln in src.splitlines()
-                            if "ctx.rhs_scratch_like(u0)" in ln)
+                            if "ctx.rhs_scratch(2, 0, u0)" in ln)
     ion_scratch = next(ln.split("=")[0].strip().split()[-1]
                        for ln in src.splitlines()
-                       if "ctx.rhs_scratch_like(u1)" in ln)
+                       if "ctx.rhs_scratch(2, 1, u1)" in ln)
     electron_accumulations = [
         line for line in src.splitlines()
         if "ctx.axpy(" in line and electron_scratch in line

@@ -82,17 +82,18 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     imex), MULTIRATE (substeps / stride), COUPLED inter-species SOURCES and the multi-block production
     DSL. In multi-block the block NAME indexes set_density(name) / mass(name) / density(name).
 
-    UNION-OF-TAGS REGRID (multi-block + regrid_every > 0) : the shared hierarchy is re-gridded from
-    the UNION of the tags of all blocks. Two criteria compose (cell-by-cell OR) :
+    UNION-OF-TAGS REGRID (regrid_every > 0) : the shared hierarchy is re-gridded from the UNION of
+    the prepared tags of all blocks. Two criteria compose (cell-by-cell OR) :
 
     - PER-BLOCK VARIABLE (set_refinement(threshold, variable=, role=)) : refine where the SELECTED
       variable of a block exceeds threshold. Default = component 0 (historical density), bit-identical ;
       ADC-296 lets you select it per block by name (variable=) or physical role (role=), resolved against
       the block's conserved variables (a block lacking the name/role raises, no silent component-0
-      fallback). Non-default selector is multi-block only (mono-block / compiled .so : component 0 only) ;
+      fallback). The resolved runtime block descriptor carries the same names and roles for native
+      and compiled blocks ;
     - ``grad phi`` (set_phi_refinement(grad_threshold)) : refine where the norm of the gradient of the
       electrostatic potential exceeds grad_threshold (diocotron ring edge). Disabled by default
-      (grad_threshold <= 0). MULTI-BLOCK only.
+      (grad_threshold <= 0).
 
     regrid_every == 0 -> FROZEN hierarchy (regrid never called, bit-identical).
     """
@@ -107,6 +108,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         _threading._first_system_built = True
         self._s = _AmrSystem(config)
         self._L = float(config.L)
+        self._Ly = float(config.Ly) if float(config.Ly) != 0.0 else self._L
         self._xlo = float(config.xlo)
         self._ylo = float(config.ylo)
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
@@ -233,25 +235,21 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """Physical rectangles ``(x0, y0, width, height)`` of the current fine patches.
 
         Converts patch_boxes() (index space, inclusive corners) into physical coordinates. The level
-        spacing is dx = L / (n << level) (ratio 2 per level) ; a patch [ilo..ihi] x [jlo..jhi]
-        covers ``ihi - ilo + 1`` cells from ``xlo + ilo*dx`` (and likewise in y). Grid convention
+        spacings are resolved independently on x and y (ratio 2 per level); a patch
+        [ilo..ihi] x [jlo..jhi] covers the corresponding exact Cartesian cell rectangle. Grid convention
         ne[j, i] -> index 0 = x (i), index 1 = y (j), consistent with density() and an imshow
         with the authored frame extent. Convenient to plot the real patches without
         rebuilding a density proxy. Returns a list of (x0, y0, w, h), one per fine patch (all
         fine levels combined). Query (between steps) : triggers the lazy build like
         n_patches(), no cost on the hot path.
         """
-        n, L = self._s.nx(), self._L
-        rects = []
-        for level, ilo, jlo, ihi, jhi in self._s.patch_boxes():
-            dx = L / (n << level)
-            rects.append((
-                self._xlo + ilo * dx,
-                self._ylo + jlo * dx,
-                (ihi - ilo + 1) * dx,
-                (jhi - jlo + 1) * dx,
-            ))
-        return rects
+        from pops.runtime._amr_bind_lowering import _physical_patch_rectangles
+        return _physical_patch_rectangles(
+            self._s.patch_boxes(),
+            cells=(self._s.nx(), self._s.ny()),
+            lengths=(self._L, self._Ly),
+            lower=(self._xlo, self._ylo),
+        )
 
     def coarse_local_boxes(self) -> Any:
         """Number of coarse (base) boxes owned by this MPI rank (ADC-319 diagnostic).
@@ -293,11 +291,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         @param name unique name of the block.
         @param model private ``ModelSpec`` engine value composed from native bricks.
         @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
-            (default minmod + rusanov + conservative). Limiter (none / minmod / vanleer / weno5;
-            weno5 = 3
-            ghosts, the coupler allocates its levels at Limiter::n_ghost and the regrid inherits n_grow()),
-            Riemann flux (rusanov / hll / hllc / roe) and reconstructed variables
-            (conservative / primitive).
+            (default minmod + rusanov + conservative). The native seam accepts limiter tokens
+            none / minmod / vanleer / weno5, Riemann fluxes rusanov / hll / hllc / roe, and
+            conservative / primitive variables. This low-level WENO5 stencil route is not an AMR
+            availability guarantee: a resolved Case also requires an owner-qualified coarse/fine
+            provider certified for order 5 and ghost depth 3. The native catalogue contains that
+            provider and resolves it from the reconstruction requirements; no lower-order
+            coarse/fine fallback is permitted.
         @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
             ``pops.lib.time`` factory. It carries cadence, any implicit mask and Newton options,
             threaded to C++. newton_diagnostics is wired for native blocks at every block count;
@@ -315,21 +315,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
-        # wave_speed_cache (ADC-199) is NOT wired on the AMR path (AmrSystem::add_block does not
-        # transport it) : explicit rejection rather than a silently ignored cache.
-        if getattr(spatial, "wave_speed_cache", False):
-            raise ValueError(
-                "AmrSystem.add_block : wave_speed_cache not supported on the AMR path (separate "
-                "work item) ; remove wave_speed_cache, or declare layout=Uniform(...) on the "
-                "pops.Case (the uniform route wires the cache).")
-        # weno_epsilon (ADC-645) is NOT wired on the AMR transport (AmrSystem::add_block does not
-        # transport it; the AMR advance keeps the default kWenoEpsilon): explicit rejection rather
-        # than a silently ignored regulariser. The uniform System path wires it.
+        spatial_options: dict[str, bool | float] = {
+            "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
+        }
         if getattr(spatial, "weno_epsilon", None) is not None:
-            raise ValueError(
-                "AmrSystem.add_block : weno_epsilon (WENO5(epsilon=...)) not supported on the AMR "
-                "path (separate work item) ; remove epsilon, or declare layout=Uniform(...) on the "
-                "pops.Case (the uniform route wires it).")
+            spatial_options["weno_epsilon"] = native_real(
+                spatial.weno_epsilon, where="AmrSystem.add_block.weno_epsilon")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
         # against the block names/roles : empty -> full backward-Euler. Options and diagnostics are
@@ -350,10 +341,11 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(time, "newton_diagnostics", False),
                           native_real(getattr(spatial, "positivity_floor", 0.0),
-                                      where="AmrSystem.add_block.positivity_floor"))
+                                      where="AmrSystem.add_block.positivity_floor"),
+                          **spatial_options)
 
     def field(self, name: Any) -> Any:
-        """Return the solved potential of a NAMED elliptic field (ADC-428) as an (n, n) array.
+        """Return the solved potential of a NAMED elliptic field as a ``(ny, nx)`` array.
 
         Read-back of a second elliptic field declared via m.elliptic_field and lowered on the AMR layout:
         solves the hierarchy fields if needed (so it is current even before any step) then reads the

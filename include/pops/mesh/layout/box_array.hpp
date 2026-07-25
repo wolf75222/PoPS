@@ -16,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -34,10 +35,33 @@ class BoxArray {
   /// Tile the domain into tiles of at most max_grid_size per direction, distributed evenly.
   /// Traversal order is y outer, x inner (deterministic, identical on all ranks).
   static BoxArray from_domain(const Box2D& domain, int max_grid_size) {
-    auto sx = split_range(domain.lo[0], domain.hi[0], max_grid_size);
-    auto sy = split_range(domain.lo[1], domain.hi[1], max_grid_size);
+    return from_domain(domain, max_grid_size, max_grid_size);
+  }
+
+  /// Axis-resolved counterpart used by rectangular Cartesian layouts.  The one-argument overload
+  /// remains exactly equivalent to passing the same limit on both axes.
+  static BoxArray from_domain(const Box2D& domain, int max_grid_size_x, int max_grid_size_y) {
+    if (max_grid_size_x <= 0 || max_grid_size_y <= 0)
+      throw std::invalid_argument(
+          "pops::BoxArray::from_domain: axis grid sizes must be strictly positive");
+    if (domain.empty())
+      return BoxArray{};
+
+    const std::uint64_t count_x = split_count(domain.lo[0], domain.hi[0], max_grid_size_x);
+    const std::uint64_t count_y = split_count(domain.lo[1], domain.hi[1], max_grid_size_y);
+    if (count_y != 0 && count_x > std::numeric_limits<std::uint64_t>::max() / count_y)
+      throw std::length_error("pops::BoxArray::from_domain: tile count overflows uint64_t");
+    const std::uint64_t count = count_x * count_y;
+    if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+      throw std::length_error(
+          "pops::BoxArray::from_domain: tile count exceeds the signed-int box-index contract");
+
     std::vector<Box2D> boxes;
-    boxes.reserve(sx.size() * sy.size());
+    if (count > static_cast<std::uint64_t>(boxes.max_size()))
+      throw std::length_error("pops::BoxArray::from_domain: tile count exceeds vector max_size");
+    auto sx = split_range(domain.lo[0], domain.hi[0], count_x);
+    auto sy = split_range(domain.lo[1], domain.hi[1], count_y);
+    boxes.reserve(static_cast<std::size_t>(count));
     for (auto [ylo, yhi] : sy)
       for (auto [xlo, xhi] : sx)
         boxes.push_back(Box2D{{xlo, ylo}, {xhi, yhi}});
@@ -45,7 +69,12 @@ class BoxArray {
   }
 
   /// Number of boxes in the tiling.
-  int size() const { return static_cast<int>(boxes_.size()); }
+  int size() const {
+    if (boxes_.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      throw std::overflow_error(
+          "pops::BoxArray::size: number of boxes exceeds the signed-int box-index contract");
+    return static_cast<int>(boxes_.size());
+  }
   /// Box at global index i (0 <= i < size()); the index is the box identity throughout the code.
   const Box2D& operator[](int i) const { return boxes_[i]; }
   /// View on the underlying vector (element-by-element equality = same boxes AND same order).
@@ -71,8 +100,12 @@ class BoxArray {
   /// Total number of valid cells (sum of num_cells over all boxes).
   std::int64_t num_cells() const {
     std::int64_t n = 0;
-    for (const auto& b : boxes_)
-      n += b.num_cells();
+    for (const auto& b : boxes_) {
+      const std::int64_t cells = b.num_cells();
+      if (cells > std::numeric_limits<std::int64_t>::max() - n)
+        throw std::overflow_error("pops::BoxArray::num_cells: total cell count exceeds int64_t");
+      n += cells;
+    }
     return n;
   }
 
@@ -203,20 +236,41 @@ class BoxArray {
     return active.empty();
   }
 
+  static std::uint64_t split_count(int lo, int hi, int m) {
+    if (hi < lo)
+      return 0;
+    const auto length = static_cast<std::uint64_t>(static_cast<std::int64_t>(hi) -
+                                                   static_cast<std::int64_t>(lo) + 1);
+    const auto width = static_cast<std::uint64_t>(m);
+    return (length - 1) / width + 1;  // ceil(length / width), without addition overflow
+  }
+
   // Split [lo, hi] into segments of length <= m, distributed evenly:
-  // n = ceil(len/m) segments, the first `rem` of them one notch longer.
-  static std::vector<std::pair<int, int>> split_range(int lo, int hi, int m) {
+  // n = ceil(len/m) segments, the first `rem` of them one notch longer.  All cursor arithmetic is
+  // widened so a final segment ending at INT_MAX never evaluates INT_MAX + 1 in signed int.
+  static std::vector<std::pair<int, int>> split_range(int lo, int hi, std::uint64_t count) {
     std::vector<std::pair<int, int>> segs;
-    int len = hi - lo + 1;
-    if (len <= 0 || m <= 0)
+    if (count == 0)
       return segs;
-    int n = (len + m - 1) / m;
-    int base = len / n, rem = len % n;
-    int cur = lo;
-    for (int k = 0; k < n; ++k) {
-      int l = base + (k < rem ? 1 : 0);
-      segs.push_back({cur, cur + l - 1});
-      cur += l;
+    if (count > static_cast<std::uint64_t>(segs.max_size()))
+      throw std::length_error("pops::BoxArray::from_domain: split count exceeds vector max_size");
+    segs.reserve(static_cast<std::size_t>(count));
+
+    const auto length = static_cast<std::uint64_t>(static_cast<std::int64_t>(hi) -
+                                                   static_cast<std::int64_t>(lo) + 1);
+    const std::uint64_t base = length / count;
+    const std::uint64_t remainder = length % count;
+    std::int64_t cursor = lo;
+    for (std::uint64_t segment = 0; segment < count; ++segment) {
+      const std::int64_t segment_length =
+          static_cast<std::int64_t>(base + (segment < remainder ? 1 : 0));
+      const std::int64_t end = cursor + segment_length - 1;
+      if (cursor < std::numeric_limits<int>::min() || cursor > std::numeric_limits<int>::max() ||
+          end < std::numeric_limits<int>::min() || end > std::numeric_limits<int>::max())
+        throw std::overflow_error(
+            "pops::BoxArray::from_domain: split endpoint exceeds signed-int coordinates");
+      segs.push_back({static_cast<int>(cursor), static_cast<int>(end)});
+      cursor = end + 1;
     }
     return segs;
   }

@@ -108,14 +108,16 @@ class MultiFab {
   /// Marks a DEVICE residence (before a kernel). No-op under unified memory.
   void sync_device() const { pops::sync_device(); }
 
-  /// Fills all cells (valid + ghosts) of every local fab with v. Synchronizes host residence first
-  /// (a kernel may have written these fabs).
+  /// Fills all cells (valid + ghosts) of every local Fab with v through the canonical Kokkos
+  /// execution seam.  Launch every local Fab first and fence once, so CUDA keeps the field resident
+  /// on device while preserving the historical completed-on-return contract.
   void set_val(Real v) {
-    sync_host();  // a kernel may have written these fabs; make the host residence
-                  // valid before the host fill (otherwise a host/kernel write
-                  // race). Under unified memory = a device_fence().
-    for (auto& f : fabs_)
-      f.set_val(v);
+    for (auto& f : fabs_) {
+      const Box2D grown = f.grown_box();
+      if (!grown.empty())
+        for_each_cell(grown, detail::SetFabValueKernel{f.array(), f.ncomp(), v});
+    }
+    device_fence();
   }
 
   /// Internal (ADC-260): memoized halo-exchange schedule used by fill_boundary. Lazily created on

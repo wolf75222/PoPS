@@ -9,8 +9,10 @@
 #include <pops/mesh/layout/refinement.hpp>     // coarsen_index
 #include <pops/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
 #include <pops/numerics/spatial/primitives/finite.hpp>
+#include <pops/numerics/time/amr/prepared_coarse_fine_operator.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source (IMEX implicit step)
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -223,17 +225,258 @@ inline void mf_average_down(const MultiFab& Uf, MultiFab& Uc, int CI0, int CI1, 
   for_each_cell(Box2D{{CI0, CJ0}, {CI1, CJ1}}, AmrAverageDownKernel{f, c, nc});
 }
 
-// First-level coarse-fine helper (review, point ghosts): fills ONE fine ghost
-// cell (i,j) by spatial interpolation (piecewise constant: covering coarse cell)
-// + time (linear between the old/new parent state). frac = temporal position of the
-// substep within the parent step. Centralizes the arithmetic shared by mf_fill_fine_ghosts_t
-// (mono-box), mf_fill_fine_ghosts_multi (multi-box) and mf_fill_fine_ghosts_mb (multi-level):
-// a single formula (1-frac)*co + frac*cn, bit-identical to the three previous bodies.
-inline void fill_cf_ghost_cell(Array4 f, const ConstArray4& co, const ConstArray4& cn, int i, int j,
-                               int nc, Real frac, Real pos_floor = Real(0), int pos_comp = 0) {
-  const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-  for (int k = 0; k < nc; ++k)
-    f(i, j, k) = (1 - frac) * co(ci, cj, k) + frac * cn(ci, cj, k);
+// Fills one fine ghost from a time-interpolated parent state followed by conservative, minmod-limited
+// piecewise-linear spatial reconstruction.  Performing time interpolation first gives the spatial
+// provider one physical parent snapshot at the requested substep time. Ratio two makes the four
+// child offsets +/-1/4, hence their average is exactly the parent mean.
+POPS_HD inline Real coarse_fine_time_value(const ConstArray4& old_value,
+                                           const ConstArray4& new_value, int i, int j,
+                                           int component, Real fraction) {
+  return (Real(1) - fraction) * old_value(i, j, component) +
+         fraction * new_value(i, j, component);
+}
+
+/// One-dimensional weights for the average of either ratio-two child of a coarse cell.
+///
+/// The five inputs are coarse-cell averages on one contiguous stencil.  `parent_position`
+/// identifies the parent within that stencil and therefore also covers the one-sided stencils
+/// required next to a non-periodic boundary.  These dyadic coefficients are obtained by integrating
+/// the unique degree-four polynomial whose five coarse-cell averages match the inputs.  For every
+/// parent position, the arithmetic mean of the two child rows is exactly the Kronecker row of the
+/// parent; the tensor product below consequently conserves every coarse-cell mean, not merely the
+/// global integral.
+POPS_HD inline Real conservative_polynomial5_row_weight(int stencil_index, int a, int b, int c,
+                                                         int d, int e) {
+  switch (stencil_index) {
+    case 0:
+      return Real(a) / Real(128);
+    case 1:
+      return Real(b) / Real(128);
+    case 2:
+      return Real(c) / Real(128);
+    case 3:
+      return Real(d) / Real(128);
+    default:
+      return Real(e) / Real(128);
+  }
+}
+
+POPS_HD inline Real conservative_polynomial5_weight(int parent_position, int child,
+                                                     int stencil_index) {
+  switch (2 * parent_position + child) {
+    case 0:
+      return conservative_polynomial5_row_weight(stencil_index, 193, -122, 88, -38, 7);
+    case 1:
+      return conservative_polynomial5_row_weight(stencil_index, 63, 122, -88, 38, -7);
+    case 2:
+      return conservative_polynomial5_row_weight(stencil_index, 7, 158, -52, 18, -3);
+    case 3:
+      return conservative_polynomial5_row_weight(stencil_index, -7, 98, 52, -18, 3);
+    case 4:
+      return conservative_polynomial5_row_weight(stencil_index, -3, 22, 128, -22, 3);
+    case 5:
+      return conservative_polynomial5_row_weight(stencil_index, 3, -22, 128, 22, -3);
+    case 6:
+      return conservative_polynomial5_row_weight(stencil_index, 3, -18, 52, 98, -7);
+    case 7:
+      return conservative_polynomial5_row_weight(stencil_index, -3, 18, -52, 158, 7);
+    case 8:
+      return conservative_polynomial5_row_weight(stencil_index, -7, 38, -88, 122, 63);
+    default:
+      return conservative_polynomial5_row_weight(stencil_index, 7, -38, 88, -122, 193);
+  }
+}
+
+struct ConservativePolynomial5Stencil {
+  int x_begin;
+  int y_begin;
+  int x_parent_position;
+  int y_parent_position;
+  int x_child;
+  int y_child;
+};
+
+/// Resolve a full degree-four stencil without changing order near physical boundaries.  Periodic
+/// axes retain the centred stencil and read periodic images from the prepared parent carrier;
+/// non-periodic axes shift the same five-cell stencil into the logical domain.  The host-side
+/// preparation contract rejects domains smaller than five cells, so this routine never clamps to a
+/// lower-order formula.
+POPS_HD inline ConservativePolynomial5Stencil conservative_polynomial5_stencil(
+    int i, int j, const Box2D& coarse_domain, const Box2D& fine_domain,
+    Periodicity periodicity) {
+  const int x_fine_offset = i - fine_domain.lo[0];
+  const int y_fine_offset = j - fine_domain.lo[1];
+  const int x_coarse_offset = floor_div(x_fine_offset, kAmrRefRatio);
+  const int y_coarse_offset = floor_div(y_fine_offset, kAmrRefRatio);
+  const int ci = coarse_domain.lo[0] + x_coarse_offset;
+  const int cj = coarse_domain.lo[1] + y_coarse_offset;
+  int x_begin = ci - 2;
+  int y_begin = cj - 2;
+  if (!periodicity.x) {
+    if (x_begin < coarse_domain.lo[0])
+      x_begin = coarse_domain.lo[0];
+    if (x_begin + 4 > coarse_domain.hi[0])
+      x_begin = coarse_domain.hi[0] - 4;
+  }
+  if (!periodicity.y) {
+    if (y_begin < coarse_domain.lo[1])
+      y_begin = coarse_domain.lo[1];
+    if (y_begin + 4 > coarse_domain.hi[1])
+      y_begin = coarse_domain.hi[1] - 4;
+  }
+  return ConservativePolynomial5Stencil{
+      x_begin, y_begin, ci - x_begin, cj - y_begin,
+      x_fine_offset - kAmrRefRatio * x_coarse_offset,
+      y_fine_offset - kAmrRefRatio * y_coarse_offset};
+}
+
+POPS_HD inline Real conservative_polynomial5_value(
+    const ConstArray4& value, int i, int j, int component, const Box2D& coarse_domain,
+    const Box2D& fine_domain, Periodicity periodicity) {
+  const ConservativePolynomial5Stencil stencil =
+      conservative_polynomial5_stencil(i, j, coarse_domain, fine_domain, periodicity);
+  Real result = Real(0);
+  for (int sy = 0; sy < 5; ++sy) {
+    const Real wy = conservative_polynomial5_weight(
+        stencil.y_parent_position, stencil.y_child, sy);
+    Real x_value = Real(0);
+    for (int sx = 0; sx < 5; ++sx)
+      x_value += conservative_polynomial5_weight(
+                     stencil.x_parent_position, stencil.x_child, sx) *
+                 value(stencil.x_begin + sx, stencil.y_begin + sy, component);
+    result += wy * x_value;
+  }
+  return result;
+}
+
+POPS_HD inline Real conservative_polynomial5_time_value(
+    const ConstArray4& old_value, const ConstArray4& new_value, int i, int j, int component,
+    Real fraction, const Box2D& coarse_domain, const Box2D& fine_domain,
+    Periodicity periodicity) {
+  const ConservativePolynomial5Stencil stencil =
+      conservative_polynomial5_stencil(i, j, coarse_domain, fine_domain, periodicity);
+  Real result = Real(0);
+  for (int sy = 0; sy < 5; ++sy) {
+    const Real wy = conservative_polynomial5_weight(
+        stencil.y_parent_position, stencil.y_child, sy);
+    Real x_value = Real(0);
+    for (int sx = 0; sx < 5; ++sx) {
+      const int ci = stencil.x_begin + sx;
+      const int cj = stencil.y_begin + sy;
+      x_value += conservative_polynomial5_weight(
+                     stencil.x_parent_position, stencil.x_child, sx) *
+                 coarse_fine_time_value(old_value, new_value, ci, cj, component, fraction);
+    }
+    result += wy * x_value;
+  }
+  return result;
+}
+
+struct ConservativeLinearCellFillKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  Box2D coarse_domain;
+  Box2D fine_domain;
+  int component;
+  bool fill_valid;
+  bool fill_ghost;
+  Periodicity periodicity;
+
+  POPS_HD void operator()(int i, int j) const {
+    const bool is_valid = valid.contains(i, j);
+    if ((is_valid && !fill_valid) || (!is_valid && !fill_ghost))
+      return;
+    const int ci = coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+    const int cj = coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+    if ((!periodicity.x && (ci < coarse_domain.lo[0] || ci > coarse_domain.hi[0])) ||
+        (!periodicity.y && (cj < coarse_domain.lo[1] || cj > coarse_domain.hi[1])))
+      return;
+    const Real center = coarse(ci, cj, component);
+    Real sx = Real(0), sy = Real(0);
+    if (periodicity.x || (ci > coarse_domain.lo[0] && ci < coarse_domain.hi[0])) {
+      const Real left = center - coarse(ci - 1, cj, component);
+      const Real right = coarse(ci + 1, cj, component) - center;
+      if (left * right > Real(0))
+        sx = ((left < Real(0) ? -left : left) < (right < Real(0) ? -right : right)) ? left
+                                                                                     : right;
+    }
+    if (periodicity.y || (cj > coarse_domain.lo[1] && cj < coarse_domain.hi[1])) {
+      const Real down = center - coarse(ci, cj - 1, component);
+      const Real up = coarse(ci, cj + 1, component) - center;
+      if (down * up > Real(0))
+        sy = ((down < Real(0) ? -down : down) < (up < Real(0) ? -up : up)) ? down : up;
+    }
+    const Real ox = ((i - fine_domain.lo[0]) & 1) ? Real(0.25) : Real(-0.25);
+    const Real oy = ((j - fine_domain.lo[1]) & 1) ? Real(0.25) : Real(-0.25);
+    fine(i, j, component) = center + ox * sx + oy * sy;
+  }
+};
+
+struct ConservativePolynomial5CellFillKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  Box2D coarse_domain;
+  Box2D fine_domain;
+  int component;
+  bool fill_valid;
+  bool fill_ghost;
+  Periodicity periodicity;
+
+  POPS_HD void operator()(int i, int j) const {
+    const bool is_valid = valid.contains(i, j);
+    if ((is_valid && !fill_valid) || (!is_valid && !fill_ghost))
+      return;
+    const int ci =
+        coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+    const int cj =
+        coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+    if ((!periodicity.x && (ci < coarse_domain.lo[0] || ci > coarse_domain.hi[0])) ||
+        (!periodicity.y && (cj < coarse_domain.lo[1] || cj > coarse_domain.hi[1])))
+      return;
+    fine(i, j, component) =
+        conservative_polynomial5_value(coarse, i, j, component, coarse_domain, fine_domain,
+                                       periodicity);
+  }
+};
+
+POPS_HD inline void fill_cf_ghost_cell(Array4 f, const ConstArray4& co, const ConstArray4& cn,
+                                       int i, int j, int nc, Real frac,
+                                       const Box2D& coarse_domain, const Box2D& fine_domain,
+                                       Periodicity periodicity = {},
+                                       Real pos_floor = Real(0),
+                                       int pos_comp = 0) {
+  const int ci =
+      coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+  const int cj =
+      coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+  if ((!periodicity.x && (ci < coarse_domain.lo[0] || ci > coarse_domain.hi[0])) ||
+      (!periodicity.y && (cj < coarse_domain.lo[1] || cj > coarse_domain.hi[1])))
+    return;
+  const std::int64_t local_fine_x =
+      static_cast<std::int64_t>(i) - static_cast<std::int64_t>(fine_domain.lo[0]);
+  const std::int64_t local_fine_y =
+      static_cast<std::int64_t>(j) - static_cast<std::int64_t>(fine_domain.lo[1]);
+  const Real ox = (local_fine_x & std::int64_t{1}) ? Real(0.25) : Real(-0.25);
+  const Real oy = (local_fine_y & std::int64_t{1}) ? Real(0.25) : Real(-0.25);
+  for (int k = 0; k < nc; ++k) {
+    const Real center = coarse_fine_time_value(co, cn, ci, cj, k, frac);
+    Real sx = Real(0), sy = Real(0);
+    if (periodicity.x || (ci > coarse_domain.lo[0] && ci < coarse_domain.hi[0])) {
+      const Real left = center - coarse_fine_time_value(co, cn, ci - 1, cj, k, frac);
+      const Real right = coarse_fine_time_value(co, cn, ci + 1, cj, k, frac) - center;
+      if (left * right > Real(0))
+        sx = (left < Real(0) ? -left : left) < (right < Real(0) ? -right : right) ? left : right;
+    }
+    if (periodicity.y || (cj > coarse_domain.lo[1] && cj < coarse_domain.hi[1])) {
+      const Real down = center - coarse_fine_time_value(co, cn, ci, cj - 1, k, frac);
+      const Real up = coarse_fine_time_value(co, cn, ci, cj + 1, k, frac) - center;
+      if (down * up > Real(0))
+        sy = (down < Real(0) ? -down : down) < (up < Real(0) ? -up : up) ? down : up;
+    }
+    f(i, j, k) = center + ox * sx + oy * sy;
+  }
   // Zhang-Shu positivity floor on the C/F fine GHOST MEAN (ADC-259): clamp the Density role only
   // (pos_comp, resolved on the host by the caller via positivity_comp<Model>) to >= pos_floor. The
   // refined-patch C/F interface is the highest-risk site: reconstruct_pp's order-1 fallback brings a
@@ -248,20 +491,150 @@ inline void fill_cf_ghost_cell(Array4 f, const ConstArray4& co, const ConstArray
     f(i, j, pos_comp) = pos_floor;
 }
 
-// fine ghosts = spatial interp (piecewise constant) + time (linear) from the
-// old/new coarse. frac = temporal position of the substep within the coarse step.
+struct CoarseFineTemporalGhostKernel {
+  Array4 fine;
+  ConstArray4 old_parent;
+  ConstArray4 new_parent;
+  Box2D valid;
+  Box2D coarse_domain;
+  Box2D fine_domain;
+  int components;
+  Real fraction;
+  Real positivity_floor;
+  int positivity_component;
+  Periodicity periodicity;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1])
+      return;
+    fill_cf_ghost_cell(fine, old_parent, new_parent, i, j, components, fraction, coarse_domain,
+                       fine_domain, periodicity, positivity_floor, positivity_component);
+  }
+};
+
+struct ConservativePolynomial5TemporalGhostKernel {
+  Array4 fine;
+  ConstArray4 old_parent;
+  ConstArray4 new_parent;
+  Box2D valid;
+  Box2D coarse_domain;
+  Box2D fine_domain;
+  int components;
+  Real fraction;
+  Real positivity_floor;
+  int positivity_component;
+  Periodicity periodicity;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1])
+      return;
+    const int ci =
+        coarse_domain.lo[0] + floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+    const int cj =
+        coarse_domain.lo[1] + floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+    if ((!periodicity.x && (ci < coarse_domain.lo[0] || ci > coarse_domain.hi[0])) ||
+        (!periodicity.y && (cj < coarse_domain.lo[1] || cj > coarse_domain.hi[1])))
+      return;
+    for (int component = 0; component < components; ++component)
+      fine(i, j, component) = conservative_polynomial5_time_value(
+          old_parent, new_parent, i, j, component, fraction, coarse_domain, fine_domain,
+          periodicity);
+    if (positivity_floor > Real(0) &&
+        fine(i, j, positivity_component) < positivity_floor)
+      fine(i, j, positivity_component) = positivity_floor;
+  }
+};
+
+inline void validate_builtin_ratio2_coarse_fine_transform(
+    const PreparedCoarseFineTransform2D& transform, const Box2D& coarse_domain,
+    const Box2D& fine_domain) {
+  if (transform.refinement_ratio_x != 2 || transform.refinement_ratio_y != 2 ||
+      transform.coarse_origin_x != coarse_domain.lo[0] ||
+      transform.coarse_origin_y != coarse_domain.lo[1] ||
+      transform.fine_origin_x != fine_domain.lo[0] ||
+      transform.fine_origin_y != fine_domain.lo[1] ||
+      fine_domain != coarse_domain.refine(2))
+    throw std::invalid_argument(
+        "builtin conservative coarse/fine operator requires an explicit ratio-2 2D transform");
+}
+
+/// Builtin order-two authority.  This factory is also the explicit compatibility route used by
+/// low-level callers that do not own a transfer registry; production AmrRuntime receives the
+/// registry-selected authority instead.
+inline PreparedCoarseFineOperator prepare_limited_linear_coarse_fine_operator() {
+  PreparedCoarseFineOperator prepared;
+  prepared.parent_reach_x = 1;
+  prepared.parent_reach_y = 1;
+  prepared.minimum_axis_cells_x = 1;
+  prepared.minimum_axis_cells_y = 1;
+  prepared.launch_spatial = [](Array4 fine, ConstArray4 coarse, const Box2D& target,
+                               const Box2D& valid, const Box2D& coarse_domain,
+                               const Box2D& fine_domain,
+                               const PreparedCoarseFineTransform2D& transform, int component,
+                               bool fill_valid, bool fill_ghost, Periodicity periodicity) {
+    validate_builtin_ratio2_coarse_fine_transform(transform, coarse_domain, fine_domain);
+    for_each_cell(target, ConservativeLinearCellFillKernel{
+                              fine, coarse, valid, coarse_domain, fine_domain, component,
+                              fill_valid, fill_ghost, periodicity});
+  };
+  prepared.launch_space_time = [](
+      Array4 fine, ConstArray4 old_parent, ConstArray4 new_parent, const Box2D& target,
+      const Box2D& valid, const Box2D& coarse_domain, const Box2D& fine_domain,
+      const PreparedCoarseFineTransform2D& transform, int components, Real fraction,
+      Real positivity_floor, int positivity_component, Periodicity periodicity) {
+    validate_builtin_ratio2_coarse_fine_transform(transform, coarse_domain, fine_domain);
+    for_each_cell(target, CoarseFineTemporalGhostKernel{
+                              fine, old_parent, new_parent, valid, coarse_domain, fine_domain,
+                              components, fraction, positivity_floor, positivity_component,
+                              periodicity});
+  };
+  return prepared;
+}
+
+inline PreparedCoarseFineOperator prepare_polynomial5_coarse_fine_operator() {
+  PreparedCoarseFineOperator prepared;
+  prepared.parent_reach_x = 4;
+  prepared.parent_reach_y = 4;
+  prepared.minimum_axis_cells_x = 5;
+  prepared.minimum_axis_cells_y = 5;
+  prepared.launch_spatial = [](Array4 fine, ConstArray4 coarse, const Box2D& target,
+                               const Box2D& valid, const Box2D& coarse_domain,
+                               const Box2D& fine_domain,
+                               const PreparedCoarseFineTransform2D& transform, int component,
+                               bool fill_valid, bool fill_ghost, Periodicity periodicity) {
+    validate_builtin_ratio2_coarse_fine_transform(transform, coarse_domain, fine_domain);
+    for_each_cell(target, ConservativePolynomial5CellFillKernel{
+                              fine, coarse, valid, coarse_domain, fine_domain, component,
+                              fill_valid, fill_ghost, periodicity});
+  };
+  prepared.launch_space_time = [](
+      Array4 fine, ConstArray4 old_parent, ConstArray4 new_parent, const Box2D& target,
+      const Box2D& valid, const Box2D& coarse_domain, const Box2D& fine_domain,
+      const PreparedCoarseFineTransform2D& transform, int components, Real fraction,
+      Real positivity_floor, int positivity_component, Periodicity periodicity) {
+    validate_builtin_ratio2_coarse_fine_transform(transform, coarse_domain, fine_domain);
+    for_each_cell(target, ConservativePolynomial5TemporalGhostKernel{
+                              fine, old_parent, new_parent, valid, coarse_domain, fine_domain,
+                              components, fraction, positivity_floor, positivity_component,
+                              periodicity});
+  };
+  return prepared;
+}
+
+// Fine ghosts use time interpolation of the old/new parent snapshots followed by conservative
+// piecewise-linear spatial reconstruction. frac is the temporal position of the substep.
 inline void mf_fill_fine_ghosts_t(MultiFab& Uf, const MultiFab& Uc_old, const MultiFab& Uc_new,
-                                  Real frac, Real pos_floor = Real(0), int pos_comp = 0) {
-  device_fence();  // host read/write on unified memory
+                                  const Box2D& coarse_domain, Real frac,
+                                  Real pos_floor = Real(0), int pos_comp = 0,
+                                  Periodicity periodicity = {}) {
   const int nc = Uf.ncomp();
   Array4 f = Uf.fab(0).array();
   const ConstArray4 co = Uc_old.fab(0).const_array();
   const ConstArray4 cn = Uc_new.fab(0).const_array();
   const Box2D v = Uf.box(0), g = Uf.fab(0).grown_box();
-  for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-    for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-      if (!v.contains(i, j))
-        fill_cf_ghost_cell(f, co, cn, i, j, nc, frac, pos_floor, pos_comp);
+  const Box2D fine_domain = coarse_domain.refine(kAmrRefRatio);
+  for_each_cell(g, CoarseFineTemporalGhostKernel{f, co, cn, v, coarse_domain, fine_domain, nc,
+                                                 frac, pos_floor, pos_comp, periodicity});
 }
 
 }  // namespace pops

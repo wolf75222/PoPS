@@ -54,7 +54,7 @@ def gaussian(n):
 print("== System : FiniteVolume(minmod, hll, primitive) sur isotherme 3 var ==")
 n = 32
 rho0 = gaussian(n)
-sim = System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodicity=(True, True))
 sim.add_equation("ions", iso_model(n0=float(rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
@@ -70,7 +70,7 @@ chk(abs(sim.mass("ions") - m0) < 1e-10 * abs(m0), "masse conservee (periodique)"
 
 # --- 2. hll sur scalaire ExB (pas de wave_speeds) -> erreur explicite ------------
 print("== hll sans wave_speeds (scalaire ExB) : rejet explicite ==")
-sim2 = System(n=16, L=1.0, periodic=True)
+sim2 = System(n=16, L=1.0, periodicity=(True, True))
 scal = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0), source=engine.NoSource(),
                  elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 try:
@@ -81,7 +81,7 @@ except RuntimeError as e:
 
 # --- 3. hllc sur isotherme 3 var -> rejet explicite (Euler 2D seulement) ---------
 print("== hllc sur isotherme 3 var natif : rejet explicite (ni capability HLLC, ni Euler 2D) ==")
-sim3 = System(n=16, L=1.0, periodic=True)
+sim3 = System(n=16, L=1.0, periodicity=(True, True))
 try:
     sim3.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod(), flux=HLLC()))
     chk(False, "hllc sur isotherme 3 var aurait du lever")
@@ -90,14 +90,14 @@ except RuntimeError as e:
 
 # --- 4. AmrSystem : hll + minmod accepte (alignement de surface System/AMR) ------
 print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
-amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=32, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
 amr_rho0 = gaussian(32)
 amr.add_equation("ions", iso_model(n0=float(amr_rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
-amr.set_density("ions", amr_rho0.ravel())
+amr.set_density("ions", amr_rho0)
 m0 = amr.mass("ions")
 for _ in range(3):
     dt = amr.step_cfl(0.4)

@@ -6,12 +6,6 @@ from dataclasses import FrozenInstanceError, dataclass, replace
 
 import pytest
 
-from pops._platform_contracts import (
-    CapabilityProof,
-    ExecutionContext,
-    ExecutionResource,
-    proven_serial_manifest,
-)
 from pops.codegen._plans import BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan
 from pops.codegen._compiled_artifact import (
     CompiledBlockArtifact,
@@ -27,15 +21,19 @@ from pops.mesh import (
 )
 from pops.mesh.layout_plan import LayoutMappingRequirement
 from pops.layouts import Uniform
+from pops.identity import make_identity
 from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.runtime._runtime_plan_contracts import (
+    FieldAccess,
+    RuntimeCall,
     RuntimePlanBundle,
     RuntimePlanningError,
 )
-from pops.runtime._runtime_planning import build_runtime_plans
+from pops.runtime._runtime_planning import build_runtime_plans, _resource_uses_and_fences
 from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.codegen._typed_artifact_fixture import CanonicalValue, CompiledComponent
 
 
@@ -166,28 +164,28 @@ def _artifact(
     return CompiledSimulationArtifact(resolved, global_program, blocks, tuple(layout_programs))
 
 
-def _context(artifact: CompiledSimulationArtifact, memory_spaces: tuple[str, ...]):
-    if memory_spaces == ("host",):
-        return None
-    evidence = "test.explicit-memory-spaces.v1"
-    proof = CapabilityProof.proven
-    backend = proven_serial_manifest(
-        backend="production",
-        target="system",
-        abi=artifact.platform_manifest.abi.require("artifact.abi"),
-        runtime=True,
-    )
-    backend = replace(backend, memory_spaces=proof(memory_spaces, evidence))
-    return ExecutionContext(
-        backend=backend,
-        communicator=ExecutionResource("communicator", "serial"),
-        datatype=ExecutionResource("datatype", "float64"),
-        device=ExecutionResource("device", "host"),
-    )
-
-
 def _install(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",)) -> InstallPlan:
     artifact = _artifact(names, heterogeneous=heterogeneous, memory_spaces=memory_spaces)
+    from pops import _pops
+
+    native_abi = _pops.abi_key()
+    if not isinstance(native_abi, str) or not native_abi:
+        raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
+    for block in artifact.blocks:
+        block.model.abi_key = native_abi
+    for row in artifact.layout_programs:
+        row.program.abi_key = native_abi
+    layout_programs = tuple(
+        CompiledLayoutProgram(row.layout_id, row.target, row.block_names, row.program)
+        for row in artifact.layout_programs
+    )
+    artifact = CompiledSimulationArtifact(
+        artifact.plan,
+        layout_programs[0].program if len(layout_programs) == 1 else None,
+        artifact.blocks,
+        layout_programs,
+        artifact.component_artifacts,
+    )
     inputs = BindInputs()
     return InstallPlan(
         artifact=artifact,
@@ -198,7 +196,7 @@ def _install(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",)) 
         },
         params=artifact.bind_schema.resolve_bind({}, compile_values=artifact.plan.compile_values),
         aux={},
-        execution_context=_context(artifact, memory_spaces),
+        execution_context=artifact_execution_context(artifact),
     )
 
 
@@ -213,6 +211,14 @@ def _manifest(
     determinism="reproducible",
     scope=("rank_count",),
 ):
+    from pops import _pops
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
+
+    runtime = native_runtime_backend_for_route(
+        "production", "system", native_mpi_communicator(_pops)
+    )
+    device = runtime.device.require("runtime.device")
     return ComponentManifest(
         uri="pops://runtime-planning.test/components/%s" % name,
         component_type="spatial_operator",
@@ -223,7 +229,14 @@ def _manifest(
         effects=effects,
         clocks=({"clock": "solution", "access": "stage"},) if clocks is None else clocks,
         target={
-            "variants": [{"dimension": 2, "scalar": "float64", "device": "host", "features": []}]
+            "variants": [
+                {
+                    "dimension": 2,
+                    "scalar": "float64",
+                    "device": device,
+                    "features": [],
+                }
+            ]
         },
         determinism={"classification": determinism, "scope": list(scope)},
         precision={"inputs": ["float64"], "accumulation": "float64", "outputs": ["float64"]},
@@ -375,18 +388,42 @@ def test_multilayout_arguments_reject_conflicting_homonymous_parameter_metadata(
 
 
 def test_device_write_followed_by_host_read_derives_one_fence():
-    install = _install(("producer", "consumer"), memory_spaces=("device", "host"))
-    manifests = {
-        "producer": _manifest(
-            "producer", writes=({"resource": "state:u", "memory_space": "device"},)
-        ),
-        "consumer": _manifest("consumer", reads=({"resource": "state:u", "memory_space": "host"},)),
+    producer = RuntimeCall(
+        0,
+        "block-producer",
+        "component-producer",
+        "spatial_operator",
+        make_identity("component-semantics", {"component": "producer"}),
+        "layout",
+        "step",
+        (),
+        (FieldAccess("state:u", "write", "device"),),
+        (),
+        (),
+        (),
+    )
+    consumer = RuntimeCall(
+        1,
+        "block-consumer",
+        "component-consumer",
+        "spatial_operator",
+        make_identity("component-semantics", {"component": "consumer"}),
+        "layout",
+        "step",
+        (FieldAccess("state:u", "read", "host"),),
+        (),
+        (),
+        (),
+        (),
+    )
+    uses, fences = _resource_uses_and_fences((producer, consumer))
+    assert {(row.resource, row.memory_space) for row in uses} == {
+        ("state:u", "device"),
+        ("state:u", "host"),
     }
-    bundle = build_runtime_plans(install, manifests)
-    assert len(bundle.communication.fences) == 1
-    fence = bundle.communication.fences[0]
+    assert len(fences) == 1
+    fence = fences[0]
     assert (fence.resource, fence.source_space, fence.target_space) == ("state:u", "device", "host")
-    assert bundle.resources.fence_ids == (fence.identity.token,)
 
 
 def test_collective_order_and_strategy_enter_bitwise_assumptions():

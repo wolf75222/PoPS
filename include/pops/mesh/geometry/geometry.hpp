@@ -31,10 +31,14 @@ struct Geometry {
   POPS_HD Real dx() const { return (xhi - xlo) / domain.nx(); }
   /// Grid spacing in y (= (yhi - ylo) / domain.ny()). POPS_HD.
   POPS_HD Real dy() const { return (yhi - ylo) / domain.ny(); }
-  /// Abscissa at the CENTER of cell index i (i = 0 -> xlo + dx/2; defined for negative i). POPS_HD.
-  POPS_HD Real x_cell(int i) const { return xlo + (i + Real(0.5)) * dx(); }
+  /// Abscissa at the CENTER of cell index i (i = domain.lo[0] -> xlo + dx/2). POPS_HD.
+  POPS_HD Real x_cell(int i) const {
+    return xlo + (Real(i) - Real(domain.lo[0]) + Real(0.5)) * dx();
+  }
   /// Ordinate at the CENTER of cell index j. POPS_HD.
-  POPS_HD Real y_cell(int j) const { return ylo + (j + Real(0.5)) * dy(); }
+  POPS_HD Real y_cell(int j) const {
+    return ylo + (Real(j) - Real(domain.lo[1]) + Real(0.5)) * dy();
+  }
 
   /// Geometry refined by ratio r: SAME physical extent, refined index domain (dx -> dx/r).
   Geometry refine(int r) const { return Geometry{domain.refine(r), xlo, xhi, ylo, yhi}; }
@@ -68,14 +72,18 @@ struct PolarGeometry {
   // garbage under nvcc. Pure arithmetic, host bit-identical.
   POPS_HD Real dr() const { return (r_max - r_min) / domain.nx(); }
   POPS_HD Real dtheta() const { return kTwoPi / domain.ny(); }
-  /// Radius at the CENTER of radial cell i (i = 0 -> r_min + dr/2).
-  POPS_HD Real r_cell(int i) const { return r_min + (i + Real(0.5)) * dr(); }
-  /// Radius at radial FACE i (face between cells i-1 and i; i = 0 -> r_min, i = nr -> r_max).
-  POPS_HD Real r_face(int i) const { return r_min + i * dr(); }
-  /// Angle at the CENTER of azimuthal cell j (j = 0 -> dtheta/2).
-  POPS_HD Real theta_cell(int j) const { return (j + Real(0.5)) * dtheta(); }
+  /// Radius at the CENTER of radial cell i (i = domain.lo[0] -> r_min + dr/2).
+  POPS_HD Real r_cell(int i) const {
+    return r_min + (Real(i) - Real(domain.lo[0]) + Real(0.5)) * dr();
+  }
+  /// Radius at radial FACE i (face at i = domain.lo[0] is r_min).
+  POPS_HD Real r_face(int i) const { return r_min + (Real(i) - Real(domain.lo[0])) * dr(); }
+  /// Angle at the CENTER of azimuthal cell j (j = domain.lo[1] -> dtheta/2).
+  POPS_HD Real theta_cell(int j) const {
+    return (Real(j) - Real(domain.lo[1]) + Real(0.5)) * dtheta();
+  }
   /// Angle at azimuthal FACE j (face between cells j-1 and j).
-  POPS_HD Real theta_face(int j) const { return j * dtheta(); }
+  POPS_HD Real theta_face(int j) const { return (Real(j) - Real(domain.lo[1])) * dtheta(); }
 
   // Same annular physical extent, refined index domain (counterpart of Geometry::refine).
   PolarGeometry refine(int r) const { return PolarGeometry{domain.refine(r), r_min, r_max}; }

@@ -21,12 +21,13 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
     PHYSICAL_DEFAULT_GAMMA,
+    numerical_defaults_report,
 )
 from pops.runtime._engine_descriptors import (
     Spatial, Explicit, DivEpsGrad, CompositeRhs, ChargeDensitySource,
 )
 from pops.runtime.routes import (
-    RIEMANN_HLL, check_riemann_capability as _check_riemann_capability,
+    check_riemann_requirement_contract as _check_riemann_requirement_contract,
     resolve as _resolve_route,
 )
 
@@ -185,26 +186,13 @@ class _SystemInstall(_System):
         self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
 
         backend = compiled.backend
-        # Numerical flux guard (ADC-590, shared with AmrSystem.add_equation): generic hllc/roe are
-        # GENERIC-ONLY (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the
-        # explicit euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
-        _check_riemann_capability(spatial.flux, compiled, "add_equation")
-        # ADC-552: cross-check a HLL(waves=<provider>) selection against the model's actual source.
-        if spatial.flux == RIEMANN_HLL and getattr(spatial, "waves_provider", None) is not None:
-            from pops.numerics.riemann.waves import check_hll_waves
-            check_hll_waves(spatial.waves_provider, compiled, "add_equation")
-        # HLL emits wave_speeds from the EXPLICIT typed Model.wave_speeds(...) pair (without 'p':
-        # moments / isothermal, cf. has_wave_speeds) OR as soon as a primitive 'p' is declared. EARLY
-        # guard (like hllc/roe): the C++ requires-gate of make_block only triggers at first use, so we
-        # diagnose at install. getattr default True (CompiledModel ALWAYS sets has_wave_speeds; only a
-        # foreign object hits the default and falls back on the C++ gate).
-        if spatial.flux == RIEMANN_HLL and not getattr(compiled, "has_wave_speeds", True):
-            raise ValueError(
-                "add_equation: riemann 'hll' requires signed wave speeds: declare "
-                "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
-                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
-                "[requested route %s -> %s]"
-                % (getattr(RIEMANN_HLL, "id", "riemann.hll"), RIEMANN_HLL.native_entry))
+        # Descriptor-owned model predicates are shared verbatim with AMR and availability.
+        _check_riemann_requirement_contract(
+            spatial.riemann_capability_contract,
+            compiled,
+            "add_equation",
+            flux=spatial.flux,
+        )
 
         if backend != "production":
             raise ValueError(
@@ -241,14 +229,46 @@ class _SystemInstall(_System):
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
         gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
         gamma = native_real(gamma, where="System.add_equation.gamma")
-        self._s._install_native_block(
-            name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-            gamma, nsub, evolve, nstride, bind_values,
-            native_real(
-                getattr(spatial, "positivity_floor", 0.0),
-                where="System.add_equation.positivity_floor",
-            ),
+        positivity_floor = native_real(
+            getattr(spatial, "positivity_floor", 0.0),
+            where="System.add_equation.positivity_floor",
         )
+        weno_epsilon = getattr(spatial, "weno_epsilon", None)
+        weno_epsilon = (
+            float(numerical_defaults_report()["weno"]["epsilon"])
+            if weno_epsilon is None
+            else native_real(weno_epsilon, where="System.add_equation.weno_epsilon")
+        )
+        if spatial.external_flux_id is not None:
+            if "uniform" not in spatial.external_flux_supported_layouts:
+                raise ValueError(
+                    "add_equation: external Riemann brick %r does not support uniform layouts"
+                    % spatial.external_flux_id)
+            if runtime_names:
+                raise ValueError(
+                    "add_equation: external Riemann ABI v2 does not transport model RuntimeParams")
+            if spatial.external_flux_model_identity != compiled.model_hash:
+                raise ValueError(
+                    "add_equation: external Riemann brick %r targets model %r, not %r"
+                    % (spatial.external_flux_id, spatial.external_flux_model_identity,
+                       compiled.model_hash))
+            if spatial.external_flux_native_abi_key != compiled.abi_key:
+                raise ValueError(
+                    "add_equation: external Riemann brick %r was built for a different native ABI"
+                    % spatial.external_flux_id)
+            self._s._install_external_riemann_block(
+                name, spatial.external_flux_library_path, spatial.external_flux_id,
+                spatial.external_flux_library_sha256, spatial.limiter, spatial.recon,
+                time.kind, gamma, nsub, evolve, nstride, compiled.n_vars, compiled.n_aux,
+                compiled.model_hash,
+                positivity_floor,
+                weno_epsilon,
+            )
+        else:
+            self._s._install_native_block(
+                name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
+                gamma, nsub, evolve, nstride, bind_values, positivity_floor,
+            )
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

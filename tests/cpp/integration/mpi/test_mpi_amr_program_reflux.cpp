@@ -154,7 +154,9 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
     return 1;
   }
 
-  const Box2D parent_domain = Box2D::from_extents(16, 16);
+  // Negative/non-zero origin: the coarse/fine formulas must remain in global index space and may
+  // not silently fall back to zero-based modulo/division.
+  const Box2D parent_domain{{-8, -8}, {7, 7}};
   const BoxArray parent_boxes = BoxArray::from_domain(parent_domain, 8);  // four parent tiles
   const DistributionMapping parent_dm(parent_boxes.size(), np);
   MultiFab parent(parent_boxes, parent_dm, kNcomp, 0);
@@ -162,9 +164,10 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
   MultiFab distributed_fy(face_boxes(parent_boxes, false), parent_dm, kNcomp, 0);
   fill_faces(distributed_fx, distributed_fy);
 
-  // Both fine patches cross the x=8 parent-tile seam.  Global child 1 belongs to rank 1,
+  // Both fine patches cross the x=0 parent-tile seam.  Global child 1 belongs to rank 1,
   // where its local index is 0: this makes local/global index confusion observable.
-  const BoxArray child_boxes(std::vector<Box2D>{Box2D{{8, 0}, {23, 15}}, Box2D{{8, 16}, {23, 31}}});
+  const BoxArray child_boxes(
+      std::vector<Box2D>{Box2D{{-8, -16}, {7, -1}}, Box2D{{-8, 0}, {7, 15}}});
   const DistributionMapping child_dm(child_boxes.size(), np);
   MultiFab child(child_boxes, child_dm, kNcomp, 0);
 
@@ -174,14 +177,20 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
   detail::CoarseRoleScratch scratch;
   reset_copy_schedule_build_count();
   EdgeFlux distributed;
+  scratch.prepare(parent, child, /*replicated=*/false, 7, kNcomp);
+  detail::prepare_edge_flux_coarse_role(distributed, child, kNcomp);
   detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 7, kNcomp,
                                    scratch, distributed);
   fails += copy_schedule_build_count() != 2;
   const std::int64_t hits_after_first = copy_schedule_hit_count();
+  const AllocationEventStats allocations_before_replay = allocation_event_stats();
   detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 7, kNcomp,
                                    scratch, distributed);
+  const AllocationEventStats allocations_after_replay = allocation_event_stats();
+  fails += !(allocations_before_replay == allocations_after_replay);
   fails += copy_schedule_build_count() != 2;
   fails += copy_schedule_hit_count() != hits_after_first + 2;
+  scratch.prepare(parent, child, /*replicated=*/false, 8, kNcomp);
   detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 8, kNcomp,
                                    scratch, distributed);
   fails += copy_schedule_build_count() != 4;
@@ -215,6 +224,8 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
 
   detail::CoarseRoleScratch replicated_scratch;
   EdgeFlux replicated;
+  replicated_scratch.prepare(replicated_parent, child, /*replicated=*/true, 8, kNcomp);
+  detail::prepare_edge_flux_coarse_role(replicated, child, kNcomp);
   detail::sample_coarse_role_strip(replicated_parent, replicated_fx, replicated_fy, child, true, 8,
                                    kNcomp, replicated_scratch, replicated);
   fails += replicated.coarse.size() != static_cast<std::size_t>(child_boxes.size());
@@ -240,6 +251,7 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
   MultiFab fine_fy(face_boxes(child_boxes, false), child_dm, kNcomp, 0);
   fill_faces(fine_fx, fine_fy);
   EdgeFlux fine;
+  detail::prepare_edge_flux_fine_role(fine, child, kNcomp);
   detail::sample_fine_role_strip(child, fine_fx, fine_fy, kNcomp, fine);
   fails += fine.fine.size() != static_cast<std::size_t>(child_boxes.size());
   if (fine.fine.size() == static_cast<std::size_t>(child_boxes.size())) {

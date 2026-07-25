@@ -1,6 +1,6 @@
 // ADC-296 : critere de regrid AMR configurable par NOM de variable ou ROLE physique, au-dela de la
-// seule composante 0. La couche moteur (TagPredicate per-bloc, union des tags) est deja generique ;
-// seule la facade epinglait `a(i, j, 0) > seuil`. set_refinement(seuil, variable, role) resout, PAR
+// seule composante 0. La couche moteur execute un graphe prepare sur Kokkos ;
+// set_refinement(seuil, variable, role) resout, PAR
 // BLOC, le selecteur en une composante (STRICT : un bloc sans le nom/role demande leve une erreur au
 // build, jamais de repli silencieux vers la composante 0), defaut (selecteur vide) = composante 0
 // bit-identique.
@@ -93,7 +93,7 @@ static std::vector<PatchBox> run_case(int N, double thr, const std::string& vari
   AmrSystemConfig cfg;
   cfg.n = N;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 1;  // regrid a chaque pas -> le patch suit le champ tague des le 1er pas
   AmrSystem sim(cfg);
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
@@ -191,23 +191,22 @@ TEST(test_amr_regrid_variable, Runs) {
   // ============================================================================================
   EXPECT_THROW(run_case(N, 6.0, "", "temperature", s_energy), std::runtime_error)
       << "absent_role_throws_at_build_no_silent_comp0";
-  // SINGLE-BLOCK : le selecteur n'est cable que sur le moteur multi-blocs ; un bloc unique + selecteur
-  // est REFUSE au build (pas de repli silencieux vers la composante 0), comme le masque IMEX mono-bloc.
-  EXPECT_THROW(
+  // SINGLE-BLOCK : le meme descripteur VariableSet alimente le graphe prepare ; le role est donc
+  // supporte sans repli vers la composante 0.
+  EXPECT_NO_THROW(
       {
         AmrSystemConfig cfg;
         cfg.n = N;
         cfg.L = 1.0;
         cfg.regrid_every = 1;
         AmrSystem sim(cfg);
+        sim.set_temporal_relations({2}, {1}, {"integral_only"});
         sim.add_block("solo", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
         sim.set_poisson("charge_density", "geometric_mg", "periodic");
-        sim.set_refinement(6.0, "", "energy");  // bloc unique + role -> refus au build
+        sim.set_refinement(6.0, "", "energy");
         sim.set_density("solo", std::vector<double>(static_cast<std::size_t>(N) * N, 1.0));
-        (void)sim.n_patches();  // declenche ensure_built -> refus
-      },
-      std::runtime_error)
-      << "single_block_selector_rejected_at_build";
+        (void)sim.n_patches();
+      }) << "single_block_selector_uses_prepared_runtime_descriptor";
   EXPECT_THROW(
       {
         AmrSystemConfig cfg;

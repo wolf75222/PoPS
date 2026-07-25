@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -17,10 +18,13 @@
 #include <pops/mesh/layout/refinement.hpp>  // parallel_copy
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/load_balance.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <stdexcept>
 
 using namespace pops;
 
@@ -80,15 +84,23 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     MultiFab dst(dba, ddm, ncomp, 0);
     set_valid(src);
     reset_copy_schedule_build_count();
-    for (int k = 0; k < K; ++k) {
+    dst.set_val(-1);
+    parallel_copy(dst, src);  // cold materialization of schedule + pinned communication lease
+    const AllocationEventStats before_hot = allocation_event_stats();
+    for (int k = 1; k < K; ++k) {
       dst.set_val(-1);  // reset dst so each copy is exercised fresh
       parallel_copy(dst, src);
     }
+    const AllocationEventStats after_hot = allocation_event_stats();
     chk(count_wrong(dst) == 0, "cache_on_correct");
     chk(copy_schedule_build_count() == 1, "cache_built_once");
     chk(dst.copy_cache().size() == 1, "cache_one_entry");
     chk(copy_schedule_miss_count() == 1, "one_miss");
     chk(copy_schedule_hit_count() == K - 1, "k_minus_one_hits");
+    chk(after_hot.communication_calls == before_hot.communication_calls,
+        "hot_path_reuses_pinned_buffers");
+    chk(dst.copy_cache().exchange_pool_size() == (np > 1 ? 1u : 0u),
+        "one_world_communicator_lease");
   }
 
   // (1') cache ON == cache OFF (clear() force la reconstruction a chaque appel) : BIT-IDENTIQUE.
@@ -173,6 +185,187 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     parallel_copy(cp, src);  // shared cache HIT -> no rebuild
     chk(copy_schedule_build_count() == 0, "copy_shares_cache_no_rebuild");
     chk(count_wrong(cp) == 0, "copy_correct");
+  }
+
+#ifdef POPS_HAS_MPI
+  // The same field pair on two duplicated execution lanes receives independent schedule/buffer
+  // identities. Repeating either lane is allocation-free and reuses only its own prepared lease.
+  if (np > 1) {
+    MultiFab src(sba, sdm, ncomp, 0);
+    MultiFab dst(dba, ddm, ncomp, 0);
+    set_valid(src);
+    ExecutionLane lane_a = ExecutionLane::duplicate_world_collectively("copy-cache-lane-a");
+    ExecutionLane lane_b = ExecutionLane::duplicate_world_collectively("copy-cache-lane-b");
+    reset_copy_schedule_build_count();
+    parallel_copy(dst, src);
+    parallel_copy(dst, src, lane_a);
+    parallel_copy(dst, src, lane_b);
+    const AllocationEventStats before_hot = allocation_event_stats();
+    parallel_copy(dst, src);
+    parallel_copy(dst, src, lane_a);
+    parallel_copy(dst, src, lane_b);
+    const AllocationEventStats after_hot = allocation_event_stats();
+    chk(copy_schedule_build_count() == 3, "one_schedule_per_communicator_context");
+    chk(dst.copy_cache().size() == 3, "three_communicator_schedule_entries");
+    chk(dst.copy_cache().exchange_pool_size() == 3, "three_communicator_buffer_leases");
+    chk(after_hot.communication_calls == before_hot.communication_calls,
+        "multi_lane_hot_path_reuses_pinned_buffers");
+    chk(count_wrong(dst) == 0, "multi_lane_copy_correct");
+  }
+#endif
+
+  // A rank-local contract error is converted into one collective exception before any request is
+  // posted. All peers remain live and a subsequent valid redistribution succeeds.
+  if (np > 1) {
+    MultiFab src(sba, sdm, ncomp, 0);
+    MultiFab dst(dba, ddm, me == 0 ? ncomp + 1 : ncomp, 0);
+    set_valid(src);
+    bool rejected = false;
+    try {
+      parallel_copy(dst, src);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    chk(all_reduce_sum(rejected ? 1L : 0L) == np,
+        "rank_local_width_error_rejected_collectively");
+
+    MultiFab valid_dst(dba, ddm, ncomp, 0);
+    parallel_copy(valid_dst, src);
+    chk(count_wrong(valid_dst) == 0, "communicator_live_after_collective_rejection");
+
+    const BoxArray divergent_boxes =
+        me == 0 ? BoxArray::from_domain(dom, 8) : BoxArray::from_domain(dom, 16);
+    MultiFab divergent_src(divergent_boxes, make_sfc_distribution(divergent_boxes, np), ncomp, 0);
+    MultiFab common_dst(dba, ddm, ncomp, 0);
+    set_valid(divergent_src);
+    rejected = false;
+    try {
+      parallel_copy(common_dst, divergent_src);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    chk(all_reduce_sum(rejected ? 1L : 0L) == np,
+        "rank_local_layout_error_rejected_collectively");
+    parallel_copy(common_dst, src);
+    chk(count_wrong(common_dst) == 0, "communicator_live_after_layout_rejection");
+  }
+
+  // The portable MPI count guard is independent of storage allocation: an oversized synthetic
+  // schedule is rejected before any Fab or communication buffer needs to exist.
+  {
+    bool rejected = false;
+    try {
+      (void)detail::checked_parallel_copy_payload_count(
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()), 2);
+    } catch (const std::overflow_error&) {
+      rejected = true;
+    }
+    chk(rejected, "portable_int_count_guard");
+  }
+
+  // A periodic parent carrier owns its image catalogue and warmed redistribution buffers across
+  // stage replays. Cover a rectangular, non-zero-origin domain and deep images on both axes; the
+  // hot path must allocate neither Fab storage nor communication storage.
+  {
+    const Box2D periodic_domain{{-11, 7}, {20, 22}};  // 32 x 16
+    const BoxArray periodic_source_boxes = BoxArray::from_domain(periodic_domain, 8);
+    const DistributionMapping periodic_source_mapping =
+        make_sfc_distribution(periodic_source_boxes, np);
+    const BoxArray carrier_boxes({Box2D{{-45, -10}, {54, 39}}});
+    const DistributionMapping carrier_mapping = make_sfc_distribution(carrier_boxes, np);
+    MultiFab periodic_source(periodic_source_boxes, periodic_source_mapping, ncomp, 0);
+    MultiFab carrier(carrier_boxes, carrier_mapping, ncomp, 0);
+    auto periodic_value = [](int i, int j, int component) {
+      return Real(3 * i - 5 * j + 1000 * component);
+    };
+    for (int local = 0; local < periodic_source.local_size(); ++local) {
+      Fab2D& fab = periodic_source.fab(local);
+      const Box2D box = fab.box();
+      for (int component = 0; component < ncomp; ++component)
+        for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+          for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+            fab(i, j, component) = periodic_value(i, j, component);
+    }
+    const CommunicatorView communicator = world_communicator_view();
+    auto periodic_plan = PreparedPeriodicCopyPlan::prepare(
+        carrier, periodic_source, periodic_domain, Periodicity{true, true},
+        /*topology_generation=*/17, communicator);
+    const AllocationEventStats before_replay = allocation_event_stats();
+    for (int replay = 0; replay < 3; ++replay)
+      periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17,
+                          communicator);
+    const AllocationEventStats after_replay = allocation_event_stats();
+    chk(after_replay == before_replay, "prepared_periodic_copy_hot_path_allocation_free");
+
+    auto wrap = [](int index, int lo, int extent) {
+      int relative = (index - lo) % extent;
+      if (relative < 0)
+        relative += extent;
+      return lo + relative;
+    };
+    long periodic_wrong = 0;
+    carrier.sync_host();
+    for (int local = 0; local < carrier.local_size(); ++local) {
+      const Fab2D& fab = carrier.fab(local);
+      const Box2D box = fab.box();
+      for (int component = 0; component < ncomp; ++component)
+        for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+          for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+            const int wrapped_i = wrap(i, periodic_domain.lo[0], periodic_domain.nx());
+            const int wrapped_j = wrap(j, periodic_domain.lo[1], periodic_domain.ny());
+            if (fab(i, j, component) != periodic_value(wrapped_i, wrapped_j, component))
+              ++periodic_wrong;
+          }
+    }
+    chk(all_reduce_sum(periodic_wrong) == 0,
+        "prepared_periodic_copy_rectangular_nonzero_origin_exact");
+
+    bool generation_rejected = false;
+    try {
+      periodic_plan.apply(carrier, periodic_source,
+                          me == 0 ? 18u : 17u, communicator);
+    } catch (const std::invalid_argument&) {
+      generation_rejected = true;
+    }
+    chk(all_reduce_sum(generation_rejected ? 1L : 0L) == np,
+        "prepared_periodic_copy_generation_rejected_collectively");
+    periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17,
+                        communicator);
+
+    const BoxArray overlapping_source_boxes(
+        {periodic_domain, Box2D{{-3, 10}, {4, 14}}});
+    MultiFab overlapping_source(
+        overlapping_source_boxes,
+        make_sfc_distribution(overlapping_source_boxes, np), ncomp, 0);
+    MultiFab overlap_destination(carrier_boxes, carrier_mapping, ncomp, 0);
+    bool overlap_rejected = false;
+    try {
+      (void)PreparedPeriodicCopyPlan::prepare(
+          overlap_destination, overlapping_source, periodic_domain,
+          Periodicity{true, true}, /*topology_generation=*/19, communicator);
+    } catch (const std::invalid_argument&) {
+      overlap_rejected = true;
+    }
+    chk(all_reduce_sum(overlap_rejected ? 1L : 0L) == np,
+        "prepared_periodic_copy_rejects_ambiguous_source_images");
+
+    const BoxArray incomplete_source_boxes(
+        {Box2D{{periodic_domain.lo[0], periodic_domain.lo[1]},
+               {periodic_domain.hi[0] - 1, periodic_domain.hi[1]}}});
+    MultiFab incomplete_source(
+        incomplete_source_boxes,
+        make_sfc_distribution(incomplete_source_boxes, np), ncomp, 0);
+    MultiFab incomplete_destination(carrier_boxes, carrier_mapping, ncomp, 0);
+    bool incomplete_rejected = false;
+    try {
+      (void)PreparedPeriodicCopyPlan::prepare(
+          incomplete_destination, incomplete_source, periodic_domain,
+          Periodicity{true, true}, /*topology_generation=*/20, communicator);
+    } catch (const std::invalid_argument&) {
+      incomplete_rejected = true;
+    }
+    chk(all_reduce_sum(incomplete_rejected ? 1L : 0L) == np,
+        "prepared_periodic_copy_rejects_incomplete_source_coverage");
   }
 
   const long gfails = all_reduce_sum(fails);

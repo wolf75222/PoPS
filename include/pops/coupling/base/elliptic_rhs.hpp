@@ -4,7 +4,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/spatial_operator.hpp>  // load_state
+#include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state
 
 #include <cstddef>
 #include <stdexcept>
@@ -35,6 +35,18 @@ struct SingleModelEllipticRhsKernel {
   }
 };
 
+/// Geometry-independent accumulation of a model's pointwise elliptic source.
+template <class Model>
+struct AddModelEllipticRhsKernel {
+  Model model;
+  ConstArray4 state;
+  Array4 rhs;
+
+  POPS_HD void operator()(int i, int j) const {
+    rhs(i, j, 0) += model.elliptic_rhs(load_state<Model>(state, i, j));
+  }
+};
+
 }  // namespace detail
 
 /// SINGLE-model RHS assembler: rhs(.,.,0) = model.elliptic_rhs(U) over the valid cells.
@@ -54,6 +66,20 @@ struct SingleModelEllipticRhs {
     }
   }
 };
+
+/// Accumulate one arbitrary model contribution into an exactly co-distributed scalar RHS.
+/// Geometry and coordinate metrics belong to the elliptic operator, not to this pointwise source.
+template <class Model>
+inline void add_model_elliptic_rhs(const Model& model, const MultiFab& state, MultiFab& rhs) {
+  if (state.box_array().boxes() != rhs.box_array().boxes() ||
+      state.dmap().ranks() != rhs.dmap().ranks() || rhs.ncomp() != 1)
+    throw std::invalid_argument(
+        "add_model_elliptic_rhs requires an exactly co-distributed scalar destination");
+  for (int local = 0; local < rhs.local_size(); ++local)
+    for_each_cell(rhs.box(local), detail::AddModelEllipticRhsKernel<Model>{
+                                          model, state.fab(local).const_array(),
+                                          rhs.fab(local).array()});
+}
 
 namespace detail {
 

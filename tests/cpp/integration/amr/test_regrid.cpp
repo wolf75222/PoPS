@@ -4,10 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include "load_balance_test_authority.hpp"
+
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/tagging/cluster.hpp>
+#include <pops/amr/tagging/clustering_provider.hpp>
 #include <pops/amr/regridding/regrid.hpp>
-#include <pops/coupling/amr/amr_coupler_mp.hpp>
 #include <pops/coupling/amr/amr_regrid_coupler.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -15,6 +17,10 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 using namespace pops;
 
@@ -26,38 +32,56 @@ double feature(int i, int j) {
 }
 
 auto threshold_crit() {
-  return [](const ConstArray4& a, int i, int j) { return a(i, j, 0) > 0.5; };
+  return [] POPS_HD(const ConstArray4& a, int i, int j) { return a(i, j, 0) > 0.5; };
 }
 
 bool close(Real x, Real y) {
   return std::fabs(x - y) < 1e-9;
 }
 
-struct DormantFineScalar {
-  using State = StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
+void regrid_test_hierarchy(AmrHierarchy& hierarchy, int tag_buffer) {
+  const amr::BergerRigoutsosProvider clustering(ClusterParams{});
+  const RegridProlongation prolongation = [](const MultiFab& coarse, MultiFab& fine,
+                                             int, int refinement_ratio, bool,
+                                             const CommunicatorView& communicator) {
+    interpolate(coarse, fine, refinement_ratio, communicator);
+  };
+  const HierarchyRegridOptions options{/*tag_buffer=*/tag_buffer,
+                                       /*nesting_margin=*/0,
+                                       RegridPeriodicity{false, false}, nullptr};
+  (void)regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, clustering,
+                               prolongation, world_communicator_view());
+}
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+class FixedClusteringProvider final : public amr::ClusteringProvider {
+ public:
+  explicit FixedClusteringProvider(std::vector<Box2D> boxes, bool fail = false)
+      : boxes_(std::move(boxes)), fail_(fail) {}
+
+  std::vector<Box2D> cluster(const TagBox&) const override {
+    if (fail_)
+      throw std::runtime_error("synthetic clustering failure");
+    return boxes_;
+  }
+
+ private:
+  std::vector<Box2D> boxes_;
+  bool fail_ = false;
 };
 
 }  // namespace
 
 TEST(test_regrid, Runs) {
   Box2D cdom = Box2D::from_extents(16, 16);
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
 
   // --- regrid sans buffer : box fine = refine de la feature ---
   {
-    AmrHierarchy h(cdom, 16, 1, 1, 2);
+    AmrHierarchy h(cdom, 16, 1, 1, load_balance, 2);
     Array4 a = h.data(0).fab(0).array();
     for_each_cell(cdom, [a](int i, int j) { a(i, j, 0) = feature(i, j); });
 
-    RegridParams rp;
-    rp.n_buffer = 0;
-    regrid_level(h, 0, threshold_crit(), rp);
+    regrid_test_hierarchy(h, /*tag_buffer=*/0);
 
     EXPECT_EQ(h.num_levels(), 2) << "level_created";
     EXPECT_TRUE(h.domain(1) == cdom.refine(2)) << "fine_domain";
@@ -72,226 +96,259 @@ TEST(test_regrid, Runs) {
 
   // --- buffer dilate la region taguee ---
   {
-    AmrHierarchy h(cdom, 16, 1, 1, 2);
+    AmrHierarchy h(cdom, 16, 1, 1, load_balance, 2);
     Array4 a = h.data(0).fab(0).array();
     for_each_cell(cdom, [a](int i, int j) { a(i, j, 0) = feature(i, j); });
 
-    RegridParams rp;
-    rp.n_buffer = 1;
-    regrid_level(h, 0, threshold_crit(), rp);
+    regrid_test_hierarchy(h, /*tag_buffer=*/1);
     // tags [6..9] dilates -> [5..10], refine -> [10..21]
     EXPECT_TRUE(h.boxes(1)[0] == (Box2D{{10, 10}, {21, 21}})) << "buffered_box";
   }
 
   // --- re-regrid : l'ancien fin est preserve la ou il recouvre ---
   {
-    AmrHierarchy h(cdom, 16, 1, 1, 2);
+    AmrHierarchy h(cdom, 16, 1, 1, load_balance, 2);
     Array4 a = h.data(0).fab(0).array();
     for_each_cell(cdom, [a](int i, int j) { a(i, j, 0) = feature(i, j); });
 
-    RegridParams rp;
-    rp.n_buffer = 0;
-    regrid_level(h, 0, threshold_crit(), rp);
+    regrid_test_hierarchy(h, /*tag_buffer=*/0);
     h.data(1).fab(0)(12, 12, 0) = 999.0;  // marqueur dans le fin
 
-    regrid_level(h, 0, threshold_crit(), rp);  // memes boxes
+    regrid_test_hierarchy(h, /*tag_buffer=*/0);  // memes boxes
     EXPECT_TRUE(close(h.data(1).fab(0)(12, 12, 0), 999.0)) << "old_fine_preserved";
     EXPECT_TRUE(close(h.data(1).fab(0)(19, 19, 0), 1.0)) << "rest_interpolated";
   }
 
   // --- tagging vide : le niveau fin disparait ---
   {
-    AmrHierarchy h(cdom, 16, 1, 1, 2);
+    AmrHierarchy h(cdom, 16, 1, 1, load_balance, 2);
     Array4 a = h.data(0).fab(0).array();
     for_each_cell(cdom, [a](int i, int j) { a(i, j, 0) = feature(i, j); });
-    regrid_level(h, 0, threshold_crit(), RegridParams{});
+    regrid_test_hierarchy(h, /*tag_buffer=*/1);
     EXPECT_EQ(h.num_levels(), 2) << "before_clear";
 
     h.data(0).set_val(0.0);  // plus aucune cellule au-dessus du seuil
-    regrid_level(h, 0, threshold_crit(), RegridParams{});
+    regrid_test_hierarchy(h, /*tag_buffer=*/1);
     EXPECT_EQ(h.num_levels(), 1) << "fine_removed";
   }
 }
 
-TEST(test_regrid, RejectsAProviderLayoutThatBreaksProperNesting) {
-  const Box2D parent_domain = Box2D::from_extents(32, 32);
-  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
-  // Coarse footprint [14..17] crosses the parent-patch join. No single parent can supply the
-  // resolved one-cell stencil halo, even though the two parent patches are adjacent.
-  const BoxArray invalid(std::vector<Box2D>{Box2D{{28, 16}, {35, 31}}});
-  EXPECT_THROW(
-      validate_fine_layout_proper_nesting(invalid, parents, parent_domain, /*refinement_ratio=*/2,
-                                          /*margin=*/1),
-      std::runtime_error);
+TEST(test_regrid, HierarchyPublicationIsAtomicAcrossProviderAndTransferFailures) {
+  const Box2D domain = Box2D::from_extents(16, 16);
+  AmrHierarchy hierarchy(domain, 16, 1, 1,
+                         test::prepare_test_space_filling_curve_load_balance(), 2);
+  Array4 values = hierarchy.data(0).fab(0).array();
+  for_each_cell(domain,
+                [values](int i, int j) { values(i, j, 0) = feature(i, j); });
+  regrid_test_hierarchy(hierarchy, /*tag_buffer=*/0);
+  ASSERT_EQ(hierarchy.num_levels(), 2);
+  hierarchy.data(1).fab(0)(12, 12, 0) = 1234.0;
+  const std::vector<Box2D> stable_boxes = hierarchy.boxes(1).boxes();
+
+  const HierarchyRegridOptions options{/*tag_buffer=*/0,
+                                       /*nesting_margin=*/0,
+                                       RegridPeriodicity{false, false}, nullptr};
+  const RegridProlongation interpolation = [](const MultiFab& coarse, MultiFab& fine,
+                                              int, int refinement_ratio, bool,
+                                              const CommunicatorView& communicator) {
+    interpolate(coarse, fine, refinement_ratio, communicator);
+  };
+  const FixedClusteringProvider provider_failure({}, true);
+  EXPECT_THROW(regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options,
+                                      provider_failure, interpolation,
+                                      world_communicator_view()),
+               std::runtime_error);
+  EXPECT_EQ(hierarchy.num_levels(), 2);
+  EXPECT_EQ(hierarchy.boxes(1).boxes(), stable_boxes);
+  EXPECT_DOUBLE_EQ(hierarchy.data(1).fab(0)(12, 12, 0), 1234.0);
+
+  const FixedClusteringProvider valid({Box2D{{6, 6}, {9, 9}}});
+  const RegridProlongation transfer_failure = [](const MultiFab&, MultiFab&, int, int, bool,
+                                                  const CommunicatorView&) {
+    throw std::runtime_error("synthetic transfer failure");
+  };
+  EXPECT_THROW(regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, valid,
+                                      transfer_failure, world_communicator_view()),
+               std::runtime_error);
+  EXPECT_EQ(hierarchy.num_levels(), 2);
+  EXPECT_EQ(hierarchy.boxes(1).boxes(), stable_boxes);
+  EXPECT_DOUBLE_EQ(hierarchy.data(1).fab(0)(12, 12, 0), 1234.0);
 }
 
-TEST(test_regrid, ThirdLevelClusteringStaysInsideOneParentPatch) {
+TEST(test_regrid, RejectsNegativeTagGrowthWithoutChangingInput) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  TagBox tags(domain);
+  tags(1, 1) = 1;
+  EXPECT_THROW((void)grow_tags(tags, -1, domain), std::invalid_argument);
+  EXPECT_EQ(tags.count(), 1);
+  EXPECT_TRUE(tags.tagged(1, 1));
+}
+
+TEST(test_regrid, TaggingRejectsLayoutsThatCouldWriteOutsideOrRaceTheMask) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const auto criterion = threshold_crit();
+  MultiFab outside(BoxArray({Box2D{{3, 0}, {4, 1}}}),
+                   DistributionMapping(std::vector<int>{0}), 1, 0);
+  EXPECT_THROW((void)tag_cells(outside, domain, criterion), std::invalid_argument);
+
+  const BoxArray overlapping(
+      {Box2D{{0, 0}, {2, 3}}, Box2D{{2, 0}, {3, 3}}});
+  MultiFab raced(overlapping, DistributionMapping(std::vector<int>{0, 0}), 1, 0);
+  EXPECT_THROW((void)tag_cells(raced, domain, criterion), std::invalid_argument);
+
+  MultiFab empty;
+  EXPECT_THROW((void)tag_cells(empty, domain, criterion), std::invalid_argument);
+}
+
+TEST(test_regrid, ProperNestingUsesTheParentLevelUnionAcrossPatchSeams) {
+  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
+  // Coarse footprint [14..17] crosses an arbitrary parent-patch join. The adjacent patches jointly
+  // supply its one-cell stencil halo, so tiling the same parent level differently cannot change
+  // admissibility.
+  const BoxArray child(std::vector<Box2D>{Box2D{{28, 16}, {35, 31}}});
+  EXPECT_NO_THROW(
+      validate_fine_layout_proper_nesting(child, parents, /*refinement_ratio=*/2, /*margin=*/1));
+}
+
+TEST(test_regrid, ThirdLevelClusteringUsesTheParentLevelCoverage) {
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   const Box2D parent_domain = Box2D::from_extents(32, 32);
   const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
   TagBox tags(parent_domain);
-  // Tags touch both sides of the join. A domain-wide cluster would bridge the patches; the
-  // provider must instead return independently nested children.
+  // Tags touch both sides of the join. Clustering may bridge that seam because the parent level is
+  // continuous there; it must still remain inside the union coverage plus resolved margin.
   for (int j = 10; j <= 18; ++j)
     for (int i = 13; i <= 18; ++i)
       tags(i, j) = 1;
 
   auto [children, mapping] = regrid_compute_fine_layout(
       std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
-      /*coarse_replicated=*/true, ClusterParams{}, /*refinement_ratio=*/2, &parents);
+      /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
+      world_communicator_view(), /*refinement_ratio=*/2, &parents);
 
   ASSERT_GT(children.size(), 0);
   EXPECT_EQ(mapping.size(), children.size());
   EXPECT_NO_THROW(
-      validate_fine_layout_proper_nesting(children, parents, parent_domain,
-                                          /*refinement_ratio=*/2, /*margin=*/1));
+      validate_fine_layout_proper_nesting(children, parents, /*refinement_ratio=*/2, /*margin=*/1));
 }
 
-TEST(test_regrid, BoundaryTagsAreNotDiscardedByNestingMargin) {
-  const Box2D parent_domain = Box2D::from_extents(16, 16);
-  TagBox tags(parent_domain);
-  tags(0, 0) = 1;
-  tags(15, 15) = 1;
-
-  auto [children, mapping] = regrid_compute_fine_layout(
-      grow_tags(tags, /*n=*/1, parent_domain), parent_domain, /*parent_level=*/0,
-      /*margin=*/1, /*coarse_replicated=*/true, ClusterParams{}, /*refinement_ratio=*/2);
-
-  ASSERT_GT(children.size(), 0);
-  EXPECT_EQ(mapping.size(), children.size());
-  bool covers_lower_boundary = false;
-  bool covers_upper_boundary = false;
-  for (int box = 0; box < children.size(); ++box) {
-    covers_lower_boundary =
-        covers_lower_boundary || children[box].contains(Box2D{{0, 0}, {1, 1}});
-    covers_upper_boundary =
-        covers_upper_boundary || children[box].contains(Box2D{{30, 30}, {31, 31}});
-  }
-  EXPECT_TRUE(covers_lower_boundary) << "lower physical boundary tag survives";
-  EXPECT_TRUE(covers_upper_boundary) << "upper physical boundary tag survives";
-}
-
-TEST(test_regrid, PeriodicTagBufferWrapsAcrossDomainBoundaries) {
-  const Box2D parent_domain = Box2D::from_extents(16, 12);
-  TagBox tags(parent_domain);
-  tags(15, 6) = 1;
-  tags(8, 11) = 1;
-
-  const TagBox periodic_x =
-      grow_tags(tags, /*n=*/1, parent_domain, /*periodic_x=*/true, /*periodic_y=*/false);
-  EXPECT_EQ(periodic_x(0, 6), 1) << "right-edge x tag wraps to the left edge";
-  EXPECT_EQ(periodic_x(8, 0), 0) << "non-periodic y growth remains clipped";
-
-  const TagBox periodic_xy =
-      grow_tags(tags, /*n=*/1, parent_domain, /*periodic_x=*/true, /*periodic_y=*/true);
-  EXPECT_EQ(periodic_xy(0, 6), 1) << "right-edge x tag wraps to the left edge";
-  EXPECT_EQ(periodic_xy(8, 0), 1) << "top-edge y tag wraps to the bottom edge";
-}
-
-TEST(test_regrid, ParentPatchBoundaryKeepsMarginExceptAtPhysicalBoundary) {
+TEST(test_regrid, ThirdLevelTagsAreProjectedOntoTheProperlyNestedParentRegion) {
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   const Box2D parent_domain = Box2D::from_extents(32, 32);
-  const BoxArray parents(std::vector<Box2D>{Box2D{{0, 0}, {15, 31}}, Box2D{{16, 0}, {31, 31}}});
+  const BoxArray parents(std::vector<Box2D>{Box2D{{4, 4}, {27, 27}}});
   TagBox tags(parent_domain);
-  tags(0, 7) = 1;
-  tags(15, 7) = 1;
-  tags(31, 7) = 1;
+  // A buffered tagging mask may extend to the edge of a partial parent level. The edge request
+  // cannot support a one-cell coarse stencil and must remain represented by the parent; the
+  // interior request is admissible and must still create a child patch.
+  tags(4, 12) = 1;
+  tags(6, 12) = 1;
 
   auto [children, mapping] = regrid_compute_fine_layout(
-      grow_tags(tags, /*n=*/0, parent_domain), parent_domain, /*parent_level=*/1,
-      /*margin=*/1, /*coarse_replicated=*/true, ClusterParams{}, /*refinement_ratio=*/2,
-      &parents);
+      std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
+      /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
+      world_communicator_view(), /*refinement_ratio=*/2, &parents);
 
   ASSERT_GT(children.size(), 0);
   EXPECT_EQ(mapping.size(), children.size());
-  bool covers_physical_lower_boundary = false;
-  bool covers_internal_parent_boundary = false;
-  bool covers_physical_upper_boundary = false;
-  for (int box = 0; box < children.size(); ++box) {
-    covers_physical_lower_boundary =
-        covers_physical_lower_boundary || children[box].contains(Box2D{{0, 14}, {1, 15}});
-    covers_internal_parent_boundary =
-        covers_internal_parent_boundary || children[box].contains(Box2D{{30, 14}, {31, 15}});
-    covers_physical_upper_boundary =
-        covers_physical_upper_boundary || children[box].contains(Box2D{{62, 14}, {63, 15}});
-  }
-  EXPECT_TRUE(covers_physical_lower_boundary) << "physical boundary does not need parent margin";
-  EXPECT_FALSE(covers_internal_parent_boundary) << "internal parent edge still keeps margin";
-  EXPECT_TRUE(covers_physical_upper_boundary) << "physical boundary does not need parent margin";
+  EXPECT_TRUE(std::any_of(children.boxes().begin(), children.boxes().end(),
+                          [](const Box2D& box) { return box.contains(12, 24); }));
+  EXPECT_FALSE(std::any_of(children.boxes().begin(), children.boxes().end(),
+                           [](const Box2D& box) { return box.contains(8, 24); }));
   EXPECT_NO_THROW(
-      validate_fine_layout_proper_nesting(children, parents, parent_domain,
-                                          /*refinement_ratio=*/2, /*margin=*/1));
+      validate_fine_layout_proper_nesting(children, parents, /*refinement_ratio=*/2, /*margin=*/1));
 }
 
-TEST(test_regrid, LegacyFineSlotClearsStalePatchesAndCanRegrow) {
-  const Box2D coarse_domain = Box2D::from_extents(16, 16);
-  const BoxArray coarse_boxes(std::vector<Box2D>{coarse_domain});
-  // The legacy coupler's default level-0 policy is replicated: each rank owns its local full copy.
-  const DistributionMapping coarse_mapping(std::vector<int>{my_rank()});
-  const BoxArray seed_boxes(std::vector<Box2D>{Box2D{{12, 12}, {19, 19}}});
-  const DistributionMapping seed_mapping(/*nboxes=*/1, n_ranks());
+TEST(test_regrid, ProperNestingWrapsOnlyOnDeclaredPeriodicAxes) {
+  const Box2D domain = Box2D::from_extents(8, 8);
+  const BoxArray parents(std::vector<Box2D>{domain});
+  const BoxArray edge_child(std::vector<Box2D>{Box2D{{0, 0}, {1, 1}}});
 
-  MultiFab coarse(coarse_boxes, coarse_mapping, /*ncomp=*/1, /*ngrow=*/2);
-  coarse.set_val(Real(0));
-  MultiFab fine(seed_boxes, seed_mapping, /*ncomp=*/1, /*ngrow=*/3);
-  fine.set_val(Real(99));
+  EXPECT_THROW(validate_fine_layout_proper_nesting(
+                   edge_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/1,
+                   RegridPeriodicity{false, false}),
+               std::runtime_error);
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
+      edge_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/1,
+      RegridPeriodicity{true, true}));
+}
 
-  std::vector<AmrLevelMP> levels;
-  levels.push_back({std::move(coarse), nullptr, Real(1) / 16, Real(1) / 16});
-  levels.push_back({std::move(fine), nullptr, Real(1) / 32, Real(1) / 32});
+TEST(test_regrid, TagGrowthWrapsOnlyOnDeclaredPeriodicAxesAtOffsetOrigin) {
+  const Box2D domain{{3, 5}, {10, 12}};
+  TagBox tags(domain);
+  tags(domain.lo[0], domain.lo[1]) = 1;
+  const TagBox grown =
+      grow_regrid_tags(tags, /*radius=*/1, domain, RegridPeriodicity{true, false});
+  EXPECT_TRUE(grown.tagged(domain.hi[0], domain.lo[1]));
+  EXPECT_TRUE(grown.tagged(domain.lo[0], domain.lo[1]));
+  EXPECT_TRUE(grown.tagged(domain.lo[0] + 1, domain.lo[1]));
+  EXPECT_FALSE(grown.tagged(domain.lo[0], domain.hi[1]));
+}
 
-  Geometry geometry{coarse_domain, Real(0), Real(1), Real(0), Real(1)};
-  BCRec elliptic_bc;
-  elliptic_bc.xlo = elliptic_bc.xhi = elliptic_bc.ylo = elliptic_bc.yhi = BCType::Periodic;
-  AmrCouplerMP<DormantFineScalar> coupler(DormantFineScalar{}, geometry, coarse_boxes, elliptic_bc,
-                                           std::move(levels), {},
-                                           /*replicated_coarse=*/true);
+TEST(test_regrid, ProperNestingAtPhysicalWallRequiresCertifiedGhostDepth) {
+  const Box2D domain{{3, 5}, {10, 12}};
+  const BoxArray parents(std::vector<Box2D>{domain});
+  const BoxArray wall_child(
+      std::vector<Box2D>{Box2D{{2 * domain.lo[0], 2 * domain.lo[1]},
+                               {2 * domain.lo[0] + 3, 2 * domain.lo[1] + 3}}});
 
-  const auto criterion =
-      [](const ConstArray4& state, int i, int j) { return state(i, j, 0) > Real(0.5); };
-  const auto active_fine_patch_count = [&coupler] {
-    int count = 0;
-    const auto& active_levels = coupler.levels();
-    for (std::size_t level = 1; level < active_levels.size(); ++level)
-      count += active_levels[level].U.box_array().size();
-    return count;
+  EXPECT_THROW(validate_fine_layout_proper_nesting(
+                   wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
+                   RegridPeriodicity{false, false}),
+               std::runtime_error);
+  const RegridPhysicalGhostSupport insufficient{/*provided_depth=*/1,
+                                                /*fills_all_requested_depth=*/false};
+  EXPECT_THROW(validate_fine_layout_proper_nesting(
+                   wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
+                   RegridPeriodicity{false, false}, &insufficient),
+               std::runtime_error);
+  const RegridPhysicalGhostSupport certified{/*provided_depth=*/2,
+                                             /*fills_all_requested_depth=*/false};
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
+      wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
+      RegridPeriodicity{false, false}, &certified));
+}
+
+TEST(test_regrid, ExternalClusteringProviderOutputIsValidatedBeforeLayoutPublication) {
+  const Box2D domain{{3, 5}, {10, 12}};
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  auto invoke = [&](const amr::ClusteringProvider& provider) {
+    TagBox tags(domain);
+    tags(6, 8) = 1;
+    return regrid_compute_fine_layout_with_provider(
+        std::move(tags), domain, /*parent_level=*/0, /*margin=*/0,
+        /*coarse_replicated=*/true, provider, *load_balance, world_communicator_view());
   };
 
-  // No tag: the configured slot remains address-stable, but its stale seed patch disappears.
-  coupler.regrid(criterion, /*grow=*/0, /*margin=*/0);
-  ASSERT_EQ(coupler.levels().size(), 2u);
-  EXPECT_EQ(coupler.nlev(), 2) << "nlev is configured high-water depth, not active patch count";
-  EXPECT_EQ(coupler.levels()[1].U.box_array().size(), 0);
-  EXPECT_EQ(coupler.levels()[1].aux->box_array().size(), 0);
-  EXPECT_EQ(coupler.levels()[1].U.ncomp(), 1);
-  EXPECT_EQ(coupler.levels()[1].U.n_grow(), 3);
-  EXPECT_EQ(active_fine_patch_count(), 0);
-  for (const PatchBox& piece : coupler.output_geometry_boxes())
-    EXPECT_EQ(piece.level, 0) << "legacy output must not expose a dormant fine level";
+  const FixedClusteringProvider throws({}, true);
+  EXPECT_THROW(invoke(throws), std::runtime_error);
+  const FixedClusteringProvider empty_box({Box2D{}});
+  EXPECT_THROW(invoke(empty_box), std::runtime_error);
+  const FixedClusteringProvider outside({Box2D{{2, 5}, {6, 8}}});
+  EXPECT_THROW(invoke(outside), std::runtime_error);
+  const FixedClusteringProvider overlap(
+      {Box2D{{5, 7}, {7, 9}}, Box2D{{6, 8}, {8, 10}}});
+  EXPECT_THROW(invoke(overlap), std::runtime_error);
+  const FixedClusteringProvider drops_tag({Box2D{{3, 5}, {4, 6}}});
+  EXPECT_THROW(invoke(drops_tag), std::runtime_error);
 
-  // The empty high-water slot participates in a complete legacy update + AMR advance without a
-  // bounding-box, coarse/fine-interface or reflux failure. Zero flux/source makes the state stable.
-  EXPECT_NO_THROW(coupler.step(Real(1e-3)));
-  EXPECT_EQ(active_fine_patch_count(), 0);
+  const FixedClusteringProvider valid({Box2D{{5, 7}, {7, 9}}});
+  const auto [boxes, owners] = invoke(valid);
+  ASSERT_EQ(boxes.size(), 1);
+  EXPECT_EQ(owners.size(), 1);
+  EXPECT_TRUE(boxes[0] == (Box2D{{10, 14}, {15, 19}}));
+}
 
-  // A later feature repopulates that dormant slot from the current coarse state, not stale fine
-  // values. This is the legacy fixed-depth/high-water contract used by AmrCouplerMP.
-  for (int local = 0; local < coupler.coarse().local_size(); ++local) {
-    const Box2D valid = coupler.coarse().box(local);
-    if (valid.contains(Box2D{{7, 8}, {7, 8}}))
-      coupler.coarse().fab(local)(7, 8, 0) = Real(4);
-  }
-  coupler.regrid(criterion, /*grow=*/0, /*margin=*/0);
-
-  ASSERT_GT(coupler.levels()[1].U.box_array().size(), 0);
-  EXPECT_GT(active_fine_patch_count(), 0);
-  EXPECT_EQ(coupler.levels()[1].U.n_grow(), 3);
-  bool found_interpolated_feature = false;
-  for (int local = 0; local < coupler.levels()[1].U.local_size(); ++local) {
-    const ConstArray4 refined = coupler.levels()[1].U.fab(local).const_array();
-    const Box2D valid = coupler.levels()[1].U.box(local);
-    if (valid.contains(Box2D{{14, 16}, {15, 17}})) {
-      found_interpolated_feature =
-          close(refined(14, 16, 0), Real(4)) && close(refined(15, 17, 0), Real(4));
-    }
-  }
-  EXPECT_EQ(all_reduce_max(static_cast<long>(found_interpolated_feature)), 1);
+TEST(test_regrid, RefinedLayoutOverflowFailsBeforePublication) {
+  const int high = std::numeric_limits<int>::max() - 1;
+  const Box2D domain{{high, 0}, {high, 0}};
+  TagBox tags(domain);
+  tags(high, 0) = 1;
+  const FixedClusteringProvider provider({domain});
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  EXPECT_THROW(
+      (void)regrid_compute_fine_layout_with_provider(
+          std::move(tags), domain, /*parent_level=*/0, /*margin=*/0,
+          /*coarse_replicated=*/true, provider, *load_balance,
+          world_communicator_view(), /*refinement_ratio=*/2),
+      std::overflow_error);
 }

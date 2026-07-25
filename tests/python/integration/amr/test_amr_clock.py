@@ -44,7 +44,7 @@ def _scalar_charge(q, B0=1.0):
 def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
-    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))

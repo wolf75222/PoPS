@@ -6,6 +6,7 @@
 
 #include <pops/runtime/program/cache_manager.hpp>
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -99,6 +100,34 @@ TEST(CacheManager, NamedScratchCacheDeepCopiesOnStore) {
   // restoring (scratch = retrieve) overwrites the live buffer with the cached content
   scratch = c.retrieve(9);
   EXPECT_TRUE(std::fabs(sum(scratch) - 3.0 * 64) < 1e-12) << "scratch_restore";
+}
+
+TEST(CacheManager, WarmStoreAndRestoreReuseExactLayoutStorage) {
+  CacheManager cache;
+  MultiFab first = make_mf(1.0);
+  cache.store(4, first, 0);
+  const Real* const cached_storage = cache.retrieve(4).fab(0).data();
+
+  MultiFab second = make_mf(7.0);
+  MultiFab restored = make_mf(-3.0);
+  Real* const restored_storage = restored.fab(0).data();
+  const AllocationEventStats before = allocation_event_stats();
+  cache.store(4, second, 1);
+  cache.restore_into(4, restored);
+  const AllocationEventStats after = allocation_event_stats();
+
+  EXPECT_EQ(cache.retrieve(4).fab(0).data(), cached_storage);
+  EXPECT_EQ(restored.fab(0).data(), restored_storage);
+  EXPECT_EQ(after.fab_calls, before.fab_calls);
+  EXPECT_EQ(after.fab_bytes, before.fab_bytes);
+  EXPECT_EQ(after.communication_calls, before.communication_calls);
+  EXPECT_EQ(after.communication_bytes, before.communication_bytes);
+  EXPECT_DOUBLE_EQ(sum(restored), 7.0 * 64.0);
+
+  second.set_val(99.0);
+  restored.set_val(-1.0);
+  EXPECT_DOUBLE_EQ(sum(cache.retrieve(4)), 7.0 * 64.0)
+      << "cache storage remains an independent deep value";
 }
 
 TEST(CacheManager, MultipleIndependentNodesAndClear) {

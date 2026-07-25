@@ -22,9 +22,13 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // all_reduce_sum
+#include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/parallel/prepared_provider_consensus.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -64,6 +68,8 @@ struct AmrHierarchyLayout {
   std::vector<DistributionMapping> dm;  // [level], parallel to ba: MPI rank per box
   std::vector<Real> dx, dy;             // [level]: grid spacing (= dx_coarse / 2^k)
   std::vector<int> refinement_ratios;   // transition k -> k+1, resolved by hierarchy manifest
+  std::shared_ptr<const PreparedLoadBalanceAuthority>
+      load_balance;  // immutable owner selection authority for every future layout
 
   /// Number of levels (= ba.size()).
   int nlev() const { return static_cast<int>(ba.size()); }
@@ -72,8 +78,14 @@ struct AmrHierarchyLayout {
   // U.box_array() / U.dmap() / dx,dy). No copy of field data: only the grid.
   /// Extracts the layout (BoxArray + DistributionMapping + dx/dy per level) from the level stack of ONE
   /// block. No copy of field data, only the grid.
-  static AmrHierarchyLayout from_levels(const std::vector<AmrLevelMP>& levels) {
+  static AmrHierarchyLayout from_levels(
+      const std::vector<AmrLevelMP>& levels,
+      std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance) {
+    if (!load_balance)
+      throw std::invalid_argument(
+          "AmrHierarchyLayout::from_levels requires a prepared load-balance authority");
     AmrHierarchyLayout L;
+    L.load_balance = std::move(load_balance);
     const int n = static_cast<int>(levels.size());
     L.ba.reserve(n);
     L.dm.reserve(n);
@@ -233,6 +245,7 @@ class AmrSystemCoupler {
       ++b;
     });
 
+    prepare_aux_transfer_workspaces_();
     fill_bz();  // populates B_z per level (no-op if no block requests it or if bz is empty)
   }
 
@@ -267,9 +280,16 @@ class AmrSystemCoupler {
   /// solve_count().
   void solve_fields() {
     ++solve_count_;
-    for (auto& levels : block_levels_)
+    for (std::size_t block = 0; block < block_levels_.size(); ++block) {
+      auto& levels = block_levels_[block];
+      auto& plan = average_down_plans_.at(block);
+      if (!plan)
+        throw std::logic_error("AMR system average-down plan was not prepared");
       for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(levels[k].U, levels[k - 1].U);
+        mf_average_down_mb(levels[k].U, levels[k - 1].U,
+                           plan->transition_for_child(k), plan->topology_generation(),
+                           world_communicator_view());
+    }
 
     rhs_assembler_(system_, mg_.rhs());  // f = Sum_s q_s n_s on the coarse level
     mg_.solve();
@@ -283,9 +303,15 @@ class AmrSystemCoupler {
     field_postprocess(mg_.phi(), aux_[0], cx, cy,
                       FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
     fill_ghosts(aux_[0], dom_, aux_bc_);
-    for (int k = 1; k < nlev_; ++k)
-      detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
-                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
+    for (int k = 1; k < nlev_; ++k) {
+      auto& workspace = aux_transfer_workspaces_.at(static_cast<std::size_t>(k - 1));
+      if (!workspace)
+        throw std::logic_error("AMR system aux transfer workspace was not prepared");
+      const bool replicated_parent = k == 1 && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      workspace->apply(aux_[k - 1], aux_[k], transfer_topology_generation_, communicator);
+    }
 
     // B_z PER LEVEL (not just propagated): coupler_inject_aux_mb copies ALL the components
     // of the parent (including B_z) to the fine levels, which would overwrite the fine B_z with a
@@ -332,7 +358,10 @@ class AmrSystemCoupler {
           if (cadence_ == PoissonCadence::PerSubstep && s > 0)
             solve_fields();
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-              block.model, levels, dom_, h, base_per_, replicated_coarse_);
+              block.model, levels, dom_, h, base_per_, replicated_coarse_, false, false,
+              NewtonOptions{}, AmrTimeMethod::kEuler, Real(0), kWenoEpsilon, false, nullptr,
+              fill_patch_plans_[bi] ? &*fill_patch_plans_[bi] : nullptr,
+              average_down_plans_[bi] ? &*average_down_plans_[bi] : nullptr);
         }
       } else if constexpr (treatment == TimeTreatment::Implicit ||
                            treatment == TimeTreatment::IMEX) {
@@ -342,7 +371,10 @@ class AmrSystemCoupler {
         if constexpr (treatment == TimeTreatment::IMEX)
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
               SourceFreeModel<typename Block::Model>{block.model}, levels, dom_, bdt, base_per_,
-              replicated_coarse_);
+              replicated_coarse_, false, false, NewtonOptions{}, AmrTimeMethod::kEuler, Real(0),
+              kWenoEpsilon, false, nullptr,
+              fill_patch_plans_[bi] ? &*fill_patch_plans_[bi] : nullptr,
+              average_down_plans_[bi] ? &*average_down_plans_[bi] : nullptr);
         implicit_advance(*this, block, levels, bdt);
       }
     });
@@ -391,9 +423,33 @@ class AmrSystemCoupler {
     // amr_mass diagnostic (which sums only the coarse level) counts a ghost coarse source
     // under the patch. Single-level hierarchy: no covered cell, the loop
     // does not execute -> strictly bit-identical to history.
-    for (auto& levels : block_levels_)
+    for (std::size_t block = 0; block < block_levels_.size(); ++block) {
+      auto& levels = block_levels_[block];
+      auto& plan = average_down_plans_.at(block);
+      if (!plan)
+        throw std::logic_error("AMR system average-down plan was not prepared");
       for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(levels[k].U, levels[k - 1].U);
+        mf_average_down_mb(levels[k].U, levels[k - 1].U,
+                           plan->transition_for_child(k), plan->topology_generation(),
+                           world_communicator_view());
+    }
+  }
+
+  void average_down_prepared(std::vector<AmrLevelMP>& levels) {
+    const auto found = std::find_if(
+        block_levels_.begin(), block_levels_.end(),
+        [&levels](const std::vector<AmrLevelMP>& candidate) { return &candidate == &levels; });
+    if (found == block_levels_.end())
+      throw std::invalid_argument("AMR system average-down received a foreign hierarchy");
+    const std::size_t block =
+        static_cast<std::size_t>(std::distance(block_levels_.begin(), found));
+    auto& plan = average_down_plans_.at(block);
+    if (!plan)
+      throw std::logic_error("AMR system average-down plan was not prepared");
+    for (int level = nlev_ - 1; level >= 1; --level)
+      mf_average_down_mb(levels[level].U, levels[level - 1].U,
+                         plan->transition_for_child(level), plan->topology_generation(),
+                         world_communicator_view());
   }
 
   // mass of component 0 of the coarse level of block b (sum u*dV over local fabs;
@@ -411,6 +467,37 @@ class AmrSystemCoupler {
   }
 
  private:
+  void prepare_aux_transfer_workspaces_() {
+    std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>> prepared(
+        static_cast<std::size_t>(std::max(0, nlev_ - 1)));
+    const Periodicity periodicity{
+        aux_bc_.xlo == BCType::Periodic && aux_bc_.xhi == BCType::Periodic,
+        aux_bc_.ylo == BCType::Periodic && aux_bc_.yhi == BCType::Periodic};
+    for (int level = 1; level < nlev_; ++level) {
+      const bool replicated_parent = level == 1 && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      prepared[static_cast<std::size_t>(level - 1)].emplace(
+          detail::PreparedConservativeLinearTransferWorkspace::prepare(
+              aux_[level - 1], aux_[level], amr_level_index_domain(dom_, level - 1),
+              amr_level_index_domain(dom_, level), replicated_parent,
+              detail::ConservativeCellFillRegion::ValidAndGhost, periodicity,
+              transfer_topology_generation_, communicator));
+    }
+    std::vector<std::optional<PreparedAmrFillPatchPlan>> fill_patch(block_levels_.size());
+    std::vector<std::optional<PreparedAmrAverageDownPlan>> average_down(block_levels_.size());
+    for (std::size_t block = 0; block < block_levels_.size(); ++block) {
+      fill_patch[block].emplace(PreparedAmrFillPatchPlan::prepare(
+          block_levels_[block], dom_, base_per_, replicated_coarse_,
+          transfer_topology_generation_));
+      average_down[block].emplace(PreparedAmrAverageDownPlan::prepare(
+          block_levels_[block], transfer_topology_generation_));
+    }
+    aux_transfer_workspaces_.swap(prepared);
+    fill_patch_plans_.swap(fill_patch);
+    average_down_plans_.swap(average_down);
+  }
+
   System system_;
   RhsAssembler rhs_assembler_;
   // Width of the SHARED aux channel: maximum of aux_comps<Model> over all the blocks (at least
@@ -467,6 +554,11 @@ class AmrSystemCoupler {
   Elliptic mg_;
   std::vector<std::vector<AmrLevelMP>> block_levels_;  // [block][level]
   std::vector<MultiFab> aux_;                          // [level], shared
+  std::uint64_t transfer_topology_generation_ = 1;
+  std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>>
+      aux_transfer_workspaces_;
+  std::vector<std::optional<PreparedAmrFillPatchPlan>> fill_patch_plans_;
+  std::vector<std::optional<PreparedAmrAverageDownPlan>> average_down_plans_;
   int aux_ncomp_ =
       kAuxBaseComps;  // width of the shared aux channel (max aux_comps over the blocks)
   int nlev_ = 0;
@@ -494,8 +586,7 @@ struct AmrImplicitSourceStepper {
     // transport-IMEX path, so that a covered coarse cell stays the coarse view of the fine
     // (otherwise amr_mass, sum of only the coarse level, double-counts the patch source).
     // Single-level: no covered cell, empty loop -> bit-identical to history.
-    for (int k = nlev - 1; k >= 1; --k)
-      mf_average_down_mb(levels[k].U, levels[k - 1].U);
+    coupler.average_down_prepared(levels);
   }
 };
 

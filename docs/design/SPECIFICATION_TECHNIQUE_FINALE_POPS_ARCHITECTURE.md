@@ -630,11 +630,13 @@ d'instructions, routes de stencil d'indicateur, nombre maximal de termes par axe
 sorties `refine_candidates`, `coarsen_candidates`,
 `refine_equalities`, `coarsen_equalities`. La résolution refuse un opcode ou une capacité absente ;
 elle ne réduit jamais le graphe à un prédicat privé du composant.
-Chaque provider v1 sélectionne exactement un variant
-`{dimension: 2, scalar: "float64", device: "cpu"}` ; une déclaration 3D ne rend pas l'adapter 2D
-compatible.
+Le `Tagger` déclare aussi exactement `execution_mode="native_backend"` ou `"host"` et ses espaces
+mémoire. Le premier sélectionne un unique variant 2D/float64 CPU, CUDA, HIP, SYCL ou OpenMP target
+compatible avec l'allocation du runtime. Le second doit déclarer uniquement `host` : c'est le seul
+cas où PoPS matérialise une image host, jamais un fallback implicite. Une déclaration 3D ne rend pas
+l'adapter 2D compatible.
 
-Le contrat `Tagger` v1 reçoit, pour chaque patch local, toutes les vues d'états qualifiées utilisées
+Le contrat `Tagger` v2 reçoit, pour chaque patch local, toutes les vues d'états qualifiées utilisées
 par le graphe ainsi que son programme lié canonique : feuilles, composantes, seuils, programmes
 refine/coarsen, stencils discrets, hystérésis, égalité, conflits et identité. Un stencil discret
 transporte sa route versionnée, sa dimension, sa norme, son échelle, son mode de frontière et, pour
@@ -650,9 +652,11 @@ omise sans transfert de ghost correspondant, fait échouer le bind ; un stencil 
 valeur de halo résiduelle.
 
 Le composant évalue ce même programme exact et rend
-les quatre masques candidats. PoPS reste l'unique autorité qui applique la couverture fine courante,
-la politique d'égalité et les conflits refine/coarsen. Les états ne sont ni packés ni réduits
-globalement. Pour un parent distribué, seule une OR collective groupée des quatre bitmaps est
+les quatre masques candidats. En mode natif, les vues empruntent directement les allocations de
+champs et le composant exécute sur le backend/stream authentifié ; seuls les quatre masques compacts
+sont rapatriés avant le clustering. PoPS reste l'unique autorité qui applique la couverture fine courante,
+la politique d'égalité et les conflits refine/coarsen. En mode natif, les états ne sont ni packés ni
+réduits globalement. Pour un parent distribué, seule une OR collective groupée des quatre bitmaps est
 autorisée ; pour un parent répliqué, les bitmaps doivent être identiques rang par rang et toute
 divergence est refusée au lieu d'être masquée par une union. `min_cycles > 0` est refusé
 à la résolution tant que le runtime ne possède pas le stockage persistant de décision requis : une
@@ -665,11 +669,11 @@ L'évaluation logique est trivaluée. Une égalité de feuille produit `Unknown`
 `True`. Les quatre masques représentent le résultat des racines, pas l'union des égalités internes.
 `EqualityPolicy` transforme ensuite tout `Unknown` de racine en aucune action, candidat refine ou
 candidat coarsen, avant `ConflictPolicy`, y compris si l'autre racine vaut déjà `True`.
-`non_finite_policy="reject"` est fixe dans la capability et l'ABI v1 : une valeur scalaire, un terme
+`non_finite_policy="reject"` est fixe dans la capability et l'ABI v2 : une valeur scalaire, un terme
 de stencil ou un gradient dérivé `NaN`/infini interrompt le tagging avant toute logique booléenne.
 En particulier `Not(NaN)` ne peut pas devenir `True`. Un composant externe signale ce rejet par son
-`PopsComponentStatusV1`; PoPS refuse aussi les entrées non finies avant l'appel et ne convertit jamais
-une erreur numérique en masque `False`.
+`PopsComponentStatusV1`; l'adapter ne relit pas tout le champ sur CPU avant l'appel et ne convertit
+jamais une erreur numérique en masque `False`.
 
 L'installation prépare chaque table une fois avant la création du runtime. Une table absente, une
 capacité de sortie insuffisante ou une identité divergente échoue

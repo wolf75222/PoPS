@@ -313,7 +313,7 @@ def _run_section_b(t):
         require_native_or_skip("test_time_history section B imports unavailable: %s" % exc)
 
     n = 16
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip(
             "test_time_history section B requires the install_program binding")
@@ -371,7 +371,7 @@ def _run_section_c(t):
         require_native_or_skip("test_time_history section C imports unavailable: %s" % exc)
 
     n = 8
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program"):
         require_native_or_skip(
             "test_time_history section C requires the install_program binding")

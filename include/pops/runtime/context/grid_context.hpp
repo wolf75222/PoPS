@@ -96,6 +96,13 @@ struct GridContext {
   /// Standalone contexts leave these null and retain the Cartesian behavior.
   const bool* embedded_boundary_set = nullptr;
   const GeometryMode* geometry_mode = nullptr;
+
+  BCRec boundary_at_grid_metric() const {
+    BCRec result = bc;
+    result.dx = geom.dx();
+    result.dy = geom.dy();
+    return result;
+  }
 };
 
 /// Ephemeral, allocation-free read view over one boundary-session binding epoch.
@@ -221,10 +228,10 @@ class PreparedGridBoundarySession final {
     if (context_.coarse_fine_fill)
       context_.coarse_fine_fill(state);
     if (plan_session_) {
-      plan_session_->fill_same_level_and_physical(state, context_.dom);
+      plan_session_->fill_same_level_and_physical(state, context_.geom);
       return;
     }
-    fill_ghosts(state, context_.dom, context_.bc, lane());
+    fill_ghosts(state, context_.dom, context_.boundary_at_grid_metric(), lane());
   }
 
   void fill(MultiFab& state, const runtime::multiblock::BoundaryEvaluationPoint& point) const {
@@ -240,11 +247,11 @@ class PreparedGridBoundarySession final {
   void fill_same_level_and_physical(
       MultiFab& state, const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     if (!plan_session_) {
-      fill_ghosts(state, context_.dom, context_.bc, lane());
+      fill_ghosts(state, context_.dom, context_.boundary_at_grid_metric(), lane());
       return;
     }
     if (!context_.boundary_plan->has_component_boundaries()) {
-      plan_session_->fill_same_level_and_physical(state, context_.dom);
+      plan_session_->fill_same_level_and_physical(state, context_.geom);
       return;
     }
     bind_registry_(point, state, nullptr, nullptr);
@@ -368,19 +375,19 @@ inline detail::BoundaryFieldRegistry bind_grid_boundary_fields(
 /// plan never falls back because its pointer is captured when the block is built.
 inline void fill_grid_ghosts(MultiFab& state, const GridContext& context) {
   if (context.boundary_plan) {
-    context.boundary_plan->fill_same_level_and_physical(state, context.dom);
+    context.boundary_plan->fill_same_level_and_physical(state, context.geom);
     return;
   }
-  fill_ghosts(state, context.dom, context.bc);
+  fill_ghosts(state, context.dom, context.boundary_at_grid_metric());
 }
 
 inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
                              const ExecutionLane& lane) {
   if (context.boundary_plan) {
-    context.boundary_plan->fill_same_level_and_physical(state, context.dom, lane);
+    context.boundary_plan->fill_same_level_and_physical(state, context.geom, lane);
     return;
   }
-  fill_ghosts(state, context.dom, context.bc, lane);
+  fill_ghosts(state, context.dom, context.boundary_at_grid_metric(), lane);
 }
 
 inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
@@ -396,7 +403,7 @@ inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
     }
     return;
   }
-  fill_ghosts(state, context.dom, context.bc);
+  fill_ghosts(state, context.dom, context.boundary_at_grid_metric());
 }
 
 inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
@@ -413,7 +420,7 @@ inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
     }
     return;
   }
-  fill_ghosts(state, context.dom, context.bc, lane);
+  fill_ghosts(state, context.dom, context.boundary_at_grid_metric(), lane);
 }
 
 inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession& session) {

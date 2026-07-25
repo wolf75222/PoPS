@@ -269,6 +269,7 @@ class ExecutionContext:
 
         communicator = require_world(_pops.mpi_world())
         from pops.runtime._platform_manifest import native_runtime_backend
+        from pops.runtime._platform_manifest import native_device_resource
 
         backend = native_runtime_backend(artifact.platform_manifest)
         expected = backend.communicator.require("runtime.communicator")
@@ -285,7 +286,7 @@ class ExecutionContext:
             datatype=ExecutionResource(
                 "datatype", "float64", handle=communicator.datatype_float64
             ),
-            device=ExecutionResource("device", "host"),
+            device=native_device_resource(backend),
         )
 
 
@@ -397,6 +398,15 @@ def _validate_launch_facts(platform: PlatformManifest, context: ExecutionContext
     route_fields = ("backend", "target") if compare_route else ()
     for name in (*route_fields, "device", "memory_spaces", "communicator"):
         _require_same(name, getattr(platform, name), getattr(backend, name))
+    for name in ("execution_backend", "shared_space", "stream_identity"):
+        if name in platform.capabilities or name in backend.capabilities:
+            if name not in platform.capabilities or name not in backend.capabilities:
+                raise PlatformContractError(
+                    "artifact/runtime lacks one exact native execution capability",
+                    field=name, expected="proved by both", actual="missing")
+            _require_same(
+                "capabilities.%s" % name,
+                platform.capabilities[name], backend.capabilities[name])
     _require_abi(platform.abi, backend.abi)
     for name in ("storage", "compute", "accumulation", "reduction"):
         _require_same("precision.%s" % name, getattr(platform.precision, name),
@@ -484,6 +494,14 @@ def validate_component_runtime(platform: PlatformManifest,
             field="component_route", expected=expected_route, actual=route)
     for name in ("device", "memory_spaces", "communicator"):
         _require_same(name, getattr(platform, name), getattr(runtime, name))
+    for name in ("execution_backend", "shared_space", "stream_identity"):
+        if name not in platform.capabilities or name not in runtime.capabilities:
+            raise PlatformContractError(
+                "component/runtime lacks an exact native execution target proof",
+                field=name, expected="proved by both", actual="missing")
+        _require_same(
+            "capabilities.%s" % name,
+            platform.capabilities[name], runtime.capabilities[name])
     expected_abi = platform.abi.require("component.abi")
     actual_abi = runtime.abi.require("runtime.abi")
     if expected_abi != actual_abi:
@@ -545,11 +563,15 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                    "layouts": proof(("right", "left", "strided")),
                    "ownership": proof(("borrowed", "owned", "shared")),
                    "generic_field_view": proof(True),
+                   "execution_backend": proof("host"),
+                   "shared_space": proof("HostSpace"),
+                   "stream_identity": proof("host::synchronous"),
                })
 
 
 def artifact_platform_manifest(
-    *, backend: str, target: str, component: Any, communicator: str | None = None
+    *, backend: str, target: str, component: Any, communicator: str | None = None,
+    runtime_backend: RuntimeBackendManifest | None = None,
 ) -> PlatformManifest:
     """Build the selected platform identity from emitted component facts, preserving unknowns."""
     evidence = "pops.compiled-component-metadata.v1"
@@ -561,9 +583,6 @@ def artifact_platform_manifest(
         precision = PrecisionPolicy(*(proof("float64") for _ in range(4)))
     if type(precision) is not PrecisionPolicy:
         raise TypeError("compiled component precision_policy must be an exact PrecisionPolicy")
-    # This is the SELECTED baseline route, not a claim that the component lacks MPI/GPU variants.
-    # A non-host/non-serial selection must name itself on the compiled component explicitly.
-    device_value = getattr(component, "platform_device", None) or "host"
     component_communicator = getattr(component, "communicator", None)
     if communicator is not None and component_communicator not in (None, communicator):
         raise PlatformContractError(
@@ -571,22 +590,56 @@ def artifact_platform_manifest(
             field="communicator", expected=communicator, actual=component_communicator,
         )
     communicator_value = communicator or component_communicator or "serial"
-    spaces = getattr(component, "memory_spaces", None)
-    if spaces is None and device_value == "host":
-        spaces = ("host",)
-    return PlatformManifest(
-        backend=proof(_text(backend, "backend")), target=proof(_text(target, "target")),
-        abi=proof(str(abi)) if abi else unknown(), precision=precision,
-        device=proof(device_value) if device_value else unknown(),
-        memory_spaces=proof(tuple(spaces)) if spaces else unknown(),
-        communicator=proof(communicator_value) if communicator_value else unknown(),
-        capabilities={
+    if runtime_backend is not None:
+        if type(runtime_backend) is not RuntimeBackendManifest:
+            raise TypeError("runtime_backend must be an exact RuntimeBackendManifest")
+        expected_route = (
+            runtime_backend.backend.require("runtime.backend"),
+            runtime_backend.target.require("runtime.target"),
+            runtime_backend.communicator.require("runtime.communicator"),
+        )
+        selected_route = (backend, target, communicator_value)
+        if selected_route != expected_route:
+            raise PlatformContractError(
+                "compiled artifact route differs from the authenticated native toolchain",
+                field="artifact_route", expected=expected_route, actual=selected_route)
+        for name in ("storage", "compute", "accumulation", "reduction"):
+            if getattr(precision, name).require("component.precision.%s" % name) != getattr(
+                    runtime_backend.precision, name).require("runtime.precision.%s" % name):
+                raise PlatformContractError(
+                    "compiled component precision differs from the native toolchain",
+                    field="precision.%s" % name,
+                    expected=getattr(runtime_backend.precision, name).value,
+                    actual=getattr(precision, name).value)
+        device_proof = runtime_backend.device
+        memory_proof = runtime_backend.memory_spaces
+        capabilities = runtime_backend.capabilities
+    else:
+        # Metadata-only callers retain the conservative host baseline. Real compilation paths pass
+        # the authenticated runtime backend selected by the replayed Kokkos toolchain contract.
+        device_value = getattr(component, "platform_device", None) or "host"
+        spaces = getattr(component, "memory_spaces", None)
+        if spaces is None and device_value == "host":
+            spaces = ("host",)
+        device_proof = proof(device_value) if device_value else unknown()
+        memory_proof = proof(tuple(spaces)) if spaces else unknown()
+        capabilities = {
             "dimensions": proof((2,)), "centerings": proof(("cell",)),
             "scalars": proof(("float64",)),
             "layouts": proof(("right", "left", "strided")),
             "ownership": proof(("borrowed", "owned", "shared")),
             "generic_field_view": proof(True),
-        })
+            "execution_backend": proof("host"),
+            "shared_space": proof("HostSpace"),
+            "stream_identity": proof("host::synchronous"),
+        }
+    return PlatformManifest(
+        backend=proof(_text(backend, "backend")), target=proof(_text(target, "target")),
+        abi=proof(str(abi)) if abi else unknown(), precision=precision,
+        device=device_proof,
+        memory_spaces=memory_proof,
+        communicator=proof(communicator_value) if communicator_value else unknown(),
+        capabilities=capabilities)
 
 
 def serial_execution_context(platform: PlatformManifest) -> ExecutionContext:

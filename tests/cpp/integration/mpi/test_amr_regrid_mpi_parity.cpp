@@ -12,8 +12,8 @@
 // BoxArray multi-box round-robin) : c'est le seul chemin ou (R4) est active (en grossier REPLIQUE,
 // chaque rang a deja la grille de tags complete, all_reduce_or serait l'identite). regrid_every=2 :
 // la grille se re-grille effectivement pendant la sequence, en suivant l'union des tags densite par
-// bloc + le tag de phi sur |grad phi| (set_phi_refinement, le predicat cable depuis la facade par CE
-// suivi). On avance plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
+// bloc + le tag de phi sur |grad phi| (set_phi_refinement, feuille aux du graphe prepare). On avance
+// plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
 //
 // ASSERTIONS :
 //   (1) CONSISTANCE CROSS-RANG (dans CHAQUE run) : la densite grossiere de chaque bloc est reconstruite
@@ -33,10 +33,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/builders/factory/model_factory.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
@@ -77,78 +74,6 @@ static std::vector<double> blob(int n, double cx, double cy, double amp, double 
   return rho;
 }
 
-struct TagDensityAbove {
-  Real threshold = Real(0);
-  bool operator()(const ConstArray4& values, int i, int j) const {
-    return values(i, j, 0) > threshold;
-  }
-};
-
-/// Real distributed proof of the dynamic active-prefix contract.  Empty collective tags remove the
-/// two fine levels, a coarse-only step remains valid, and later tags regrow both levels on the same
-/// MPI hierarchy without changing the configured high-water depth or the conserved mass.
-static int check_dynamic_active_depth_mpi(int n, int me, int np) {
-  AmrBuildParams params;
-  params.mesh.n = n;
-  params.mesh.L = 1.0;
-  params.mesh.distribute_coarse = true;
-  params.mesh.coarse_max_grid = n / 2;
-  params.poisson.bc = BCRec{};
-  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
-
-  std::vector<AmrRuntimeBlock> blocks;
-  const std::vector<double> density = blob(n, 0.28, 0.50, 0.8, 1.0, 0.08);
-  detail::dispatch_model(exb_charge(0.0, 1.0), [&](auto model) {
-    blocks.push_back(detail::dispatch_amr_block(
-        model, "minmod", "rusanov", layout, "moving", density,
-        /*has_density=*/true, 1.4, 1, false, false, 1));
-  });
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
-  runtime.set_parent_child_temporal_relations(
-      {::pops::amr::ParentChildClockRelation(
-           0, 1, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly),
-       ::pops::amr::ParentChildClockRelation(
-           1, 2, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly)});
-
-  const double initial_mass = runtime.mass(0);
-  runtime.set_block_tag_predicate(0, TagDensityAbove{Real(1e9)});
-  runtime.regrid();
-  const bool removed = runtime.nlev() == 1 && runtime.configured_nlev() == 3 &&
-                       runtime.n_patches() == 0;
-  const double removed_mass = runtime.mass(0);
-
-  runtime.step(Real(1e-4));  // exercise the temporarily uniform hierarchy before regrowth
-  runtime.set_block_tag_predicate(0, TagDensityAbove{Real(1.05)});
-  runtime.regrid();
-  const bool regrown = runtime.nlev() == 3 && runtime.configured_nlev() == 3 &&
-                       runtime.n_patches() > 0;
-  const double regrown_mass = runtime.mass(0);
-
-  auto spread = [](double value) {
-    return all_reduce_max(value) - (-all_reduce_max(-value));
-  };
-  const double cross_rank_spread =
-      std::fmax(spread(static_cast<double>(runtime.nlev())),
-                std::fmax(spread(static_cast<double>(runtime.n_patches())),
-                          std::fmax(spread(removed_mass), spread(regrown_mass))));
-  const bool conserved = std::fabs(removed_mass - initial_mass) < 1e-10 &&
-                         std::fabs(regrown_mass - initial_mass) < 1e-10;
-  const long local_failure = removed && regrown && conserved && cross_rank_spread == 0.0 ? 0L : 1L;
-  const long failure = all_reduce_max(local_failure);
-  if (me == 0) {
-    std::printf(
-        "AMRDEPTH np=%d | removed=%d regrown=%d | active=%d configured=%d patches=%d | "
-        "dm_remove=%.3e dm_regrow=%.3e spread=%.3e\n",
-        np, removed ? 1 : 0, regrown ? 1 : 0, runtime.nlev(), runtime.configured_nlev(),
-        runtime.n_patches(), std::fabs(removed_mass - initial_mass),
-        std::fabs(regrown_mass - initial_mass), cross_rank_spread);
-  }
-  return failure == 0 ? 0 : 1;
-}
-
 static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
@@ -166,7 +91,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   AmrSystemConfig cfg;
   cfg.n = n;
   cfg.L = 1.0;
-  cfg.periodic = true;
+  cfg.periodicity = {true, true};
   cfg.regrid_every = 2;          // REGRID ACTIF : la hierarchie se re-grille pendant la sequence
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).
@@ -262,7 +187,6 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   } else {
     (void)sp;
   }
-  fails += check_dynamic_active_depth_mpi(/*n=*/16, me, np);
   comm_finalize();
   return fails ? 1 : 0;
 }

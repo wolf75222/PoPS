@@ -139,14 +139,14 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   std::vector<double>
       ref_state;  // etat de reference (chemin plein cartesien), reutilise par (b)/(c)/(d)
   {
-    System base(SystemConfig{n, L, false});
+    System base(SystemConfig{n, L, Periodicity{false, false}});
     build_exb(base, R_wall);
     base.set_density("n", rho0);
     for (int k = 0; k < n_steps; ++k)
       base.step(dt);
     ref_state = base.get_state("n");
 
-    System none(SystemConfig{n, L, false});
+    System none(SystemConfig{n, L, Periodicity{false, false}});
     build_exb(none, R_wall);
     none.set_density("n", rho0);
     none.set_disc_domain(cx, cy, R_disc, "none");  // disque pose, mode none : doit rester inerte
@@ -169,7 +169,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   // (b) ROUTING-LIVE (staircase) : etat DIFFERENT du carre + masse active conservee a la machine.
   // ----------------------------------------------------------------------
   {
-    System sc(SystemConfig{n, L, false});
+    System sc(SystemConfig{n, L, Periodicity{false, false}});
     build_exb(sc, R_wall);
     sc.set_density("n", rho0);
     sc.set_disc_domain(cx, cy, R_disc, "staircase");
@@ -224,7 +224,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   // ----------------------------------------------------------------------
   {
     // (c1) disque coupant : etat fini + different du carre.
-    System cc(SystemConfig{n, L, false});
+    System cc(SystemConfig{n, L, Periodicity{false, false}});
     build_exb(cc, R_wall);
     cc.set_density("n", rho0);
     cc.set_disc_domain(cx, cy, R_disc, "cutcell");
@@ -242,13 +242,13 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     // assemble_rhs_eb == assemble_rhs (kappa=1, alpha=1 partout, cf. test_eb_transport bit-identite).
     // Un pas cutcell doit alors etre BIT-IDENTIQUE au pas carre sur le meme init.
     const double R_big = 10.0 * L;         // englobe largement la boite
-    System sq(SystemConfig{n, L, false});  // reference 1 pas plein
+    System sq(SystemConfig{n, L, Periodicity{false, false}});  // reference 1 pas plein
     build_exb(sq, R_wall);
     sq.set_density("n", rho0);
     sq.step(dt);
     const std::vector<double> sq1 = sq.get_state("n");
 
-    System eb(SystemConfig{n, L, false});
+    System eb(SystemConfig{n, L, Periodicity{false, false}});
     build_exb(eb, R_wall);
     eb.set_density("n", rho0);
     eb.set_disc_domain(cx, cy, R_big, "cutcell");
@@ -276,12 +276,12 @@ TEST(FacadeRouting, GenericAnalyticLevelSetMatchesDiscSugarAfterBlockConstructio
 
   // Both transport closures are deliberately built before their geometry is installed. The stable
   // native program owner must therefore make authoring order irrelevant.
-  System disc(SystemConfig{n, L, false});
+  System disc(SystemConfig{n, L, Periodicity{false, false}});
   build_exb(disc, wall_radius);
   disc.set_density("n", rho0);
   disc.set_disc_domain(cx, cy, radius, "cutcell");
 
-  System analytic(SystemConfig{n, L, false});
+  System analytic(SystemConfig{n, L, Periodicity{false, false}});
   build_exb(analytic, wall_radius);
   analytic.set_density("n", rho0);
   analytic.set_analytic_level_set(
@@ -298,7 +298,7 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();
 #endif
-  System system(SystemConfig{20, 1.0, false});
+  System system(SystemConfig{20, 1.0, Periodicity{false, false}});
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0},
                                 "staircase", 0.2, 1e-5, 0.1);
   const std::vector<double> original = system.disc_mask();
@@ -324,13 +324,13 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   // The reference spells out the low-side periodic extension only to make this regression observable:
   // a correct topology fill replaces that extension with the opposite valid cells and both prepared
   // metric fields become bit-identical. Direct evaluation at the fictitious x<0 ghost does not.
-  System topology(SystemConfig{n, 1.0, true});
+  System topology(SystemConfig{n, 1.0, Periodicity{true, true}});
   topology.add_block("n", periodic_exb_model(), "none");
   topology.set_density("n", rho0);
   topology.set_analytic_level_set({"x", "constant", "sub"},
                                   {0.0, 0.25, 0.0}, "cutcell");
 
-  System explicit_wrap(SystemConfig{n, 1.0, true});
+  System explicit_wrap(SystemConfig{n, 1.0, Periodicity{true, true}});
   explicit_wrap.add_block("n", periodic_exb_model(), "none");
   explicit_wrap.set_density("n", rho0);
   explicit_wrap.set_analytic_level_set(

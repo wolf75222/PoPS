@@ -2,8 +2,9 @@
 
 Split out of :mod:`pops.runtime._system_io` (the 500-line cap): the checkpoint WRITER emits, per
 history ring, the authoring policy and one resolved physical storage plan. Selective slots are used
-only on a stable hierarchy window; a window containing a scheduled regrid is explicitly promoted to
-``dense_regrid_safety``. Restart replays only gaps that are exact on the stable hierarchy.
+only after every logical slot is authentic and on a stable hierarchy window. Cold/partially filled
+rings are promoted to ``dense_cold_start_safety``; a window containing a scheduled regrid is promoted
+to ``dense_regrid_safety``. Restart replays only gaps proven exact by both guards.
 """
 from dataclasses import dataclass
 import json
@@ -17,6 +18,7 @@ class HistoryRingCapture:
     depth: int
     ncomp: int
     initialized: bool
+    fill_count: int
     policy_json: str
     requested_stored_slots: tuple[int, ...]
     stored_slots: tuple[int, ...]
@@ -30,6 +32,7 @@ class HistoryRingCapture:
             "depth": self.depth,
             "ncomp": self.ncomp,
             "initialized": self.initialized,
+            "fill_count": self.fill_count,
             "policy_json": self.policy_json,
             "requested_stored_slots": list(self.requested_stored_slots),
             "stored_slots": list(self.stored_slots),
@@ -66,6 +69,28 @@ def resolve_ring_policy(policy, depth):
     return policy
 
 
+def history_fill_count_from_payload(payload, name, depth, initialized):
+    """Return one authenticated fill age, conservatively deriving legacy payloads.
+
+    Older payloads recorded only ``initialized``.  They cannot prove that every cold-start copy has
+    since been replaced, so an initialized legacy ring derives fill count one (zero otherwise).
+    This may retain dense storage longer after restart, but can never authorize replay from a
+    synthetic slot.
+    """
+    key = "history_fill_count_" + name
+    fill_count = int(payload[key]) if key in payload else (1 if initialized else 0)
+    if fill_count < 0 or fill_count > depth:
+        raise ValueError(
+            "history '%s' fill count %d is outside [0, %d]"
+            % (name, fill_count, depth)
+        )
+    if initialized != (fill_count > 0):
+        raise ValueError(
+            "history '%s' has inconsistent initialized/fill-count metadata" % name
+        )
+    return fill_count
+
+
 def replay_regrid_steps(depth, m, regrid_every):
     """Scheduled regrid cursors inside a selective ring's prospective replay window.
 
@@ -86,20 +111,35 @@ def replay_regrid_steps(depth, m, regrid_every):
     return sorted(steps)
 
 
-def resolve_history_storage(policy, depth, *, macro_step, regrid_every):
+def resolve_history_storage(policy, depth, *, fill_count, macro_step, regrid_every):
     """Resolve authoring intent to one exact, restart-safe physical storage plan.
 
-    Selective replay is exact only while the replay window retains one hierarchy.  If a regrid is
-    scheduled inside that window, the resolved plan explicitly promotes this checkpoint instance to
-    dense storage.  The requested slots, effective slots, mode and schedule fingerprint are all
-    persisted, so this safety promotion is observable and authenticated rather than a silent fallback.
+    Selective replay is exact only after every logical ring slot contains an authentic accepted
+    store, and while the replay window retains one hierarchy.  The first store broadcasts its value
+    into cold slots for multistep startup; those copies are valid for evaluation but are not replay
+    anchors.  A partially filled ring is therefore promoted to ``dense_cold_start_safety``.  A warm
+    ring whose window contains a regrid is promoted to ``dense_regrid_safety``.  The requested slots,
+    effective slots, mode and schedule fingerprint are persisted, so each promotion is observable and
+    authenticated rather than a silent fallback.
     """
     policy = resolve_ring_policy(policy, depth)
+    if isinstance(fill_count, bool) or not isinstance(fill_count, int):
+        raise TypeError("history fill count must be a Python int")
+    if fill_count < 0 or fill_count > depth:
+        raise ValueError(
+            "history fill count %d is outside [0, %d]" % (fill_count, depth))
     requested = tuple(int(slot) for slot in policy.stored_slots(depth))
     regrid_steps = None
     if len(requested) < depth:
         regrid_steps = tuple(replay_regrid_steps(
             depth, int(macro_step), int(regrid_every)))
+    if len(requested) < depth and fill_count < depth:
+        return (
+            requested,
+            tuple(range(depth)),
+            "dense_cold_start_safety",
+            regrid_steps,
+        )
     if regrid_steps:
         return requested, tuple(range(depth)), "dense_regrid_safety", regrid_steps
     return requested, requested, "policy", regrid_steps
@@ -115,10 +155,17 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
         depth = int(system.history_depth(hname))
         ncomp = int(system.history_ncomp(hname))
         initialized = bool(system.history_initialized(hname))
+        fill_count = int(system.history_fill_count(hname))
+        if initialized != (fill_count > 0):
+            raise RuntimeError(
+                "checkpoint history '%s' has inconsistent initialized/fill-count metadata"
+                % hname
+            )
         policy = resolve_ring_policy(persistence.get(hname), depth)
         requested, stored, storage_mode, regrid_steps = resolve_history_storage(
             policy,
             depth,
+            fill_count=fill_count,
             macro_step=int(macro_step),
             regrid_every=int(regrid_every),
         )
@@ -130,6 +177,7 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
             depth=depth,
             ncomp=ncomp,
             initialized=initialized,
+            fill_count=fill_count,
             policy_json=json.dumps(
                 policy.to_manifest(), sort_keys=True, separators=(",", ":")),
             requested_stored_slots=requested,
@@ -145,9 +193,9 @@ def capture_histories(system, plan, out):
     """Execute only the history gathers fixed by an agreed :class:`HistoryCapturePlan`.
 
     Per ring: depth / ncomp /
-    initialized / policy manifest / requested and effective slot arrays / storage mode / per-slot dt,
-    then the resolved effective slots' global buffers. The gather is collective (all ranks call), like
-    ``state_global``."""
+    initialized / authentic fill count / policy manifest / requested and effective slot arrays /
+    storage mode / per-slot dt, then the resolved effective slots' global buffers. The gather is
+    collective (all ranks call), like ``state_global``."""
     import numpy as np
     if not isinstance(plan, HistoryCapturePlan):
         raise TypeError("history capture requires its exact prepared plan")
@@ -158,6 +206,7 @@ def capture_histories(system, plan, out):
         out["history_depth_" + hname] = depth
         out["history_ncomp_" + hname] = ring.ncomp
         out["history_init_" + hname] = ring.initialized
+        out["history_fill_count_" + hname] = ring.fill_count
         out["history_policy_" + hname] = np.array(ring.policy_json)
         out["history_requested_stored_slots_" + hname] = np.asarray(
             ring.requested_stored_slots, dtype=np.int64)
@@ -192,54 +241,176 @@ def serialize_histories(system, persistence, out):
 def restore_histories(system, d, fired_out=None):
     """Restore every checkpointed ring, replaying omitted slots only on a stable hierarchy.
 
-    The current payload restores the stored slots + per-slot dt, then
-    ``rebuild_history_slots`` reconstructs any gaps by deterministic
-    replay. Requested/effective storage or policy mismatches are refused verbatim. When @p fired_out is
-    a dict it records native replay guard evidence; every valid value is empty because regrid-window
-    captures use dense safety storage. Returns the typed
+    The current payload is validated in full before native mutation.  All rings then restore their
+    stored anchors, per-slot dt and initialized flag before any ring is replayed: a compiled Program
+    may read another ring while reconstructing one gap, so replaying during the first ring's restore
+    would make checkpoint key order observable.  ``rebuild_history_slots`` subsequently reconstructs
+    only the omitted slots by deterministic replay. Requested/effective storage or policy mismatches
+    are refused verbatim. When @p fired_out is a dict it records native replay guard evidence; every
+    valid value is empty because regrid-window captures use dense safety storage. Returns the typed
     :class:`~pops.time._history.report.HistoryReplayReport`."""
     import numpy as np
     from pops.time._history.persistence import HistoryPersistence
     from pops.time._history.report import HistoryReplayReport
-    report = HistoryReplayReport()
-    for hname in (str(h) for h in d["history_names"]):
+
+    names = tuple(str(h) for h in d["history_names"])
+    if len(names) != len(set(names)):
+        raise ValueError("restart : checkpoint history names must be unique")
+    required_restore_seams = (
+        "restore_history",
+        "set_history_initialized",
+        "restore_history_fill_count",
+    )
+    missing_restore_seams = tuple(
+        seam for seam in required_restore_seams if not hasattr(system, seam)
+    )
+    if names and missing_restore_seams:
+        raise RuntimeError(
+            "restart : runtime lacks required history restore seam(s): %s"
+            % ", ".join(missing_restore_seams)
+        )
+
+    # Phase 1a -- validate and materialize the whole payload without mutating the runtime.  Keeping
+    # the staged values alive lets an np.load-backed caller retain the archive until native scatter
+    # has consumed each binary64 buffer.
+    prepared = []
+    for hname in names:
         depth = int(d["history_depth_" + hname])
+        initialized = bool(d["history_init_" + hname])
+        fill_count = history_fill_count_from_payload(
+            d, hname, depth, initialized
+        )
         policy_key = "history_policy_" + hname
         if policy_key not in d:
             raise RuntimeError(
                 "restart : history '%s' lacks its required persistence manifest" % hname)
         policy = HistoryPersistence.from_json(str(d[policy_key]))
         requested_key = "history_requested_stored_slots_" + hname
+        stored_key = "history_stored_slots_" + hname
         mode_key = "history_storage_mode_" + hname
-        if requested_key not in d or mode_key not in d:
+        if requested_key not in d or stored_key not in d or mode_key not in d:
             raise RuntimeError(
                 "restart : history '%s' lacks its resolved storage plan" % hname)
-        requested = [int(s) for s in d[requested_key]]
-        stored = [int(s) for s in d["history_stored_slots_" + hname]]
+        requested = tuple(sorted(int(s) for s in d[requested_key]))
+        stored = tuple(sorted(int(s) for s in d[stored_key]))
         expected_requested, expected_stored, expected_mode, _steps = resolve_history_storage(
             policy,
             depth,
+            fill_count=fill_count,
             macro_step=int(d.get("macro_step", 0)),
             regrid_every=int(d.get("regrid_every", 0)),
         )
-        if sorted(requested) != list(expected_requested):
+        if list(requested) != list(expected_requested):
             raise RuntimeError(
                 "restart : history '%s' checkpoint requested slots %r != policy %s expects %r"
-                % (hname, sorted(requested), policy.name, list(expected_requested)))
-        if sorted(stored) != list(expected_stored) or str(d[mode_key]) != expected_mode:
+                % (hname, list(requested), policy.name, list(expected_requested)))
+        if list(stored) != list(expected_stored) or str(d[mode_key]) != expected_mode:
             raise RuntimeError(
                 "restart : history '%s' resolved storage plan (%r, %s) != expected (%r, %s)"
-                % (hname, sorted(stored), str(d[mode_key]), list(expected_stored), expected_mode))
-        for k in stored:
-            system.restore_history(
-                hname, k, np.asarray(d["history_%s_%d" % (hname, k)], dtype=np.float64))
-        if hasattr(system, "restore_history_slot_dt") and ("history_slot_dt_" + hname) in d:
-            for k, dt in enumerate(np.asarray(d["history_slot_dt_" + hname], dtype=np.float64)):
-                system.restore_history_slot_dt(hname, int(k), float(dt))
-        system.set_history_initialized(hname, bool(d["history_init_" + hname]))
+                % (hname, list(stored), str(d[mode_key]), list(expected_stored), expected_mode))
+        anchors = tuple(
+            (
+                k,
+                np.asarray(
+                    d["history_%s_%d" % (hname, k)],
+                    dtype=np.float64,
+                ),
+            )
+            for k in stored
+        )
+        slot_dt_key = "history_slot_dt_" + hname
+        slot_dt = (
+            None
+            if slot_dt_key not in d
+            else tuple(float(dt) for dt in np.asarray(d[slot_dt_key], dtype=np.float64))
+        )
+        if slot_dt is not None and len(slot_dt) != depth:
+            raise ValueError(
+                "restart : history '%s' slot-dt count %d != depth %d"
+                % (hname, len(slot_dt), depth)
+            )
+        if len(stored) < depth and slot_dt is None:
+            raise RuntimeError(
+                "restart : history '%s' requires selective replay but lacks per-slot dt"
+                % hname
+            )
+        if slot_dt is not None and not hasattr(system, "restore_history_slot_dt"):
+            raise RuntimeError(
+                "restart : history '%s' carries per-slot dt but the runtime "
+                "does not expose restore_history_slot_dt" % hname
+            )
+        if len(stored) < depth and not hasattr(system, "rebuild_history_slots"):
+            raise RuntimeError(
+                "restart : history '%s' requires selective replay but the runtime "
+                "does not expose rebuild_history_slots" % hname
+            )
+        prepared.append(
+            (
+                hname,
+                depth,
+                fill_count,
+                policy,
+                requested,
+                stored,
+                expected_mode,
+                anchors,
+                slot_dt,
+                initialized,
+            )
+        )
+
+    # Phase 1b -- publish every exact anchor and its metadata before executing the first Program
+    # replay.  This is deliberately a separate pass from both validation and replay.
+    for (
+        hname,
+        _depth,
+        fill_count,
+        _policy,
+        _requested,
+        _stored,
+        _expected_mode,
+        anchors,
+        slot_dt,
+        initialized,
+    ) in prepared:
+        for k, values in anchors:
+            system.restore_history(hname, k, values)
+        if slot_dt is not None:
+            for k, dt in enumerate(slot_dt):
+                system.restore_history_slot_dt(hname, k, dt)
+        system.set_history_initialized(hname, initialized)
+        system.restore_history_fill_count(hname, fill_count)
+
+    # Phase 2 -- all ring dependencies now expose the checkpoint image.  Native replay restores its
+    # own save bracket after each ring and returns one count per Program step, which is also the
+    # number of omitted slots now that stored anchors are never stepped into.
+    report = HistoryReplayReport()
+    for (
+        hname,
+        depth,
+        _fill_count,
+        policy,
+        requested,
+        stored,
+        expected_mode,
+        _anchors,
+        _slot_dt,
+        _initialized,
+    ) in prepared:
         recomputed = 0
-        if len(stored) < depth and hasattr(system, "rebuild_history_slots"):
-            recomputed = int(system.rebuild_history_slots(hname, sorted(stored)))
+        replay_steps = 0
+        if len(stored) < depth:
+            replay_steps = sum(
+                stored[index + 1] - stored[index] - 1
+                for index in range(len(stored) - 1)
+            )
+            recomputed = int(system.rebuild_history_slots(hname, list(stored)))
+            if recomputed != replay_steps:
+                raise RuntimeError(
+                    "restart : history '%s' native replay rebuilt %d slot(s), "
+                    "but its stored anchors require %d Program step(s)"
+                    % (hname, recomputed, replay_steps)
+                )
             if fired_out is not None and hasattr(system, "last_replay_regrid_steps"):
                 fired_out[hname] = [int(s) for s in system.last_replay_regrid_steps()]
         report.add(
@@ -250,7 +421,7 @@ def restore_histories(system, d, fired_out=None):
             requested_slots=len(requested),
             stored_slots=len(stored),
             recomputed_slots=recomputed,
-            replay_steps=recomputed,
+            replay_steps=replay_steps,
         )
     return report
 
@@ -258,6 +429,7 @@ def restore_histories(system, d, fired_out=None):
 __all__ = [
     "HistoryCapturePlan",
     "capture_histories",
+    "history_fill_count_from_payload",
     "prepare_history_capture",
     "replay_regrid_steps",
     "resolve_history_storage",

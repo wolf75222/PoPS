@@ -157,7 +157,7 @@ chk(
 )
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
-if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
     if fails:
         raise AssertionError(
             "%d pure-Python acceptance(s) failed before the native capability skip" % fails
@@ -173,7 +173,7 @@ print("== (B) end-to-end: implicit Lorentz solve vs analytic rotation ==")
 
 def make_sim():
     n = 16
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     # Production-backend DSL model added as a native block; the Program drives the step.
     try:
         compiled_model = lorentz_model("lorentz_block").compile(backend="production")

@@ -56,7 +56,7 @@ def cyclotron_model(q):
 
 
 def build(time_policy, q, B0, rho0=1.0, u0=1.0, v0=0.0, n=8):
-    sim = System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodicity=(True, True))
     sim.add_equation("e", cyclotron_model(q), spatial=engine.Spatial(limiter=Minmod()),
                   time=time_policy)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
@@ -124,7 +124,7 @@ chk(float(np.linalg.norm(m_be - m_rk)) > 1e-4,
 print("== (d) rejets explicites : AMR / polaire / Strang / masque partiel ==")
 
 # (d1) AMR
-amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 try:
     amr.add_equation("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
                   time=engine.IMEXRK())
@@ -144,7 +144,7 @@ except (RuntimeError, ValueError, TypeError) as e:
     chk("imex" in str(e).lower(), f"polaire rejet explicite : {e}")
 
 # (d3) masque IMEX partiel : la source IMEXRK est pleinement implicite -> rejet a l'ajout du bloc
-sim_mask = System(n=8, L=1.0, periodic=True)
+sim_mask = System(n=8, L=1.0, periodicity=(True, True))
 try:
     # engine.IMEXRK n'expose pas implicit_vars ; on force l'attribut pour exercer la garde C++.
     pol = engine.IMEXRK()
