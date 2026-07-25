@@ -2149,6 +2149,7 @@ jobs:
           }
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_TEST_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"
           if [ "${#cpp_targets[@]}" -eq 0 ]; then
@@ -2156,7 +2157,7 @@ jobs:
             exit 1
           fi
           run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m \
-            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
+            cmake --build --preset ci-kokkos --parallel 2 --target "${cpp_targets[@]}"
 
       - name: Test (ctest, backend Kokkos OpenMP)
         if: matrix.kind == 'cpp'
