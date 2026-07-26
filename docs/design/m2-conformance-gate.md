@@ -39,5 +39,6 @@ remains.
 
 Use `--check-only` for the cheap source-only CI integrity proof. Use
 `--available-only` to execute the landed battery without claiming completion,
-`--python-only` when no native build is available, and `--build-dir` to select
-the CTest tree. The unqualified command is the final fail-closed gate.
+`--python-only` to skip only the CTest stage, and `--build-dir` to select the
+CTest tree. Pytest proofs can still compile or execute native code. The
+unqualified command is the final fail-closed gate.

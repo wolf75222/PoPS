@@ -348,7 +348,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run landed supporting proofs even while the final M2 gate is incomplete",
     )
-    parser.add_argument("--python-only", action="store_true")
+    parser.add_argument(
+        "--python-only",
+        action="store_true",
+        help="skip CTest proofs; pytest proofs may still compile or execute native code",
+    )
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build")
     parser.add_argument(
         "--example-timeout",
