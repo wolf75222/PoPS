@@ -1,25 +1,63 @@
-schema_version = 1
+schema_version = 2
 gate = "m2-temporal-execution"
-issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667"]
-deferred = []
+issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667", "ADC-668", "ADC-700"]
 
-# Every requirement has one success proof and one refusal/rollback proof. Exact
-# nodeids make deletion or renaming a reviewed gate change rather than silent loss.
+# These are acceptance gaps, not waivers.  The default runner fails closed while
+# any row remains; --available-only runs the supporting proofs below.
+[[deferred]]
+requirement = "normalized_program_execution"
+blocked_by = ["ADC-668"]
+missing = "Graph identity is proved, but mandatory native manual and preset SSPRK2 plus IMEX execution still needs one stable executable acceptance."
+
+[[deferred]]
+requirement = "native_solve_outcome_fault_matrix"
+blocked_by = ["ADC-665"]
+missing = "Every local, global and field solve publication boundary needs native singular, breakdown, iteration-limit and invalid-evaluation injection."
+
+[[deferred]]
+requirement = "atomic_rejection_side_effects"
+blocked_by = ["ADC-666"]
+missing = "One fault matrix must reject after stage, solve, synchronization, guard and effect preparation without state, history, cursor, output or checkpoint leakage."
+
+[[deferred]]
+requirement = "strict_temporal_continuation"
+blocked_by = ["ADC-667"]
+missing = "A strict restart must reproduce the exact next attempt with histories, off-schedule caches, controllers and event cursors."
+
+[[deferred]]
+requirement = "native_multiblock_implicit_phase"
+blocked_by = ["ADC-665", "ADC-666"]
+missing = "A real native multi-block implicit fixture must use each block operator and consume one declared solve phase transactionally."
+
+[[deferred]]
+requirement = "refined_hierarchy_native_ordering"
+blocked_by = ["ADC-648"]
+missing = "A refined two- or three-level native oracle must prove gather all levels, solve once, publish or reconstruct, guard, then commit."
+
+[[deferred]]
+requirement = "legacy_temporal_route_retirement"
+blocked_by = ["ADC-700"]
+missing = "The negative gate must prove no legacy stepper, fallback publication path, ignored outcome or compatibility alias remains."
+
+# Every landed supporting requirement has one success proof and one
+# refusal/rollback proof. Exact nodeids make deletion or renaming a reviewed
+# gate change rather than silent loss. Supporting evidence is not final
+# acceptance while [[deferred]] is non-empty.
 [[check]]
 issue = "ADC-648"
-requirement = "amr_step_transaction"
+requirement = "hierarchy_solve_ordering"
 polarity = "positive"
-kind = "ctest"
-target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
+kind = "pytest"
+target = "hierarchy"
+nodeid = "tests/python/unit/codegen/test_hierarchy_scoped_solve_emit.py::test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply"
 
 [[check]]
 issue = "ADC-648"
-requirement = "amr_step_transaction"
+requirement = "hierarchy_solve_ordering"
 polarity = "refusal"
-kind = "ctest"
-target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
+kind = "pytest"
+target = "hierarchy"
+nodeid = "tests/python/unit/codegen/test_hierarchy_scoped_solve_emit.py::test_refined_solution_publishes_atomically_before_reflux_then_average_down"
 
 [[check]]
 issue = "ADC-661"
@@ -70,6 +108,46 @@ target = "schedule"
 nodeid = "tests/python/unit/time/test_typed_schedule.py::test_scheduled_read_without_off_policy_fails_before_native_lowering"
 
 [[check]]
+issue = "ADC-663"
+requirement = "normalized_program_execution"
+polarity = "positive"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/lib/time/test_program_factories.py::test_ssprk2_factory_matches_manual_graph_identity_and_certificate"
+
+[[check]]
+issue = "ADC-663"
+requirement = "normalized_program_execution"
+polarity = "positive"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/lib/time/test_program_factories.py::test_imex_factory_matches_the_same_manual_program_graph"
+
+[[check]]
+issue = "ADC-663"
+requirement = "normalized_program_execution"
+polarity = "refusal"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/lib/time/test_program_factories.py::test_factories_reject_legacy_shapes_and_free_operator_names"
+
+[[check]]
+issue = "ADC-663"
+requirement = "normalized_program_execution"
+polarity = "positive"
+kind = "pytest"
+target = "example"
+nodeid = "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart"
+
+[[check]]
+issue = "ADC-663"
+requirement = "normalized_program_execution"
+polarity = "positive"
+kind = "pytest"
+target = "example"
+nodeid = "tests/python/examples/final/test_imex_amr_final_example.py::test_example_runs_and_every_scientific_format_reopens"
+
+[[check]]
 issue = "ADC-664"
 requirement = "residual_operator"
 polarity = "positive"
@@ -84,6 +162,22 @@ polarity = "refusal"
 kind = "pytest"
 target = "residual"
 nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_validates_inputs"
+
+[[check]]
+issue = "ADC-664"
+requirement = "dae_residual"
+polarity = "positive"
+kind = "ctest"
+target = "test_residual_operator"
+test_regex = "^ResidualOperator\\.RealIndex1DaeChecksConsistentInitialization$"
+
+[[check]]
+issue = "ADC-664"
+requirement = "dae_residual"
+polarity = "refusal"
+kind = "ctest"
+target = "test_residual_operator"
+test_regex = "^ResidualOperator\\.ConsistentInitializationFailsClosed$"
 
 [[check]]
 issue = "ADC-665"
@@ -116,6 +210,22 @@ polarity = "refusal"
 kind = "pytest"
 target = "transaction"
 nodeid = "tests/python/unit/time/test_step_transaction_contract.py::test_step_transaction_report_refuses_partial_publication"
+
+[[check]]
+issue = "ADC-666"
+requirement = "amr_step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "amr_step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
 
 [[check]]
 issue = "ADC-666"
