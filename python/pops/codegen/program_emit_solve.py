@@ -93,6 +93,43 @@ def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ..
     return matches[0]
 
 
+def _append_solve_report_guard(
+        program: Any, solve: Any, report: str, lines: list[str], *, label: str,
+        phase: str | None = None) -> None:
+    """Attach the authored action to ``report`` and consume that report exactly once.
+
+    The unique ``SolveOutcome.consume`` remains the authoring authority.  Generated code copies that
+    decision into ``SolveReport.action`` before branching, so the report -- rather than a second
+    status filter in the guard -- is the sole runtime source of truth.
+    """
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+    if action_kind == "reject_attempt":
+        selected = " || ".join(
+            "%s.status == %s" % (report, _SOLVE_STATUS_CPP[status])
+            for status in action_statuses)
+        failure_action = (
+            "(%s ? pops::SolveAction::kRejectAttempt : pops::SolveAction::kFailRun)"
+            % selected
+        )
+    else:
+        failure_action = "pops::SolveAction::kFailRun"
+    failure_phase = label if phase is None else phase
+    lines.append("if (!%s.solved_value_available()) {" % report)
+    lines.append("  %s.action = %s;" % (report, failure_action))
+    if action_kind == "reject_attempt":
+        lines.append("  if (%s.action == pops::SolveAction::kRejectAttempt) {" % report)
+        lines.append(
+            "    throw pops::runtime::program::StepAttemptRejected("
+            "%s.status, %s, std::string(%s) + %s.status_name());"
+            % (report, json.dumps(failure_phase), json.dumps(label + " failed: "), report))
+        lines.append("  }")
+    lines.append(
+        "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
+        "\" action=\" + %s.action_name());"
+        % (json.dumps(label + " failed: "), report, report))
+    lines.append("}")
+
+
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
     """Validate matrix-free facts that need either the final node or physical model metadata."""
     if v.op == "rhs_jacvec":
@@ -798,22 +835,6 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
     kr = "kr%d" % v.id
-    action_kind, action_statuses = _consumed_solve_action(program, v)
-
-    def _append_report_guard() -> None:
-        lines.append("if (!%s.solved_value_available()) {" % kr)
-        if action_kind == "reject_attempt":
-            selected = " || ".join(
-                "%s.status == %s" % (kr, _SOLVE_STATUS_CPP[status])
-                for status in action_statuses)
-            lines.append("  if (%s) {" % selected)
-            lines.append("    throw pops::runtime::program::StepAttemptRejected("
-                         "%s.status, \"solve\", std::string(\"solve_linear failed: \") + "
-                         "%s.status_name());" % (kr, kr))
-            lines.append("  }")
-        lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
-                     "%s.status_name() + \" action=fail_run\");" % kr)
-        lines.append("}")
 
     abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["abs_tol"])
     hierarchy_emission = None
@@ -837,7 +858,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         if hierarchy_emission is None:
             raise ValueError("a direct hierarchy phase has no native provider emission")
         lines.extend(hierarchy_emission.solve)
-        _append_report_guard()
+        _append_solve_report_guard(
+            program, v, kr, lines, label="solve_linear", phase="solve")
         return
 
     if footprint is None or problem_contract is None:
@@ -960,4 +982,5 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         "pops::SolveReport %s = ctx.solve_prepared_linear("
         "*%s, *%s, *%s, %s, %s);"
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
-    _append_report_guard()
+    _append_solve_report_guard(
+        program, v, kr, lines, label="solve_linear", phase="solve")
