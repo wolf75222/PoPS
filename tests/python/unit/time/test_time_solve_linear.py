@@ -133,7 +133,8 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
     assert "solve_linear failed" in src, src
     assert ".status == pops::SolveStatus::kIterationLimit" in src, src
     assert ".status == pops::SolveStatus::kBreakdown" not in src, src
-    assert "action=fail_run" in src, src
+    assert ".action == pops::SolveAction::kRejectAttempt" in src, src
+    assert '" action=" +' in src and ".action_name()" in src, src
 
 
 def test_bicgstab_codegen(t):
