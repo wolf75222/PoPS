@@ -94,6 +94,28 @@ def _append_solve_report_guard(
     lines.append("}")
 
 
+def _append_pointwise_solve_report(
+        program: Any, solve: Any, status: str, lines: list[str], *,
+        label: str, stem: str) -> None:
+    """Reduce typed per-cell solve status and consume one collective ``SolveReport``."""
+    code = "%s_code_%d" % (stem, solve.id)
+    report = "%s_report_%d" % (stem, solve.id)
+    lines.append(
+        "const int %s = static_cast<int>(pops::reduce_max(%s, 0));"
+        % (code, status))
+    lines.append("pops::SolveReport %s;" % report)
+    lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
+    lines.append(
+        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
+        % (code, report))
+    lines.append(
+        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
+        % (code, report))
+    lines.append(
+        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
+    _append_solve_report_guard(program, solve, report, lines, label=label)
+
+
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
              field_plans: Any = None) -> None:
@@ -246,17 +268,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             components, by_block, var, scratch, status,
             tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
             fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
-        code = "ci_code_%d" % v.id
-        report = "ci_report_%d" % v.id
-        lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))
-        lines.append("pops::SolveReport %s;" % report)
-        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
-        lines.append("else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
-                     % (code, report))
-        lines.append("else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
-                     % (code, report))
-        lines.append("else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
-        _append_solve_report_guard(program, v, report, lines, label="coupled_implicit")
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="coupled_implicit", stem="ci")
         var.update({("coupled_solution", v.id, block): token
                     for block, token in scratch.items()})
         var[v.id] = scratch[next(iter(scratch))]
@@ -481,28 +494,39 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_linear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
-            node_model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
+            node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
+            var[rhs_in.id], var[v.id], status, bidx)
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
         # uses. The output is a fresh scratch state; the guess input seeds the iterate.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, bidx)
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_nonlinear", stem="local_solve")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
