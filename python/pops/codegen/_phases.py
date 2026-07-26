@@ -72,14 +72,14 @@ def resolve(
     from pops.time import Program
     if resolved_time is not None and type(resolved_time) is not Program:
         raise TypeError("pops.resolve time must be an exact pops.Program")
-    if target == "system" and resolved_time is None:
-        raise ValueError("pops.resolve requires a whole-system Program for Uniform layout")
-    if resolved_time is not None and backend_token != "production":
+    if resolved_time is None:
+        raise ValueError(
+            "pops.resolve requires a whole-system Program for every Uniform or AMR layout"
+        )
+    if backend_token != "production":
         raise ValueError("a resolved whole-system Program requires backend=Production()")
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     if len(layout_plan.layouts) > 1:
-        if resolved_time is None:
-            raise RuntimeError("multi-layout Uniform resolution lost its required Program")
         co_layout_ops = {
             "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
             "field_solve_from_blocks",
@@ -332,61 +332,59 @@ def compile(plan: Any) -> Any:
     )
 
     models = compile_install_models(plan, plan.compile_options)
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen._compiled_artifact import CompiledLayoutProgram
+    from pops.codegen.program_models import ProgramModelGraph
+
     program = None
-    layout_programs = ()
-    if plan.time is not None:
-        from pops.codegen._compile_drivers import compile_problem
-        from pops.codegen._compiled_artifact import CompiledLayoutProgram
-        from pops.codegen.program_models import ProgramModelGraph
+    options = dict(plan.compile_options)
+    options["libraries"] = plan.libraries
+    if len(plan.layout_plan.layouts) == 1:
+        model_graph = build_program_model_graph(plan)
+        program = compile_problem(
+            time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
+            problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
+        program._discard_authoring()
+        row = plan.layout_plan.layouts[0]
+        layout_programs = (CompiledLayoutProgram(
+            row.handle.qualified_id, plan.layout_targets[row.handle.qualified_id],
+            tuple(block.name for block in plan.blocks), program),)
+    else:
+        from pathlib import Path
+        from pops.codegen.program_slicing import slice_program
 
-        options = dict(plan.compile_options)
-        options["libraries"] = plan.libraries
-        if len(plan.layout_plan.layouts) == 1:
-            model_graph = build_program_model_graph(plan)
-            program = compile_problem(
-                time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
-                problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
-            program._discard_authoring()
-            row = plan.layout_plan.layouts[0]
-            layout_programs = (CompiledLayoutProgram(
-                row.handle.qualified_id, plan.layout_targets[row.handle.qualified_id],
-                tuple(block.name for block in plan.blocks), program),)
-        else:
-            from pathlib import Path
-            from pops.codegen.program_slicing import slice_program
-
-            block_layouts = {
-                assignment.subject.local_id: assignment.layout.qualified_id
-                for assignment in plan.layout_plan.assignments
-                if assignment.subject_kind == "block"
-            }
-            compiled_rows = []
-            for row in plan.layout_plan.layouts:
-                layout_id = row.handle.qualified_id
-                selected = tuple(
-                    block for block in plan.blocks if block_layouts[block.name] == layout_id)
-                selected_names = tuple(block.name for block in selected)
-                sliced = slice_program(plan.time, selected_names)
-                slice_options = dict(options)
-                if slice_options.get("so_path") is not None:
-                    path = Path(slice_options["so_path"])
-                    slice_options["so_path"] = str(
-                        path.with_name("%s.%s%s" % (
-                            path.stem, row.handle.local_id, path.suffix or ".so")))
-                compiled_program = compile_problem(
-                    time=sliced,
-                    model_graph=ProgramModelGraph.from_resolved_blocks(selected),
-                    backend=plan.backend,
-                    target=plan.layout_targets[layout_id],
-                    problem_snapshot=plan.snapshot,
-                    field_plans={},
-                    **slice_options,
-                )
-                compiled_program._discard_authoring()
-                compiled_rows.append(CompiledLayoutProgram(
-                    layout_id, plan.layout_targets[layout_id], selected_names,
-                    compiled_program))
-            layout_programs = tuple(compiled_rows)
+        block_layouts = {
+            assignment.subject.local_id: assignment.layout.qualified_id
+            for assignment in plan.layout_plan.assignments
+            if assignment.subject_kind == "block"
+        }
+        compiled_rows = []
+        for row in plan.layout_plan.layouts:
+            layout_id = row.handle.qualified_id
+            selected = tuple(
+                block for block in plan.blocks if block_layouts[block.name] == layout_id)
+            selected_names = tuple(block.name for block in selected)
+            sliced = slice_program(plan.time, selected_names)
+            slice_options = dict(options)
+            if slice_options.get("so_path") is not None:
+                path = Path(slice_options["so_path"])
+                slice_options["so_path"] = str(
+                    path.with_name("%s.%s%s" % (
+                        path.stem, row.handle.local_id, path.suffix or ".so")))
+            compiled_program = compile_problem(
+                time=sliced,
+                model_graph=ProgramModelGraph.from_resolved_blocks(selected),
+                backend=plan.backend,
+                target=plan.layout_targets[layout_id],
+                problem_snapshot=plan.snapshot,
+                field_plans={},
+                **slice_options,
+            )
+            compiled_program._discard_authoring()
+            compiled_rows.append(CompiledLayoutProgram(
+                layout_id, plan.layout_targets[layout_id], selected_names,
+                compiled_program))
+        layout_programs = tuple(compiled_rows)
     from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 
     blocks = tuple(

@@ -122,10 +122,7 @@ class CompiledPlanRecord:
                     state_identities=block.state_identities)
                 for block in plan.blocks
             ),
-            time_identity=(
-                _evidence(plan.time, where="resolved time")
-                if plan.time is not None else None
-            ),
+            time_identity=_evidence(plan.time, where="resolved time"),
             resolved_hierarchy=plan.resolved_hierarchy,
             amr_transfer=plan.amr_transfer,
             initial_condition_plan=plan.initial_condition_plan,
@@ -154,6 +151,9 @@ class CompiledPlanRecord:
         if type(self.lowering_coverage) is not LoweringCoverageReport:
             raise TypeError(
                 "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
+        if self.time_identity is None:
+            raise ValueError("CompiledPlanRecord lost its authenticated whole-system Program")
+        object.__setattr__(self, "time_identity", _deep_freeze(self.time_identity))
         object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
         object.__setattr__(self, "field_plans", _deep_freeze(self.field_plans))
         if self.consumer_graph is not None:
@@ -264,7 +264,8 @@ class CompiledPlanRecord:
                 }
                 for block in self.blocks
             ],
-            "time_identity": self.time_identity,
+            "time_identity": _evidence(
+                self.time_identity, where="compiled plan time identity"),
             "resolved_hierarchy": _evidence(
                 self.resolved_hierarchy, where="compiled plan resolved hierarchy"
             ) if self.resolved_hierarchy is not None else None,
@@ -497,14 +498,12 @@ class CompiledSimulationArtifact:
             layout_programs = (CompiledLayoutProgram(
                 layout_id, self.plan.layout_targets[layout_id],
                 expected_partitions[layout_id], self.program),)
-        # Uniform execution always requires one independently installable Program per layout.
-        # AMR permits a program-less low-level artifact, but when a compiled Program is present it
-        # is an equally authenticated per-layout binary (multi-layout AMR is refused at resolve).
-        required_program_layouts = expected_layouts \
-            if self.plan.target == "system" or self.program is not None else ()
-        if tuple(row.layout_id for row in layout_programs) != required_program_layouts:
+        # Every layout owns one independently installable compiled Program.  Only the aggregate
+        # pointer may be absent for a heterogeneous multi-layout artifact, where it would be
+        # ambiguous; each qualified layout Program remains mandatory and authenticated.
+        if tuple(row.layout_id for row in layout_programs) != expected_layouts:
             raise ValueError(
-                "layout_programs must cover every and only per-layout system target")
+                "layout_programs must cover every resolved layout exactly once")
         for row in layout_programs:
             if row.target != self.plan.layout_targets[row.layout_id]:
                 raise ValueError("layout Program target differs from resolved per-layout target")

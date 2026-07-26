@@ -25,6 +25,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
     HierarchySnapshot, RuntimeInspection)
+from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
 
 
 def _model():
@@ -299,9 +300,11 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         cells=64,
         name="amr-runtime-inspect",
     )
+    program = CompiledProgramStub(
+        target="amr_system", block_names=("ne",), abi_key=cm.abi_key)
     artifact = CompiledSimulationArtifact(
         plan=resolved,
-        program=None,
+        program=program,
         blocks=(CompiledBlockArtifact(
             "ne", cm, resolved.blocks[0].spatial, ("U",)),),
     )

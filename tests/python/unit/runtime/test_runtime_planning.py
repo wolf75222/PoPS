@@ -25,6 +25,7 @@ from pops.identity import make_identity
 from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from pops.time import Program
 from pops.runtime._runtime_plan_contracts import (
     FieldAccess,
     RuntimeCall,
@@ -110,7 +111,7 @@ def _artifact(
         layout={"kind": "runtime-planning"},
         layout_plan=layout_plan,
         layout_targets={row.handle.qualified_id: "system" for row in layout_plan.layouts},
-        time=CanonicalValue("rk2"),
+        time=Program("rk2"),
         blocks=tuple(
             ResolvedBlock(
                 name,

@@ -183,7 +183,6 @@ def typed_compiled_artifact(
     *,
     target: str = "system",
     layout: Any = None,
-    has_program: bool = True,
     spatial: Any = None,
 ):
     """Wrap inert compiled components in the exact compile-phase artifact.
@@ -258,7 +257,7 @@ def typed_compiled_artifact(
         layout_targets={
             row.handle.qualified_id: target for row in layout_plan.layouts
         },
-        time=program if has_program else None,
+        time=program,
         blocks=tuple(
             ResolvedBlock(
                 name, schema_modules[name], resolved_spatial, backend, ("U",),
@@ -280,7 +279,7 @@ def typed_compiled_artifact(
             model.definition_identity = model_compile_identity(schema_modules[name])
     return CompiledSimulationArtifact(
         plan=plan,
-        program=compiled if has_program else None,
+        program=compiled,
         blocks=tuple(
             CompiledBlockArtifact(name, by_name[name], resolved_spatial, ("U",))
             for name in names

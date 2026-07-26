@@ -1,7 +1,7 @@
 """ADC-660: exact immutable resolve/compile/bind/install phase values."""
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import numpy as np
 import pytest
@@ -16,6 +16,7 @@ from pops.layouts import Uniform
 from pops.model import Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from pops.time import Program
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
 from tests.python.support.layout_plan import cartesian_grid
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -68,7 +69,7 @@ def _resolved_plan():
         layout_targets={
             row.handle.qualified_id: "system" for row in layout_plan.layouts
         },
-        time=_Canonical("rk2"),
+        time=Program("rk2"),
         blocks=(plans.ResolvedBlock(
             "fluid", _Canonical("model"), {"flux": ["hll"]}, "production", ("U",),
             ("test::fluid::state::U",)),),
@@ -126,6 +127,16 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
         plan.verify()
 
 
+@pytest.mark.parametrize("time", [None, _Canonical("program-lookalike")])
+def test_resolved_plan_requires_an_exact_whole_system_program(time):
+    plan, _ = _resolved_plan()
+    with pytest.raises(
+        TypeError,
+        match="time must be the exact whole-system pops.Program",
+    ):
+        replace(plan, time=time)
+
+
 def test_wrong_phase_and_structural_lookalikes_are_rejected():
     plan, _ = _resolved_plan()
     with pytest.raises(TypeError, match="exact ResolvedSimulationPlan"):
@@ -147,7 +158,7 @@ def test_compiled_artifact_is_one_exact_wrapper_and_rehashes_binaries(tmp_path):
 
 
 def test_single_amr_artifact_authenticates_its_compiled_layout_program():
-    artifact = artifact_fixture(target="amr_system", amr_program=True)
+    artifact = artifact_fixture(target="amr_system")
 
     assert artifact.program is artifact.layout_programs[0].program
     assert artifact.layout_programs[0].target == "amr_system"

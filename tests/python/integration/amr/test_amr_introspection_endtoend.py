@@ -40,6 +40,7 @@ from tests.python.support.native_execution_context import (  # noqa: E402
     artifact_execution_context,
 )
 from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
+from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
 
 
 def _amr_metadata_fixture():
@@ -66,9 +67,11 @@ def _amr_metadata_fixture():
         name="amr-introspection-metadata",
     )
     schema = resolved.bind_schema
+    program = CompiledProgramStub(
+        target="amr_system", block_names=("ne",), abi_key=handle.abi_key)
     artifact = CompiledSimulationArtifact(
         plan=resolved,
-        program=None,
+        program=program,
         blocks=(CompiledBlockArtifact(
             "ne", handle, resolved.blocks[0].spatial, ("U",)),),
     )
