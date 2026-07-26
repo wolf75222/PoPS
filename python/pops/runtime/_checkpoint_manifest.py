@@ -173,7 +173,59 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     return restart
 
 
+def require_exact_payload_version(
+    payload: Any,
+    *,
+    key: str,
+    expected: int,
+    runtime_kind: str,
+) -> int:
+    """Require one current integer payload version without coercing legacy values.
+
+    The canonical envelope version authenticates the outer container.  Uniform and AMR also carry
+    a codec-specific payload version, which must remain an exact scalar integer: strings, floats,
+    booleans, arrays and missing values are migration inputs, never runtime compatibility routes.
+    """
+    if not isinstance(key, str) or not key:
+        raise TypeError("checkpoint payload version key must be non-empty text")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 1:
+        raise TypeError("expected checkpoint payload version must be a positive integer")
+    if not isinstance(runtime_kind, str) or not runtime_kind:
+        raise TypeError("checkpoint runtime kind must be non-empty text")
+    stored_files = getattr(payload, "files", None)
+    if stored_files is None:
+        keys = getattr(payload, "keys", None)
+        if not callable(keys):
+            raise TypeError("checkpoint payload exposes neither files nor keys()")
+        stored_files = keys()
+    elif callable(stored_files):
+        stored_files = stored_files()
+    files = set(stored_files)
+    if key not in files:
+        raise ValueError(
+            "restart: strict %s checkpoint is missing payload version %r; "
+            "historical checkpoints require offline migration" % (runtime_kind, key)
+        )
+    import numpy as np
+
+    encoded = np.asarray(payload[key])
+    if encoded.shape != () or encoded.dtype.kind not in "iu":
+        raise TypeError(
+            "restart: %s checkpoint payload version must be an exact integer scalar; "
+            "historical checkpoints require offline migration" % runtime_kind
+        )
+    actual = int(encoded.item())
+    if actual != expected:
+        raise ValueError(
+            "restart: %s checkpoint payload version %r unsupported; expected exactly %d; "
+            "historical checkpoints require offline migration"
+            % (runtime_kind, actual, expected)
+        )
+    return actual
+
+
 __all__ = [
     "CHECKPOINT_SCHEMA_VERSION", "IDENTITY_KEY", "MANIFEST_KEY",
-    "authenticate_checkpoint_payload", "seal_checkpoint_payload",
+    "authenticate_checkpoint_payload", "require_exact_payload_version",
+    "seal_checkpoint_payload",
 ]

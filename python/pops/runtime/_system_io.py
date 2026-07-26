@@ -213,7 +213,10 @@ class _SystemIO(_System):
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
-        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._checkpoint_manifest import (
+            authenticate_checkpoint_payload,
+            require_exact_payload_version,
+        )
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
         from pops.time._history.persistence import HistoryPersistence
@@ -224,13 +227,12 @@ class _SystemIO(_System):
 
         d = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
-        version = int(d["pops_checkpoint_version"])
-        if version != UNIFORM_CHECKPOINT_PAYLOAD_VERSION:
-            raise ValueError(
-                "restart : checkpoint version %r not supported (expected exactly %d; "
-                "historical checkpoints require offline migration)"
-                % (version, UNIFORM_CHECKPOINT_PAYLOAD_VERSION)
-            )
+        require_exact_payload_version(
+            d,
+            key="pops_checkpoint_version",
+            expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            runtime_kind="Uniform",
+        )
         preflight_uniform_restart(d)
         installed_schedule = getattr(
             getattr(self, "_temporal_restart_state", None), "program_schedule", None)

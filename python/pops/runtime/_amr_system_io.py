@@ -41,16 +41,22 @@ class _AmrSystemIO(_AmrSystem):
 
     def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
         """Authenticate and preflight the complete AMR payload without native mutation."""
+        from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
-        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._checkpoint_manifest import (
+            authenticate_checkpoint_payload,
+            require_exact_payload_version,
+        )
         from pops.runtime._amr_checkpoint_v3 import prepare_v3
 
         data = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
-        version = int(data["pops_amr_checkpoint_version"])
-        if version != 3:
-            raise ValueError(
-                "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
+        require_exact_payload_version(
+            data,
+            key="pops_amr_checkpoint_version",
+            expected=AMR_CHECKPOINT_PAYLOAD_VERSION,
+            runtime_kind="AMR",
+        )
         return _PreparedAMRSystemRestart(
             identity, prepare_v3(
                 self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo)))
