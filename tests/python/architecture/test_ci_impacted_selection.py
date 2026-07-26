@@ -749,7 +749,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m' in mpi_prewarm_block
     assert "compression-level: 0" in mpi_prewarm_block
 
-    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  kokkos-openmp:\n", 1)[0]
+    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split(
+        "\n  # PREWARM OPENMP NATIF.", 1
+    )[0]
     assert "needs: [set-mode, changes, gate-mpi-prewarm]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
     assert "actions/download-artifact@v8" in mpi_block
@@ -802,9 +804,48 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block
     assert "This writer is pure Python" not in mpi_block
 
+    openmp_prewarm_block = workflow.split("\n  gate-openmp-prewarm:\n", 1)[1].split(
+        "\n  kokkos-openmp:\n", 1
+    )[0]
+    assert "runs-on: ubuntu-latest" in openmp_prewarm_block
+    assert "timeout-minutes: 32" in openmp_prewarm_block
+    assert "needs: set-mode" in openmp_prewarm_block
+    assert "if: needs.set-mode.outputs.openmp_required == 'true'" in openmp_prewarm_block
+    assert (
+        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        in openmp_prewarm_block
+    )
+    assert "-DKokkos_ENABLE_OPENMP=ON" in openmp_prewarm_block
+    assert "cmake --preset ci-kokkos" in openmp_prewarm_block
+    assert "scripts/ci_python_module_objects.py" in openmp_prewarm_block
+    assert "--contract-file" in openmp_prewarm_block
+    assert "Restore reusable OpenMP ccache" not in openmp_prewarm_block
+    assert "Initialize exact OpenMP prewarm ccache" in openmp_prewarm_block
+    assert "lane_parallelism=2" in openmp_prewarm_block
+    assert "lane_parallelism=4" not in openmp_prewarm_block
+    assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_prewarm_block
+    assert (
+        '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."'
+        in openmp_prewarm_block
+    )
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in openmp_prewarm_block
+    assert (
+        'run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m'
+        in openmp_prewarm_block
+    )
+    assert "compression-level: 0" in openmp_prewarm_block
+    openmp_prewarm_upload = openmp_prewarm_block.split(
+        "\n      - name: Upload OpenMP prewarm cache and compile contract", 1
+    )[1]
+    assert "openmp-prewarm-ccache-${{ matrix.lane }}.tar" in openmp_prewarm_upload
+    assert "openmp-prewarm-contract-${{ matrix.lane }}.json" in openmp_prewarm_upload
+    for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
+        assert linked_artifact not in openmp_prewarm_upload
+
     openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
     assert "timeout-minutes: 70" in openmp_block
+    assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
     assert openmp_block.count("- lane: cpp-") == 6
     for shard in range(6):
@@ -813,7 +854,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
             "            kind: cpp\n"
             f"            shard: {shard}\n"
             "            shard_total: 6\n"
-            "            ccache_maxsize: 512M"
+            "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (
         "- lane: python\n"
@@ -822,7 +863,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            shard_total: 1\n"
         "            ccache_maxsize: 2G"
     ) in openmp_block
-    assert openmp_block.count("if: matrix.kind == 'cpp'") == 4
+    assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
     assert openmp_block.count("if: matrix.kind == 'python'") == 6
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
@@ -835,6 +876,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--shard-index "${{ matrix.shard }}"' in openmp_block
     assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
     assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
+    assert "pattern: gate-openmp-prewarm-*" in openmp_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in openmp_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in openmp_block
+    assert "--verify-contracts" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
     openmp_cpp_build = openmp_block[
         openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
@@ -847,6 +892,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         in openmp_block
     )
     assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in openmp_cpp_build
+    assert openmp_cpp_build.index("--verify-contracts") < openmp_cpp_build.index(
+        'read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"'
+    )
     assert (
         'cmake --build --preset ci-kokkos --parallel 2 --target "${cpp_targets[@]}"'
         in openmp_block

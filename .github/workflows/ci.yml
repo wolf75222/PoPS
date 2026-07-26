@@ -1925,6 +1925,153 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
+  # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
+  # chacun des six shards a recompiler independamment le meme socle runtime avant ses executables.
+  # Ces quatre lanes configurent le graphe OpenMP exact et compilent une partition disjointe de ses
+  # objets runtime. Elles publient uniquement ccache et le contrat compilateur/flags/revision/sources :
+  # aucun binaire lie n'est transmis, et chaque shard reconfigure puis authentifie le contrat.
+  gate-openmp-prewarm:
+    name: ubuntu-latest / Kokkos OpenMP (C++ prewarm ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    needs: set-mode
+    if: needs.set-mode.outputs.openmp_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [system, amr-base, amr-compressible, amr-compiled]
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_VERSION: 4.4.01
+      KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-openmp-install
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Install OpenMP prewarm dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev ninja-build ccache mold
+
+      - name: Resolve OpenMP prewarm platform identity
+        id: openmp-prewarm-platform
+        run: |
+          image="${ImageOS:-}"
+          if [ -z "$image" ]; then
+            . /etc/os-release
+            image="${ID}${VERSION_ID}"
+          fi
+          version="$(g++ -dumpfullversion -dumpversion)"
+          version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
+          echo "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Kokkos install (OpenMP prewarm)
+        id: openmp-prewarm-kokkos-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.KOKKOS_PREFIX }}
+          key: kokkos-${{ runner.os }}-${{ steps.openmp-prewarm-platform.outputs.key }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-openmp-cxx20-pic
+
+      - name: Build + install Kokkos (OpenMP prewarm)
+        if: steps.openmp-prewarm-kokkos-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 -b "${KOKKOS_VERSION}" \
+            https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
+          test "$(git -C /tmp/kokkos-omp rev-parse HEAD)" = "${KOKKOS_COMMIT}"
+          cmake -S /tmp/kokkos-omp -B /tmp/kbuild-omp -G Ninja \
+            -DKokkos_ENABLE_OPENMP=ON \
+            -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build /tmp/kbuild-omp --parallel 4 --target install
+          rm -rf "${CCACHE_DIR}"
+          mkdir -p "${CCACHE_DIR}"
+
+      # Le cache transporte uniquement les objets produits par cette lane et ce checkout. Un ancien
+      # cache de shard (ou les objets de bootstrap Kokkos) gonflerait sinon l'artefact et brouillerait
+      # l'autorite du contrat courant.
+      - name: Initialize exact OpenMP prewarm ccache
+        run: |
+          rm -rf "${CCACHE_DIR}"
+          mkdir -p "${CCACHE_DIR}"
+
+      - name: Prewarm OpenMP production runtime objects (${{ matrix.lane }})
+        run: |
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          # Deux frontends sont la limite observee sans pression memoire dangereuse sur les
+          # runners publics OpenMP. Les quatre lanes restent executees en parallele.
+          lane_parallelism=2
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism" \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          python3 scripts/ci_python_module_objects.py --build-dir build-kokkos --verify
+          ccache --zero-stats
+          mapfile -t object_targets < <(
+            python3 scripts/ci_python_module_objects.py \
+              --build-dir build-kokkos \
+              --lane "${{ matrix.lane }}" \
+              --contract-file "$RUNNER_TEMP/openmp-prewarm-contract-${{ matrix.lane }}.json"
+          )
+          test "${#object_targets[@]}" -gt 0
+          run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m \
+            cmake --build --preset ci-kokkos --parallel "$lane_parallelism" \
+              --target "${object_targets[@]}"
+          ccache -s
+          tar -C "$CCACHE_DIR" \
+            -cf "$RUNNER_TEMP/openmp-prewarm-ccache-${{ matrix.lane }}.tar" .
+
+      - name: Upload OpenMP prewarm cache and compile contract
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-openmp-prewarm-${{ matrix.lane }}
+          path: |
+            ${{ runner.temp }}/openmp-prewarm-ccache-${{ matrix.lane }}.tar
+            ${{ runner.temp }}/openmp-prewarm-contract-${{ matrix.lane }}.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   kokkos-openmp:
     # The OpenMP C++ proof is the same exact six-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
@@ -1932,11 +2079,11 @@ jobs:
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
     name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    # C++ shards keep a 38-minute cold-build watchdog and a 7-minute test watchdog. The Python lane
-    # retains its existing 45-minute module-build guard. The outer envelope is setup/cache/cleanup
-    # margin.
+    # Les shards C++ recoivent le socle runtime du prewarm courant ; leur watchdog de 38 minutes
+    # reste une borne fail-closed pour verification, objets de tests et liens. La lane Python
+    # conserve son garde de 45 minutes. L'enveloppe externe couvre setup/cache/nettoyage.
     timeout-minutes: 70
-    needs: set-mode
+    needs: [set-mode, gate-openmp-prewarm]
     strategy:
       fail-fast: false
       matrix:
@@ -1945,32 +2092,32 @@ jobs:
             kind: cpp
             shard: 0
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
             shard_total: 6
-            ccache_maxsize: 512M
+            ccache_maxsize: 2G
           - lane: python
             kind: python
             shard: 0
@@ -1983,8 +2130,9 @@ jobs:
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      # Each C++ lane caches only its deterministic sixth of the target graph.  The Python lane
-      # keeps the pre-existing 2 GiB budget for its single production module build.
+      # Chaque lane C++ fusionne le socle runtime OpenMP prechauffe avant d'ajouter les objets de
+      # son sixieme du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
+      # La lane Python conserve le meme budget pour son module de production unique.
       CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
@@ -2091,9 +2239,9 @@ jobs:
           rm -rf "${CCACHE_DIR}"
           mkdir -p "${CCACHE_DIR}"
 
-      # Restore the PoPS object cache only after a possible Kokkos bootstrap.  Both builds use
+      # Restore the PoPS object cache only after a possible Kokkos bootstrap. Both builds use
       # ccache, but Kokkos objects are covered by their own exact install cache and must not evict
-      # the deliberately small per-shard PoPS working set before it is consumed.
+      # the PoPS working set before the authenticated current-run prewarm is merged.
       - name: Restore ccache (Kokkos OpenMP, ${{ matrix.lane }})
         if: matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
@@ -2108,11 +2256,32 @@ jobs:
         if: matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
         run: ccache --zero-stats
 
+      - name: Download parallel OpenMP prewarm caches
+        if: matrix.kind == 'cpp'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gate-openmp-prewarm-*
+          path: ${{ github.workspace }}/.pops-ci/openmp-prewarm
+
+      - name: Merge parallel OpenMP prewarm caches
+        if: matrix.kind == 'cpp'
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          mapfile -t cache_archives < <(
+            find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
+              -name 'openmp-prewarm-ccache-*.tar' -type f | sort
+          )
+          test "${#cache_archives[@]}" -eq 4
+          for cache_archive in "${cache_archives[@]}"; do
+            tar -C "$CCACHE_DIR" -xf "$cache_archive"
+          done
+          ccache --zero-stats
+
       - name: Configure + build (backend Kokkos OpenMP)
         if: matrix.kind == 'cpp'
-        # A cold production-header invalidation leaves the two heaviest shards within 10-13 targets
-        # of completion at 30 minutes.  Keep five minutes around the independently bounded build for
-        # configure/reporting without misclassifying a progressing compilation as a test failure.
+        # Le socle runtime froid est construit une seule fois par les quatre lanes semantiques. Ce
+        # shard reconfigure le graphe officiel, authentifie les quatre contrats puis ne compile que
+        # ses executables/tests propres ; le watchdog reste un garde-fou, pas le mecanisme de vitesse.
         timeout-minutes: 43
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
@@ -2152,6 +2321,14 @@ jobs:
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_HEAVY_TEST_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          mapfile -t compile_contracts < <(
+            find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
+              -name 'openmp-prewarm-contract-*.json' -type f | sort
+          )
+          test "${#compile_contracts[@]}" -eq 4
+          python3 scripts/ci_python_module_objects.py \
+            --build-dir build-kokkos \
+            --verify-contracts "${compile_contracts[@]}"
           read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"
           if [ "${#cpp_targets[@]}" -eq 0 ]; then
             echo "::error::OpenMP C++ shard ${{ matrix.shard }} selected no targets from the forced complete suite"
