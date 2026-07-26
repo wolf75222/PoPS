@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from pops.identity.scalar import scalar_data, scalar_literal
@@ -341,9 +342,12 @@ def test_hierarchy_program_and_codegen_core_have_no_builtin_backend_branch():
         assert "CompositeTensorFAC" not in source
 
 
-def _public_amr_hierarchy_case(solver):
+def _public_amr_hierarchy_case(
+    solver, *, max_levels=2, temporal_ratios=(3,),
+):
     import pops
     from pops.amr import (
+        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -360,7 +364,7 @@ def _public_amr_hierarchy_case(solver):
     from pops.initial import InitialCondition
     from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
-    from pops.lib.initial import Constant
+    from pops.lib.initial import Constant, Gaussian
     from pops.math import ValueExpr, ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.numerics import (
@@ -536,22 +540,34 @@ def _public_amr_hierarchy_case(solver):
     case.initials.add(
         InitialCondition(
             state=marker_instance,
-            # Tag the complete coarse domain so bootstrap materializes the authored fine level.
-            value=Constant((2.0,)),
+            # A localized marker creates genuinely nested patches at every requested depth.  Full
+            # domain fine levels are a degenerate topology and do not exercise coarse/fine FAC joins.
+            value=Gaussian(
+                frame=frame,
+                center={x_axis: 0.5, y_axis: 0.5},
+                background=0.0,
+                amplitude=2.0,
+                inverse_width=64.0,
+            ),
             projection=ConservativeCellAverage(),
         )
     )
-    threshold = case.param(RuntimeParam("flat-refine-threshold", default=1.0))
+    threshold = case.param(RuntimeParam("nested-refine-threshold", default=0.5))
     transfer = AMRTransfer()
     transfer.state(state_instance, StateTransfer())
     transfer.state(marker_instance, StateTransfer())
+    if len(temporal_ratios) != max_levels - 1:
+        raise ValueError("one independent temporal ratio is required per AMR transition")
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
-            cells=(4, 4),
+            cells=(8, 8),
             periodic=PeriodicAxes(frame.axes),
         ),
-        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        hierarchy=AMRHierarchy(
+            max_levels=max_levels,
+            ratios=tuple(2 for _ in range(max_levels - 1)),
+        ),
         tagging=AMRTagging(
             rules=(
                 Tag(ValueExpr(marker_instance) > case.value(threshold)),
@@ -562,9 +578,34 @@ def _public_amr_hierarchy_case(solver):
         ),
         regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
         transfer=transfer,
-        execution=AMRExecution.synchronous(),
+        execution=AMRExecution.subcycled(
+            tuple(
+                AMRClockRelation(level, level + 1, ratio)
+                for level, ratio in enumerate(temporal_ratios)
+            )
+        ),
     )
     return case, layout
+
+
+def _constant_rotation_oracle(*, dt, rate, density, east, north):
+    """Closed-form inverse of ``I - dt*J`` for the authored skew source.
+
+    This deliberately does not call a PoPS kernel, generated helper, or the native provider.  The
+    spatially constant state has an exact zero condensed RHS, so the real hierarchy solver must still
+    execute but the accepted state is the independently checkable local implicit rotation on every
+    materialized level.
+    """
+    rotation = dt * rate
+    denominator = 1.0 + rotation * rotation
+    return np.asarray(
+        (
+            density,
+            (east + rotation * north) / denominator,
+            (-rotation * east + north) / denominator,
+        ),
+        dtype=np.float64,
+    )
 
 
 def _external_hierarchy_counters(so_path):
@@ -834,56 +875,99 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
         encoding="utf-8"
     )
 
-    # The same descriptor must survive the public AMR lifecycle.  Merely loading the library leaves
-    # every counter at zero; bind must register and prepare the external provider, while run must
-    # query its provider-selected execution path and invoke its real hierarchy solve.  The external
-    # provider delegates numerical storage/iterations to the authenticated builtin FAC provider but
-    # retains its own identity, exact prepared contract and observable lifecycle.
-    import numpy as np
+    # The same descriptor must survive the public AMR lifecycle.  Bind registers and prepares the
+    # external provider, while run must query its provider-selected execution path and invoke its real
+    # hierarchy solve.  The external provider delegates numerical storage/iterations to the
+    # authenticated builtin FAC provider but retains its own identity, exact prepared contract and
+    # observable lifecycle.
     import pops
     from pops.codegen import Production
 
-    case, layout = _public_amr_hierarchy_case(ExternalHierarchySolver())
-    resolved = pops.resolve(
-        pops.validate(case),
-        layout=layout,
-        backend=Production(),
-        compile_options={
-            "include": str(Path(__file__).resolve().parents[4] / "include"),
-            "cxx": native_cxx,
-        },
+    oracle = _constant_rotation_oracle(
+        dt=0.01, rate=3.0, density=2.0, east=0.25, north=-0.5,
     )
-    compiled = pops.compile(resolved)
-    assert Path(compiled.so_path).is_file()
-    assert _external_hierarchy_counters(compiled.so_path) == (0, 0, 0, 0)
+    for max_levels, temporal_ratios in ((2, (3,)), (3, (3, 5))):
+        case, layout = _public_amr_hierarchy_case(
+            ExternalHierarchySolver(),
+            max_levels=max_levels,
+            temporal_ratios=temporal_ratios,
+        )
+        resolved = pops.resolve(
+            pops.validate(case),
+            layout=layout,
+            backend=Production(),
+            compile_options={
+                "include": str(Path(__file__).resolve().parents[4] / "include"),
+                "cxx": native_cxx,
+            },
+        )
+        compiled = pops.compile(resolved)
+        assert Path(compiled.so_path).is_file()
+        before_bind = _external_hierarchy_counters(compiled.so_path)
 
-    simulation = pops.bind(compiled)
-    bound_register, bound_prepare, bound_execution, bound_solve = (
-        _external_hierarchy_counters(compiled.so_path)
-    )
-    assert bound_register >= 1
-    assert bound_prepare >= 1
-    assert bound_solve == 0
-    assert simulation.n_levels() == 2
+        simulation = pops.bind(compiled)
+        bound_register, bound_prepare, bound_execution, bound_solve = (
+            _external_hierarchy_counters(compiled.so_path)
+        )
+        assert bound_register > before_bind[0]
+        assert bound_prepare > before_bind[1]
+        assert bound_execution >= before_bind[2]
+        assert bound_solve == before_bind[3]
+        assert simulation.n_levels() == max_levels
 
-    report = pops.run(simulation, t_end=0.01, max_steps=1)
-    run_register, run_prepare, run_execution, run_solve = (
-        _external_hierarchy_counters(compiled.so_path)
-    )
-    assert report.accepted_steps == 1
-    assert run_register == bound_register
-    assert run_prepare == bound_prepare
-    assert run_execution > bound_execution
-    assert run_solve > bound_solve
+        report = pops.run(simulation, t_end=0.01, max_steps=1)
+        run_register, run_prepare, run_execution, run_solve = (
+            _external_hierarchy_counters(compiled.so_path)
+        )
+        assert report.accepted_steps == 1
+        assert run_register == bound_register
+        assert run_prepare == bound_prepare
+        assert run_execution > bound_execution
+        assert run_solve == bound_solve + 1
 
-    actual = np.asarray(
-        simulation.block_level_state_global("plasma", 0), dtype=np.float64
-    ).reshape(3, 4, 4)
-    assert np.isfinite(actual).all()
-    np.testing.assert_array_equal(actual[0], np.full((4, 4), 2.0))
-    assert np.max(np.abs(actual[1] - 0.25)) > 1.0e-6
-    assert np.max(np.abs(actual[2] + 0.5)) > 1.0e-6
-    fine = np.asarray(
-        simulation.block_level_state_global("plasma", 1), dtype=np.float64
-    )
-    assert fine.size > 0 and np.isfinite(fine).all()
+        # Each level owns a distinct qualified clock, while the authored temporal ratios remain
+        # independent from the spatial ratio two (and from each other in the three-level tower).
+        program_report = simulation.program_report()
+        level_clocks = [
+            row for row in program_report.clocks if row["kind"] == "level"
+        ]
+        assert {row["level"] for row in level_clocks} == set(range(max_levels))
+        assert all(row["macro_step"] == 1 for row in level_clocks)
+        assert all(row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks)
+        assert all(row["physical_time"] == pytest.approx(0.01) for row in level_clocks)
+        assert program_report.level_relations == [
+            {
+                "parent_level": level,
+                "child_level": level + 1,
+                "temporal_ratio": {"numerator": ratio, "denominator": 1},
+                "remainder_policy": "integral_only",
+            }
+            for level, ratio in enumerate(temporal_ratios)
+        ]
+
+        # Fail on any per-level drift.  The exact zero condensed RHS is intentional: the counter
+        # above proves the real composite FAC still executes once, while this independent closed-form
+        # oracle isolates gather/publish, level qualification, and local reconstruction errors.
+        for level in range(max_levels):
+            actual = np.asarray(
+                simulation.block_level_state_global("plasma", level),
+                dtype=np.float64,
+            ).reshape(3, -1)
+            assert actual.shape[1] > 0
+            assert np.isfinite(actual).all()
+            active = actual[0] > 0.0
+            assert np.any(active)
+            np.testing.assert_array_equal(
+                actual[0, active], np.full(np.count_nonzero(active), oracle[0]),
+            )
+            np.testing.assert_allclose(
+                actual[1:, active],
+                np.broadcast_to(
+                    oracle[1:, None], (2, np.count_nonzero(active)),
+                ),
+                rtol=5.0e-15,
+                atol=5.0e-15,
+            )
+            np.testing.assert_array_equal(
+                actual[:, ~active], np.zeros((3, np.count_nonzero(~active))),
+            )
