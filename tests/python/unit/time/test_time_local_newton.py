@@ -200,15 +200,24 @@ def section_a(t):
     for frag in (
         "auto residual_eval = [&]",
         "pops::detail::mat_inverse<1>(",
+        "if (!pops::detail::mat_inverse<1>(",
         "for (int it_ = 0;",
         "J_[1][1]",
         "std::fmax(rmax_, std::fabs(r_",
-        "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
+        "if (rmax_ <= static_cast<pops::Real>(1e-12))",
         "const pops::Real eps_",
         "U_[i_] -= du_;",
+        "pops::reduce_max(local_solve_status_",
+        "pops::SolveReport local_solve_report_",
+        "pops::SolveStatus::kIterationLimit",
+        "pops::SolveStatus::kSingular",
+        "pops::SolveStatus::kInvalidEvaluation",
         "pops::for_each_cell(",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
+    guard = src.index("if (!local_solve_report_")
+    commit = src.index("ctx.commit_many(")
+    chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
     chk("U_[0] = Gval[0]" in src, "the Newton iterate is seeded to the guess")
