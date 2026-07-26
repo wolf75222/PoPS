@@ -167,7 +167,10 @@ jobs:
   warnings:
     name: warnings stricts (build, informatif)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # This lane compiles the complete native target inventory with a distinct warning flag set, so
+    # the production prewarm caches are not compile-contract compatible.  A cold shared-header
+    # change has measured above 45 minutes; keep a bounded budget aligned with ASan/coverage.
+    timeout-minutes: 90
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
