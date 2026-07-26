@@ -43,6 +43,7 @@ try:
     import numpy as np
 
     import pops.runtime._engine_descriptors as engine
+    from pops._bootstrap import StepAttemptRejected
     from pops.math import sqrt
     from pops.physics._facade import Model
     from pops import time as adctime
@@ -91,7 +92,7 @@ def lorentz_model(name="lorentz_local"):
     return m
 
 
-def lorentz_program(name="lorentz_step", model=None):
+def lorentz_program(name="lorentz_step", model=None, action=None):
     """W = (I - dt*L_lorentz)^{-1} U, committed: one implicit Lorentz rotation of the momentum."""
     P = adctime.Program(name)
     dt = P.dt
@@ -100,11 +101,12 @@ def lorentz_program(name="lorentz_step", model=None):
     endpoint = typed_state(P, "plasma", state_name="U", model=authority).next
     Q = P.value("Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
     linear = authority.module.operator_handle("lorentz")
-    W = P.solve(
+    outcome = P.solve(
         adctime.LocalLinear(operator=P.I - dt * P.linear_source(linear), rhs=Q),
         solver=DenseLU(),
         name="W",
-    ).consume(action=adctime.FailRun())
+    )
+    W = outcome.consume(action=adctime.FailRun() if action is None else action)
     P.commit(endpoint, W)
     return P
 
@@ -116,8 +118,13 @@ src = emit_cpp_program(lorentz_program(model=m), model=m)
 for frag in (
     "pops::for_each_cell(",
     "pops::detail::mat_inverse<3>(",
+    "if (solve_failure_ == 0 && !pops::detail::mat_inverse<3>(",
     "pops::Real M_[3][3];",
     "pops::Real Minv_[3][3];",
+    "pops::reduce_max(local_solve_status_",
+    "pops::SolveReport local_solve_report_",
+    "pops::SolveStatus::kSingular",
+    "pops::SolveStatus::kInvalidEvaluation",
     "auxA(i, j, 3)",
     "ctx.aux()",
 ):
@@ -201,7 +208,8 @@ dt = 0.05
 try:
     program_model = lorentz_model("lorentz_prog")
     compiled = compile_drivers.compile_problem(
-        model=program_model, time=lorentz_program(model=program_model)
+        model=program_model,
+        time=lorentz_program(model=program_model, action=adctime.RejectAttempt()),
     )
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -228,6 +236,27 @@ print("  Lorentz parity: max|d(rho)| = %.2e  max|d(mx,my)| = %.2e" % (e_rho, e_l
 chk(e_rho < 1e-13, "rho unchanged by the Lorentz solve (max|d| = %.2e)" % e_rho)
 chk(e_lorentz < 1e-12, "stepped (mx, my) == analytic implicit rotation (max|d| = %.2e)" % e_lorentz)
 chk(float(np.abs(U[1] - mx0).max()) > 1e-6, "the step actually rotated the momentum")
+
+# Fault injection on the same compiled Program: a non-finite coefficient must be reduced into one
+# invalid-evaluation SolveReport, rejected before commit, and leave the accepted state untouched.
+accepted = np.array(prog.get_state("plasma"))
+prog.set_magnetic_field(np.full(accepted[0].size, np.nan))
+rejected = None
+try:
+    prog.step(dt)
+except StepAttemptRejected as exc:
+    rejected = exc
+after_rejection = np.array(prog.get_state("plasma"))
+chk(rejected is not None, "non-finite local coefficients reject the step attempt")
+if rejected is not None:
+    chk(
+        rejected.status == "invalid_evaluation",
+        "the typed rejection status is invalid_evaluation",
+    )
+chk(
+    np.array_equal(after_rejection, accepted),
+    "the rejected local solve does not commit a provisional state",
+)
 
 print("%s test_time_local_solve_run" % ("FAIL (%d)" % fails if fails else "PASS"))
 sys.exit(1 if fails else 0)

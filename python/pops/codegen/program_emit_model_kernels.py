@@ -397,7 +397,7 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
 
 
 def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var: Any, out_var: Any,
-                                    block_idx: Any = 0) -> list:
+                                    status_var: Any, block_idx: Any = 0) -> list:
     """Lower ``solve_local_linear``: per cell M = I - a*L (a = a_coeff(dt)), invert M (dense N x N
     via pops::detail::mat_inverse) and set outA(i,j,r) = sum_c Minv[r][c] * q(i,j,c), q = the rhs state.
     L's coefficients depend on aux / const / params only, so M is assembled from the aux / param locals +
@@ -410,22 +410,42 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
     body = _kernel_open(out_var, rhs_var, params_block)
+    lambda_index = next(
+        index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+    ]
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
                                                  with_prim=False)]
     body.append("    const pops::Real a_ = %s;" % a_cpp)
     body.append("    pops::Real M_[%d][%d];" % (n, n))
+    body.append("    int solve_failure_ = 0;")
     for r in range(n):
         for c in range(n):
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
             body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, rows[r][c].to_cpp()))
+            body.append(
+                "    if (!std::isfinite(M_[%d][%d])) solve_failure_ = 3;" % (r, c))
+    for c in range(n):
+        body.append(
+            "    if (!std::isfinite(%sA(i, j, %d))) solve_failure_ = 3;"
+            % (rhs_var, c))
     body.append("    pops::Real Minv_[%d][%d];" % (n, n))
-    # mat_inverse returns false on a singular M; we do not branch in the device kernel (no throw on
-    # device). I - a*L is invertible for a well-posed local source (e.g. Lorentz: det = 1 + (a*B)^2 > 0);
-    # a singular user operator yields a non-finite result that surfaces downstream, not a plausible wrong one.
-    body.append("    pops::detail::mat_inverse<%d>(M_, Minv_);" % n)
+    body.append(
+        "    if (solve_failure_ == 0 && !pops::detail::mat_inverse<%d>(M_, Minv_)) "
+        "solve_failure_ = 2;" % n)
     for r in range(n):
         terms = ["Minv_[%d][%d] * %sA(i, j, %d)" % (r, c, rhs_var, c) for c in range(n)]
-        body.append("    outA(i, j, %d) = %s;" % (r, " + ".join(terms)))
+        body.append(
+            "    pops::Real solved_%d_ = %sA(i, j, %d);" % (r, rhs_var, r))
+        body.append(
+            "    if (solve_failure_ == 0) solved_%d_ = %s;"
+            % (r, " + ".join(terms)))
+        body.append(
+            "    if (!std::isfinite(solved_%d_)) solve_failure_ = 3;" % r)
+        body.append("    outA(i, j, %d) = solved_%d_;" % (r, r))
+    body.append(
+        "    solve_statusA(i, j, 0) = static_cast<pops::Real>(solve_failure_);")
     body += _kernel_close()
     return body
 
@@ -507,7 +527,7 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
 
 
 def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_var: Any,
-                                       block_idx: Any = 0) -> list:
+                                       status_var: Any, block_idx: Any = 0) -> list:
     """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
     U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
     fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
@@ -536,6 +556,11 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block)
+    lambda_index = next(
+        index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+    ]
     # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
     # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
     body += ["    " + ln for ln in _cell_locals(impl, term_exprs, guess_var, with_cons=False,
@@ -560,15 +585,25 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     body.append("    };")
     # Newton state: the iterate U_ (seeded to the guess), the residual r_, the FD Jacobian J_ and step.
     body.append("    pops::Real U_[%d];" % n)
+    body.append("    int solve_failure_ = 1;")
     for c in range(n):
         body.append("    U_[%d] = Gval[%d];" % (c, c))
+        body.append(
+            "    if (!std::isfinite(U_[%d])) solve_failure_ = 3;" % c)
     body.append("    pops::Real r_[%d];" % n)
     body.append("    for (int it_ = 0; it_ < %d; ++it_) {" % max_iter)
+    body.append("      if (solve_failure_ == 3) break;")
     body.append("      residual_eval(U_, r_);")
     # Convergence on max_c |r_c| (the per-cell residual infinity norm).
     body.append("      pops::Real rmax_ = pops::Real(0);")
-    body.append("      for (int c_ = 0; c_ < %d; ++c_) rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));" % n)
-    body.append("      if (rmax_ < static_cast<pops::Real>(%s)) break;" % tol)
+    body.append("      for (int c_ = 0; c_ < %d; ++c_) {" % n)
+    body.append("        if (!std::isfinite(r_[c_])) { solve_failure_ = 3; break; }")
+    body.append("        rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));")
+    body.append("      }")
+    body.append("      if (solve_failure_ == 3) break;")
+    body.append(
+        "      if (rmax_ <= static_cast<pops::Real>(%s)) { solve_failure_ = 0; break; }"
+        % tol)
     # FD Jacobian J_[i][j] = (r_i(U + eps e_j) - r_i(U)) / eps, eps relative to |U_j| (floored).
     body.append("      pops::Real J_[%d][%d];" % (n, n))
     body.append("      pops::Real Up_[%d];" % n)
@@ -577,21 +612,52 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     body.append("        for (int k_ = 0; k_ < %d; ++k_) Up_[k_] = U_[k_];" % n)
     body.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) "
                 "* std::fmax(std::fabs(U_[j_]), static_cast<pops::Real>(1));" % fd_eps_lit)
+    body.append(
+        "        if (!std::isfinite(eps_) || eps_ == pops::Real(0)) "
+        "{ solve_failure_ = 3; break; }")
     body.append("        Up_[j_] += eps_;")
     body.append("        residual_eval(Up_, rp_);")
-    body.append("        for (int i_ = 0; i_ < %d; ++i_) J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;" % n)
+    body.append("        for (int i_ = 0; i_ < %d; ++i_) {" % n)
+    body.append("          if (!std::isfinite(rp_[i_])) { solve_failure_ = 3; break; }")
+    body.append("          J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;")
+    body.append(
+        "          if (!std::isfinite(J_[i_][j_])) { solve_failure_ = 3; break; }")
+    body.append("        }")
+    body.append("        if (solve_failure_ == 3) break;")
     body.append("      }")
+    body.append("      if (solve_failure_ == 3) break;")
     # Newton step J dU = -r via the SAME stack dense inverse solve_local_linear uses; U -= dU.
     body.append("      pops::Real Jinv_[%d][%d];" % (n, n))
-    body.append("      pops::detail::mat_inverse<%d>(J_, Jinv_);" % n)
+    body.append(
+        "      if (!pops::detail::mat_inverse<%d>(J_, Jinv_)) "
+        "{ solve_failure_ = 2; break; }" % n)
     body.append("      for (int i_ = 0; i_ < %d; ++i_) {" % n)
     body.append("        pops::Real du_ = pops::Real(0);")
     body.append("        for (int k_ = 0; k_ < %d; ++k_) du_ += Jinv_[i_][k_] * r_[k_];" % n)
     body.append("        U_[i_] -= du_;")
+    body.append(
+        "        if (!std::isfinite(U_[i_])) solve_failure_ = 3;")
     body.append("      }")
+    body.append("      if (solve_failure_ == 3) break;")
+    body.append("    }")
+    body.append("    if (solve_failure_ == 1) {")
+    body.append("      pops::Real final_r_[%d];" % n)
+    body.append("      residual_eval(U_, final_r_);")
+    body.append("      pops::Real final_max_ = pops::Real(0);")
+    body.append("      for (int c_ = 0; c_ < %d; ++c_) {" % n)
+    body.append(
+        "        if (!std::isfinite(final_r_[c_])) { solve_failure_ = 3; break; }")
+    body.append(
+        "        final_max_ = std::fmax(final_max_, std::fabs(final_r_[c_]));")
+    body.append("      }")
+    body.append(
+        "      if (solve_failure_ == 1 && "
+        "final_max_ <= static_cast<pops::Real>(%s)) solve_failure_ = 0;" % tol)
     body.append("    }")
     for c in range(n):
         body.append("    outA(i, j, %d) = U_[%d];" % (c, c))
+    body.append(
+        "    solve_statusA(i, j, 0) = static_cast<pops::Real>(solve_failure_);")
     body += _kernel_close()
     return body
 
