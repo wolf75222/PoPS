@@ -14,12 +14,12 @@
 #include <gtest/gtest.h>
 
 #include <pops/core/foundation/allocator.hpp>  // allocation_event_stats
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
+#include <pops/physics/bricks/bricks.hpp>      // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime + detail::AmrHistoryOps
 #include <pops/runtime/amr_system.hpp>                       // facade transaction boundary
-#include <pops/runtime/program/step_transaction.hpp>        // StepAttemptRejected fault signal
-#include <pops/runtime/program/amr_program_context.hpp>     // native AB2/reflux context
+#include <pops/runtime/program/step_transaction.hpp>     // StepAttemptRejected fault signal
+#include <pops/runtime/program/amr_program_context.hpp>  // native AB2/reflux context
 #include <pops/runtime/config/model_spec.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -131,24 +131,22 @@ static void install_history_state_authorities(AmrSystem& sim) {
   for (const StateRoute& route : routes)
     sim.install_block_state_route(route.block, route.subject);
   for (const StateRoute& route : routes) {
-    const std::string prefix = std::string("test://amr-history/block/") + route.block +
-                               "/transfer/";
+    const std::string prefix =
+        std::string("test://amr-history/block/") + route.block + "/transfer/";
     sim.register_bootstrap_transfer_route(
-        prefix + "prolongation", {route.subject}, "test::amr-history-transfer@1", "cell",
-        "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1},
-        2, kAmrRefRatio);
+        prefix + "prolongation", {route.subject}, "test::amr-history-transfer@1", "cell", "cell",
+        "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2, kAmrRefRatio);
     sim.register_bootstrap_transfer_route(
-        prefix + "restriction", {route.subject}, "test::amr-history-transfer@1", "cell",
-        "cell", "conservative", "dense", "restriction", "volume_average", 1, {0}, 2,
-        kAmrRefRatio);
-    sim.register_bootstrap_transfer_route(
-        prefix + "coarse-fine", {route.subject}, "test::amr-history-transfer@1", "cell",
-        "cell", "conservative", "dense", "coarse_fine_fill", "conservative_coarse_fine", 2,
-        {2}, 2, kAmrRefRatio);
-    sim.register_bootstrap_transfer_route(
-        prefix + "temporal", {route.subject}, "test::amr-history-transfer@1", "cell", "cell",
-        "conservative", "dense", "temporal_interpolation", "linear_time_interpolation", 2,
-        {0}, 2, kAmrRefRatio);
+        prefix + "restriction", {route.subject}, "test::amr-history-transfer@1", "cell", "cell",
+        "conservative", "dense", "restriction", "volume_average", 1, {0}, 2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(prefix + "coarse-fine", {route.subject},
+                                          "test::amr-history-transfer@1", "cell", "cell",
+                                          "conservative", "dense", "coarse_fine_fill",
+                                          "conservative_coarse_fine", 2, {2}, 2, kAmrRefRatio);
+    sim.register_bootstrap_transfer_route(prefix + "temporal", {route.subject},
+                                          "test::amr-history-transfer@1", "cell", "cell",
+                                          "conservative", "dense", "temporal_interpolation",
+                                          "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
     sim.bind_bootstrap_block_subject(route.subject, route.block);
   }
 }
@@ -194,8 +192,7 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
   if (!sim.uses_runtime_engine() || sim.engine() == nullptr)
     throw std::runtime_error("native AB2 fixture failed to build its AMR runtime engine");
   AmrRuntime* rt = sim.engine();
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   return rt;
 }
 
@@ -348,8 +345,7 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
 
   // Activate a real regrid and fire it (a moving density front -> the fine layout changes).
   rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
-  test::install_prepared_threshold_union(
-      rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  test::install_prepared_threshold_union(rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   rt.step(Real(0.01));  // macro_step 0: no regrid (fresh grid), but stores nothing to the ring
   rt.step(Real(0.01));  // macro_step 1 (every=1): regrid fires -> remap_rings runs
   ASSERT_GE(rt.regrid_count(), 1);
@@ -393,10 +389,8 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
   AmrSystem sim(cfg);
   install_history_state_authorities(sim);
   sim.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
-  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative",
-                "explicit", 1);
-  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative",
-                "explicit", 1);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
   sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
@@ -408,8 +402,7 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
 
   // The test owns only scheduler semantics, so use the runtime's generic bootstrap seam directly:
   // a deterministic positive component tag materializes L1 and L2 without involving Python.
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(0.5)}}, "test.program-catch-up-tag");
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(0.5)}}, "test.program-catch-up-tag");
   rt->begin_bootstrap_plan();
   ASSERT_TRUE(rt->bootstrap_next_level(2));
   EXPECT_GT(rt->fill_bootstrap_block_constant(0, 1, {1.0}), 0);
@@ -450,8 +443,7 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
         const int j = coarsen_index(child_box.lo[1], kAmrRefRatio);
         const int parent_box = mf_find_box(state, i, j);
         ASSERT_GE(parent_box, 0);
-        level1_seen_before_second_advance =
-            state.fab(parent_box).const_array()(i, j, 0);
+        level1_seen_before_second_advance = state.fab(parent_box).const_array()(i, j, 0);
         state.set_val(Real(40));
       }
       ++level1_calls;
@@ -522,8 +514,7 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   EXPECT_EQ(rt->topology_materialization_generation(), first_generation)
       << "same-layout rollback preserves every topology-bound prepared workspace";
   context.regrid_if_due(rt->macro_step());
-  EXPECT_EQ(context.capture_flux_workspace_generation(),
-            rt->topology_materialization_generation());
+  EXPECT_EQ(context.capture_flux_workspace_generation(), rt->topology_materialization_generation());
 
   bool measured_coarse_capture = false;
   context.advance_hierarchy(dt, [&](double level_dt) {
@@ -587,18 +578,19 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   // A rejected attempt restores accepted simulation state but deliberately keeps topology-matching
   // scratch storage resident. The next acquisition resets its provisional bytes in place.
   Real* rejected_storage = nullptr;
-  EXPECT_THROW(
-      context.advance_hierarchy(dt, [&](double) {
-        MultiFab& rejected = context.rhs_scratch(901, 0, context.state(0));
-        if (context.level() == 0 && rejected.local_size() > 0) {
-          rejected_storage = rejected.fab(0).array().p;
-          rejected.set_val(Real(73));
-          throw runtime::program::StepAttemptRejected(
-              SolveStatus::kIterationLimit, "scratch rollback",
-              "fault after provisional persistent scratch write");
-        }
-      }),
-      runtime::program::StepAttemptRejected);
+  EXPECT_THROW(context.advance_hierarchy(
+                   dt,
+                   [&](double) {
+                     MultiFab& rejected = context.rhs_scratch(901, 0, context.state(0));
+                     if (context.level() == 0 && rejected.local_size() > 0) {
+                       rejected_storage = rejected.fab(0).array().p;
+                       rejected.set_val(Real(73));
+                       throw runtime::program::StepAttemptRejected(
+                           SolveStatus::kIterationLimit, "scratch rollback",
+                           "fault after provisional persistent scratch write");
+                     }
+                   }),
+               runtime::program::StepAttemptRejected);
   ASSERT_NE(rejected_storage, nullptr);
   MultiFab& retried = context.rhs_scratch(901, 0, context.state(0));
   ASSERT_GT(retried.local_size(), 0);
@@ -639,8 +631,7 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
   context.install([&](double dt) {
     context.advance_hierarchy(dt, [&](double) {
       const auto take_snapshot = [&]() {
-        return context.operator_evaluation_snapshot(
-            authority, context.state(0), resources);
+        return context.operator_evaluation_snapshot(authority, context.state(0), resources);
       };
       context.set_stage_time(1, 3);
       parents_before.push_back({context.level(), take_snapshot()});
@@ -651,8 +642,8 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
         if (iteration == 0) {
           const OperatorEvaluationSnapshot parent = parents_before.back().snapshot;
           stale_parent_entry_probes.push_back(
-              {context.level(), context.probe_operator_evaluation(
-                                    authority, parent.topology, resources, parent.revision)});
+              {context.level(), context.probe_operator_evaluation(authority, parent.topology,
+                                                                  resources, parent.revision)});
         }
         context.set_stage_time(1, 2);
         children.push_back({context.level(), take_snapshot()});
@@ -664,19 +655,19 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
             nested_children.push_back({context.level(), take_snapshot()});
           }
           stale_outer_probes.push_back(
-              {context.level(), context.probe_operator_evaluation(
-                                    authority, outer.topology, resources, outer.revision)});
+              {context.level(), context.probe_operator_evaluation(authority, outer.topology,
+                                                                  resources, outer.revision)});
           reminted_outers.push_back({context.level(), take_snapshot()});
           const OperatorEvaluationSnapshot& reminted = reminted_outers.back().snapshot;
-          EXPECT_TRUE(context.probe_operator_evaluation(
-                          authority, reminted.topology, resources, reminted.revision) == reminted);
+          EXPECT_TRUE(context.probe_operator_evaluation(authority, reminted.topology, resources,
+                                                        reminted.revision) == reminted);
         }
       }
       ticks.finish();
       const OperatorEvaluationSnapshot parent = parents_before.back().snapshot;
       stale_parent_probes.push_back(
-          {context.level(), context.probe_operator_evaluation(
-                                authority, parent.topology, resources, parent.revision)});
+          {context.level(), context.probe_operator_evaluation(authority, parent.topology, resources,
+                                                              parent.revision)});
       parents_after.push_back({context.level(), take_snapshot()});
     });
   });
@@ -692,12 +683,11 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
   ASSERT_EQ(stale_parent_probes.size(), 3u);
   ASSERT_EQ(parents_after.size(), 3u);
   const std::array<int, 6> expected_levels{0, 0, 1, 1, 1, 1};
-  const std::array<amr::Rational, 6> expected_phases{
-      amr::Rational(1, 4), amr::Rational(3, 4), amr::Rational(1, 8),
-      amr::Rational(3, 8), amr::Rational(5, 8), amr::Rational(7, 8)};
-  const std::array<double, 6> expected_dt{
-      macro_dt / 2.0, macro_dt / 2.0, macro_dt / 4.0,
-      macro_dt / 4.0, macro_dt / 4.0, macro_dt / 4.0};
+  const std::array<amr::Rational, 6> expected_phases{amr::Rational(1, 4), amr::Rational(3, 4),
+                                                     amr::Rational(1, 8), amr::Rational(3, 8),
+                                                     amr::Rational(5, 8), amr::Rational(7, 8)};
+  const std::array<double, 6> expected_dt{macro_dt / 2.0, macro_dt / 2.0, macro_dt / 4.0,
+                                          macro_dt / 4.0, macro_dt / 4.0, macro_dt / 4.0};
   const double coarse_child_dt = macro_dt / 2.0;
   const double fine_level_dt = macro_dt / 2.0;
   const double fine_child_dt = fine_level_dt / 2.0;
@@ -749,20 +739,17 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
               parents_before[index].snapshot.stage_numerator);
     EXPECT_EQ(stale_parent_probes[index].snapshot.stage_denominator,
               parents_before[index].snapshot.stage_denominator);
-    EXPECT_EQ(stale_parent_probes[index].snapshot.dt_bits,
-              parents_before[index].snapshot.dt_bits);
+    EXPECT_EQ(stale_parent_probes[index].snapshot.dt_bits, parents_before[index].snapshot.dt_bits);
     EXPECT_EQ(stale_parent_probes[index].snapshot.physical_time_bits,
               parents_before[index].snapshot.physical_time_bits);
     EXPECT_EQ(parents_after[index].snapshot.stage_numerator,
               parents_before[index].snapshot.stage_numerator);
     EXPECT_EQ(parents_after[index].snapshot.stage_denominator,
               parents_before[index].snapshot.stage_denominator);
-    EXPECT_EQ(parents_after[index].snapshot.dt_bits,
-              parents_before[index].snapshot.dt_bits);
+    EXPECT_EQ(parents_after[index].snapshot.dt_bits, parents_before[index].snapshot.dt_bits);
     EXPECT_EQ(parents_after[index].snapshot.physical_time_bits,
               parents_before[index].snapshot.physical_time_bits);
-    EXPECT_NE(parents_after[index].snapshot.revision,
-              parents_before[index].snapshot.revision);
+    EXPECT_NE(parents_after[index].snapshot.revision, parents_before[index].snapshot.revision);
   }
 }
 
@@ -794,9 +781,8 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   ASSERT_EQ(rt->nlev(), 1);
   ASSERT_EQ(rt->max_levels(), 3);
 
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
-      "test::lagged-flux-depth-refine@1");
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
+                                         "test::lagged-flux-depth-refine@1");
   runtime::program::AmrProgramContext context(rt, &sim);
   install_native_ab2_program(context);
 
@@ -810,8 +796,8 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   // The accepted multilevel AB2 state now carries real compact conservative contributions. The
   // following coarsen therefore proves that removal invalidates an existing authority rather than
   // merely bypassing the no-history SSPRK path.
-  const auto multilevel = runtime::program::deserialize_amr_program_accepted_state(
-      sim.program_accepted_state());
+  const auto multilevel =
+      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
   const auto contributions = multilevel.ring_flux_contributions.find("a.rate");
   ASSERT_NE(contributions, multilevel.ring_flux_contributions.end());
   bool has_multilevel_flux = false;
@@ -831,8 +817,8 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   ASSERT_EQ(rt->nlev(), 1);
   EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 2);
 
-  const auto coarse = runtime::program::deserialize_amr_program_accepted_state(
-      sim.program_accepted_state());
+  const auto coarse =
+      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
   for (const auto& slot : coarse.ring_flux.at("a.rate"))
     EXPECT_EQ(slot.size(), 1u);
   for (const auto& slot : coarse.ring_flux_contributions.at("a.rate"))
@@ -843,14 +829,13 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
     EXPECT_EQ(slot.size(), 1u);
   EXPECT_EQ(coarse.ring_flux_initialized.at("a.rate").size(), 1u);
 
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
-      "test::lagged-flux-depth-reactivate@1");
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
+                                         "test::lagged-flux-depth-reactivate@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 3);
   EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 4);
-  const auto reactivated = runtime::program::deserialize_amr_program_accepted_state(
-      sim.program_accepted_state());
+  const auto reactivated =
+      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
   ASSERT_EQ(reactivated.ring_flux_initialized.at("a.rate").size(), 3u);
   EXPECT_TRUE(std::all_of(reactivated.ring_flux_initialized.at("a.rate").begin(),
                           reactivated.ring_flux_initialized.at("a.rate").end(),
@@ -897,8 +882,7 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   const std::vector<PatchBox> initial_patches = rt->patch_boxes();
   const double initial_mass = rt->composite_reduce("a", "sum", 0, {0});
 
@@ -992,8 +976,7 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   // Empty tags remove the child before the next Program body.  The accepted image must expose only
   // active levels in every context-owned axis; no stale child clock/identity/flux survives.
   test::install_prepared_threshold_decisions(
-      *rt,
-      {{0, 0, Real(1.0e9)}, {1, 0, Real(1.0e9)}},
+      *rt, {{0, 0, Real(1.0e9)}, {1, 0, Real(1.0e9)}},
       {{0, 0, Real(1.0e9), test::PreparedThresholdRelation::Below},
        {1, 0, Real(1.0e9), test::PreparedThresholdRelation::Below}},
       "test::history-metadata-coarsen@1");
@@ -1017,8 +1000,7 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   // the matching parent temporal slot and receive a level-qualified copy of that exact clock.
   sim.step(dt);
   test::install_prepared_threshold_decisions(
-      *rt,
-      {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
+      *rt, {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
       {{0, 0, Real(-1), test::PreparedThresholdRelation::Below},
        {1, 0, Real(-1), test::PreparedThresholdRelation::Below}},
       "test::history-metadata-regrow@1");
@@ -1206,8 +1188,7 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
   sim.set_clock(0.25, 1);  // the accepted attempt performs a real due regrid
 
@@ -1262,8 +1243,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
-  test::install_prepared_threshold_union(
-      *rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  test::install_prepared_threshold_union(*rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
   sim.set_clock(0.25, 1);  // next native engine step is regrid-due
 

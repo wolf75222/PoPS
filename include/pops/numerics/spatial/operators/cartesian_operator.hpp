@@ -149,10 +149,10 @@ void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux, co
     const ConstArray4 ax = aux.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    failures.merge(reduce_max_uint64_cell(
-        v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
-               model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp,
-               failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
+                                      model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor,
+                                      pos_comp, failures.recorder()}));
   }
   failures.throw_if_failed("assemble_rhs");
 }
@@ -333,10 +333,9 @@ struct FaceFluxHllCachedXKernel {
     const Real speed_left = ws(i, j, 0), speed_right = ws(i, j, 1);
     const FaceContext face = FaceContext::axis_aligned(0);
     const PhysicalFluxView<Model> physical{model};
-    const auto evaluation =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(left, ax, i - 1, j),
-                             make_face_trace_at<Model>(right, ax, i, j), face, speed_left,
-                             speed_right);
+    const auto evaluation = hll_flux_with_speeds(
+        physical, make_face_trace_at<Model>(left, ax, i - 1, j),
+        make_face_trace_at<Model>(right, ax, i, j), face, speed_left, speed_right);
     failures.record(evaluation, failure);
     const auto value = apply_face_measure(evaluation.checked_density(), face).value;
     for (int component = 0; component < Model::n_vars; ++component)
@@ -344,8 +343,7 @@ struct FaceFluxHllCachedXKernel {
     if constexpr (DiffusiveModel<Model>) {
       const Real nu = model.diffusivity();
       for (int component = 0; component < Model::n_vars; ++component)
-        flux(i, j, component) +=
-            -nu * (u(i, j, component) - u(i - 1, j, component)) / dx;
+        flux(i, j, component) += -nu * (u(i, j, component) - u(i - 1, j, component)) / dx;
     }
     if (evaluation.succeeded())
       for (int component = 0; component < Model::n_vars; ++component)
@@ -373,10 +371,9 @@ struct FaceFluxHllCachedYKernel {
     const Real speed_left = ws(i, j, 2), speed_right = ws(i, j, 3);
     const FaceContext face = FaceContext::axis_aligned(1);
     const PhysicalFluxView<Model> physical{model};
-    const auto evaluation =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(left, ax, i, j - 1),
-                             make_face_trace_at<Model>(right, ax, i, j), face, speed_left,
-                             speed_right);
+    const auto evaluation = hll_flux_with_speeds(
+        physical, make_face_trace_at<Model>(left, ax, i, j - 1),
+        make_face_trace_at<Model>(right, ax, i, j), face, speed_left, speed_right);
     failures.record(evaluation, failure);
     const auto value = apply_face_measure(evaluation.checked_density(), face).value;
     for (int component = 0; component < Model::n_vars; ++component)
@@ -384,8 +381,7 @@ struct FaceFluxHllCachedYKernel {
     if constexpr (DiffusiveModel<Model>) {
       const Real nu = model.diffusivity();
       for (int component = 0; component < Model::n_vars; ++component)
-        flux(i, j, component) +=
-            -nu * (u(i, j, component) - u(i, j - 1, component)) / dy;
+        flux(i, j, component) += -nu * (u(i, j, component) - u(i, j - 1, component)) / dy;
     }
     if (evaluation.succeeded())
       for (int component = 0; component < Model::n_vars; ++component)
@@ -420,10 +416,9 @@ void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiF
     const ConstArray4 ws = cache.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    failures.merge(reduce_max_uint64_cell(
-        v, detail::AssembleRhsHllCachedKernel<Limiter, Model>{
-               model, u, ax, ws, r, dx, dy, lim, recon_prim, pos_floor, pos_comp,
-               failures.recorder()}));
+    failures.merge(reduce_max_uint64_cell(v, detail::AssembleRhsHllCachedKernel<Limiter, Model>{
+                                                 model, u, ax, ws, r, dx, dy, lim, recon_prim,
+                                                 pos_floor, pos_comp, failures.recorder()}));
   }
   failures.throw_if_failed("assemble_rhs_hll_cached");
 }
@@ -447,25 +442,27 @@ void compute_face_fluxes_hll_cached(const Model& model, const MultiFab& U, const
     const ConstArray4 state = U.fab(local).const_array();
     const ConstArray4 providers = aux.fab(local).const_array();
     const ConstArray4 speeds = cache.fab(local).const_array();
-    failures.merge(reduce_max_uint64_cell(
-        xface_box(U.box(local)), detail::FaceFluxHllCachedXKernel<Limiter, Model>{
-                                      model, state, providers, speeds, Fx.fab(local).array(), dx,
-                                      limiter, recon_prim, pos_floor, pos_comp,
-                                      failures.recorder()}));
-    failures.merge(reduce_max_uint64_cell(
-        yface_box(U.box(local)), detail::FaceFluxHllCachedYKernel<Limiter, Model>{
-                                      model, state, providers, speeds, Fy.fab(local).array(), dy,
-                                      limiter, recon_prim, pos_floor, pos_comp,
-                                      failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(xface_box(U.box(local)),
+                               detail::FaceFluxHllCachedXKernel<Limiter, Model>{
+                                   model, state, providers, speeds, Fx.fab(local).array(), dx,
+                                   limiter, recon_prim, pos_floor, pos_comp, failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(yface_box(U.box(local)),
+                               detail::FaceFluxHllCachedYKernel<Limiter, Model>{
+                                   model, state, providers, speeds, Fy.fab(local).array(), dy,
+                                   limiter, recon_prim, pos_floor, pos_comp, failures.recorder()}));
   }
   failures.throw_if_failed("compute_face_fluxes_hll_cached");
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void compute_face_fluxes_with_optional_hll_cache(
-    const Model& model, const MultiFab& U, const MultiFab& aux, MultiFab& Fx, MultiFab& Fy,
-    MultiFab* wave_speed_cache, Real dx = Real(0), Real dy = Real(0), bool recon_prim = false,
-    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon) {
+void compute_face_fluxes_with_optional_hll_cache(const Model& model, const MultiFab& U,
+                                                 const MultiFab& aux, MultiFab& Fx, MultiFab& Fy,
+                                                 MultiFab* wave_speed_cache, Real dx = Real(0),
+                                                 Real dy = Real(0), bool recon_prim = false,
+                                                 Real pos_floor = Real(0),
+                                                 Real weno_eps = kWenoEpsilon) {
   if constexpr (std::is_same_v<NumericalFlux, HLLFlux>) {
     if (wave_speed_cache != nullptr) {
       compute_face_fluxes_hll_cached<Limiter>(model, U, aux, Fx, Fy, *wave_speed_cache, dx, dy,
@@ -473,8 +470,8 @@ void compute_face_fluxes_with_optional_hll_cache(
       return;
     }
   }
-  compute_face_fluxes<Limiter, NumericalFlux>(model, U, aux, Fx, Fy, dx, dy, recon_prim,
-                                              pos_floor, weno_eps);
+  compute_face_fluxes<Limiter, NumericalFlux>(model, U, aux, Fx, Fy, dx, dy, recon_prim, pos_floor,
+                                              weno_eps);
 }
 
 }  // namespace pops

@@ -73,12 +73,10 @@ class HaloScheduleCache {
  public:
   /// Existing schedule for (px, py, dom, communicator rank space), or nullptr if none is cached.
   std::shared_ptr<const HaloSchedule> find(bool px, bool py, const Box2D& dom,
-                                           int communicator_size,
-                                           int communicator_rank) const {
+                                           int communicator_size, int communicator_rank) const {
     for (const auto& s : entries_) {
       if (s->per_x == px && s->per_y == py && s->domain == dom &&
-          s->communicator_size == communicator_size &&
-          s->communicator_rank == communicator_rank) {
+          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank) {
         return s;
       }
     }

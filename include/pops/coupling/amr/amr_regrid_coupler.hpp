@@ -100,16 +100,14 @@ struct RegridPhysicalGhostSupport {
 };
 
 inline int regrid_periodic_index(std::int64_t value, int lo, int hi) {
-  const std::int64_t width =
-      static_cast<std::int64_t>(hi) - static_cast<std::int64_t>(lo) + 1;
+  const std::int64_t width = static_cast<std::int64_t>(hi) - static_cast<std::int64_t>(lo) + 1;
   if (width <= 0)
     throw std::overflow_error("regrid periodic extent is not representable");
   std::int64_t shifted = (value - static_cast<std::int64_t>(lo)) % width;
   if (shifted < 0)
     shifted += width;
   const std::int64_t wrapped = static_cast<std::int64_t>(lo) + shifted;
-  if (wrapped < std::numeric_limits<int>::min() ||
-      wrapped > std::numeric_limits<int>::max())
+  if (wrapped < std::numeric_limits<int>::min() || wrapped > std::numeric_limits<int>::max())
     throw std::overflow_error("regrid periodic index is not representable");
   return static_cast<int>(wrapped);
 }
@@ -143,10 +141,8 @@ inline TagBox grow_regrid_tags(const TagBox& input, int radius, const Box2D& dom
               continue;
             jj64 = regrid_periodic_index(jj64, domain.lo[1], domain.hi[1]);
           }
-          if (ii64 < std::numeric_limits<int>::min() ||
-              ii64 > std::numeric_limits<int>::max() ||
-              jj64 < std::numeric_limits<int>::min() ||
-              jj64 > std::numeric_limits<int>::max())
+          if (ii64 < std::numeric_limits<int>::min() || ii64 > std::numeric_limits<int>::max() ||
+              jj64 < std::numeric_limits<int>::min() || jj64 > std::numeric_limits<int>::max())
             continue;
           const int ii = static_cast<int>(ii64);
           const int jj = static_cast<int>(jj64);
@@ -157,19 +153,17 @@ inline TagBox grow_regrid_tags(const TagBox& input, int radius, const Box2D& dom
   return output;
 }
 
-inline bool regrid_parent_cell_is_covered(std::int64_t i, std::int64_t j, const Box2D& domain,
-                                          const BoxArray* parents, RegridPeriodicity periodicity,
-                                          const RegridPhysicalGhostSupport* physical_support = nullptr) {
+inline bool regrid_parent_cell_is_covered(
+    std::int64_t i, std::int64_t j, const Box2D& domain, const BoxArray* parents,
+    RegridPeriodicity periodicity, const RegridPhysicalGhostSupport* physical_support = nullptr) {
   if (i < domain.lo[0] || i > domain.hi[0]) {
     if (periodicity.x) {
       i = regrid_periodic_index(i, domain.lo[0], domain.hi[0]);
     } else {
-      const std::int64_t distance =
-          i < domain.lo[0] ? static_cast<std::int64_t>(domain.lo[0]) - i
-                           : i - static_cast<std::int64_t>(domain.hi[0]);
-      if (physical_support == nullptr ||
-          (!physical_support->fills_all_requested_depth &&
-           physical_support->provided_depth < distance))
+      const std::int64_t distance = i < domain.lo[0] ? static_cast<std::int64_t>(domain.lo[0]) - i
+                                                     : i - static_cast<std::int64_t>(domain.hi[0]);
+      if (physical_support == nullptr || (!physical_support->fills_all_requested_depth &&
+                                          physical_support->provided_depth < distance))
         return false;
       i = std::clamp(i, static_cast<std::int64_t>(domain.lo[0]),
                      static_cast<std::int64_t>(domain.hi[0]));
@@ -179,12 +173,10 @@ inline bool regrid_parent_cell_is_covered(std::int64_t i, std::int64_t j, const 
     if (periodicity.y) {
       j = regrid_periodic_index(j, domain.lo[1], domain.hi[1]);
     } else {
-      const std::int64_t distance =
-          j < domain.lo[1] ? static_cast<std::int64_t>(domain.lo[1]) - j
-                           : j - static_cast<std::int64_t>(domain.hi[1]);
-      if (physical_support == nullptr ||
-          (!physical_support->fills_all_requested_depth &&
-           physical_support->provided_depth < distance))
+      const std::int64_t distance = j < domain.lo[1] ? static_cast<std::int64_t>(domain.lo[1]) - j
+                                                     : j - static_cast<std::int64_t>(domain.hi[1]);
+      if (physical_support == nullptr || (!physical_support->fills_all_requested_depth &&
+                                          physical_support->provided_depth < distance))
         return false;
       j = std::clamp(j, static_cast<std::int64_t>(domain.lo[1]),
                      static_cast<std::int64_t>(domain.hi[1]));
@@ -198,25 +190,22 @@ inline bool regrid_parent_cell_is_covered(std::int64_t i, std::int64_t j, const 
   return false;
 }
 
-inline bool regrid_parent_cell_has_nesting_support(int i, int j, int margin,
-                                                   const Box2D& domain,
-                                                   const BoxArray* parents,
-                                                   RegridPeriodicity periodicity,
-                                                   const RegridPhysicalGhostSupport* physical_support = nullptr) {
+inline bool regrid_parent_cell_has_nesting_support(
+    int i, int j, int margin, const Box2D& domain, const BoxArray* parents,
+    RegridPeriodicity periodicity, const RegridPhysicalGhostSupport* physical_support = nullptr) {
   for (std::int64_t dj = -static_cast<std::int64_t>(margin); dj <= margin; ++dj)
     for (std::int64_t di = -static_cast<std::int64_t>(margin); di <= margin; ++di)
       if (!regrid_parent_cell_is_covered(static_cast<std::int64_t>(i) + di,
-                                         static_cast<std::int64_t>(j) + dj, domain, parents, periodicity,
-                                         physical_support))
+                                         static_cast<std::int64_t>(j) + dj, domain, parents,
+                                         periodicity, physical_support))
         return false;
   return true;
 }
 
-inline void validate_fine_layout_proper_nesting(const BoxArray& fine, const BoxArray& parents,
-                                                const Box2D& parent_domain,
-                                                int refinement_ratio, int margin,
-                                                RegridPeriodicity periodicity = {},
-                                                const RegridPhysicalGhostSupport* physical_support = nullptr) {
+inline void validate_fine_layout_proper_nesting(
+    const BoxArray& fine, const BoxArray& parents, const Box2D& parent_domain, int refinement_ratio,
+    int margin, RegridPeriodicity periodicity = {},
+    const RegridPhysicalGhostSupport* physical_support = nullptr) {
   if (refinement_ratio < 2)
     throw std::runtime_error("validate_fine_layout_proper_nesting: refinement_ratio must be >= 2");
   if (margin < 0)
@@ -241,11 +230,9 @@ inline void validate_fine_layout_proper_nesting(const BoxArray& fine, const BoxA
 
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_provider(
     TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated,
-    const amr::ClusteringProvider& clustering,
-    const PreparedLoadBalanceAuthority& load_balance, const CommunicatorView& communicator,
-    int refinement_ratio = kAmrRefRatio,
-    const BoxArray* proper_nesting_parents = nullptr,
-    RegridPeriodicity periodicity = {},
+    const amr::ClusteringProvider& clustering, const PreparedLoadBalanceAuthority& load_balance,
+    const CommunicatorView& communicator, int refinement_ratio = kAmrRefRatio,
+    const BoxArray* proper_nesting_parents = nullptr, RegridPeriodicity periodicity = {},
     const RegridPhysicalGhostSupport* physical_support = nullptr) {
   regrid_detail::collective_stage("regrid layout contract", communicator, [&] {
     if (pk < 0)
@@ -258,8 +245,7 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
         grown.t.size() != static_cast<std::size_t>(pdom.num_cells()))
       throw std::runtime_error("tag storage must exactly match the parent domain");
     if (communicator.size() != n_ranks() || communicator.rank() != my_rank())
-      throw std::runtime_error(
-          "execution communicator must preserve the field-storage rank space");
+      throw std::runtime_error("execution communicator must preserve the field-storage rank space");
     if (physical_support != nullptr && physical_support->provided_depth < 0)
       throw std::runtime_error("physical ghost support depth must be non-negative");
   });
@@ -290,8 +276,7 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
   all_reduce_min_inplace(contract_min.data(), contract_min.size(), communicator);
   all_reduce_max_inplace(contract_max.data(), contract_max.size(), communicator);
   if (contract_min != contract_max)
-    throw std::runtime_error(
-        "regrid_compute_fine_layout contract differs between MPI ranks");
+    throw std::runtime_error("regrid_compute_fine_layout contract differs between MPI ranks");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{load_balance.semantic_identity(), load_balance.collective_contract()}}, communicator))
     throw std::runtime_error(
@@ -436,13 +421,13 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
       if (box.num_cells() == 1)
         continue;
       if (box.nx() >= box.ny()) {
-        const int split = static_cast<int>(static_cast<std::int64_t>(box.lo[0]) +
-                                           box.length64(0) / 2 - 1);
+        const int split =
+            static_cast<int>(static_cast<std::int64_t>(box.lo[0]) + box.length64(0) / 2 - 1);
         pending.push_back(Box2D{{box.lo[0], box.lo[1]}, {split, box.hi[1]}});
         pending.push_back(Box2D{{split + 1, box.lo[1]}, {box.hi[0], box.hi[1]}});
       } else {
-        const int split = static_cast<int>(static_cast<std::int64_t>(box.lo[1]) +
-                                           box.length64(1) / 2 - 1);
+        const int split =
+            static_cast<int>(static_cast<std::int64_t>(box.lo[1]) + box.length64(1) / 2 - 1);
         pending.push_back(Box2D{{box.lo[0], box.lo[1]}, {box.hi[0], split}});
         pending.push_back(Box2D{{box.lo[0], split + 1}, {box.hi[0], box.hi[1]}});
       }
@@ -458,8 +443,7 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
     candidate_layout.emplace(std::move(fine_boxes));
     if (proper_nesting_parents != nullptr && candidate_layout->size() > 0)
       validate_fine_layout_proper_nesting(*candidate_layout, *proper_nesting_parents, pdom,
-                                          refinement_ratio, margin, periodicity,
-                                          physical_support);
+                                          refinement_ratio, margin, periodicity, physical_support);
   });
   if (candidate_layout->size() == 0)
     return {BoxArray{}, DistributionMapping{}};
@@ -471,28 +455,22 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated,
     const ClusterParams& cluster, const PreparedLoadBalanceAuthority& load_balance,
-    const CommunicatorView& communicator,
-    int refinement_ratio = kAmrRefRatio,
-    const BoxArray* proper_nesting_parents = nullptr,
-    RegridPeriodicity periodicity = {},
+    const CommunicatorView& communicator, int refinement_ratio = kAmrRefRatio,
+    const BoxArray* proper_nesting_parents = nullptr, RegridPeriodicity periodicity = {},
     const RegridPhysicalGhostSupport* physical_support = nullptr) {
   const amr::BergerRigoutsosProvider provider(cluster);
-  return regrid_compute_fine_layout_with_provider(std::move(grown), pdom, pk, margin,
-                                                  coarse_replicated, provider, load_balance,
-                                                  communicator,
-                                                  refinement_ratio,
-                                                  proper_nesting_parents, periodicity,
-                                                  physical_support);
+  return regrid_compute_fine_layout_with_provider(
+      std::move(grown), pdom, pk, margin, coarse_replicated, provider, load_balance, communicator,
+      refinement_ratio, proper_nesting_parents, periodicity, physical_support);
 }
 
-using RegridProlongation = std::function<void(const MultiFab&, MultiFab&, int, int, bool,
-                                              const CommunicatorView&)>;
+using RegridProlongation =
+    std::function<void(const MultiFab&, MultiFab&, int, int, bool, const CommunicatorView&)>;
 
 inline MultiFab regrid_field_on_layout_with_provider(
     const BoxArray& fb, const DistributionMapping& dmap, const MultiFab& par, const MultiFab& old,
     int pk, int ngf, const RegridProlongation& prolong, const CommunicatorView& communicator,
-    bool coarse_replicated,
-    int refinement_ratio = kAmrRefRatio) {
+    bool coarse_replicated, int refinement_ratio = kAmrRefRatio) {
   int ncomp = 0;
   regrid_detail::collective_stage("regrid field contract", communicator, [&] {
     if (!prolong)
@@ -556,17 +534,15 @@ bool regrid_hierarchy_level(AmrHierarchy& hierarchy, int coarse_level, Crit crit
     parent_domain = hierarchy.domain(coarse_level);
     (void)hierarchy.data(coarse_level);
   });
-  const bool parent_replicated =
-      hierarchy.level_is_replicated(coarse_level, communicator);
+  const bool parent_replicated = hierarchy.level_is_replicated(coarse_level, communicator);
   const std::array<long, 14> hierarchy_contract{
-      static_cast<long>(coarse_level),       static_cast<long>(hierarchy.num_levels()),
-      static_cast<long>(hierarchy.ref_ratio()),
-      static_cast<long>(hierarchy.ncomp()),  static_cast<long>(hierarchy.n_grow()),
-      static_cast<long>(options.tag_buffer), static_cast<long>(options.nesting_margin),
-      options.periodicity.x ? 1L : 0L,       options.periodicity.y ? 1L : 0L,
-      parent_replicated ? 1L : 0L,
-      static_cast<long>(parent_domain.lo[0]), static_cast<long>(parent_domain.lo[1]),
-      static_cast<long>(parent_domain.hi[0]), static_cast<long>(parent_domain.hi[1])};
+      static_cast<long>(coarse_level),           static_cast<long>(hierarchy.num_levels()),
+      static_cast<long>(hierarchy.ref_ratio()),  static_cast<long>(hierarchy.ncomp()),
+      static_cast<long>(hierarchy.n_grow()),     static_cast<long>(options.tag_buffer),
+      static_cast<long>(options.nesting_margin), options.periodicity.x ? 1L : 0L,
+      options.periodicity.y ? 1L : 0L,           parent_replicated ? 1L : 0L,
+      static_cast<long>(parent_domain.lo[0]),    static_cast<long>(parent_domain.lo[1]),
+      static_cast<long>(parent_domain.hi[0]),    static_cast<long>(parent_domain.hi[1])};
   std::array<long, 14> hierarchy_min = hierarchy_contract;
   std::array<long, 14> hierarchy_max = hierarchy_contract;
   all_reduce_min_inplace(hierarchy_min.data(), hierarchy_min.size(), communicator);
@@ -577,15 +553,13 @@ bool regrid_hierarchy_level(AmrHierarchy& hierarchy, int coarse_level, Crit crit
   TagBox grown;
   regrid_detail::collective_stage("hierarchy regrid tagging", communicator, [&] {
     TagBox local_tags = tag_cells(hierarchy.data(coarse_level), parent_domain, criterion);
-    grown = grow_regrid_tags(local_tags, options.tag_buffer, parent_domain,
-                             options.periodicity);
+    grown = grow_regrid_tags(local_tags, options.tag_buffer, parent_domain, options.periodicity);
   });
   const BoxArray& parents = hierarchy.boxes(coarse_level);
   auto [fine_boxes, distribution] = regrid_compute_fine_layout_with_provider(
-      std::move(grown), parent_domain, coarse_level, options.nesting_margin,
-      parent_replicated, clustering, hierarchy.load_balance_authority(),
-      communicator, hierarchy.ref_ratio(), &parents, options.periodicity,
-      options.physical_support);
+      std::move(grown), parent_domain, coarse_level, options.nesting_margin, parent_replicated,
+      clustering, hierarchy.load_balance_authority(), communicator, hierarchy.ref_ratio(), &parents,
+      options.periodicity, options.physical_support);
   if (fine_boxes.size() == 0) {
     regrid_detail::collective_stage("hierarchy empty-regrid publication", communicator, [&] {
       if (coarse_level < 0 || coarse_level >= hierarchy.num_levels())
@@ -600,8 +574,7 @@ bool regrid_hierarchy_level(AmrHierarchy& hierarchy, int coarse_level, Crit crit
       hierarchy.num_levels() > coarse_level + 1 ? hierarchy.data(coarse_level + 1) : empty_old;
   MultiFab candidate = regrid_field_on_layout_with_provider(
       fine_boxes, distribution, hierarchy.data(coarse_level), old_fine, coarse_level,
-      hierarchy.n_grow(), prolongation, communicator, parent_replicated,
-      hierarchy.ref_ratio());
+      hierarchy.n_grow(), prolongation, communicator, parent_replicated, hierarchy.ref_ratio());
   hierarchy.install_level(coarse_level + 1, fine_boxes, std::move(candidate), communicator);
   return true;
 }
@@ -619,8 +592,7 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
                        Crit crit, int grow, int margin, const RegridProlongation& prolong,
                        int aux_ncomp, bool coarse_replicated,
                        const PreparedLoadBalanceAuthority& load_balance,
-                       RegridPeriodicity periodicity,
-                       const CommunicatorView& communicator,
+                       RegridPeriodicity periodicity, const CommunicatorView& communicator,
                        const RegridPhysicalGhostSupport* physical_support = nullptr) {
   int nlev = 0;
   regrid_detail::collective_stage("finest-level regrid contract", communicator, [&] {
@@ -636,12 +608,10 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
     nlev = static_cast<int>(L.size());
   });
   const std::array<long, 11> regrid_contract{
-      static_cast<long>(nlev),         static_cast<long>(grow),
-      static_cast<long>(margin),       static_cast<long>(aux_ncomp),
-      coarse_replicated ? 1L : 0L,     periodicity.x ? 1L : 0L,
-      periodicity.y ? 1L : 0L,         static_cast<long>(dom.lo[0]),
-      static_cast<long>(dom.lo[1]),    static_cast<long>(dom.hi[0]),
-      static_cast<long>(dom.hi[1])};
+      static_cast<long>(nlev),      static_cast<long>(grow),      static_cast<long>(margin),
+      static_cast<long>(aux_ncomp), coarse_replicated ? 1L : 0L,  periodicity.x ? 1L : 0L,
+      periodicity.y ? 1L : 0L,      static_cast<long>(dom.lo[0]), static_cast<long>(dom.lo[1]),
+      static_cast<long>(dom.hi[0]), static_cast<long>(dom.hi[1])};
   std::array<long, 11> regrid_min = regrid_contract;
   std::array<long, 11> regrid_max = regrid_contract;
   all_reduce_min_inplace(regrid_min.data(), regrid_min.size(), communicator);
@@ -660,10 +630,9 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
   });
   // (1) Compute the fine layout (tags -> grow [already done] -> all_reduce_or -> clustering -> clamp).
   const BoxArray* parents = pk > 0 ? &L[pk].U.box_array() : nullptr;
-  auto [fb, dmap] =
-      regrid_compute_fine_layout(std::move(grown), pdom, pk, margin, coarse_replicated,
-                                 ClusterParams{}, load_balance, communicator, kAmrRefRatio, parents,
-                                 periodicity, physical_support);
+  auto [fb, dmap] = regrid_compute_fine_layout(
+      std::move(grown), pdom, pk, margin, coarse_replicated, ClusterParams{}, load_balance,
+      communicator, kAmrRefRatio, parents, periodicity, physical_support);
   if (fb.size() == 0)
     return;  // nothing to refine: keep the current grid
   // The new patches INHERIT the ghost width of the level being replaced (not a frozen 1): a
@@ -675,9 +644,8 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux, c
   MultiFab candidate_state = regrid_field_on_layout_with_provider(
       fb, dmap, L[pk].U, L[fk].U, pk, ngf, prolong, communicator, coarse_replicated);
   std::optional<MultiFab> candidate_aux;
-  regrid_detail::collective_stage("finest-level regrid auxiliary allocation", communicator, [&] {
-    candidate_aux.emplace(fb, dmap, aux_ncomp, 1);
-  });
+  regrid_detail::collective_stage("finest-level regrid auxiliary allocation", communicator,
+                                  [&] { candidate_aux.emplace(fb, dmap, aux_ncomp, 1); });
 
   // Both candidates exist and every rank has acknowledged success before either public object is
   // touched. MultiFab's implicit move assignment is no-throw, so this commit cannot strand U and

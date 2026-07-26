@@ -99,8 +99,7 @@ TEST(test_amr_hierarchy, FineLayoutValidationIsAtomic) {
   expect_unchanged(BoxArray({Box2D{}}));
   expect_unchanged(BoxArray({Box2D{{1, 0}, {4, 3}}}));
   expect_unchanged(BoxArray({Box2D{{16, 0}, {19, 3}}}));
-  expect_unchanged(
-      BoxArray({Box2D{{0, 0}, {7, 7}}, Box2D{{4, 4}, {11, 11}}}));
+  expect_unchanged(BoxArray({Box2D{{0, 0}, {7, 7}}, Box2D{{4, 4}, {11, 11}}}));
 
   const BoxArray partial_parent({Box2D{{0, 0}, {7, 15}}});
   hierarchy.add_level(partial_parent);
@@ -128,19 +127,18 @@ TEST(test_amr_hierarchy, InstallValidatesCompleteCandidateBeforeTruncatingFinerL
   EXPECT_THROW(hierarchy.install_level(1, level_one, field(different_layout, 1, 1),
                                        world_communicator_view()),
                std::invalid_argument);
-  EXPECT_THROW(hierarchy.install_level(1, level_one, field(level_one, 2, 1),
-                                       world_communicator_view()),
-               std::invalid_argument);
-  EXPECT_THROW(hierarchy.install_level(1, level_one, field(level_one, 1, 2),
-                                       world_communicator_view()),
-               std::invalid_argument);
+  EXPECT_THROW(
+      hierarchy.install_level(1, level_one, field(level_one, 2, 1), world_communicator_view()),
+      std::invalid_argument);
+  EXPECT_THROW(
+      hierarchy.install_level(1, level_one, field(level_one, 1, 2), world_communicator_view()),
+      std::invalid_argument);
   EXPECT_EQ(hierarchy.num_levels(), 3);
   EXPECT_EQ(hierarchy.boxes(1).boxes(), level_one.boxes());
   EXPECT_EQ(hierarchy.boxes(2).boxes(), level_two.boxes());
 
   const BoxArray replacement({Box2D{{8, 0}, {15, 15}}});
-  hierarchy.install_level(1, replacement, field(replacement, 1, 1),
-                          world_communicator_view());
+  hierarchy.install_level(1, replacement, field(replacement, 1, 1), world_communicator_view());
   EXPECT_EQ(hierarchy.num_levels(), 2);
   EXPECT_EQ(hierarchy.boxes(1).boxes(), replacement.boxes());
 }

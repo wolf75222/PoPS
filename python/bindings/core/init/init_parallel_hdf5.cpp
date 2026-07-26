@@ -101,8 +101,7 @@ void init_parallel_hdf5(py::module_& m) {
         if (py::isinstance<pops::WorldCommunicator>(communicator_value)) {
           auto& world = communicator_value.cast<pops::WorldCommunicator&>();
           if (&world != &pops::WorldCommunicator::world())
-            throw py::value_error(
-                "native HDF5 requires the exact process-world authority");
+            throw py::value_error("native HDF5 requires the exact process-world authority");
           communicator = world.communicator();
         } else if (py::isinstance<pops::ObserverMpiLane>(communicator_value)) {
           auto& lane = communicator_value.cast<pops::ObserverMpiLane&>();
@@ -176,8 +175,8 @@ void init_parallel_hdf5(py::module_& m) {
         {
           py::gil_scoped_release release;
           pops::runtime::output::collective_hdf5_input_consensus(communicator, local_error);
-          pops::runtime::output::write_collective_hdf5(
-              communicator, path, manifest_json, arrays, fields);
+          pops::runtime::output::write_collective_hdf5(communicator, path, manifest_json, arrays,
+                                                       fields);
         }
       },
       py::arg("communicator"), py::arg("path"), py::arg("manifest_json"), py::arg("root_arrays"),

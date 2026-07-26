@@ -265,8 +265,7 @@ class AmrProgramContext {
   /// StepAttemptRejected cannot leave residue for the retry.
   template <class Body>
   void advance_hierarchy(double dt, Body&& body) const {
-    advance_attempt_(dt, "AmrProgramContext::advance_hierarchy",
-                     CouplingSchedule::RecursiveCatchUp,
+    advance_attempt_(dt, "AmrProgramContext::advance_hierarchy", CouplingSchedule::RecursiveCatchUp,
                      [&](const amr::ClockWindow& root) { advance_level_(0, root, dt, body); });
   }
 
@@ -278,8 +277,7 @@ class AmrProgramContext {
   template <class Body>
   void advance_synchronized_hierarchy(double dt, Body&& body) const {
     advance_attempt_(dt, "AmrProgramContext::advance_synchronized_hierarchy",
-                     CouplingSchedule::HierarchyBarrier,
-                     [&](const amr::ClockWindow& root) {
+                     CouplingSchedule::HierarchyBarrier, [&](const amr::ClockWindow& root) {
                        current_window_ = root;
                        current_level_dt_ = dt;
                        active_parent_.reset();
@@ -555,8 +553,7 @@ class AmrProgramContext {
         for (const auto& request : requests) {
           count_kernel();
           capture_into_(request.block, *request.state, *request.rhs,
-                        request.flux_only ? ResidualCapture::FluxOnly
-                                          : ResidualCapture::FullRate,
+                        request.flux_only ? ResidualCapture::FluxOnly : ResidualCapture::FullRate,
                         request.rate_id, &group_point);
         }
       });
@@ -805,13 +802,12 @@ class AmrProgramContext {
   /// Generated allocation-free route. The static initializer-list request is copied into one
   /// context-owned pointer workspace keyed by the exact IR identity; field and ordered block pack
   /// cannot drift across replays. The vector overload above remains the manual C++ API.
-  SolveReport solve_fields_from_blocks(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
+  SolveReport solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
+                                       std::initializer_list<FieldStageOverride> overrides) const {
     const std::vector<const MultiFab*>& stages =
         generated_field_solve_stages_(value_id, field, overrides);
-    return solve_fields_from_blocks(
-        generated_field_solve_workspaces_.at(value_id).field_identity, stages);
+    return solve_fields_from_blocks(generated_field_solve_workspaces_.at(value_id).field_identity,
+                                    stages);
   }
 
   /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.
@@ -850,22 +846,20 @@ class AmrProgramContext {
         eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_);
     if (context.domain_mask == nullptr)
       return nullptr;
-    pops::detail::validate_relative_cell_measure(
-        field, RelativeCellMeasure{context.domain_mask, nullptr},
-        "AmrProgramContext pointwise active-cell mask");
+    pops::detail::validate_relative_cell_measure(field,
+                                                 RelativeCellMeasure{context.domain_mask, nullptr},
+                                                 "AmrProgramContext pointwise active-cell mask");
     return context.domain_mask;
   }
 
   /// AMR counterpart of ProgramContext::pointwise_status_max.  The exact mask view used by the
   /// pointwise kernel is authenticated again before the collective reduction.
-  Real pointwise_status_max(int block, const MultiFab& status,
-                            const MultiFab* active_cells) const {
+  Real pointwise_status_max(int block, const MultiFab& status, const MultiFab* active_cells) const {
     const MultiFab* expected = pointwise_active_mask(block, status);
     if (expected != active_cells)
       throw std::invalid_argument(
           "AmrProgramContext pointwise status reduction received a different active-cell mask");
-    const Real reduced =
-        pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
+    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
     return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
   }
 
@@ -897,14 +891,13 @@ class AmrProgramContext {
   /// sub-slot select one non-aliasing buffer per AMR level; a materialization-generation or exact
   /// layout change replaces that buffer, while stable steps reuse it without Fab allocation.
   MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype,
-                                prototype.ncomp(), prototype.n_grow());
+    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
+                                prototype.n_grow());
   }
 
-  MultiFab& scratch_state(std::int64_t value_id, int subslot,
-                          const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype,
-                                prototype.ncomp(), prototype.n_grow());
+  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
+    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
+                                prototype.n_grow());
   }
 
   MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
@@ -912,8 +905,7 @@ class AmrProgramContext {
     if (n_comp < 1 || n_ghost < 0)
       throw std::invalid_argument(
           "AMR Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp,
-                                n_ghost);
+    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
   }
 
   // --- linear algebra (LEVEL-AGNOSTIC: operate on the MultiFab handed in) ---------------------------
@@ -1648,8 +1640,8 @@ class AmrProgramContext {
     std::vector<Box2D> boxes;
     std::vector<int> owners;
 
-    bool matches(std::size_t expected_block, int expected_level,
-                 std::uint64_t expected_generation, const MultiFab& prototype) const noexcept {
+    bool matches(std::size_t expected_block, int expected_level, std::uint64_t expected_generation,
+                 const MultiFab& prototype) const noexcept {
       return block == expected_block && level == expected_level &&
              topology_generation == expected_generation && ncomp == prototype.ncomp() &&
              ngrow == prototype.n_grow() && boxes == prototype.box_array().boxes() &&
@@ -1676,7 +1668,7 @@ class AmrProgramContext {
     explicit CaptureFluxScratchLease(CaptureFluxScratch& scratch) : scratch_(&scratch) {
       bool idle = false;
       if (!scratch_->reserved.compare_exchange_strong(idle, true, std::memory_order_acq_rel,
-                                                       std::memory_order_acquire))
+                                                      std::memory_order_acquire))
         throw std::logic_error(
             "AMR Program face-flux workspace is already active on this block/level");
     }
@@ -1709,16 +1701,15 @@ class AmrProgramContext {
       return capture_flux_scratch_generation_ == generation &&
              capture_flux_scratch_blocks_ == blocks && capture_flux_scratch_levels_ == levels &&
              capture_flux_scratch_.empty();
-    if (capture_flux_scratch_generation_ != generation ||
-        capture_flux_scratch_blocks_ != blocks || capture_flux_scratch_levels_ != levels ||
+    if (capture_flux_scratch_generation_ != generation || capture_flux_scratch_blocks_ != blocks ||
+        capture_flux_scratch_levels_ != levels ||
         capture_flux_scratch_.size() != blocks * static_cast<std::size_t>(levels))
       return false;
     for (std::size_t block = 0; block < blocks; ++block)
       for (int level = 0; level < levels; ++level) {
         const auto& slot = capture_flux_scratch_[block * static_cast<std::size_t>(levels) +
                                                  static_cast<std::size_t>(level)];
-        if (!slot || !slot->key.matches(block, level, generation,
-                                        eng_->level_state(block, level)))
+        if (!slot || !slot->key.matches(block, level, generation, eng_->level_state(block, level)))
           return false;
       }
     return true;
@@ -1732,8 +1723,7 @@ class AmrProgramContext {
     device_fence();
     for (const auto& slot : capture_flux_scratch_)
       if (slot && slot->reserved.load(std::memory_order_acquire))
-        throw std::logic_error(
-            "AMR Program cannot rematerialize an active face-flux workspace");
+        throw std::logic_error("AMR Program cannot rematerialize an active face-flux workspace");
 
     const std::size_t blocks = eng_->n_blocks();
     const int levels = eng_->nlev();
@@ -1775,9 +1765,9 @@ class AmrProgramContext {
                                   prototype.n_grow(),
                                   prototype.box_array().boxes(),
                                   prototype.dmap().ranks()};
-        auto slot = std::make_unique<CaptureFluxScratch>(
-            std::move(key), BoxArray(std::move(x_faces)), BoxArray(std::move(y_faces)),
-            prototype.dmap());
+        auto slot =
+            std::make_unique<CaptureFluxScratch>(std::move(key), BoxArray(std::move(x_faces)),
+                                                 BoxArray(std::move(y_faces)), prototype.dmap());
         // Deterministic values make the cold schedule warm-up sanitizer-safe. Every production
         // capture overwrites the faces before sampling, exactly as with the former fresh buffers.
         slot->fx.set_val(Real(0));
@@ -1790,8 +1780,7 @@ class AmrProgramContext {
           const bool replicated_parent = eng_->level_is_replicated(level);
           scratch->second.prepare(prototype, child, replicated_parent, eng_->topology_epoch(),
                                   prototype.ncomp());
-          pops::detail::prepare_edge_flux_coarse_role(slot->sampled_flux, child,
-                                                      prototype.ncomp());
+          pops::detail::prepare_edge_flux_coarse_role(slot->sampled_flux, child, prototype.ncomp());
           if (!replicated_parent) {
             // Replay once during preparation so CopySchedule and communication buffers are also
             // outside the residual loop. The first physical capture overwrites these zero values.
@@ -1823,15 +1812,14 @@ class AmrProgramContext {
   }
 
   CaptureFluxScratchLease capture_flux_scratch_for_(std::size_t block, int level,
-                                                     const MultiFab& prototype) const {
+                                                    const MultiFab& prototype) const {
     const std::uint64_t generation = eng_->topology_materialization_generation();
     if (capture_flux_scratch_generation_ != generation || block >= capture_flux_scratch_blocks_ ||
         level < 0 || level >= capture_flux_scratch_levels_)
       throw std::logic_error(
           "AMR Program face-flux workspace is stale; topology preparation must run before stages");
-    const std::size_t index =
-        block * static_cast<std::size_t>(capture_flux_scratch_levels_) +
-        static_cast<std::size_t>(level);
+    const std::size_t index = block * static_cast<std::size_t>(capture_flux_scratch_levels_) +
+                              static_cast<std::size_t>(level);
     if (index >= capture_flux_scratch_.size() || !capture_flux_scratch_[index] ||
         !capture_flux_scratch_[index]->key.matches(block, level, generation, prototype))
       throw std::logic_error("AMR Program face-flux workspace layout contract mismatch");
@@ -1888,9 +1876,9 @@ class AmrProgramContext {
       throw block_map_error_(
           "AmrProgramContext::solve_fields_from_blocks: no explicit program-to-AMR block map is "
           "installed; positional block identity is not supported");
-    bool structure_matches = workspace.program_to_system.size() == block_map.size() &&
-                             workspace.program_stages.size() ==
-                                 static_cast<std::size_t>(n_blocks());
+    bool structure_matches =
+        workspace.program_to_system.size() == block_map.size() &&
+        workspace.program_stages.size() == static_cast<std::size_t>(n_blocks());
     for (std::size_t p = 0; structure_matches && p < block_map.size(); ++p)
       structure_matches = workspace.program_to_system[p] == sys_block(static_cast<int>(p));
     if (!structure_matches) {
@@ -1957,8 +1945,7 @@ class AmrProgramContext {
     int subslot = -1;
     int level = -1;
 
-    friend bool operator<(const ProgramScratchKey& lhs,
-                          const ProgramScratchKey& rhs) noexcept {
+    friend bool operator<(const ProgramScratchKey& lhs, const ProgramScratchKey& rhs) noexcept {
       if (lhs.kind != rhs.kind)
         return lhs.kind < rhs.kind;
       if (lhs.value_id != rhs.value_id)
@@ -1974,9 +1961,8 @@ class AmrProgramContext {
     std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
   };
 
-  static bool program_scratch_layout_matches_(const MultiFab& field,
-                                               const MultiFab& prototype, int n_comp,
-                                               int n_ghost) {
+  static bool program_scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype,
+                                              int n_comp, int n_ghost) {
     return field.box_array().boxes() == prototype.box_array().boxes() &&
            field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
            field.n_grow() == n_ghost;
@@ -2052,10 +2038,8 @@ class AmrProgramContext {
       const std::size_t sb = static_cast<std::size_t>(sys_block(b));
       if (capturing()) {
         sync_report_.push_back({parent, child, b, SyncPhase::Reflux, sync_clock});
-        const EdgeFlux coarse_role =
-            reflux_flux_from_ledger_(b, parent, ledger_begin, ledger_end);
-        const EdgeFlux fine_role =
-            reflux_flux_from_ledger_(b, child, ledger_begin, ledger_end);
+        const EdgeFlux coarse_role = reflux_flux_from_ledger_(b, parent, ledger_begin, ledger_end);
+        const EdgeFlux fine_role = reflux_flux_from_ledger_(b, child, ledger_begin, ledger_end);
         pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role);
       }
       sync_report_.push_back({parent, child, b, SyncPhase::AverageDown, sync_clock});
@@ -2097,7 +2081,8 @@ class AmrProgramContext {
     // A grouped evaluation publishes every sibling stage state under one exact boundary point.
     // Keep rate_id separate: it remains the conservative-ledger/provenance identity for this
     // individual residual even when the prepared boundary registry observes the atomic group point.
-    const auto boundary_point = grouped_point == nullptr ? boundary_point_(rate_id) : *grouped_point;
+    const auto boundary_point =
+        grouped_point == nullptr ? boundary_point_(rate_id) : *grouped_point;
     if (active_parent_ && active_parent_->child_level == level_) {
       const amr::Rational target_phase = active_parent_->child_window.begin.phase +
                                          stage_time_ * (active_parent_->child_window.end.phase -
@@ -2117,10 +2102,8 @@ class AmrProgramContext {
           alpha.denominator};
       if (active_parent_->old_states == nullptr || active_parent_->new_states == nullptr)
         throw std::logic_error("AMR temporal interpolation has no prepared parent-state workspace");
-      const MultiFab& old_parent =
-          active_parent_->old_states->at(static_cast<std::size_t>(b));
-      const MultiFab& new_parent =
-          active_parent_->new_states->at(static_cast<std::size_t>(b));
+      const MultiFab& old_parent = active_parent_->old_states->at(static_cast<std::size_t>(b));
+      const MultiFab& new_parent = active_parent_->new_states->at(static_cast<std::size_t>(b));
       if (mode == ResidualCapture::FluxOnly)
         eng_->level_neg_div_flux_capture_into_temporal(sb, level_, boundary_point, u, r, Fx, Fy,
                                                        old_parent, new_parent, target);
@@ -2180,8 +2163,7 @@ class AmrProgramContext {
     if (!(dt > 0.0))
       throw std::invalid_argument(std::string(operation) + " requires dt > 0");
     if (attempt_snapshot_active_)
-      throw std::logic_error(
-          "AMR Program attempt execution is non-reentrant on one context");
+      throw std::logic_error("AMR Program attempt execution is non-reentrant on one context");
     if (active_parent_)
       throw std::logic_error(
           "AMR Program attempt cannot begin inside an active parent/child interpolation window");
@@ -2261,8 +2243,8 @@ class AmrProgramContext {
         conservative_ledger_.rollback();
       else if (!conservative_ledger_.empty())
         conservative_ledger_.clear();
-      const bool accepted_state_mutated = facade_->program_accepted_state_revision() !=
-                                          saved.program_accepted_state_revision;
+      const bool accepted_state_mutated =
+          facade_->program_accepted_state_revision() != saved.program_accepted_state_revision;
       if (saved.engine_captured)
         eng_->restore_step_snapshot(saved.engine);
       else
@@ -2564,8 +2546,7 @@ class AmrProgramContext {
 
   template <class Map>
   static void copy_map_values_in_place_(Map& destination, const Map& source) {
-    copy_map_in_place_(destination, source,
-                       [](auto& value, const auto& saved) { value = saved; });
+    copy_map_in_place_(destination, source, [](auto& value, const auto& saved) { value = saved; });
   }
 
   template <class Set>
@@ -2580,7 +2561,7 @@ class AmrProgramContext {
   }
 
   static void copy_flux_contribution_in_place_(FluxContribution& destination,
-                                                const FluxContribution& source) {
+                                               const FluxContribution& source) {
     destination.rate_id = source.rate_id;
     destination.weight = source.weight;
     destination.dt_power = source.dt_power;
@@ -2590,11 +2571,11 @@ class AmrProgramContext {
   }
 
   static void copy_flux_contributions_in_place_(std::vector<FluxContribution>& destination,
-                                                 const std::vector<FluxContribution>& source) {
-    copy_vector_in_place_(destination, source, [](FluxContribution& value,
-                                                  const FluxContribution& saved) {
-      copy_flux_contribution_in_place_(value, saved);
-    });
+                                                const std::vector<FluxContribution>& source) {
+    copy_vector_in_place_(destination, source,
+                          [](FluxContribution& value, const FluxContribution& saved) {
+                            copy_flux_contribution_in_place_(value, saved);
+                          });
   }
 
   static void copy_flux_map_in_place_(std::map<FluxKey, EdgeFlux>& destination,
@@ -2607,11 +2588,11 @@ class AmrProgramContext {
   static void copy_contribution_map_in_place_(
       std::map<FluxKey, std::vector<FluxContribution>>& destination,
       const std::map<FluxKey, std::vector<FluxContribution>>& source) {
-    copy_map_in_place_(destination, source,
-                       [](std::vector<FluxContribution>& value,
-                          const std::vector<FluxContribution>& saved) {
-      copy_flux_contributions_in_place_(value, saved);
-    });
+    copy_map_in_place_(
+        destination, source,
+        [](std::vector<FluxContribution>& value, const std::vector<FluxContribution>& saved) {
+          copy_flux_contributions_in_place_(value, saved);
+        });
   }
 
   static void copy_ring_flux_in_place_(
@@ -2628,7 +2609,8 @@ class AmrProgramContext {
 
   static void copy_ring_contributions_in_place_(
       std::map<std::string, std::vector<std::vector<std::vector<FluxContribution>>>>& destination,
-      const std::map<std::string, std::vector<std::vector<std::vector<FluxContribution>>>>& source) {
+      const std::map<std::string, std::vector<std::vector<std::vector<FluxContribution>>>>&
+          source) {
     copy_map_in_place_(destination, source, [](auto& ring, const auto& saved_ring) {
       copy_vector_in_place_(ring, saved_ring, [](auto& slot, const auto& saved_slot) {
         copy_vector_in_place_(slot, saved_slot, [](auto& value, const auto& saved) {
@@ -2651,8 +2633,8 @@ class AmrProgramContext {
   static void copy_identity_ring_in_place_(
       std::map<std::string, std::vector<std::vector<std::optional<amr::HistoryIdentity>>>>&
           destination,
-      const std::map<std::string,
-                     std::vector<std::vector<std::optional<amr::HistoryIdentity>>>>& source) {
+      const std::map<std::string, std::vector<std::vector<std::optional<amr::HistoryIdentity>>>>&
+          source) {
     copy_map_in_place_(destination, source, [](auto& ring, const auto& saved_ring) {
       copy_vector_in_place_(ring, saved_ring, [](auto& slot, const auto& saved_slot) {
         copy_vector_values_in_place_(slot, saved_slot);
@@ -2661,30 +2643,26 @@ class AmrProgramContext {
   }
 
   static void copy_history_flux_topology_in_place_(HistoryFluxTopology& destination,
-                                                    const HistoryFluxTopology& source) {
+                                                   const HistoryFluxTopology& source) {
     destination.epoch = source.epoch;
-    copy_vector_in_place_(destination.boxes, source.boxes,
-                          [](auto& value, const auto& saved) {
-                            copy_vector_values_in_place_(value, saved);
-                          });
-    copy_vector_in_place_(destination.owners, source.owners,
-                          [](auto& value, const auto& saved) {
-                            copy_vector_values_in_place_(value, saved);
-                          });
+    copy_vector_in_place_(destination.boxes, source.boxes, [](auto& value, const auto& saved) {
+      copy_vector_values_in_place_(value, saved);
+    });
+    copy_vector_in_place_(destination.owners, source.owners, [](auto& value, const auto& saved) {
+      copy_vector_values_in_place_(value, saved);
+    });
   }
 
   static bool same_parent_state_layout_(const MultiFab& destination,
                                         const MultiFab& source) noexcept {
     return destination.box_array().boxes() == source.box_array().boxes() &&
            destination.dmap().ranks() == source.dmap().ranks() &&
-           destination.ncomp() == source.ncomp() &&
-           destination.n_grow() == source.n_grow();
+           destination.ncomp() == source.ncomp() && destination.n_grow() == source.n_grow();
   }
 
   static void copy_parent_state_in_place_(MultiFab& destination, const MultiFab& source) {
     if (!same_parent_state_layout_(destination, source))
-      destination =
-          MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
+      destination = MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
     pops::detail::copy_amr_storage(destination, source);
   }
 
@@ -2692,8 +2670,7 @@ class AmrProgramContext {
     const std::size_t required = nlev() > 1 ? static_cast<std::size_t>(nlev() - 1) : 0;
     parent_window_workspaces_.resize(required);
     for (int level = 0; level + 1 < nlev(); ++level) {
-      ParentWindowWorkspace& workspace =
-          parent_window_workspaces_[static_cast<std::size_t>(level)];
+      ParentWindowWorkspace& workspace = parent_window_workspaces_[static_cast<std::size_t>(level)];
       workspace.old_states.resize(static_cast<std::size_t>(n_blocks()));
       workspace.new_states.resize(static_cast<std::size_t>(n_blocks()));
       for (int block = 0; block < n_blocks(); ++block) {
@@ -2742,8 +2719,7 @@ class AmrProgramContext {
       else
         ++entry;
     }
-    for (auto entry = snapshot.rate_provenance.begin();
-         entry != snapshot.rate_provenance.end();) {
+    for (auto entry = snapshot.rate_provenance.begin(); entry != snapshot.rate_provenance.end();) {
       if (snapshot.active_flux.count(entry->first) == 0)
         entry = snapshot.rate_provenance.erase(entry);
       else
@@ -2767,12 +2743,10 @@ class AmrProgramContext {
     copy_vector_values_in_place_(snapshot.accepted_flux_report, accepted_flux_report_);
     copy_vector_values_in_place_(snapshot.accepted_sync_report, accepted_sync_report_);
     copy_ring_flux_in_place_(snapshot.ring_flux, ring_flux_);
-    copy_ring_contributions_in_place_(snapshot.ring_flux_contributions,
-                                      ring_flux_contributions_);
-    copy_map_in_place_(snapshot.ring_flux_init, ring_flux_init_,
-                       [](auto& value, const auto& saved) {
-                         copy_vector_values_in_place_(value, saved);
-                       });
+    copy_ring_contributions_in_place_(snapshot.ring_flux_contributions, ring_flux_contributions_);
+    copy_map_in_place_(
+        snapshot.ring_flux_init, ring_flux_init_,
+        [](auto& value, const auto& saved) { copy_vector_values_in_place_(value, saved); });
     copy_clock_ring_in_place_(snapshot.ring_clocks, ring_clocks_);
     copy_identity_ring_in_place_(snapshot.ring_identities, ring_identities_);
     copy_map_values_in_place_(snapshot.history_owners, history_owners_);
@@ -2780,8 +2754,7 @@ class AmrProgramContext {
     copy_map_values_in_place_(snapshot.history_spaces, history_space_ids_);
     copy_map_values_in_place_(snapshot.history_clocks, history_clock_ids_);
     copy_map_values_in_place_(snapshot.history_interpolations, history_interpolation_ids_);
-    copy_history_flux_topology_in_place_(snapshot.history_flux_topology,
-                                         history_flux_topology_);
+    copy_history_flux_topology_in_place_(snapshot.history_flux_topology, history_flux_topology_);
     snapshot.history_flux_topology_rebind_count = history_flux_topology_rebind_count_;
     copy_vector_values_in_place_(snapshot.level_clocks, level_clocks_);
     clock_schedule_.copy_into(snapshot.clock_schedule);
@@ -2817,12 +2790,10 @@ class AmrProgramContext {
     copy_vector_values_in_place_(accepted_flux_report_, snapshot.accepted_flux_report);
     copy_vector_values_in_place_(accepted_sync_report_, snapshot.accepted_sync_report);
     copy_ring_flux_in_place_(ring_flux_, snapshot.ring_flux);
-    copy_ring_contributions_in_place_(ring_flux_contributions_,
-                                      snapshot.ring_flux_contributions);
-    copy_map_in_place_(ring_flux_init_, snapshot.ring_flux_init,
-                       [](auto& value, const auto& saved) {
-                         copy_vector_values_in_place_(value, saved);
-                       });
+    copy_ring_contributions_in_place_(ring_flux_contributions_, snapshot.ring_flux_contributions);
+    copy_map_in_place_(
+        ring_flux_init_, snapshot.ring_flux_init,
+        [](auto& value, const auto& saved) { copy_vector_values_in_place_(value, saved); });
     copy_clock_ring_in_place_(ring_clocks_, snapshot.ring_clocks);
     copy_identity_ring_in_place_(ring_identities_, snapshot.ring_identities);
     copy_map_values_in_place_(history_owners_, snapshot.history_owners);
@@ -2830,8 +2801,7 @@ class AmrProgramContext {
     copy_map_values_in_place_(history_space_ids_, snapshot.history_spaces);
     copy_map_values_in_place_(history_clock_ids_, snapshot.history_clocks);
     copy_map_values_in_place_(history_interpolation_ids_, snapshot.history_interpolations);
-    copy_history_flux_topology_in_place_(history_flux_topology_,
-                                         snapshot.history_flux_topology);
+    copy_history_flux_topology_in_place_(history_flux_topology_, snapshot.history_flux_topology);
     history_flux_topology_rebind_count_ = snapshot.history_flux_topology_rebind_count;
     copy_vector_values_in_place_(level_clocks_, snapshot.level_clocks);
     snapshot.clock_schedule.copy_into(clock_schedule_);
@@ -2861,8 +2831,7 @@ class AmrProgramContext {
     const std::size_t ledger_begin = conservative_ledger_.size();
     ParentWindowWorkspace* parent_workspace = nullptr;
     if (level + 1 < nlev()) {
-      parent_workspace =
-          &parent_window_workspaces_.at(static_cast<std::size_t>(level));
+      parent_workspace = &parent_window_workspaces_.at(static_cast<std::size_t>(level));
       for (int b = 0; b < n_blocks(); ++b)
         copy_parent_state_in_place_(
             parent_workspace->old_states[static_cast<std::size_t>(b)],
@@ -2886,17 +2855,16 @@ class AmrProgramContext {
     if (parent_workspace == nullptr)
       throw std::logic_error("AMR parent-state workspace was not prepared for an active child");
     for (int b = 0; b < n_blocks(); ++b)
-      copy_parent_state_in_place_(
-          parent_workspace->new_states[static_cast<std::size_t>(b)],
-          eng_->level_state(static_cast<std::size_t>(sys_block(b)), level));
+      copy_parent_state_in_place_(parent_workspace->new_states[static_cast<std::size_t>(b)],
+                                  eng_->level_state(static_cast<std::size_t>(sys_block(b)), level));
 
     const amr::ParentChildClockRelation& relation = eng_->parent_child_temporal_relation(level + 1);
     const std::optional<ActiveParentWindow> saved_parent = active_parent_;
     const amr::Rational parent_span = window.end.phase - window.begin.phase;
     for (const amr::ChildSubstep& substep : relation.partition(window)) {
-      active_parent_ = ActiveParentWindow{level + 1, window, substep.window,
-                                          &parent_workspace->old_states,
-                                          &parent_workspace->new_states};
+      active_parent_ =
+          ActiveParentWindow{level + 1, window, substep.window, &parent_workspace->old_states,
+                             &parent_workspace->new_states};
       const amr::Rational child_span = substep.window.end.phase - substep.window.begin.phase;
       const double child_dt = local_dt * (child_span / parent_span).value();
       advance_level_(level + 1, substep.window, child_dt, body);
@@ -3048,9 +3016,8 @@ class AmrProgramContext {
           "AMR Program RHS group requires a non-negative authored group identity");
   }
 
-  static std::size_t scaled_contribution_count_(
-      const std::vector<FluxContribution>& source,
-      std::initializer_list<ExactCoefficientTerm> exact) {
+  static std::size_t scaled_contribution_count_(const std::vector<FluxContribution>& source,
+                                                std::initializer_list<ExactCoefficientTerm> exact) {
     std::size_t nonzero_terms = 0;
     for (const ExactCoefficientTerm& term : exact) {
       if (term.dt_power < 0 || term.denominator <= 0)
@@ -3090,8 +3057,7 @@ class AmrProgramContext {
     return offset;
   }
 
-  static void append_rate_provenance_(RateProvenance& destination,
-                                      const RateProvenance& source) {
+  static void append_rate_provenance_(RateProvenance& destination, const RateProvenance& source) {
     if (&destination == &source)
       return;
     for (int rate : source)
@@ -3130,11 +3096,9 @@ class AmrProgramContext {
     const FluxKey source_key = key_(&source);
     const auto found = flux_contributions_.find(source_key);
     const std::vector<FluxContribution>* values =
-        active_flux_(source_key) == nullptr || found == flux_contributions_.end()
-            ? nullptr
-            : &found->second;
-    const std::size_t count =
-        values == nullptr ? 0 : scaled_contribution_count_(*values, exact);
+        active_flux_(source_key) == nullptr || found == flux_contributions_.end() ? nullptr
+                                                                                  : &found->second;
+    const std::size_t count = values == nullptr ? 0 : scaled_contribution_count_(*values, exact);
     auto& scratch = contribution_algebra_scratch_[destination_key];
     scratch.resize(count);
     if (values != nullptr)
@@ -3153,10 +3117,11 @@ class AmrProgramContext {
     std::swap(rate_provenance_[destination_key], scratch);
   }
 
-  void assign_combined_contributions_(
-      const FluxKey& destination_key, const FluxKey& x_key, Real x_dt,
-      std::initializer_list<ExactCoefficientTerm> exact_x, const FluxKey& y_key, Real y_dt,
-      std::initializer_list<ExactCoefficientTerm> exact_y) const {
+  void assign_combined_contributions_(const FluxKey& destination_key, const FluxKey& x_key,
+                                      Real x_dt,
+                                      std::initializer_list<ExactCoefficientTerm> exact_x,
+                                      const FluxKey& y_key, Real y_dt,
+                                      std::initializer_list<ExactCoefficientTerm> exact_y) const {
     const auto source = [&](const FluxKey& key) -> const std::vector<FluxContribution>* {
       if (active_flux_(key) == nullptr)
         return nullptr;
@@ -3301,8 +3266,7 @@ class AmrProgramContext {
       std::swap(activate_flux_(destination_key), out);
     }
     if (active_flux_(destination_key) != nullptr) {
-      assign_combined_contributions_(destination_key, key_(&x), dt, exact_a, key_(&y), dt,
-                                     exact_b);
+      assign_combined_contributions_(destination_key, key_(&x), dt, exact_a, key_(&y), dt, exact_b);
       assign_combined_provenance_(destination_key, key_(&x), key_(&y));
     }
   }
@@ -3325,8 +3289,8 @@ class AmrProgramContext {
       if (static_cast<int>(slot.size()) < nlev())
         slot.resize(static_cast<std::size_t>(nlev()));
     const EdgeFlux* active = active_flux_(key_(&value));
-    const auto contribution = active == nullptr ? flux_contributions_.end()
-                                                : flux_contributions_.find(key_(&value));
+    const auto contribution =
+        active == nullptr ? flux_contributions_.end() : flux_contributions_.find(key_(&value));
     // PER-RING PER-LEVEL COLD START (mirror of AmrHistoryOps::store_history): the FIRST store of a (name,
     // level) broadcasts into EVERY deeper slot, so a multistep step 0 reads the same flux at each lag; from
     // then on only slot 0 is written (the ring rotate carries the older slots). Tracked with our own flag
@@ -3346,8 +3310,8 @@ class AmrProgramContext {
       for (std::size_t s = 1; s < ring.size(); ++s) {
         pops::detail::edge_flux_copy_into(ring[s][static_cast<std::size_t>(level_)],
                                           ring[0][static_cast<std::size_t>(level_)]);
-        copy_flux_contributions_in_place_(
-            contribution_ring[s][static_cast<std::size_t>(level_)], slot0_contributions);
+        copy_flux_contributions_in_place_(contribution_ring[s][static_cast<std::size_t>(level_)],
+                                          slot0_contributions);
       }
       init[static_cast<std::size_t>(level_)] = 1;
     }
@@ -3376,8 +3340,7 @@ class AmrProgramContext {
       stored_contributions =
           &contributions->second[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)];
     }
-    if (stored_flux.empty() &&
-        (stored_contributions == nullptr || stored_contributions->empty())) {
+    if (stored_flux.empty() && (stored_contributions == nullptr || stored_contributions->empty())) {
       active_flux_ledger_.erase(destination_key);
       flux_ledger_.erase(destination_key);
       flux_contributions_.erase(destination_key);
@@ -3467,8 +3430,8 @@ class AmrProgramContext {
   /// example a phi/state carry) keep the engine's normal overlap-preserving remap and are untouched.
   void rebind_history_flux_topology_(const HistoryFluxTopology& before,
                                      const HistoryFluxTopology& after) const {
-    if (before.boxes.size() != before.owners.size() ||
-        after.boxes.size() != after.owners.size() || after.boxes.empty())
+    if (before.boxes.size() != before.owners.size() || after.boxes.size() != after.owners.size() ||
+        after.boxes.empty())
       throw std::runtime_error(
           "AMR lagged-flux topology rebind received an inconsistent hierarchy");
     const std::size_t before_levels = before.boxes.size();
@@ -3515,8 +3478,7 @@ class AmrProgramContext {
       // Removing a fine suffix restricts it into the highest surviving child. Even when that
       // child's boxes/owners are unchanged, its data and therefore its parent-interface flux
       // authority changed.
-      const bool absorbed_removed_child =
-          before_levels > after_levels && k + 1 == after_levels;
+      const bool absorbed_removed_child = before_levels > after_levels && k + 1 == after_levels;
       if (!level_changed(p) && !level_changed(k) && !absorbed_removed_child)
         continue;
       for (const auto& [name, owner] : history_owners_) {
@@ -3533,8 +3495,8 @@ class AmrProgramContext {
     // Deactivated fine levels were conservatively restricted into their surviving parent by
     // AmrHistoryOps.  Their compact interface authority is no longer meaningful; discard exactly
     // those roles before shrinking every Program-owned level axis.
-    for (int child = static_cast<int>(before_levels) - 1;
-         child >= static_cast<int>(after_levels); --child) {
+    for (int child = static_cast<int>(before_levels) - 1; child >= static_cast<int>(after_levels);
+         --child) {
       const int parent = child - 1;
       for (const auto& [name, owner] : history_owners_) {
         (void)owner;
@@ -3713,11 +3675,9 @@ class AmrProgramContext {
   mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable bool named_field_solve_in_use_ = false;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
-  mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace>
-      generated_field_solve_workspaces_;
+  mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::map<ProgramScratchKey, ProgramScratchSlot> program_scratch_;
-  mutable std::uint64_t program_scratch_topology_epoch_ =
-      std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t program_scratch_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t program_scratch_materialization_generation_ =
       std::numeric_limits<std::uint64_t>::max();
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;

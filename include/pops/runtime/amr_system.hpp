@@ -141,8 +141,7 @@ struct AmrSystemConfig {
   /// identity covers the public route, exact provider options and its weight capability.
   std::string load_balance_route = "space_filling_curve";
   std::string load_balance_identity = "pops.amr.default.space-filling-curve@1";
-  PreparedProviderOptions load_balance_options{
-      "pops.amr.load-balance.space-filling-curve@1", {}};
+  PreparedProviderOptions load_balance_options{"pops.amr.load-balance.space-filling-curve@1", {}};
   /// Independent y-axis geometry. Zero means "same as x" solely for the historical direct-C++
   /// square shorthand; resolved CartesianGrid lowering always writes both values explicitly.
   int ny = 0;
@@ -219,8 +218,7 @@ struct AmrBuildParams {
     std::vector<double> density;  ///< initial coarse density (component 0), ny*nx
     // FULL initial conservative state (all components), takes priority over `density` when has_state.
     bool has_state = false;
-    std::vector<double>
-        state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
+    std::vector<double> state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
   } initial;
   /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
   /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
@@ -548,13 +546,14 @@ class AmrSystem {
 
   /// AMR twin of System::add_external_riemann_block. The external flux is instantiated directly
   /// in the deferred AmrRuntime builder and therefore retains native reflux/halo execution.
-  void add_external_riemann_block(
-      const std::string& name, const std::string& so_path, const std::string& brick_id,
-      const std::string& sha256, const std::string& limiter, const std::string& recon,
-      const std::string& time, double gamma, int substeps, int stride, int expected_nvars,
-      int expected_naux, const std::string& expected_model_identity,
-      double positivity_floor = 0.0,
-      double weno_epsilon = static_cast<double>(kWenoEpsilon));
+  void add_external_riemann_block(const std::string& name, const std::string& so_path,
+                                  const std::string& brick_id, const std::string& sha256,
+                                  const std::string& limiter, const std::string& recon,
+                                  const std::string& time, double gamma, int substeps, int stride,
+                                  int expected_nvars, int expected_naux,
+                                  const std::string& expected_model_identity,
+                                  double positivity_floor = 0.0,
+                                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Refines the cells where the SELECTED conserved variable exceeds @p threshold. By default the
   /// variable is component 0 (historically the density), preserving the bit-identical @c 1e30 no-op.
@@ -720,10 +719,10 @@ class AmrSystem {
   void register_analytic_gaussian(const std::string& subject, const std::string& block,
                                   double center_x, double center_y, double background,
                                   double amplitude, double inverse_width);
-  void register_analytic_expression(
-      const std::string& subject, const std::string& block, const std::string& space,
-      const std::string& centering, const std::vector<std::vector<std::string>>& opcodes,
-      const std::vector<std::vector<double>>& literals);
+  void register_analytic_expression(const std::string& subject, const std::string& block,
+                                    const std::string& space, const std::string& centering,
+                                    const std::vector<std::vector<std::string>>& opcodes,
+                                    const std::vector<std::vector<double>>& literals);
   std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
   int apply_bootstrap_component_floor(const std::string& subject, int level, int component,
                                       double floor);
@@ -1084,10 +1083,10 @@ class AmrSystem {
   /// central patch, reproduced by replaying the same composition). The _global variants all_reduce_sum
   /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
-  int n_levels();  ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
-  int max_levels();  ///< resolved maximum active hierarchy depth
+  int n_levels();             ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
+  int max_levels();           ///< resolved maximum active hierarchy depth
   int configured_n_levels();  ///< immutable resolved hierarchy capacity
-  int n_vars();    ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
+  int n_vars();  ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.
   std::vector<double> level_state(int k);

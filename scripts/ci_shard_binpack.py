@@ -55,6 +55,7 @@ the compiler-gated files skip fast locally and MUST be seeded from CI instead.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -82,11 +83,22 @@ def load_durations(path: Path | str | None = None) -> dict[str, float]:
     if not p.exists():
         return {}
     raw = json.loads(p.read_text(encoding="utf-8"))
-    return {
-        str(k): float(v)
-        for k, v in raw.items()
-        if not str(k).startswith("_") and isinstance(v, (int, float))
-    }
+    durations: dict[str, float] = {}
+    for key, value in raw.items():
+        name = str(key)
+        if name.startswith("_"):
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise PartitionError(
+                f"invalid duration in {p}: {name} must be a finite positive number"
+            )
+        durations[name] = float(value)
+    return durations
 
 
 def median(values: Sequence[float]) -> float:

@@ -145,10 +145,9 @@ TEST(CompositeFacNlevelTest, fully_covered_parent_solves_finest_and_averages_dow
   for (int j = coarse_domain.lo[1]; j <= coarse_domain.hi[1]; ++j)
     for (int i = coarse_domain.lo[0]; i <= coarse_domain.hi[0]; ++i) {
       const double fine_average =
-          0.25 * (fine(2 * i, 2 * j, 0) + fine(2 * i + 1, 2 * j, 0) +
-                  fine(2 * i, 2 * j + 1, 0) + fine(2 * i + 1, 2 * j + 1, 0));
-      avgdown_error =
-          std::fmax(avgdown_error, std::fabs(coarse(i, j, 0) - fine_average));
+          0.25 * (fine(2 * i, 2 * j, 0) + fine(2 * i + 1, 2 * j, 0) + fine(2 * i, 2 * j + 1, 0) +
+                  fine(2 * i + 1, 2 * j + 1, 0));
+      avgdown_error = std::fmax(avgdown_error, std::fabs(coarse(i, j, 0) - fine_average));
     }
 
   EXPECT_TRUE(std::isfinite(residual));

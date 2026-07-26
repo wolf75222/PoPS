@@ -146,9 +146,8 @@ inline bool solve_report_is_publishable(const SolveReport& report,
   const auto finite_nonnegative = [](Real value) noexcept {
     return std::isfinite(value) && value >= Real(0);
   };
-  return maximum_iterations >= 0 && report.iters >= 0 &&
-         report.iters <= maximum_iterations && known_status(report.status) &&
-         known_action(report.action) && report.valid() &&
+  return maximum_iterations >= 0 && report.iters >= 0 && report.iters <= maximum_iterations &&
+         known_status(report.status) && known_action(report.action) && report.valid() &&
          report.solved_value_available() == (report.status == SolveStatus::kSolved) &&
          finite_nonnegative(report.rel_residual) &&
          finite_nonnegative(report.reference_residual_norm) &&

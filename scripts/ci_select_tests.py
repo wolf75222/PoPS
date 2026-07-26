@@ -761,6 +761,40 @@ def cpp_target_weights(targets: list[str]) -> dict[str, float]:
     }
 
 
+def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
+    """Require both C++ duration catalogues to exactly cover the manifest inventory.
+
+    A selected subset is not enough to authenticate these files: otherwise deleting or renaming a
+    manifest target could leave an orphan weight indefinitely.  Validate the complete serial target
+    universe before planning any shard, and keep missing, stale and non-positive weights fatal.
+    """
+    expected = set(targets)
+    catalogues: list[tuple[str, dict[str, float]]] = []
+    for label, path in (
+        ("build", CPP_BUILD_DURATIONS_JSON),
+        ("test", CPP_DURATIONS_JSON),
+    ):
+        try:
+            durations = ci_shard_binpack.load_durations(path)
+        except ci_shard_binpack.PartitionError as exc:
+            raise SystemExit(f"C++ {label} duration catalog is invalid: {exc}") from exc
+        catalogues.append((label, durations))
+    failures: list[str] = []
+    for label, durations in catalogues:
+        actual = set(durations)
+        missing = sorted(expected - actual)
+        orphaned = sorted(actual - expected)
+        non_positive = sorted(name for name, seconds in durations.items() if seconds <= 0)
+        if missing:
+            failures.append(f"{label} missing={missing}")
+        if orphaned:
+            failures.append(f"{label} orphaned={orphaned}")
+        if non_positive:
+            failures.append(f"{label} non-positive={non_positive}")
+    if failures:
+        raise SystemExit("C++ duration catalog inventory mismatch: " + "; ".join(failures))
+
+
 def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
     if total <= 0:
@@ -1133,6 +1167,7 @@ def plan_cpp(args: argparse.Namespace) -> int:
 
     if not all_targets:
         raise SystemExit("no non-MPI C++ suites found in tests/test_manifest.toml")
+    validate_cpp_duration_catalogs(all_targets)
 
     full_reasons: list[str] = []
     if args.force_all:

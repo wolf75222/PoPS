@@ -18,7 +18,7 @@ from pops.time.references import block_name
 from pops.time.stencil import StencilAccess
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
-    ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _residual_wants_guess,
+    ProgramValue, _Coeff, _Operator, _exact_number, _residual_wants_guess,
     _resolve_handle)
 
 if TYPE_CHECKING:

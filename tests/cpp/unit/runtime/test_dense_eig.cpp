@@ -549,12 +549,8 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
     // Jacobienne x de la fermeture gaussienne 2D d'ordre 2 au Maxwellien centre. Son spectre
     // {-sqrt(3), -1, 0, 0, 1, sqrt(3)} est reel avec un noyau double : le fournisseur Roe dense
     // doit conserver les deux modes nuls sans confondre multiplicite reelle et paire complexe.
-    const Real A[6][6] = {{0, 1, 0, 0, 0, 0},
-                          {0, 0, 1, 0, 0, 0},
-                          {0, 3, 0, 0, 0, 0},
-                          {0, 0, 0, 0, 1, 0},
-                          {0, 0, 0, 1, 0, 0},
-                          {0, 1, 0, 0, 0, 0}};
+    const Real A[6][6] = {{0, 1, 0, 0, 0, 0}, {0, 0, 1, 0, 0, 0}, {0, 3, 0, 0, 0, 0},
+                          {0, 0, 0, 0, 1, 0}, {0, 0, 0, 1, 0, 0}, {0, 1, 0, 0, 0, 0}};
     const Real dU[6] = {1, 0, 1, 0, 0, 1};
     Real out[6] = {};
     ASSERT_TRUE(pops::roe_abs_apply(A, dU, out));
@@ -574,17 +570,18 @@ TEST(DenseEig, RoeAbsApplyMatrixSign) {
     const Real A[6][6] = {
         {0, 0, 0, 1, 0, 0},
         {0, 0, 0, 0, 1, 0},
-        {Real(1.4152909052530569e-05), Real(-3.5510220040414111e-09),
-         Real(-1.4152367117191054e-05), Real(1.000038300781064),
-         Real(-0.00012545682198025873), 0},
+        {Real(1.4152909052530569e-05), Real(-3.5510220040414111e-09), Real(-1.4152367117191054e-05),
+         Real(1.000038300781064), Real(-0.00012545682198025873), 0},
         {0, 0, 0, 0, 0, 1},
-        {Real(6.2728348106356945e-05), Real(0.99999899792384794), 0,
-         Real(-3.5510220040414111e-09), Real(-2.8304734234382107e-05),
-         Real(-6.2728410990129367e-05)},
+        {Real(6.2728348106356945e-05), Real(0.99999899792384794), 0, Real(-3.5510220040414111e-09),
+         Real(-2.8304734234382107e-05), Real(-6.2728410990129367e-05)},
         {Real(4.2457058811993561e-05), 0, 0, Real(2.9999969937715441), 0,
          Real(-4.2457101351573168e-05)}};
-    const Real dU[6] = {Real(0.0013283911625738831), Real(-2.5848588284373079e-05),
-                        Real(0.0013441770644624373), Real(1.7405713276659193e-06), 0,
+    const Real dU[6] = {Real(0.0013283911625738831),
+                        Real(-2.5848588284373079e-05),
+                        Real(0.0013441770644624373),
+                        Real(1.7405713276659193e-06),
+                        0,
                         Real(0.0013245323044106527)};
 
     const pops::EigBounds full = pops::real_eig_minmax(A);
@@ -687,9 +684,7 @@ TEST(DenseEig, RoeEntropyFixApplyMatchesHartenFunction) {
     // delta^2, ni evaluer sqrt(norm(inv) / norm(S)) avant la racine.
     const Real scales[2] = {Real(1e200), Real(1e-200)};
     for (const Real scale : scales) {
-      const Real A[3][3] = {{-Real(0.5) * scale, 0, 0},
-                            {0, 0, 0},
-                            {0, 0, Real(2) * scale}};
+      const Real A[3][3] = {{-Real(0.5) * scale, 0, 0}, {0, 0, 0}, {0, 0, Real(2) * scale}};
       const Real dU[3] = {Real(2), Real(3), Real(5)};
       Real out[3] = {};
       ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, scale)) << "scale=" << scale;
@@ -706,8 +701,7 @@ TEST(DenseEig, RoeEntropyFixApplyMatchesHartenFunction) {
       const Real A[2][2] = {{scale, scale}, {0, -Real(2) * scale}};
       const Real dU[2] = {Real(1), Real(1)};
       Real out[2] = {};
-      ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, Real(0.1) * scale))
-          << "scale=" << scale;
+      ASSERT_TRUE(pops::roe_entropy_fix_apply(A, dU, out, Real(0.1) * scale)) << "scale=" << scale;
       EXPECT_NEAR(out[0] / scale, Real(2) / Real(3), Real(2e-11));
       EXPECT_NEAR(out[1] / scale, Real(2), Real(2e-11));
     }
@@ -725,8 +719,8 @@ TEST(DenseEig, RoeEntropyFixApplyMatchesHartenFunction) {
     companion(roots, unresolved_A);
     const Real dU3[3] = {Real(1), Real(1), Real(1)};
     Real out3[3] = {Real(4), Real(5), Real(6)};
-    EXPECT_TRUE(!pops::roe_entropy_fix_apply(
-        unresolved_A, dU3, out3, delta, 80, Real(1e-13), Real(1e-5), 0));
+    EXPECT_TRUE(!pops::roe_entropy_fix_apply(unresolved_A, dU3, out3, delta, 80, Real(1e-13),
+                                             Real(1e-5), 0));
     EXPECT_TRUE(out3[0] == Real(4) && out3[1] == Real(5) && out3[2] == Real(6));
   }
 }

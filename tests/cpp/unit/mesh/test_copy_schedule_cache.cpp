@@ -226,8 +226,7 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     } catch (const std::invalid_argument&) {
       rejected = true;
     }
-    chk(all_reduce_sum(rejected ? 1L : 0L) == np,
-        "rank_local_width_error_rejected_collectively");
+    chk(all_reduce_sum(rejected ? 1L : 0L) == np, "rank_local_width_error_rejected_collectively");
 
     MultiFab valid_dst(dba, ddm, ncomp, 0);
     parallel_copy(valid_dst, src);
@@ -244,8 +243,7 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     } catch (const std::invalid_argument&) {
       rejected = true;
     }
-    chk(all_reduce_sum(rejected ? 1L : 0L) == np,
-        "rank_local_layout_error_rejected_collectively");
+    chk(all_reduce_sum(rejected ? 1L : 0L) == np, "rank_local_layout_error_rejected_collectively");
     parallel_copy(common_dst, src);
     chk(count_wrong(common_dst) == 0, "communicator_live_after_layout_rejection");
   }
@@ -292,8 +290,7 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
         /*topology_generation=*/17, communicator);
     const AllocationEventStats before_replay = allocation_event_stats();
     for (int replay = 0; replay < 3; ++replay)
-      periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17,
-                          communicator);
+      periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17, communicator);
     const AllocationEventStats after_replay = allocation_event_stats();
     chk(after_replay == before_replay, "prepared_periodic_copy_hot_path_allocation_free");
 
@@ -322,27 +319,23 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
 
     bool generation_rejected = false;
     try {
-      periodic_plan.apply(carrier, periodic_source,
-                          me == 0 ? 18u : 17u, communicator);
+      periodic_plan.apply(carrier, periodic_source, me == 0 ? 18u : 17u, communicator);
     } catch (const std::invalid_argument&) {
       generation_rejected = true;
     }
     chk(all_reduce_sum(generation_rejected ? 1L : 0L) == np,
         "prepared_periodic_copy_generation_rejected_collectively");
-    periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17,
-                        communicator);
+    periodic_plan.apply(carrier, periodic_source, /*topology_generation=*/17, communicator);
 
-    const BoxArray overlapping_source_boxes(
-        {periodic_domain, Box2D{{-3, 10}, {4, 14}}});
-    MultiFab overlapping_source(
-        overlapping_source_boxes,
-        make_sfc_distribution(overlapping_source_boxes, np), ncomp, 0);
+    const BoxArray overlapping_source_boxes({periodic_domain, Box2D{{-3, 10}, {4, 14}}});
+    MultiFab overlapping_source(overlapping_source_boxes,
+                                make_sfc_distribution(overlapping_source_boxes, np), ncomp, 0);
     MultiFab overlap_destination(carrier_boxes, carrier_mapping, ncomp, 0);
     bool overlap_rejected = false;
     try {
-      (void)PreparedPeriodicCopyPlan::prepare(
-          overlap_destination, overlapping_source, periodic_domain,
-          Periodicity{true, true}, /*topology_generation=*/19, communicator);
+      (void)PreparedPeriodicCopyPlan::prepare(overlap_destination, overlapping_source,
+                                              periodic_domain, Periodicity{true, true},
+                                              /*topology_generation=*/19, communicator);
     } catch (const std::invalid_argument&) {
       overlap_rejected = true;
     }
@@ -352,15 +345,14 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     const BoxArray incomplete_source_boxes(
         {Box2D{{periodic_domain.lo[0], periodic_domain.lo[1]},
                {periodic_domain.hi[0] - 1, periodic_domain.hi[1]}}});
-    MultiFab incomplete_source(
-        incomplete_source_boxes,
-        make_sfc_distribution(incomplete_source_boxes, np), ncomp, 0);
+    MultiFab incomplete_source(incomplete_source_boxes,
+                               make_sfc_distribution(incomplete_source_boxes, np), ncomp, 0);
     MultiFab incomplete_destination(carrier_boxes, carrier_mapping, ncomp, 0);
     bool incomplete_rejected = false;
     try {
-      (void)PreparedPeriodicCopyPlan::prepare(
-          incomplete_destination, incomplete_source, periodic_domain,
-          Periodicity{true, true}, /*topology_generation=*/20, communicator);
+      (void)PreparedPeriodicCopyPlan::prepare(incomplete_destination, incomplete_source,
+                                              periodic_domain, Periodicity{true, true},
+                                              /*topology_generation=*/20, communicator);
     } catch (const std::invalid_argument&) {
       incomplete_rejected = true;
     }

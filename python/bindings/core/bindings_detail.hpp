@@ -41,8 +41,7 @@ inline Periodicity periodicity_from_python(const py::handle& value, const char* 
                          ".periodicity must be an exact (x: bool, y: bool) tuple");
   const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
   if (!PyBool_Check(tuple[0].ptr()) || !PyBool_Check(tuple[1].ptr()))
-    throw py::type_error(std::string(owner) +
-                         ".periodicity entries must be exact bool values");
+    throw py::type_error(std::string(owner) + ".periodicity entries must be exact bool values");
   return Periodicity{tuple[0].ptr() == Py_True, tuple[1].ptr() == Py_True};
 }
 

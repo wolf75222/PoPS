@@ -58,8 +58,7 @@ inline void reject_nonfinite_finite_volume_data(const char* where, const MultiFa
 /// Validate a complete AMR hierarchy with one collective.  The level type is intentionally a
 /// protocol (it only needs a ``U`` MultiFab), keeping this primitive independent of AMR ownership.
 template <class LevelRange>
-inline void reject_nonfinite_finite_volume_hierarchy(const char* where,
-                                                     const LevelRange& levels) {
+inline void reject_nonfinite_finite_volume_hierarchy(const char* where, const LevelRange& levels) {
   bool local_failed = false;
   for (const auto& level : levels)
     local_failed = local_finite_volume_data_has_nonfinite(level.U) || local_failed;

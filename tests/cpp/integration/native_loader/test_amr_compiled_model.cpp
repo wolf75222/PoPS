@@ -14,9 +14,12 @@ namespace abi = pops::component::test_support;
 
 PopsComponentTableHeaderV1 header(std::size_t size, PopsNativeInterfaceIdV1 id,
                                   std::uint32_t version = 1) {
-  return {
-      static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, version, nullptr,
-      nullptr};
+  return {static_cast<std::uint32_t>(size),
+          POPS_COMPONENT_PROTOCOL_ABI_V1,
+          id,
+          version,
+          nullptr,
+          nullptr};
 }
 
 PopsComponentStatusV1 ok() {
@@ -84,8 +87,8 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
       0,
       {sizeof(PopsTaggerMaskViewV2), tags.data(), tags.size(), POPS_MEMORY_SPACE_HOST_V1,
        POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
-      {sizeof(PopsTaggerMaskViewV2), coarsen.data(), coarsen.size(),
-       POPS_MEMORY_SPACE_HOST_V1, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
+      {sizeof(PopsTaggerMaskViewV2), coarsen.data(), coarsen.size(), POPS_MEMORY_SPACE_HOST_V1,
+       POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
       {sizeof(PopsTaggerMaskViewV2), refine_equalities.data(), refine_equalities.size(),
        POPS_MEMORY_SPACE_HOST_V1, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1},
       {sizeof(PopsTaggerMaskViewV2), coarsen_equalities.data(), coarsen_equalities.size(),

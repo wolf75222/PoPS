@@ -1069,9 +1069,10 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
-    # tests can legitimately run a little over 30 minutes on a cold public runner; keep a bounded
-    # ten-minute margin so GitHub does not cancel an otherwise progressing shard near completion.
-    timeout-minutes: 40
+    # tests can legitimately run for tens of minutes on a cold public runner.  Six measured-duration
+    # shards keep the test critical path below the watchdog; the remaining margin covers setup and
+    # transient runner variance without turning a stalled test into an unbounded job.
+    timeout-minutes: 50
     needs: [changes, set-mode, gate-python-build]
     if: needs.set-mode.outputs.python_required == 'true'
     strategy:
@@ -1081,10 +1082,10 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 5 shards (was 3): the ADC-621 cached _pops.so makes the marginal shard cheap. To rebalance,
+        # 6 shards (was 5): the ADC-621 cached _pops.so makes the marginal shard cheap. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4]
+        shard: [0, 1, 2, 3, 4, 5]
 
     env:
       # ccache reste utile aux tests DSL qui compilent des loaders/.so a runtime dans chaque shard.

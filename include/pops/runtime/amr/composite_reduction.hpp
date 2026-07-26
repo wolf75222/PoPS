@@ -159,8 +159,7 @@ inline MultiFab active_mask(const std::vector<CompositeLevelView>& hierarchy, in
     return mask;
 
   const int ratio = ratio_between(hierarchy, level, next_selected);
-  const BoxArray& finer =
-      hierarchy[static_cast<std::size_t>(next_selected)].values->box_array();
+  const BoxArray& finer = hierarchy[static_cast<std::size_t>(next_selected)].values->box_array();
   for (int local = 0; local < mask.local_size(); ++local) {
     const Box2D valid = mask.box(local);
     const Array4 active = mask.fab(local).array();
@@ -188,11 +187,10 @@ inline Real local_difference_sum_sq(const MultiFab& current, const MultiFab& pre
   Real result = 0;
   for (int local = 0; local < current.local_size(); ++local)
     for (int component = 0; component < current.ncomp(); ++component)
-      result += reduce_sum_cell(
-          current.box(local),
-          CompositeDifferenceSumSq{
-              current.fab(local).const_array(), previous.fab(local).const_array(),
-              mask.fab(local).const_array(), component});
+      result += reduce_sum_cell(current.box(local),
+                                CompositeDifferenceSumSq{current.fab(local).const_array(),
+                                                         previous.fab(local).const_array(),
+                                                         mask.fab(local).const_array(), component});
   return result;
 }
 
@@ -219,20 +217,18 @@ inline Real local_max(const MultiFab& values, const MultiFab& mask, int componen
 }  // namespace composite_detail
 
 inline double composite_reduce_views(
-    const std::vector<composite_detail::CompositeLevelView>& hierarchy,
-    bool replicated_coarse, const std::string& kind, int component,
-    const std::vector<int>& requested_levels = {}) {
+    const std::vector<composite_detail::CompositeLevelView>& hierarchy, bool replicated_coarse,
+    const std::string& kind, int component, const std::vector<int>& requested_levels = {}) {
   if (hierarchy.empty())
     throw std::runtime_error("composite_reduce: AMR hierarchy has no active level");
   for (const auto& level : hierarchy)
     if (level.values == nullptr || !std::isfinite(static_cast<double>(level.dx)) ||
-        !std::isfinite(static_cast<double>(level.dy)) || level.dx <= Real(0) ||
-        level.dy <= Real(0))
+        !std::isfinite(static_cast<double>(level.dy)) || level.dx <= Real(0) || level.dy <= Real(0))
       throw std::invalid_argument(
           "composite_reduce: every level requires native storage and positive finite metrics");
 
-  const std::vector<int> levels = composite_detail::selected_levels(
-      static_cast<int>(hierarchy.size()), requested_levels);
+  const std::vector<int> levels =
+      composite_detail::selected_levels(static_cast<int>(hierarchy.size()), requested_levels);
   const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
   const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
   const bool additive = base == "sum" || base == "abs_sum" || base == "sum_sq";
@@ -285,8 +281,7 @@ inline double composite_reduce_views(
       const bool absolute = base == "abs_max";
       Real local = absolute ? Real(0) : -std::numeric_limits<Real>::infinity();
       for (int current = first_component; current < end_component; ++current)
-        local = std::max(local,
-                         composite_detail::local_max(values, mask, current, absolute));
+        local = std::max(local, composite_detail::local_max(values, mask, current, absolute));
       result = std::max(result, all_reduce_max(static_cast<double>(local)));
     }
   }
@@ -314,42 +309,34 @@ inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
 /// Volume-weighted L2 change over the visible composite AMR hierarchy. Covered coarse cells are
 /// excluded exactly like composite_reduce(sum_sq_all). A topology-changing step is reported as
 /// unavailable rather than comparing unrelated cells.
-inline double composite_difference_l2_levels(
-    const std::vector<AmrLevelMP>& current,
-    const std::vector<AmrLevelMP>& previous,
-    bool replicated_coarse) {
+inline double composite_difference_l2_levels(const std::vector<AmrLevelMP>& current,
+                                             const std::vector<AmrLevelMP>& previous,
+                                             bool replicated_coarse) {
   if (current.size() != previous.size() || current.empty())
-    throw std::runtime_error(
-        "step-change L2 unavailable after an AMR topology change");
+    throw std::runtime_error("step-change L2 unavailable after an AMR topology change");
   std::vector<composite_detail::CompositeLevelView> views;
   views.reserve(current.size());
   for (std::size_t level = 0; level < current.size(); ++level) {
     const MultiFab& now = current[level].U;
     const MultiFab& before = previous[level].U;
-    if (now.ncomp() != before.ncomp() ||
-        now.box_array().boxes() != before.box_array().boxes() ||
-        now.dmap().ranks() != before.dmap().ranks() ||
-        now.local_size() != before.local_size() ||
-        current[level].dx != previous[level].dx ||
-        current[level].dy != previous[level].dy)
-      throw std::runtime_error(
-          "step-change L2 unavailable after an AMR topology change");
+    if (now.ncomp() != before.ncomp() || now.box_array().boxes() != before.box_array().boxes() ||
+        now.dmap().ranks() != before.dmap().ranks() || now.local_size() != before.local_size() ||
+        current[level].dx != previous[level].dx || current[level].dy != previous[level].dy)
+      throw std::runtime_error("step-change L2 unavailable after an AMR topology change");
     views.push_back({&now, current[level].dx, current[level].dy});
   }
 
   double sum_sq = 0.0;
   for (std::size_t level = 0; level < current.size(); ++level) {
-    const int next =
-        level + 1 < current.size() ? static_cast<int>(level + 1) : -1;
-    MultiFab mask = composite_detail::active_mask(
-        views, static_cast<int>(level), next);
-    const Real local = composite_detail::local_difference_sum_sq(
-        current[level].U, previous[level].U, mask);
+    const int next = level + 1 < current.size() ? static_cast<int>(level + 1) : -1;
+    MultiFab mask = composite_detail::active_mask(views, static_cast<int>(level), next);
+    const Real local =
+        composite_detail::local_difference_sum_sq(current[level].U, previous[level].U, mask);
     const double global = level == 0 && replicated_coarse
                               ? static_cast<double>(local)
                               : all_reduce_sum(static_cast<double>(local));
-    sum_sq += static_cast<double>(current[level].dx) *
-              static_cast<double>(current[level].dy) * global;
+    sum_sq +=
+        static_cast<double>(current[level].dx) * static_cast<double>(current[level].dy) * global;
   }
   return std::sqrt(sum_sq);
 }
@@ -357,11 +344,11 @@ inline double composite_difference_l2_levels(
 /// The same native composite fold for a hierarchy whose scalar values do not live in AmrLevelMP::U
 /// (for example a qualified elliptic output field).  Layout and metric metadata stay explicit and
 /// index-aligned; no field is gathered or copied to Python/host storage.
-inline double composite_reduce_fields(
-    const std::vector<const MultiFab*>& hierarchy,
-    const std::vector<std::pair<Real, Real>>& metrics, bool replicated_coarse,
-    const std::string& kind, int component,
-    const std::vector<int>& requested_levels = {}) {
+inline double composite_reduce_fields(const std::vector<const MultiFab*>& hierarchy,
+                                      const std::vector<std::pair<Real, Real>>& metrics,
+                                      bool replicated_coarse, const std::string& kind,
+                                      int component,
+                                      const std::vector<int>& requested_levels = {}) {
   if (hierarchy.size() != metrics.size())
     throw std::invalid_argument(
         "composite_reduce: field hierarchy and metric hierarchy sizes differ");

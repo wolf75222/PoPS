@@ -231,16 +231,14 @@ TEST_F(DiscDomainMask, NonFiniteRoeCannotReachMaskedStateOrAmrFaceLedger) {
   failed_roe.vy = -0.4;
 
   MultiFab residual(ba, dm, 1, 0);
-  EXPECT_THROW(
-      (assemble_rhs_masked<NoSlope, RoeFlux>(failed_roe, U, aux, mask, geom, residual)),
-      std::runtime_error);
+  EXPECT_THROW((assemble_rhs_masked<NoSlope, RoeFlux>(failed_roe, U, aux, mask, geom, residual)),
+               std::runtime_error);
 
   MultiFab flux_x(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 1, 0);
   MultiFab flux_y(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 1, 0);
   // Face materialisation is itself the conservation-ledger publication boundary: a failed
   // provider must be rejected there, not encoded as NaN and discovered only by a later divergence.
-  EXPECT_THROW(
-      (compute_face_fluxes<NoSlope, RoeFlux>(failed_roe, U, aux, flux_x, flux_y, geom.dx(),
-                                             geom.dy())),
-      FluxEvaluationFailure);
+  EXPECT_THROW((compute_face_fluxes<NoSlope, RoeFlux>(failed_roe, U, aux, flux_x, flux_y, geom.dx(),
+                                                      geom.dy())),
+               FluxEvaluationFailure);
 }

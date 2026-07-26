@@ -184,12 +184,11 @@ TEST(test_prepared_boundary_plan, grid_sessions_apply_robin_with_each_level_geom
   robin.xlo_val = Real(0);
   robin.dx = Real(37);  // Deliberately not either level metric.
   auto plan = std::make_shared<PreparedBoundaryPlan>("case::block::robin-plan", 1,
-                                                      std::vector<BCRec>{robin});
+                                                     std::vector<BCRec>{robin});
 
   // A Box2D has no physical metric.  Keeping the historical overload for metric-independent laws
   // is harmless, but Robin must never reuse the declaration-time placeholder spacing.
-  EXPECT_THROW(plan->fill_same_level_and_physical(coarse, coarse_domain),
-               std::invalid_argument);
+  EXPECT_THROW(plan->fill_same_level_and_physical(coarse, coarse_domain), std::invalid_argument);
   const auto metricless_lane = ExecutionLane::world("case::block::robin-metricless-lane");
   auto metricless_session = plan->make_session(metricless_lane);
   EXPECT_THROW(metricless_session.fill_same_level_and_physical(coarse, coarse_domain),
@@ -213,7 +212,7 @@ TEST(test_prepared_boundary_plan, grid_sessions_apply_robin_with_each_level_geom
 
   // alpha=beta=1, value=0 gives u_g=((1/h)-1/2)/((1/h)+1/2) u_i.
   EXPECT_EQ(plan->component_bc(0).dx, Real(37));  // Execution did not mutate shared authority.
-  EXPECT_NEAR(coarse.fab(0)(-1, 0, 0), Real(1.2), 1e-12);          // h = 1/2
+  EXPECT_NEAR(coarse.fab(0)(-1, 0, 0), Real(1.2), 1e-12);         // h = 1/2
   EXPECT_NEAR(fine.fab(0)(-1, 0, 0), Real(14) / Real(9), 1e-12);  // h = 1/4
 }
 

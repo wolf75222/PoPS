@@ -120,17 +120,13 @@ inline SolveReport solve_prepared_hierarchy_tensor_collectively(
     solve_failed = true;
   }
   if (all_reduce_max(solve_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor-solver provider failed on at least one MPI rank");
-  const bool malformed =
-      !solve_report_is_publishable(report, controls.maximum_iterations);
+    throw std::runtime_error("hierarchy tensor-solver provider failed on at least one MPI rank");
+  const bool malformed = !solve_report_is_publishable(report, controls.maximum_iterations);
   if (all_reduce_max(malformed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor-solver provider published a malformed SolveReport");
+    throw std::runtime_error("hierarchy tensor-solver provider published a malformed SolveReport");
   ExactSolveReportConsensusScratch report_consensus;
   if (!report_consensus.agrees(report))
-    throw std::runtime_error(
-        "hierarchy tensor-solver provider report differs between MPI ranks");
+    throw std::runtime_error("hierarchy tensor-solver provider report differs between MPI ranks");
   return report;
 }
 
@@ -149,10 +145,8 @@ inline std::string exact_hierarchy_tensor_solver_provider_declaration(
       .text(provider.identity())
       .scalar(provider.interface_version())
       .text(provider.collective_contract())
-      .sequence(capabilities,
-                [](ExactContractBuilder& item, const std::string& capability) {
-                  item.text(capability);
-                })
+      .sequence(capabilities, [](ExactContractBuilder& item,
+                                 const std::string& capability) { item.text(capability); })
       .bytes(provider.default_options().exact_contract());
   return std::move(contract).release();
 }
@@ -234,8 +228,7 @@ class HierarchyTensorSolverProviderRegistry {
   std::map<std::string, std::shared_ptr<const HierarchyTensorSolverProvider>> providers_;
 };
 
-inline std::unique_ptr<PreparedHierarchyTensorSolver>
-prepare_hierarchy_tensor_solver_collectively(
+inline std::unique_ptr<PreparedHierarchyTensorSolver> prepare_hierarchy_tensor_solver_collectively(
     const HierarchyTensorSolverProviderRegistry& registry, std::string_view provider_identity,
     HierarchyTensorSolverBuildRequest request) {
   std::shared_ptr<const HierarchyTensorSolverProvider> provider;
@@ -269,13 +262,13 @@ prepare_hierarchy_tensor_solver_collectively(
     throw std::runtime_error(
         "hierarchy tensor-solver declaration or support decision differs across MPI ranks");
   if (!option_support.accepted())
-    throw std::invalid_argument(
-        "hierarchy tensor-solver provider rejected options (code " +
-        std::to_string(option_support.code) + "): " + std::string(option_support.reason));
+    throw std::invalid_argument("hierarchy tensor-solver provider rejected options (code " +
+                                std::to_string(option_support.code) +
+                                "): " + std::string(option_support.reason));
   if (!request_support.accepted())
-    throw std::invalid_argument(
-        "hierarchy tensor-solver provider rejected request (code " +
-        std::to_string(request_support.code) + "): " + std::string(request_support.reason));
+    throw std::invalid_argument("hierarchy tensor-solver provider rejected request (code " +
+                                std::to_string(request_support.code) +
+                                "): " + std::string(request_support.reason));
   if (all_reduce_max(expected_contract.empty() ? 1L : 0L) != 0)
     throw std::runtime_error(
         "hierarchy tensor-solver provider accepted the request without an exact contract");
@@ -303,13 +296,11 @@ prepare_hierarchy_tensor_solver_collectively(
         "hierarchy tensor-solver execution support inspection failed on at least one MPI rank");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"hierarchy-tensor-execution-support", execution_support_contract}}))
-    throw std::runtime_error(
-        "hierarchy tensor-solver execution support differs across MPI ranks");
+    throw std::runtime_error("hierarchy tensor-solver execution support differs across MPI ranks");
   if (!execution_support.accepted())
     throw std::invalid_argument(
         "hierarchy tensor-solver provider rejected prepared execution path (code " +
-        std::to_string(execution_support.code) + "): " +
-        std::string(execution_support.reason));
+        std::to_string(execution_support.code) + "): " + std::string(execution_support.reason));
   const bool mismatch = prepared->provider_identity() != provider->identity() ||
                         prepared->provider_version() != provider->interface_version() ||
                         prepared->exact_prepared_contract() != expected_contract;

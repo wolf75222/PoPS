@@ -65,8 +65,8 @@ struct PatchRange {
 /// every register/average destination has exactly one writer and needs no atomics.  Performing the
 /// complete validation first also guarantees that a later malformed box cannot throw while an
 /// earlier kernel still references pinned communication storage.
-inline void validate_ratio_aligned_disjoint_fine_layout(
-    const BoxArray& fine_boxes, const Box2D* coarse_domain = nullptr) {
+inline void validate_ratio_aligned_disjoint_fine_layout(const BoxArray& fine_boxes,
+                                                        const Box2D* coarse_domain = nullptr) {
   if (coarse_domain != nullptr && coarse_domain->empty())
     throw std::invalid_argument("coarse/fine layout requires a non-empty coarse domain");
   for (int current = 0; current < fine_boxes.size(); ++current) {
@@ -151,14 +151,12 @@ struct PeriodicLocalFillKernel {
     if ((!outside_x && !outside_y) || (outside_x && !periodicity.x) ||
         (outside_y && !periodicity.y))
       return;
-    const int source_i = outside_x
-                             ? domain.lo[0] + (i - domain.lo[0]) -
-                                   floor_div(i - domain.lo[0], domain.nx()) * domain.nx()
-                             : i;
-    const int source_j = outside_y
-                             ? domain.lo[1] + (j - domain.lo[1]) -
-                                   floor_div(j - domain.lo[1], domain.ny()) * domain.ny()
-                             : j;
+    const int source_i = outside_x ? domain.lo[0] + (i - domain.lo[0]) -
+                                         floor_div(i - domain.lo[0], domain.nx()) * domain.nx()
+                                   : i;
+    const int source_j = outside_y ? domain.lo[1] + (j - domain.lo[1]) -
+                                         floor_div(j - domain.lo[1], domain.ny()) * domain.ny()
+                                   : j;
     for (int component = 0; component < components; ++component)
       values(i, j, component) = values(source_i, source_j, component);
   }
@@ -170,8 +168,8 @@ inline void fill_periodic_local(MultiFab& mf, const Box2D& dom, Periodicity peri
     throw std::invalid_argument("fill_periodic_local requires a non-empty domain");
   for (int li = 0; li < mf.local_size(); ++li) {
     const Box2D grown = mf.fab(li).grown_box();
-    for_each_cell(grown, detail::PeriodicLocalFillKernel{mf.fab(li).array(), dom, periodicity,
-                                                         mf.ncomp()});
+    for_each_cell(
+        grown, detail::PeriodicLocalFillKernel{mf.fab(li).array(), dom, periodicity, mf.ncomp()});
   }
 }
 
@@ -247,7 +245,7 @@ class SparseCellLookup {
   }
 
   [[nodiscard]] SparseCellLookupView view() const {
-    return {keys_.data(), values_.data(), capacity() == 0 ? 0 : capacity() - 1,
+    return {keys_.data(),   values_.data(), capacity() == 0 ? 0 : capacity() - 1,
             maximum_probe_, invalid_value_, size_ != 0};
   }
   [[nodiscard]] std::size_t size() const noexcept { return size_; }
@@ -345,9 +343,7 @@ struct FluxRegisterView {
 
   POPS_HD Real at(int I, int J, int component) const {
     std::size_t offset = 0;
-    return locate(I, J, offset)
-               ? values[offset + static_cast<std::size_t>(component)]
-               : Real(0);
+    return locate(I, J, offset) ? values[offset + static_cast<std::size_t>(component)] : Real(0);
   }
 };
 
@@ -367,9 +363,7 @@ struct FluxRegisterConstView {
 
   POPS_HD Real at(int I, int J, int component) const {
     std::size_t offset = 0;
-    return locate(I, J, offset)
-               ? values[offset + static_cast<std::size_t>(component)]
-               : Real(0);
+    return locate(I, J, offset) ? values[offset + static_cast<std::size_t>(component)] : Real(0);
   }
 };
 
@@ -395,8 +389,7 @@ struct FluxRegister {
   std::vector<std::size_t> region_offsets;
   SparseCellLookup cell_lookup;
   RefluxStorage<Real> buf;
-  FluxRegister(const Box2D& region, int ncomp)
-      : FluxRegister(std::vector<Box2D>{region}, ncomp) {}
+  FluxRegister(const Box2D& region, int ncomp) : FluxRegister(std::vector<Box2D>{region}, ncomp) {}
   FluxRegister(std::vector<Box2D> compact_regions, int ncomp)
       : I0(0),
         J0(0),
@@ -415,8 +408,7 @@ struct FluxRegister {
       for (std::size_t previous = 0; previous < index; ++previous)
         if (!region.intersect(regions[previous]).empty())
           throw std::invalid_argument("FluxRegister compact regions must be disjoint");
-      if (cells > std::numeric_limits<std::size_t>::max() /
-                      static_cast<std::size_t>(nc))
+      if (cells > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(nc))
         throw std::overflow_error("FluxRegister component offset overflow");
       region_offsets.push_back(cells * static_cast<std::size_t>(nc));
       const std::size_t region_nx = checked_extent_(region, 0);
@@ -439,9 +431,7 @@ struct FluxRegister {
     buf.assign(cells * static_cast<std::size_t>(nc), Real(0));
     build_sparse_lookup_(cells);
   }
-  FluxRegisterView view() {
-    return FluxRegisterView{cell_lookup.view(), buf.data(), nc};
-  }
+  FluxRegisterView view() { return FluxRegisterView{cell_lookup.view(), buf.data(), nc}; }
   FluxRegisterConstView view() const {
     return FluxRegisterConstView{cell_lookup.view(), buf.data(), nc};
   }
@@ -479,21 +469,16 @@ struct FluxRegister {
     device_fence();
     all_reduce_sum_inplace(buf.data(), buf.size(), communicator);
   }
-  [[nodiscard]] std::size_t lookup_capacity() const noexcept {
-    return cell_lookup.capacity();
-  }
-  [[nodiscard]] std::size_t covered_cell_count() const noexcept {
-    return cell_lookup.size();
-  }
+  [[nodiscard]] std::size_t lookup_capacity() const noexcept { return cell_lookup.capacity(); }
+  [[nodiscard]] std::size_t covered_cell_count() const noexcept { return cell_lookup.size(); }
 
  private:
   static std::size_t checked_extent_(const Box2D& region, int axis) {
     if (region.empty())
       return 0;
-    const std::int64_t extent = static_cast<std::int64_t>(region.hi[axis]) -
-                                static_cast<std::int64_t>(region.lo[axis]) + 1;
-    if (extent <= 0 || static_cast<std::uint64_t>(extent) >
-                           std::numeric_limits<std::size_t>::max())
+    const std::int64_t extent =
+        static_cast<std::int64_t>(region.hi[axis]) - static_cast<std::int64_t>(region.lo[axis]) + 1;
+    if (extent <= 0 || static_cast<std::uint64_t>(extent) > std::numeric_limits<std::size_t>::max())
       throw std::overflow_error("FluxRegister extent exceeds addressable range");
     return static_cast<std::size_t>(extent);
   }
@@ -506,13 +491,11 @@ struct FluxRegister {
       for (int J = region.lo[1];;) {
         for (int I = region.lo[0];;) {
           const std::size_t local_cell =
-              static_cast<std::size_t>(static_cast<std::int64_t>(J) - region.lo[1]) *
-                  region_nx +
+              static_cast<std::size_t>(static_cast<std::int64_t>(J) - region.lo[1]) * region_nx +
               static_cast<std::size_t>(static_cast<std::int64_t>(I) - region.lo[0]);
-          cell_lookup.insert(I, J,
-                             region_offsets[region_index] +
-                                 local_cell * static_cast<std::size_t>(nc),
-                             /*reject_duplicate=*/true);
+          cell_lookup.insert(
+              I, J, region_offsets[region_index] + local_cell * static_cast<std::size_t>(nc),
+              /*reject_duplicate=*/true);
           if (I == region.hi[0])
             break;
           ++I;
@@ -613,14 +596,17 @@ struct RefluxStripConstView {
 
 template <class Strip>
 inline RefluxStripView reflux_strip_view(Strip& strip, int components) {
-  return {strip.I0,      strip.I1,      strip.J0,      strip.J1,
-          strip.cL.data(), strip.cR.data(), strip.cB.data(), strip.cT.data(),
-          strip.fL.data(), strip.fR.data(), strip.fB.data(), strip.fT.data(), components};
+  return {strip.I0,        strip.I1,        strip.J0,        strip.J1,        strip.cL.data(),
+          strip.cR.data(), strip.cB.data(), strip.cT.data(), strip.fL.data(), strip.fR.data(),
+          strip.fB.data(), strip.fT.data(), components};
 }
 
 template <class Strip>
 inline RefluxStripConstView reflux_strip_const_view(const Strip& strip, int components) {
-  return {strip.I0,      strip.I1,      strip.J0,      strip.J1,
+  return {strip.I0,
+          strip.I1,
+          strip.J0,
+          strip.J1,
           strip.cL.empty() ? nullptr : strip.cL.data(),
           strip.cR.empty() ? nullptr : strip.cR.data(),
           strip.cB.empty() ? nullptr : strip.cB.data(),
@@ -628,7 +614,8 @@ inline RefluxStripConstView reflux_strip_const_view(const Strip& strip, int comp
           strip.fL.empty() ? nullptr : strip.fL.data(),
           strip.fR.empty() ? nullptr : strip.fR.data(),
           strip.fB.empty() ? nullptr : strip.fB.data(),
-          strip.fT.empty() ? nullptr : strip.fT.data(), components};
+          strip.fT.empty() ? nullptr : strip.fT.data(),
+          components};
 }
 
 namespace detail {
@@ -670,12 +657,12 @@ struct AccumulateFineXStripKernel {
         static_cast<std::size_t>(J - strip.J0) * static_cast<std::size_t>(strip.components);
     for (int component = 0; component < strip.components; ++component) {
       strip.fL[base + static_cast<std::size_t>(component)] +=
-          Real(0.5) * (flux(2 * strip.I0, 2 * J, component) +
-                       flux(2 * strip.I0, 2 * J + 1, component)) *
-          scale;
+          Real(0.5) *
+          (flux(2 * strip.I0, 2 * J, component) + flux(2 * strip.I0, 2 * J + 1, component)) * scale;
       strip.fR[base + static_cast<std::size_t>(component)] +=
-          Real(0.5) * (flux(2 * strip.I1 + 2, 2 * J, component) +
-                       flux(2 * strip.I1 + 2, 2 * J + 1, component)) *
+          Real(0.5) *
+          (flux(2 * strip.I1 + 2, 2 * J, component) +
+           flux(2 * strip.I1 + 2, 2 * J + 1, component)) *
           scale;
     }
   }
@@ -690,12 +677,12 @@ struct AccumulateFineYStripKernel {
         static_cast<std::size_t>(I - strip.I0) * static_cast<std::size_t>(strip.components);
     for (int component = 0; component < strip.components; ++component) {
       strip.fB[base + static_cast<std::size_t>(component)] +=
-          Real(0.5) * (flux(2 * I, 2 * strip.J0, component) +
-                       flux(2 * I + 1, 2 * strip.J0, component)) *
-          scale;
+          Real(0.5) *
+          (flux(2 * I, 2 * strip.J0, component) + flux(2 * I + 1, 2 * strip.J0, component)) * scale;
       strip.fT[base + static_cast<std::size_t>(component)] +=
-          Real(0.5) * (flux(2 * I, 2 * strip.J1 + 2, component) +
-                       flux(2 * I + 1, 2 * strip.J1 + 2, component)) *
+          Real(0.5) *
+          (flux(2 * I, 2 * strip.J1 + 2, component) +
+           flux(2 * I + 1, 2 * strip.J1 + 2, component)) *
           scale;
     }
   }
@@ -707,11 +694,10 @@ struct AverageDownRegisterKernel {
   int components;
   POPS_HD void operator()(int I, int J) const {
     for (int component = 0; component < components; ++component)
-      average.set(I, J, component,
-                  Real(0.25) * (fine(2 * I, 2 * J, component) +
-                                fine(2 * I + 1, 2 * J, component) +
-                                fine(2 * I, 2 * J + 1, component) +
-                                fine(2 * I + 1, 2 * J + 1, component)));
+      average.set(
+          I, J, component,
+          Real(0.25) * (fine(2 * I, 2 * J, component) + fine(2 * I + 1, 2 * J, component) +
+                        fine(2 * I, 2 * J + 1, component) + fine(2 * I + 1, 2 * J + 1, component)));
   }
 };
 
@@ -805,31 +791,30 @@ struct RouteRefluxStripKernel {
   }
 
   POPS_HD void operator()(int, int) const {
-    const RefluxStripConstView shape =
-        (fine.fL != nullptr || fine.fB != nullptr) ? fine : coarse;
+    const RefluxStripConstView shape = (fine.fL != nullptr || fine.fB != nullptr) ? fine : coarse;
     for (int J = shape.J0; J <= shape.J1; ++J)
       for (int component = 0; component < shape.components; ++component) {
-        const std::size_t index = static_cast<std::size_t>(J - shape.J0) *
-                                      static_cast<std::size_t>(shape.components) +
-                                  static_cast<std::size_t>(component);
-        add_if_uncovered(shape.I0 - 1, J, component,
-                         -(value(fine.fL, index) - coarse_scale * value(coarse.cL, index)) *
-                             inverse_dx);
-        add_if_uncovered(shape.I1 + 1, J, component,
-                         +(value(fine.fR, index) - coarse_scale * value(coarse.cR, index)) *
-                             inverse_dx);
+        const std::size_t index =
+            static_cast<std::size_t>(J - shape.J0) * static_cast<std::size_t>(shape.components) +
+            static_cast<std::size_t>(component);
+        add_if_uncovered(
+            shape.I0 - 1, J, component,
+            -(value(fine.fL, index) - coarse_scale * value(coarse.cL, index)) * inverse_dx);
+        add_if_uncovered(
+            shape.I1 + 1, J, component,
+            +(value(fine.fR, index) - coarse_scale * value(coarse.cR, index)) * inverse_dx);
       }
     for (int I = shape.I0; I <= shape.I1; ++I)
       for (int component = 0; component < shape.components; ++component) {
-        const std::size_t index = static_cast<std::size_t>(I - shape.I0) *
-                                      static_cast<std::size_t>(shape.components) +
-                                  static_cast<std::size_t>(component);
-        add_if_uncovered(I, shape.J0 - 1, component,
-                         -(value(fine.fB, index) - coarse_scale * value(coarse.cB, index)) *
-                             inverse_dy);
-        add_if_uncovered(I, shape.J1 + 1, component,
-                         +(value(fine.fT, index) - coarse_scale * value(coarse.cT, index)) *
-                             inverse_dy);
+        const std::size_t index =
+            static_cast<std::size_t>(I - shape.I0) * static_cast<std::size_t>(shape.components) +
+            static_cast<std::size_t>(component);
+        add_if_uncovered(
+            I, shape.J0 - 1, component,
+            -(value(fine.fB, index) - coarse_scale * value(coarse.cB, index)) * inverse_dy);
+        add_if_uncovered(
+            I, shape.J1 + 1, component,
+            +(value(fine.fT, index) - coarse_scale * value(coarse.cT, index)) * inverse_dy);
       }
   }
 };
@@ -840,16 +825,14 @@ inline void sample_coarse_x_strip(const ConstArray4& left, const ConstArray4& ri
                                   RefluxStripView strip, int begin, int end) {
   if (begin > end)
     return;
-  for_each_cell(Box2D{{0, begin}, {0, end}},
-                detail::SampleCoarseXStripKernel{left, right, strip});
+  for_each_cell(Box2D{{0, begin}, {0, end}}, detail::SampleCoarseXStripKernel{left, right, strip});
 }
 
 inline void sample_coarse_y_strip(const ConstArray4& bottom, const ConstArray4& top,
                                   RefluxStripView strip, int begin, int end) {
   if (begin > end)
     return;
-  for_each_cell(Box2D{{begin, 0}, {end, 0}},
-                detail::SampleCoarseYStripKernel{bottom, top, strip});
+  for_each_cell(Box2D{{begin, 0}, {end, 0}}, detail::SampleCoarseYStripKernel{bottom, top, strip});
 }
 
 inline void sample_coarse_strip(const ConstArray4& left, const ConstArray4& right,
@@ -922,7 +905,8 @@ struct CoarseFineInterface {
   bool canonicalize(int& I, int& J) const {
     const auto wrap = [](int value, int lo, int extent) {
       const std::int64_t relative = static_cast<std::int64_t>(value) - lo;
-      const std::int64_t quotient = relative >= 0 ? relative / extent : -((-relative + extent - 1) / extent);
+      const std::int64_t quotient =
+          relative >= 0 ? relative / extent : -((-relative + extent - 1) / extent);
       const std::int64_t wrapped = static_cast<std::int64_t>(lo) + relative - quotient * extent;
       if (wrapped < std::numeric_limits<int>::min() || wrapped > std::numeric_limits<int>::max())
         throw std::overflow_error("coarse/fine periodic index overflow");
@@ -940,9 +924,7 @@ struct CoarseFineInterface {
     }
     return true;
   }
-  bool covered(int I, int J) const {
-    return canonicalize(I, J) && cmask.covered(I, J);
-  }
+  bool covered(int I, int J) const { return canonicalize(I, J) && cmask.covered(I, J); }
 
   std::vector<Box2D> reflux_register_regions(const Box2D& fine_parent_footprint) const {
     const Box2D grown = fine_parent_footprint.grow(1);
@@ -962,8 +944,10 @@ struct CoarseFineInterface {
         return segments;
       }
       const std::int64_t relative = static_cast<std::int64_t>(lo) - domain_lo;
-      const std::int64_t quotient = relative >= 0 ? relative / extent : -((-relative + extent - 1) / extent);
-      const std::int64_t start64 = static_cast<std::int64_t>(domain_lo) + relative - quotient * extent;
+      const std::int64_t quotient =
+          relative >= 0 ? relative / extent : -((-relative + extent - 1) / extent);
+      const std::int64_t start64 =
+          static_cast<std::int64_t>(domain_lo) + relative - quotient * extent;
       const std::int64_t end64 = start64 + width - 1;
       if (start64 < std::numeric_limits<int>::min() || end64 > std::numeric_limits<int>::max())
         throw std::overflow_error("coarse/fine reflux region index overflow");
@@ -1032,8 +1016,7 @@ struct CoarseFineInterface {
       int hi = lo;
       std::size_t end = begin + 1;
       while (end < cells.size() && cells[end].first == row &&
-             static_cast<std::int64_t>(cells[end].second) ==
-                 static_cast<std::int64_t>(hi) + 1) {
+             static_cast<std::int64_t>(cells[end].second) == static_cast<std::int64_t>(hi) + 1) {
         hi = cells[end].second;
         ++end;
       }
@@ -1058,10 +1041,9 @@ struct CoarseFineInterface {
   void route_reflux(const Reg& g, Real dx, Real dy, Real dt, FluxRegister& ref, int nc) const {
     validate_route_inputs_(g, g, dx, dy, dt, nc, /*allow_empty_roles=*/false);
     const RefluxStripConstView strip = reflux_strip_const_view(g, nc);
-    for_each_cell(Box2D{{0, 0}, {0, 0}},
-                  detail::RouteRefluxStripKernel{strip, strip, ref.view(), cmask.view(),
-                                                 coarse_region, periodicity, Real(1) / dx,
-                                                 Real(1) / dy, dt});
+    for_each_cell(Box2D{{0, 0}, {0, 0}}, detail::RouteRefluxStripKernel{
+                                             strip, strip, ref.view(), cmask.view(), coarse_region,
+                                             periodicity, Real(1) / dx, Real(1) / dy, dt});
   }
 
   // ADC-639 variant of route_reflux for the compiled-Program driver: BOTH the coarse side (g.c*) and the
@@ -1075,10 +1057,9 @@ struct CoarseFineInterface {
   void route_reflux_integrated(const Reg& g, Real dx, Real dy, FluxRegister& ref, int nc) const {
     validate_route_inputs_(g, g, dx, dy, Real(1), nc, /*allow_empty_roles=*/false);
     const RefluxStripConstView strip = reflux_strip_const_view(g, nc);
-    for_each_cell(Box2D{{0, 0}, {0, 0}},
-                  detail::RouteRefluxStripKernel{strip, strip, ref.view(), cmask.view(),
-                                                 coarse_region, periodicity, Real(1) / dx,
-                                                 Real(1) / dy, Real(1)});
+    for_each_cell(Box2D{{0, 0}, {0, 0}}, detail::RouteRefluxStripKernel{
+                                             strip, strip, ref.view(), cmask.view(), coarse_region,
+                                             periodicity, Real(1) / dx, Real(1) / dy, Real(1)});
   }
 
   /// Allocation-free Program variant: the coarse and fine roles remain in their independently
@@ -1090,8 +1071,8 @@ struct CoarseFineInterface {
                                     FluxRegister& ref, int nc) const {
     const bool coarse_present = coarse.I1 >= coarse.I0 && coarse.J1 >= coarse.J0 &&
                                 (!coarse.cL.empty() || !coarse.cB.empty());
-    const bool fine_present = fine.I1 >= fine.I0 && fine.J1 >= fine.J0 &&
-                              (!fine.fL.empty() || !fine.fB.empty());
+    const bool fine_present =
+        fine.I1 >= fine.I0 && fine.J1 >= fine.J0 && (!fine.fL.empty() || !fine.fB.empty());
     if (!coarse_present && !fine_present)
       return;
     const Reg& shape = fine_present ? fine : coarse;
@@ -1101,37 +1082,36 @@ struct CoarseFineInterface {
       throw std::runtime_error("coarse/fine reflux strips have different patch footprints");
     validate_route_inputs_(coarse, fine, dx, dy, Real(1), nc,
                            /*allow_empty_roles=*/true);
-    for_each_cell(
-        Box2D{{0, 0}, {0, 0}},
-        detail::RouteRefluxStripKernel{
-            reflux_strip_const_view(coarse, nc), reflux_strip_const_view(fine, nc), ref.view(),
-            cmask.view(), coarse_region, periodicity, Real(1) / dx, Real(1) / dy, Real(1)});
+    for_each_cell(Box2D{{0, 0}, {0, 0}},
+                  detail::RouteRefluxStripKernel{reflux_strip_const_view(coarse, nc),
+                                                 reflux_strip_const_view(fine, nc), ref.view(),
+                                                 cmask.view(), coarse_region, periodicity,
+                                                 Real(1) / dx, Real(1) / dy, Real(1)});
   }
 
   template <class Reg>
   static void validate_route_inputs_(const Reg& coarse, const Reg& fine, Real dx, Real dy,
                                      Real coarse_scale, int nc, bool allow_empty_roles) {
-    if (nc <= 0 || !std::isfinite(dx) || !std::isfinite(dy) || dx <= Real(0) ||
-        dy <= Real(0) || !std::isfinite(coarse_scale))
+    if (nc <= 0 || !std::isfinite(dx) || !std::isfinite(dy) || dx <= Real(0) || dy <= Real(0) ||
+        !std::isfinite(coarse_scale))
       throw std::invalid_argument("reflux route requires finite positive spacing and components");
     const Reg& shape = (!fine.fL.empty() || !fine.fB.empty()) ? fine : coarse;
     if (shape.I1 < shape.I0 || shape.J1 < shape.J0)
       throw std::invalid_argument("reflux strip has an empty footprint");
-    const std::size_t nJ = static_cast<std::size_t>(shape.J1 - shape.J0 + 1) *
-                           static_cast<std::size_t>(nc);
-    const std::size_t nI = static_cast<std::size_t>(shape.I1 - shape.I0 + 1) *
-                           static_cast<std::size_t>(nc);
-    const bool coarse_present = !coarse.cL.empty() || !coarse.cR.empty() ||
-                                !coarse.cB.empty() || !coarse.cT.empty();
-    const bool fine_present = !fine.fL.empty() || !fine.fR.empty() || !fine.fB.empty() ||
-                              !fine.fT.empty();
+    const std::size_t nJ =
+        static_cast<std::size_t>(shape.J1 - shape.J0 + 1) * static_cast<std::size_t>(nc);
+    const std::size_t nI =
+        static_cast<std::size_t>(shape.I1 - shape.I0 + 1) * static_cast<std::size_t>(nc);
+    const bool coarse_present =
+        !coarse.cL.empty() || !coarse.cR.empty() || !coarse.cB.empty() || !coarse.cT.empty();
+    const bool fine_present =
+        !fine.fL.empty() || !fine.fR.empty() || !fine.fB.empty() || !fine.fT.empty();
     const bool coarse_exact = coarse.cL.size() == nJ && coarse.cR.size() == nJ &&
                               coarse.cB.size() == nI && coarse.cT.size() == nI;
-    const bool fine_exact = fine.fL.size() == nJ && fine.fR.size() == nJ &&
-                            fine.fB.size() == nI && fine.fT.size() == nI;
+    const bool fine_exact = fine.fL.size() == nJ && fine.fR.size() == nJ && fine.fB.size() == nI &&
+                            fine.fT.size() == nI;
     if ((!allow_empty_roles && (!coarse_exact || !fine_exact)) ||
-        (allow_empty_roles && ((coarse_present && !coarse_exact) ||
-                               (fine_present && !fine_exact))))
+        (allow_empty_roles && ((coarse_present && !coarse_exact) || (fine_present && !fine_exact))))
       throw std::runtime_error("coarse/fine reflux strip width disagrees with its footprint");
   }
 };

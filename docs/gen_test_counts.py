@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import tomllib
 from pathlib import Path
 
@@ -29,7 +28,9 @@ def manifest_python_files(manifest: dict) -> set[str]:
     files: set[str] = set()
     for suite in manifest.get("python", {}).get("suite", []):
         path = ROOT / suite["path"]
-        files.update(str(p.relative_to(ROOT)) for p in path.glob("test_*.py"))
+        # A Python suite owns its complete subtree, exactly like
+        # scripts/ci_select_tests.py and the manifest coverage fence.
+        files.update(str(p.relative_to(ROOT)) for p in path.rglob("test_*.py"))
     return files
 
 

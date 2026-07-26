@@ -34,8 +34,7 @@ struct AmrDriftSpeedKernel {
     const Real gx = aux(i, j, 1);
     const Real gy = aux(i, j, 2);
     const Real magnitude = Kokkos::hypot(gx, gy);
-    if (!(magnitude >= Real(0)) ||
-        !(magnitude < std::numeric_limits<Real>::infinity()))
+    if (!(magnitude >= Real(0)) || !(magnitude < std::numeric_limits<Real>::infinity()))
       return std::numeric_limits<Real>::infinity();
     return magnitude * inverse_B0;
   }
@@ -87,8 +86,8 @@ inline Real amr_max_drift_speed_mb(const MultiFab& aux0, Real B0) {
   Real v = 0;
   for (int li = 0; li < aux0.local_size(); ++li) {
     const ConstArray4 a = aux0.fab(li).const_array();
-    v = std::max(v, for_each_cell_reduce_max(
-                        aux0.box(li), detail::AmrDriftSpeedKernel{a, inverse_B0}));
+    v = std::max(
+        v, for_each_cell_reduce_max(aux0.box(li), detail::AmrDriftSpeedKernel{a, inverse_B0}));
   }
   return v;
 }

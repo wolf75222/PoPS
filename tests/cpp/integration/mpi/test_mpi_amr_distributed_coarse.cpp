@@ -133,17 +133,16 @@ static bool regrid_owner_change_preserves_old_fine() {
   const auto prepared = runtime::amr::prepare_conservative_linear();
   const RegridProlongation prolong = [&prepared](const MultiFab& coarse, MultiFab& fine,
                                                  int parent_level, int ratio,
-                                                 bool replicated_parent,
-                                                 const CommunicatorView&) {
+                                                 bool replicated_parent, const CommunicatorView&) {
     const Box2D coarse_box = coarse.box_array().bounding_box();
     const Box2D fine_domain = coarse_box.refine(ratio);
-    prepared.spatial(
-        coarse, fine,
-        runtime::amr::SpatialTransferContext{
-            parent_level, parent_level + 1, fine.ncomp(),
-            runtime::amr::IndexTransform{{coarse_box.lo[0], coarse_box.lo[1]},
-                                         {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}},
-            coarse_box, fine_domain, replicated_parent});
+    prepared.spatial(coarse, fine,
+                     runtime::amr::SpatialTransferContext{
+                         parent_level, parent_level + 1, fine.ncomp(),
+                         runtime::amr::IndexTransform{{coarse_box.lo[0], coarse_box.lo[1]},
+                                                      {fine_domain.lo[0], fine_domain.lo[1]},
+                                                      {ratio, ratio}},
+                         coarse_box, fine_domain, replicated_parent});
   };
   MultiFab remapped = regrid_field_on_layout_with_provider(
       BoxArray(std::move(fine_boxes)), DistributionMapping(std::move(new_owners)), parent, old_fine,

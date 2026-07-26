@@ -53,8 +53,8 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   // probe mirrors that exact layout and proves that only one rank samples the invalid expression;
   // the other rank can reject only through the native collective preflight.
   const Box2D domain = Box2D::from_extents(20, 20);
-  MultiFab ownership_probe(BoxArray(std::vector<Box2D>{domain}),
-                           DistributionMapping(1, n_ranks()), 1, 1);
+  MultiFab ownership_probe(BoxArray(std::vector<Box2D>{domain}), DistributionMapping(1, n_ranks()),
+                           1, 1);
   const long local_sampler = ownership_probe.local_size() == 1 ? 1L : 0L;
   require(all_reduce_sum(local_sampler) == 1,
           "the invalid expression must be sampled on exactly one rank");
@@ -62,8 +62,8 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
           "the single Cartesian patch must be owned by rank zero");
 
   System system(SystemConfig{20, 1.0, Periodicity{false, false}});
-  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0},
-                                "staircase", 0.2, 1e-5, 0.1);
+  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
+                                0.1);
   const std::vector<double> before = system.disc_mask();
   const auto active = std::count(before.begin(), before.end(), 1.0);
   require(active > 0 && active < static_cast<std::ptrdiff_t>(before.size()),
@@ -74,9 +74,8 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   bool geometry_mismatch_rejected = false;
   std::string geometry_mismatch_message;
   try {
-    system.set_analytic_level_set(
-        {"x", "constant", "sub"}, {0.0, rank == 0 ? 0.45 : 0.55, 0.0},
-        rank == 0 ? "staircase" : "cutcell", 0.2, 1e-5, 0.1);
+    system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, rank == 0 ? 0.45 : 0.55, 0.0},
+                                  rank == 0 ? "staircase" : "cutcell", 0.2, 1e-5, 0.1);
   } catch (const std::runtime_error& error) {
     geometry_mismatch_rejected = true;
     geometry_mismatch_message = error.what();
@@ -122,18 +121,18 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   bool mismatch_rejected = false;
   std::string mismatch_message;
   try {
-    expression_system.set_analytic_expression_state(
-        "plasma", "cell", "cell", "conservative_cell_average", {{"constant"}},
-        {{rank == 0 ? 0.25 : 0.5}});
+    expression_system.set_analytic_expression_state("plasma", "cell", "cell",
+                                                    "conservative_cell_average", {{"constant"}},
+                                                    {{rank == 0 ? 0.25 : 0.5}});
   } catch (const std::runtime_error& error) {
     mismatch_rejected = true;
     mismatch_message = error.what();
   }
   require(all_reduce_sum(mismatch_rejected ? 1L : 0L) == n_ranks(),
           "all ranks must reject a rank-dependent analytic state payload");
-  require(mismatch_rejected &&
-              mismatch_message.find("differs across MPI ranks") != std::string::npos,
-          "rank-dependent analytic state rejection must identify exact MPI disagreement");
+  require(
+      mismatch_rejected && mismatch_message.find("differs across MPI ranks") != std::string::npos,
+      "rank-dependent analytic state rejection must identify exact MPI disagreement");
 
   // Rejection is pre-publication: the same System remains usable by an identical request.
   bool valid_state_installed = true;
@@ -161,15 +160,14 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   amr.add_block("plasma", analytic_scalar_model());
   const std::string subject = "case::plasma::state::U";
   amr.register_bootstrap_transfer_route(
-      "case::plasma::initial::prolongation", {subject}, "test::analytic-provider", "cell",
-      "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2,
-      2);
+      "case::plasma::initial::prolongation", {subject}, "test::analytic-provider", "cell", "cell",
+      "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2, 2);
   bool malformed_rejected = false;
   std::string malformed_message;
   try {
-    amr.register_analytic_expression(
-        subject, "plasma", "cell", "cell",
-        {{rank == 0 ? "constant" : "not-an-analytic-opcode"}}, {{1.0}});
+    amr.register_analytic_expression(subject, "plasma", "cell", "cell",
+                                     {{rank == 0 ? "constant" : "not-an-analytic-opcode"}},
+                                     {{1.0}});
   } catch (const std::runtime_error& error) {
     malformed_rejected = true;
     malformed_message = error.what();
@@ -183,8 +181,7 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
 
   bool valid_amr_registered = true;
   try {
-    amr.register_analytic_expression(subject, "plasma", "cell", "cell", {{"constant"}},
-                                     {{1.0}});
+    amr.register_analytic_expression(subject, "plasma", "cell", "cell", {{"constant"}}, {{1.0}});
   } catch (const std::exception& error) {
     valid_amr_registered = false;
     std::cerr << "valid AMR analytic registration failed after malformed payload on rank " << rank

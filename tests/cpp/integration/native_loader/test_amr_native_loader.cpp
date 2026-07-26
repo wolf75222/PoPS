@@ -342,8 +342,7 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
     fixture_flags += " -DPOPS_TEST_FORGED_FLUX_ENTRY_SIZE";
   if (fixture == FluxTableFixture::WrongAbi)
     fixture_flags += " -DPOPS_TEST_WRONG_COMPONENT_ABI";
-  const auto package =
-      pops::test::native_dso::compile_shared(source, library, fixture_flags);
+  const auto package = pops::test::native_dso::compile_shared(source, library, fixture_flags);
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_amr_native_loader", package);
     throw std::runtime_error("failed to compile exact component ABI fixture; log: " +
@@ -427,8 +426,8 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
       reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_tag_call_count"));
   const auto set_partial_tag_output =
       reinterpret_cast<SetIntFn>(pops::dynlib::sym(inspection, "pops_test_set_partial_tag_output"));
-  const auto last_tag_state_data = reinterpret_cast<PointerFn>(
-      pops::dynlib::sym(inspection, "pops_test_last_tag_state_data"));
+  const auto last_tag_state_data =
+      reinterpret_cast<PointerFn>(pops::dynlib::sym(inspection, "pops_test_last_tag_state_data"));
   ASSERT_NE(tag_call_count, nullptr);
   ASSERT_NE(set_partial_tag_output, nullptr);
   ASSERT_NE(last_tag_state_data, nullptr);
@@ -516,11 +515,9 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
         {POPS_MEMORY_SPACE_HOST_V1},
         2,
         execution};
-    pops::runtime::amr::PreparedTaggerComponent host_tagger(std::move(host_tagger_spec),
-                                                            component);
-    const auto host_candidates =
-        host_tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,
-                        1.0 / 3.0, false, false, false);
+    pops::runtime::amr::PreparedTaggerComponent host_tagger(std::move(host_tagger_spec), component);
+    const auto host_candidates = host_tagger.tag({{"case::tracer::U", &state}}, program, domain, 0,
+                                                 7, 0.25, 0.25, 1.0 / 3.0, false, false, false);
     EXPECT_EQ(host_candidates.refine.count(), candidates.refine.count());
     EXPECT_NE(last_tag_state_data(), state.fab(state.local_size() - 1).data())
         << "only an explicitly host-scoped Tagger may receive a staged field image";

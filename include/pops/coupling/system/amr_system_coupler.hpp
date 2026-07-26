@@ -286,9 +286,8 @@ class AmrSystemCoupler {
       if (!plan)
         throw std::logic_error("AMR system average-down plan was not prepared");
       for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(levels[k].U, levels[k - 1].U,
-                           plan->transition_for_child(k), plan->topology_generation(),
-                           world_communicator_view());
+        mf_average_down_mb(levels[k].U, levels[k - 1].U, plan->transition_for_child(k),
+                           plan->topology_generation(), world_communicator_view());
     }
 
     rhs_assembler_(system_, mg_.rhs());  // f = Sum_s q_s n_s on the coarse level
@@ -429,9 +428,8 @@ class AmrSystemCoupler {
       if (!plan)
         throw std::logic_error("AMR system average-down plan was not prepared");
       for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(levels[k].U, levels[k - 1].U,
-                           plan->transition_for_child(k), plan->topology_generation(),
-                           world_communicator_view());
+        mf_average_down_mb(levels[k].U, levels[k - 1].U, plan->transition_for_child(k),
+                           plan->topology_generation(), world_communicator_view());
     }
   }
 
@@ -441,15 +439,13 @@ class AmrSystemCoupler {
         [&levels](const std::vector<AmrLevelMP>& candidate) { return &candidate == &levels; });
     if (found == block_levels_.end())
       throw std::invalid_argument("AMR system average-down received a foreign hierarchy");
-    const std::size_t block =
-        static_cast<std::size_t>(std::distance(block_levels_.begin(), found));
+    const std::size_t block = static_cast<std::size_t>(std::distance(block_levels_.begin(), found));
     auto& plan = average_down_plans_.at(block);
     if (!plan)
       throw std::logic_error("AMR system average-down plan was not prepared");
     for (int level = nlev_ - 1; level >= 1; --level)
-      mf_average_down_mb(levels[level].U, levels[level - 1].U,
-                         plan->transition_for_child(level), plan->topology_generation(),
-                         world_communicator_view());
+      mf_average_down_mb(levels[level].U, levels[level - 1].U, plan->transition_for_child(level),
+                         plan->topology_generation(), world_communicator_view());
   }
 
   // mass of component 0 of the coarse level of block b (sum u*dV over local fabs;
@@ -487,11 +483,11 @@ class AmrSystemCoupler {
     std::vector<std::optional<PreparedAmrFillPatchPlan>> fill_patch(block_levels_.size());
     std::vector<std::optional<PreparedAmrAverageDownPlan>> average_down(block_levels_.size());
     for (std::size_t block = 0; block < block_levels_.size(); ++block) {
-      fill_patch[block].emplace(PreparedAmrFillPatchPlan::prepare(
-          block_levels_[block], dom_, base_per_, replicated_coarse_,
-          transfer_topology_generation_));
-      average_down[block].emplace(PreparedAmrAverageDownPlan::prepare(
-          block_levels_[block], transfer_topology_generation_));
+      fill_patch[block].emplace(PreparedAmrFillPatchPlan::prepare(block_levels_[block], dom_,
+                                                                  base_per_, replicated_coarse_,
+                                                                  transfer_topology_generation_));
+      average_down[block].emplace(
+          PreparedAmrAverageDownPlan::prepare(block_levels_[block], transfer_topology_generation_));
     }
     aux_transfer_workspaces_.swap(prepared);
     fill_patch_plans_.swap(fill_patch);

@@ -55,8 +55,8 @@ class FieldNullspaceWorkspace {
       for (const PreparedVectorDistribution& distribution : distributions_) {
         validation_capacity =
             std::max(validation_capacity, distribution.validation_scratch_byte_count());
-        reduction_capacity = std::max(
-            reduction_capacity, distribution.reduction_scratch_value_count(value_capacity_));
+        reduction_capacity = std::max(reduction_capacity,
+                                      distribution.reduction_scratch_value_count(value_capacity_));
       }
       validation_scratch_.assign(validation_capacity, char{0});
       reduction_scratch_.assign(reduction_capacity, 0.0);
@@ -87,8 +87,7 @@ class FieldNullspaceWorkspace {
 
   /// Returns the persistent witness [dot(rhs,b_0), abs(rhs*b_0), ...]. The span remains valid until
   /// the next operation on this workspace.
-  std::span<const double> require_compatible(
-      std::span<const MultiFab* const> rhs_levels) {
+  std::span<const double> require_compatible(std::span<const MultiFab* const> rhs_levels) {
     if (basis_count_ == 0)
       return {};
     require_hot_fields_(rhs_levels, "field nullspace compatibility");
@@ -108,15 +107,13 @@ class FieldNullspaceWorkspace {
           const ConstArray4 coverage_values =
               coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
           level_value_(level, 2 * basis_index) += static_cast<double>(reduce_sum_cell(
-              rhs.box(local),
-              detail::FieldBasisMomentKernel{values, mask_values, coverage_values,
-                                             basis.field_component, mask != nullptr,
-                                             coverage != nullptr, measure}));
+              rhs.box(local), detail::FieldBasisMomentKernel{values, mask_values, coverage_values,
+                                                             basis.field_component, mask != nullptr,
+                                                             coverage != nullptr, measure}));
           level_value_(level, 2 * basis_index + 1) += static_cast<double>(reduce_sum_cell(
-              rhs.box(local),
-              detail::FieldBasisAbsMomentKernel{values, mask_values, coverage_values,
-                                                basis.field_component, mask != nullptr,
-                                                coverage != nullptr, measure}));
+              rhs.box(local), detail::FieldBasisAbsMomentKernel{
+                                  values, mask_values, coverage_values, basis.field_component,
+                                  mask != nullptr, coverage != nullptr, measure}));
         }
       }
     }
@@ -127,8 +124,8 @@ class FieldNullspaceWorkspace {
       if (!std::isfinite(moment) || !std::isfinite(absolute))
         throw FieldNullspaceInvalidEvaluation(
             "field RHS has a non-finite prepared nullspace compatibility moment");
-      const double tolerance = 128.0 * std::numeric_limits<Real>::epsilon() *
-                               (absolute > 1.0 ? absolute : 1.0);
+      const double tolerance =
+          128.0 * std::numeric_limits<Real>::epsilon() * (absolute > 1.0 ? absolute : 1.0);
       if (std::abs(moment) > tolerance)
         throw FieldNullspaceIncompatibleRhs(
             "field RHS is incompatible with prepared nullspace basis '" +
@@ -162,9 +159,9 @@ class FieldNullspaceWorkspace {
               coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
           level_value_(level, basis_index) += static_cast<double>(reduce_sum_cell(
               phi.box(local),
-              detail::FieldBasisMomentKernel{
-                  values, mask_values, coverage_values, basis.field_component, mask != nullptr,
-                  coverage != nullptr, basis.measure(resolved_level)}));
+              detail::FieldBasisMomentKernel{values, mask_values, coverage_values,
+                                             basis.field_component, mask != nullptr,
+                                             coverage != nullptr, basis.measure(resolved_level)}));
         }
       }
     }
@@ -192,9 +189,8 @@ class FieldNullspaceWorkspace {
               mask == nullptr ? ConstArray4{} : mask->fab(local).const_array();
           const ConstArray4 coverage_values =
               coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
-          for_each_cell(
-              phi.box(local),
-              detail::ShiftFieldBasisKernel{phi.fab(local).array(), mask_values, coverage_values,
+          for_each_cell(phi.box(local), detail::ShiftFieldBasisKernel{
+                                            phi.fab(local).array(), mask_values, coverage_values,
                                             basis.field_component, mask != nullptr,
                                             coverage != nullptr, coefficient});
         }
@@ -216,10 +212,10 @@ class FieldNullspaceWorkspace {
       for (std::size_t level = 0; level < count; ++level) {
         const MultiFab* field = fields[level];
         const MultiFab* prepared = layouts_[level];
-        const bool structural_match =
-            field != nullptr && prepared != nullptr && field->ncomp() == prepared->ncomp() &&
-            field->box_array().boxes() == prepared->box_array().boxes() &&
-            field->dmap().ranks() == prepared->dmap().ranks();
+        const bool structural_match = field != nullptr && prepared != nullptr &&
+                                      field->ncomp() == prepared->ncomp() &&
+                                      field->box_array().boxes() == prepared->box_array().boxes() &&
+                                      field->dmap().ranks() == prepared->dmap().ranks();
         if (!structural_match || !distributions_[level].layout_matches(*field))
           invalid_local = 1;
       }
@@ -255,19 +251,16 @@ class FieldNullspaceWorkspace {
             const ConstArray4 right_values =
                 right_mask == nullptr ? ConstArray4{} : right_mask->fab(local).const_array();
             const ConstArray4 left_coverage_values =
-                left_coverage == nullptr ? ConstArray4{}
-                                         : left_coverage->fab(local).const_array();
+                left_coverage == nullptr ? ConstArray4{} : left_coverage->fab(local).const_array();
             const ConstArray4 right_coverage_values =
                 right_coverage == nullptr ? ConstArray4{}
                                           : right_coverage->fab(local).const_array();
-            level_value_(level, left * basis_count_ + right) +=
-                static_cast<double>(reduce_sum_cell(
-                    layout.box(local),
-                    detail::FieldBasisGramKernel{
-                        left_values, right_values, left_coverage_values, right_coverage_values,
-                        left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
-                        right_coverage != nullptr,
-                        plan_.bases[left].measure(resolved_level)}));
+            level_value_(level, left * basis_count_ + right) += static_cast<double>(reduce_sum_cell(
+                layout.box(local),
+                detail::FieldBasisGramKernel{
+                    left_values, right_values, left_coverage_values, right_coverage_values,
+                    left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
+                    right_coverage != nullptr, plan_.bases[left].measure(resolved_level)}));
           }
         }
         for (std::size_t level = 0; level < layouts_.size(); ++level)
@@ -294,8 +287,7 @@ class FieldNullspaceWorkspace {
     std::fill_n(reduced_values_.begin(), width, 0.0);
     for (std::size_t level = 0; level < layouts_.size(); ++level) {
       std::span<double> values(level_values_.data() + level * value_capacity_, width);
-      const std::size_t scratch_count =
-          distributions_[level].reduction_scratch_value_count(width);
+      const std::size_t scratch_count = distributions_[level].reduction_scratch_value_count(width);
       distributions_[level].reduce_sum_values(
           values, std::span<double>(reduction_scratch_.data(), scratch_count), quantity);
       for (std::size_t index = 0; index < width; ++index)

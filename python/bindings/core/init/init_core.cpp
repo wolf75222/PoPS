@@ -129,7 +129,7 @@ class NativeExecutionResource final {
 #else
             "none"
 #endif
-            ),
+                ),
         device_identity_(pops::native_device_identity()),
         memory_space_identity_(pops::native_field_memory_space_identity()),
         shared_space_identity_(pops::native_shared_space_identity()),
@@ -141,12 +141,8 @@ class NativeExecutionResource final {
 #endif
   }
 
-  [[nodiscard]] const std::string& execution_backend() const noexcept {
-    return execution_backend_;
-  }
-  [[nodiscard]] const std::string& device_identity() const noexcept {
-    return device_identity_;
-  }
+  [[nodiscard]] const std::string& execution_backend() const noexcept { return execution_backend_; }
+  [[nodiscard]] const std::string& device_identity() const noexcept { return device_identity_; }
   [[nodiscard]] const std::string& memory_space_identity() const noexcept {
     return memory_space_identity_;
   }
@@ -287,13 +283,11 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
       pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
   capabilities["generic_field_view"] = true;
   capabilities["execution_backend"] = pops::platform::require_text(
-      pops::platform::capability(manifest, "execution_backend"),
-      "capabilities.execution_backend");
+      pops::platform::capability(manifest, "execution_backend"), "capabilities.execution_backend");
   capabilities["shared_space"] = pops::platform::require_text(
       pops::platform::capability(manifest, "shared_space"), "capabilities.shared_space");
   capabilities["stream_identity"] = pops::platform::require_text(
-      pops::platform::capability(manifest, "stream_identity"),
-      "capabilities.stream_identity");
+      pops::platform::capability(manifest, "stream_identity"), "capabilities.stream_identity");
   py::dict result;
   result["schema_version"] = pops::platform::kPlatformContractSchemaVersion;
   result["backend"] = pops::platform::require_text(manifest.backend, "backend");
@@ -383,20 +377,19 @@ void init_core(py::module_& m) {
       "system block by block; the compute stays compiled C++.";
 
   py::class_<NativeExecutionResource>(m, "_NativeExecutionResource")
-      .def_property_readonly("execution_backend",
-                             &NativeExecutionResource::execution_backend)
-      .def_property_readonly("device_identity",
-                             &NativeExecutionResource::device_identity)
+      .def_property_readonly("execution_backend", &NativeExecutionResource::execution_backend)
+      .def_property_readonly("device_identity", &NativeExecutionResource::device_identity)
       .def_property_readonly("memory_space_identity",
                              &NativeExecutionResource::memory_space_identity)
       .def_property_readonly("shared_space_identity",
                              &NativeExecutionResource::shared_space_identity)
       .def_property_readonly("stream_handle", &NativeExecutionResource::stream_handle)
       .def_property_readonly("stream_identity", &NativeExecutionResource::stream_identity);
-  m.def("native_execution_resource", []() -> const NativeExecutionResource& {
-    return native_execution_resource();
-  }, py::return_value_policy::reference,
-        "Process-lifetime exact Kokkos device, SharedSpace and default execution stream.");
+  m.def(
+      "native_execution_resource",
+      []() -> const NativeExecutionResource& { return native_execution_resource(); },
+      py::return_value_policy::reference,
+      "Process-lifetime exact Kokkos device, SharedSpace and default execution stream.");
 
   // Exact native distributed resources.  Neither class has a Python constructor: all consumers
   // receive the same process-world singleton and the singleton-owned MPI_DOUBLE identity.  The
@@ -534,8 +527,7 @@ void init_core(py::module_& m) {
           py::arg("payload"))
       .def(
           "gather_bytes",
-          [](const pops::ObserverMpiLane& lane, const py::bytes& payload,
-             int root) -> py::object {
+          [](const pops::ObserverMpiLane& lane, const py::bytes& payload, int root) -> py::object {
             const std::string native = payload.cast<std::string>();
             std::optional<std::vector<std::string>> gathered;
             {
@@ -781,9 +773,8 @@ void init_core(py::module_& m) {
       .def_readwrite("n", &SystemConfig::n)
       .def_readwrite("L", &SystemConfig::L)
       .def_property(
-          "periodicity", [](const SystemConfig& config) {
-            return periodicity_to_python(config.periodicity);
-          },
+          "periodicity",
+          [](const SystemConfig& config) { return periodicity_to_python(config.periodicity); },
           [](SystemConfig& config, const py::handle& value) {
             config.periodicity = periodicity_from_python(value, "SystemConfig");
           })

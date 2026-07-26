@@ -364,12 +364,10 @@ class ProgramContext {
   /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
   /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
   /// old vector overloads above remain available for manual C++ callers.
-  SolveReport solve_fields_from_blocks(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
+  SolveReport solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
+                                       std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
-    FieldSolveWorkspace& workspace =
-        generated_field_solve_workspace_(value_id, field, overrides);
+    FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
   }
   int n_blocks() const { return sys_->n_blocks(); }
@@ -535,23 +533,21 @@ class ProgramContext {
     if (context.domain_mask == nullptr)
       throw std::runtime_error(
           "ProgramContext pointwise operator has no prepared active-cell mask");
-    pops::detail::validate_relative_cell_measure(
-        field, RelativeCellMeasure{context.domain_mask, nullptr},
-        "ProgramContext pointwise active-cell mask");
+    pops::detail::validate_relative_cell_measure(field,
+                                                 RelativeCellMeasure{context.domain_mask, nullptr},
+                                                 "ProgramContext pointwise active-cell mask");
     return context.domain_mask;
   }
 
   /// Collective fail-closed reduction for a pointwise generated operator.  @p active_cells must be
   /// the exact block-qualified mask returned by pointwise_active_mask for @p status; this prevents a
   /// generated kernel from evaluating one physical domain and validating another.
-  Real pointwise_status_max(int b, const MultiFab& status,
-                            const MultiFab* active_cells) const {
+  Real pointwise_status_max(int b, const MultiFab& status, const MultiFab* active_cells) const {
     const MultiFab* expected = pointwise_active_mask(b, status);
     if (expected != active_cells)
       throw std::invalid_argument(
           "ProgramContext pointwise status reduction received a different active-cell mask");
-    const Real reduced =
-        pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
+    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
     return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
   }
 
@@ -1008,8 +1004,7 @@ class ProgramContext {
     }
   }
 
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy,
-                         const ExecutionLane& lane) const {
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
     MultiFab divc(r.box_array(), r.dmap(), 1, 0);
     neg_div_flux_into(r, fx, fy, divc, lane);
   }
@@ -1036,16 +1031,15 @@ class ProgramContext {
   /// bytes into a retry.  The registry belongs to this ProgramContext (and is shared only by copies
   /// of that context); there is no process-global cache or Python fallback.
   MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype,
-                                prototype.ncomp(), prototype.n_grow());
+    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
+                                prototype.n_grow());
   }
 
   /// Persistent state-shaped counterpart of rhs_scratch().  A distinct kind namespace guarantees
   /// that an IR node asking for both an RHS and a provisional state never aliases accidentally.
-  MultiFab& scratch_state(std::int64_t value_id, int subslot,
-                          const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype,
-                                prototype.ncomp(), prototype.n_grow());
+  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
+    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
+                                prototype.n_grow());
   }
 
   /// Persistent scalar/vector field on @p prototype's exact distributed mesh.  Component and ghost
@@ -1054,10 +1048,8 @@ class ProgramContext {
   MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
                            int n_comp = 1, int n_ghost = 1) const {
     if (n_comp < 1 || n_ghost < 0)
-      throw std::invalid_argument(
-          "Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp,
-                                n_ghost);
+      throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
+    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
   }
 
   /// u <- u + a r over the valid cells (linear combine; forwards to pops::saxpy).
@@ -1510,7 +1502,8 @@ class ProgramContext {
 
   FieldSolveWorkspace& manual_named_field_solve_workspace_(const std::string& field) const {
     if (field.empty())
-      throw std::invalid_argument("Program named simultaneous field solve requires a field identity");
+      throw std::invalid_argument(
+          "Program named simultaneous field solve requires a field identity");
     if (!field_solve_workspace_registry_)
       throw std::logic_error("Program field-solve workspace registry is unavailable");
     auto& workspaces = field_solve_workspace_registry_->manual_named;
@@ -1556,10 +1549,8 @@ class ProgramContext {
     std::size_t ordinal = 0;
     for (const FieldStageOverride& override_value : overrides) {
       if (override_value.program_block < 0 ||
-          static_cast<std::size_t>(override_value.program_block) >=
-              workspace.program_stages.size())
-        throw std::out_of_range(
-            "generated simultaneous field solve Program block is out of range");
+          static_cast<std::size_t>(override_value.program_block) >= workspace.program_stages.size())
+        throw std::out_of_range("generated simultaneous field solve Program block is out of range");
       if (override_value.state == nullptr)
         throw std::invalid_argument(
             "generated simultaneous field solve stage override cannot be null");
@@ -1599,8 +1590,7 @@ class ProgramContext {
       MultiFab& live = sys_->block_state(system_block);
       MultiFab& published = workspace.published_states[p];
       if (!scratch_layout_matches_(published, live, live.ncomp(), live.n_grow())) {
-        published =
-            MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        published = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
         count_scratch(published);
       }
       if (representative < 0)
@@ -1646,8 +1636,8 @@ class ProgramContext {
       for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
         if (workspace.program_stages[p] == nullptr)
           continue;
-        PureFieldAlgebra::copy_allocated(
-            sys_->block_state(workspace.program_to_system[p]), *workspace.program_stages[p]);
+        PureFieldAlgebra::copy_allocated(sys_->block_state(workspace.program_to_system[p]),
+                                         *workspace.program_stages[p]);
       }
       const SolveReport report =
           sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
@@ -1680,8 +1670,8 @@ class ProgramContext {
     std::map<ScratchKey, MultiFab> fields;
   };
 
-  static bool scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype,
-                                      int n_comp, int n_ghost) {
+  static bool scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype, int n_comp,
+                                      int n_ghost) {
     return field.box_array().boxes() == prototype.box_array().boxes() &&
            field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
            field.n_grow() == n_ghost;
@@ -1795,8 +1785,7 @@ class ProgramContext {
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
       std::make_shared<FieldSolveWorkspaceRegistry>();
-  mutable std::shared_ptr<ScratchRegistry> scratch_registry_ =
-      std::make_shared<ScratchRegistry>();
+  mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
 };
 

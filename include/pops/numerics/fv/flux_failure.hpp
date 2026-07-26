@@ -119,8 +119,7 @@ inline constexpr std::uint32_t kNonFiniteFiniteVolumeReason = UINT32_C(0x4e46494
 
 POPS_HD constexpr std::uint64_t pack_flux_failure(EvaluationStatus status,
                                                   std::uint32_t reason_code) {
-  return (static_cast<std::uint64_t>(flux_evaluation_severity(status))
-          << kFluxSeverityShift) |
+  return (static_cast<std::uint64_t>(flux_evaluation_severity(status)) << kFluxSeverityShift) |
          static_cast<std::uint64_t>(reason_code);
 }
 
@@ -166,8 +165,8 @@ struct FluxEvaluationRecorder {
   POPS_HD void record_nonfinite(Real value, std::uint64_t& aggregate) const {
     if (Kokkos::isfinite(value))
       return;
-    const std::uint64_t candidate = detail::pack_flux_failure(
-        EvaluationStatus::kFailed, detail::kNonFiniteFiniteVolumeReason);
+    const std::uint64_t candidate =
+        detail::pack_flux_failure(EvaluationStatus::kFailed, detail::kNonFiniteFiniteVolumeReason);
     if (candidate > aggregate)
       aggregate = candidate;
   }

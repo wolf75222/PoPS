@@ -86,8 +86,7 @@ struct NonFiniteGradientFill {
 
   POPS_HD void operator()(int i, int j) const {
     aux(i, j, 0) = Real(0);
-    aux(i, j, 1) =
-        (i == bad_i && j == bad_j) ? std::numeric_limits<Real>::quiet_NaN() : Real(0);
+    aux(i, j, 1) = (i == bad_i && j == bad_j) ? std::numeric_limits<Real>::quiet_NaN() : Real(0);
     aux(i, j, 2) = Real(0);
   }
 };
@@ -167,8 +166,7 @@ TEST(test_amr_diagnostics, Runs) {
 
 TEST(test_amr_diagnostics, DeviceMultiboxNonzeroOriginParity) {
   const Box2D domain{{11, -7}, {18, 0}};
-  const BoxArray boxes(
-      std::vector<Box2D>{Box2D{{11, -7}, {14, 0}}, Box2D{{15, -7}, {18, 0}}});
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{11, -7}, {14, 0}}, Box2D{{15, -7}, {18, 0}}});
   const DistributionMapping mapping(boxes.size(), n_ranks());
 
   // The exact shared gradient provider must cover every local box and respect global indices.
@@ -183,10 +181,9 @@ TEST(test_amr_diagnostics, DeviceMultiboxNonzeroOriginParity) {
   Real local_error = Real(0);
   for (int local = 0; local < derived.local_size(); ++local)
     local_error = std::max(
-        local_error,
-        for_each_cell_reduce_max(
-            derived.box(local),
-            GradientParityError{derived.fab(local).const_array(), extra_sentinel}));
+        local_error, for_each_cell_reduce_max(
+                         derived.box(local),
+                         GradientParityError{derived.fab(local).const_array(), extra_sentinel}));
   EXPECT_EQ(all_reduce_max(local_error), Real(0));
 
   // Exercise both public AMR CFL diagnostics on the same non-zero-origin, multi-box layout.
@@ -199,10 +196,10 @@ TEST(test_amr_diagnostics, DeviceMultiboxNonzeroOriginParity) {
                                             std::move(levels), {},
                                             /*replicated_coarse=*/false, load_balance);
   for (int local = 0; local < coupler.coarse().local_size(); ++local)
-    for_each_cell(coupler.coarse().box(local),
-                  WaveDiagnosticFill{coupler.coarse().fab(local).array(),
-                                     coupler.aux0().fab(local).array(), domain.lo[0],
-                                     domain.lo[1]});
+    for_each_cell(
+        coupler.coarse().box(local),
+        WaveDiagnosticFill{coupler.coarse().fab(local).array(), coupler.aux0().fab(local).array(),
+                           domain.lo[0], domain.lo[1]});
 
   const Real expected_wave = Real(2) * Real(8) + Real(0.25) * Real(7);
   const Real expected_drift = std::hypot(Real(0.5) * Real(7), Real(0.25) * Real(7)) / Real(2);
@@ -220,13 +217,12 @@ TEST(test_amr_diagnostics, RejectsNonFiniteDriftInputs) {
   const DistributionMapping mapping(boxes.size(), n_ranks());
   MultiFab aux(boxes, mapping, 3, 0);
   for (int local = 0; local < aux.local_size(); ++local)
-    for_each_cell(aux.box(local), NonFiniteGradientFill{aux.fab(local).array(), domain.lo[0],
-                                                        domain.lo[1]});
+    for_each_cell(aux.box(local),
+                  NonFiniteGradientFill{aux.fab(local).array(), domain.lo[0], domain.lo[1]});
 
   EXPECT_THROW((void)amr_max_drift_speed(aux, domain, Real(1)), std::domain_error);
   EXPECT_THROW((void)amr_max_drift_speed(aux, domain, Real(0)), std::domain_error);
-  EXPECT_THROW((void)amr_max_drift_speed(aux, domain,
-                                         std::numeric_limits<Real>::infinity()),
+  EXPECT_THROW((void)amr_max_drift_speed(aux, domain, std::numeric_limits<Real>::infinity()),
                std::domain_error);
 
   MultiFab too_narrow(boxes, mapping, 2, 0);
@@ -246,9 +242,9 @@ TEST(test_amr_diagnostics, RejectsInvalidSpacingBeforeFieldKernels) {
     const Geometry zero_width{domain, Real(0), Real(0), Real(0), Real(1)};
     EXPECT_THROW(
         {
-          AmrCouplerMP<DiagnosticWaveModel> invalid(
-              DiagnosticWaveModel{}, zero_width, boxes, BCRec{}, std::move(levels), {}, false,
-              load_balance);
+          AmrCouplerMP<DiagnosticWaveModel> invalid(DiagnosticWaveModel{}, zero_width, boxes,
+                                                    BCRec{}, std::move(levels), {}, false,
+                                                    load_balance);
         },
         std::invalid_argument);
   }
@@ -260,9 +256,8 @@ TEST(test_amr_diagnostics, RejectsInvalidSpacingBeforeFieldKernels) {
     const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
     EXPECT_THROW(
         {
-          AmrCouplerMP<DiagnosticWaveModel> invalid(
-              DiagnosticWaveModel{}, geometry, boxes, BCRec{}, std::move(levels), {}, false,
-              load_balance);
+          AmrCouplerMP<DiagnosticWaveModel> invalid(DiagnosticWaveModel{}, geometry, boxes, BCRec{},
+                                                    std::move(levels), {}, false, load_balance);
         },
         std::invalid_argument);
   }

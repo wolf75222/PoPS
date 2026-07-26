@@ -136,8 +136,7 @@ struct SystemElectronTemperatureKernel {
     const Real mx = state(i, j, 1);
     const Real my = state(i, j, 2);
     const Real energy = state(i, j, 3);
-    const Real pressure =
-        gamma_minus_one * (energy - Real(0.5) * (mx * mx + my * my) / rho);
+    const Real pressure = gamma_minus_one * (energy - Real(0.5) * (mx * mx + my * my) / rho);
     aux(i, j, component) = pressure / rho;
   }
 };
@@ -424,7 +423,7 @@ class SystemFieldSolver {
   // ghost layer. In Cartesian geometry this buffer is inert.
   std::optional<MultiFab> phi_src_polar_;
   NamedAuxField bz_field_;  // field B_z(x) n*n row-major, device-addressable (empty if absent)
-  int te_src_ = -1;             // index of the fluid block source of T_e (-1 = none)
+  int te_src_ = -1;         // index of the fluid block source of T_e (-1 = none)
   // NAMED aux fields (ADC-70 phase 1) provided by the user via System::set_aux_field: key =
   // canonical component (>= kAuxNamedBase = 5), value = field n*n (cartesian) / nr*ntheta (polar)
   // row-major. PERSISTENT like bz_field_: solve_fields touches ONLY components 0..2 (phi,
@@ -1933,8 +1932,8 @@ class SystemFieldSolver {
       const ConstArray4 p = phi.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
       const Box2D valid = owner_->aux.box(li);
-      for_each_cell(valid, detail::SystemNamedFieldPostprocessKernel{
-                               a, p, 0, 1, 2, Real(1), dx, dy, true});
+      for_each_cell(
+          valid, detail::SystemNamedFieldPostprocessKernel{a, p, 0, 1, 2, Real(1), dx, dy, true});
     }
   }
 
@@ -2014,9 +2013,8 @@ class SystemFieldSolver {
     for (int local = 0; local < field.local_size(); ++local) {
       Array4 output = field.fab(local).array();
       const Box2D valid = field.box(local);
-      for_each_cell(valid, detail::SystemNamedAuxCopyKernel{
-                               output, device_values.data(), 0, n, owner_->dom.lo[0],
-                               owner_->dom.lo[1]});
+      for_each_cell(valid, detail::SystemNamedAuxCopyKernel{output, device_values.data(), 0, n,
+                                                            owner_->dom.lo[0], owner_->dom.lo[1]});
     }
     device_fence();
     return field;

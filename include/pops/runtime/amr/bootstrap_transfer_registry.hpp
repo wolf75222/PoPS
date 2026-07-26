@@ -134,20 +134,19 @@ class TransferKernelRegistry {
   void add_exact(std::string qualified_id, TransferRouteDescriptor descriptor,
                  std::function<PreparedTransferKernel(const TransferRouteDescriptor&)> prepare) {
     const auto exact_descriptor = descriptor;
-    add(TransferKernelManifest{
-        qualified_id,
-        [exact_descriptor](const TransferRouteDescriptor& row) {
-          return row.space == exact_descriptor.space &&
-                 row.centering == exact_descriptor.centering &&
-                 row.representation == exact_descriptor.representation &&
-                 row.storage == exact_descriptor.storage &&
-                 row.operation == exact_descriptor.operation &&
-                 row.order == exact_descriptor.order &&
-                 row.ghost_depth == exact_descriptor.ghost_depth &&
-                 row.dimension == exact_descriptor.dimension &&
-                 row.refinement_ratio == exact_descriptor.refinement_ratio;
-        },
-        std::move(prepare)});
+    add(TransferKernelManifest{qualified_id,
+                               [exact_descriptor](const TransferRouteDescriptor& row) {
+                                 return row.space == exact_descriptor.space &&
+                                        row.centering == exact_descriptor.centering &&
+                                        row.representation == exact_descriptor.representation &&
+                                        row.storage == exact_descriptor.storage &&
+                                        row.operation == exact_descriptor.operation &&
+                                        row.order == exact_descriptor.order &&
+                                        row.ghost_depth == exact_descriptor.ghost_depth &&
+                                        row.dimension == exact_descriptor.dimension &&
+                                        row.refinement_ratio == exact_descriptor.refinement_ratio;
+                               },
+                               std::move(prepare)});
     catalogue_.push_back({std::move(qualified_id), std::move(descriptor)});
   }
 
@@ -160,15 +159,13 @@ class TransferKernelRegistry {
       throw std::runtime_error(
           "native AMR transfer route is incompatible with its authenticated kernel manifest");
     PreparedTransferKernel prepared = found->second.prepare(descriptor);
-    if (static_cast<bool>(prepared.coarse_fine) !=
-        static_cast<bool>(prepared.prepared_coarse_fine))
+    if (static_cast<bool>(prepared.coarse_fine) != static_cast<bool>(prepared.prepared_coarse_fine))
       throw std::runtime_error(
           "native AMR coarse/fine provider must pair its callable with one prepared spatial "
           "identity");
     if (descriptor.operation == "coarse_fine_fill" && !prepared.coarse_fine &&
         !prepared.materialize)
-      throw std::runtime_error(
-          "native AMR coarse/fine provider omitted its executable authority");
+      throw std::runtime_error("native AMR coarse/fine provider omitted its executable authority");
     // The manifest acceptance predicate authenticates the descriptor.  Publish exactly those
     // capabilities with the callable so downstream code never needs a route-name switch.
     prepared.capabilities = PreparedTransferCapabilities{descriptor.order, descriptor.ghost_depth};
@@ -179,8 +176,9 @@ class TransferKernelRegistry {
     if (requirement.dimension < 1 || requirement.order < 1 || requirement.refinement_ratio < 2 ||
         (requirement.ghost_depth.size() != 1 &&
          requirement.ghost_depth.size() != static_cast<std::size_t>(requirement.dimension)) ||
-        std::any_of(requirement.ghost_depth.begin(), requirement.ghost_depth.end(),
-                    [](int depth) { return depth < 0; }))
+        std::any_of(
+            requirement.ghost_depth.begin(), requirement.ghost_depth.end(),
+            [](int depth) { return depth < 0; }))
       throw std::runtime_error("invalid native AMR transfer capability requirement");
     struct Match {
       const std::string* qualified_id;
@@ -190,9 +188,9 @@ class TransferKernelRegistry {
     };
     std::vector<Match> matches;
     const auto expanded = [&](const std::vector<int>& ghost) {
-      return ghost.size() == 1 ? std::vector<int>(static_cast<std::size_t>(requirement.dimension),
-                                                  ghost.front())
-                               : ghost;
+      return ghost.size() == 1
+                 ? std::vector<int>(static_cast<std::size_t>(requirement.dimension), ghost.front())
+                 : ghost;
     };
     const std::vector<int> needed = expanded(requirement.ghost_depth);
     for (const auto& [qualified_id, descriptor] : catalogue_) {
@@ -216,8 +214,7 @@ class TransferKernelRegistry {
         ghost_surplus.push_back(available[axis] - needed[axis]);
       }
       if (supports)
-        matches.push_back(Match{&qualified_id, &descriptor,
-                                descriptor.order - requirement.order,
+        matches.push_back(Match{&qualified_id, &descriptor, descriptor.order - requirement.order,
                                 std::move(ghost_surplus)});
     }
     if (matches.empty())
@@ -231,17 +228,15 @@ class TransferKernelRegistry {
       for (std::size_t axis = 0; axis < left.ghost_surplus.size(); ++axis) {
         if (left.ghost_surplus[axis] > right.ghost_surplus[axis])
           return false;
-        strictly_better = strictly_better ||
-                          left.ghost_surplus[axis] < right.ghost_surplus[axis];
+        strictly_better = strictly_better || left.ghost_surplus[axis] < right.ghost_surplus[axis];
       }
       return strictly_better;
     };
     std::vector<const Match*> frontier;
     for (const Match& candidate : matches) {
-      const bool dominated = std::any_of(
-          matches.begin(), matches.end(), [&](const Match& other) {
-            return &candidate != &other && dominates(other, candidate);
-          });
+      const bool dominated = std::any_of(matches.begin(), matches.end(), [&](const Match& other) {
+        return &candidate != &other && dominates(other, candidate);
+      });
       if (!dominated)
         frontier.push_back(&candidate);
     }
@@ -294,8 +289,7 @@ class TransferRouteRegistry {
 
   std::size_t size() const { return routes_.size(); }
 
-  PreparedTransferKernel prepare_minimum(
-      const TransferRouteDescriptor& requirement) const {
+  PreparedTransferKernel prepare_minimum(const TransferRouteDescriptor& requirement) const {
     return kernels_.prepare_minimum(requirement);
   }
 

@@ -96,13 +96,17 @@ class KokkosEnvironment : public ::testing::Environment {
 // ADC-299 : SystemConfig invalide rejetee AVANT la construction de Impl (allocation geom/ba/dm/aux).
 // ================================================================================================
 TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{0, 1.0, Periodicity{false, false}}); }, "n >= 1"))
+  EXPECT_TRUE(
+      raises_with([&] { System s(SystemConfig{0, 1.0, Periodicity{false, false}}); }, "n >= 1"))
       << "System(n=0) rejete avant Impl (n >= 1)";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{-4, 1.0, Periodicity{false, false}}); }, "n >= 1"))
+  EXPECT_TRUE(
+      raises_with([&] { System s(SystemConfig{-4, 1.0, Periodicity{false, false}}); }, "n >= 1"))
       << "System(n<0) rejete";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, 0.0, Periodicity{false, false}}); }, "L > 0"))
+  EXPECT_TRUE(
+      raises_with([&] { System s(SystemConfig{16, 0.0, Periodicity{false, false}}); }, "L > 0"))
       << "System(L=0) rejete (L > 0)";
-  EXPECT_TRUE(raises_with([&] { System s(SystemConfig{16, -1.0, Periodicity{false, false}}); }, "L > 0"))
+  EXPECT_TRUE(
+      raises_with([&] { System s(SystemConfig{16, -1.0, Periodicity{false, false}}); }, "L > 0"))
       << "System(L<0) rejete";
   // Une config valide CONSTRUIT toujours (le garde-fou ne sur-rejette pas).
   {
@@ -124,20 +128,19 @@ TEST(ConfigModelValidation, SystemRejectsAmbiguousDiffusionCoefficientShapes) {
 
   System scalar_first(SystemConfig{8, 1.0, Periodicity{false, false}});
   scalar_first.set_epsilon_field(scalar);
-  EXPECT_TRUE(raises_with(
-      [&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
-      "cannot be combined"));
+  EXPECT_TRUE(
+      raises_with([&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
+                  "cannot be combined"));
 
   System diagonal_first(SystemConfig{8, 1.0, Periodicity{false, false}});
   diagonal_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y);
-  EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); },
-                          "cannot be combined"));
+  EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); }, "cannot be combined"));
 
   // Reconfiguration within the same exact shape is intentional and remains available while the
   // System is assembling; only a physically ambiguous shape change is rejected.
   EXPECT_NO_THROW(scalar_first.set_epsilon_field(std::vector<double>(8 * 8, 5.0)));
-  EXPECT_NO_THROW(diagonal_first.set_epsilon_anisotropic_field(
-      std::vector<double>(8 * 8, 6.0), std::vector<double>(8 * 8, 7.0)));
+  EXPECT_NO_THROW(diagonal_first.set_epsilon_anisotropic_field(std::vector<double>(8 * 8, 6.0),
+                                                               std::vector<double>(8 * 8, 7.0)));
 }
 
 // ================================================================================================

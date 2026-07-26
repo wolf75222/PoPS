@@ -72,9 +72,9 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, B0), "minmod", "rusanov", S,
-                                              "ions", rho_ions, /*has_density=*/true, 1.4, 1,
-                                              false, false, 1));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, B0), "minmod", "rusanov", S, "ions",
+                                              rho_ions, /*has_density=*/true, 1.4, 1, false, false,
+                                              1));
   blocks.push_back(detail::dispatch_amr_block(exb_charge(0.0, B0), "minmod", "rusanov", S,
                                               "neutrals", rho_neut, /*has_density=*/true, 1.4, 1,
                                               false, false, 1));

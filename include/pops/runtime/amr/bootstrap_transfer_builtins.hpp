@@ -24,8 +24,8 @@ inline PreparedTransferKernel prepare_conservative_linear() {
       throw std::runtime_error("conservative-linear prolongation logical-domain mismatch");
     detail::coupler_conservative_linear_to_fine_mb(
         coarse, fine, context.logical_coarse_domain, context.logical_fine_domain,
-        context.index.coarse_origin, context.index.fine_origin,
-        context.index.refinement_ratio, context.replicated_parent, context.periodicity);
+        context.index.coarse_origin, context.index.fine_origin, context.index.refinement_ratio,
+        context.replicated_parent, context.periodicity);
   };
   return kernel;
 }
@@ -90,8 +90,7 @@ inline PreparedTransferKernel prepare_conservative_polynomial5_coarse_fine() {
       throw std::runtime_error("degree-four coarse/fine spatial transfer ratio mismatch");
     const Box2D coarse = context.logical_coarse_domain;
     if (context.logical_fine_domain != coarse.refine(2))
-      throw std::runtime_error(
-          "degree-four coarse/fine spatial transfer logical-domain mismatch");
+      throw std::runtime_error("degree-four coarse/fine spatial transfer logical-domain mismatch");
     if (context.index.coarse_origin != std::vector<int>{coarse.lo[0], coarse.lo[1]} ||
         context.index.fine_origin != std::vector<int>{2 * coarse.lo[0], 2 * coarse.lo[1]})
       throw std::runtime_error("degree-four coarse/fine spatial transfer origin mismatch");

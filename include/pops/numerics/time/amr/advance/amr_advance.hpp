@@ -76,22 +76,18 @@ struct LevelHierarchy {
 // false (default) -> conservative, strictly bit-identical to the historical.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
-                 Periodicity base_per, bool coarse_replicated = true,
-                 bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+                 Periodicity base_per, bool coarse_replicated = true, bool recon_prim = false,
+                 bool imex = false, const NewtonOptions& nopts = {},
                  AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
                  Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
                  const AmrBoundaryFillAuthority* boundary_fill = nullptr,
                  PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
                  PreparedAmrAverageDownPlan* average_down_plan = nullptr,
                  PreparedAmrAdvanceScratchPlan* advance_scratch_plan = nullptr) {
-  detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
-                                                                 coarse_replicated, recon_prim,
-                                                                 imex, nopts, tmethod, pos_floor,
-                                                                 weno_eps, wave_speed_cache,
-                                                                 boundary_fill,
-                                                                 fill_patch_plan,
-                                                                 average_down_plan,
-                                                                 advance_scratch_plan);
+  detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(
+      m, levels, base_dom, dt, base_per, coarse_replicated, recon_prim, imex, nopts, tmethod,
+      pos_floor, weno_eps, wave_speed_cache, boundary_fill, fill_patch_plan, average_down_plan,
+      advance_scratch_plan);
 }
 
 /// Production entry for an explicitly authored AMR clock chain.  Unlike the compatibility overload
@@ -100,11 +96,10 @@ void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& b
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr_with_temporal_relations(
     const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
-    const std::vector<amr::ParentChildClockRelation>& temporal_relations,
-    Periodicity base_per, bool coarse_replicated = true,
-    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
-    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
-    Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations, Periodicity base_per,
+    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
+    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
     const AmrBoundaryFillAuthority* boundary_fill = nullptr,
     PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
     PreparedAmrAverageDownPlan* average_down_plan = nullptr,
@@ -118,20 +113,16 @@ void advance_amr_with_temporal_relations(
 /// Allocation-free counterpart used by AmrRuntime after relation installation prepared the clock
 /// partitions once.  The immutable plan is safe to share across blocks and their explicit substeps.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void advance_amr_with_temporal_plan(const Model& m, std::vector<AmrLevelMP>& levels,
-                                    const Box2D& base_dom, Real dt,
-                                    const detail::PreparedAmrTemporalPlan& temporal_plan,
-                                    Periodicity base_per,
-                                    bool coarse_replicated = true, bool recon_prim = false,
-                                    bool imex = false, const NewtonOptions& nopts = {},
-                                    AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
-                                    Real pos_floor = Real(0),
-                                    Real weno_eps = kWenoEpsilon,
-                                    bool wave_speed_cache = false,
-                                    const AmrBoundaryFillAuthority* boundary_fill = nullptr,
-                                    PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
-                                    PreparedAmrAverageDownPlan* average_down_plan = nullptr,
-                                    PreparedAmrAdvanceScratchPlan* advance_scratch_plan = nullptr) {
+void advance_amr_with_temporal_plan(
+    const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
+    const detail::PreparedAmrTemporalPlan& temporal_plan, Periodicity base_per,
+    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
+    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
+    const AmrBoundaryFillAuthority* boundary_fill = nullptr,
+    PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
+    PreparedAmrAverageDownPlan* average_down_plan = nullptr,
+    PreparedAmrAdvanceScratchPlan* advance_scratch_plan = nullptr) {
   detail::amr_step_multilevel_multipatch_with_temporal_plan<Limiter, NumericalFlux>(
       m, levels, base_dom, dt, temporal_plan, base_per, coarse_replicated, recon_prim, imex, nopts,
       tmethod, pos_floor, weno_eps, wave_speed_cache, boundary_fill, fill_patch_plan,

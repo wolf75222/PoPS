@@ -34,9 +34,13 @@ MultiFab field(const Box2D& box, int ghosts = 0) {
 SpatialTransferContext context(const Box2D& coarse, int coarse_level = 0, int fine_level = 1) {
   const Box2D fine_domain = coarse.refine(2);
   return SpatialTransferContext{
-      coarse_level, fine_level, 1,
+      coarse_level,
+      fine_level,
+      1,
       IndexTransform{{coarse.lo[0], coarse.lo[1]}, {fine_domain.lo[0], fine_domain.lo[1]}, {2, 2}},
-      coarse, fine_domain, true};
+      coarse,
+      fine_domain,
+      true};
 }
 
 using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
@@ -89,10 +93,10 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
   params.poisson.bc = BCRec{};
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
   std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(
-      exb_model(), "minmod", "rusanov", layout, "transport",
-      std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
-      false, 1));
+  blocks.push_back(
+      detail::dispatch_amr_block(exb_model(), "minmod", "rusanov", layout, "transport",
+                                 std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0),
+                                 true, 1.4, 1, false, false, 1));
   blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
   if (install_prepared_boundary) {
     auto& block = blocks.front();
@@ -123,15 +127,13 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
                      layout.base_per, layout.replicated_coarse, layout.wall);
   runtime.configure_hierarchy_capacity(
       {kAmrRefRatio, kAmrRefRatio},
-      {::pops::amr::ParentChildClockRelation(
-           0, 1, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly),
-       ::pops::amr::ParentChildClockRelation(
-           1, 2, ::pops::amr::Rational(2, 1),
-           ::pops::amr::RemainderPolicy::IntegralOnly)});
-  runtime.set_block_transfer_authority(
-      0, prepare_conservative_linear(), prepare_volume_average(),
-      prepare_conservative_coarse_fine(), prepare_linear_time_interpolation(), kAmrRefRatio);
+      {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly),
+       ::pops::amr::ParentChildClockRelation(1, 2, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly)});
+  runtime.set_block_transfer_authority(0, prepare_conservative_linear(), prepare_volume_average(),
+                                       prepare_conservative_coarse_fine(),
+                                       prepare_linear_time_interpolation(), kAmrRefRatio);
   if (install_prepared_boundary)
     runtime.install_boundary_storage_routes({});
   return runtime;
@@ -139,13 +141,11 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
 
 AmrRuntime rectangular_offset_runtime() {
   const Box2D domain{{3, 5}, {6, 7}};
-  const BoxArray boxes(
-      std::vector<Box2D>{Box2D{{3, 5}, {4, 7}}, Box2D{{5, 5}, {6, 7}}});
+  const BoxArray boxes(std::vector<Box2D>{Box2D{{3, 5}, {4, 7}}, Box2D{{5, 5}, {6, 7}}});
   const DistributionMapping distribution(boxes.size(), n_ranks());
   const Geometry geometry{domain, Real(0), Real(4), Real(-1), Real(2)};
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
-  AmrHierarchyLayout hierarchy{
-      {boxes}, {distribution}, {Real(1)}, {Real(1)}, {}, load_balance};
+  AmrHierarchyLayout hierarchy{{boxes}, {distribution}, {Real(1)}, {Real(1)}, {}, load_balance};
 
   MultiFab state(boxes, distribution, 2, 1);
   state.set_val(Real(0));
@@ -190,11 +190,9 @@ TEST(test_amr_transfer_properties, CellConservationRestrictionAndNonzeroOrigin) 
       c(i, j, 0) = 2.0 + 0.4 * i - 0.3 * j;
 
   const auto transform = context(coarse_box);
-  detail::coupler_conservative_linear_to_fine_mb(coarse, fine, transform.logical_coarse_domain,
-                                                 transform.logical_fine_domain,
-                                                 transform.index.coarse_origin,
-                                                 transform.index.fine_origin,
-                                                 transform.index.refinement_ratio);
+  detail::coupler_conservative_linear_to_fine_mb(
+      coarse, fine, transform.logical_coarse_domain, transform.logical_fine_domain,
+      transform.index.coarse_origin, transform.index.fine_origin, transform.index.refinement_ratio);
   average_down(fine, restricted, 2);
   const ConstArray4 r = restricted.fab(0).const_array();
   for (int j = coarse_box.lo[1]; j <= coarse_box.hi[1]; ++j)
@@ -226,9 +224,8 @@ TEST(test_amr_transfer_properties,
     for (int i = coarse_box.lo[0]; i <= coarse_box.hi[0]; ++i) {
       const int fi = fine_box.lo[0] + kAmrRefRatio * (i - coarse_box.lo[0]);
       const int fj = fine_box.lo[1] + kAmrRefRatio * (j - coarse_box.lo[1]);
-      const Real average = Real(0.25) *
-                           (child(fi, fj, 0) + child(fi + 1, fj, 0) +
-                            child(fi, fj + 1, 0) + child(fi + 1, fj + 1, 0));
+      const Real average = Real(0.25) * (child(fi, fj, 0) + child(fi + 1, fj, 0) +
+                                         child(fi, fj + 1, 0) + child(fi + 1, fj + 1, 0));
       EXPECT_NEAR(average, parent(i, j, 0), 2e-12);
     }
 }
@@ -242,8 +239,8 @@ TEST(test_amr_transfer_properties,
   Array4 parent = coarse.fab(0).array();
   for (int j = coarse_box.lo[1]; j <= coarse_box.hi[1]; ++j)
     for (int i = coarse_box.lo[0]; i <= coarse_box.hi[0]; ++i)
-      parent(i, j, 0) = Real(2) + Real(0.13) * i * j + std::sin(Real(0.7) * i) -
-                        std::cos(Real(0.4) * j);
+      parent(i, j, 0) =
+          Real(2) + Real(0.13) * i * j + std::sin(Real(0.7) * i) - std::cos(Real(0.4) * j);
 
   detail::coupler_conservative_polynomial5_to_fine_mb(
       coarse, fine, coarse_box, fine_box, {coarse_box.lo[0], coarse_box.lo[1]},
@@ -255,27 +252,24 @@ TEST(test_amr_transfer_properties,
     for (int i = coarse_box.lo[0]; i <= coarse_box.hi[0]; ++i) {
       const int fi = fine_box.lo[0] + kAmrRefRatio * (i - coarse_box.lo[0]);
       const int fj = fine_box.lo[1] + kAmrRefRatio * (j - coarse_box.lo[1]);
-      const Real average = Real(0.25) *
-                           (child(fi, fj, 0) + child(fi + 1, fj, 0) +
-                            child(fi, fj + 1, 0) + child(fi + 1, fj + 1, 0));
+      const Real average = Real(0.25) * (child(fi, fj, 0) + child(fi + 1, fj, 0) +
+                                         child(fi, fj + 1, 0) + child(fi + 1, fj + 1, 0));
       EXPECT_NEAR(average, parent(i, j, 0), 2e-12);
     }
 }
 
-TEST(test_amr_transfer_properties,
-     FifthOrderFillPatchRejectsSmallDomainsAndPreservesValidCells) {
+TEST(test_amr_transfer_properties, FifthOrderFillPatchRejectsSmallDomainsAndPreservesValidCells) {
   const auto high_order = std::make_shared<const PreparedCoarseFineOperator>(
       prepare_polynomial5_coarse_fine_operator());
   {
     const Box2D small_parent{{0, 0}, {3, 5}};
     MultiFab parent = field(small_parent);
     MultiFab fine = field(small_parent.refine(kAmrRefRatio));
-    EXPECT_THROW(
-        detail::PreparedConservativeCellTransferWorkspace::prepare(
-            parent, fine, small_parent, small_parent.refine(kAmrRefRatio),
-            /*replicated_parent=*/true, detail::ConservativeCellFillRegion::Valid,
-            Periodicity{}, 0, CommunicatorView{}, high_order),
-        std::invalid_argument);
+    EXPECT_THROW(detail::PreparedConservativeCellTransferWorkspace::prepare(
+                     parent, fine, small_parent, small_parent.refine(kAmrRefRatio),
+                     /*replicated_parent=*/true, detail::ConservativeCellFillRegion::Valid,
+                     Periodicity{}, 0, CommunicatorView{}, high_order),
+                 std::invalid_argument);
   }
 
   const Box2D coarse_box{{3, 5}, {10, 12}};
@@ -311,21 +305,19 @@ TEST(test_amr_transfer_properties, PreparedCarrierRejectsUnrepresentableExternal
   const Box2D fine_box = coarse_box.refine(kAmrRefRatio);
   MultiFab parent = field(coarse_box);
   MultiFab fine = field(fine_box, 1);
-  auto excessive = std::make_shared<PreparedCoarseFineOperator>(
-      prepare_limited_linear_coarse_fine_operator());
+  auto excessive =
+      std::make_shared<PreparedCoarseFineOperator>(prepare_limited_linear_coarse_fine_operator());
   excessive->parent_reach_x = std::numeric_limits<int>::max();
 
-  EXPECT_THROW(
-      detail::PreparedConservativeCellTransferWorkspace::prepare(
-          parent, fine, coarse_box, fine_box, /*replicated_parent=*/true,
-          detail::ConservativeCellFillRegion::Ghost, Periodicity{}, 31,
-          CommunicatorView{}, excessive),
-      std::invalid_argument);
-  EXPECT_THROW(
-      PreparedFillPatchWorkspace::prepare(
-          fine, parent, parent, coarse_box, /*replicated_parent=*/true,
-          Periodicity{}, 31, CommunicatorView{}, excessive),
-      std::invalid_argument);
+  EXPECT_THROW(detail::PreparedConservativeCellTransferWorkspace::prepare(
+                   parent, fine, coarse_box, fine_box, /*replicated_parent=*/true,
+                   detail::ConservativeCellFillRegion::Ghost, Periodicity{}, 31, CommunicatorView{},
+                   excessive),
+               std::invalid_argument);
+  EXPECT_THROW(PreparedFillPatchWorkspace::prepare(fine, parent, parent, coarse_box,
+                                                   /*replicated_parent=*/true, Periodicity{}, 31,
+                                                   CommunicatorView{}, excessive),
+               std::invalid_argument);
 }
 
 TEST(test_amr_transfer_properties, CoupledFaceProlongationCommutesWithDivergence) {
@@ -510,21 +502,20 @@ TEST(test_amr_transfer_properties, NativeSubcyclingGhostFillInterpolatesTimeThen
     for (int i = coarse_box.lo[0]; i <= coarse_box.hi[0]; ++i)
       new_values(i, j, 0) = old_values(i, j, 0) + 8.0;
   fine.set_val(-7.0);
-  workspace.apply(fine, old_parent, new_parent, Real(0.5), Real(0), 0, 23,
-                  CommunicatorView{});
+  workspace.apply(fine, old_parent, new_parent, Real(0.5), Real(0), 0, 23, CommunicatorView{});
   EXPECT_DOUBLE_EQ(fine.fab(0).const_array()(fine_patch.lo[0] - 1, fine_patch.lo[1], 0),
                    old_values(3, 6, 0) + 4.0 - 0.25);
-  EXPECT_THROW(workspace.apply(fine, old_parent, new_parent, Real(0.5), Real(0), 0, 24,
-                               CommunicatorView{}),
-               std::invalid_argument);
+  EXPECT_THROW(
+      workspace.apply(fine, old_parent, new_parent, Real(0.5), Real(0), 0, 24, CommunicatorView{}),
+      std::invalid_argument);
 }
 
 TEST(test_amr_transfer_properties, AnalyticEveryLevelCacheEpochAndL0L1L2Rollback) {
   AmrRuntime runtime = bootstrap_runtime();
   ASSERT_EQ(runtime.nlev(), 1);
   const std::vector<double> baseline = runtime.block_level_state(0, 0);
-  test::install_prepared_threshold_union(
-      runtime, {{0, 0, Real(0.5)}}, "test.tag-provider::component-above");
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test.tag-provider::component-above");
 
   for (int failure_level = 0; failure_level <= 2; ++failure_level) {
     runtime.begin_bootstrap_plan();
@@ -557,8 +548,8 @@ TEST(test_amr_transfer_properties, AnalyticEveryLevelCacheEpochAndL0L1L2Rollback
 TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionAtNewLevel) {
   AmrRuntime runtime = bootstrap_runtime(8, true);
   const std::vector<double> baseline = runtime.block_level_state(0, 0);
-  test::install_prepared_threshold_union(
-      runtime, {{0, 0, Real(0.5)}}, "test.tag-provider::component-above");
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test.tag-provider::component-above");
 
   runtime.begin_bootstrap_plan();
   runtime.bootstrap_next_level(2);

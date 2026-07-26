@@ -198,8 +198,8 @@ struct PreparedProviderSupport {
     return accepted() ? reason.empty() : !reason.empty();
   }
   [[nodiscard]] static constexpr PreparedProviderSupport accept() noexcept { return {}; }
-  [[nodiscard]] static constexpr PreparedProviderSupport reject(
-      std::uint32_t code, std::string_view reason) noexcept {
+  [[nodiscard]] static constexpr PreparedProviderSupport reject(std::uint32_t code,
+                                                                std::string_view reason) noexcept {
     return {code, reason};
   }
 };

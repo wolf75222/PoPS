@@ -257,9 +257,7 @@ class PreparedBoundaryPlan {
   /// The built-in BCRec laws fill every ghost layer allocated by the state. A dynamically loaded
   /// ghost component is prepared only for this plan's authenticated required_depth(), so it keeps
   /// the bounded-depth contract even though residual/JVP-only components do not affect ghost fill.
-  bool fills_all_allocated_physical_ghosts() const noexcept {
-    return ghost_components_.empty();
-  }
+  bool fills_all_allocated_physical_ghosts() const noexcept { return ghost_components_.empty(); }
 
   /// Whether this plan owns an executable residual/JVP pair for an implicit operator.  A partial
   /// installation is an invalid native state, never a false capability that can be silently ignored.
@@ -397,8 +395,8 @@ class PreparedBoundaryPlan {
 
   bool requires_grid_metric() const {
     return std::any_of(component_bc_.begin(), component_bc_.end(), [](const BCRec& bc) {
-      return bc.xlo == BCType::Robin || bc.xhi == BCType::Robin ||
-             bc.ylo == BCType::Robin || bc.yhi == BCType::Robin;
+      return bc.xlo == BCType::Robin || bc.xhi == BCType::Robin || bc.ylo == BCType::Robin ||
+             bc.yhi == BCType::Robin;
     });
   }
 

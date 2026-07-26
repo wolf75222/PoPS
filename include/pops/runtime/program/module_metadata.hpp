@@ -142,8 +142,8 @@ inline std::vector<ProgramOperatorAuthority> read_program_operator_authorities(
   const int count =
       detail::require_module_count(dl_handle, "pops_program_operator_authority_count");
   using WordFn = std::uint64_t (*)(int, int);
-  const WordFn word = detail::require_module_symbol<WordFn>(
-      dl_handle, "pops_program_operator_authority_word");
+  const WordFn word =
+      detail::require_module_symbol<WordFn>(dl_handle, "pops_program_operator_authority_word");
   std::vector<ProgramOperatorAuthority> authorities;
   authorities.reserve(static_cast<std::size_t>(count));
   std::set<ProgramOperatorAuthority> unique;

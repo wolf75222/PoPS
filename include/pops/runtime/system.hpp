@@ -132,8 +132,8 @@ struct PreparedInterfaceFluxSpec;
 /// wired through System transport and polar field routes. Polar-only config fields are ignored while
 /// geometry == "cartesian".
 struct SystemConfig {
-  int n = 64;       ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
-  double L = 1.0;   ///< size of the square domain [0,L]^2 (cartesian)
+  int n = 64;      ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
+  double L = 1.0;  ///< size of the square domain [0,L]^2 (cartesian)
   Periodicity periodicity{true, true};  ///< Cartesian topology, independently on x and y
   // --- internal geometry: "cartesian" (default, bit-identical) | "polar" (global ring) ---
   std::string geometry = "cartesian";  ///< internal choice lowered from CartesianGrid or advanced
@@ -289,13 +289,14 @@ class System {
 
   /// Installs an authenticated external Riemann policy against its compiled Model on the real
   /// System storage. The loaded library remains alive until every installed closure is destroyed.
-  void add_external_riemann_block(
-      const std::string& name, const std::string& so_path, const std::string& brick_id,
-      const std::string& sha256, const std::string& limiter, const std::string& recon,
-      const std::string& time, double gamma, int substeps, bool evolve, int stride,
-      int expected_nvars, int expected_naux, const std::string& expected_model_identity,
-      double positivity_floor = 0.0,
-      double weno_epsilon = static_cast<double>(kWenoEpsilon));
+  void add_external_riemann_block(const std::string& name, const std::string& so_path,
+                                  const std::string& brick_id, const std::string& sha256,
+                                  const std::string& limiter, const std::string& recon,
+                                  const std::string& time, double gamma, int substeps, bool evolve,
+                                  int stride, int expected_nvars, int expected_naux,
+                                  const std::string& expected_model_identity,
+                                  double positivity_floor = 0.0,
+                                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
@@ -820,14 +821,14 @@ class System {
   std::vector<double> get_state(const std::string& name);  ///< U, ncomp*n*n (component-major)
   void set_state(const std::string& name, const std::vector<double>& u);
   std::int64_t set_analytic_expression_state(const std::string& name, const std::string& space,
-                                              const std::string& centering,
-                                              const std::string& projection,
-                                              const std::vector<std::vector<std::string>>& opcodes,
-                                              const std::vector<std::vector<double>>& literals);
-  std::int64_t set_analytic_mapped_state(
-      const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
-      const std::vector<std::vector<double>>& literals,
-      const std::vector<std::string>& input_sources);
+                                             const std::string& centering,
+                                             const std::string& projection,
+                                             const std::vector<std::vector<std::string>>& opcodes,
+                                             const std::vector<std::vector<double>>& literals);
+  std::int64_t set_analytic_mapped_state(const std::string& name,
+                                         const std::vector<std::vector<std::string>>& opcodes,
+                                         const std::vector<std::vector<double>>& literals,
+                                         const std::vector<std::string>& input_sources);
   std::int64_t set_analytic_gaussian_state(const std::string& name, double center_x,
                                            double center_y, double background, double amplitude,
                                            double inverse_width);
@@ -1340,8 +1341,7 @@ class POPS_EXPORT PreparedSystemLayoutTransfer final {
   ~PreparedSystemLayoutTransfer();
 
   static std::shared_ptr<PreparedSystemLayoutTransfer> prepare(
-      System& source, System& target,
-      std::shared_ptr<component::LoadedComponent> component,
+      System& source, System& target, std::shared_ptr<component::LoadedComponent> component,
       SystemLayoutTransferSpec spec, SystemLayoutTransferExecution execution);
 
   const SystemLayoutTransferSpec& spec() const noexcept;

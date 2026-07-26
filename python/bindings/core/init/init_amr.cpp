@@ -82,8 +82,7 @@ void require_amr_cell_array_shape(const AmrSystem& system, const py::array& arra
                           std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
                           "); got ndim=" + std::to_string(array.ndim()));
   if (array.shape(0) != expected_ny || array.shape(1) != expected_nx)
-    throw py::value_error(std::string(operation) +
-                          ": expected Cartesian cell shape (ny, nx) = (" +
+    throw py::value_error(std::string(operation) + ": expected Cartesian cell shape (ny, nx) = (" +
                           std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
                           "); got (" + std::to_string(array.shape(0)) + ", " +
                           std::to_string(array.shape(1)) + ")");
@@ -206,8 +205,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             newton.fail_policy =
                 newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
-                        implicit_roles, newton, newton_diagnostics, positivity_floor,
-                        weno_epsilon, wave_speed_cache);
+                        implicit_roles, newton, newton_diagnostics, positivity_floor, weno_epsilon,
+                        wave_speed_cache);
           },
           py::arg("name"), py::arg("model"), py::arg("limiter") = "minmod",
           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
@@ -1130,8 +1129,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &AmrSystem::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
-      .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count,
-           py::arg("name"), py::arg("fill_count"))
+      .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count, py::arg("name"),
+           py::arg("fill_count"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))
@@ -1165,9 +1164,8 @@ void init_amr(py::module_& m) {
       .def_readwrite("regrid_margin", &AmrSystemConfig::regrid_margin)
       .def_readwrite("explicit_bootstrap", &AmrSystemConfig::explicit_bootstrap)
       .def_property(
-          "periodicity", [](const AmrSystemConfig& config) {
-            return periodicity_to_python(config.periodicity);
-          },
+          "periodicity",
+          [](const AmrSystemConfig& config) { return periodicity_to_python(config.periodicity); },
           [](AmrSystemConfig& config, const py::handle& value) {
             config.periodicity = periodicity_from_python(value, "AmrSystemConfig");
           })
@@ -1192,8 +1190,8 @@ void init_amr(py::module_& m) {
             config.load_balance_options =
                 prepared_provider_options_from_python(option_schema_identity, options);
           },
-          py::arg("route"), py::arg("semantic_identity"),
-          py::arg("option_schema_identity"), py::arg("options"));
+          py::arg("route"), py::arg("semantic_identity"), py::arg("option_schema_identity"),
+          py::arg("options"));
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystem> cls(m, "AmrSystem");

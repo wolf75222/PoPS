@@ -176,8 +176,8 @@ TEST(test_amr_positivity_floor, Runs) {
 
     // unclamped (pos_floor = 0): the sub-floor coarse cell propagates to its fine ghosts.
     Uf.set_val(1.0);
-    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, cdom, Real(0.5), /*replicated_parent=*/true,
-                           Real(0), 0, Periodicity{false, false});
+    mf_fill_fine_ghosts_mb(Uf, Pc, Pc, cdom, Real(0.5), /*replicated_parent=*/true, Real(0), 0,
+                           Periodicity{false, false});
     const int n_raw = sub_floor_ghosts(Uf);
 
     // clamped (pos_floor = floor): every C/F fine-ghost density >= floor; momentum unchanged.
@@ -297,8 +297,7 @@ TEST(test_amr_positivity_floor, Runs) {
     try {
       amr_step(Uoff, aux, dt, Real(0));
     } catch (const FluxEvaluationFailure& failure) {
-      if (failure.status() != EvaluationStatus::kReject ||
-          failure.reason_code() != 0x53544201u ||
+      if (failure.status() != EvaluationStatus::kReject || failure.reason_code() != 0x53544201u ||
           failure.phase() != "compute_face_fluxes")
         throw;
       unfloored_rejected = true;

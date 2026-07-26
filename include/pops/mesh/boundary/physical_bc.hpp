@@ -61,9 +61,8 @@ struct BoundarySample1D {
   Real offset;
 };
 
-POPS_HD inline BoundarySample1D boundary_sample_1d(int index, int lo, int hi,
-                                                    BoundaryFaceData low,
-                                                    BoundaryFaceData high, Real h) {
+POPS_HD inline BoundarySample1D boundary_sample_1d(int index, int lo, int hi, BoundaryFaceData low,
+                                                   BoundaryFaceData high, Real h) {
   std::int64_t current = index;
   Real scale = Real(1);
   Real offset = Real(0);
@@ -112,8 +111,7 @@ inline const char* bc_type_name(BCType type) {
   return "unknown";
 }
 
-inline void validate_face_data(BoundaryFaceData face, Real h, const char* axis,
-                               const char* side) {
+inline void validate_face_data(BoundaryFaceData face, Real h, const char* axis, const char* side) {
   if (!is_native_physical_bc(face.type))
     return;
   if (face.type != BCType::Foextrap && !std::isfinite(face.value))
@@ -128,9 +126,8 @@ inline void validate_face_data(BoundaryFaceData face, Real h, const char* axis,
 // Host preflight mirrors boundary_sample_1d. It rejects a deep extension which would require data
 // owned by an External/Periodic opposite face, and rejects singular/non-finite Robin transforms
 // before any asynchronous device kernel is launched.
-inline void validate_boundary_sample_1d(std::int64_t index, int lo, int hi,
-                                        BoundaryFaceData low, BoundaryFaceData high, Real h,
-                                        const char* axis) {
+inline void validate_boundary_sample_1d(std::int64_t index, int lo, int hi, BoundaryFaceData low,
+                                        BoundaryFaceData high, Real h, const char* axis) {
   std::int64_t current = index;
   Real scale = Real(1);
   Real offset = Real(0);
@@ -269,14 +266,14 @@ inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRe
     if (bc.yhi != BCType::Periodic)
       jghi = std::min(jghi, domain.hi[1]);
     if (detail::is_native_physical_bc(bc.xlo) && v.lo[0] == domain.lo[0]) {
-      for_each_cell(Box2D{{domain.lo[0] - ng, jglo}, {domain.lo[0] - 1, jghi}},
-                    detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow,
-                                          xhigh, bc.dx});
+      for_each_cell(
+          Box2D{{domain.lo[0] - ng, jglo}, {domain.lo[0] - 1, jghi}},
+          detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow, xhigh, bc.dx});
     }
     if (detail::is_native_physical_bc(bc.xhi) && v.hi[0] == domain.hi[0]) {
-      for_each_cell(Box2D{{domain.hi[0] + 1, jglo}, {domain.hi[0] + ng, jghi}},
-                    detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow,
-                                          xhigh, bc.dx});
+      for_each_cell(
+          Box2D{{domain.hi[0] + 1, jglo}, {domain.hi[0] + ng, jghi}},
+          detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow, xhigh, bc.dx});
     }
 
     // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
@@ -287,14 +284,14 @@ inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRe
     if (bc.xhi == BCType::External)
       ighi = std::min(ighi, domain.hi[0]);
     if (detail::is_native_physical_bc(bc.ylo) && v.lo[1] == domain.lo[1]) {
-      for_each_cell(Box2D{{iglo, domain.lo[1] - ng}, {ighi, domain.lo[1] - 1}},
-                    detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow,
-                                          yhigh, bc.dy});
+      for_each_cell(
+          Box2D{{iglo, domain.lo[1] - ng}, {ighi, domain.lo[1] - 1}},
+          detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow, yhigh, bc.dy});
     }
     if (detail::is_native_physical_bc(bc.yhi) && v.hi[1] == domain.hi[1]) {
-      for_each_cell(Box2D{{iglo, domain.hi[1] + 1}, {ighi, domain.hi[1] + ng}},
-                    detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow,
-                                          yhigh, bc.dy});
+      for_each_cell(
+          Box2D{{iglo, domain.hi[1] + 1}, {ighi, domain.hi[1] + ng}},
+          detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow, yhigh, bc.dy});
     }
   }
 }

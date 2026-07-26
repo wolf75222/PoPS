@@ -62,16 +62,15 @@ inline std::vector<int> morton_order(const BoxArray& ba) {
   for (int i = 0; i < n; ++i)
     key[i] = morton_key(static_cast<std::uint32_t>(ba[i].lo[0] - bb.lo[0]),
                         static_cast<std::uint32_t>(ba[i].lo[1] - bb.lo[1]));
-  std::sort(order.begin(), order.end(), [&](int a, int b) {
-    return key[a] < key[b] || (key[a] == key[b] && a < b);
-  });
+  std::sort(order.begin(), order.end(),
+            [&](int a, int b) { return key[a] < key[b] || (key[a] == key[b] && a < b); });
   return order;
 }
 
 namespace detail {
 
-inline std::vector<std::int64_t> load_balance_weights(
-    const BoxArray& boxes, std::span<const std::int64_t> supplied) {
+inline std::vector<std::int64_t> load_balance_weights(const BoxArray& boxes,
+                                                      std::span<const std::int64_t> supplied) {
   if (!supplied.empty() && supplied.size() != static_cast<std::size_t>(boxes.size()))
     throw std::invalid_argument("load-balance weight count must equal the BoxArray size");
   std::vector<std::int64_t> weights(static_cast<std::size_t>(boxes.size()));
@@ -135,8 +134,8 @@ inline DistributionMapping make_sfc_distribution(
     // remain to give at least one box to each remaining rank.
     const int boxes_left = n - 1 - k;
     const int ranks_left = nranks - 1 - r;
-    if (r < nranks - 1 &&
-        acc >= detail::cumulative_target(total, r + 1, nranks) && boxes_left >= ranks_left)
+    if (r < nranks - 1 && acc >= detail::cumulative_target(total, r + 1, nranks) &&
+        boxes_left >= ranks_left)
       ++r;
   }
   return DistributionMapping(std::move(rank));

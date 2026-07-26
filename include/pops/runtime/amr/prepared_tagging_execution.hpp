@@ -23,10 +23,8 @@ namespace pops::runtime::amr {
 
 namespace tagging_detail {
 
-constexpr std::size_t kPreparedTaggingMaximumLeaves =
-    POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1;
-constexpr std::size_t kPreparedTaggingMaximumStencils =
-    POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1;
+constexpr std::size_t kPreparedTaggingMaximumLeaves = POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1;
+constexpr std::size_t kPreparedTaggingMaximumStencils = POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1;
 constexpr std::size_t kPreparedTaggingDimension = 2;
 
 enum PreparedTaggingMask : std::uint8_t {
@@ -134,8 +132,7 @@ struct PreparedTaggingPatchKernel {
     for (std::int32_t instruction = 0; instruction < count; ++instruction) {
       const std::int32_t opcode = ops[instruction];
       const std::int32_t argument = args[instruction];
-      const bool leaf_opcode = opcode == POPS_TAGGING_ABOVE_V1 ||
-                               opcode == POPS_TAGGING_BELOW_V1 ||
+      const bool leaf_opcode = opcode == POPS_TAGGING_ABOVE_V1 || opcode == POPS_TAGGING_BELOW_V1 ||
                                opcode == POPS_TAGGING_MAGNITUDE_ABOVE_V1 ||
                                opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
                                opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
@@ -143,8 +140,7 @@ struct PreparedTaggingPatchKernel {
         const PreparedTaggingLeafDevice& leaf = leaves[argument];
         const ConstArray4 values = leaf_fields[argument];
         Real sample = Real(0);
-        if (opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
-            opcode == POPS_TAGGING_GRADIENT_BELOW_V1) {
+        if (opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 || opcode == POPS_TAGGING_GRADIENT_BELOW_V1) {
           const PreparedTaggingStencilDevice& stencil = stencils[leaf.stencil_index];
           Real squared_norm = Real(0);
           for (std::int32_t axis_index = 0; axis_index < stencil.axis_count; ++axis_index) {
@@ -177,10 +173,9 @@ struct PreparedTaggingPatchKernel {
         } else if (sample == leaf.threshold) {
           stack[depth++] = DeviceTagTruth::Unknown;
         } else {
-          stack[depth++] =
-              (greater ? sample > leaf.threshold : sample < leaf.threshold)
-                  ? DeviceTagTruth::True
-                  : DeviceTagTruth::False;
+          stack[depth++] = (greater ? sample > leaf.threshold : sample < leaf.threshold)
+                               ? DeviceTagTruth::True
+                               : DeviceTagTruth::False;
         }
         continue;
       }
@@ -214,8 +209,7 @@ struct PreparedTaggingPatchKernel {
   POPS_HD void operator()(int i, int j) const {
     bool finite = true;
     const DeviceTagTruth refine = evaluate(refine_ops, refine_args, refine_count, i, j, finite);
-    const DeviceTagTruth coarsen =
-        evaluate(coarsen_ops, coarsen_args, coarsen_count, i, j, finite);
+    const DeviceTagTruth coarsen = evaluate(coarsen_ops, coarsen_args, coarsen_count, i, j, finite);
     std::uint8_t bits = finite ? std::uint8_t{0} : std::uint8_t{kNonFinite};
     if (refine == DeviceTagTruth::True)
       bits |= kRefineMatch;
@@ -252,8 +246,8 @@ static_assert(std::is_trivially_copyable_v<PreparedTaggingClearCompactKernel>);
 static_assert(std::is_trivially_copyable_v<PreparedTaggingCompactPatchKernel>);
 
 inline bool same_box(const Box2D& left, const Box2D& right) noexcept {
-  return left.lo[0] == right.lo[0] && left.lo[1] == right.lo[1] &&
-         left.hi[0] == right.hi[0] && left.hi[1] == right.hi[1];
+  return left.lo[0] == right.lo[0] && left.lo[1] == right.lo[1] && left.hi[0] == right.hi[0] &&
+         left.hi[1] == right.hi[1];
 }
 
 }  // namespace tagging_detail
@@ -282,12 +276,11 @@ class PreparedTaggingExecutionPlan {
     static_assert(sizeof(Real) == sizeof(double),
                   "prepared AMR Tagger ABI requires PoPS binary64 state storage");
     if (!program.prepared || program.provider_identity.empty() || program.clock_identity.empty() ||
-        program.leaves.empty() ||
-        program.refine_ops.empty() || fields_by_level.empty() ||
+        program.leaves.empty() || program.refine_ops.empty() || fields_by_level.empty() ||
         fields_by_level.size() != domains.size() || topology_generation == 0 ||
-        program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
-        program.min_cycles != 0 || program.equality_policy < 0 || program.equality_policy > 2 ||
-        program.conflict_policy < 0 || program.conflict_policy > 3 ||
+        program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 || program.min_cycles != 0 ||
+        program.equality_policy < 0 || program.equality_policy > 2 || program.conflict_policy < 0 ||
+        program.conflict_policy > 3 ||
         program.leaves.size() > tagging_detail::kPreparedTaggingMaximumLeaves ||
         program.stencils.size() > tagging_detail::kPreparedTaggingMaximumStencils ||
         program.refine_ops.size() != program.refine_args.size() ||
@@ -297,8 +290,7 @@ class PreparedTaggingExecutionPlan {
       throw std::invalid_argument("prepared AMR tagging execution exceeds its authenticated ABI");
 
     const auto validate_root = [&program](const std::vector<std::int32_t>& ops,
-                                          const std::vector<std::int32_t>& args,
-                                          bool required) {
+                                          const std::vector<std::int32_t>& args, bool required) {
       if (ops.empty()) {
         if (required)
           throw std::invalid_argument("prepared AMR tagging has no refine root");
@@ -391,8 +383,8 @@ class PreparedTaggingExecutionPlan {
       for (int global = 0; global < reference.box_array().size(); ++global) {
         const Box2D& box = reference.box_array()[global];
         if (box.empty() || !domains[level_index].contains(box.lo[0], box.lo[1]) ||
-            !domains[level_index].contains(box.hi[0], box.hi[1]) ||
-            reference.dmap()[global] < 0 || reference.dmap()[global] >= n_ranks())
+            !domains[level_index].contains(box.hi[0], box.hi[1]) || reference.dmap()[global] < 0 ||
+            reference.dmap()[global] >= n_ranks())
           throw std::invalid_argument("prepared AMR tagging has an invalid global patch layout");
         for (int other = 0; other < global; ++other)
           if (!box.intersect(reference.box_array()[other]).empty())
@@ -457,15 +449,12 @@ class PreparedTaggingExecutionPlan {
   }
 
   [[nodiscard]] bool prepared() const noexcept { return prepared_; }
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
 
   const PreparedTaggerCandidates& execute(int level_index, const Box2D& domain, Real dx, Real dy,
                                           std::uint64_t topology_generation) {
     std::uint64_t local_preflight_failure = 0;
-    if (!prepared_ || level_index < 0 ||
-        static_cast<std::size_t>(level_index) >= levels_.size() ||
+    if (!prepared_ || level_index < 0 || static_cast<std::size_t>(level_index) >= levels_.size() ||
         topology_generation != topology_generation_ || !(dx > Real(0)) || !(dy > Real(0)) ||
         !std::isfinite(static_cast<double>(dx)) || !std::isfinite(static_cast<double>(dy)))
       local_preflight_failure = 1;
@@ -495,25 +484,22 @@ class PreparedTaggingExecutionPlan {
       Kokkos::parallel_for(
           "pops_amr_prepared_tagging_patch",
           Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-              {patch.box.lo[0], patch.box.lo[1]},
-              {patch.box.hi[0] + 1, patch.box.hi[1] + 1}),
+              {patch.box.lo[0], patch.box.lo[1]}, {patch.box.hi[0] + 1, patch.box.hi[1] + 1}),
           kernel);
     }
-    const tagging_detail::PreparedTaggingCompactView compact{
-        level.compact.data(), domain.nx(), domain.lo[0], domain.lo[1]};
-    Kokkos::parallel_for(
-        "pops_amr_prepared_tagging_clear_compact",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-            {domain.lo[0], domain.lo[1]}, {domain.hi[0] + 1, domain.hi[1] + 1}),
-        tagging_detail::PreparedTaggingClearCompactKernel{compact});
+    const tagging_detail::PreparedTaggingCompactView compact{level.compact.data(), domain.nx(),
+                                                             domain.lo[0], domain.lo[1]};
+    Kokkos::parallel_for("pops_amr_prepared_tagging_clear_compact",
+                         Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+                             {domain.lo[0], domain.lo[1]}, {domain.hi[0] + 1, domain.hi[1] + 1}),
+                         tagging_detail::PreparedTaggingClearCompactKernel{compact});
     for (const Patch& patch : level.patches) {
-      const tagging_detail::PreparedTaggingConstMaskView mask{
-          patch.mask.data(), patch.box.nx(), patch.box.lo[0], patch.box.lo[1]};
+      const tagging_detail::PreparedTaggingConstMaskView mask{patch.mask.data(), patch.box.nx(),
+                                                              patch.box.lo[0], patch.box.lo[1]};
       Kokkos::parallel_for(
           "pops_amr_prepared_tagging_compact_patch",
           Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-              {patch.box.lo[0], patch.box.lo[1]},
-              {patch.box.hi[0] + 1, patch.box.hi[1] + 1}),
+              {patch.box.lo[0], patch.box.lo[1]}, {patch.box.hi[0] + 1, patch.box.hi[1] + 1}),
           tagging_detail::PreparedTaggingCompactPatchKernel{mask, compact});
     }
     device_fence();
@@ -527,11 +513,9 @@ class PreparedTaggingExecutionPlan {
     for (std::size_t index = 0; index < level.compact.size(); ++index) {
       const auto bits = static_cast<std::uint8_t>(level.compact[index]);
       level.candidates.refine.t[index] = (bits & tagging_detail::kRefineMatch) != 0;
-      level.candidates.refine_equalities.t[index] =
-          (bits & tagging_detail::kRefineEquality) != 0;
+      level.candidates.refine_equalities.t[index] = (bits & tagging_detail::kRefineEquality) != 0;
       level.candidates.coarsen.t[index] = (bits & tagging_detail::kCoarsenMatch) != 0;
-      level.candidates.coarsen_equalities.t[index] =
-          (bits & tagging_detail::kCoarsenEquality) != 0;
+      level.candidates.coarsen_equalities.t[index] = (bits & tagging_detail::kCoarsenEquality) != 0;
     }
     return level.candidates;
   }

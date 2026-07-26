@@ -80,8 +80,7 @@ class PreparedInterfaceFluxComponent final {
                                              measures_.data(),
                                              time,
                                              spec_.execution->view()};
-    std::fill(stability_.begin(), stability_.end(),
-              std::numeric_limits<double>::quiet_NaN());
+    std::fill(stability_.begin(), stability_.end(), std::numeric_limits<double>::quiet_NaN());
     std::fill(actions_.begin(), actions_.end(), POPS_COMPONENT_CONTINUE_V1);
     PopsNumericalFluxResultV1 result{
         sizeof(PopsNumericalFluxResultV1),

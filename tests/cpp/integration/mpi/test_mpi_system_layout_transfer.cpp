@@ -51,90 +51,88 @@ std::string transfer_component_source() {
 #include <cstddef>
 #include <cstdint>
 
-namespace {
-constexpr char kComponentId[] = "pops://test/system-layout-transfer-mpi@1.0.0";
-constexpr char kSemanticIdentity[] = "system-layout-transfer-mpi-semantic-v1";
-constexpr char kManifestIdentity[] = "system-layout-transfer-mpi-manifest-v1";
+    namespace {
+    constexpr char kComponentId[] = "pops://test/system-layout-transfer-mpi@1.0.0";
+    constexpr char kSemanticIdentity[] = "system-layout-transfer-mpi-semantic-v1";
+    constexpr char kManifestIdentity[] = "system-layout-transfer-mpi-manifest-v1";
 
-int fail(PopsComponentStatusV1* status, int code, const char* reason) {
-  if (status != nullptr)
-    *status = {sizeof(PopsComponentStatusV1), code, POPS_COMPONENT_ABORT_RUN_V1, reason};
-  return code;
-}
+    int fail(PopsComponentStatusV1* status, int code, const char* reason) {
+      if (status != nullptr)
+        *status = {sizeof(PopsComponentStatusV1), code, POPS_COMPONENT_ABORT_RUN_V1, reason};
+      return code;
+    }
 
-int apply(void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* status) {
-  if (request == nullptr || status == nullptr ||
-      request->struct_size < sizeof(PopsTransferRequestV1))
-    return fail(status, 11, "transfer request is incomplete");
-  if (request->dimension != 2 || request->source.dimension != 2 ||
-      request->destination.dimension != 2 || request->source.data == nullptr ||
-      request->destination.data == nullptr || request->refinement_ratio == nullptr)
-    return fail(status, 12, "transfer field views are incomplete");
-  if (request->source.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
-      request->destination.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
-      request->source.component_count != request->destination.component_count ||
-      request->operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
-    return fail(status, 13, "transfer type or operation is unsupported");
+    int apply(void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* status) {
+      if (request == nullptr || status == nullptr ||
+          request->struct_size < sizeof(PopsTransferRequestV1))
+        return fail(status, 11, "transfer request is incomplete");
+      if (request->dimension != 2 || request->source.dimension != 2 ||
+          request->destination.dimension != 2 || request->source.data == nullptr ||
+          request->destination.data == nullptr || request->refinement_ratio == nullptr)
+        return fail(status, 12, "transfer field views are incomplete");
+      if (request->source.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
+          request->destination.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
+          request->source.component_count != request->destination.component_count ||
+          request->operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
+        return fail(status, 13, "transfer type or operation is unsupported");
 
-  const std::int32_t ratio_y = request->refinement_ratio[0];
-  const std::int32_t ratio_x = request->refinement_ratio[1];
-  if (ratio_y <= 0 || ratio_x <= 0 ||
-      request->source.extents[0] != request->destination.extents[0] * ratio_y ||
-      request->source.extents[1] != request->destination.extents[1] * ratio_x)
-    return fail(status, 14, "transfer refinement ratio does not match the field extents");
+      const std::int32_t ratio_y = request->refinement_ratio[0];
+      const std::int32_t ratio_x = request->refinement_ratio[1];
+      if (ratio_y <= 0 || ratio_x <= 0 ||
+          request->source.extents[0] != request->destination.extents[0] * ratio_y ||
+          request->source.extents[1] != request->destination.extents[1] * ratio_x)
+        return fail(status, 14, "transfer refinement ratio does not match the field extents");
 
-  const auto* source = static_cast<const double*>(request->source.data);
-  auto* destination = static_cast<double*>(request->destination.data);
-  const double scale = 1.0 / static_cast<double>(ratio_y * ratio_x);
-  for (std::size_t component = 0; component < request->source.component_count; ++component) {
-    for (std::size_t y = 0; y < request->destination.extents[0]; ++y) {
-      for (std::size_t x = 0; x < request->destination.extents[1]; ++x) {
-        double sum = 0.0;
-        for (std::int32_t dy = 0; dy < ratio_y; ++dy) {
-          for (std::int32_t dx = 0; dx < ratio_x; ++dx) {
-            const auto source_offset =
-                static_cast<std::ptrdiff_t>(component) * request->source.component_stride +
-                static_cast<std::ptrdiff_t>(y * ratio_y + dy) *
-                    request->source.axis_strides[0] +
-                static_cast<std::ptrdiff_t>(x * ratio_x + dx) *
-                    request->source.axis_strides[1];
-            sum += source[source_offset];
+      const auto* source = static_cast<const double*>(request->source.data);
+      auto* destination = static_cast<double*>(request->destination.data);
+      const double scale = 1.0 / static_cast<double>(ratio_y * ratio_x);
+      for (std::size_t component = 0; component < request->source.component_count; ++component) {
+        for (std::size_t y = 0; y < request->destination.extents[0]; ++y) {
+          for (std::size_t x = 0; x < request->destination.extents[1]; ++x) {
+            double sum = 0.0;
+            for (std::int32_t dy = 0; dy < ratio_y; ++dy) {
+              for (std::int32_t dx = 0; dx < ratio_x; ++dx) {
+                const auto source_offset =
+                    static_cast<std::ptrdiff_t>(component) * request->source.component_stride +
+                    static_cast<std::ptrdiff_t>(y * ratio_y + dy) *
+                        request->source.axis_strides[0] +
+                    static_cast<std::ptrdiff_t>(x * ratio_x + dx) * request->source.axis_strides[1];
+                sum += source[source_offset];
+              }
+            }
+            const auto destination_offset =
+                static_cast<std::ptrdiff_t>(component) * request->destination.component_stride +
+                static_cast<std::ptrdiff_t>(y) * request->destination.axis_strides[0] +
+                static_cast<std::ptrdiff_t>(x) * request->destination.axis_strides[1];
+            destination[destination_offset] = sum * scale;
           }
         }
-        const auto destination_offset =
-            static_cast<std::ptrdiff_t>(component) * request->destination.component_stride +
-            static_cast<std::ptrdiff_t>(y) * request->destination.axis_strides[0] +
-            static_cast<std::ptrdiff_t>(x) * request->destination.axis_strides[1];
-        destination[destination_offset] = sum * scale;
       }
+      *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+      return 0;
     }
-  }
-  *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
-  return 0;
-}
 
-const PopsTransferApiV1 transfer_table{
-    {sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-     POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, nullptr, nullptr},
-    &apply};
-const PopsComponentInterfaceEntryV1 interface_entry{
-    POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer_table};
-const PopsComponentApiV1 component_api{
-    sizeof(PopsComponentApiV1),
-    POPS_COMPONENT_PROTOCOL_ABI_V1,
-    POPS_ABI_KEY_LITERAL,
-    POPS_COMPONENT_CATALOG_SHA256_V1,
-    kComponentId,
-    kSemanticIdentity,
-    kManifestIdentity,
-    1,
-    &interface_entry};
-}  // namespace
+    const PopsTransferApiV1 transfer_table{
+        {sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+         POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, nullptr, nullptr},
+        &apply};
+    const PopsComponentInterfaceEntryV1 interface_entry{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1,
+                                                        sizeof(PopsTransferApiV1), &transfer_table};
+    const PopsComponentApiV1 component_api{sizeof(PopsComponentApiV1),
+                                           POPS_COMPONENT_PROTOCOL_ABI_V1,
+                                           POPS_ABI_KEY_LITERAL,
+                                           POPS_COMPONENT_CATALOG_SHA256_V1,
+                                           kComponentId,
+                                           kSemanticIdentity,
+                                           kManifestIdentity,
+                                           1,
+                                           &interface_entry};
+    }  // namespace
 
-extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
-  return &component_api;
-}
-)CPP";
+    extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
+      return &component_api;
+    }
+  )CPP";
 }
 
 struct PassiveScalar {
@@ -144,9 +142,7 @@ struct PassiveScalar {
   static constexpr int n_vars = 1;
 
   POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const {
-    return pops::Real(1);
-  }
+  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(1); }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
   POPS_HD Prim to_primitive(const State& state) const { return state; }
@@ -161,12 +157,10 @@ struct PassiveScalar {
 };
 
 pops::component::ExpectedNativeComponent expected_component() {
-  return {kComponentId,
-          kSemanticIdentity,
-          kManifestIdentity,
-          POPS_COMPONENT_CATALOG_SHA256_V1,
-          POPS_ABI_KEY_LITERAL,
-          {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
+  return {
+      kComponentId,         kSemanticIdentity,
+      kManifestIdentity,    POPS_COMPONENT_CATALOG_SHA256_V1,
+      POPS_ABI_KEY_LITERAL, {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
 }
 
 pops::SystemLayoutTransferSpec transfer_spec() {
@@ -352,8 +346,8 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
                 receipt.provider_component_identity == kComponentId &&
                 receipt.provider_manifest_identity == kManifestIdentity &&
                 receipt.source_layout_identity == kFineLayout &&
-                receipt.target_layout_identity == kCoarseLayout &&
-                receipt.source_block == "fine" && receipt.target_block == "coarse" &&
+                receipt.target_layout_identity == kCoarseLayout && receipt.source_block == "fine" &&
+                receipt.target_block == "coarse" &&
                 receipt.execution_identity == "test::execution::mpi-world-host" &&
                 receipt.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 &&
                 receipt.generation == generation && receipt.attempt == attempt &&
@@ -425,9 +419,9 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
         fine->set_state("fine", transient);
         transfer->capture(3, 1);
         check_receipt(transfer->apply(3, 1), 3, 1);
-        check(coarse->get_state("coarse") ==
-                  (rank == 0 ? transient_average : std::vector<double>{}),
-              "rollback candidate reaches the target before rejection");
+        check(
+            coarse->get_state("coarse") == (rank == 0 ? transient_average : std::vector<double>{}),
+            "rollback candidate reaches the target before rejection");
         coarse->rollback_step_transaction();
         fine->rollback_step_transaction();
         transfer->rollback_transaction(3);
@@ -452,7 +446,7 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
 }  // namespace
 
 TEST(test_mpi_system_layout_transfer, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&run_mpi_system_layout_transfer,
-                                    "test_mpi_system_layout_transfer"),
-            0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&run_mpi_system_layout_transfer, "test_mpi_system_layout_transfer"),
+      0);
 }

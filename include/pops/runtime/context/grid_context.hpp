@@ -43,9 +43,9 @@ constexpr std::uint8_t geometry_mode_flag(GeometryMode mode) {
   return static_cast<std::uint8_t>(1U << static_cast<unsigned>(mode));
 }
 constexpr std::uint8_t kCartesianGeometrySupport = geometry_mode_flag(GeometryMode::None);
-constexpr std::uint8_t kAllGeometrySupport =
-    geometry_mode_flag(GeometryMode::None) | geometry_mode_flag(GeometryMode::Staircase) |
-    geometry_mode_flag(GeometryMode::CutCell);
+constexpr std::uint8_t kAllGeometrySupport = geometry_mode_flag(GeometryMode::None) |
+                                             geometry_mode_flag(GeometryMode::Staircase) |
+                                             geometry_mode_flag(GeometryMode::CutCell);
 constexpr bool supports_geometry_mode(std::uint8_t supported_modes, GeometryMode mode) {
   return (supported_modes & geometry_mode_flag(mode)) != 0;
 }
@@ -478,11 +478,11 @@ inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, 
 /// BlockStore selects a family once per Program RHS evaluation, while every numerical operation
 /// remains statically compiled in the closure produced by build_block.
 struct PointQualifiedResidualClosures {
-  using AtPoint =
-      std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>;
-  using PreparedAtPoint = std::function<void(
-      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
-      const PreparedGridBoundarySession&)>;
+  using AtPoint = std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                                     MultiFab&)>;
+  using PreparedAtPoint =
+      std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&,
+                         const PreparedGridBoundarySession&)>;
 
   AtPoint full;
   AtPoint flux_only;
@@ -540,8 +540,8 @@ inline PointQualifiedResidualClosures make_geometry_residual_closures(
     }
   };
 
-  auto session = std::make_shared<Session>(Session{std::move(context), std::move(full_core),
-                                                   std::move(flux_only_core), std::move(operation)});
+  auto session = std::make_shared<Session>(Session{
+      std::move(context), std::move(full_core), std::move(flux_only_core), std::move(operation)});
   PointQualifiedResidualClosures closures;
   closures.full = [session](const auto& point, MultiFab& state, MultiFab& residual) {
     session->evaluate(point, state, residual, false, true);
@@ -557,26 +557,24 @@ inline PointQualifiedResidualClosures make_geometry_residual_closures(
   closures.flux_only_core = [session](const auto& point, MultiFab& state, MultiFab& residual) {
     session->evaluate(point, state, residual, true, false);
   };
-  closures.full_prepared =
-      [session](const auto& point, MultiFab& state, MultiFab& residual,
-                const PreparedGridBoundarySession& boundary) {
-        session->evaluate(point, state, residual, boundary, false, true);
-      };
-  closures.flux_only_full_prepared =
-      [session](const auto& point, MultiFab& state, MultiFab& residual,
-                const PreparedGridBoundarySession& boundary) {
-        session->evaluate(point, state, residual, boundary, true, true);
-      };
-  closures.core_prepared =
-      [session](const auto& point, MultiFab& state, MultiFab& residual,
-                const PreparedGridBoundarySession& boundary) {
-        session->evaluate(point, state, residual, boundary, false, false);
-      };
-  closures.flux_only_core_prepared =
-      [session](const auto& point, MultiFab& state, MultiFab& residual,
-                const PreparedGridBoundarySession& boundary) {
-        session->evaluate(point, state, residual, boundary, true, false);
-      };
+  closures.full_prepared = [session](const auto& point, MultiFab& state, MultiFab& residual,
+                                     const PreparedGridBoundarySession& boundary) {
+    session->evaluate(point, state, residual, boundary, false, true);
+  };
+  closures.flux_only_full_prepared = [session](const auto& point, MultiFab& state,
+                                               MultiFab& residual,
+                                               const PreparedGridBoundarySession& boundary) {
+    session->evaluate(point, state, residual, boundary, true, true);
+  };
+  closures.core_prepared = [session](const auto& point, MultiFab& state, MultiFab& residual,
+                                     const PreparedGridBoundarySession& boundary) {
+    session->evaluate(point, state, residual, boundary, false, false);
+  };
+  closures.flux_only_core_prepared = [session](const auto& point, MultiFab& state,
+                                               MultiFab& residual,
+                                               const PreparedGridBoundarySession& boundary) {
+    session->evaluate(point, state, residual, boundary, true, false);
+  };
   return closures;
 }
 

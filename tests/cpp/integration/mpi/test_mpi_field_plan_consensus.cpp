@@ -158,8 +158,7 @@ SolveReport make_consensus_report(SolveReportFault fault) {
   return report;
 }
 
-class ConsensusHierarchyPrepared final
-    : public runtime::program::PreparedHierarchyTensorSolver {
+class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierarchyTensorSolver {
  public:
   explicit ConsensusHierarchyPrepared(SolveReportFault fault) : fault_(fault) {}
 
@@ -302,8 +301,7 @@ void install(AmrSystem& system, const std::string& slot, const std::string& plan
              double provider_coefficient = 1.0) {
   system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
                                "potential", {"rhs-provider"}, {"plasma"}, {"potential"},
-                               {provider_coefficient}, "geometric_mg",
-                               composite_hierarchy_policy(),
+                               {provider_coefficient}, "geometric_mg", composite_hierarchy_policy(),
                                amr_geometric_options());
   system.set_field_nullspace(
       slot, "pops.field-nullspace.operator-topology-derived",
@@ -367,17 +365,16 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusHierarchyPrepared solver(SolveReportFault::None);
     try {
-      const SolveReport report =
-          runtime::program::solve_prepared_hierarchy_tensor_collectively(
-              solver, {Real(1.0e-8), Real(0), 4});
+      const SolveReport report = runtime::program::solve_prepared_hierarchy_tensor_collectively(
+          solver, {Real(1.0e-8), Real(0), 4});
       require(report.solved());
       require(report.reason == "collective-solved");
     } catch (...) {
       require(false);
     }
   }
-  for (const SolveReportFault fault : {SolveReportFault::OutcomeOnRankOne,
-                                       SolveReportFault::ReasonBytesOnRankOne}) {
+  for (const SolveReportFault fault :
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
     ConsensusHierarchyPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;
@@ -386,9 +383,8 @@ int run_field_plan_consensus(int argc, char** argv) {
           solver, {Real(1.0e-8), Real(0), 4});
     } catch (const std::runtime_error& error) {
       rejected = true;
-      exact_error =
-          std::string_view(error.what()) ==
-          "hierarchy tensor-solver provider report differs between MPI ranks";
+      exact_error = std::string_view(error.what()) ==
+                    "hierarchy tensor-solver provider report differs between MPI ranks";
     } catch (...) {
     }
     require(rejected);
@@ -407,8 +403,8 @@ int run_field_plan_consensus(int argc, char** argv) {
       require(false);
     }
   }
-  for (const SolveReportFault fault : {SolveReportFault::OutcomeOnRankOne,
-                                       SolveReportFault::ReasonBytesOnRankOne}) {
+  for (const SolveReportFault fault :
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
     ConsensusAmrFieldPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;
@@ -667,8 +663,7 @@ int run_field_plan_consensus(int argc, char** argv) {
     try {
       system.set_field_solver_plan(
           "field-slot", "plan", "provider", "output-owner", "plasma", "potential", {"rhs-provider"},
-          {"plasma"}, {"potential"}, {1.0}, "geometric_mg",
-          composite_hierarchy_policy(),
+          {"plasma"}, {"potential"}, {1.0}, "geometric_mg", composite_hierarchy_policy(),
           geometric_mg_amr_field_solver_options(GeometricMgOptions{}, invalid));
     } catch (const std::runtime_error&) {
       rejected = true;

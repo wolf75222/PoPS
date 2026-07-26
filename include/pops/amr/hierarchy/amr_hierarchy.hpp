@@ -64,8 +64,7 @@ class AmrHierarchy {
     if (!boxes.tiles_exactly(coarse_domain))
       throw std::invalid_argument("AmrHierarchy coarse boxes must tile the coarse domain exactly");
     MultiFab data(boxes, load_balance_->distribute(boxes, n_ranks()), ncomp_, ngrow_);
-    levels_.push_back(
-        std::make_unique<LevelStorage>(LevelStorage{coarse_domain, std::move(data)}));
+    levels_.push_back(std::make_unique<LevelStorage>(LevelStorage{coarse_domain, std::move(data)}));
   }
 
   /// Adds a fine level defined by its BoxArray (in fine index space).
@@ -98,11 +97,11 @@ class AmrHierarchy {
 
     const Box2D dom = levels_[static_cast<std::size_t>(lev - 1)]->domain.refine(ref_ratio_);
     const std::array<long, 10> metadata{
-        static_cast<long>(lev),         static_cast<long>(num_levels()),
-        static_cast<long>(ref_ratio_),  static_cast<long>(ncomp_),
-        static_cast<long>(ngrow_),      static_cast<long>(dom.lo[0]),
-        static_cast<long>(dom.lo[1]),   static_cast<long>(dom.hi[0]),
-        static_cast<long>(dom.hi[1]),   static_cast<long>(fine_ba.size())};
+        static_cast<long>(lev),        static_cast<long>(num_levels()),
+        static_cast<long>(ref_ratio_), static_cast<long>(ncomp_),
+        static_cast<long>(ngrow_),     static_cast<long>(dom.lo[0]),
+        static_cast<long>(dom.lo[1]),  static_cast<long>(dom.hi[0]),
+        static_cast<long>(dom.hi[1]),  static_cast<long>(fine_ba.size())};
     std::array<long, 10> minimum = metadata;
     std::array<long, 10> maximum = metadata;
     all_reduce_min_inplace(minimum.data(), minimum.size(), communicator);
@@ -113,8 +112,7 @@ class AmrHierarchy {
 
     std::vector<long> parent_layout;
     collective_stage_("AmrHierarchy::install_level parent layout", communicator, [&] {
-      const BoxArray& parents =
-          levels_[static_cast<std::size_t>(lev - 1)]->data.box_array();
+      const BoxArray& parents = levels_[static_cast<std::size_t>(lev - 1)]->data.box_array();
       parent_layout.reserve(static_cast<std::size_t>(parents.size()) * 4u);
       for (const Box2D& box : parents.boxes()) {
         parent_layout.push_back(box.lo[0]);
@@ -125,8 +123,7 @@ class AmrHierarchy {
       validate_fine_layout_(fine_ba, dom, parents);
     });
     const long parent_words = static_cast<long>(parent_layout.size());
-    if (all_reduce_min(parent_words, communicator) !=
-        all_reduce_max(parent_words, communicator))
+    if (all_reduce_min(parent_words, communicator) != all_reduce_max(parent_words, communicator))
       throw std::runtime_error(
           "AmrHierarchy::install_level parent layout differs between MPI ranks");
     std::vector<long> parent_min;
@@ -153,8 +150,7 @@ class AmrHierarchy {
         throw std::invalid_argument(
             "AmrHierarchy installed field distribution does not match the prepared "
             "load-balance authority");
-      candidate =
-          std::make_unique<LevelStorage>(LevelStorage{dom, std::move(data)});
+      candidate = std::make_unique<LevelStorage>(LevelStorage{dom, std::move(data)});
     });
 
     // Make append capacity part of preparation. After this consensus, publishing is a sequence of
@@ -283,8 +279,7 @@ class AmrHierarchy {
                               ": level is outside [0, num_levels)");
   }
 
-  static std::int64_t covered_cell_count_(const Box2D& footprint,
-                                          const BoxArray& parents) {
+  static std::int64_t covered_cell_count_(const Box2D& footprint, const BoxArray& parents) {
     std::int64_t covered = 0;
     for (const Box2D& parent : parents.boxes()) {
       const std::int64_t cells = footprint.intersect(parent).num_cells();

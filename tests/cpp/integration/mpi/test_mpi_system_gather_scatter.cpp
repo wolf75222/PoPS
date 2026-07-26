@@ -26,8 +26,8 @@
 
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity (scalaire 1 var)
-#include <pops/physics/bricks/source.hpp>                // NoSource
+#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var)
+#include <pops/physics/bricks/source.hpp>      // NoSource
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
@@ -182,8 +182,8 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   }
   chk(rejected_invalid_dt, "stability_dt_invalide_rejetee_collectivement");
 
-  const Real direct_dt = min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state,
-                                              reduction_aux);
+  const Real direct_dt =
+      min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state, reduction_aux);
   chk(direct_dt == Real(0.25), "stability_dt_valide_diffusee_aux_rangs_vides");
 
 #ifdef POPS_HAS_MPI

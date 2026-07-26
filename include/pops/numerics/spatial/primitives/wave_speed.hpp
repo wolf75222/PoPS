@@ -53,8 +53,8 @@ POPS_HD inline void accumulate_nonnegative_finite(Real value, Real& maximum) {
 /// value.  Ranks with no local Fab contribute {0, 0}; if one rank observed an invalid sample, every
 /// rank receives the same status and throws at the same collective boundary.
 inline Real publish_nonnegative_maximum(Real local_maximum, const char* quantity) {
-  const bool local_invalid = local_maximum < Real(0) ||
-                             !std::isfinite(static_cast<double>(local_maximum));
+  const bool local_invalid =
+      local_maximum < Real(0) || !std::isfinite(static_cast<double>(local_maximum));
   double reduction[2] = {local_invalid ? 1.0 : 0.0,
                          local_invalid ? 0.0 : static_cast<double>(local_maximum)};
   all_reduce_max_inplace(reduction, 2);
@@ -438,11 +438,10 @@ template <class Kernel>
 inline StabilityDtReduction reduce_stability_dt_cell(const Box2D& box, const Kernel& kernel) {
   ensure_kokkos_initialized();
   StabilityDtReduction result{};
-  Kokkos::parallel_reduce(
-      "pops_reduce_stability_dt_cell",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-          {box.lo[0], box.lo[1]}, {box.hi[0] + 1, box.hi[1] + 1}),
-      kernel, result);
+  Kokkos::parallel_reduce("pops_reduce_stability_dt_cell",
+                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+                              {box.lo[0], box.lo[1]}, {box.hi[0] + 1, box.hi[1] + 1}),
+                          kernel, result);
   return result;
 }
 
@@ -468,9 +467,8 @@ inline Real publish_stability_dt_minimum(const StabilityDtReduction& local) {
     throw std::domain_error(
         "stability_dt returned zero, a negative value, or a non-finite value other than +inf "
         "on an active cell");
-  return payload[1] == -std::numeric_limits<double>::infinity()
-             ? Real(0)
-             : static_cast<Real>(-payload[1]);
+  return payload[1] == -std::numeric_limits<double>::infinity() ? Real(0)
+                                                                : static_cast<Real>(-payload[1]);
 }
 }  // namespace detail
 
@@ -558,8 +556,8 @@ inline Real min_stability_dt_mf(const Model& model, const MultiFab& U, const Mul
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 a = aux.fab(li).const_array();
     detail::merge_stability_dt_reduction(
-        local, detail::reduce_stability_dt_cell(
-                   U.box(li), detail::StabilityDtKernel<Model>{model, u, a}));
+        local,
+        detail::reduce_stability_dt_cell(U.box(li), detail::StabilityDtKernel<Model>{model, u, a}));
   }
   return detail::publish_stability_dt_minimum(local);
 }
@@ -574,7 +572,7 @@ inline Real min_stability_dt_mf(const Model& model, const MultiFab& U, const Mul
     detail::merge_stability_dt_reduction(
         local, detail::reduce_stability_dt_cell(
                    U.box(li), detail::ActiveStabilityDtKernel<Model>{
-                                      {model, u, a}, active_cells.fab(li).const_array()}));
+                                  {model, u, a}, active_cells.fab(li).const_array()}));
   }
   return detail::publish_stability_dt_minimum(local);
 }

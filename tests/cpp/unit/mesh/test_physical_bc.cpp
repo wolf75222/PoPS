@@ -184,8 +184,7 @@ TEST(test_physical_bc, deep_dirichlet_preserves_nonzero_index_origin) {
   const Box2D grown = dom.grow(ng);
   for (int j = grown.lo[1]; j <= grown.hi[1]; ++j) {
     for (int i = grown.lo[0]; i <= grown.hi[0]; ++i) {
-      const bool odd_reflections =
-          (std::abs(i - dom.lo[0]) + std::abs(j - dom.lo[1])) % 2 != 0;
+      const bool odd_reflections = (std::abs(i - dom.lo[0]) + std::abs(j - dom.lo[1])) % 2 != 0;
       EXPECT_EQ(mf.fab(0)(i, j, 0), odd_reflections ? -2.0 : 6.0)
           << "deep nonzero-origin Dirichlet extension at (" << i << ", " << j << ")";
     }

@@ -68,7 +68,7 @@ struct HistoryManager {
   /// A store has populated slot zero since this ring's last logical rotation. Multiple writes in one
   /// Program tick still create one accepted logical sample; rotate consumes and clears this flag.
   std::map<std::string, bool> store_pending;
-  std::map<std::string, int> owner;                        // runtime block index (-1 legacy)
+  std::map<std::string, int> owner;  // runtime block index (-1 legacy)
   std::map<std::string, std::string> state_identity;
   std::map<std::string, std::string> space_identity;
   std::map<std::string, std::string> clock_identity;
@@ -98,8 +98,7 @@ struct HistoryManager {
           std::swap(dts[k], dts[k - 1]);
       }
       if (store_pending[name]) {
-        fill_count[name] =
-            std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
+        fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
       }
     }
@@ -121,8 +120,7 @@ struct HistoryManager {
           std::swap(dts[k], dts[k - 1]);
       }
       if (store_pending[name]) {
-        fill_count[name] =
-            std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
+        fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
       }
     }

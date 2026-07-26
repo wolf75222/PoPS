@@ -264,8 +264,7 @@ class PreparedTaggerComponent final {
                                              program.non_finite_policy};
       const auto& api = component_->table<PopsTaggerApiV2>(POPS_NATIVE_INTERFACE_TAGGER_V2,
                                                            spec_.interface_version);
-      const bool native_execution =
-          spec_.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2;
+      const bool native_execution = spec_.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2;
       const PopsMemorySpaceV1 field_memory_space =
           native_execution ? native_storage_memory_space_() : POPS_MEMORY_SPACE_HOST_V1;
       MultiFab& reference = *fields.front().values;
@@ -288,13 +287,13 @@ class PreparedTaggerComponent final {
             host_storage.emplace_back(static_cast<std::size_t>(source.size()));
             using SharedView = Kokkos::View<const Real*, Kokkos::SharedSpace,
                                             Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-            using HostView = Kokkos::View<Real*, Kokkos::HostSpace,
-                                          Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+            using HostView =
+                Kokkos::View<Real*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
             const SharedView shared(values.p, host_storage.back().size());
             HostView host(host_storage.back().data(), host_storage.back().size());
             Kokkos::deep_copy(host, shared);
             invocation_values.push_back(ConstArray4{host.data(), values.nx_tot, values.comp_stride,
-                                                     values.ig0, values.jg0});
+                                                    values.ig0, values.jg0});
           }
         }
         std::vector<std::string> patch_identities;
@@ -344,9 +343,7 @@ class PreparedTaggerComponent final {
               sizeof(PopsTaggerMaskViewV2),
               native_execution ? native_masks.data() + output * local_points
                                : compact_masks.data() + output * local_points,
-              local_points,
-              field_memory_space,
-              POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+              local_points, field_memory_space, POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
         };
         const PopsLogicalTimeV1 logical_time{sizeof(PopsLogicalTimeV1),
                                              spec_.clock_identity.c_str(),
@@ -384,8 +381,8 @@ class PreparedTaggerComponent final {
                                                             : status.reason);
         if (native_execution) {
           std::size_t invalid_values = 0;
-          using MaskPolicy = Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace,
-                                                  Kokkos::IndexType<std::int64_t>>;
+          using MaskPolicy =
+              Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>;
           Kokkos::parallel_reduce(
               "pops_external_tagger_validate_masks",
               MaskPolicy(0, static_cast<std::int64_t>(mask_points)),
@@ -407,16 +404,15 @@ class PreparedTaggerComponent final {
                                        &result.coarsen_equalities};
         const std::size_t patch_width = static_cast<std::size_t>(valid.nx());
         const std::size_t domain_width = static_cast<std::size_t>(domain.nx());
-        const std::size_t domain_x_offset =
-            static_cast<std::size_t>(valid.lo[0] - domain.lo[0]);
+        const std::size_t domain_x_offset = static_cast<std::size_t>(valid.lo[0] - domain.lo[0]);
         for (std::size_t output = 0; output < outputs.size(); ++output)
           for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
             const std::size_t patch_row = static_cast<std::size_t>(j - valid.lo[1]);
             const std::size_t domain_row = static_cast<std::size_t>(j - domain.lo[1]);
-            const auto* source = compact_masks.data() + output * local_points +
-                                 patch_row * patch_width;
-            auto* destination = outputs[output]->t.data() + domain_row * domain_width +
-                                domain_x_offset;
+            const auto* source =
+                compact_masks.data() + output * local_points + patch_row * patch_width;
+            auto* destination =
+                outputs[output]->t.data() + domain_row * domain_width + domain_x_offset;
             std::copy_n(source, patch_width, destination);
           }
       }
@@ -549,15 +545,14 @@ class PreparedTaggerComponent final {
         spec_.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
         (spec_.execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
          spec_.execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) ||
-        spec_.collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
-        spec_.memory_spaces.empty() || spec_.interface_version != 2)
+        spec_.collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 || spec_.memory_spaces.empty() ||
+        spec_.interface_version != 2)
       throw std::invalid_argument("prepared AMR Tagger specification is incomplete");
     std::vector<PopsMemorySpaceV1> memory_spaces = spec_.memory_spaces;
     std::sort(memory_spaces.begin(), memory_spaces.end());
     if (std::adjacent_find(memory_spaces.begin(), memory_spaces.end()) != memory_spaces.end() ||
         std::any_of(memory_spaces.begin(), memory_spaces.end(), [](PopsMemorySpaceV1 space) {
-          return space != POPS_MEMORY_SPACE_HOST_V1 &&
-                 space != POPS_MEMORY_SPACE_MANAGED_V1 &&
+          return space != POPS_MEMORY_SPACE_HOST_V1 && space != POPS_MEMORY_SPACE_MANAGED_V1 &&
                  space != POPS_MEMORY_SPACE_DEVICE_V1;
         }))
       throw std::invalid_argument("prepared AMR Tagger declares invalid memory spaces");

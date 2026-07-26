@@ -202,9 +202,8 @@ TEST(test_multiblock_interface_scheduler,
   // The current pair scheduler owns Cartesian shared fluxes only.  An embedded-boundary Program
   // must fail before either local residual or pair evaluator runs; otherwise the scheduler could
   // scatter an unmasked flux back into an inactive cell after the local EB residual zeroed it.
-  EXPECT_THROW(
-      store.evaluate_rhs_with_interfaces(point, states, rhs, {}, GeometryMode::Staircase),
-      std::runtime_error);
+  EXPECT_THROW(store.evaluate_rhs_with_interfaces(point, states, rhs, {}, GeometryMode::Staircase),
+               std::runtime_error);
   EXPECT_EQ(evaluator_calls, 0);
   EXPECT_EQ(interface_omitting_rhs_calls, 0);
 

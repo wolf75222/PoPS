@@ -104,8 +104,7 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
         const Prim Pp =
             model.to_primitive(load_state<Model>(u, dir == 0 ? i + 1 : i, dir == 0 ? j : j + 1));
         for (int c = 0; c < Model::n_vars; ++c)
-          Pf[c] =
-              P0[c] + sgn * Real(0.5) * lim.limited_slope(P0[c] - Pm[c], Pp[c] - P0[c]);
+          Pf[c] = P0[c] + sgn * Real(0.5) * lim.limited_slope(P0[c] - Pm[c], Pp[c] - P0[c]);
       } else if constexpr (StencilReconstruction<Limiter>) {
         const int orientation = (sgn > Real(0)) ? 1 : -1;
         detail::PrimitiveStencilCache<Model, Limiter> cache{};
@@ -323,14 +322,14 @@ void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& 
     Array4 fx = Fx.fab(li).array();
     Array4 fy = Fy.fab(li).array();
     const Box2D v = U.box(li);
-    failures.merge(reduce_max_uint64_cell(
-        xface_box(v), detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
-                          model, u, ax, fx, dx, lim, nflux, recon_prim, pos_floor, pos_comp,
-                          failures.recorder()}));
-    failures.merge(reduce_max_uint64_cell(
-        yface_box(v), detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
-                          model, u, ax, fy, dy, lim, nflux, recon_prim, pos_floor, pos_comp,
-                          failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(xface_box(v), detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
+                                                 model, u, ax, fx, dx, lim, nflux, recon_prim,
+                                                 pos_floor, pos_comp, failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(yface_box(v), detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
+                                                 model, u, ax, fy, dy, lim, nflux, recon_prim,
+                                                 pos_floor, pos_comp, failures.recorder()}));
   }
   failures.throw_if_failed("compute_face_fluxes");
 }

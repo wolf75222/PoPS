@@ -1,13 +1,16 @@
 {
   "_meta": {
-    "captured_utc": "2026-07-14",
+    "captured_utc": "2026-07-26",
     "ctest_parallel_jobs": 4,
     "estimated_targets": [
-      "test_analytic_expression",
-      "test_analytic_level_set",
       "test_flux_failure_loader_transaction"
     ],
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
+    "measured_refresh": {
+      "test_analytic_expression": "0.06 s aggregate CTest, job 89764712380",
+      "test_analytic_level_set": "0.04 s aggregate CTest, job 89764712402"
+    },
+    "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
     "target_count": 192,
@@ -50,8 +53,8 @@
   "test_amr_tensor_fac_provider": 0.02,
   "test_amr_transfer_properties": 0.01,
   "test_amr_weno5_native": 0.01,
-  "test_analytic_expression": 0.02,
-  "test_analytic_level_set": 0.02,
+  "test_analytic_expression": 0.06,
+  "test_analytic_level_set": 0.04,
   "test_anisotropic_epsilon": 0.76,
   "test_ap_limit": 0.01,
   "test_assembler_driver": 0.02,

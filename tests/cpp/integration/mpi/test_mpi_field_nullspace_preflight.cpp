@@ -47,8 +47,7 @@ class OperatorFactsBlindProvider final : public FieldNullspaceProvider {
   }
   [[nodiscard]] bool accepts_options(
       const PreparedProviderOptions& options) const noexcept override {
-    return options.schema_identity ==
-               "test.field-nullspace.operator-facts-blind.options@1" &&
+    return options.schema_identity == "test.field-nullspace.operator-facts-blind.options@1" &&
            options.values.empty();
   }
   [[nodiscard]] PreparedProviderSupport supports(
@@ -58,8 +57,7 @@ class OperatorFactsBlindProvider final : public FieldNullspaceProvider {
   [[nodiscard]] std::string expected_prepared_contract(
       const FieldNullspaceProviderRequest&) const override {
     ExactContractBuilder contract;
-    contract.text("test.prepared-field-nullspace.operator-facts-blind")
-        .scalar(std::uint32_t{1});
+    contract.text("test.prepared-field-nullspace.operator-facts-blind").scalar(std::uint32_t{1});
     return std::move(contract).release();
   }
   [[nodiscard]] PreparedFieldNullspace prepare(
@@ -149,10 +147,8 @@ int run_field_nullspace_preflight(int argc, char** argv) {
 #endif
   const int rank = my_rank();
   long failures = n_ranks() == 2 ? 0 : 1;
-  const auto require = [&failures, rank](
-                           bool condition,
-                           const std::source_location where =
-                               std::source_location::current()) {
+  const auto require = [&failures, rank](bool condition, const std::source_location where =
+                                                             std::source_location::current()) {
     if (!condition) {
       std::cerr << "field-nullspace MPI preflight check failed on rank " << rank << " at "
                 << where.file_name() << ':' << where.line() << '\n';
@@ -180,22 +176,17 @@ int run_field_nullspace_preflight(int argc, char** argv) {
           FieldBoundaryNullspaceBehavior::PreservesConstantMode}},
         false);
     require(uniformly_rejected(
-        [&] {
-          (void)prepare_field_nullspace_collectively(registry, selection, request);
-        },
+        [&] { (void)prepare_field_nullspace_collectively(registry, selection, request); },
         "operator facts differ across MPI ranks"));
 
     request.plan_identity = "mpi-preflight:operator-facts-behavior-drift";
     request.operator_facts = make_field_nullspace_operator_facts(
         "mpi-preflight:boundary-set@1",
-        {{"boundary:a", rank == 0
-                            ? FieldBoundaryNullspaceBehavior::PreservesConstantMode
-                            : FieldBoundaryNullspaceBehavior::ConstrainsConstantMode}},
+        {{"boundary:a", rank == 0 ? FieldBoundaryNullspaceBehavior::PreservesConstantMode
+                                  : FieldBoundaryNullspaceBehavior::ConstrainsConstantMode}},
         false);
     require(uniformly_rejected(
-        [&] {
-          (void)prepare_field_nullspace_collectively(registry, selection, request);
-        },
+        [&] { (void)prepare_field_nullspace_collectively(registry, selection, request); },
         "operator facts differ across MPI ranks"));
   }
 
@@ -206,9 +197,9 @@ int run_field_nullspace_preflight(int argc, char** argv) {
     if (rank == 0)
       components.push_back({2, "material-b", "mpi-preflight:label:2"});
     require(uniformly_rejected([&] {
-      (void)labelled_mean_zero_nullspace(
-          "prepared-nullspace", "prepared-layout", {std::shared_ptr<const MultiFab>(field)},
-          components, {}, {Real(1)}, 0, kDistributedLevel);
+      (void)labelled_mean_zero_nullspace("prepared-nullspace", "prepared-layout",
+                                         {std::shared_ptr<const MultiFab>(field)}, components, {},
+                                         {Real(1)}, 0, kDistributedLevel);
     }));
   }
 
@@ -239,11 +230,9 @@ int run_field_nullspace_preflight(int argc, char** argv) {
     FieldNullspacePlan plan = constant_mean_zero_nullspace("nullspace", "mpi-preflight");
     plan.bases[0].cell_measure = {Real(1), Real(1)};
     const int first_level = rank == 0 ? 1 : 0;
-    require(uniformly_rejected(
-        [&] {
-          (void)require_field_nullspace_compatible({field.get()}, plan, kDistributedLevel,
-                                                   first_level);
-        }));
+    require(uniformly_rejected([&] {
+      (void)require_field_nullspace_compatible({field.get()}, plan, kDistributedLevel, first_level);
+    }));
   }
   {
     FieldNullspacePlan plan = constant_mean_zero_nullspace("nullspace", "mpi-preflight");
@@ -260,8 +249,8 @@ int run_field_nullspace_preflight(int argc, char** argv) {
     std::vector<const MultiFab*> levels{field.get()};
     if (rank == 0)
       levels.push_back(field.get());
-    std::vector<PreparedVectorDistribution> distributions(
-        levels.size(), PreparedVectorDistribution::Distributed);
+    std::vector<PreparedVectorDistribution> distributions(levels.size(),
+                                                          PreparedVectorDistribution::Distributed);
     require(uniformly_rejected(
         [&] { (void)require_field_nullspace_compatible(levels, plan, distributions); }));
   }
@@ -305,9 +294,8 @@ int run_field_nullspace_preflight(int argc, char** argv) {
     plan.bases[0].masks = {replicated_mask};
     try {
       validate_field_nullspace_basis({replicated_field.get()}, plan, kReplicatedLevel);
-      const std::vector<double> witness =
-          require_field_nullspace_compatible(*replicated_field, plan,
-                                             PreparedVectorDistribution::Replicated);
+      const std::vector<double> witness = require_field_nullspace_compatible(
+          *replicated_field, plan, PreparedVectorDistribution::Replicated);
       require(witness.size() == 2 && witness[0] == 0.0 && witness[1] == 8.0);
       apply_field_gauge(*replicated_field, plan, PreparedVectorDistribution::Replicated);
     } catch (...) {
@@ -336,8 +324,8 @@ int run_field_nullspace_preflight(int argc, char** argv) {
           "replicated-components", "replicated-components-layout", {labels},
           {{1, "left", "mpi:label:1"}, {2, "right", "mpi:label:2"}}, {}, {Real(1)}, 0,
           kReplicatedLevel);
-      const std::vector<double> witness = require_field_nullspace_compatible(
-          *rhs, plan, PreparedVectorDistribution::Replicated);
+      const std::vector<double> witness =
+          require_field_nullspace_compatible(*rhs, plan, PreparedVectorDistribution::Replicated);
       require(witness.size() == 4 && witness[0] == 0.0 && witness[1] == 4.0 && witness[2] == 0.0 &&
               witness[3] == 4.0);
     } catch (...) {
@@ -370,8 +358,9 @@ int run_field_nullspace_preflight(int argc, char** argv) {
     const std::shared_ptr<MultiFab> distributed_field = make_rank_zero_distributed(Real(0));
     const FieldNullspacePlan plan =
         constant_mean_zero_nullspace("misdeclared-replica", "mpi-preflight", Real(1));
-    require(uniformly_rejected(
-        [&] { validate_field_nullspace_basis({distributed_field.get()}, plan, kReplicatedLevel); }));
+    require(uniformly_rejected([&] {
+      validate_field_nullspace_basis({distributed_field.get()}, plan, kReplicatedLevel);
+    }));
   }
 
   // Replicated scientific values are consensus checked, not silently averaged or selected locally.
@@ -380,10 +369,11 @@ int run_field_nullspace_preflight(int argc, char** argv) {
         make_rank_local_replica(rank == 0 ? Real(0) : Real(1));
     const FieldNullspacePlan plan =
         constant_mean_zero_nullspace("divergent-replica", "mpi-preflight", Real(1));
-    require(uniformly_rejected([&] {
-      apply_field_gauge(*divergent_replica, plan, PreparedVectorDistribution::Replicated);
-    },
-                               kExactReplicaValidationFailure));
+    require(uniformly_rejected(
+        [&] {
+          apply_field_gauge(*divergent_replica, plan, PreparedVectorDistribution::Replicated);
+        },
+        kExactReplicaValidationFailure));
   }
 
   // Equal norms and moments are not an equality certificate. Exact chunked consensus rejects both
@@ -391,23 +381,21 @@ int run_field_nullspace_preflight(int argc, char** argv) {
   {
     const std::shared_ptr<MultiFab> permuted_field = make_rank_local_replica(Real(0));
     set_isometric_rank_permutation(*permuted_field);
-    const FieldNullspacePlan plan = constant_mean_zero_nullspace(
-        "isometric-field-replica", "mpi-preflight", Real(1));
-    require(uniformly_rejected([&] {
-      apply_field_gauge(*permuted_field, plan, PreparedVectorDistribution::Replicated);
-    },
-                               kExactReplicaValidationFailure));
+    const FieldNullspacePlan plan =
+        constant_mean_zero_nullspace("isometric-field-replica", "mpi-preflight", Real(1));
+    require(uniformly_rejected(
+        [&] { apply_field_gauge(*permuted_field, plan, PreparedVectorDistribution::Replicated); },
+        kExactReplicaValidationFailure));
 
     const std::shared_ptr<MultiFab> stable_layout = make_rank_local_replica(Real(0));
     const std::shared_ptr<MultiFab> permuted_mask = make_rank_local_replica(Real(0));
     set_isometric_rank_permutation(*permuted_mask);
-    FieldNullspacePlan masked = constant_mean_zero_nullspace(
-        "isometric-mask-replica", "mpi-preflight", Real(1));
+    FieldNullspacePlan masked =
+        constant_mean_zero_nullspace("isometric-mask-replica", "mpi-preflight", Real(1));
     masked.bases[0].masks = {permuted_mask};
-    require(
-        uniformly_rejected(
-            [&] { validate_field_nullspace_basis({stable_layout.get()}, masked, kReplicatedLevel); },
-                           kExactReplicaValidationFailure));
+    require(uniformly_rejected(
+        [&] { validate_field_nullspace_basis({stable_layout.get()}, masked, kReplicatedLevel); },
+        kExactReplicaValidationFailure));
   }
 
   // Mixed hierarchies require exact-or-replicated agreement independently per layout slot: the

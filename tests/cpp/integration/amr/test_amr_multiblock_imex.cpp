@@ -310,8 +310,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     } catch (const FluxEvaluationFailure& failure) {
       if (failure.status() != EvaluationStatus::kReject ||
           failure.action() != TransactionFailureAction::kRejectStep ||
-          failure.reason_code() != 0x53544201u ||
-          failure.phase() != "compute_face_fluxes")
+          failure.reason_code() != 0x53544201u || failure.phase() != "compute_face_fluxes")
         throw;
       explicit_rejected = true;
     }
@@ -321,8 +320,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     // L'explosion DOIT etre visible sur mx/my/E (le champ que la raideur attaque) ; on garde aussi le
     // critere densite (contamination par le transport) pour la lisibilite du diagnostic.
     const bool me_blew_up = explicit_rejected || (me_finite && me_max > 1e3);
-    const bool rho_blew_up =
-        explicit_rejected || (all_finite(dStiff) && maxabs(dStiff) > 1e3);
+    const bool rho_blew_up = explicit_rejected || (all_finite(dStiff) && maxabs(dStiff) > 1e3);
     EXPECT_TRUE(me_blew_up)
         << "explicit_stiff_momentum_energy_BLOWS_UP_DIRECT (disable-and-fail sur mx/my/E)";
     EXPECT_TRUE(rho_blew_up)
@@ -331,8 +329,7 @@ TEST(test_amr_multiblock_imex, Runs) {
         "      EXPLICITE : %s (la stabilite vient bien du pas implicite)\n",
         explicit_rejected
             ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
-            : (me_finite && all_finite(dStiff) ? "borne >> 1"
-                                               : "ETAT NON FINI PUBLIE (ECHEC)"));
+            : (me_finite && all_finite(dStiff) ? "borne >> 1" : "ETAT NON FINI PUBLIE (ECHEC)"));
   }
 
   // ============================================================================================

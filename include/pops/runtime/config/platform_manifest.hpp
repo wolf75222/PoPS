@@ -375,9 +375,9 @@ inline RuntimeBackendManifest proven_native_backend(
     const std::string& communicator, const std::string& execution_backend,
     const std::string& shared_space, const std::string& stream_identity,
     const std::string& evidence) {
-  const auto platform = proven_native_platform(
-      backend, target, abi, device, std::move(memory_spaces), communicator,
-      execution_backend, shared_space, stream_identity, evidence);
+  const auto platform =
+      proven_native_platform(backend, target, abi, device, std::move(memory_spaces), communicator,
+                             execution_backend, shared_space, stream_identity, evidence);
   return {platform.backend, platform.target,        platform.abi,          platform.precision,
           platform.device,  platform.memory_spaces, platform.communicator, platform.capabilities};
 }

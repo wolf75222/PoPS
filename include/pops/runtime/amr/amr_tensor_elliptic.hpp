@@ -135,8 +135,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver {
  public:
   /// @p eng: the AMR engine (levels / geom / bc); @p block: the exact AMR system block index;
   /// @p ncomp: the authenticated operator component count. The native tensor route is scalar.
-  AmrTensorElliptic(AmrRuntime* eng, int block, int ncomp,
-                    std::string prepared_contract = {})
+  AmrTensorElliptic(AmrRuntime* eng, int block, int ncomp, std::string prepared_contract = {})
       : eng_(eng), block_(block), ncomp_(ncomp), prepared_contract_(std::move(prepared_contract)) {
     if (ncomp_ != 1)
       throw std::invalid_argument("AmrTensorElliptic requires exactly one component");
@@ -284,9 +283,9 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver {
   struct LevelBuffers {
     MultiFab eps_x, eps_y, a_xy, a_yx;  ///< tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]]
     MultiFab rhs;                       ///< condensed right-hand side (-Lap phi^n - g div F)
-    MultiFab flux;            ///< transient explicit-flux scratch (2-comp, if the body uses it)
-    MultiFab initial_guess;   ///< gathered per-level initial guess for the next solve attempt
-    MultiFab phi;             ///< published composite potential of this level
+    MultiFab flux;           ///< transient explicit-flux scratch (2-comp, if the body uses it)
+    MultiFab initial_guess;  ///< gathered per-level initial guess for the next solve attempt
+    MultiFab phi;            ///< published composite potential of this level
     bool built = false;
   };
 
@@ -302,8 +301,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver {
     // Regrid may replace a level with a different patch tiling while retaining the level index.  The
     // old built flag alone would then route assembly into stale storage.  Multi-level execution is
     // The BoxArray determines allocation shape; redistribution is provider-owned at solve time.
-    if (lb.built && lb.phi.box_array().boxes() == ba.boxes() &&
-        lb.phi.dmap().ranks() == dm.ranks())
+    if (lb.built && lb.phi.box_array().boxes() == ba.boxes() && lb.phi.dmap().ranks() == dm.ranks())
       return;
     lb = LevelBuffers{};
     lb.eps_x = MultiFab(ba, dm, 1, 1);
@@ -398,9 +396,9 @@ inline bool request_matches_populated_hierarchy(
           request.runtime->level_state(static_cast<std::size_t>(request.block), level)
               .box_array()
               .size() != 0;
-      const FieldDistribution distribution =
-          request.runtime->level_is_replicated(level) ? FieldDistribution::Replicated
-                                                      : FieldDistribution::Distributed;
+      const FieldDistribution distribution = request.runtime->level_is_replicated(level)
+                                                 ? FieldDistribution::Replicated
+                                                 : FieldDistribution::Distributed;
       if (request.level_populated[static_cast<std::size_t>(level)] != populated ||
           request.level_distributions[static_cast<std::size_t>(level)] != distribution)
         return false;
@@ -485,12 +483,13 @@ inline std::string composite_tensor_fac_prepared_contract(
     const MultiFab& layout =
         request.runtime->level_state(static_cast<std::size_t>(request.block), level);
     contract.scalar(static_cast<std::int32_t>(level))
-        .sequence(layout.box_array().boxes(), [](ExactContractBuilder& item, const Box2D& box) {
-          item.scalar(static_cast<std::int32_t>(box.lo[0]))
-              .scalar(static_cast<std::int32_t>(box.lo[1]))
-              .scalar(static_cast<std::int32_t>(box.hi[0]))
-              .scalar(static_cast<std::int32_t>(box.hi[1]));
-        })
+        .sequence(layout.box_array().boxes(),
+                  [](ExactContractBuilder& item, const Box2D& box) {
+                    item.scalar(static_cast<std::int32_t>(box.lo[0]))
+                        .scalar(static_cast<std::int32_t>(box.lo[1]))
+                        .scalar(static_cast<std::int32_t>(box.hi[0]))
+                        .scalar(static_cast<std::int32_t>(box.hi[1]));
+                  })
         .scalar(request.runtime->level_is_replicated(level));
     if (!request.runtime->level_is_replicated(level))
       contract.sequence(layout.dmap().ranks());
@@ -536,15 +535,15 @@ class CompositeTensorFacHierarchyProvider final : public HierarchyTensorSolverPr
         request.level_distributions.size() != static_cast<std::size_t>(request.levels))
       return PreparedProviderSupport::reject(
           12, "level population and distribution authorities do not cover the hierarchy");
-    const bool refined = request.level_populated.size() > 1 &&
-                         std::any_of(request.level_populated.begin() + 1,
-                                     request.level_populated.end(), [](bool value) { return value; });
+    const bool refined =
+        request.level_populated.size() > 1 &&
+        std::any_of(request.level_populated.begin() + 1, request.level_populated.end(),
+                    [](bool value) { return value; });
     const bool supported_distribution =
         !refined ||
         (request.level_distributions.size() == static_cast<std::size_t>(request.levels) &&
          request.level_distributions.front() == FieldDistribution::Replicated &&
-         std::all_of(request.level_distributions.begin() + 1,
-                     request.level_distributions.end(),
+         std::all_of(request.level_distributions.begin() + 1, request.level_distributions.end(),
                      [](FieldDistribution distribution) {
                        return distribution == FieldDistribution::Distributed;
                      }));
@@ -552,7 +551,8 @@ class CompositeTensorFacHierarchyProvider final : public HierarchyTensorSolverPr
       return PreparedProviderSupport::reject(
           13, "refined composite FAC requires replicated coarse and distributed refined levels");
     if (request.operator_contract_identity != kScalarTensorElliptic2dContract)
-      return PreparedProviderSupport::reject(14, "operator contract is not scalar tensor elliptic 2D");
+      return PreparedProviderSupport::reject(14,
+                                             "operator contract is not scalar tensor elliptic 2D");
     if (request.assembly_field_slots != scalar_tensor_elliptic_2d_assembly_slots())
       return PreparedProviderSupport::reject(15, "assembly field-slot contract is incompatible");
     if (request.solution_field_slot != "pops.tensor-elliptic.solution")
@@ -572,9 +572,9 @@ class CompositeTensorFacHierarchyProvider final : public HierarchyTensorSolverPr
     const PreparedProviderSupport request_support = supports(request);
     if (!request_support.accepted())
       return request_support;
-    const bool refined = std::any_of(request.level_populated.begin() + 1,
-                                     request.level_populated.end(),
-                                     [](bool value) { return value; });
+    const bool refined =
+        std::any_of(request.level_populated.begin() + 1, request.level_populated.end(),
+                    [](bool value) { return value; });
     const auto expected = refined ? HierarchyTensorSolverExecutionPath::DirectProvider
                                   : HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
     if (execution != expected)
@@ -591,10 +591,10 @@ class CompositeTensorFacHierarchyProvider final : public HierarchyTensorSolverPr
     if (!supports(request).accepted())
       throw std::invalid_argument("composite tensor FAC provider rejected the build request");
     const std::string contract = expected_prepared_contract(request);
-    const TensorFacControls controls = decode_composite_tensor_fac_provider_options(request.options);
-    auto prepared =
-        std::make_unique<AmrTensorElliptic>(request.runtime, request.block, request.components,
-                                           contract);
+    const TensorFacControls controls =
+        decode_composite_tensor_fac_provider_options(request.options);
+    auto prepared = std::make_unique<AmrTensorElliptic>(request.runtime, request.block,
+                                                        request.components, contract);
     prepared->configure_composite_tensor_fac(
         controls.fine_sweeps.value_or(0), controls.coarse_rel_tol.value_or(Real(0)),
         controls.coarse_abs_tol.value_or(Real(0)), controls.coarse_cycles.value_or(0),

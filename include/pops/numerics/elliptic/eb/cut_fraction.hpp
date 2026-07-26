@@ -72,9 +72,9 @@ struct CutFraction {
 /// canonical arithmetic used both by callable level sets and by runtime-prepared static EB metrics;
 /// pre-sampling therefore removes expression evaluation from time stepping without changing a bit
 /// of the cut-distance or volume-fraction scheme.
-POPS_HD inline CutFraction cut_fraction_from_samples(
-    Real lc, Real lxm, Real lxp, Real lym, Real lyp, Real dx, Real dy,
-    Real theta_min = kEbCutFractionFloor) {
+POPS_HD inline CutFraction cut_fraction_from_samples(Real lc, Real lxm, Real lxp, Real lym,
+                                                     Real lyp, Real dx, Real dy,
+                                                     Real theta_min = kEbCutFractionFloor) {
   const Real axm = cut_distance(lc, lxm, dx, theta_min);
   const Real axp = cut_distance(lc, lxp, dx, theta_min);
   const Real aym = cut_distance(lc, lym, dy, theta_min);
@@ -83,8 +83,7 @@ POPS_HD inline CutFraction cut_fraction_from_samples(
   const Real alpha_xp = axp / dx;
   const Real alpha_ym = aym / dy;
   const Real alpha_yp = ayp / dy;
-  const Real kappa =
-      Real(0.5) * (alpha_xm + alpha_xp) * Real(0.5) * (alpha_ym + alpha_yp);
+  const Real kappa = Real(0.5) * (alpha_xm + alpha_xp) * Real(0.5) * (alpha_ym + alpha_yp);
   return CutFraction{axm, axp, aym, ayp, alpha_xm, alpha_xp, alpha_ym, alpha_yp, kappa};
 }
 

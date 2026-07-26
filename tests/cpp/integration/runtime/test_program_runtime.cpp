@@ -530,8 +530,7 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   EXPECT_EQ(staircase_sum, Real(2 * staircase_active));
   EXPECT_EQ(staircase_abs_sum, staircase_sum);
   EXPECT_EQ(staircase.mass("gas"), static_cast<double>(staircase_sum));
-  EXPECT_EQ(staircase.reduce_component("gas", "sum", 0),
-            static_cast<double>(staircase_sum));
+  EXPECT_EQ(staircase.reduce_component("gas", "sum", 0), static_cast<double>(staircase_sum));
   EXPECT_NEAR(staircase_dot, Real(2) * staircase_sum, 1e-12);
   EXPECT_NEAR(staircase_context.norm2(0, staircase_field), std::sqrt(staircase_dot), 1e-12);
   EXPECT_EQ(staircase_context.max_component(0, staircase_field, 0), Real(2));
@@ -608,8 +607,7 @@ TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
     ASSERT_GT(active, 0) << mode;
     ASSERT_GT(inactive, 0) << mode;
     EXPECT_EQ(context.pointwise_status_max(0, status, prepared), Real(0)) << mode;
-    EXPECT_THROW((void)context.pointwise_status_max(0, status, &status),
-                 std::invalid_argument)
+    EXPECT_THROW((void)context.pointwise_status_max(0, status, &status), std::invalid_argument)
         << mode;
   }
 }

@@ -66,8 +66,7 @@ inline std::atomic<std::uint64_t>& communication_allocation_bytes() {
 }
 inline void record_fab_allocation(std::size_t bytes) noexcept {
   fab_allocation_calls().fetch_add(1, std::memory_order_relaxed);
-  fab_allocation_bytes().fetch_add(static_cast<std::uint64_t>(bytes),
-                                   std::memory_order_relaxed);
+  fab_allocation_bytes().fetch_add(static_cast<std::uint64_t>(bytes), std::memory_order_relaxed);
 }
 inline void record_communication_allocation(std::size_t bytes) noexcept {
   communication_allocation_calls().fetch_add(1, std::memory_order_relaxed);

@@ -65,22 +65,19 @@ TEST(test_field_nullspace, canonicalizes_generic_boundary_facts_and_rejects_forg
   EXPECT_FALSE(forged.is_canonical());
   EXPECT_THROW((void)forged.exact_contract(), std::invalid_argument);
 
-  EXPECT_THROW(
-      (void)make_field_nullspace_operator_facts(
-          "test.boundary-set@1",
-          {{"wall:a", FieldBoundaryNullspaceBehavior::PreservesConstantMode},
-           {"wall:a", FieldBoundaryNullspaceBehavior::ConstrainsConstantMode}},
-          false),
-      std::invalid_argument);
-  EXPECT_THROW(
-      (void)make_field_nullspace_operator_facts(
-          "", {{"wall:a", FieldBoundaryNullspaceBehavior::PreservesConstantMode}}, false),
-      std::invalid_argument);
-  EXPECT_THROW(
-      (void)make_field_nullspace_operator_facts(
-          "test.boundary-set@1",
-          {{"wall:a", static_cast<FieldBoundaryNullspaceBehavior>(255)}}, false),
-      std::invalid_argument);
+  EXPECT_THROW((void)make_field_nullspace_operator_facts(
+                   "test.boundary-set@1",
+                   {{"wall:a", FieldBoundaryNullspaceBehavior::PreservesConstantMode},
+                    {"wall:a", FieldBoundaryNullspaceBehavior::ConstrainsConstantMode}},
+                   false),
+               std::invalid_argument);
+  EXPECT_THROW((void)make_field_nullspace_operator_facts(
+                   "", {{"wall:a", FieldBoundaryNullspaceBehavior::PreservesConstantMode}}, false),
+               std::invalid_argument);
+  EXPECT_THROW((void)make_field_nullspace_operator_facts(
+                   "test.boundary-set@1",
+                   {{"wall:a", static_cast<FieldBoundaryNullspaceBehavior>(255)}}, false),
+               std::invalid_argument);
 
   const FieldNullspaceOperatorFacts boundaryless =
       make_field_nullspace_operator_facts("test.boundaryless-topology@1", {}, false);
@@ -102,22 +99,18 @@ TEST(test_field_nullspace, bc_rec_adapter_is_the_only_cartesian_boundary_mapping
   ASSERT_EQ(facts.boundaries.size(), 4U);
   EXPECT_EQ(facts.boundary_set_identity, "pops.mesh.boundary.bc-rec.cartesian-2d@1");
   EXPECT_EQ(facts.boundaries[0].boundary_id, "axis:0:lower");
-  EXPECT_EQ(facts.boundaries[0].behavior,
-            FieldBoundaryNullspaceBehavior::PreservesConstantMode);
+  EXPECT_EQ(facts.boundaries[0].behavior, FieldBoundaryNullspaceBehavior::PreservesConstantMode);
   EXPECT_EQ(facts.boundaries[1].boundary_id, "axis:0:upper");
-  EXPECT_EQ(facts.boundaries[1].behavior,
-            FieldBoundaryNullspaceBehavior::ConstrainsConstantMode);
+  EXPECT_EQ(facts.boundaries[1].behavior, FieldBoundaryNullspaceBehavior::ConstrainsConstantMode);
   EXPECT_EQ(facts.boundaries[2].boundary_id, "axis:1:lower");
-  EXPECT_EQ(facts.boundaries[2].behavior,
-            FieldBoundaryNullspaceBehavior::PreservesConstantMode);
+  EXPECT_EQ(facts.boundaries[2].behavior, FieldBoundaryNullspaceBehavior::PreservesConstantMode);
   EXPECT_EQ(facts.boundaries[3].boundary_id, "axis:1:upper");
   EXPECT_EQ(facts.boundaries[3].behavior, FieldBoundaryNullspaceBehavior::Opaque);
 
   const auto provider = make_default_field_nullspace_provider_registry()->resolve(
       "pops.field-nullspace.operator-topology-derived");
   EXPECT_EQ(provider->interface_version(), 2U);
-  EXPECT_EQ(provider->collective_contract(),
-            "pops.field-nullspace.operator-topology-derived@2");
+  EXPECT_EQ(provider->collective_contract(), "pops.field-nullspace.operator-topology-derived@2");
   EXPECT_EQ(provider->default_options().schema_identity,
             "pops.field-nullspace.operator-topology-derived.options@1");
 }
@@ -205,7 +198,8 @@ TEST(test_field_nullspace, checks_rhs_and_applies_gauges_component_by_component)
   EXPECT_THROW(require_field_nullspace_compatible(rhs, plan), std::runtime_error);
 }
 
-TEST(test_field_nullspace, prepared_workspace_supports_overlapping_independent_bases_without_hot_allocations) {
+TEST(test_field_nullspace,
+     prepared_workspace_supports_overlapping_independent_bases_without_hot_allocations) {
   const Box2D domain = Box2D::from_extents(2, 1);
   const BoxArray boxes(std::vector<Box2D>{domain});
   const DistributionMapping mapping(1, 1);
@@ -220,8 +214,7 @@ TEST(test_field_nullspace, prepared_workspace_supports_overlapping_independent_b
   plan.identity = "overlapping-independent";
   plan.layout_identity = "overlapping-independent-layout";
   plan.bases = {{"first", "unit-test:first", "unit-test:first@1", 0, {first}, {}, {Real(1)}},
-                {"second", "unit-test:second", "unit-test:second@1", 0, {second}, {},
-                 {Real(1)}}};
+                {"second", "unit-test:second", "unit-test:second@1", 0, {second}, {}, {Real(1)}}};
   plan.gauges = {{"first", Real(0)}, {"second", Real(0)}};
 
   MultiFab prepared_layout(boxes, mapping, 1, 0);
@@ -229,10 +222,10 @@ TEST(test_field_nullspace, prepared_workspace_supports_overlapping_independent_b
   // a different ghost width for its RHS and iterate without changing that
   // space or requiring a second nullspace preparation.
   MultiFab value(boxes, mapping, 1, 1);
-  value.fab(0).array()(0, 0, 0) = Real(1);   // 3*first - 2*second
+  value.fab(0).array()(0, 0, 0) = Real(1);  // 3*first - 2*second
   value.fab(0).array()(1, 0, 0) = Real(-1);
-  FieldNullspaceWorkspace workspace(
-      plan, {&prepared_layout}, {PreparedVectorDistribution::Distributed});
+  FieldNullspaceWorkspace workspace(plan, {&prepared_layout},
+                                    {PreparedVectorDistribution::Distributed});
 
   const AllocationEventStats before = allocation_event_stats();
   workspace.apply_gauge(value);
@@ -326,8 +319,7 @@ TEST(test_field_nullspace, level_local_plan_validates_only_its_resolved_absolute
   plan.bases[0].masks = {nullptr, active_mask};
 
   EXPECT_NO_THROW(validate_field_nullspace_basis({&field}, plan, kDistributedLevel, 1));
-  EXPECT_NO_THROW(
-      (void)require_field_nullspace_compatible({&field}, plan, kDistributedLevel, 1));
+  EXPECT_NO_THROW((void)require_field_nullspace_compatible({&field}, plan, kDistributedLevel, 1));
   EXPECT_NO_THROW(apply_field_gauge({&field}, plan, kDistributedLevel, 1));
 
   FieldNullspacePlan zero_active_measure = plan;
@@ -347,6 +339,5 @@ TEST(test_field_nullspace, level_local_plan_validates_only_its_resolved_absolute
   FieldNullspacePlan uniform_with_zero =
       constant_mean_zero_nullspace("uniform-nullspace", "unit-test", Real(1));
   uniform_with_zero.bases[0].cell_measure.push_back(Real(0));
-  EXPECT_NO_THROW(
-      validate_field_nullspace_basis({&field}, uniform_with_zero, kDistributedLevel));
+  EXPECT_NO_THROW(validate_field_nullspace_basis({&field}, uniform_with_zero, kDistributedLevel));
 }

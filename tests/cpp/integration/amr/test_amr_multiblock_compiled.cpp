@@ -486,8 +486,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     } catch (const runtime::program::StepAttemptRejected& rejection) {
       if (rejection.status() != SolveStatus::kInvalidEvaluation ||
           rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u ||
-          rejection.phase() != "stage")
+          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
         throw;
       explicit_rejected = true;
     } catch (const std::runtime_error& error) {
@@ -499,11 +498,10 @@ TEST(test_amr_multiblock_compiled, Runs) {
         explicit_rejected || (all_finite(expl_res.first) && maxabs(expl_res.first) > 1e3);
     EXPECT_TRUE(expl_blew_up)
         << "F1_compiled_explicit_block_BLOWS_UP (disable-and-fail : IMEX requis)";
-    std::printf(
-        "      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
-        explicit_rejected ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
-                          : (all_finite(expl_res.first) ? "borne >> 1"
-                                                       : "ETAT NON FINI PUBLIE (ECHEC)"));
+    std::printf("      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
+                explicit_rejected
+                    ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
+                    : (all_finite(expl_res.first) ? "borne >> 1" : "ETAT NON FINI PUBLIE (ECHEC)"));
 
     // (F2) stride=2 DIFFERE de stride=1 (memes eps/dt/macro-pas) : la cadence est effective.
     const auto imex_s2 = run_stiff_compiled(/*imex=*/true, /*stride=*/2, {});
@@ -533,8 +531,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     } catch (const runtime::program::StepAttemptRejected& rejection) {
       if (rejection.status() != SolveStatus::kInvalidEvaluation ||
           rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u ||
-          rejection.phase() != "stage")
+          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
         throw;
       partial_rejected = true;
     } catch (const std::runtime_error& error) {
@@ -543,8 +540,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       partial_rejected = true;
     }
     const bool partial_blew_up =
-        partial_rejected ||
-        (all_finite(imex_mask_mx.first) && maxabs(imex_mask_mx.first) > 1e3);
+        partial_rejected || (all_finite(imex_mask_mx.first) && maxabs(imex_mask_mx.first) > 1e3);
     EXPECT_TRUE(partial_blew_up)
         << "F3_compiled_partial_mask_mx_only_leaves_my_EXPLICIT_and_blows_up (masque honore par "
            "composante)";
