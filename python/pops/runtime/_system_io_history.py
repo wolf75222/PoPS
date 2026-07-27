@@ -270,7 +270,7 @@ def capture_histories(system, plan, out):
 
     if not isinstance(plan, HistoryCapturePlan):
         raise TypeError("history capture requires its exact prepared plan")
-    out["history_names"] = np.array([ring.name for ring in plan.rings])
+    out["history_names"] = np.asarray([ring.name for ring in plan.rings], dtype=str)
     for ring in plan.rings:
         hname = ring.name
         depth = ring.depth

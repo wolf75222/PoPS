@@ -1,9 +1,10 @@
 """ADC-667: typed histories and explicit cross-clock history providers."""
 from dataclasses import dataclass
+from fractions import Fraction
 
 import pytest
 
-from typed_program_support import typed_state
+from typed_program_support import state_refs, typed_state
 
 from pops.identity.semantic import program_semantic_data, semantic_identity_of
 from pops.time import (
@@ -229,6 +230,37 @@ def _interpolated_program(capability):
     return program
 
 
+def _child_owned_interpolated_program():
+    program = Program("native_child_history_interpolation")
+    block, declared = state_refs(program, "fluid", state_name="U")
+    macro = program.state(block[declared])
+    fast = Clock("fast", owner=program.owner_path)
+    child = program.state(block[declared], clock=fast)
+    program.keep_history(child, depth=2, interpolation=LinearInterpolation())
+    advanced = program.subcycle(
+        child.n,
+        clock=fast,
+        within=program.clock,
+        count=2,
+        body_fn=lambda P, value: P.value("child_copy", 1 * value),
+    )
+    # The source ring is owned and rotated by the child clock. The fractional macro coordinate is
+    # -3/4 macro ticks == -3/2 child ticks, so native lowering must use adjacent child samples.
+    program.synchronize(
+        child.prev,
+        at=TimePoint(program.clock, Fraction(1, 4), step=-1),
+        relation=InterpolateHistory(child.prev),
+        name="child_history_at_macro_coordinate",
+    )
+    returned = program.synchronize(
+        advanced,
+        at=macro.next.point,
+        relation=SampleAndHold(),
+    )
+    program.commit(macro.next, returned)
+    return program
+
+
 def test_linear_history_interpolation_lowers_to_the_native_uniform_slot_kernel():
     from pops.codegen.program_codegen import emit_cpp_program
 
@@ -240,6 +272,21 @@ def test_linear_history_interpolation_lowers_to_the_native_uniform_slot_kernel()
 
     assert "ctx.interpolate_history_linear" in source
     assert "ctx.scratch_state" in source
+
+
+def test_child_clock_history_interpolation_lowers_with_its_qualified_clock_ledger():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    program = _child_owned_interpolated_program()
+    source = emit_cpp_program(program, model=None, target="system")
+    schedule = program.temporal_manifest()
+    (history,) = schedule["histories"]
+    child_clock = history["clock"]
+
+    assert child_clock != program.clock.qualified_id
+    assert "ctx.store_history" in source
+    assert 'ctx.rotate_histories("%s")' % child_clock in source
+    assert "ctx.interpolate_history_linear" in source
 
 
 def test_dense_and_amr_history_interpolation_lowering_fail_closed():

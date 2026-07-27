@@ -3,6 +3,8 @@
 // scheduler-cache save/restore accessors. This TU is a subdivision of system.cpp (persistence and
 // checkpoint surface of the compiled program runtime state).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
+#include <cmath>
+
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 #include <cmath>
@@ -27,6 +29,13 @@ void System::set_clock(double t, int macro_step) {
 }
 
 void System::store_history(const std::string& name, const MultiFab& value) {
+  store_history(name, value, static_cast<double>(p_->program_.last_dt_));
+}
+
+void System::store_history(const std::string& name, const MultiFab& value, double outgoing_dt) {
+  if (!std::isfinite(outgoing_dt) || outgoing_dt < 0.0)
+    throw std::runtime_error(
+        "System::store_history: outgoing logical-clock dt must be finite and non-negative");
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::store_history: unknown history '" + name +
@@ -44,14 +53,14 @@ void System::store_history(const std::string& name, const MultiFab& value) {
   std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
   if (dts.size() != ring.size())
     dts.assign(ring.size(), Real(0));
-  dts[0] = p_->program_.last_dt_;
+  dts[0] = static_cast<Real>(outgoing_dt);
   if (!p_->program_.hist_.initialized[name]) {
     // COLD START (first store): broadcast into every deeper slot so a multistep step 0 reads the same
     // value at every lag (degenerating to a one-step method). Deterministic + machine-precision exact.
     // The dt broadcasts the same way so every cold-start slot carries the step-0 dt.
     for (std::size_t k = 1; k < ring.size(); ++k) {
       pops::lincomb(ring[k], Real(1), value, Real(0), value);
-      dts[k] = p_->program_.last_dt_;
+      dts[k] = static_cast<Real>(outgoing_dt);
     }
     p_->program_.hist_.initialized[name] = true;
   }
