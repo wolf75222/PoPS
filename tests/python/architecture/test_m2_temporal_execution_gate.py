@@ -24,7 +24,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 27
+    assert len(data["check"]) == 33
     assert [
         row["nodeid"] for row in data["check"] if row["target"] == "example"
     ] == [
@@ -59,7 +59,6 @@ def test_m2_gate_refuses_false_completion_while_blockers_remain():
         "normalized_program_execution",
         "native_solve_outcome_fault_matrix",
         "atomic_rejection_side_effects",
-        "strict_temporal_continuation",
         "native_multiblock_implicit_phase",
         "refined_hierarchy_native_ordering",
         "legacy_temporal_route_retirement",

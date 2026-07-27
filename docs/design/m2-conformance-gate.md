@@ -18,7 +18,13 @@ The executable supporting battery covers the landed contracts:
 - emitted refined-hierarchy gather → solve once → publish → synchronize ordering;
 - accepted AMR transaction commit across topology, state, history and clock;
 - strict shared `TemporalRestartState` round-trip and rejected-attempt checkpoint refusal;
-- history restart round-trip and mismatched-program refusal.
+- authoritative `ErrorControlledDt` queue seeding, rejection replacement and
+  exact next-proposal replay;
+- accepted checkpoint/restart continuation, including bit-identical history
+  recurrence and mismatched-program refusal;
+- actual native history slots, exact `slot_dt` ledgers and off-schedule cache
+  arrays across restart, with sealed queue/history/cache corruption refused
+  before mutation.
 
 The two native example checks are stronger than launch smoke tests. The scalar
 check compares the manual SSPRK2 continuation against the
@@ -28,12 +34,14 @@ They run in separate process groups so one native abort cannot hide the other
 result or corrupt the lightweight Python conformance process. Each has a
 30-minute default watchdog, configurable with `--example-timeout`.
 
-Those checks are not sufficient to close ADC-668. The manifest records seven
+Those checks are not sufficient to close ADC-668. The manifest records six
 explicit acceptance gaps: stable native manual/factory SSPRK2 plus IMEX
 execution; native `SolveOutcome` fault injection; the complete transaction
-fault matrix including outputs and checkpoints; strict next-attempt restart; a
-native multi-block implicit phase; a refined hierarchy native oracle; and
-deletion of legacy temporal/fallback routes. These are blockers, not waivers.
+fault matrix including outputs and checkpoints; a native multi-block implicit
+phase; the complete accepted/rejected transaction envelope around the refined
+hierarchy native oracle; and deletion of legacy temporal/fallback routes.
+Strict next-attempt restart is executable evidence now, not a deferred claim.
+These are blockers, not waivers.
 The default command returns a non-zero status while any `[[deferred]]` row
 remains.
 
