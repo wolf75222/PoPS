@@ -26,6 +26,7 @@ _PROGRAM_KEYS = frozenset((
     "synchronizations", "schedules", "histories",
 ))
 _UNSPECIFIED = object()
+_ERROR_PROPOSAL_KIND = "error_controlled_dt.proposal"
 
 
 def _clock(time: Any, macro_step: Any) -> tuple[str, int]:
@@ -270,6 +271,86 @@ def _validate_event_queue(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _event(
+    *, kind: Any, time: Any, cursor: Any, payload: Any,
+) -> dict[str, Any]:
+    """Build one canonical runtime event through the same strict checkpoint validator."""
+    event_time = float(time)
+    if not math.isfinite(event_time):
+        raise ValueError("temporal event time must be finite")
+    candidate = [{
+        "kind": kind,
+        "time": event_time.hex(),
+        "cursor": cursor,
+        "payload": payload,
+    }]
+    return _validate_event_queue(candidate)[0]
+
+
+def _validate_controller_events(
+    events: list[dict[str, Any]],
+    *,
+    strategy: dict[str, Any],
+    controller: dict[str, Any],
+    time_hex: str,
+    macro_step: int,
+) -> None:
+    """Bind queued decisions to the exact controller which will consume them.
+
+    A queue row is not checkpoint decoration: for the currently stateful controller its head is
+    the sole next-dt authority. Other controllers own no queued event today and therefore must not
+    accept one.
+    """
+    descriptor = strategy["strategy"]
+    if descriptor["kind"] != "error_controlled_dt":
+        if events:
+            raise ValueError(
+                "the installed step strategy does not own temporal queued events")
+        return
+    if not events:
+        raise ValueError(
+            "ErrorControlledDt accepted restart state lacks its queued next proposal")
+    if len(events) != 1:
+        raise ValueError("ErrorControlledDt owns exactly one queued next proposal")
+    proposal = events[0]
+    if proposal["kind"] != _ERROR_PROPOSAL_KIND:
+        raise ValueError("ErrorControlledDt queue has the wrong event kind")
+    if proposal["cursor"] != macro_step + 1:
+        raise ValueError("ErrorControlledDt proposal cursor is not the next macro step")
+    payload = proposal["payload"]
+    if not isinstance(payload, dict) or set(payload) != {"dt"} \
+            or not isinstance(payload["dt"], str):
+        raise ValueError("ErrorControlledDt proposal payload must contain exactly one dt")
+    try:
+        proposed_dt = float.fromhex(payload["dt"])
+    except ValueError:
+        raise ValueError("ErrorControlledDt proposal dt is not hexadecimal") from None
+    if not math.isfinite(proposed_dt) or proposed_dt <= 0.0 \
+            or proposed_dt.hex() != payload["dt"]:
+        raise ValueError("ErrorControlledDt proposal dt must be canonical, finite, and positive")
+    expected_time = (float.fromhex(time_hex) + proposed_dt).hex()
+    if proposal["time"] != expected_time:
+        raise ValueError("ErrorControlledDt proposal time disagrees with its dt")
+
+    last_hex = controller["last_accepted_dt"]
+    from pops.time._step.strategy import ErrorControlledDt
+
+    policy = ErrorControlledDt.from_data(descriptor)
+    if last_hex is None:
+        if macro_step != 0:
+            raise ValueError(
+                "ErrorControlledDt proposal lacks the prior accepted dt authority")
+        if proposed_dt.hex() != policy.dt_init.hex():
+            raise ValueError(
+                "ErrorControlledDt initial queued proposal differs from dt_init")
+        return
+
+    expected_dt = min(policy.dt_max, float.fromhex(last_hex) * policy.growth)
+    if proposed_dt.hex() != expected_dt.hex():
+        raise ValueError(
+            "ErrorControlledDt queued proposal differs from the accepted controller state")
+
+
 def _boundary_cursors(
     schedule: dict[str, Any] | None, *, time_hex: str, macro_step: int,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -392,18 +473,89 @@ class TemporalRestartState:
                 "restart requires the checkpointed step strategy for the exact next attempt")
         if not self._restored_pending:
             self.strategy = candidate
+            if (candidate["strategy"]["kind"] == "error_controlled_dt"
+                    and step == 0
+                    and self.controller_state["last_accepted_dt"] is None
+                    and not self.event_queue):
+                from pops.time._step.strategy import ErrorControlledDt
+
+                policy = ErrorControlledDt.from_data(candidate["strategy"])
+                self.queue_error_controlled_proposal(
+                    dt=policy.dt_init,
+                    time=float.fromhex(now),
+                    macro_step=step,
+                )
 
     def before_attempt(self, *, time: Any, macro_step: Any) -> None:
         now, step = _clock(time, macro_step)
         self._require_live_clock(now, step)
 
+    def queue_error_controlled_proposal(
+        self, *, dt: Any, time: Any, macro_step: Any, replace: bool = False,
+    ) -> dict[str, Any]:
+        """Publish the exact next ErrorControlledDt proposal consumed by one native attempt."""
+        now, step = _clock(time, macro_step)
+        self._require_live_clock(now, step)
+        proposal_dt = float(dt)
+        if not math.isfinite(proposal_dt) or proposal_dt <= 0.0:
+            raise ValueError("ErrorControlledDt queued proposal must be finite and positive")
+        candidate = _event(
+            kind=_ERROR_PROPOSAL_KIND,
+            time=float.fromhex(now) + proposal_dt,
+            cursor=step + 1,
+            payload={"dt": proposal_dt.hex()},
+        )
+        if replace:
+            if not self.event_queue:
+                raise RuntimeError("cannot replace an absent temporal proposal")
+            self.event_queue[0] = candidate
+        elif self.event_queue:
+            if self.event_queue[0] != candidate:
+                raise RuntimeError("a different temporal proposal is already queued")
+        else:
+            self.event_queue.append(candidate)
+        return _json_copy(candidate, where="temporal proposal")
+
+    def queued_error_controlled_proposal(
+        self, *, time: Any, macro_step: Any,
+    ) -> tuple[dict[str, Any], float]:
+        """Return the authoritative next proposal without consuming it."""
+        now, step = _clock(time, macro_step)
+        self._require_live_clock(now, step)
+        if not self.event_queue:
+            raise RuntimeError("ErrorControlledDt has no queued next proposal")
+        event = _json_copy(self.event_queue[0], where="temporal proposal")
+        if event["kind"] != _ERROR_PROPOSAL_KIND or event["cursor"] != step + 1:
+            raise RuntimeError("ErrorControlledDt queued proposal is not the next event")
+        dt = float.fromhex(event["payload"]["dt"])
+        if event["time"] != (float.fromhex(now) + dt).hex():
+            raise RuntimeError("ErrorControlledDt queued proposal time is inconsistent")
+        return event, dt
+
+    def before_queued_attempt(
+        self, event: Any, *, time: Any, macro_step: Any,
+    ) -> None:
+        """Authenticate one attempt against the queue head without mutating accepted state."""
+        self.before_attempt(time=time, macro_step=macro_step)
+        candidate = _validate_event_queue([event])[0]
+        if not self.event_queue or candidate != self.event_queue[0]:
+            raise RuntimeError("native attempt does not match the queued temporal event")
+
     def accept(self, *, before_time: Any, before_step: Any,
-               time: Any, macro_step: Any) -> None:
+               time: Any, macro_step: Any, consumed_event: Any = None) -> None:
         before, old_step = _clock(before_time, before_step)
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
             raise RuntimeError(
                 "accepted temporal attempt must advance time and macro_step exactly once")
+        if consumed_event is not None:
+            candidate = _validate_event_queue([consumed_event])[0]
+            if not self.event_queue or candidate != self.event_queue[0]:
+                raise RuntimeError("accepted attempt did not consume the temporal queue head")
+            if candidate["time"] != now or candidate["cursor"] != step:
+                raise RuntimeError(
+                    "accepted attempt did not land on the queued temporal event")
+            self.event_queue.pop(0)
         self.time_hex = now
         self.macro_step = step
         (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
@@ -462,7 +614,14 @@ class TemporalRestartState:
         if actual != expected:
             raise RuntimeError("checkpoint temporal cursors are not at one synchronized boundary")
         _validate_controller_state(self.controller_state)
-        _validate_event_queue(self.event_queue)
+        events = _validate_event_queue(self.event_queue)
+        _validate_controller_events(
+            events,
+            strategy=self.strategy,
+            controller=self.controller_state,
+            time_hex=now,
+            macro_step=step,
+        )
         if (set(self.transaction_stats) != _STATUSES
                 or any(isinstance(value, bool) or not isinstance(value, int) or value < 0
                        for value in self.transaction_stats.values())):
@@ -543,6 +702,13 @@ class TemporalRestartState:
             raise ValueError("checkpoint temporal state is not an accepted synchronized point")
         controller = _validate_controller_state(data["controller_state"])
         events = _validate_event_queue(data["event_queue"])
+        _validate_controller_events(
+            events,
+            strategy=strategy,
+            controller=controller,
+            time_hex=now,
+            macro_step=step,
+        )
         out = cls(
             strategy=strategy, program_schedule=schedule, time_hex=now, macro_step=step,
             clock_cursors=dict(data["clock_cursors"]),

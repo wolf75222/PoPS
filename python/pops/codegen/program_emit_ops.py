@@ -71,6 +71,23 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
+def _canonical_metadata_int(value: Any, *, where: str) -> int:
+    """Decode one graph-canonical integer without accepting an approximate numeric cast."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be an exact integer" % where)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Mapping) and set(value) == {"scalar"}:
+        scalar = value["scalar"]
+        if isinstance(scalar, Mapping) and scalar.get("kind") == "integer" \
+                and isinstance(scalar.get("value"), str):
+            try:
+                return int(scalar["value"])
+            except ValueError:
+                pass
+    raise TypeError("%s must be an exact graph-canonical integer" % where)
+
+
 def _append_pointwise_solve_report(
         program: Any, solve: Any, status: str, lines: list[str], *,
         label: str, stem: str) -> None:
@@ -130,16 +147,77 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.time._schedule.synchronization import SampleAndHold, relation_data
 
         expected = relation_data(SampleAndHold())
-        if relation != expected:
+        point = v.point.time if hasattr(v.point, "time") else v.point
+        if relation == expected:
+            lines.append(
+                "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
+                % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
+                   int(point.step), scalar_cpp(point.offset)))
+            var[v.id] = var[source.id]
+        elif isinstance(relation, Mapping) \
+                and relation.get("kind") == "history_interpolation":
+            capability = relation.get("interpolation")
+            if not isinstance(capability, Mapping) or set(capability) != {
+                    "kind", "schema_version", "minimum_samples"} \
+                    or capability.get("kind") != "linear" \
+                    or _canonical_metadata_int(
+                        capability["schema_version"],
+                        where="LinearInterpolation schema_version",
+                    ) != 1 \
+                    or _canonical_metadata_int(
+                        capability["minimum_samples"],
+                        where="LinearInterpolation minimum_samples",
+                    ) != 2:
+                raise NotImplementedError(
+                    "history synchronization capability %r has no native lowering; "
+                    "supported capability: LinearInterpolation()" % capability)
+            if target != "system":
+                raise NotImplementedError(
+                    "LinearInterpolation native lowering is Uniform-only; AMR retained-history "
+                    "timestamps require the complete hierarchy restart contract")
+            if source.op != "history":
+                raise ValueError(
+                    "LinearInterpolation native lowering requires one retained history value")
+            if source.clock != program.clock:
+                raise NotImplementedError(
+                    "LinearInterpolation native lowering currently requires a primary-clock "
+                    "history; child-clock slot intervals are not yet an exact timestamp ledger")
+            contract = relation["provider"]["contract"]
+            depth = _canonical_metadata_int(
+                contract["depth"], where="LinearInterpolation history depth")
+            temporal = program.temporal_manifest()
+            ticks = {
+                row["id"]: int(row["ticks_per_macro"]) for row in temporal["clocks"]
+            }
+            coordinate = (
+                (Fraction(point.step) + Fraction(point.offset.to_python()))
+                * Fraction(ticks[source.clock.qualified_id], ticks[v.clock.qualified_id])
+            )
+            if coordinate < -depth or coordinate > 0:
+                raise ValueError(
+                    "LinearInterpolation target %s lies outside retained history [-%d, 0]"
+                    % (coordinate, depth))
+            var[v.id] = "u%d" % v.id
+            lines.append(
+                "pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                % (var[v.id], int(v.id), var[source.id]))
+            lines.append(
+                "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
+                % (
+                    var[v.id],
+                    json.dumps(source.attrs["history"]),
+                    depth,
+                    bidx,
+                    json.dumps(source.clock.qualified_id),
+                    json.dumps(v.clock.qualified_id),
+                    int(point.step),
+                    scalar_cpp(point.offset),
+                )
+            )
+        else:
             raise NotImplementedError(
                 "synchronization provider %r has no native lowering; supported provider: "
-                "SampleAndHold()" % relation)
-        point = v.point.time if hasattr(v.point, "time") else v.point
-        lines.append(
-            "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
-            % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
-               int(point.step), scalar_cpp(point.offset)))
-        var[v.id] = var[source.id]
+                "SampleAndHold() or Uniform LinearInterpolation()" % relation)
     elif v.op == "solve_fields":
         # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the

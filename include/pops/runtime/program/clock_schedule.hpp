@@ -152,6 +152,10 @@ class ClockScheduleState {
     return accepted_ticks_;
   }
 
+  std::int64_t ticks_per_macro(const std::string& clock) const {
+    return ticks_per_macro_(clock, {});
+  }
+
   /// Refresh a persistent transaction image without rebuilding its map/vector storage.  Logical
   /// clock declarations are immutable after Program installation, but accepted ticks and active
   /// subcycle frames are attempt state and must roll back exactly with the numerical hierarchy.
