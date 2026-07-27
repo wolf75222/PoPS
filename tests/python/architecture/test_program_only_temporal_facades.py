@@ -165,7 +165,7 @@ def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step(
 def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
     """No new C++ test may make the retiring AmrRuntime temporal engine authoritative."""
     direct_step = re.compile(
-        r"\b(?:rt[0-9A-Za-z_]*|rational|integral)\.step(?:_cfl)?\("
+        r"\b(?:rt[0-9A-Za-z_]*|runtime|rational|integral)\.step(?:_cfl)?\("
     )
     discovered = {
         path.relative_to(ROOT).as_posix()
