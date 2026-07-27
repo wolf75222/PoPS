@@ -16,6 +16,7 @@
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution_mapping.hpp>
 
 #include <set>
 #include <limits>
@@ -40,6 +41,87 @@ EdgeStrip make_strip(int I0, int I1, int J0, int J1, int nc) {
   return s;
 }
 }  // namespace
+
+TEST(test_program_reflux_ledger, edge_strip_rejects_invalid_storage_shape) {
+  EdgeStrip strip;
+  EXPECT_THROW(strip.alloc(Box2D{}, 1), std::invalid_argument);
+  EXPECT_THROW(strip.alloc(Box2D{{0, 0}, {1, 1}}, 0), std::invalid_argument);
+}
+
+TEST(test_program_reflux_ledger, prepared_transition_does_not_skip_right_or_top_only_roles) {
+  const Box2D coarse_domain{{0, 0}, {7, 7}};
+  const BoxArray coarse_boxes(std::vector<Box2D>{coarse_domain});
+  const BoxArray fine_boxes(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  const DistributionMapping coarse_mapping(coarse_boxes.size(), n_ranks());
+  const DistributionMapping fine_mapping(fine_boxes.size(), n_ranks());
+  AmrLevelMP coarse{MultiFab(coarse_boxes, coarse_mapping, 1, 0), nullptr, Real(0.5), Real(0.5)};
+  AmrLevelMP fine{MultiFab(fine_boxes, fine_mapping, 1, 0), nullptr, Real(0.25), Real(0.25)};
+  coarse.U.set_val(Real(0));
+  fine.U.set_val(Real(0));
+  auto transition = PreparedAmrProgramRefluxTransition::prepare(
+      coarse, fine, coarse_domain, Periodicity{false, false}, world_communicator_view());
+
+  EdgeStrip valid_coarse = make_strip(2, 5, 2, 5, 1);
+  EdgeStrip valid_fine = make_strip(2, 5, 2, 5, 1);
+  valid_coarse.cL.assign(4, Real(1));
+  valid_coarse.cR.assign(4, Real(1));
+  valid_coarse.cB.assign(4, Real(1));
+  valid_coarse.cT.assign(4, Real(1));
+  valid_fine.fL.assign(4, Real(2));
+  valid_fine.fR.assign(4, Real(2));
+  valid_fine.fB.assign(4, Real(2));
+  valid_fine.fT.assign(4, Real(2));
+  transition.synchronize_integrated(coarse.U, coarse.dx, coarse.dy,
+                                    std::vector<EdgeStrip>{valid_coarse},
+                                    std::vector<EdgeStrip>{valid_fine}, world_communicator_view());
+  ASSERT_EQ(coarse.U.local_size(), 1);
+  EXPECT_EQ(coarse.U.fab(0)(1, 2, 0), Real(-2));
+
+  EdgeStrip right_only;
+  right_only.I0 = right_only.J0 = 2;
+  right_only.I1 = right_only.J1 = 5;
+  right_only.cR.assign(4, Real(1));
+  EXPECT_THROW(transition.synchronize_integrated(
+                   coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>{right_only},
+                   std::vector<EdgeStrip>{valid_fine}, world_communicator_view()),
+               std::runtime_error);
+
+  EdgeStrip top_only;
+  top_only.I0 = top_only.J0 = 2;
+  top_only.I1 = top_only.J1 = 5;
+  top_only.fT.assign(4, Real(1));
+  EXPECT_THROW(transition.synchronize_integrated(
+                   coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>{valid_coarse},
+                   std::vector<EdgeStrip>{top_only}, world_communicator_view()),
+               std::runtime_error);
+
+  EXPECT_THROW(
+      transition.synchronize_integrated(coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>(2),
+                                        std::vector<EdgeStrip>{}, world_communicator_view()),
+      std::runtime_error);
+
+  EXPECT_THROW(
+      transition.synchronize_integrated(coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>(1),
+                                        std::vector<EdgeStrip>(1), world_communicator_view()),
+      std::runtime_error);
+
+  EdgeStrip shifted_coarse = make_strip(1, 4, 2, 5, 1);
+  EdgeStrip shifted_fine = make_strip(1, 4, 2, 5, 1);
+  EXPECT_THROW(transition.synchronize_integrated(
+                   coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>{shifted_coarse},
+                   std::vector<EdgeStrip>{shifted_fine}, world_communicator_view()),
+               std::runtime_error);
+  EXPECT_EQ(coarse.U.fab(0)(1, 2, 0), Real(-2))
+      << "every rejected preflight leaves the parent untouched";
+}
+
+TEST(test_program_reflux_ledger, edge_flux_axpy_rejects_shifted_equal_width_footprints) {
+  EdgeFlux destination;
+  destination.fine.push_back(make_strip(2, 5, 2, 5, 1));
+  EdgeFlux shifted;
+  shifted.fine.push_back(make_strip(3, 6, 2, 5, 1));
+  EXPECT_THROW(detail::edge_flux_axpy(destination, Real(1), shifted), std::invalid_argument);
+}
 
 TEST(test_program_reflux_ledger, route_reflux_integrated_drops_dt) {
   // Same fixture as test_cf_interface but the strips already carry dt*Feff, so the correction is

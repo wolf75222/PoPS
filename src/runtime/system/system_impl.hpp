@@ -116,8 +116,7 @@ inline EffectiveBlockOptions make_system_block_options(
     const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
-    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache,
-    double weno_epsilon) {
+    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
   EffectiveBlockOptions out;
   out.name = name;
   out.route = route;
@@ -605,6 +604,11 @@ struct System::Impl {
     double time;
     int macro_step;
     Real last_program_dt;
+    double cadence_window_dt;
+    int cadence_window_steps;
+    double cadence_window_start_time;
+    bool cadence_clock_restore_pending;
+    int cadence_clock_restore_macro_step;
     std::map<std::string, Real> program_diagnostics;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
@@ -618,6 +622,11 @@ struct System::Impl {
           time(impl.t),
           macro_step(impl.macro_step_),
           last_program_dt(impl.program_.last_dt_),
+          cadence_window_dt(impl.program_.cadence_window_dt_),
+          cadence_window_steps(impl.program_.cadence_window_steps_),
+          cadence_window_start_time(impl.program_.cadence_window_start_time_),
+          cadence_clock_restore_pending(impl.program_.cadence_clock_restore_pending_),
+          cadence_clock_restore_macro_step(impl.program_.cadence_clock_restore_macro_step_),
           program_diagnostics(impl.program_.diagnostics_),
           cache(impl.program_.cache_),
           history(impl.program_.hist_),
@@ -639,6 +648,11 @@ struct System::Impl {
       impl.t = time;
       impl.macro_step_ = macro_step;
       impl.program_.last_dt_ = last_program_dt;
+      impl.program_.cadence_window_dt_ = cadence_window_dt;
+      impl.program_.cadence_window_steps_ = cadence_window_steps;
+      impl.program_.cadence_window_start_time_ = cadence_window_start_time;
+      impl.program_.cadence_clock_restore_pending_ = cadence_clock_restore_pending;
+      impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       impl.program_.diagnostics_ = program_diagnostics;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
@@ -673,9 +687,9 @@ struct System::Impl {
           const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                        ? runtime::program::StepAttemptDisposition::kRetry
                                        : runtime::program::StepAttemptDisposition::kReject;
-          throw runtime::program::StepAttemptRejected(
-              SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-              failure.what());
+          throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                      failure.reason_code(), "stage",
+                                                      failure.what());
         }
         throw;
       } catch (...) {
@@ -693,9 +707,8 @@ struct System::Impl {
         const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                      ? runtime::program::StepAttemptDisposition::kRetry
                                      : runtime::program::StepAttemptDisposition::kReject;
-        throw runtime::program::StepAttemptRejected(
-            SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-            failure.what());
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                    failure.reason_code(), "stage", failure.what());
       }
       throw;
     } catch (...) {

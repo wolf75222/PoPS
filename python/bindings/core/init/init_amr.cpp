@@ -211,13 +211,15 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("name"), py::arg("model"), py::arg("limiter") = "minmod",
           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
           py::arg("time") = "explicit", py::arg("substeps") = 1, py::arg("stride") = 1,
-          // Partial IMEX mask CARRIED BY THE BLOCK (capstone vii): conserved variables treated
-          // implicitly by NAME (implicit_vars) or by physical ROLE (implicit_roles). Empty (default)
-          // -> full backward-Euler. Only meaningful with time="imex" and MULTI-BLOCK (cf. add_block).
+          // Compatibility call shape shared with System.add_block. The AMR spatial runtime has no
+          // typed local implicit-source Program primitive: every non-empty selector fails closed and
+          // is never retained by the block. Empty selectors keep the bare "imex" authoring token as
+          // metadata only; they do not enable a hidden backward-Euler step.
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // IMEX Newton options and newton_diagnostics use the native unified AMR runtime at every
-          // block count. Compiled .so loaders reject values their flat ABI cannot transport.
+          // The flat newton_* kwargs likewise remain for Python-surface compatibility. Every
+          // non-default option and newton_diagnostics=true fails closed until an executable typed
+          // AMR local nonlinear/Newton Program primitive owns both the solve and its report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -333,41 +335,6 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("level") = 0)
       .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN, native AMR runtime): dict {enabled, converged,
-      // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
-      // levels/substeps of the LAST advance of the block. failed_cell = (i, j) or None. EXACT shape of
-      // the System.newton_report binding (parity, including failed_cell tuple/None).
-      .def(
-          "newton_report",
-          [](AmrSystem& s, const std::string& name) {
-            const AmrSystem::SourceNewtonReport r = s.newton_report(name);
-            py::dict d;
-            d["enabled"] = r.enabled;
-            d["converged"] = r.converged;
-            d["max_residual"] = r.max_residual;
-            d["max_iters_used"] = r.max_iters_used;
-            d["n_failed"] = r.n_failed;
-            if (r.failed_i >= 0)
-              d["failed_cell"] =
-                  py::make_tuple(static_cast<int>(r.failed_i), static_cast<int>(r.failed_j));
-            else
-              d["failed_cell"] = py::none();
-            d["failed_component"] = static_cast<int>(r.failed_comp);
-            py::list diagnostics;
-            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
-              py::dict row;
-              row["code"] = event.code;
-              row["component"] = event.component;
-              row["severity"] = event.severity;
-              row["message"] = event.message;
-              row["iteration"] = event.iteration;
-              row["value"] = event.value;
-              diagnostics.append(row);
-            }
-            d["diagnostics"] = diagnostics;
-            return d;
-          },
-          py::arg("name"))
       // Private production-package seam. Parameters are fixed before AMR closures are built.
       .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"),
            py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
@@ -814,6 +781,13 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // Const getters (default 1/1 with no program); there was no Python-visible getter before.
       .def("program_substeps", &AmrSystem::program_substeps)
       .def("program_stride", &AmrSystem::program_stride)
+      // Exact partially accumulated GLOBAL stride window (strict checkpoint/restart state).
+      .def("program_cadence_window_dt", &AmrSystem::program_cadence_window_dt)
+      .def("program_cadence_window_steps", &AmrSystem::program_cadence_window_steps)
+      .def("program_cadence_window_start_time", &AmrSystem::program_cadence_window_start_time)
+      .def("restore_program_cadence_window", &AmrSystem::restore_program_cadence_window,
+           py::arg("accumulated_dt"), py::arg("held_steps"), py::arg("window_start_time"),
+           py::arg("macro_step"))
       // Changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT recompiling the .so
       // (ADC-508, parity ADC-510). prog_block = the PROGRAM block index (P.state order); values = that
       // block's params in sorted-name order. Python's _install_program_params routes params={name: value}

@@ -12,6 +12,7 @@ The model-coefficient per-cell kernels (source / flux / apply / local solves) li
 Krylov emitters in ``program_emit_solve``.  ``program_codegen`` re-imports every name so
 its public surface is unchanged.
 """
+
 from __future__ import annotations
 
 from fractions import Fraction
@@ -19,7 +20,9 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.fields._prepared_nullspace_registry import prepared_nullspace_provider_from_attrs
-from pops.solvers._prepared_preconditioner_registry import prepared_preconditioner_provider_from_attrs
+from pops.solvers._prepared_preconditioner_registry import (
+    prepared_preconditioner_provider_from_attrs,
+)
 from pops.solvers.krylov._prepared_method_registry import prepared_krylov_method_provider_from_attrs
 from pops.solvers.providers import prepared_hierarchy_solver_provider_from_attrs
 from pops.time.values import ProgramValue, _to_affine  # noqa: F401
@@ -28,30 +31,70 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "source", "apply", "local_transform", "solve_local_linear", "solve_local_nonlinear",
+    "source",
+    "apply",
+    "local_transform",
+    "solve_local_linear",
+    "solve_local_nonlinear",
 )
 
-_ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
-                          "linear_combine", "linear_source",
-                          "reduce", "scalar_op", "compare", "hmin", "max_wave_speed", "cfl",
-                          "while", "range", "subcycle", "branch", "synchronize",
-                          "acceptance_guard", "matrix_free_operator",
-                          "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
-                          "solve_outcome", "solve_outcome_component",
-                          "apply_in", "apply_out", "history", "store_history",
-                          "fill_boundary", "project", "record_scalar",
-                          "cell_compare", "where", "rhs_jacvec",
-                          "apply_laplacian_coeff",
-                          "condensed_coeffs", "condensed_rhs", "condensed_reconstruct",
-                          "condensed_energy",
-                          "coupled_rate", "coupled_rate_out", "solve_coupled_implicit"})
+_ALLOWED_OPS = frozenset(
+    {
+        "state",
+        "solve_fields",
+        "solve_fields_from_blocks",
+        "rhs",
+        "linear_combine",
+        "linear_source",
+        "reduce",
+        "scalar_op",
+        "compare",
+        "hmin",
+        "max_wave_speed",
+        "cfl",
+        "while",
+        "range",
+        "subcycle",
+        "branch",
+        "synchronize",
+        "acceptance_guard",
+        "matrix_free_operator",
+        "scalar_field",
+        "laplacian",
+        "gradient",
+        "divergence",
+        "solve_linear",
+        "solve_outcome",
+        "solve_outcome_component",
+        "apply_in",
+        "apply_out",
+        "history",
+        "store_history",
+        "fill_boundary",
+        "project",
+        "record_scalar",
+        "cell_compare",
+        "where",
+        "rhs_jacvec",
+        "apply_laplacian_coeff",
+        "condensed_coeffs",
+        "condensed_rhs",
+        "condensed_reconstruct",
+        "condensed_energy",
+        "coupled_rate",
+        "coupled_rate_out",
+        "solve_coupled_implicit",
+    }
+)
 
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 
 _AUX_OUTPUT_OPS = frozenset({"solve_fields", "solve_fields_from_blocks"})
 
+
 def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     """Return used native components in first-use order after authenticating every provider."""
+
     def walk(values: Any) -> Any:
         for value in values:
             yield value
@@ -101,10 +144,7 @@ def _prepared_native_component_includes(program: Any) -> str:
             if header not in seen:
                 seen.add(header)
                 headers.append(header)
-    return "".join(
-        "#include <%s>  // prepared native provider\n" % header
-        for header in headers
-    )
+    return "".join("#include <%s>  // prepared native provider\n" % header for header in headers)
 
 
 # Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit
@@ -112,8 +152,10 @@ def _prepared_native_component_includes(program: Any) -> str:
 # condensed_energy is a pure-kinematic in-place kernel (no block inverse), so it is NOT listed here.
 _CONDENSED_OPS = frozenset({"condensed_coeffs", "condensed_rhs", "condensed_reconstruct"})
 
-_BLOCK_INVERSE_INCLUDE = ("#include <pops/numerics/linalg/block_inverse.hpp>"
-                          "  // pops::detail::block_inverse (condensed-implicit solve, ADC-637)\n")
+_BLOCK_INVERSE_INCLUDE = (
+    "#include <pops/numerics/linalg/block_inverse.hpp>"
+    "  // pops::detail::block_inverse (condensed-implicit solve, ADC-637)\n"
+)
 
 
 def _block_inverse_include(program: Any) -> str:
@@ -144,8 +186,7 @@ def _apply_in_arg(sub: Any, value: Any) -> str:
     return "*%s" % tok
 
 
-def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any,
-                        *, dt_symbol: str) -> list:
+def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any, *, dt_symbol: str) -> list:
     """Emit C++ writing the affine combination @p result into the field @p target (a C++ MultiFab token,
     e.g. ``out``). Mirrors the linear_combine commit: zero the PERSISTENT accumulator @p acc (a scratch
     shared_ptr allocated once at install time -- no per-call/per-iteration allocation), accumulate the
@@ -160,16 +201,22 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any,
     c_target = {0: 0}
     for value, coeff in terms:
         tok = sub[value.id]
-        ref = "const_cast<pops::MultiFab&>(in)" if tok == "in" else (
-            "*%s" % tok if tok.startswith("sf") else tok)
+        ref = (
+            "const_cast<pops::MultiFab&>(in)"
+            if tok == "in"
+            else ("*%s" % tok if tok.startswith("sf") else tok)
+        )
         if tok == target:
             c_target = coeff
         else:
-            lines.append("pops::PureFieldAlgebra::axpy(*%s, %s, %s);"
-                         % (acc, _coeff_cpp(coeff, dt_symbol=dt_symbol), ref))
+            lines.append(
+                "pops::PureFieldAlgebra::axpy(*%s, %s, %s);"
+                % (acc, _coeff_cpp(coeff, dt_symbol=dt_symbol), ref)
+            )
     lines.append(
         "pops::PureFieldAlgebra::lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s);"
-        % (target, _coeff_cpp(c_target, dt_symbol=dt_symbol), target, acc))
+        % (target, _coeff_cpp(c_target, dt_symbol=dt_symbol), target, acc)
+    )
     return lines
 
 
@@ -203,21 +250,26 @@ def _coeff_metadata_terms(powers: Any) -> tuple[tuple[int, int, int], ...]:
             ratio = Fraction.from_float(value) if isinstance(value, float) else Fraction(value)
         except (TypeError, ValueError, ZeroDivisionError) as error:
             raise TypeError(
-                "AMR conservative coefficient is not an exact rational literal") from error
+                "AMR conservative coefficient is not an exact rational literal"
+            ) from error
         if ratio:
             signed_limit = (1 << 63) - 1
-            if (power > (1 << 31) - 1 or ratio.numerator < -signed_limit
-                    or ratio.numerator > signed_limit or ratio.denominator > signed_limit):
+            if (
+                power > (1 << 31) - 1
+                or ratio.numerator < -signed_limit
+                or ratio.numerator > signed_limit
+                or ratio.denominator > signed_limit
+            ):
                 raise OverflowError(
-                    "AMR conservative coefficient cannot be represented by the native exact ledger")
+                    "AMR conservative coefficient cannot be represented by the native exact ledger"
+                )
             terms.append((power, ratio.numerator, ratio.denominator))
     return tuple(terms)
 
 
 def _coeff_metadata_cpp(powers: Any) -> str:
     """Render the same dt polynomial as checked exact native-ledger metadata."""
-    return "{%s}" % ", ".join(
-        "{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
+    return "{%s}" % ", ".join("{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
 
 
 # --- Phase-4b: lower a model's split-source / local-linear ops to per-cell C++ kernels ----------
@@ -225,6 +277,7 @@ def _coeff_metadata_cpp(powers: Any) -> str:
 # reuse the dsl Expr -> C++ machinery (Var.to_cpp returns the bare name; we bind those names to locals)
 # and the existing numerics (pops::detail::mat_inverse). A device kernel must stay heap-free /
 # allocation-free: only stack scalars + fixed-size arrays, no std::vector / std::function / Eigen.
+
 
 def _model_impl(model: Any) -> Any:
     """Return the HyperbolicModel that owns the symbolic coefficients.
@@ -250,7 +303,9 @@ def _named_fluxes(v: Any) -> Any:
     if len(named) != len(fluxes):
         raise ValueError(
             "rhs '%s': fluxes mixes 'default' with named fluxes %r; request either the default flux "
-            "(-div F via rhs_into) or a set of named fluxes (their -div sum), not both" % (v.name, named))
+            "(-div F via rhs_into) or a set of named fluxes (their -div sum), not both"
+            % (v.name, named)
+        )
     return named
 
 
@@ -259,6 +314,7 @@ def _aux_comp(impl: Any, name: Any) -> int:
     or a model NAMED aux field (dsl.AUX_NAMED_BASE + position in aux_extra_names). @p impl is the
     HyperbolicModel."""
     from pops.physics.aux import AUX_CANONICAL, AUX_NAMED_BASE
+
     if name in AUX_CANONICAL:
         return AUX_CANONICAL[name]
     extra = list(getattr(impl, "aux_extra_names", []) or [])
@@ -266,7 +322,8 @@ def _aux_comp(impl: Any, name: Any) -> int:
         return AUX_NAMED_BASE + extra.index(name)
     raise NotImplementedError(
         "emit_cpp_program: aux field '%s' is neither canonical (%s) nor a declared named aux field "
-        "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra))
+        "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra)
+    )
 
 
 def _has_runtime_param(exprs: Any) -> bool:
@@ -276,6 +333,7 @@ def _has_runtime_param(exprs: Any) -> bool:
     without recompiling (mirror of the AOT-native RuntimeParams member, P7-b)."""
     from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _children
+
     stack = list(exprs)
     seen = set()
     while stack:
@@ -299,6 +357,7 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
     from pops._ir.visitors import _dependencies
+
     deps = _dependencies(exprs)
     lines = []
     live = impl._live_prims(exprs) if with_prim else set()
@@ -349,8 +408,7 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device
         # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
         lines.append("  const pops::RuntimeParams params = ctx.program_params(%d);" % params_block)
-    lines.append(
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var)
+    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var)
     return lines
 
 
@@ -411,7 +469,7 @@ def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> l
 # cache/restart key) and is not yet consumed by System::install_program. {name} is a JSON-escaped C
 # string literal, {hash} the IR hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), {body} the step-closure body (both already
-_PROGRAM_CPP_TEMPLATE = '''\
+_PROGRAM_CPP_TEMPLATE = """\
 // GENERATED by pops.codegen.program_codegen.emit_cpp_program (epic ADC-399 / ADC-401). Do not edit.
 // A compiled time Program installed across the stable .so ABI: it drives sim.step(dt) entirely in
 // C++ via ProgramContext, reusing the PoPS runtime (no MultiFab / flux / solver reimplementation).
@@ -439,6 +497,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
 {route_manifest}extern "C" const char* pops_program_name() {{ return {name}; }}
 extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
+{history_replay_authorities}
 {operator_authorities}
 
 {block_names}
@@ -457,4 +516,4 @@ extern "C" pops::Real pops_program_dt_bound(pops::runtime::program::ProgramConte
   (void)ctx; (void)cfl;
 {dt_bound_body}
 }}
-'''
+"""

@@ -38,9 +38,6 @@ echo "=== build Serial oracle (g++) ==="
 g++ -std=c++20 -O2 -I "$INC" "$SRC/gpu_epm_validate.cpp" -o "$RES/epm_serial" \
   > "$RES/serial_epm.log" 2>&1 \
   || { echo SERIAL_EPM_FAIL; tail -30 "$RES/serial_epm.log"; exit 1; }
-g++ -std=c++20 -O2 -I "$INC" "$SRC/gpu_amr_bz_validate.cpp" -o "$RES/amrbz_serial" \
-  > "$RES/serial_amrbz.log" 2>&1 \
-  || { echo SERIAL_AMRBZ_FAIL; tail -30 "$RES/serial_amrbz.log"; exit 1; }
 g++ -std=c++20 -O2 -I "$INC" "$SRC/gpu_aux_validate.cpp" -o "$RES/aux_serial" \
   > "$RES/serial_aux.log" 2>&1 \
   || { echo SERIAL_AUX_FAIL; tail -30 "$RES/serial_aux.log"; exit 1; }
@@ -63,12 +60,6 @@ srun --kill-on-bad-exit=1 -n 1 --gpus-per-task=1 \
   "$PWD/../gpuval2_build/gpu_aux_validate" --dump=aux_cuda
 ./aux_serial --dump=aux_serial
 ./diff_bin aux_cuda_te.bin aux_serial_te.bin
-
-echo "######## (4) B_z par niveau AMR ########"
-srun --kill-on-bad-exit=1 -n 1 --gpus-per-task=1 \
-  "$PWD/../gpuval2_build/gpu_amr_bz_validate" --dump=amrbz_cuda
-./amrbz_serial --dump=amrbz_serial
-./diff_bin amrbz_cuda_amrbz.bin amrbz_serial_amrbz.bin
 
 echo "######## (7) ordre for_each_cell -> MultiFab::scale -> reduction ########"
 # No fence is inserted by the harness before scale or reduce_sum: reduce_sum is

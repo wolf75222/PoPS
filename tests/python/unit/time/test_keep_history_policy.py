@@ -6,6 +6,7 @@ typed history-persistence descriptor, records it in the Program-owned history ta
 author time. The compile-time gate refuses a non-Dense policy outside the proven primary-clock,
 strictly owner-affine replay class. Pure Python IR construction (no numerics / no _pops).
 """
+
 from typed_program_support import state_refs, typed_state
 
 import sys
@@ -116,15 +117,19 @@ def test_compile_gate_refuses_an_orphan_policy_and_a_depth_mismatch():
 def test_incoherent_interval_refused_at_author_time():
     P = adctime.Program("k")
     U = typed_state(P, "plasma", state_name="U")
-    _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Interval(2)),
-            "oldest slot")
+    _expect(
+        ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Interval(2)), "oldest slot"
+    )
 
 
 def test_oversized_revolve_refused_at_author_time():
     P = adctime.Program("k")
     U = typed_state(P, "plasma", state_name="U")
-    _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Revolve(5)),
-            "exceeds ring depth")
+    _expect(
+        ValueError,
+        lambda: P.keep_history(U, depth=3, checkpoint_policy=Revolve(5)),
+        "exceeds ring depth",
+    )
 
 
 # --- compile-time exact-replay gate -------------------------------------------------------------
@@ -134,20 +139,47 @@ def test_primary_clock_affine_transition_with_dt_and_zero_weight_lag_passes():
     P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     # The exact-zero coefficient is canonicalized out of the effective dependency graph. It may
     # declare/read the physical lag without making the dt-dependent transition multistep.
-    nxt = P.value(
-        "U_next", U.n + 0.25 * P.dt * U.n + 0.0 * U.prev(3), at=U.next.point)
+    nxt = P.value("U_next", U.n + 0.25 * P.dt * U.n + 0.0 * U.prev(3), at=U.next.point)
     P.commit(U.next, nxt)
     check_program(P)
     from pops.time._program.detach import detach_compiled_program
+
     check_program(detach_compiled_program(P))
+
+
+def test_codegen_exports_only_validated_selective_replay_ring_authorities():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    selective = adctime.Program("selective_authority")
+    tracked = typed_state(selective, "plasma", state_name="U")
+    selective.keep_history(tracked, depth=3, checkpoint_policy=Interval(3))
+    selective.commit(
+        tracked.next,
+        selective.value("U_next", 1.0 * tracked.n, at=tracked.next.point),
+    )
+    source = emit_cpp_program(selective)
+    assert "pops_program_history_replay_authority_count() { return 1; }" in source
+    assert 'case 0: return "plasma.U";' in source
+    assert "pops_program_history_replay_authority_depth" in source
+    assert "case 0: return 4;" in source
+
+    dense = adctime.Program("dense_authority")
+    dense_state = typed_state(dense, "plasma", state_name="U")
+    dense.keep_history(dense_state, depth=3, checkpoint_policy=Dense())
+    dense.commit(
+        dense_state.next,
+        dense.value("U_next", 1.0 * dense_state.n, at=dense_state.next.point),
+    )
+    dense_source = emit_cpp_program(dense)
+    assert "pops_program_history_replay_authority_count() { return 0; }" in dense_source
+    assert 'case 0: return "plasma.U";' not in dense_source
 
 
 def test_load_bearing_lag_refuses_single_anchor_replay():
     P = adctime.Program("multistep")
     U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
-    nxt = P.value(
-        "U_next", 1.0 * U.n + 0.5 * U.prev(1), at=U.next.point)
+    nxt = P.value("U_next", 1.0 * U.n + 0.5 * U.prev(1), at=U.next.point)
     P.commit(U.next, nxt)
     report = _persistence_report(P)
     assert not report.ok
@@ -199,6 +231,29 @@ def test_context_side_effect_refuses_single_anchor_replay():
     assert "non-affine/context-dependent op 'reduce'" in str(report)
 
 
+def test_scheduled_affine_transition_refuses_unrestored_scheduler_context():
+    P = adctime.Program("scheduled_affine_history")
+    U = typed_state(P, "plasma", state_name="U")
+    P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
+    value = P.value("scheduled_next", 1.0 * U.n, at=U.next.point)
+    scheduled = P._replace_value(
+        value,
+        attrs={
+            **value.attrs,
+            "schedule": adctime.Schedule(
+                adctime.Every(adctime.AcceptedStep(P.clock), 2),
+                off=adctime.Skip(),
+            ),
+        },
+    )
+    P.commit(U.next, scheduled)
+
+    report = _persistence_report(P)
+    assert not report.ok
+    assert any(issue.code.endswith("unrestored_replay_context") for issue in report.issues)
+    assert "historical scheduler/cache state" in str(report)
+
+
 def test_cross_block_commit_is_rejected_before_replay_validation():
     P = adctime.Program("cross_block_history")
     U = typed_state(P, "plasma", state_name="U")
@@ -223,7 +278,8 @@ def test_dense_policy_never_refused_even_with_unknown_op():
         _values = [FakeOp()]
 
     root = ReportTree(
-        phase="validation", severity="info", code="validation.history_persistence.report")
+        phase="validation", severity="info", code="validation.history_persistence.report"
+    )
     report = validate_history_persistence(FakeProg(), root)
     assert report.ok, str(report)
 
@@ -243,7 +299,8 @@ def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
         _values = [FakeOp()]
 
     root = ReportTree(
-        phase="validation", severity="info", code="validation.history_persistence.report")
+        phase="validation", severity="info", code="validation.history_persistence.report"
+    )
     report = validate_history_persistence(FakeProg(), root)
     assert not report.ok
     message = str(report)

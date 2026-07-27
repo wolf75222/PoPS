@@ -23,6 +23,8 @@ void require_cartesian_boundary_linearization(bool embedded_boundary_set, Geomet
 // body and reaches per-block storage through these accessors (Impl is private to this TU).
 void System::install_program_step(std::function<void(double)> step) {
   p_->program_.step_ = std::move(step);
+  p_->program_.artifact_backed_ = false;
+  p_->program_.history_replay_authorities_.clear();
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
 // program closure (cf. SystemProgramDriver::step). Kept separate from install_program so the .so ABI is
@@ -42,12 +44,26 @@ int System::program_substeps() const {
 int System::program_stride() const {
   return p_->program_.stride_;
 }
+double System::program_cadence_window_dt() const {
+  return p_->program_.cadence_window_dt_;
+}
+int System::program_cadence_window_steps() const {
+  return p_->program_.cadence_window_steps_;
+}
+double System::program_cadence_window_start_time() const {
+  return p_->program_.cadence_window_start_time_;
+}
+void System::restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                            double window_start_time, int macro_step) {
+  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time, macro_step,
+                                      "System");
+}
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());
 }
 
-std::size_t System::apply_coupling_operators(
-    Real dt, const std::vector<MultiFab*>& candidate_states) {
+std::size_t System::apply_coupling_operators(Real dt,
+                                             const std::vector<MultiFab*>& candidate_states) {
   if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
     throw std::invalid_argument(
         "System::apply_coupling_operators requires a finite non-negative dt");
@@ -61,8 +77,8 @@ std::size_t System::apply_coupling_operators(
           "System::apply_coupling_operators received a null candidate state");
     const MultiFab& live = p_->sp[block].U;
     if (candidate->box_array().boxes() != live.box_array().boxes() ||
-        candidate->dmap().ranks() != live.dmap().ranks() ||
-        candidate->ncomp() != live.ncomp() || candidate->n_grow() != live.n_grow())
+        candidate->dmap().ranks() != live.dmap().ranks() || candidate->ncomp() != live.ncomp() ||
+        candidate->n_grow() != live.n_grow())
       throw std::invalid_argument(
           "System::apply_coupling_operators candidate layout differs from its block");
     for (const auto& accepted : p_->sp)

@@ -1,4 +1,5 @@
 """Output-owned restart operation provider used by checkpoint ConsumerGraph nodes."""
+
 from __future__ import annotations
 
 import os
@@ -26,8 +27,13 @@ class _RestartSnapshot:
     """One collectively captured file whose publication is still compensatable."""
 
     __slots__ = (
-        "_runtime", "_topology", "_staging", "_staging_inode",
-        "_published_target", "_published_inode", "_discarded",
+        "_runtime",
+        "_topology",
+        "_staging",
+        "_staging_inode",
+        "_published_target",
+        "_published_inode",
+        "_discarded",
     )
 
     @staticmethod
@@ -37,15 +43,18 @@ class _RestartSnapshot:
 
     @classmethod
     def _unlink_owned(
-        cls, path: Path, inode: tuple[int, int], *, phase: str,
+        cls,
+        path: Path,
+        inode: tuple[int, int],
+        *,
+        phase: str,
     ) -> None:
         try:
             current = cls._inode(path)
         except FileNotFoundError:
             return
         if current != inode:
-            raise RuntimeError(
-                "checkpoint %s refuses to delete replaced path %s" % (phase, path))
+            raise RuntimeError("checkpoint %s refuses to delete replaced path %s" % (phase, path))
         path.unlink()
 
     def __init__(self, runtime: Any, directory: Any) -> None:
@@ -56,7 +65,8 @@ class _RestartSnapshot:
         def choose_staging() -> dict[str, str]:
             local_directory.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(
-                prefix=".pops-restart-snapshot.", suffix=".npz", dir=local_directory)
+                prefix=".pops-restart-snapshot.", suffix=".npz", dir=local_directory
+            )
             os.close(fd)
             os.unlink(name)
             return {"directory": str(local_directory), "staging": name}
@@ -76,8 +86,11 @@ class _RestartSnapshot:
                 raise ValueError("checkpoint staging path escaped its authenticated directory")
         except BaseException as error:
             selection_error = error
-            staging = Path(selected.get("staging", ".invalid-checkpoint.npz")) \
-                if isinstance(selected, dict) else Path(".invalid-checkpoint.npz")
+            staging = (
+                Path(selected.get("staging", ".invalid-checkpoint.npz"))
+                if isinstance(selected, dict)
+                else Path(".invalid-checkpoint.npz")
+            )
         consensus(self._topology, "staging agreement", error=selection_error)
         self._staging = staging
         self._staging_inode: tuple[int, int] | None = None
@@ -99,7 +112,8 @@ class _RestartSnapshot:
         exact_error = None
         if produced != self._staging:
             exact_error = RuntimeError(
-                "restart provider did not capture the exact shared staged snapshot")
+                "restart provider did not capture the exact shared staged snapshot"
+            )
         consensus(
             self._topology,
             "staged snapshot identity",
@@ -123,8 +137,9 @@ class _RestartSnapshot:
         if self._discarded:
             raise RuntimeError("discarded restart snapshot cannot be published")
         local_target = canonical_checkpoint_path(target)
-        selected_target = Path(root_value(
-            self._topology, "target selection", lambda: str(local_target)))
+        selected_target = Path(
+            root_value(self._topology, "target selection", lambda: str(local_target))
+        )
         target_error = None
         if local_target != selected_target:
             target_error = ValueError(
@@ -152,10 +167,12 @@ class _RestartSnapshot:
                     raise RuntimeError("checkpoint hard link does not retain the staging inode")
                 self._runtime._inspect_checkpoint_file(selected_target)
                 self._unlink_owned(
-                    self._staging, self._staging_inode, phase="successful staging cleanup")
+                    self._staging, self._staging_inode, phase="successful staging cleanup"
+                )
             except FileExistsError as error:
                 raise FileExistsError(
-                    "checkpoint target collision: %s" % selected_target) from error
+                    "checkpoint target collision: %s" % selected_target
+                ) from error
             except BaseException as error:
                 cleanup_error = None
                 if linked:
@@ -181,7 +198,9 @@ class _RestartSnapshot:
 
         publication = root_value(self._topology, "publication", publish_root)
         if not isinstance(publication, dict) or set(publication) != {
-            "target", "device", "inode",
+            "target",
+            "device",
+            "inode",
         }:
             raise RuntimeError("checkpoint publication returned invalid ownership evidence")
         published = Path(publication["target"])
@@ -198,8 +217,7 @@ class _RestartSnapshot:
         def discard_root() -> None:
             if self._staging_inode is None:
                 raise RuntimeError("restart snapshot has no authenticated staging inode")
-            self._unlink_owned(
-                self._staging, self._staging_inode, phase="snapshot discard")
+            self._unlink_owned(self._staging, self._staging_inode, phase="snapshot discard")
 
         root_value(self._topology, "discard", discard_root)
         self._discarded = True
@@ -211,7 +229,8 @@ class _RestartSnapshot:
         def rollback_root() -> None:
             if self._staging_inode is not None:
                 self._unlink_owned(
-                    self._staging, self._staging_inode, phase="rollback staging cleanup")
+                    self._staging, self._staging_inode, phase="rollback staging cleanup"
+                )
             if self._published_target is not None:
                 if self._published_inode is None:
                     raise RuntimeError("published checkpoint has no ownership evidence")
@@ -229,7 +248,7 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Immutable adapter over the strict Uniform/AMR accepted-state v3 codecs."""
+    """Compatibility-named adapter over the strict Uniform/AMR accepted-state v4 payloads."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -241,7 +260,7 @@ class RestartV3:
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "provider_id": "pops.restart.accepted-state-v3",
+            "provider_id": "pops.restart.accepted-state-v4",
             "extension": ".npz",
             "bit_identical": self.bit_identical,
             # A serial runtime is the one-member case of this collective operation.  Providers
@@ -270,9 +289,12 @@ class RestartV3:
         topology = checkpoint_topology(runtime)
         local_target = canonical_checkpoint_path(path)
         target = Path(root_value(topology, "restart target selection", lambda: str(local_target)))
-        target_error = None if target == local_target else ValueError(
-            "restart target differs across ranks: local %s, rank-0 %s"
-            % (local_target, target)
+        target_error = (
+            None
+            if target == local_target
+            else ValueError(
+                "restart target differs across ranks: local %s, rank-0 %s" % (local_target, target)
+            )
         )
         consensus(topology, "restart target agreement", error=target_error)
         root_payload = b""
@@ -284,9 +306,9 @@ class RestartV3:
             return cursors.to_data()
 
         cursor_data = root_value(
-            topology, "restart read and authentication", read_and_authenticate_root)
-        payload = root_bytes(
-            topology, "restart payload broadcast", lambda: root_payload)
+            topology, "restart read and authentication", read_and_authenticate_root
+        )
+        payload = root_bytes(topology, "restart payload broadcast", lambda: root_payload)
         cursors = None
         cursor_error = None
         try:
@@ -311,7 +333,7 @@ class RestartAuthority:
     """Resolved, plan-owned authority for manual and scheduled restart checkpoints."""
 
     operation: Any = field(repr=False)
-    source: str = "builtin-v3"
+    source: str = "builtin-v4"
     operation_data: Any = field(init=False, repr=False)
     identity: Any = field(init=False)
 
@@ -320,7 +342,7 @@ class RestartAuthority:
         from pops._frozen_data import thaw_data
         from ._consumer_contracts import _provider_data
 
-        if self.source not in {"builtin-v3", "consumer-graph"}:
+        if self.source not in {"builtin-v4", "consumer-graph"}:
             raise ValueError("restart authority has an unsupported source")
         data = _provider_data(
             self.operation,
@@ -328,10 +350,17 @@ class RestartAuthority:
             methods=("snapshot", "validate_snapshot", "write", "reopen", "restore"),
         )
         object.__setattr__(self, "operation_data", data)
-        object.__setattr__(self, "identity", make_identity("restart-authority", {
-            "source": self.source,
-            "operation": thaw_data(data),
-        }))
+        object.__setattr__(
+            self,
+            "identity",
+            make_identity(
+                "restart-authority",
+                {
+                    "source": self.source,
+                    "operation": thaw_data(data),
+                },
+            ),
+        )
 
     @classmethod
     def from_consumer_graph(cls, graph: Any) -> RestartAuthority:
@@ -347,8 +376,7 @@ class RestartAuthority:
         if not rows:
             return cls(RestartV3())
         identities = {
-            make_identity("restart-provider", thaw_data(row.operation_data)).token
-            for row in rows
+            make_identity("restart-provider", thaw_data(row.operation_data)).token for row in rows
         }
         if len(identities) != 1:
             raise ValueError("ConsumerGraph declares incompatible restart authorities")

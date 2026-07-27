@@ -7,15 +7,14 @@
 
 namespace pops::detail {
 
-AmrRuntimeBlock @SEAM_SYMBOL @(const AmrBlockBuildArgs& a, const SharedAmrLayout& S) {
-  return build_amr_block_for_flux(@SEAM_TR_CTOR @, a, S,
-                                  [](auto m, const AmrBlockBuildArgs& aa, const SharedAmrLayout& SS,
-                                     const std::vector<int>& impl) {
-                                    return dispatch_amr_block_ @SEAM_FLUX
-                                        @(m, aa.limiter, SS, aa.name, aa.density, aa.has_density,
-                                          aa.gamma, aa.substeps, aa.recon_prim, aa.imex, aa.stride,
-                                          impl, aa.newton, aa.state, aa.newton_diagnostics,
-                                          aa.pos_floor, aa.weno_epsilon, aa.wave_speed_cache);
+AmrRuntimeBlock @SEAM_SYMBOL@(const AmrBlockBuildArgs& a, const SharedAmrLayout& S) {
+  return build_amr_block_for_flux(@SEAM_TR_CTOR@, a, S,
+                                  [](auto m, const AmrBlockBuildArgs& aa,
+                                     const SharedAmrLayout& SS) {
+                                    return dispatch_amr_block_@SEAM_FLUX@(
+                                        m, aa.limiter, SS, aa.name, aa.density, aa.has_density,
+                                        aa.gamma, aa.substeps, aa.recon_prim, aa.stride, aa.state,
+                                        aa.pos_floor, aa.weno_epsilon, aa.wave_speed_cache);
                                   });
 }
 

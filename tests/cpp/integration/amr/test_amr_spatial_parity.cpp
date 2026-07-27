@@ -1,17 +1,13 @@
 // Parite spatiale AmrSystem <-> System : le coeur spatial du chemin AMR
-// (compute_face_fluxes<Limiter, Flux> + recon_prim, consomme par le reflux de
-// advance_amr) reproduit EXACTEMENT le residu d'assemble_rhs<Limiter, Flux> du
+// (compute_face_fluxes<Limiter, Flux> + recon_prim, consomme par le reflux du
+// ProgramGraph AMR) reproduit EXACTEMENT le residu d'assemble_rhs<Limiter, Flux> du
 // chemin System, sous reconstruction PRIMITIVE et flux HLLC puis Roe. C'est la
 // preuve que la facade raffinee accepte les memes parametres de schema que System
 // et les applique a chaque niveau/patch.
 //
-// Deux parties :
-//   A. Coeur spatial (bit-identique) : div(compute_face_fluxes) == assemble_rhs,
-//      pour HLLC et Roe en reconstruction primitive (minmod, ordre 2). Et le
-//      primitif DIFFERE du conservatif (la reconstruction joue bien).
-//   B. Plomberie moteur : advance_amr (un niveau) transmet recon_prim jusqu'a
-//      compute_face_fluxes (primitif != conservatif apres un pas), reste fini et
-//      conserve la masse sur un etat lisse periodique.
+// Le coeur spatial (bit-identique) prouve que div(compute_face_fluxes) == assemble_rhs pour HLLC et
+// Roe en reconstruction primitive (minmod, ordre 2), et que le primitif differe du conservatif.
+// L'integration temporelle et la conservation AMR sont couvertes par les tests ProgramGraph/reflux.
 
 #include <gtest/gtest.h>
 
@@ -19,7 +15,6 @@
 #include <pops/numerics/fv/numerical_flux.hpp>  // HLLCFlux, RoeFlux
 #include <pops/numerics/fv/reconstruction.hpp>  // Minmod
 #include <pops/numerics/spatial_operator.hpp>   // assemble_rhs, compute_face_fluxes, load_state
-#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // advance_amr, AmrLevelMP
 
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -100,7 +95,7 @@ TEST(test_amr_spatial_parity, Runs) {
     return d;
   };
 
-  // --- Partie A : coeur spatial AMR == coeur spatial System (bit-identique) ---
+  // Coeur spatial AMR == coeur spatial System (bit-identique).
   {
     MultiFab Rs(ba, dm, 4, 0), Ra(ba, dm, 4, 0), Rc(ba, dm, 4, 0);
 
@@ -121,29 +116,5 @@ TEST(test_amr_spatial_parity, Runs) {
     EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13)
         << "Roe+primitif : div(compute_face_fluxes) == assemble_rhs";
     EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "Roe+primitif : residu non trivial";
-  }
-
-  // --- Partie B : recon_prim transmis a travers advance_amr (moteur AMR) ---
-  {
-    const double dt = 1e-3;
-    const double sum0 = sum(U0);
-    auto one_step = [&](bool prim) {
-      std::vector<AmrLevelMP> levels;
-      levels.push_back(AmrLevelMP{U0, &aux, dx, dy});  // un seul niveau (grossier)
-      advance_amr<Minmod, HLLCFlux>(model, levels, dom, dt, Periodicity{true, true},
-                                    /*coarse_replicated=*/true, /*recon_prim=*/prim);
-      return std::move(levels[0].U);
-    };
-    MultiFab Up = one_step(true);
-    MultiFab Uc = one_step(false);
-
-    EXPECT_TRUE(std::isfinite(norm_inf(Up)) && norm_inf(Up) < 1e6)
-        << "advance_amr primitif : etat fini";
-    EXPECT_TRUE(std::fabs(sum(Up) - sum0) < 1e-9)
-        << "advance_amr primitif : masse conservee (periodique)";
-    EXPECT_TRUE(std::fabs(sum(Uc) - sum0) < 1e-9) << "advance_amr conservatif : masse conservee";
-    // recon_prim a bien traverse advance_amr -> compute_face_fluxes : les deux pas different.
-    EXPECT_TRUE(maxdiff(Up, Uc) > 1e-9)
-        << "advance_amr : recon_prim plumbing (primitif != conservatif)";
   }
 }

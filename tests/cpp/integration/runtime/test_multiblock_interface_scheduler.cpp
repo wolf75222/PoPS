@@ -447,8 +447,7 @@ TEST(test_multiblock_interface_scheduler,
   for (const char* name : {"left", "right"}) {
     blocks.push_back(detail::dispatch_amr_block(
         scalar_model(), "none", "rusanov", layout, name,
-        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false,
-        false, 1));
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1));
     blocks.back().level_rhs = [&full_rhs_calls](MultiFab&, const MultiFab&, const Geometry&,
                                                 MultiFab& rhs) {
       ++full_rhs_calls;
@@ -526,7 +525,7 @@ TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProv
   for (const char* name : {"a", "b"}) {
     blocks.push_back(detail::dispatch_amr_block(scalar_model(), "none", "rusanov", layout, name,
                                                 std::vector<double>(9, 1.0), true, 1.4, 1, false,
-                                                false, 1));
+                                                1));
   }
   const std::string a_state = "case::amr::a::state::U";
   const std::string b_state = "case::amr::b::state::U";

@@ -30,8 +30,13 @@
 #include <bit>
 #include <cmath>
 #include <functional>
+#include <limits>
+#include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <limits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -40,9 +45,57 @@
 
 using namespace pops;
 
+template <class Snapshot>
+concept CarriesAcceptedMacroStep = requires(Snapshot snapshot) { snapshot.macro_step; };
+
+static_assert(!CarriesAcceptedMacroStep<AmrRuntime::StepSnapshot>,
+              "the spatial AMR snapshot must not serialize the facade's accepted clock");
+
 using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
 static ExBModel exb_model(double q, double B0) {
   return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+}
+
+// One scalar source-only model for the late fine-level rollback proof. A finite provisional value
+// above sqrt(max(Real)) makes its authored source u^2 genuinely non-finite. This distinguishes a
+// real numerical failure from a test-injected exception.
+struct QuadraticGrowthModel {
+  using State = StateVec<1>;
+  using Prim = State;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State source(const State& u, const Aux&) const { return State{u[0] * u[0]}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+  POPS_HD Prim to_primitive(const State& state) const { return state; }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
+
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"u"}, 1, {VariableRole::Density}};
+  }
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"u"}, 1, {VariableRole::Density}};
+  }
+};
+
+static_assert(PhysicalModel<QuadraticGrowthModel>);
+
+static AmrCompiledBlockBuilder quadratic_growth_block_builder() {
+  return [](const detail::SharedAmrLayout& layout, const std::string& name,
+            const std::vector<double>& density, bool has_density, const std::vector<double>& state,
+            bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+            const std::vector<std::string>& implicit_vars,
+            const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
+            bool wave_speed_cache) {
+    if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+      throw std::invalid_argument(
+          "the quadratic rollback fixture requires an explicit spatial block");
+    return detail::build_amr_block<QuadraticGrowthModel, Minmod, RusanovFlux>(
+        QuadraticGrowthModel{}, layout, name, density, has_density, gamma, substeps, recon_prim,
+        stride, has_state ? &state : nullptr, pos_floor, weno_epsilon, wave_speed_cache);
+  };
 }
 
 static ModelSpec exb_spec(double q, double B0) {
@@ -163,11 +216,11 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_model(+1.0, B0), "minmod", "rusanov", S, "a",
                                               blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
-                                              /*has_density=*/true, 1.4, 1, false, false, 1));
+                                              /*has_density=*/true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-history/block/a/state/U";
   blocks.push_back(detail::dispatch_amr_block(exb_model(-1.0, B0), "minmod", "rusanov", S, "b",
                                               blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
-                                              /*has_density=*/true, 1.4, 1, false, false, 1));
+                                              /*has_density=*/true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-history/block/b/state/U";
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
@@ -229,8 +282,8 @@ static void install_transaction_probe_program(runtime::program::AmrProgramContex
                                               AmrRuntime& runtime,
                                               std::function<void()> after_hierarchy = {}) {
   context.configure_primary_clock("clock.macro");
-  context.install([&context, &runtime, after_hierarchy = std::move(after_hierarchy)](
-                      double macro_dt) {
+  context.install([&context, &runtime,
+                   after_hierarchy = std::move(after_hierarchy)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context](double level_dt) {
       context.set_stage_time(0, 1);
       (void)context.solve_fields();
@@ -246,8 +299,7 @@ static void install_transaction_probe_program(runtime::program::AmrProgramContex
         rates.push_back(&rate);
       }
       for (std::size_t block = 0; block < states.size(); ++block)
-        context.axpy(*states[block], Real(level_dt), *rates[block], Real(level_dt),
-                     {{1, 1, 1}});
+        context.axpy(*states[block], Real(level_dt), *rates[block], Real(level_dt), {{1, 1, 1}});
     });
     for (int level = 0; level < runtime.nlev(); ++level)
       detail::AmrHistoryOps::store_history(runtime, "R", level, runtime.level_state(0, level),
@@ -355,6 +407,26 @@ TEST(test_amr_history_ring, CheckpointRoundTrip) {
   EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt2, "R", 1, false), flat), 0.0)
       << "flat_round_trip";
   EXPECT_EQ(detail::AmrHistoryOps::slot_dt(rt2, "R", 1), 0.03) << "slot_dt_round_trip";
+}
+
+TEST(test_amr_history_ring, SelectiveReplayCapabilityCannotBeForgedByAnEngineCaller) {
+  static_assert(!std::is_constructible_v<detail::AuthenticatedHistoryReplayToken, std::string, int>,
+                "only AmrSystem may mint a history replay capability after artifact validation");
+  SUCCEED();
+}
+
+TEST(test_amr_history_ring, InvalidOutgoingDtIsRejectedBeforeRestoreMutation) {
+  AmrRuntime runtime = make_two_block(32, 1.0, 1.0);
+  detail::AmrHistoryOps::register_history(runtime, 0, "R", 2);
+  const double before = detail::AmrHistoryOps::slot_dt(runtime, "R", 0);
+  EXPECT_THROW(detail::AmrHistoryOps::restore_slot_dt(runtime, "R", 0,
+                                                      std::numeric_limits<double>::quiet_NaN()),
+               std::runtime_error);
+  EXPECT_THROW(detail::AmrHistoryOps::restore_slot_dt(runtime, "R", 0,
+                                                      std::numeric_limits<double>::infinity()),
+               std::runtime_error);
+  EXPECT_THROW(detail::AmrHistoryOps::restore_slot_dt(runtime, "R", 0, -0.01), std::runtime_error);
+  EXPECT_EQ(detail::AmrHistoryOps::slot_dt(runtime, "R", 0), before);
 }
 
 TEST(test_amr_history_ring, NullRemapIsBitIdentical) {
@@ -555,7 +627,7 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   EXPECT_EQ(rt->block_level_state(0, 0), accepted_state);
   EXPECT_EQ(rt->topology_materialization_generation(), first_generation)
       << "same-layout rollback preserves every topology-bound prepared workspace";
-  context.regrid_if_due(rt->macro_step());
+  context.regrid_if_due(sim.macro_step());
   EXPECT_EQ(context.capture_flux_workspace_generation(), rt->topology_materialization_generation());
 
   bool measured_coarse_capture = false;
@@ -1240,8 +1312,8 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   const int regrids_before = rt->regrid_count();
 
   runtime::program::AmrProgramContext context(rt, &sim);
-  install_transaction_probe_program(
-      context, *rt, [&] { sim.record_program_diagnostic("accepted", 7.0); });
+  install_transaction_probe_program(context, *rt,
+                                    [&] { sim.record_program_diagnostic("accepted", 7.0); });
 
   sim.begin_step_transaction();
   sim.step(0.01);
@@ -1259,6 +1331,36 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   // snapshot. Finalize is the irreversible boundary after those publications succeed.
   sim.finalize_step_transaction();
   EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+}
+
+TEST(test_amr_history_ring, FacadeSnapshotRestoresClockAfterSeveralAcceptedSteps) {
+  constexpr double dt = 0.125;
+  AmrSystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.level_count = 1;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem sim(cfg);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1);
+  sim.install_program_step([](double) {});
+
+  sim.advance(dt, 3);
+  ASSERT_DOUBLE_EQ(sim.time(), 3.0 * dt);
+  ASSERT_EQ(sim.macro_step(), 3);
+
+  // The retained accepted image serializes the facade clock together with the spatial snapshot.
+  // Advancing provisionally and rolling back must restore the exact pre-attempt cursor.
+  sim.begin_step_transaction();
+  sim.step(dt);
+  ASSERT_DOUBLE_EQ(sim.time(), 4.0 * dt);
+  ASSERT_EQ(sim.macro_step(), 4);
+  sim.rollback_step_transaction();
+
+  EXPECT_DOUBLE_EQ(sim.time(), 3.0 * dt);
+  EXPECT_EQ(sim.macro_step(), 3);
+  EXPECT_FALSE(sim.has_active_step_transaction());
 }
 
 TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock) {
@@ -1308,7 +1410,6 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   EXPECT_TRUE(topology_changed_during_attempt) << "fault must happen after a real topology change";
   EXPECT_DOUBLE_EQ(sim.time(), 0.25);
   EXPECT_EQ(sim.macro_step(), 1);
-  EXPECT_EQ(rt->macro_step(), 1);
   EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
   EXPECT_EQ(rt->level_owner_ranks(1), owners_before);
   EXPECT_EQ(rt->block_level_state(0, 0), state_a_before);
@@ -1325,7 +1426,6 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   EXPECT_TRUE(topology_changed_during_attempt);
   EXPECT_DOUBLE_EQ(sim.time(), 0.25);
   EXPECT_EQ(sim.macro_step(), 1);
-  EXPECT_EQ(rt->macro_step(), 1);
   EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
   EXPECT_EQ(rt->level_owner_ranks(1), owners_before);
   EXPECT_EQ(rt->block_level_state(0, 0), state_a_before);
@@ -1335,4 +1435,129 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   EXPECT_EQ(rt->regrid_count(), regrids_before);
   EXPECT_FALSE(detail::AmrHistoryOps::initialized(*rt, "R"));
   EXPECT_TRUE(sim.program_diagnostics().empty());
+}
+
+TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.level_count = 2;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem sim(cfg);
+  sim.set_compiled_block(QuadraticGrowthModel::n_vars, 1.4, /*substeps=*/1,
+                         quadratic_growth_block_builder(), "quadratic");
+  sim.set_density("quadratic", std::vector<double>(static_cast<std::size_t>(n) * n, 1.0));
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_refinement(1.0e29);
+  sim.set_temporal_relations({2}, {1}, {"integral_only"});
+  sim.set_program_block_map({0});
+  sim.install_program_step([](double) {});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+
+  ASSERT_FALSE(rt->block_level_state(0, 1).empty());
+  const double fine_value = 2.0 * std::sqrt(static_cast<double>(std::numeric_limits<Real>::max()));
+  ASSERT_TRUE(all_finite(rt->block_level_state(0, 0)));
+  ASSERT_TRUE(all_finite(rt->block_level_state(0, 1)));
+
+  // Make the elliptic solve's provisional publication observable too: the zero-RHS solve replaces
+  // these finite sentinels, and the outer accepted-step transaction must restore both levels.
+  std::vector<double> aux0_seed = rt->level_aux_flat(0);
+  std::vector<double> aux1_seed = rt->level_aux_flat(1);
+  std::fill(aux0_seed.begin(), aux0_seed.end(), 0.125);
+  std::fill(aux1_seed.begin(), aux1_seed.end(), -0.25);
+  rt->set_level_aux_flat(0, aux0_seed);
+  rt->set_level_aux_flat(1, aux1_seed);
+
+  bool coarse_solve_succeeded = false;
+  bool coarse_state_published = false;
+  bool fine_nonfinite_observed = false;
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.configure_primary_clock("test.clock.fine-nonfinite");
+  context.install([&](double macro_dt) {
+    context.advance_hierarchy(macro_dt, [&](double level_dt) {
+      context.set_stage_time(0, 1);
+      const SolveReport field_report = context.solve_fields();
+      if (!field_report.solved())
+        throw std::runtime_error("quadratic rollback fixture field solve did not succeed");
+      if (context.level() == 0)
+        coarse_solve_succeeded = true;
+
+      MultiFab& live = context.state(0);
+      if (context.level() == 1)
+        live.set_val(static_cast<Real>(fine_value));
+      MultiFab& rate = context.rhs_scratch(8100, 0, live);
+      try {
+        context.rhs_into(0, live, rate, 8101);
+      } catch (const std::runtime_error& failure) {
+        const std::string detail = failure.what();
+        if (context.level() != 1 || detail.find("non-finite") == std::string::npos)
+          throw;
+        fine_nonfinite_observed = true;
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, "stage",
+                                                    detail);
+      }
+
+      MultiFab& candidate = context.scratch_state(8102, 0, live);
+      context.lincomb(candidate, Real(1), live, Real(0), live);
+      context.axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
+      context.commit_many({{&live, &candidate}});
+      if (context.level() == 0) {
+        coarse_state_published = true;
+        sim.record_program_diagnostic("provisional.coarse", 1.0);
+      }
+    });
+  });
+
+  const double time_before = sim.time();
+  const int facade_step_before = sim.macro_step();
+  const std::vector<double> coarse_before = rt->block_level_state(0, 0);
+  const std::vector<double> fine_before = rt->block_level_state(0, 1);
+  const std::vector<double> aux0_before = rt->level_aux_flat(0);
+  const std::vector<double> aux1_before = rt->level_aux_flat(1);
+  const std::vector<PatchBox> patches_before = rt->patch_boxes();
+  const std::vector<int> coarse_owners_before = rt->level_owner_ranks(0);
+  const std::vector<int> fine_owners_before = rt->level_owner_ranks(1);
+  const std::uint64_t topology_before = rt->topology_epoch();
+  const int regrids_before = rt->regrid_count();
+  const int solves_before = rt->solve_count();
+  const std::vector<std::uint8_t> program_before = sim.program_accepted_state();
+  const std::uint64_t program_revision_before = sim.program_accepted_state_revision();
+  const std::vector<std::vector<std::string>> program_clocks_before = sim.program_clock_manifest();
+  const std::map<std::string, double> diagnostics_before = sim.program_diagnostics();
+  ASSERT_FALSE(program_before.empty());
+
+  try {
+    sim.step(0.01);
+    FAIL() << "a genuinely non-finite fine-level RHS must reject the complete hierarchy attempt";
+  } catch (const runtime::program::StepAttemptRejected& rejected) {
+    EXPECT_EQ(rejected.status(), SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(rejected.phase(), "stage");
+    EXPECT_NE(rejected.detail().find("non-finite"), std::string::npos);
+  }
+
+  ASSERT_TRUE(coarse_solve_succeeded);
+  ASSERT_TRUE(coarse_state_published);
+  ASSERT_TRUE(fine_nonfinite_observed);
+  EXPECT_DOUBLE_EQ(sim.time(), time_before);
+  EXPECT_EQ(sim.macro_step(), facade_step_before);
+  EXPECT_EQ(rt->block_level_state(0, 0), coarse_before);
+  EXPECT_EQ(rt->block_level_state(0, 1), fine_before);
+  EXPECT_EQ(rt->level_aux_flat(0), aux0_before);
+  EXPECT_EQ(rt->level_aux_flat(1), aux1_before);
+  EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
+  EXPECT_EQ(rt->level_owner_ranks(0), coarse_owners_before);
+  EXPECT_EQ(rt->level_owner_ranks(1), fine_owners_before);
+  EXPECT_EQ(rt->topology_epoch(), topology_before);
+  EXPECT_EQ(rt->regrid_count(), regrids_before);
+  EXPECT_EQ(rt->solve_count(), solves_before);
+  EXPECT_EQ(sim.program_accepted_state(), program_before);
+  EXPECT_EQ(sim.program_accepted_state_revision(), program_revision_before);
+  EXPECT_EQ(sim.program_clock_manifest(), program_clocks_before);
+  EXPECT_EQ(sim.program_diagnostics(), diagnostics_before);
 }

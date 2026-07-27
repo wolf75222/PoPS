@@ -18,7 +18,9 @@ the schedule all consume. Slot 0 is the NEWEST value, slot d-1 the OLDEST.
 
 A policy is INERT: it declares which slots are stored and computes nothing. The replay that
 reconstructs the recomputed slots is the native ``System::rebuild_history_slots`` seam
-(ADC-626), driven by the checkpoint reader at restart.
+(ADC-626), driven by the checkpoint reader at restart. The resolved checkpoint plan may safely
+promote a selective request to dense storage (cold ring, AMR regrid window, or non-default global
+Program cadence); this changes physical storage, never the authored policy recorded in the manifest.
 
 SCHEDULE (see :func:`_optimal_placement`): ring reconstruction fills each gap between adjacent
 stored anchors ONCE by re-stepping the Program forward, so the TOTAL replay work is
@@ -30,6 +32,7 @@ when its stride misses the oldest slot. This is the EXACT min-max-gap optimum, n
 Griewank-Walsh adjoint Revolve (which optimises a different objective); the name is kept
 because the policy is budget-bounded storage, but the schedule is documented as equispaced.
 """
+
 from pops.descriptors import Descriptor
 from pops._manifest_protocol import (
     exact_mapping,
@@ -67,7 +70,8 @@ class HistoryPersistence(Descriptor):
         ``range(depth)``; slot 0 = newest). The generic primitive the writer / reader / schedule
         consume. Subclasses override; the base refuses (an abstract policy stores nothing)."""
         raise NotImplementedError(
-            "%s.stored_slots is abstract; use Dense / Interval / Revolve" % (self.name,))
+            "%s.stored_slots is abstract; use Dense / Interval / Revolve" % (self.name,)
+        )
 
     def recomputed_slots(self, depth):
         """The slots NOT stored (reconstructed by replay), sorted ascending. Derived generically
@@ -77,11 +81,11 @@ class HistoryPersistence(Descriptor):
         return tuple(s for s in range(depth) if s not in stored)
 
     def _check_depth(self, depth):
-        depth = resolve_param_use(
-            depth, ParamUse.SHAPE, where="%s(depth=)" % self.name)
+        depth = resolve_param_use(depth, ParamUse.SHAPE, where="%s(depth=)" % self.name)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError(
-                "%s: ring depth must be a Python int >= 1 (got %r)" % (self.name, depth))
+                "%s: ring depth must be a Python int >= 1 (got %r)" % (self.name, depth)
+            )
         return depth
 
     def validate_for(self, depth):
@@ -124,19 +128,23 @@ class HistoryPersistence(Descriptor):
             where="history persistence manifest",
         )
         if "policy" not in envelope:
-            raise TypeError("history persistence manifest payload is missing required field 'policy'")
+            raise TypeError(
+                "history persistence manifest payload is missing required field 'policy'"
+            )
         kind = strict_string(envelope["policy"], where="history persistence policy")
         factory = _KIND_REGISTRY.get(kind)
         if factory is None:
             raise ValueError(
                 "history persistence kind %r unknown -- this checkpoint was written by a newer "
-                "pops (known kinds: %s)" % (kind, ", ".join(sorted(_KIND_REGISTRY))))
+                "pops (known kinds: %s)" % (kind, ", ".join(sorted(_KIND_REGISTRY)))
+            )
         return factory._from_manifest_payload(envelope)
 
     @staticmethod
     def from_json(text):
         return HistoryPersistence.from_manifest(
-            strict_json_loads(text, where="history persistence manifest JSON"))
+            strict_json_loads(text, where="history persistence manifest JSON")
+        )
 
     @classmethod
     def _from_manifest_payload(cls, payload):
@@ -195,12 +203,14 @@ class Interval(HistoryPersistence):
         if self.k >= depth:
             raise ValueError(
                 "Interval(k=%d) invalid for ring depth %d: k >= depth stores only the newest slot "
-                "-- use Dense() to keep the whole ring" % (self.k, depth))
+                "-- use Dense() to keep the whole ring" % (self.k, depth)
+            )
         if (depth - 1) % self.k != 0:
             raise ValueError(
                 "Interval(k=%d) does not store the oldest slot %d ((depth-1)=%d %% k=%d != 0); the "
                 "oldest lag cannot be replayed -- choose k dividing depth-1, or Dense()"
-                % (self.k, depth - 1, depth - 1, self.k))
+                % (self.k, depth - 1, depth - 1, self.k)
+            )
         return depth
 
     def to_manifest(self):
@@ -229,13 +239,13 @@ class Revolve(HistoryPersistence):
     kind = "revolve"
 
     def __init__(self, snapshots):
-        snapshots = resolve_param_use(
-            snapshots, ParamUse.SHAPE, where="Revolve(snapshots=)")
+        snapshots = resolve_param_use(snapshots, ParamUse.SHAPE, where="Revolve(snapshots=)")
         if isinstance(snapshots, bool) or not isinstance(snapshots, int) or snapshots < 2:
             raise ValueError(
                 "Revolve(snapshots): snapshots must be a Python int >= 2 (got %r); a single stored "
                 "slot cannot bound the replay of a depth>1 ring -- use Dense() for a full ring"
-                % (snapshots,))
+                % (snapshots,)
+            )
         self.snapshots = int(snapshots)
 
     def options(self):
@@ -251,7 +261,8 @@ class Revolve(HistoryPersistence):
         if self.snapshots > depth:
             raise ValueError(
                 "Revolve(snapshots=%d) exceeds ring depth %d: more budget than slots -- use Dense() "
-                "to store the whole ring" % (self.snapshots, depth))
+                "to store the whole ring" % (self.snapshots, depth)
+            )
         return depth
 
     def to_manifest(self):
@@ -263,10 +274,8 @@ class Revolve(HistoryPersistence):
 
     @classmethod
     def _from_manifest_payload(cls, payload):
-        row = exact_mapping(
-            payload, {"policy", "snapshots"}, where="Revolve persistence payload")
-        return cls(strict_int(
-            row["snapshots"], where="Revolve persistence snapshots", minimum=2))
+        row = exact_mapping(payload, {"policy", "snapshots"}, where="Revolve persistence payload")
+        return cls(strict_int(row["snapshots"], where="Revolve persistence snapshots", minimum=2))
 
 
 #: Reader dispatch table: the ``"kind"`` tag -> the policy class (ADC-626). An unknown kind at
@@ -292,7 +301,8 @@ def resolve_history_persistence(policy):
     raise TypeError(
         "keep_history(checkpoint_policy=%r): expected a pops.time history-persistence policy "
         "(Dense / Interval(k) / Revolve(snapshots)) or None; a bare object / string is not a typed "
-        "policy" % (policy,))
+        "policy" % (policy,)
+    )
 
 
 def _optimal_placement(depth, snapshots):
@@ -313,7 +323,8 @@ def _optimal_placement(depth, snapshots):
     if snapshots < 2:
         raise ValueError(
             "_optimal_placement requires snapshots >= 2 (got %d) to bound a depth-%d ring"
-            % (snapshots, depth))
+            % (snapshots, depth)
+        )
     # Equispaced base placement including both endpoints (i=0 -> 0, i=snapshots-1 -> depth-1).
     anchors = sorted({round(i * (depth - 1) / (snapshots - 1)) for i in range(snapshots)})
     # Deterministic gap-fill for rounding collisions: split the largest gap at its midpoint until
@@ -334,7 +345,13 @@ def _optimal_placement(depth, snapshots):
     return tuple(anchors)
 
 
-__all__ = ["HistoryPersistence", "Dense", "Interval", "Revolve",
-           "HISTORY_PERSISTENCE_CATEGORY", "HISTORY_PERSISTENCE_SCHEMA_VERSION",
-           "DEFAULT_HISTORY_PERSISTENCE",
-           "resolve_history_persistence"]
+__all__ = [
+    "HistoryPersistence",
+    "Dense",
+    "Interval",
+    "Revolve",
+    "HISTORY_PERSISTENCE_CATEGORY",
+    "HISTORY_PERSISTENCE_SCHEMA_VERSION",
+    "DEFAULT_HISTORY_PERSISTENCE",
+    "resolve_history_persistence",
+]

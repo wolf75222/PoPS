@@ -6,6 +6,7 @@ codec and restore transaction), ``_amr_system_program`` (compiled time-Program i
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
 mixins; this module composes them and keeps the constructor plus native block/coupling glue.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -13,8 +14,11 @@ from typing import Any
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
 from pops.runtime import _threading
 from pops.runtime._lifecycle import (
-    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error,
-    guard_assembling as _guard_assembling, _LifecycleMixin)
+    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL,
+    freeze_error as _freeze_error,
+    guard_assembling as _guard_assembling,
+    _LifecycleMixin,
+)
 from pops.runtime._numeric import native_real
 from pops.runtime._engine_descriptors import Spatial, Explicit
 from pops.runtime.defaults import (
@@ -72,15 +76,17 @@ class _AmrProfileSession:
         return PerformanceSummary(_profile_payload(self._system), self._profile)
 
 
-class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram,
-                _LifecycleMixin):
+class AmrSystem(
+    _AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram, _LifecycleMixin
+):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
     One or several blocks are co-located on one shared AMR hierarchy through the same AmrRuntime,
     SYSTEM Poisson with co-located SUMMED right-hand side (Sum_b q_b n_b), conservation PER BLOCK. The
-    blocks may have DIFFERENT SPATIAL SCHEMES, a per-block TEMPORAL TREATMENT (explicit /
-    imex), MULTIRATE (substeps / stride), COUPLED inter-species SOURCES and the multi-block production
-    DSL. In multi-block the block NAME indexes set_density(name) / mass(name) / density(name).
+    blocks may have different spatial schemes, coupled inter-species sources and compiled production
+    implementations. Their time descriptors are Program-authoring inputs only: one installed
+    ProgramGraph owns stages, cadence and accepted clocks. In multi-block the block name indexes
+    set_density(name) / mass(name) / density(name).
 
     UNION-OF-TAGS REGRID (regrid_every > 0) : the shared hierarchy is re-gridded from the UNION of
     the prepared tags of all blocks. Two criteria compose (cell-by-cell OR) :
@@ -133,6 +139,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         self._step_controller = None
         self._last_step_transaction_report = None
         from pops.runtime._temporal_restart import TemporalRestartState
+
         self._temporal_restart_state = TemporalRestartState()
 
     def _native_step_target(self) -> Any:
@@ -158,8 +165,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             t_end=float(self._s.time()) + strategy.dt,
         )
 
-    def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg", *,
-                    bc: Any = None, wall: Any = None) -> Any:
+    def set_poisson(
+        self,
+        rhs: Any = "charge_density",
+        solver: Any = "geometric_mg",
+        *,
+        bc: Any = None,
+        wall: Any = None,
+    ) -> Any:
         """Configure AMR Poisson with typed boundary and wall selectors.
 
         ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
@@ -168,42 +181,57 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         separate wall radius remain confined to :meth:`_set_poisson_native`.
         """
         from pops.runtime._system_install_lowering import _lower_bc, _lower_wall
+
         bc_token = "auto" if bc is None else _lower_bc(bc)
         wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
         self._set_poisson_native(
-            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
-            wall_radius=wall_radius)
+            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token, wall_radius=wall_radius
+        )
 
-    def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
-                            wall_radius: Any = 0.0) -> Any:
+    def _set_poisson_native(
+        self, *, rhs: Any, solver: Any, bc: Any, wall: Any, wall_radius: Any = 0.0
+    ) -> Any:
         """Private token-level seam used by resolved AMR installation."""
         _guard_assembling(self, "set_poisson")
         if not isinstance(bc, str) or not isinstance(wall, str):
             raise TypeError("_set_poisson_native requires native bc and wall tokens")
         self._s.set_poisson(
-            rhs=rhs, solver=solver, bc=bc, wall=wall,
-            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"))
+            rhs=rhs,
+            solver=solver,
+            bc=bc,
+            wall=wall,
+            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"),
+        )
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
         from pops.runtime._step_strategy import (
-            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+            prepare_step_controller,
+            resolve_run_strategy,
+            run_control_payload,
+            run_step_attempt,
+        )
         from pops.runtime._native_step_target import native_step_target
+
         strategy = resolve_run_strategy(self)
         control_payload = run_control_payload(strategy, controls)
         prepare_step_controller(self, strategy, controls)
         self._temporal_restart_state.begin_run(
-            control_payload, time=self._s.time(), macro_step=self._s.macro_step())
+            control_payload, time=self._s.time(), macro_step=self._s.macro_step()
+        )
         from pops.runtime._run_manifest import begin_run
+
         begin_run(
-            self, t_end=t_end, step_transaction=control_payload,
-            max_steps=max_steps, output_dir=output_dir)
+            self,
+            t_end=t_end,
+            step_transaction=control_payload,
+            max_steps=max_steps,
+            output_dir=output_dir,
+        )
         step_target = native_step_target(self)
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
-            run_step_attempt(
-                self, step_target, strategy,
-                t_end=float(t_end), controls=controls)
+            run_step_attempt(self, step_target, strategy, t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 
@@ -228,7 +256,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         elif not isinstance(profile, Profile):
             raise TypeError(
                 "AmrSystem.profile: expected the private engine Profile value, got %r"
-                % type(profile).__name__)
+                % type(profile).__name__
+            )
         return _AmrProfileSession(self, profile)
 
     def patch_rectangles(self) -> Any:
@@ -244,6 +273,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         n_patches(), no cost on the hot path.
         """
         from pops.runtime._amr_bind_lowering import _physical_patch_rectangles
+
         return _physical_patch_rectangles(
             self._s.patch_boxes(),
             cells=(self._s.nx(), self._s.ny()),
@@ -299,9 +329,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             provider and resolves it from the reconstruction requirements; no lower-order
             coarse/fine fallback is permitted.
         @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
-            ``pops.lib.time`` factory. It carries cadence, any implicit mask and Newton options,
-            threaded to C++. newton_diagnostics is wired for native blocks at every block count;
-            compiled .so loaders reject it because their flat ABI does not transport the report.
+            ``pops.lib.time`` factory. The installed typed Program is the sole time authority.
+            Until the AMR target provides a typed local implicit primitive, non-empty partial masks,
+            non-default Newton controls, and Newton diagnostics fail closed. The spatial runtime
+            never stores them or manufactures an implicit step/report.
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
@@ -320,29 +351,47 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         }
         if getattr(spatial, "weno_epsilon", None) is not None:
             spatial_options["weno_epsilon"] = native_real(
-                spatial.weno_epsilon, where="AmrSystem.add_block.weno_epsilon")
-        # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
-        # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
-        # against the block names/roles : empty -> full backward-Euler. Options and diagnostics are
-        # wired for native blocks at every block count; compiled .so loaders are rejected upstream
-        # when their flat ABI cannot transport the requested Newton contract.
-        self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-                          getattr(time, "substeps", 1), getattr(time, "stride", 1),
-                          getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
-                          getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                          native_real(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                                      where="AmrSystem.add_block.newton_rel_tol"),
-                          native_real(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                                      where="AmrSystem.add_block.newton_abs_tol"),
-                          native_real(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
-                                      where="AmrSystem.add_block.newton_fd_eps"),
-                          native_real(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
-                                      where="AmrSystem.add_block.newton_damping"),
-                          getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
-                          getattr(time, "newton_diagnostics", False),
-                          native_real(getattr(spatial, "positivity_floor", 0.0),
-                                      where="AmrSystem.add_block.positivity_floor"),
-                          **spatial_options)
+                spatial.weno_epsilon, where="AmrSystem.add_block.weno_epsilon"
+            )
+        # Forward the complete authoring request to the native contract. Cadence remains meaningful
+        # to Program/CFL normalization; unsupported partial masks and non-default Newton requests
+        # fail closed there instead of becoming inert spatial-runtime state.
+        self._s.add_block(
+            name,
+            model,
+            spatial.limiter,
+            spatial.flux,
+            spatial.recon,
+            time.kind,
+            getattr(time, "substeps", 1),
+            getattr(time, "stride", 1),
+            getattr(time, "implicit_vars", []),
+            getattr(time, "implicit_roles", []),
+            getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
+            native_real(
+                getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
+                where="AmrSystem.add_block.newton_rel_tol",
+            ),
+            native_real(
+                getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
+                where="AmrSystem.add_block.newton_abs_tol",
+            ),
+            native_real(
+                getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                where="AmrSystem.add_block.newton_fd_eps",
+            ),
+            native_real(
+                getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                where="AmrSystem.add_block.newton_damping",
+            ),
+            getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
+            getattr(time, "newton_diagnostics", False),
+            native_real(
+                getattr(spatial, "positivity_floor", 0.0),
+                where="AmrSystem.add_block.positivity_floor",
+            ),
+            **spatial_options,
+        )
 
     def field(self, name: Any) -> Any:
         """Return the solved potential of a NAMED elliptic field as a ``(ny, nx)`` array.
@@ -368,8 +417,11 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
 
         if isinstance(coupling, CompiledCoupledSource):
-            args = coupling_operator_args(coupling, getattr(coupling, "conserved_roles", ()),
-                                          getattr(coupling, "created_roles", ()))
+            args = coupling_operator_args(
+                coupling,
+                getattr(coupling, "conserved_roles", ()),
+                getattr(coupling, "created_roles", ()),
+            )
             self._s.add_coupling_operator(*args)
             return
         # Named preset (ADC-595): lower to the generic coupled source (bit-identical to System), so the
@@ -379,10 +431,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         if preset is None:
             raise TypeError(
                 "AmrSystem.add_coupling expects a private named-coupling engine descriptor or "
-                "CompiledCoupledSource")
+                "CompiledCoupledSource"
+            )
         preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
-        args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
-                                      frequency=preset.frequency)
+        args = coupling_operator_args(
+            preset.source.compile(), preset.conserved, preset.created, frequency=preset.frequency
+        )
         self._s.add_coupling_operator(*args)
 
     def _amr_block_gamma(self, name: Any) -> Any:
@@ -392,7 +446,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         raise NotImplementedError(
             "AmrSystem: the ThermalExchange preset needs a per-block gamma, which AMR does not expose; "
             "author the thermal exchange as a private CompiledCoupledSource with an explicit gamma "
-            "param, or use it on a uniform System.")
+            "param, or use it on a uniform System."
+        )
 
     @property
     def amr(self) -> Any:
@@ -431,11 +486,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         this AmrSystem, then reuses ADC-463 :func:`collect_missing_arguments` to report PROVIDED vs
         still-REQUIRED per group. It binds nothing and mutates nothing -- a read-only bind plan."""
         from pops.codegen.inspect_report import build_bind_report
+
         return build_bind_report(self, compiled)
 
     def inspect(self) -> Any:
         """Structured, array-free AMR runtime inspection report (ADC-591)."""
         from pops.runtime.inspection import build_runtime_inspection
+
         return build_runtime_inspection(self, runtime="amr_system")
 
     def program_report(self) -> Any:
@@ -446,6 +503,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         sections stay empty). Metadata only; installed=False with empty sections on a runtime with no
         program installed."""
         from pops.runtime.program_report import build_program_report
+
         return build_program_report(self)
 
     def __getattr__(self, attr: Any) -> Any:

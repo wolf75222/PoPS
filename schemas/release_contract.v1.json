@@ -10,8 +10,8 @@
   "component_interface_abi_version": 1,
   "native_abi_version": 3,
   "checkpoint_envelope_schema_version": 1,
-  "uniform_checkpoint_payload_version": 3,
-  "amr_checkpoint_payload_version": 3,
+  "uniform_checkpoint_payload_version": 4,
+  "amr_checkpoint_payload_version": 4,
   "supported_matrix": {
     "language": {
       "python": ["3.12"],

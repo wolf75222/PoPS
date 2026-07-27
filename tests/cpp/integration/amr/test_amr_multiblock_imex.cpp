@@ -11,6 +11,9 @@
 //   (2) CONSERVATION : la source raide IMEX choisie est CELLULE-LOCALE et n'agit PAS sur la composante 0
 //       (densite) -> la masse du bloc IMEX est conservee a ~machine (hors registres de reflux, cascade
 //       fin -> grossier intacte). On le verifie sur 2 niveaux (un patch fin present).
+//   (2bis) SOURCE IMPLICITE SUR AMR : une source non lineaire exerce backward-Euler sur le niveau fin,
+//       puis la synchronisation Program retablit covered coarse == moyenne 2x2 des enfants. La
+//       trajectoire fine suit l'oracle backward-Euler analytique et le bloc voisin reste bit-identique.
 //   (3) DISABLE-AND-FAIL : forcer le MEME bloc raide en EXPLICITE (imex=false) le fait EXPLOSER -> la
 //       selection IMEX est GENUINEMENT exercee (ce n'est pas un no-op silencieux). C'est le pendant
 //       "negatif" de (1) : sans IMEX, la stabilite disparait. L'explosion est verifiee SUR mx/my/E.
@@ -19,8 +22,9 @@
 //       splitting IMEX porte par le Program est INTENTIONNEL et reellement execute, pas un no-op.
 //   (4) OPT-IN BIT-IDENTIQUE : deux Programs TOUT-EXPLICITES identiques donnent le meme resultat
 //       (dmax==0). L'IMEX porte par le Program est strictement opt-in.
-//   (5) FACADE : AmrSystem.add_block(time="imex") sans Program ne peut pas avancer ; le moteur spatial
-//       se materialise cependant avec un masque IMEX partiel resolu (un role absent leve clairement).
+//   (5) FACADE : AmrSystem.add_block(time="imex") sans Program ne peut pas avancer ; masque partiel,
+//       options Newton non-defaut et diagnostics sont refuses avant le build tant qu'aucune primitive
+//       Program implicite executable ne les consomme.
 //
 // La source RAIDE n'est pas ModelSpec-atteignable; deux builders compiles fournissent donc seulement
 // les noyaux spatiaux au meme AmrSystem. Toutes les avances passent neanmoins par la facade + Program.
@@ -103,6 +107,39 @@ NeutralModel make_neutral() {
   return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, ZeroElliptic{}};
 }
 
+// Source scalaire non lineaire utilisee pour rendre la cascade fine -> grossier observable. Pour
+// du/dt = -k u^2, backward Euler resout k*dt*u_{n+1}^2 + u_{n+1} - u_n = 0. Comme la racine positive
+// est non lineaire en u_n, avancer le parent couvert independamment ne donne pas la moyenne des
+// enfants : seule la synchronisation Program restaure l'invariant AMR.
+struct NonlinearDensityDecay {
+  using State = StateVec<1>;
+  using Prim = State;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  Real rate = Real(0);
+
+  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State source(const State& u, const Aux&) const { return State{-rate * u[0] * u[0]}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+  POPS_HD Prim to_primitive(const State& state) const { return state; }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
+
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"rho"}, 1, {VariableRole::Density}};
+  }
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"rho"}, 1, {VariableRole::Density}};
+  }
+};
+
+static_assert(PhysicalModel<NonlinearDensityDecay>);
+
+double backward_euler_quadratic(double value, double dt, double rate) {
+  return (2.0 * value) / (1.0 + std::sqrt(1.0 + 4.0 * rate * dt * value));
+}
+
 // densite + impulsion initiales : une bulle de densite avec une impulsion non nulle (pour que la source
 // de relaxation de mx/my AIT un effet a relaxer). On pose ici la SEULE composante 0 (densite) via le
 // chemin coupler_write_coarse (qui derive mx,my,E d'un Euler au repos) ; la raideur agit ensuite sur
@@ -162,9 +199,8 @@ AmrCompiledBlockBuilder make_program_block_builder(Model model) {
           throw std::invalid_argument(
               "the IMEX test Program owns source treatment; its spatial block must be explicit");
         return detail::build_amr_block<Model, Minmod, RusanovFlux>(
-            model, layout, name, density, has_density, gamma, substeps, recon_prim,
-            /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
-            /*newton_diagnostics=*/false, pos_floor, weno_epsilon, wave_speed_cache);
+            model, layout, name, density, has_density, gamma, substeps, recon_prim, stride,
+            has_state ? &state : nullptr, pos_floor, weno_epsilon, wave_speed_cache);
       };
 }
 
@@ -215,6 +251,33 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
   });
 }
 
+// Source-only Program used by the nonlinear AMR oracle below. It deliberately commits both private
+// candidates: the decaying block changes through backward Euler, while the neighbouring block is
+// copied and must therefore survive level traversal + synchronization bit-for-bit.
+void install_nonlinear_source_program(AmrSystem& system, NonlinearDensityDecay decay) {
+  system.set_program_block_map({0, 1});
+  system.install_program_step([](double) {});
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("nonlinear-source test Program requires the materialized AMR engine");
+
+  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  context->configure_primary_clock("test.clock.nonlinear-source");
+  context->install([context, decay](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [context, decay](double level_dt) {
+      context->set_stage_time(0, 1);
+      MultiFab& decay_live = context->state(0);
+      MultiFab& neutral_live = context->state(1);
+      MultiFab& decay_candidate = context->scratch_state(4000, 0, decay_live);
+      MultiFab& neutral_candidate = context->scratch_state(4001, 0, neutral_live);
+      context->lincomb(decay_candidate, Real(1), decay_live, Real(0), decay_live);
+      context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
+      backward_euler_source(decay, context->aux(), decay_candidate, Real(level_dt), NewtonOptions{},
+                            ImplicitMask<NonlinearDensityDecay::n_vars>{}, nullptr);
+      context->commit_many({{&decay_live, &decay_candidate}, {&neutral_live, &neutral_candidate}});
+    });
+  });
+}
+
 // Construit une facade AmrSystem a deux blocs sur une hierarchie deux niveaux. Les builders ne
 // transportent aucune decision temporelle : le Program ci-dessus est l'unique autorite IMEX/explicite.
 std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool imex_stiff,
@@ -240,12 +303,35 @@ std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool ime
   return system;
 }
 
+std::unique_ptr<AmrSystem> make_nonlinear_source_pair(int n, double rate,
+                                                      const std::vector<double>& initial) {
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.level_count = 2;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+  auto system = std::make_unique<AmrSystem>(cfg);
+  const NonlinearDensityDecay decay{Real(rate)};
+  system->set_compiled_block(NonlinearDensityDecay::n_vars, kGamma, /*substeps=*/1,
+                             make_program_block_builder(decay), "decay");
+  system->set_compiled_block(NonlinearDensityDecay::n_vars, kGamma, /*substeps=*/1,
+                             make_program_block_builder(NonlinearDensityDecay{}), "neutral");
+  system->set_density("decay", initial);
+  system->set_density("neutral", initial);
+  system->set_poisson("charge_density", "geometric_mg", "periodic");
+  system->set_refinement(1e29);
+  system->set_temporal_relations({2}, {1}, {"integral_only"});
+  install_nonlinear_source_program(*system, decay);
+  return system;
+}
+
 // Lit DIRECTEMENT le grossier (niveau 0) du bloc @p b et renvoie le max |U(.,.,c)| sur les
 // composantes STIFFENEES mx/my/E (c=1,2,3), tout en signalant la presence d'un non-fini. Le reviewer
 // #184 a note que borner la densite (comp 0) n'observe la stabilite qu'INDIRECTEMENT (la source raide
 // StiffMomentumRelax laisse rho INTACTE et ne stiffenne que mx/my/E) : on lit donc les composantes
-// REELLEMENT relaxees, sans changer l'API de production (rt est non-const et expose levels(b), exactement
-// l'accesseur de test_amr_source_covered_cells). On itere les fabs LOCAUX (local_size()==0 sur un rang
+// REELLEMENT relaxees, sans changer l'API de production (rt est non-const et expose levels(b)). On
+// itere les fabs LOCAUX (local_size()==0 sur un rang
 // sans boite -> max nul, MPI-safe) et les cellules VALIDES (box(li), pas les ghosts). @p finite mis a
 // false des qu'une cellule est non finie.
 double max_momentum_energy_coarse(AmrRuntime& rt, std::size_t b, bool& finite) {
@@ -316,6 +402,115 @@ TEST(test_amr_multiblock_imex, Runs) {
   const std::vector<double> facade_rho_b = bump(N, 1.0, 0.20);
   ASSERT_NEAR(periodic_rhs_mean(+1.0, facade_rho_a, -1.0, facade_rho_b), 0.0, 1e-13)
       << "charged facade fixtures must satisfy the periodic Poisson nullspace before solve";
+
+  // ============================================================================================
+  // (2bis) BACKWARD-EULER NON LINEAIRE SUR LE PROGRAM AMR.
+  //     Le niveau fin porte volontairement quatre valeurs differentes par cellule parente. Apres
+  //     deux sous-pas fins dt/2, chaque valeur doit suivre la racine analytique de backward Euler,
+  //     la cellule grossiere couverte doit etre leur moyenne 2x2, et le bloc voisin doit rester
+  //     bit-identique sur les deux niveaux.
+  // ============================================================================================
+  {
+    constexpr double rate = 0.7;
+    constexpr double source_dt = 0.1;
+    auto sim = make_nonlinear_source_pair(N, rate, rho);
+    AmrRuntime& rt = *sim->engine();
+    ASSERT_EQ(rt.nlev(), 2);
+
+    MultiFab& fine_decay = rt.levels(0)[1].U;
+    ASSERT_GT(fine_decay.local_size(), 0);
+    for (int li = 0; li < fine_decay.local_size(); ++li) {
+      Array4 values = fine_decay.fab(li).array();
+      const Box2D box = fine_decay.box(li);
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          values(i, j, 0) = Real(0.75) + Real(0.04) * Real(i & 1) + Real(0.07) * Real(j & 1) +
+                            Real(0.001) * Real(i + j);
+    }
+    device_fence();
+
+    // Normalize both accepted parents before the oracle snapshot. Repeating the same average-down
+    // after an unchanged neutral trajectory must therefore be exactly idempotent.
+    rt.average_down_level(0, 1);
+    rt.average_down_level(1, 1);
+    const std::vector<double> fine_before = sim->block_level_state_global("decay", 1);
+    const std::vector<double> neutral_coarse_before = sim->block_level_state_global("neutral", 0);
+    const std::vector<double> neutral_fine_before = sim->block_level_state_global("neutral", 1);
+    ASSERT_FALSE(fine_before.empty());
+
+    double nonlinear_sync_discriminator = 0.0;
+    for (int li = 0; li < fine_decay.local_size(); ++li) {
+      const ConstArray4 fine = fine_decay.fab(li).const_array();
+      const Box2D box = fine_decay.box(li);
+      for (int j = box.lo[1]; j + 1 <= box.hi[1]; j += 2)
+        for (int i = box.lo[0]; i + 1 <= box.hi[0]; i += 2) {
+          const double child_initial[4] = {fine(i, j, 0), fine(i + 1, j, 0), fine(i, j + 1, 0),
+                                           fine(i + 1, j + 1, 0)};
+          const double parent_initial =
+              0.25 * (child_initial[0] + child_initial[1] + child_initial[2] + child_initial[3]);
+          const double unsynchronized_parent =
+              backward_euler_quadratic(parent_initial, source_dt, rate);
+          double synchronized_parent = 0.0;
+          for (double child : child_initial) {
+            child = backward_euler_quadratic(child, source_dt / 2.0, rate);
+            child = backward_euler_quadratic(child, source_dt / 2.0, rate);
+            synchronized_parent += 0.25 * child;
+          }
+          nonlinear_sync_discriminator = std::fmax(
+              nonlinear_sync_discriminator, std::fabs(unsynchronized_parent - synchronized_parent));
+        }
+    }
+    EXPECT_GT(nonlinear_sync_discriminator, 1e-6)
+        << "fixture must fail if the covered parent publishes its independent nonlinear solve";
+
+    sim->step(source_dt);
+
+    const std::vector<double> fine_after = sim->block_level_state_global("decay", 1);
+    ASSERT_EQ(fine_after.size(), fine_before.size());
+    EXPECT_EQ(sim->block_level_state_global("neutral", 0), neutral_coarse_before)
+        << "implicit source on block 0 must not mutate the neighbouring coarse state";
+    EXPECT_EQ(sim->block_level_state_global("neutral", 1), neutral_fine_before)
+        << "implicit source on block 0 must not mutate the neighbouring fine state";
+
+    double analytic_error = 0.0;
+    double active_change = 0.0;
+    for (std::size_t index = 0; index < fine_before.size(); ++index) {
+      double expected = backward_euler_quadratic(fine_before[index], source_dt / 2.0, rate);
+      expected = backward_euler_quadratic(expected, source_dt / 2.0, rate);
+      analytic_error = std::fmax(analytic_error, std::fabs(fine_after[index] - expected));
+      active_change = std::fmax(active_change, std::fabs(fine_after[index] - fine_before[index]));
+    }
+    EXPECT_LT(analytic_error, 2e-9)
+        << "fine level must execute the two authored backward-Euler half-steps";
+    EXPECT_GT(active_change, 1e-4) << "fine-level implicit source must be observable";
+
+    device_fence();
+    const MultiFab& coarse_after = rt.levels(0)[0].U;
+    const MultiFab& fine_after_mf = rt.levels(0)[1].U;
+    double covered_error = 0.0;
+    int covered_samples = 0;
+    for (int li = 0; li < fine_after_mf.local_size(); ++li) {
+      const ConstArray4 fine = fine_after_mf.fab(li).const_array();
+      const Box2D box = fine_after_mf.box(li);
+      for (int j = box.lo[1]; j + 1 <= box.hi[1]; j += 2)
+        for (int i = box.lo[0]; i + 1 <= box.hi[0]; i += 2) {
+          const int parent_i = i / 2;
+          const int parent_j = j / 2;
+          const int parent_box = mf_find_box(coarse_after, parent_i, parent_j);
+          ASSERT_GE(parent_box, 0);
+          const double average = 0.25 * (fine(i, j, 0) + fine(i + 1, j, 0) + fine(i, j + 1, 0) +
+                                         fine(i + 1, j + 1, 0));
+          const double parent = coarse_after.fab(parent_box).const_array()(parent_i, parent_j, 0);
+          ASSERT_TRUE(std::isfinite(parent) && std::isfinite(average));
+          covered_error = std::fmax(covered_error, std::fabs(parent - average));
+          ++covered_samples;
+        }
+    }
+    EXPECT_GT(covered_samples, 0);
+    EXPECT_LT(covered_error, 1e-12)
+        << "Program synchronization must average nonlinear implicit fine state onto covered coarse "
+           "cells";
+  }
 
   // ============================================================================================
   // (1)+(2)+(3) STABILITE RAIDE + CONSERVATION + DISABLE-AND-FAIL via le Program AMR.
@@ -494,47 +689,54 @@ TEST(test_amr_multiblock_imex, Runs) {
           << "facade_mask_rejected_in_explicit";
     }
 
-    // (5c) masque IMEX partiel RESOLU en multi-blocs (role momentum_x present sur un Euler) :
-    //      materialiser le moteur suffit a prouver le contrat de construction, sans lancer son
-    //      ancien moteur temporel parallele.
-    {
-      AmrSystem s3(cfg);
-      s3.set_temporal_relations({2}, {1}, {"integral_only"});
-      s3.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1,
-                   /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x", "momentum_y"});
-      s3.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
-      s3.set_poisson("charge_density", "geometric_mg", "periodic");
-      s3.set_density("A", facade_rho_a);
-      s3.set_density("B", facade_rho_b);
-      bool ok = false;
-      try {
-        ok = s3.uses_runtime_engine() && s3.engine() != nullptr && all_finite(s3.density("A"));
-      } catch (const std::exception& e) {
-        std::printf("      (5c) masque partiel a leve : %s\n", e.what());
-      }
-      EXPECT_TRUE(ok) << "facade_partial_mask_resolved_and_builds";
-    }
-
-    // (5d) role ABSENT du bloc -> erreur claire au build (resolution du masque, build_multi).
-    {
-      AmrSystem s4(cfg);
-      s4.set_temporal_relations({2}, {1}, {"integral_only"});
-      // ExB scalaire (1 var, role Scalar) : 'momentum_x' n'existe pas -> resolve_implicit_components leve.
-      s4.add_block("A", exb_charge(1.0, 1.0), "none", "rusanov", "conservative", "imex", 1, 1,
-                   /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"});
-      s4.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
-      s4.set_poisson("charge_density", "geometric_mg", "periodic");
-      s4.set_density("A", facade_rho_a);
-      s4.set_density("B", facade_rho_b);
+    // (5c) Aucun masque IMEX partiel ne peut etre accepte tant qu'une primitive Program implicite
+    //      executable ne le consomme. Le refus precede volontairement la resolution nom/role : un
+    //      selecteur valide et un selecteur absent ont le meme contrat de capacite fail-closed.
+    const auto expect_partial_mask_unavailable = [&](const std::vector<std::string>& implicit_vars,
+                                                     const std::vector<std::string>& implicit_roles,
+                                                     const char* label) {
+      AmrSystem masked(cfg);
       std::string diagnostic;
       try {
-        (void)s4.uses_runtime_engine();  // build paresseux : role absent -> leve
-        FAIL() << "facade_partial_mask_absent_role_throws";
+        masked.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1,
+                         implicit_vars, implicit_roles);
+        FAIL() << label;
       } catch (const std::runtime_error& error) {
         diagnostic = error.what();
       }
-      EXPECT_NE(diagnostic.find("implicit_roles"), std::string::npos) << diagnostic;
-      EXPECT_NE(diagnostic.find("momentum_x"), std::string::npos) << diagnostic;
-    }
+      EXPECT_NE(diagnostic.find("implicit_vars / implicit_roles"), std::string::npos) << diagnostic;
+      EXPECT_NE(diagnostic.find("no executable AMR Program implicit-source primitive"),
+                std::string::npos)
+          << diagnostic;
+      EXPECT_EQ(masked.engine(), nullptr);
+    };
+    expect_partial_mask_unavailable({"rho_u"}, {}, "facade_partial_name_mask_must_fail_closed");
+    expect_partial_mask_unavailable({}, {"momentum_x"},
+                                    "facade_partial_role_mask_must_fail_closed");
+
+    // (5d) Les réglages Newton et leur rapport appartiennent au solve typé du Program. Les accepter
+    // sur le bloc AMR serait un no-op silencieux puisque le moteur spatial ne les consomme pas.
+    const auto expect_newton_metadata_unavailable = [&](const NewtonOptions& newton,
+                                                        bool diagnostics, const char* label) {
+      AmrSystem configured(cfg);
+      std::string diagnostic;
+      try {
+        configured.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1,
+                             1, {}, {}, newton, diagnostics);
+        FAIL() << label;
+      } catch (const std::runtime_error& error) {
+        diagnostic = error.what();
+      }
+      EXPECT_NE(diagnostic.find("NewtonOptions / newton_diagnostics"), std::string::npos)
+          << diagnostic;
+      EXPECT_NE(diagnostic.find("typed Program implicit-source solve"), std::string::npos)
+          << diagnostic;
+      EXPECT_EQ(configured.engine(), nullptr);
+    };
+    NewtonOptions tuned_newton;
+    ++tuned_newton.max_iters;
+    expect_newton_metadata_unavailable(tuned_newton, false, "facade_tuned_newton_must_fail_closed");
+    expect_newton_metadata_unavailable(NewtonOptions{}, true,
+                                       "facade_newton_diagnostics_must_fail_closed");
   }
 }

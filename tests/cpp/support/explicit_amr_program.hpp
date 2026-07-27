@@ -13,7 +13,7 @@ namespace pops::test {
 /// AMR facade test Program: one explicit rate stage per recursive hierarchy clock.
 ///
 /// AmrProgramContext owns level clocks and conservative catch-up. AmrRuntime remains the spatial
-/// engine inspected by tests; no test invokes its legacy temporal step entry point.
+/// engine inspected by tests and exposes no temporal step entry point.
 inline void install_forward_euler_program(AmrSystem& system) {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);

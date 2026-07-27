@@ -659,7 +659,7 @@ TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriod
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, 1.0), "minmod", "rusanov", layout,
                                               "a", flat(n, 1.0),
-                                              /*has_density=*/true, 1.4, 1, false, false, 1));
+                                              /*has_density=*/true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-regrid-union/non-periodic/block/a/state/U";
   // This is the precise invalid state under test: a non-periodic sampled state with no prepared
   // authority capable of producing its physical ghosts.

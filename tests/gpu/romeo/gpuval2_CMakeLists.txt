@@ -2,7 +2,7 @@
 # Usage (sur le noeud armgpu, cf. romeo_gpuval2_build.sh) :
 #   cmake -S . -B build -DCMAKE_CXX_COMPILER=<nvcc_wrapper> -DKokkos_ROOT=<kinstall> \
 #         -DPOPS_INCLUDE=<include> -DCMAKE_BUILD_TYPE=Release
-# Les harness sont HEADER-ONLY (assemble_rhs / advance_amr / GeometricMG via for_each POPS_HD).
+# Les harness sont HEADER-ONLY (assemble_rhs / GeometricMG via for_each POPS_HD).
 # Le MEME source compile aussi en Serial pur (g++ -DPOPS_HAS_KOKKOS off) pour l'oracle hote.
 cmake_minimum_required(VERSION 3.16)
 project(gpuval2 CXX)
@@ -16,12 +16,6 @@ add_executable(gpu_epm_validate gpu_epm_validate.cpp)
 target_include_directories(gpu_epm_validate PRIVATE ${POPS_INCLUDE})
 target_compile_definitions(gpu_epm_validate PRIVATE POPS_HAS_KOKKOS)
 target_link_libraries(gpu_epm_validate PRIVATE Kokkos::kokkos)
-
-# (4) B_z par niveau AMR (advance_amr, chemin consomme par AmrSystemCoupler) : header-only.
-add_executable(gpu_amr_bz_validate gpu_amr_bz_validate.cpp)
-target_include_directories(gpu_amr_bz_validate PRIVATE ${POPS_INCLUDE})
-target_compile_definitions(gpu_amr_bz_validate PRIVATE POPS_HAS_KOKKOS)
-target_link_libraries(gpu_amr_bz_validate PRIVATE Kokkos::kokkos)
 
 # (1) T_e via load_aux<5> : assemble_rhs header-only (fonceurs nommes device-robustes), PAS
 # add_compiled_model (lambdas etendues cross-TU -> crash device documente).
@@ -42,14 +36,6 @@ add_executable(gpu_fft_async_validate gpu_fft_async_validate.cpp)
 target_include_directories(gpu_fft_async_validate PRIVATE ${POPS_INCLUDE})
 target_compile_definitions(gpu_fft_async_validate PRIVATE POPS_HAS_KOKKOS)
 target_link_libraries(gpu_fft_async_validate PRIVATE Kokkos::kokkos)
-
-# (5) FACADE AmrSystemCoupler entiere (limite device (b)) : instancie le coupleur de systeme sur AMR
-# (CoupledSystem 2 blocs + Poisson de systeme + solve_fields + step). Ne compilait PAS sous nvcc avant
-# le passage de la sonde du concept CoupledSystemLike a un foncteur nomme (detail::ForEachBlockProbe).
-add_executable(gpu_amrsys_facade_validate gpu_amrsys_facade_validate.cpp)
-target_include_directories(gpu_amrsys_facade_validate PRIVATE ${POPS_INCLUDE})
-target_compile_definitions(gpu_amrsys_facade_validate PRIVATE POPS_HAS_KOKKOS)
-target_link_libraries(gpu_amrsys_facade_validate PRIVATE Kokkos::kokkos)
 
 # (6) CHEMIN NATIF DE PRODUCTION du DSL : add_compiled_model<ProdModel>(System&, ...), la fonction
 # qu'inline le loader natif genere (emit_cpp_native_loader / add_native_block, #85). A la difference

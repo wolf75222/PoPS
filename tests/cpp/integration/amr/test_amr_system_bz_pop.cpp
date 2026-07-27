@@ -14,12 +14,10 @@
 //       coarse->fine (constante par cellule grossiere) ne produirait pas.
 //   (B) PRESERVATION par solve_fields : phi resolu (ici 0), field_postprocess n'ecrit que comp
 //       0..2 ; B_z (comp 3) inchange a tous les niveaux apres solve_fields.
-//   (C) LA SOURCE LIT B_z SUR LE GROSSIER ET LE FIN : source S = B_z*u, flux nul. Apres un pas,
-//       une cellule grossiere NON couverte croit de u0*(1+dt*B_z_grossier), une cellule fine de
-//       u0*(1+(dt/2)*B_z_fin)^2 (r=2 sous-pas), chacune avec le B_z DE SON NIVEAU. C'est la
-//       verification fonctionnelle demandee : le residu/source = B_z*u correct par niveau.
-//   (D) SETTER set_bz : poser B_z apres construction donne le meme resultat que par le ctor.
-//   (E) GARDE / BIT-IDENTITE : sans bz fourni, la composante B_z reste 0 (comportement historique).
+//   (C) SETTER set_bz : poser B_z apres construction donne le meme resultat que par le ctor.
+//   (D) GARDE / BIT-IDENTITE : sans bz fourni, la composante B_z reste 0 (comportement historique).
+//   (E) CONSOMMATION SPATIALE : le residu de production lit B_z sur les niveaux grossier et fin ;
+//       ProgramGraph reste l'unique autorite qui integre ensuite ce residu dans le temps.
 
 #include <gtest/gtest.h>
 
@@ -37,6 +35,7 @@
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -97,6 +96,40 @@ Real read_bz(const MultiFab& A, int i, int j) {
   return A.fab(0).const_array()(i, j, kAuxBaseComps);
 }
 
+template <class Model>
+Real max_bz_source_residual_error(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                  Real dx, Real dy) {
+  std::vector<Box2D> xfaces;
+  std::vector<Box2D> yfaces;
+  xfaces.reserve(U.box_array().size());
+  yfaces.reserve(U.box_array().size());
+  for (const Box2D& box : U.box_array().boxes()) {
+    xfaces.push_back(xface_box(box));
+    yfaces.push_back(yface_box(box));
+  }
+
+  MultiFab Fx(BoxArray(std::move(xfaces)), U.dmap(), Model::n_vars, 0);
+  MultiFab Fy(BoxArray(std::move(yfaces)), U.dmap(), Model::n_vars, 0);
+  MultiFab residual(U.box_array(), U.dmap(), Model::n_vars, 0);
+  Fx.set_val(Real(0));
+  Fy.set_val(Real(0));
+  mf_eval_rhs(model, U, aux, Fx, Fy, dx, dy, residual);
+  device_fence();
+
+  Real error = Real(0);
+  for (int li = 0; li < U.local_size(); ++li) {
+    const Box2D valid = U.box(li);
+    const ConstArray4 state = U.fab(li).const_array();
+    const ConstArray4 auxiliary = aux.fab(li).const_array();
+    const ConstArray4 rhs = residual.fab(li).const_array();
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        error = std::max(error,
+                         std::fabs(rhs(i, j, 0) - auxiliary(i, j, kAuxBaseComps) * state(i, j, 0)));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(error)));
+}
+
 }  // namespace
 
 // Regroupe la geometrie partagee (grossier + patch fin) et la fabrique `build` qui construit un
@@ -125,7 +158,7 @@ class AmrSystemBzPopTest : public ::testing::Test {
     delete ba_fine_;
   }
 
-  // Fabrique : construit un coupleur frais (etats remis). bz_user vide => garde (E).
+  // Fabrique : construit un coupleur frais (etats remis). bz_user vide => garde (D).
   auto build(ScalarFieldProvider2D bz_user, bool use_setter, Real u0g) {
     const Geometry& geom = *geom_;
     const BoxArray& ba_coarse = *ba_coarse_;
@@ -158,7 +191,7 @@ class AmrSystemBzPopTest : public ::testing::Test {
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
     auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
                                      Periodicity{true, true}, /*replicated_coarse=*/true,
-                                     PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
+                                     ActiveRegionProvider2D{},
                                      use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
@@ -180,8 +213,8 @@ DistributionMapping* AmrSystemBzPopTest::dm_ = nullptr;
 Box2D* AmrSystemBzPopTest::fbox_ = nullptr;
 BoxArray* AmrSystemBzPopTest::ba_fine_ = nullptr;
 
-// --- (A)(B)(C) peuplement par niveau, preservation par solve_fields, source lit B_z par niveau.
-TEST_F(AmrSystemBzPopTest, LevelwisePopulationAndSource) {
+// --- (A)(B) peuplement par niveau et preservation par solve_fields.
+TEST_F(AmrSystemBzPopTest, LevelwisePopulationAndFieldSolve) {
   const Geometry& geom = *geom_;
   const Box2D& fbox = *fbox_;
   auto sim = build(bz_provider(), /*use_setter=*/false, /*u0g=*/Real(2));
@@ -218,30 +251,20 @@ TEST_F(AmrSystemBzPopTest, LevelwisePopulationAndSource) {
   EXPECT_LT(std::fabs(read_bz(sim->aux(1), fbox.lo[0], fbox.lo[1]) - bz_lo), Real(1e-12))
       << "fine_Bz_preserved_after_solve_fields";
 
-  // --- (C) la source lit B_z sur le GROSSIER et le FIN ------------------------------------
-  const Real u0 = Real(2), dt = Real(0.05);
-  sim->step(dt);  // tout explicite, phi gele (OncePerStep)
-  device_fence();
-
-  // cellule grossiere NON couverte (0,0) : u <- u0*(1 + dt*B_z(0,0)).
-  const Real bzc = bz_field(geom.x_cell(0), 0);
-  const Real expect_c = u0 * (Real(1) + dt * bzc);
-  const Real uc = sim->levels(0)[0].U.fab(0).const_array()(0, 0, 0);
-  EXPECT_LT(std::fabs(uc - expect_c), Real(1e-12)) << "coarse_source_reads_levelwise_Bz";
-  EXPECT_GT(std::fabs(uc - u0), Real(1e-3)) << "coarse_Bz_actually_read";
-
-  // cellule fine (fbox.lo) : r=2 sous-pas Euler avant de dt/2 -> u0*(1+(dt/2)*B_z_fin)^2.
-  const Real bzf = bz_field(gf.x_cell(fbox.lo[0]), 0);
-  const Real half = dt / 2;
-  const Real expect_f = u0 * (Real(1) + half * bzf) * (Real(1) + half * bzf);
-  const Real uf = sim->levels(0)[1].U.fab(0).const_array()(fbox.lo[0], fbox.lo[1], 0);
-  EXPECT_LT(std::fabs(uf - expect_f), Real(1e-12)) << "fine_source_reads_levelwise_Bz";
-  // grossier et fin utilisent des B_z DIFFERENTS (bzc != bzf) : verifie qu'on ne lit pas le
-  // meme B_z partout (sinon le peuplement par niveau ne serait pas effectif).
-  EXPECT_GT(std::fabs(bzc - bzf), Real(1e-6)) << "coarse_and_fine_Bz_differ";
+  // Spatial proof that B_z is not merely stored: the production residual consumes it as
+  // S(U,aux)=B_z*U on both hierarchy levels. ProgramGraph owns the subsequent time update.
+  const auto& grow_levels = sim->levels(0);
+  EXPECT_LT(max_bz_source_residual_error(BzGrowPop{}, grow_levels[0].U, sim->aux(0),
+                                         grow_levels[0].dx, grow_levels[0].dy),
+            Real(1e-12))
+      << "coarse_residual_consumes_Bz";
+  EXPECT_LT(max_bz_source_residual_error(BzGrowPop{}, grow_levels[1].U, sim->aux(1),
+                                         grow_levels[1].dx, grow_levels[1].dy),
+            Real(1e-12))
+      << "fine_residual_consumes_Bz";
 }
 
-// --- (D) setter set_bz : meme resultat que par le ctor -----------------------------------
+// --- (C) setter set_bz : meme resultat que par le ctor -----------------------------------
 TEST_F(AmrSystemBzPopTest, SetterMatchesConstructor) {
   const Geometry& geom = *geom_;
   const Box2D& fbox = *fbox_;
@@ -255,7 +278,7 @@ TEST_F(AmrSystemBzPopTest, SetterMatchesConstructor) {
       << "set_bz_populates_fine";
 }
 
-// --- (E) garde : sans bz fourni, la composante B_z reste 0 (bit-identite historique) ------
+// --- (D) garde : sans bz fourni, la composante B_z reste 0 (bit-identite historique) ------
 TEST_F(AmrSystemBzPopTest, NoBzStaysZero) {
   const Box2D& fbox = *fbox_;
   auto sim = build({}, /*use_setter=*/false, /*u0g=*/Real(2));

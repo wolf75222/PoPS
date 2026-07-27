@@ -507,11 +507,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_coupling_operator_contract
   test_system_two_explicit
   test_assembler_driver
-  test_amr_system_coupler
-  test_amr_source_covered_cells
-  test_amr_composite_source_conservation
   test_amr_layout_guard
-  test_amr_stride_cadence
   test_system_hardening
   test_imex_partial
   test_imex_transport
@@ -520,9 +516,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_adaptive_multirate
   test_user_time_integrator
   test_diffusion
-  test_amr_diffusion
   test_amr_spatial_parity
-  test_amr_positivity_floor
   test_disc_domain_mask
   test_eb_transport
   test_embedded_boundary_generic
@@ -532,7 +526,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_coupler_bz
   test_aux_system_bz
   test_aux_composite
-  test_amr_aux_bz
   test_amr_system_bz_pop
   test_amr_system_bz_multibox
   test_aux_single_source
@@ -621,12 +614,18 @@ pops_add_gtest_suite(NAME test_amr_regrid_variable SOURCES "${_src}" EXTRA_LIBS 
 pops_test_source(_src test_amr_potential)
 pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
+pops_test_source(_src test_amr_program_diffusion)
+pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_program_positivity_floor)
+pops_add_gtest_suite(NAME test_amr_program_positivity_floor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_distribute_coarse_serial)
 pops_add_gtest_suite(NAME test_amr_distribute_coarse_serial SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_native_loader)
 pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_external_riemann_dispatch)
 pops_native_loader_definitions(_native_defs)
@@ -645,9 +644,6 @@ pops_add_gtest_suite(NAME test_amr_imex_native SOURCES "${_src}" EXTRA_LIBS ${CM
 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
-
-pops_test_source(_src test_amr_ssprk2)
-pops_add_gtest_suite(NAME test_amr_ssprk2 SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)

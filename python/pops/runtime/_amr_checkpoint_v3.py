@@ -1,4 +1,4 @@
-"""Strict v3 AMR checkpoint: exact topology, fields, histories and accepted Program state.
+"""Strict AMR checkpoint: exact topology, fields, histories and accepted Program state.
 
 The sealed payload preserves owner-rank mappings, all block/level state, aux and elliptic warm starts,
 regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
@@ -10,13 +10,14 @@ are refused.
 from dataclasses import dataclass
 from typing import Any, cast
 
-from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _V3
+from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
 
 
 @dataclass(frozen=True, slots=True)
 class _PreparedAMRRestart:
     payload: Any
     temporal_state: Any
+    cadence_state: Any
     program_state: Any
     regrid_count: int
     topology_epoch: int
@@ -53,7 +54,8 @@ def _live_amr_level_envelope(sim):
     configured_provider = getattr(sim, "configured_n_levels", None)
     if not callable(active_provider) or not callable(configured_provider):
         raise TypeError(
-            "AMR checkpoint requires native n_levels() and configured_n_levels() providers")
+            "AMR checkpoint requires native n_levels() and configured_n_levels() providers"
+        )
     active = active_provider()
     configured = configured_provider()
     if isinstance(active, bool) or not isinstance(active, int):
@@ -62,8 +64,7 @@ def _live_amr_level_envelope(sim):
         raise TypeError("native configured AMR level count must be an exact integer")
     if configured < 1 or active < 1 or active > configured:
         raise ValueError(
-            "native AMR level envelope is invalid: active=%d configured=%d"
-            % (active, configured)
+            "native AMR level envelope is invalid: active=%d configured=%d" % (active, configured)
         )
     return active, configured
 
@@ -83,16 +84,11 @@ def _checkpoint_amr_level_envelope(sim, payload):
         raise ValueError("restart: AMR checkpoint lacks level-envelope key 'n_levels'")
     checkpoint_active = int(payload["n_levels"])
     _current_active, current_configured = _live_amr_level_envelope(sim)
-    if "configured_n_levels" in files:
-        checkpoint_configured = int(payload["configured_n_levels"])
-    else:
-        if checkpoint_active != current_configured:
-            raise ValueError(
-                "restart: legacy v3 AMR checkpoint lacks configured_n_levels and records %d "
-                "levels, but the installed configured depth is %d"
-                % (checkpoint_active, current_configured)
-            )
-        checkpoint_configured = current_configured
+    if "configured_n_levels" not in files:
+        raise ValueError(
+            "restart: strict AMR checkpoint lacks level-envelope key 'configured_n_levels'"
+        )
+    checkpoint_configured = int(payload["configured_n_levels"])
     if checkpoint_configured != current_configured:
         raise ValueError(
             "restart: checkpoint configured AMR depth %d != installed configured depth %d"
@@ -121,16 +117,21 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
     from pops.output._checkpoint_collective import canonical_checkpoint_path, checkpoint_topology
     from pops.runtime._amr_checkpoint_contract import encode_contract
     from pops.runtime._engine_descriptors import abi_key
+    from pops.runtime._program_cadence_checkpoint import capture_program_cadence
     from pops.runtime._system_io_history import prepare_history_capture
 
     if int(sim.n_blocks()) == 0:
         raise ValueError(
             "AmrSystem.checkpoint: no blocks installed (nothing to checkpoint); bind a compiled "
-            "problem with pops.bind(...) before checkpointing")
+            "problem with pops.bind(...) before checkpointing"
+        )
     topology = checkpoint_topology(owner)
     target = canonical_checkpoint_path(path)
-    multi = bool(sim.uses_runtime_engine()) if hasattr(sim, "uses_runtime_engine") \
+    multi = (
+        bool(sim.uses_runtime_engine())
+        if hasattr(sim, "uses_runtime_engine")
         else int(sim.n_blocks()) != 1
+    )
     levels, configured_levels = _live_amr_level_envelope(sim)
     names = tuple(str(name) for name in sim.block_names())
     if levels <= 0 or not names or len(names) != len(set(names)):
@@ -140,6 +141,7 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
         raise ValueError("checkpoint AMR patch-box rows must contain exactly five integers")
     time = float(sim.time())
     macro_step = int(sim.macro_step())
+    cadence = capture_program_cadence(sim, macro_step=macro_step)
     temporal = getattr(owner, "_temporal_restart_state", None)
     if temporal is None:
         raise RuntimeError("checkpoint requires the AMR temporal restart state")
@@ -148,21 +150,25 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
     accepted_contract = encode_contract(sim)
     dmaps = tuple(
         tuple(int(rank) for rank in sim.level_owner_ranks(level))
-        if hasattr(sim, "level_owner_ranks") else ()
+        if hasattr(sim, "level_owner_ranks")
+        else ()
         for level in range(levels)
     )
-    nvars = tuple(
-        int(sim.block_n_vars(name)) if multi else int(sim.n_vars()) for name in names)
+    nvars = tuple(int(sim.block_n_vars(name)) if multi else int(sim.n_vars()) for name in names)
     if any(value <= 0 for value in nvars):
         raise ValueError("checkpoint AMR blocks must have a positive conservative size")
-    field_slots = tuple(str(slot) for slot in sim.field_provider_slots()) \
-        if hasattr(sim, "field_provider_slots") else ()
+    field_slots = (
+        tuple(str(slot) for slot in sim.field_provider_slots())
+        if hasattr(sim, "field_provider_slots")
+        else ()
+    )
     if len(field_slots) != len(set(field_slots)):
         raise ValueError("checkpoint AMR field-provider slots must be unique")
     field_levels = tuple(int(sim.field_provider_levels(slot)) for slot in field_slots)
     for slot, provider_levels in zip(field_slots, field_levels, strict=True):
         _require_exact_field_provider_depth(
-            slot, provider_levels, levels, phase="checkpoint capture")
+            slot, provider_levels, levels, phase="checkpoint capture"
+        )
     history_plan = prepare_history_capture(
         sim,
         persistence or {},
@@ -172,27 +178,30 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
     required_collectives = []
     if topology.distributed:
         required_collectives.extend(
-            ["block_level_state_global" if multi else "level_state_global",
-             "level_potential_global", "level_aux_flat_global"])
+            [
+                "block_level_state_global" if multi else "level_state_global",
+                "level_potential_global",
+                "level_aux_flat_global",
+            ]
+        )
     else:
         required_collectives.extend(
-            ["block_level_state" if multi else "level_state",
-             "level_potential", "level_aux_flat"])
+            ["block_level_state" if multi else "level_state", "level_potential", "level_aux_flat"]
+        )
     if field_slots:
         required_collectives.append("field_potential_level_global")
     if any(ring.stored_slots for ring in history_plan.rings):
         required_collectives.append("history_global")
-    missing_collectives = sorted({
-        name for name in required_collectives if not callable(getattr(sim, name, None))
-    })
+    missing_collectives = sorted(
+        {name for name in required_collectives if not callable(getattr(sim, name, None))}
+    )
     if missing_collectives:
-        raise TypeError(
-            "checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
+        raise TypeError("checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
     nx, ny = int(sim.nx()), int(sim.ny())
     Lx, Ly = (float(value) for value in lengths)
     xlo, ylo = (float(value) for value in lower)
     out = {
-        "pops_amr_checkpoint_version": _V3,
+        "pops_amr_checkpoint_version": _VERSION,
         "t": time,
         "macro_step": macro_step,
         # n/L retain their historical meaning as the x-axis values.  The y-axis and origin are
@@ -209,54 +218,76 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
         "n_levels": levels,
         "configured_n_levels": configured_levels,
         "n_ranks": topology.size,
-        "patch_boxes": (np.asarray(patch_boxes, dtype=np.int64)
-                        if patch_boxes else np.zeros((0, 5), dtype=np.int64)),
+        "patch_boxes": (
+            np.asarray(patch_boxes, dtype=np.int64)
+            if patch_boxes
+            else np.zeros((0, 5), dtype=np.int64)
+        ),
         "temporal_restart_state": np.array(temporal_json),
         "regrid_count": int(sim.checkpoint_regrid_count()),
         "topology_epoch": int(sim.checkpoint_topology_epoch()),
         "amr_accepted_contract": accepted_contract,
         "program_hash": str(sim.installed_program_hash())
-        if hasattr(sim, "installed_program_hash") else "",
+        if hasattr(sim, "installed_program_hash")
+        else "",
         "field_provider_slots": np.asarray(field_slots),
     }
+    out.update(cadence.to_payload())
     for name, value in zip(names, nvars, strict=True):
         out["n_vars_%s" % name] = value
     for index, value in enumerate(field_levels):
         out["field_provider_levels_%d" % index] = value
-    capture_identity = make_identity("checkpoint-capture-plan", {
-        "runtime_kind": "amr",
-        "target": str(target),
-        "clock": {"time": time.hex(), "macro_step": macro_step},
-        "cells": [nx, ny],
-        "lower": [xlo.hex(), ylo.hex()],
-        "upper": [(xlo + Lx).hex(), (ylo + Ly).hex()],
-        "regrid_every": int(regrid_every),
-        "abi_key": str(out["abi_key"]),
-        "blocks": [{"name": name, "nvars": value}
-                   for name, value in zip(names, nvars, strict=True)],
-        "level_envelope": {
-            "active": levels,
-            "configured": configured_levels,
+    capture_identity = make_identity(
+        "checkpoint-capture-plan",
+        {
+            "runtime_kind": "amr",
+            "target": str(target),
+            "clock": {"time": time.hex(), "macro_step": macro_step},
+            "cells": [nx, ny],
+            "lower": [xlo.hex(), ylo.hex()],
+            "upper": [(xlo + Lx).hex(), (ylo + Ly).hex()],
+            "regrid_every": int(regrid_every),
+            "abi_key": str(out["abi_key"]),
+            "blocks": [
+                {"name": name, "nvars": value} for name, value in zip(names, nvars, strict=True)
+            ],
+            "level_envelope": {
+                "active": levels,
+                "configured": configured_levels,
+            },
+            "patch_boxes": [list(row) for row in patch_boxes],
+            # Distribution mappings and the opaque accepted Program image contain rank-local state.
+            # Only their schema participates in the collective plan; capture stores every exact rank
+            # image in the single authenticated artifact below.
+            "dmap_sizes": [len(row) for row in dmaps],
+            "field_slots": [
+                {"name": slot, "levels": count}
+                for slot, count in zip(field_slots, field_levels, strict=True)
+            ],
+            "program_hash": str(out["program_hash"]),
+            "program_cadence": cadence.to_data(),
+            "program_state_present": bool(program_state),
+            "accepted_contract": accepted_contract,
+            "histories": history_plan.to_data(),
+            "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
+            "run_identity": owner.last_run_identity.to_data(),
         },
-        "patch_boxes": [list(row) for row in patch_boxes],
-        # Distribution mappings and the opaque accepted Program image contain rank-local state.
-        # Only their schema participates in the collective plan; capture stores every exact rank
-        # image in the single authenticated artifact below.
-        "dmap_sizes": [len(row) for row in dmaps],
-        "field_slots": [
-            {"name": slot, "levels": count}
-            for slot, count in zip(field_slots, field_levels, strict=True)
-        ],
-        "program_hash": str(out["program_hash"]),
-        "program_state_present": bool(program_state),
-        "accepted_contract": accepted_contract,
-        "histories": history_plan.to_data(),
-        "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
-        "run_identity": owner.last_run_identity.to_data(),
-    }).token
+    ).token
     return _PreparedAMRCapture(
-        target, out, multi, names, levels, configured_levels, field_slots, field_levels,
-        history_plan, topology, dmaps, program_state, capture_identity)
+        target,
+        out,
+        multi,
+        names,
+        levels,
+        configured_levels,
+        field_slots,
+        field_levels,
+        history_plan,
+        topology,
+        dmaps,
+        program_state,
+        capture_identity,
+    )
 
 
 def _capture_v3(owner, sim, prepared):
@@ -273,7 +304,8 @@ def _capture_v3(owner, sim, prepared):
     gather = prepared.topology.distributed
     program_states = (
         allgather_bytes(prepared.topology.communicator, prepared.local_program_state)
-        if prepared.topology.distributed else (prepared.local_program_state,)
+        if prepared.topology.distributed
+        else (prepared.local_program_state,)
     )
     rank_rows = consensus(
         prepared.topology,
@@ -289,20 +321,21 @@ def _capture_v3(owner, sim, prepared):
         if not isinstance(dmaps, list) or len(dmaps) != prepared.levels:
             raise ValueError("checkpoint AMR rank-local owner maps have an invalid level count")
         out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
-            program_states[rank], dtype=np.uint8).copy()
+            program_states[rank], dtype=np.uint8
+        ).copy()
         for level, ranks in enumerate(dmaps):
             if not isinstance(ranks, list) or any(
                 isinstance(value, bool) or not isinstance(value, int) for value in ranks
             ):
                 raise TypeError("checkpoint AMR rank-local owner map must contain integers")
-            out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(
-                ranks, dtype=np.int64)
+            out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(ranks, dtype=np.int64)
     if prepared.multi:
         for name in prepared.names:
             for level in range(prepared.levels):
                 out["state_%s_%d" % (name, level)] = np.asarray(
                     sim.block_level_state_global(name, level)
-                    if gather else sim.block_level_state(name, level),
+                    if gather
+                    else sim.block_level_state(name, level),
                     dtype=np.float64,
                 )
     else:
@@ -322,7 +355,8 @@ def _capture_v3(owner, sim, prepared):
     ):
         for level in range(count):
             out["field_provider_phi_%d_%d" % (index, level)] = np.asarray(
-                sim.field_potential_level_global(slot, level), dtype=np.float64)
+                sim.field_potential_level_global(slot, level), dtype=np.float64
+            )
     for level in range(prepared.levels):
         out["aux_%d" % level] = np.asarray(
             sim.level_aux_flat_global(level) if gather else sim.level_aux_flat(level),
@@ -343,7 +377,8 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
 
     def prepare():
         prepared = _prepare_capture_v3(
-            owner, sim, path, lengths, lower, regrid_every, persistence or {})
+            owner, sim, path, lengths, lower, regrid_every, persistence or {}
+        )
         prepared_holder["plan"] = prepared
         return prepared, prepared.capture_identity
 
@@ -362,7 +397,8 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
         return str(prepared.target)
 
     return collective_checkpoint_capture(
-        owner, "AMR accepted-state capture", prepare, capture, publish)
+        owner, "AMR accepted-state capture", prepare, capture, publish
+    )
 
 
 def prepare_v3(owner, sim, d, lengths, lower):
@@ -373,6 +409,7 @@ def prepare_v3(owner, sim, d, lengths, lower):
     import numpy as np
     from pops.output._checkpoint_collective import checkpoint_topology
     from pops.runtime._amr_checkpoint_contract import preflight_contract
+    from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
     from pops.runtime._temporal_restart import TemporalRestartState
 
     topology = checkpoint_topology(owner)
@@ -384,28 +421,27 @@ def prepare_v3(owner, sim, d, lengths, lower):
         raise ValueError(
             "restart: AMR accepted state was captured under %d rank(s), current run has %d; "
             "rank-local DistributionMappings and compiled Program publications require the exact "
-            "native rank topology"
-            % (checkpoint_ranks, current_ranks)
+            "native rank topology" % (checkpoint_ranks, current_ranks)
         )
-    checkpoint_levels, checkpoint_configured_levels = \
-        _checkpoint_amr_level_envelope(sim, d)
+    checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
     selected = dict(d)
     selected["configured_n_levels"] = checkpoint_configured_levels
     for rank in range(checkpoint_ranks):
         state_key = "program_accepted_state_rank_%d" % rank
         if state_key not in d:
             raise ValueError(
-                "restart: AMR checkpoint lacks accepted Program state for rank %d" % rank)
+                "restart: AMR checkpoint lacks accepted Program state for rank %d" % rank
+            )
         state = np.asarray(d[state_key])
         if state.dtype != np.dtype("uint8") or state.ndim != 1:
             raise TypeError(
-                "restart: AMR accepted Program state for rank %d must be a uint8 vector" % rank)
+                "restart: AMR accepted Program state for rank %d must be a uint8 vector" % rank
+            )
         for level in range(checkpoint_levels):
             dmap_key = "dmap_rank_%d_level_%d" % (rank, level)
             if dmap_key not in d:
                 raise ValueError(
-                    "restart: AMR checkpoint lacks owner map for rank %d level %d"
-                    % (rank, level)
+                    "restart: AMR checkpoint lacks owner map for rank %d level %d" % (rank, level)
                 )
             owner_map = np.asarray(d[dmap_key])
             if owner_map.dtype.kind not in "iu" or owner_map.ndim != 1:
@@ -414,48 +450,66 @@ def prepare_v3(owner, sim, d, lengths, lower):
                     % (rank, level)
                 )
     selected["program_accepted_state"] = np.asarray(
-        d["program_accepted_state_rank_%d" % topology.rank], dtype=np.uint8)
+        d["program_accepted_state_rank_%d" % topology.rank], dtype=np.uint8
+    )
     for level in range(checkpoint_levels):
         selected["dmap_%d" % level] = np.asarray(
-            d["dmap_rank_%d_level_%d" % (topology.rank, level)], dtype=np.int64)
+            d["dmap_rank_%d_level_%d" % (topology.rank, level)], dtype=np.int64
+        )
     d = selected
     program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
+    cadence = prepare_program_cadence(
+        sim,
+        d,
+        macro_step=int(d["macro_step"]),
+        accepted_time=float(d["t"]),
+    )
     if "temporal_restart_state" not in d:
         raise ValueError("restart: AMR checkpoint lacks its strict temporal state")
     installed_schedule = getattr(
-        getattr(owner, "_temporal_restart_state", None), "program_schedule", None)
+        getattr(owner, "_temporal_restart_state", None), "program_schedule", None
+    )
     restored_temporal = TemporalRestartState.from_json(
-        d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"],
-        program_schedule=installed_schedule)
+        d["temporal_restart_state"],
+        time=d["t"],
+        macro_step=d["macro_step"],
+        program_schedule=installed_schedule,
+    )
 
     # (2) GUARDS.
     geometry_keys = ("n", "ny", "L", "Ly", "xlo", "ylo")
     missing_geometry = [key for key in geometry_keys if key not in d]
     if missing_geometry:
         raise ValueError(
-            "restart: AMR checkpoint lacks exact Cartesian geometry keys %r"
-            % missing_geometry)
+            "restart: AMR checkpoint lacks exact Cartesian geometry keys %r" % missing_geometry
+        )
     current_cells = (int(sim.nx()), int(sim.ny()))
     checkpoint_cells = (int(d["n"]), int(d["ny"]))
     if checkpoint_cells != current_cells:
-        raise ValueError("restart : checkpoint grid %r != system grid %r"
-                         % (checkpoint_cells, current_cells))
+        raise ValueError(
+            "restart : checkpoint grid %r != system grid %r" % (checkpoint_cells, current_cells)
+        )
     current_lengths = tuple(float(value) for value in lengths)
     checkpoint_lengths = (float(d["L"]), float(d["Ly"]))
     if checkpoint_lengths != current_lengths:
         raise ValueError(
             "restart : checkpoint domain lengths %r != system lengths %r -- different spacing"
-            % (checkpoint_lengths, current_lengths))
+            % (checkpoint_lengths, current_lengths)
+        )
     current_lower = tuple(float(value) for value in lower)
     checkpoint_lower = (float(d["xlo"]), float(d["ylo"]))
     if checkpoint_lower != current_lower:
-        raise ValueError("restart : checkpoint lower bounds %r != system lower bounds %r"
-                         % (checkpoint_lower, current_lower))
+        raise ValueError(
+            "restart : checkpoint lower bounds %r != system lower bounds %r"
+            % (checkpoint_lower, current_lower)
+        )
     chk_blocks = [str(b) for b in d["blocks"]]
     cur_blocks = list(sim.block_names())
     if chk_blocks != cur_blocks:
-        raise ValueError("restart : checkpoint blocks %r != current composition %r "
-                         "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks))
+        raise ValueError(
+            "restart : checkpoint blocks %r != current composition %r "
+            "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
+        )
     nlev = checkpoint_levels
     # program-hash guard (m5): a v3 checkpoint of a compiled AMR Program refuses a DIFFERENT program.
     chk_hash = str(d["program_hash"])
@@ -463,50 +517,53 @@ def prepare_v3(owner, sim, d, lengths, lower):
     if chk_hash != cur_hash:
         raise ValueError(
             "restart : checkpoint program hash %r != installed program hash %r (a different compiled "
-            "AMR Program cannot restart this checkpoint)" % (chk_hash, cur_hash))
+            "AMR Program cannot restart this checkpoint)" % (chk_hash, cur_hash)
+        )
     # Route on the ENGINE (see write_v3): a compiled Program forces the runtime engine for ONE block too,
     # where only the per-block accessors + rebuild_hierarchy work.
-    multi = (sim.uses_runtime_engine() if hasattr(sim, "uses_runtime_engine")
-             else sim.n_blocks() != 1)
+    multi = (
+        sim.uses_runtime_engine() if hasattr(sim, "uses_runtime_engine") else sim.n_blocks() != 1
+    )
     if not multi and nlev != int(sim.n_levels()):
         raise ValueError(
             "restart: the legacy fixed-hierarchy route cannot change active depth "
-            "(%d checkpoint levels, %d materialized levels)"
-            % (nlev, int(sim.n_levels())))
+            "(%d checkpoint levels, %d materialized levels)" % (nlev, int(sim.n_levels()))
+        )
 
     # Validate the complete qualified provider registry and every persisted level before hierarchy or
     # state mutation.  The checkpoint manifest has already authenticated the payload; this check binds
     # it to the exact live native registry and prevents partial field restoration.
-    checkpoint_slots = ([str(slot) for slot in d["field_provider_slots"]]
-                        if "field_provider_slots" in d else [])
-    current_slots = (list(sim.field_provider_slots())
-                     if hasattr(sim, "field_provider_slots") else [])
+    checkpoint_slots = (
+        [str(slot) for slot in d["field_provider_slots"]] if "field_provider_slots" in d else []
+    )
+    current_slots = list(sim.field_provider_slots()) if hasattr(sim, "field_provider_slots") else []
     if checkpoint_slots != current_slots:
         raise ValueError(
             "restart : checkpoint qualified field providers %r != installed providers %r"
-            % (checkpoint_slots, current_slots))
+            % (checkpoint_slots, current_slots)
+        )
     field_payload = []
     for index, slot in enumerate(checkpoint_slots):
         levels_key = "field_provider_levels_%d" % index
         if levels_key not in d:
             raise ValueError("restart: checkpoint lacks field provider level count for %s" % slot)
         provider_levels = int(d[levels_key])
-        _require_exact_field_provider_depth(
-            slot, provider_levels, nlev, phase="restart")
+        _require_exact_field_provider_depth(slot, provider_levels, nlev, phase="restart")
         values = []
         for k in range(provider_levels):
             key = "field_provider_phi_%d_%d" % (index, k)
             if key not in d:
                 raise ValueError(
-                    "restart: checkpoint lacks level %d potential for field provider %s"
-                    % (k, slot))
+                    "restart: checkpoint lacks level %d potential for field provider %s" % (k, slot)
+                )
             width = int(sim.nx()) << k
             height = int(sim.ny()) << k
             value = np.asarray(d[key], dtype=np.float64).ravel()
             if value.size != width * height:
                 raise ValueError(
                     "restart: field provider %s level %d potential has size %d, expected %d"
-                    % (slot, k, value.size, width * height))
+                    % (slot, k, value.size, width * height)
+                )
             values.append(value)
         field_payload.append((slot, values))
 
@@ -522,45 +579,50 @@ def prepare_v3(owner, sim, d, lengths, lower):
     for box in boxes:
         level, ilo, jlo, ihi, jhi = box
         if level <= 0 or level >= nlev:
-            raise ValueError(
-                "restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
+            raise ValueError("restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
         width = int(sim.nx()) << level
         height = int(sim.ny()) << level
-        if (ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo
-                or ihi >= width or jhi >= height):
-            raise ValueError("restart: invalid level-%d patch box %r for shape (%d, %d)"
-                             % (level, box[1:], height, width))
+        if ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo or ihi >= width or jhi >= height:
+            raise ValueError(
+                "restart: invalid level-%d patch box %r for shape (%d, %d)"
+                % (level, box[1:], height, width)
+            )
         for other in per_level_boxes[level]:
-            if not (ihi < other[0] or other[2] < ilo or
-                    jhi < other[1] or other[3] < jlo):
+            if not (ihi < other[0] or other[2] < ilo or jhi < other[1] or other[3] < jlo):
                 raise ValueError(
-                    "restart: overlapping level-%d patch boxes %r and %r"
-                    % (level, other, box[1:]))
+                    "restart: overlapping level-%d patch boxes %r and %r" % (level, other, box[1:])
+                )
         per_level_boxes[level].append((ilo, jlo, ihi, jhi))
     if nlev > 1:
         for level in range(1, nlev):
             if not per_level_boxes[level]:
                 raise ValueError(
-                    "restart: %d-level hierarchy has no patch at fine level %d" % (nlev, level))
+                    "restart: %d-level hierarchy has no patch at fine level %d" % (nlev, level)
+                )
 
     owner_ranks = []
     if multi:
         from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+
         owner_ranks = owner_ranks_for_boxes(d, boxes, nlev)
         nranks = current_ranks
         for level in range(1, nlev):
             key = "dmap_%d" % level
             if key not in d:
-                raise ValueError("restart: checkpoint lacks owner-rank map for AMR level %d" % level)
+                raise ValueError(
+                    "restart: checkpoint lacks owner-rank map for AMR level %d" % level
+                )
             ranks = np.asarray(d[key], dtype=np.int64).ravel()
             if ranks.size != len(per_level_boxes[level]):
                 raise ValueError(
                     "restart: owner-rank map for level %d has %d entries, expected %d"
-                    % (level, ranks.size, len(per_level_boxes[level])))
+                    % (level, ranks.size, len(per_level_boxes[level]))
+                )
             if any(int(rank) < 0 or int(rank) >= nranks for rank in ranks):
                 raise ValueError(
                     "restart: owner-rank map for level %d contains a rank outside [0, %d)"
-                    % (level, nranks))
+                    % (level, nranks)
+                )
 
     state_payload = []
     for block in cur_blocks:
@@ -570,14 +632,17 @@ def prepare_v3(owner, sim, d, lengths, lower):
         current_nvars = int(sim.block_n_vars(block)) if multi else int(sim.n_vars())
         checkpoint_nvars = int(d[nvars_key])
         if checkpoint_nvars != current_nvars:
-            raise ValueError("restart : block '%s' has %d components in the checkpoint, %d here"
-                             % (block, checkpoint_nvars, current_nvars))
+            raise ValueError(
+                "restart : block '%s' has %d components in the checkpoint, %d here"
+                % (block, checkpoint_nvars, current_nvars)
+            )
         levels = []
         for level in range(nlev):
             key = "state_%s_%d" % (block, level)
             if key not in d:
-                raise ValueError("restart: checkpoint lacks state for block '%s' level %d"
-                                 % (block, level))
+                raise ValueError(
+                    "restart: checkpoint lacks state for block '%s' level %d" % (block, level)
+                )
             width = int(sim.nx()) << level
             height = int(sim.ny()) << level
             state = np.asarray(d[key], dtype=np.float64)
@@ -585,7 +650,8 @@ def prepare_v3(owner, sim, d, lengths, lower):
             if state.size != expected:
                 raise ValueError(
                     "restart: block '%s' level %d state has size %d, expected %d"
-                    % (block, level, state.size, expected))
+                    % (block, level, state.size, expected)
+                )
             levels.append(state)
         state_payload.append((block, levels))
 
@@ -600,18 +666,23 @@ def prepare_v3(owner, sim, d, lengths, lower):
         aux_key = "aux_%d" % level
         phi_key = "phi_%d" % level
         if aux_key not in d or phi_key not in d:
-            raise ValueError("restart: checkpoint lacks aux or potential payload for level %d" % level)
+            raise ValueError(
+                "restart: checkpoint lacks aux or potential payload for level %d" % level
+            )
         aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
         width = int(sim.nx()) << level
         height = int(sim.ny()) << level
         expected_aux = aux_components * width * height
         if aux.size != expected_aux:
-            raise ValueError("restart: level %d aux has size %d, expected %d"
-                             % (level, aux.size, expected_aux))
+            raise ValueError(
+                "restart: level %d aux has size %d, expected %d" % (level, aux.size, expected_aux)
+            )
         phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
         if phi.size != width * height:
-            raise ValueError("restart: level %d potential has size %d, expected %d"
-                             % (level, phi.size, width * height))
+            raise ValueError(
+                "restart: level %d potential has size %d, expected %d"
+                % (level, phi.size, width * height)
+            )
         aux_payload.append(aux)
         phi_payload.append(phi)
 
@@ -620,6 +691,7 @@ def prepare_v3(owner, sim, d, lengths, lower):
     return _PreparedAMRRestart(
         payload=d,
         temporal_state=restored_temporal,
+        cadence_state=cadence,
         program_state=program_state,
         regrid_count=int(regrid_count),
         topology_epoch=int(topology_epoch),
@@ -639,6 +711,7 @@ def apply_v3(owner, sim, prepared):
     if type(prepared) is not _PreparedAMRRestart:
         raise TypeError("AMR restart requires its exact prepared payload")
     d = prepared.payload
+    from pops.runtime._program_cadence_checkpoint import restore_program_cadence
 
     # (3) Impose the exact recorded hierarchy.
     if prepared.multi:
@@ -649,8 +722,7 @@ def apply_v3(owner, sim, prepared):
     # A freshly bound compiled Program has not executed its prelude yet, so its native history
     # rings do not exist.  Materialize the exact qualified registry from the authenticated accepted
     # image on the already rebuilt hierarchy; never advance physics merely to trigger allocation.
-    history_names = ([str(name) for name in d["history_names"]]
-                     if "history_names" in d else [])
+    history_names = [str(name) for name in d["history_names"]] if "history_names" in d else []
     if history_names and prepared.program_state:
         sim.materialize_program_restart_histories(
             prepared.program_state,
@@ -662,15 +734,16 @@ def apply_v3(owner, sim, prepared):
     if installed_names != history_names:
         raise ValueError(
             "restart: checkpoint history rings %r != installed rings %r"
-            % (history_names, installed_names))
+            % (history_names, installed_names)
+        )
     for name in history_names:
         depth = int(d["history_depth_" + name])
         ncomp = int(d["history_ncomp_" + name])
         if depth != int(sim.history_depth(name)) or ncomp != int(sim.history_ncomp(name)):
             raise ValueError(
                 "restart: history '%s' shape (%d, %d) != installed shape (%d, %d)"
-                % (name, depth, ncomp, int(sim.history_depth(name)),
-                   int(sim.history_ncomp(name))))
+                % (name, depth, ncomp, int(sim.history_depth(name)), int(sim.history_ncomp(name)))
+            )
 
     # (4) Restore every block/level state as saved, without re-prolongation.
     for block, levels in prepared.state_payload:
@@ -694,6 +767,17 @@ def apply_v3(owner, sim, prepared):
     # (6) Selectively stored clean-window histories may replay the Program. A window containing a
     # scheduled regrid was explicitly promoted to dense storage during capture.
     from pops.output._checkpoint_collective import checkpoint_topology
+
+    macro_step = int(d["macro_step"])
+    if history_names:
+        # History replay first primes the facade cursor. A mid-stride cursor is valid only with its
+        # exact authenticated held-window image installed.
+        restore_program_cadence(
+            sim,
+            prepared.cadence_state,
+            macro_step=macro_step,
+            accepted_time=float(d["t"]),
+        )
     report = _restore_histories_v3(sim, d, checkpoint_topology(owner).size)
 
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
@@ -701,11 +785,18 @@ def apply_v3(owner, sim, prepared):
     # exact accepted semantic state before exposing the runtime again.
     sim.restore_program_accepted_state(prepared.program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
+
     validate_restored_contract(sim, d)
     sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
-    sim.set_clock(float(d["t"]), int(d["macro_step"]))
+    restore_program_cadence(
+        sim,
+        prepared.cadence_state,
+        macro_step=macro_step,
+        accepted_time=float(d["t"]),
+    )
+    sim.set_clock(float(d["t"]), macro_step)
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report
@@ -716,17 +807,22 @@ def _preflight_histories_v3(sim, d, current_ranks):
     import numpy as np
     from pops.time._history.persistence import HistoryPersistence
 
-    checkpoint_names = ([str(name) for name in d["history_names"]]
-                        if "history_names" in d else [])
+    checkpoint_names = [str(name) for name in d["history_names"]] if "history_names" in d else []
     if len(checkpoint_names) != len(set(checkpoint_names)):
         raise ValueError("restart: checkpoint history ring names must be unique")
     checkpoint_ranks = int(d["n_ranks"]) if "n_ranks" in d else 1
     for name in checkpoint_names:
-        required = ["history_depth_" + name, "history_ncomp_" + name,
-                    "history_init_" + name, "history_policy_" + name,
-                    "history_requested_stored_slots_" + name,
-                    "history_stored_slots_" + name, "history_storage_mode_" + name,
-                    "history_slot_dt_" + name]
+        required = [
+            "history_depth_" + name,
+            "history_ncomp_" + name,
+            "history_init_" + name,
+            "history_fill_count_" + name,
+            "history_policy_" + name,
+            "history_requested_stored_slots_" + name,
+            "history_stored_slots_" + name,
+            "history_storage_mode_" + name,
+            "history_slot_dt_" + name,
+        ]
         missing = [key for key in required if key not in d]
         if missing:
             raise ValueError("restart: history '%s' lacks keys %r" % (name, missing))
@@ -734,87 +830,107 @@ def _preflight_histories_v3(sim, d, current_ranks):
         ncomp = int(d["history_ncomp_" + name])
         if depth < 2 or ncomp < 1:
             raise ValueError(
-                "restart: history '%s' requires depth >= 2 and component count >= 1" % name)
+                "restart: history '%s' requires depth >= 2 and component count >= 1" % name
+            )
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
             resolve_history_storage,
+            validate_history_slot_dt_payload,
         )
+
         fill_count = history_fill_count_from_payload(
             d,
             name,
             depth,
             bool(d["history_init_" + name]),
         )
-        expected_requested, expected_stored, expected_mode, expected_steps = \
+        expected_requested, expected_stored, expected_mode, expected_steps = (
             resolve_history_storage(
                 policy,
                 depth,
                 fill_count=fill_count,
                 macro_step=int(d["macro_step"]),
                 regrid_every=int(d["regrid_every"]),
+                program_substeps=int(d["program_cadence_substeps"]),
+                program_stride=int(d["program_cadence_stride"]),
             )
-        requested = sorted(
-            int(slot) for slot in d["history_requested_stored_slots_" + name])
+        )
+        requested = sorted(int(slot) for slot in d["history_requested_stored_slots_" + name])
         stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
         mode = str(d["history_storage_mode_" + name])
         if requested != list(expected_requested):
             raise ValueError(
                 "restart: history '%s' requested slots %r != policy %s expects %r"
-                % (name, requested, policy.name, list(expected_requested)))
+                % (name, requested, policy.name, list(expected_requested))
+            )
         if stored != list(expected_stored) or mode != expected_mode:
             raise ValueError(
                 "restart: history '%s' resolved storage plan (%r, %s) != expected (%r, %s)"
-                % (name, stored, mode, list(expected_stored), expected_mode))
-        if len(stored) < depth:
+                % (name, stored, mode, list(expected_stored), expected_mode)
+            )
+        fingerprint_key = "history_regrid_steps_" + name
+        if expected_steps is None:
+            if fingerprint_key in d:
+                raise ValueError(
+                    "restart: history '%s' carries a regrid fingerprint that its resolved "
+                    "storage mode forbids" % name
+                )
+        elif len(stored) < depth:
             if checkpoint_ranks != current_ranks:
                 raise ValueError(
                     "restart: non-Dense history '%s' was written under %d rank(s), current run has %d"
-                    % (name, checkpoint_ranks, current_ranks))
-            if "history_regrid_steps_" + name not in d:
+                    % (name, checkpoint_ranks, current_ranks)
+                )
+            if fingerprint_key not in d:
                 raise ValueError("restart: history '%s' lacks its regrid replay fingerprint" % name)
-            recorded = sorted(int(step) for step in d["history_regrid_steps_" + name])
+            recorded = sorted(int(step) for step in d[fingerprint_key])
             if recorded != list(expected_steps or ()):
                 raise ValueError(
                     "restart: history '%s' regrid fingerprint %r differs from manifest cadence %r"
-                    % (name, recorded, list(expected_steps or ())))
-        elif expected_steps is not None:
-            key = "history_regrid_steps_" + name
-            if key not in d:
-                raise ValueError("restart: history '%s' lacks its regrid schedule fingerprint" % name)
-            recorded = sorted(int(step) for step in d[key])
+                    % (name, recorded, list(expected_steps or ()))
+                )
+        else:
+            if fingerprint_key not in d:
+                raise ValueError(
+                    "restart: history '%s' lacks its regrid schedule fingerprint" % name
+                )
+            recorded = sorted(int(step) for step in d[fingerprint_key])
             if recorded != list(expected_steps):
                 raise ValueError(
                     "restart: history '%s' dense safety regrid fingerprint %r is inconsistent "
-                    "with manifest cadence %r"
-                    % (name, recorded, list(expected_steps)))
+                    "with manifest cadence %r" % (name, recorded, list(expected_steps))
+                )
         expected_values = ncomp * sum(
             (int(sim.nx()) << level) * (int(sim.ny()) << level)
-            for level in range(int(d["n_levels"])))
+            for level in range(int(d["n_levels"]))
+        )
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
             if key not in d:
                 raise ValueError("restart: history '%s' lacks stored slot %d" % (name, slot))
             values = np.asarray(d[key], dtype=np.float64).ravel()
             if values.size != expected_values:
-                raise ValueError("restart: history '%s' slot %d has size %d, expected %d"
-                                 % (name, slot, values.size, expected_values))
-        dt_key = "history_slot_dt_" + name
-        if np.asarray(d[dt_key], dtype=np.float64).ravel().size != depth:
-            raise ValueError("restart: history '%s' dt vector has wrong length" % name)
+                raise ValueError(
+                    "restart: history '%s' slot %d has size %d, expected %d"
+                    % (name, slot, values.size, expected_values)
+                )
+        validate_history_slot_dt_payload(d, name, depth, fill_count)
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
     """Restore v3 rings and replay only policy-omitted slots on a stable hierarchy.
 
-    Capture resolves any selective ring whose replay window contains a scheduled regrid to explicit
-    ``dense_regrid_safety`` storage. Therefore this function replays only clean windows; the native
-    seam independently refuses an unsafe handcrafted payload. Returns the typed
+    Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
+    or non-default whole-Program cadence to explicit dense safety storage. Therefore this function
+    replays only clean cadence-1/1 windows; the native seam independently refuses an unsafe
+    handcrafted payload. Returns the typed
     :class:`HistoryReplayReport`, or ``None`` when the checkpoint has no rings.
     """
     if "history_names" not in d or not len(list(d["history_names"])):
         return None
     from pops.runtime._system_io_history import replay_regrid_steps, restore_histories
+
     chk_ranks = int(d["n_ranks"])
     m = int(d["macro_step"])
     regrid_every = int(d["regrid_every"])
@@ -832,7 +948,8 @@ def _restore_histories_v3(sim, d, cur_ranks):
                 "installed Program to reconstruct its slots, but the checkpoint was written under "
                 "%d rank(s) and this restart uses %d; the deterministic regrid would desync across "
                 "the rank-count change. Restart under %d rank(s)."
-                % (hname, chk_ranks, cur_ranks, chk_ranks))
+                % (hname, chk_ranks, cur_ranks, chk_ranks)
+            )
 
     # Prime the facade cursor to the checkpoint macro-step so clean-window re-steps use their original
     # logical cursors. The final set_clock in apply_v3 re-imposes m.
@@ -854,13 +971,15 @@ def _restore_histories_v3(sim, d, cur_ranks):
                 "restart : history '%s' checkpoint records the in-window regrid schedule %r but "
                 "its own macro_step=%d / regrid_every=%d derive %r; the manifest is corrupted or "
                 "inconsistent with the recorded in-window regrid schedule."
-                % (hname, recorded, m, regrid_every, derived))
+                % (hname, recorded, m, regrid_every, derived)
+            )
         completed = sorted(set(int(s) for s in got))
         if recorded or completed:
             raise ValueError(
                 "restart : history '%s' selective replay was not a stable-hierarchy window "
                 "(recorded=%r, completed=%r); capture must resolve it as dense_regrid_safety"
-                % (hname, recorded, completed))
+                % (hname, recorded, completed)
+            )
     return report
 
 

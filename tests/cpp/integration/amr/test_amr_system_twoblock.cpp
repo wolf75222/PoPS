@@ -127,11 +127,11 @@ TEST(test_amr_system_twoblock, Runs) {
     std::vector<AmrRuntimeBlock> blocks;
     // bloc 0 : ions q=+1, schema none/rusanov.
     blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), "none", "rusanov", S, "ions",
-                                                rho0, /*has_density=*/true, 1.4, 1, false, false));
+                                                rho0, /*has_density=*/true, 1.4, 1, false));
     // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
     blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), "minmod", "rusanov", S,
                                                 "electrons", rho1, /*has_density=*/true, 1.4, 1,
-                                                false, false));
+                                                false));
 
     AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);

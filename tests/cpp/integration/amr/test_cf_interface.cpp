@@ -1,23 +1,23 @@
-// Contrat des types SubcyclingSchedule et CoarseFineInterface (revue, points 5 et 2). Ces
-// deux abstractions ont ete extraites de la recursion AMR coeur (amr_step_2level_multipatch
-// et subcycle_level_mp) ; leur integration est couverte bit a bit par les tests de reflux
+// Contrat de CoarseFineInterface. Son integration est couverte bit a bit par les tests de reflux
 // (np=1/2/4 identiques). Ici on fige les mecaniques locales :
-//   - SubcyclingSchedule : ratio, dt/r, frac s/r (arithmetique exactement preservee) ;
-//   - CoarseFineInterface : couverture batie depuis un BoxArray fin (empreinte PatchRange)
+//   - couverture batie depuis un BoxArray fin (empreinte PatchRange)
 //     et routage bordant du reflux (formules et garde de couverture).
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // pops::SubcyclingSchedule, pops::CoarseFineInterface
+#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // pops::CoarseFineInterface
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
 #include <vector>
 
 using namespace pops;
 
 namespace {
-// registre minimal a la disposition de Reg / RegMP (champs lus par route_reflux).
+// registre minimal EdgeStrip-shaped (champs lus par route_reflux).
 struct RegLite {
   int I0, I1, J0, J1;
   RefluxStorage<Real> cL, cR, cB, cT, fL, fR, fB, fT;
@@ -25,14 +25,6 @@ struct RegLite {
 }  // namespace
 
 TEST(test_cf_interface, Runs) {
-  // --- SubcyclingSchedule : cadence Berger-Oliger ratio 2 ---
-  SubcyclingSchedule s2(0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
-  EXPECT_EQ(s2.count(), 2) << "sched_count";
-  EXPECT_EQ(s2.dt_sub(Real(1)), Real(1) / 2) << "sched_dt_sub";  // bit-identique a dt / r
-  EXPECT_TRUE(s2.frac(0) == Real(0) / 2 && s2.frac(1) == Real(1) / 2) << "sched_frac";
-  EXPECT_EQ(s2.clocks.parent_level(), 0) << "sched_parent_level";
-  EXPECT_EQ(s2.clocks.child_level(), 1) << "sched_child_level";
-
   // --- CoarseFineInterface : couverture depuis un BoxArray fin ---
   // patch fin [4..11]^2 -> empreinte grossiere [2..5]^2 (PatchRange). Region grossiere 8x8.
   BoxArray fine(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
@@ -87,6 +79,63 @@ TEST(test_cf_interface, Runs) {
   device_fence();
   EXPECT_EQ(ref2.at(6, 2, 0), Real(0)) << "reflux_joint_supprime";  // bord droit couvert -> rien
   EXPECT_EQ(ref2.at(1, 2, 0), -(Real(10) - Real(1) * dt) / dx) << "reflux_gauche_libre";  // libre
+}
+
+TEST(test_cf_interface, IntegratedPairRejectsPartiallyMaterializedRoles) {
+  const BoxArray fine_boxes(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine_boxes, Periodicity{false, false});
+  FluxRegister correction(cfi.reflux_register_regions(fine_boxes), 1);
+
+  RegLite coarse{};
+  coarse.I0 = 2;
+  coarse.I1 = 5;
+  coarse.J0 = 2;
+  coarse.J1 = 5;
+  coarse.cR.assign(4, Real(1));
+  RegLite absent_fine{};
+  absent_fine.I1 = absent_fine.J1 = -1;
+  EXPECT_THROW(
+      cfi.route_reflux_integrated_pair(coarse, absent_fine, Real(1), Real(1), correction, 1),
+      std::runtime_error);
+
+  RegLite absent_coarse{};
+  absent_coarse.I1 = absent_coarse.J1 = -1;
+  RegLite fine{};
+  fine.I0 = 2;
+  fine.I1 = 5;
+  fine.J0 = 2;
+  fine.J1 = 5;
+  fine.fT.assign(4, Real(1));
+  EXPECT_THROW(
+      cfi.route_reflux_integrated_pair(absent_coarse, fine, Real(1), Real(1), correction, 1),
+      std::runtime_error);
+}
+
+TEST(test_cf_interface, RefluxRejectsRegisterComponentMismatchBeforeLaunching) {
+  const BoxArray fine_boxes(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  const CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine_boxes, Periodicity{false, false});
+  RegLite strip{};
+  strip.I0 = strip.J0 = 2;
+  strip.I1 = strip.J1 = 5;
+  constexpr int routed_components = 2;
+  strip.cL.assign(8, Real(1));
+  strip.cR.assign(8, Real(1));
+  strip.cB.assign(8, Real(1));
+  strip.cT.assign(8, Real(1));
+  strip.fL.assign(8, Real(2));
+  strip.fR.assign(8, Real(2));
+  strip.fB.assign(8, Real(2));
+  strip.fT.assign(8, Real(2));
+  FluxRegister one_component(cfi.reflux_register_regions(fine_boxes), 1);
+
+  EXPECT_THROW(cfi.route_reflux(strip, Real(1), Real(1), Real(1), one_component, routed_components),
+               std::invalid_argument);
+  EXPECT_THROW(
+      cfi.route_reflux_integrated(strip, Real(1), Real(1), one_component, routed_components),
+      std::invalid_argument);
+  EXPECT_THROW(cfi.route_reflux_integrated_pair(strip, strip, Real(1), Real(1), one_component,
+                                                routed_components),
+               std::invalid_argument);
 }
 
 TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
@@ -149,4 +198,58 @@ TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
   cfiy.route_reflux(gy, dx, dy, dt, refy, nc);
   EXPECT_EQ(refy.at(2, 7, 0), -(Real(30) - Real(3) * dt) / dy)
       << "y-low correction wraps onto y-high coarse cell";
+}
+
+TEST(test_cf_interface, PositivityFloorClampsOnlyTheCoarseFineGhostDensity) {
+  const Box2D coarse_domain = Box2D::from_extents(8, 8);
+  const BoxArray coarse_boxes(std::vector<Box2D>{coarse_domain});
+  const DistributionMapping coarse_mapping(1, n_ranks());
+  MultiFab parent(coarse_boxes, coarse_mapping, 2, 0);
+  parent.set_val(Real(0));
+  ASSERT_EQ(parent.local_size(), 1);
+  {
+    Array4 coarse = parent.fab(0).array();
+    for_each_cell(coarse_domain, [coarse](int i, int j) {
+      const bool low_density_parent = i == 1 && j == 3;
+      coarse(i, j, 0) = low_density_parent ? Real(1e-10) : Real(1);
+      coarse(i, j, 1) = low_density_parent ? Real(0.5) : Real(0.3);
+    });
+    device_fence();
+  }
+
+  const Box2D fine_box{{4, 4}, {11, 11}};
+  const BoxArray fine_boxes(std::vector<Box2D>{fine_box});
+  const DistributionMapping fine_mapping(1, n_ranks());
+  MultiFab fine(fine_boxes, fine_mapping, 2, 2);
+  ASSERT_EQ(fine.local_size(), 1);
+  constexpr Real floor = Real(1e-6);
+
+  auto count_subfloor_ghosts = [&](const MultiFab& state) {
+    int count = 0;
+    const ConstArray4 values = state.fab(0).const_array();
+    const Box2D valid = state.box(0);
+    const Box2D grown = state.fab(0).grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        if (!valid.contains(i, j) && values(i, j, 0) < floor)
+          ++count;
+    return count;
+  };
+
+  fine.set_val(Real(1));
+  mf_fill_fine_ghosts_mb(fine, parent, parent, coarse_domain, Real(0.5),
+                         /*replicated_parent=*/true, /*positivity_floor=*/Real(0),
+                         /*positivity_component=*/0, Periodicity{false, false});
+  device_fence();
+  EXPECT_GT(count_subfloor_ghosts(fine), 0);
+
+  fine.set_val(Real(1));
+  mf_fill_fine_ghosts_mb(fine, parent, parent, coarse_domain, Real(0.5),
+                         /*replicated_parent=*/true, floor,
+                         /*positivity_component=*/0, Periodicity{false, false});
+  device_fence();
+  EXPECT_EQ(count_subfloor_ghosts(fine), 0);
+  const ConstArray4 values = fine.fab(0).const_array();
+  EXPECT_GE(values(3, 6, 0), floor);
+  EXPECT_NEAR(values(3, 6, 1), Real(0.5), Real(1e-12));
 }

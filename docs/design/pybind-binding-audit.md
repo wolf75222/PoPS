@@ -15,14 +15,14 @@ Bindings live under `python/bindings/` and have only two responsibilities:
 | plan installation | decode authenticated generated records and construct a `RuntimeInstance` |
 
 Compiled execution ownership is separate: `src/runtime/system/` and `src/runtime/amr/` implement
-the engines, while `src/runtime/builders/` owns the declarative seam manifest, templates and bounded
+the private state/operator facades, while `src/runtime/builders/` owns the declarative seam manifest, templates and bounded
 builtin template instantiations. `src/CMakeLists.txt` builds the single `pops_runtime_system` and
 `pops_runtime_amr` source manifests consumed by both Python and native tests. Nothing below
 `python/bindings/` defines a `System::` or `AmrSystem::` method.
 
-The `System` and `AmrSystem` C++ types are private execution engines. Their pybind classes may expose
-installation seams used by `pops.bind`, but no public Python authoring object delegates to their old
-registration methods.
+The `System` and `AmrSystem` C++ types are private state/operator facades. Their pybind classes may
+expose installation and Program-dispatch seams used by `pops.bind`, but no public Python authoring
+object delegates to their old registration methods and neither type owns an alternate time engine.
 
 ## One component path
 

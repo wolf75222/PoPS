@@ -206,7 +206,8 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
                                         const std::vector<double>& density, bool has_density,
                                         const std::vector<double>& state, bool has_state,
                                         double block_gamma, int block_substeps,
-                                        bool block_recon_prim, bool block_imex, int block_stride,
+                                        bool block_recon_prim, bool /*block_imex*/,
+                                        int block_stride,
                                         const std::vector<std::string>& implicit_vars,
                                         const std::vector<std::string>& implicit_roles,
                                         double block_positivity_floor, double block_weno_epsilon,
@@ -220,9 +221,9 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
                               using Limiter = typename decltype(tag)::type;
                               return ::pops::detail::build_amr_block<Model, Limiter, Flux>(
                                   model, layout, block_name, density, has_density, block_gamma,
-                                  block_substeps, block_recon_prim, block_imex, block_stride, {},
-                                  NewtonOptions{}, has_state ? &state : nullptr, false,
-                                  block_positivity_floor, block_weno_epsilon, false);
+                                  block_substeps, block_recon_prim, block_stride,
+                                  has_state ? &state : nullptr, block_positivity_floor,
+                                  block_weno_epsilon, false);
                             });
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder), name, recon_prim, imex,

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # VALIDATION INTEGREE AmrSystem + MPI + GPU + STRONG-SCALING sur ROMEO (GH200) : MPI + Kokkos (backend
 # Cuda) + OpenMPI CUDA-aware. Batit amrmpi_integrated et le lance en np=1/2/4 (un GH200 par rang).
+# Le binaire prouve aussi que le ProgramGraph consomme B_z sur les niveaux grossier et fin avant la
+# mesure de strong-scaling.
 # CHAQUE run mesure DEUX modes dans le meme binaire : grossier REPLIQUE (defaut, ne scale pas) puis
 # REPARTI (distribute_coarse=true, 2x2, le mode strong-scaling). Le script :
 #   - verifie cmax bit-identique cross-rang dans les deux modes (max insensible a l'ordre) ;
 #   - reporte per_step_ms np=1/2/4 pour replique ET reparti -> montre (ou non) le strong-scaling.
-# Place amrmpi_integrated.cpp + amrmpi_CMakeLists.txt (-> CMakeLists.txt) dans $HOME/pops_gpu_p1/sim_amrmpi,
-# python/amr_system.cpp dans $HOME/pops_gpu_p1/src_amr, les en-tetes pops a jour dans $HOME/pops_gpu_p1/include,
-# Kokkos (Cuda+Serial, Hopper90) dans kinstall. Soumettre : sbatch amrmpi_romeo_build.sh
+# Lancer depuis un checkout PoPS complet (ou definir POPS_SOURCE_ROOT). Le job copie dans son espace
+# temporaire le CMake racine, cmake/, include/ et src/ : src/CMakeLists.txt reste ainsi l'autorite
+# unique des sources runtime et des seams generees. Kokkos (Cuda+Serial, Hopper90) reste installe dans
+# $HOME/pops_gpu_p1/kinstall. Soumettre : sbatch tests/gpu/romeo/amrmpi_romeo_build.sh
 #SBATCH --account=r250127
 #SBATCH --constraint=armgpu
 #SBATCH --partition=instant
@@ -18,23 +21,54 @@
 #SBATCH --mem=64G
 #SBATCH --time=00:60:00
 #SBATCH --job-name=amrmpi
+set -euo pipefail
+
 module load cuda/12.6
 romeo_load_armgpu_env
 spack load openmpi +cuda          # OpenMPI 4.1.7 CUDA-aware (UCX)
-cd "$HOME/pops_gpu_p1" || exit 3
 echo "noeud=$(hostname) arch=$(uname -m)"
-NW="$PWD/kinstall/bin/nvcc_wrapper"
-rm -rf amrmpi_build
-cmake -S sim_amrmpi -B amrmpi_build -DCMAKE_CXX_COMPILER="$NW" -DKokkos_ROOT="$PWD/kinstall" \
-  -DPOPS_INCLUDE="$PWD/include" -DPOPS_SRC="$PWD/src_amr" -DCMAKE_BUILD_TYPE=Release \
-  > amrmpi_cfg.log 2>&1 || { echo CFG_FAIL; tail -40 amrmpi_cfg.log; exit 1; }
-cmake --build amrmpi_build -j 8 > amrmpi_build.log 2>&1 || { echo BUILD_FAIL; tail -60 amrmpi_build.log; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POPS_SOURCE_ROOT="${POPS_SOURCE_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+[[ -f "$POPS_SOURCE_ROOT/CMakeLists.txt" \
+   && -f "$POPS_SOURCE_ROOT/src/CMakeLists.txt" \
+   && -f "$POPS_SOURCE_ROOT/src/runtime/builders/seam_combinations.cmake" ]] || {
+  echo "POPS_SOURCE_ROOT is not a complete PoPS checkout: $POPS_SOURCE_ROOT" >&2
+  exit 3
+}
+
+PERSIST_ROOT="${POPS_AMRMPI_ROOT:-$HOME/pops_gpu_p1}"
+WORK_ROOT="${SLURM_TMPDIR:-$PERSIST_ROOT/tmp-${SLURM_JOB_ID:-manual}}/pops-amrmpi"
+STAGED_POPS="$WORK_ROOT/pops"
+HARNESS_SOURCE="$WORK_ROOT/harness"
+BUILD_DIR="$WORK_ROOT/build"
+NW="$PERSIST_ROOT/kinstall/bin/nvcc_wrapper"
+[[ -x "$NW" ]] || { echo "missing Kokkos nvcc_wrapper: $NW" >&2; exit 3; }
+
+# The target is job-scoped and explicit. Copy the complete canonical runtime inputs, not a private
+# hand-maintained list of implementation TUs.
+cmake -E rm -rf "$WORK_ROOT"
+cmake -E make_directory "$STAGED_POPS" "$HARNESS_SOURCE"
+cmake -E copy "$POPS_SOURCE_ROOT/CMakeLists.txt" "$STAGED_POPS/CMakeLists.txt"
+cmake -E copy_directory "$POPS_SOURCE_ROOT/cmake" "$STAGED_POPS/cmake"
+cmake -E copy_directory "$POPS_SOURCE_ROOT/include" "$STAGED_POPS/include"
+cmake -E copy_directory "$POPS_SOURCE_ROOT/src" "$STAGED_POPS/src"
+cmake -E copy "$SCRIPT_DIR/amrmpi_CMakeLists.txt" "$HARNESS_SOURCE/CMakeLists.txt"
+cmake -E copy "$SCRIPT_DIR/amrmpi_integrated.cpp" "$HARNESS_SOURCE/amrmpi_integrated.cpp"
+
+CFG_LOG="$PERSIST_ROOT/amrmpi_cfg.log"
+BUILD_LOG="$PERSIST_ROOT/amrmpi_build.log"
+cmake -S "$HARNESS_SOURCE" -B "$BUILD_DIR" -DCMAKE_CXX_COMPILER="$NW" \
+  -DKokkos_ROOT="$PERSIST_ROOT/kinstall" -DPOPS_ROOT="$STAGED_POPS" \
+  -DCMAKE_BUILD_TYPE=Release \
+  > "$CFG_LOG" 2>&1 || { echo CFG_FAIL; tail -40 "$CFG_LOG"; exit 1; }
+cmake --build "$BUILD_DIR" --target amrmpi_integrated -j 8 \
+  > "$BUILD_LOG" 2>&1 || { echo BUILD_FAIL; tail -60 "$BUILD_LOG"; exit 1; }
 echo AMRMPI_BUILD_OK
-OUT=amrmpi_out.txt
+OUT="$PERSIST_ROOT/amrmpi_out.txt"
 : > "$OUT"
 for NP in 1 2 4; do
   echo "--- np=$NP ---" | tee -a "$OUT"
-  srun -n $NP --gpus-per-task=1 ./amrmpi_build/amrmpi_integrated 2>&1 | tee -a "$OUT"
+  srun -n "$NP" --gpus-per-task=1 "$BUILD_DIR/amrmpi_integrated" 2>&1 | tee -a "$OUT"
 done
 echo "=== PARITE cmax + STRONG-SCALING per_step_ms (replique vs reparti, np=1/2/4) ===" | tee -a "$OUT"
 python3 - "$OUT" <<'PY' | tee -a "$OUT"

@@ -51,7 +51,7 @@ flowchart TD
     parallel["parallel<br/>comm (seam MPI),<br/>load_balance"]
     numerics["numerics<br/>flux, reconstruction,<br/>spatial_operator(_eb/_polar)"]
     elliptic["numerics/elliptic<br/>GeometricMG, PoissonFFT,<br/>Krylov, polar, interface"]
-    timed["numerics/time<br/>SSPRK, IMEX, splitting,<br/>scheduler, advance_amr"]
+    timed["numerics/time<br/>ProgramGraph, SSPRK/IMEX IR,<br/>scheduler metadata"]
     amr["amr<br/>hierarchy, cluster,<br/>regrid, tag_box"]
     coupling["coupling<br/>Coupler, SystemCoupler,<br/>AmrSystemCoupler, Schur"]
     runtime["runtime<br/>System, AmrSystem,<br/>model_factory, DSL/native"]
@@ -135,7 +135,7 @@ PoPS is organized into five orthogonal layers. A high layer expresses the proble
 
 **Execution (seams).** The execution policy, reduced to seams that only see minimal views (Box2D, `Array4`, scalar, rank), never `BoxArray` nor `DistributionMapping`: `for_each_cell` ([`include/pops/mesh/execution/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp), serial / OpenMP / Kokkos dispatch) takes a box and an `POPS_HD(i, j)` lambda; the POD view `Array4` ([`include/pops/mesh/storage/fab2d.hpp`](../include/pops/mesh/storage/fab2d.hpp)) is identical host/device; `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) does rank/size, all-reduce, barrier (serial / MPI identity); the allocator ([`include/pops/core/foundation/allocator.hpp`](../include/pops/core/foundation/allocator.hpp)) manages the storage of the Fabs. The halo exchange (`fill_boundary`) and the reductions / `saxpy` (`mf_arith`) are not this layer: they are grid operators that orchestrate the seams.
 
-**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names simple per-block native treatments. Arbitrary production composition is authored through `pops.Program`; `pops.lib.time` presets are ordinary IR builders, and no native `SystemProgramDriver` branch selects a named split or condensed source stage. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/pops/coupling/base/coupling_policy.hpp`](../include/pops/coupling/base/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/pops/coupling/system/system_coupler.hpp`](../include/pops/coupling/system/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)). On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program. Source-timescale stability is likewise a Program authority, declared explicitly with `Program.set_dt_bound(...)`; it is not inferred by registering a separate public coupling object. At the lower native layer, the private `CouplingOperator` engine ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) still wraps the flat coupled-source program with its declared conservation metadata and native frequency-bound field for engine validation and read-only introspection. This is an implementation representation consumed by installation/lowering, not a second authoring path. Named physical couplings may be Python presets that build `Model.coupled_rate` plus Program IR; there is no named C++ coupling method per coupling.
+**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names simple per-block native treatments. Production composition is authored exclusively through `pops.Program`; its immutable normalized `ProgramGraph` is the sole temporal authority for both uniform and AMR execution. `pops.lib.time` presets are ordinary IR builders, and the native integrator/policy types are lowering ingredients rather than alternate production drivers. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/pops/coupling/base/coupling_policy.hpp`](../include/pops/coupling/base/coupling_policy.hpp)) that supplies field/coupling primitives without owning the temporal order: the Program places every operation and synchronization. `Coupler` single-model ([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)) and `SystemCoupler` multi-species single-level ([`include/pops/coupling/system/system_coupler.hpp`](../include/pops/coupling/system/system_coupler.hpp)) remain low-level integrator components used by isolated native numerics tests; they do not sit behind the production runtime facades. `AmrCouplerMP` ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)) and `AmrRuntime` expose AMR state, spatial operators, fields, transfers and reflux services only. On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program. Source-timescale stability is likewise a Program authority, declared explicitly with `Program.set_dt_bound(...)`; it is not inferred by registering a separate public coupling object. At the lower native layer, the private `CouplingOperator` engine ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) still wraps the flat coupled-source program with its declared conservation metadata and native frequency-bound field for engine validation and read-only introspection. This is an implementation representation consumed by installation/lowering, not a second authoring path. Named physical couplings may be Python presets that build `Model.coupled_rate` plus Program IR; there is no named C++ coupling method per coupling.
 
 
 ## Component contracts and generated catalog
@@ -287,7 +287,7 @@ graph LR
   Cg --> Cgf
   Cgf -. "meme interface physique" .-> f0
   Cgf -. "meme interface physique" .-> f1
-  f0 --> Reflux["correction = -(fL - cL*dt)/dx_c<br/>versee dans Cg"]
+  f0 --> Reflux["correction = -(fL - cL)/dx_c<br/>versee dans Cg"]
   f1 --> Reflux
   Reflux --> Cg
 ```
@@ -295,8 +295,10 @@ graph LR
 The mechanics is carried by
 [`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp), which is only an umbrella
 including the sub-headers; the types of the interface live in
-[`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp) and the subcycling that
-drives them in [`amr_subcycling.hpp`](../include/pops/numerics/time/amr/levels/amr_subcycling.hpp).
+[`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp), while
+[`amr_subcycling.hpp`](../include/pops/numerics/time/amr/levels/amr_subcycling.hpp) provides prepared
+hierarchy storage and spatial transfer/reflux helpers. Neither header owns a temporal loop:
+`ProgramGraph`, executed through `AmrProgramContext`, determines every stage, substep and catch-up.
 
 Three objects share the work.
 
@@ -311,32 +313,32 @@ Three objects share the work.
   fine-fine joint: we only pour a correction onto a bordering coarse cell not covered by an
   other patch.
 
-- The per-patch register (`RegMP` or the local `Reg` of the subcycling) stores, along the border of
-  the parent footprint $[I_0..I_1] \times [J_0..J_1]$, two sets of arrays: `cL, cR, cB, cT` =
-  coarse flux (without dt) read once at the start, and `fL, fR, fB, fT` = time-integrated fine flux,
-  accumulated substep after substep during the Berger-Oliger subcycling.
+- Prepared per-patch interface storage describes the parent footprint
+  $[I_0..I_1] \times [J_0..J_1]$ and the coarse/fine edge strips. The transactional Program flux
+  ledger owns time integration of those strips, using the exact rational stage coefficients carried
+  by the normalized graph.
 
-The accumulation of the fine flux is exactly the sum of the two sub-faces on each substep:
-along the left border of the patch, `subcycle_level_mp` does
+For a ratio-2 spatial interface, the spatial restriction of a fine edge flux is exactly the average
+of the two sub-faces:
 
-`g.fL[(J - g.J0) * nc + k] += 0.5 * (FX(2*g.I0, 2*J, k) + FX(2*g.I0, 2*J+1, k)) * dt`
+`Ffine_left[J,k] = 0.5 * (FX(2*I0, 2*J, k) + FX(2*I0, 2*J+1, k))`
 
-(and symmetrically `fR` at `2*g.I1 + 2`, `fB` / `fT` on the $y$ faces). The two fine faces are
-averaged by the factor $0.5$, time-integrated by `* dt` of the substep, and the `+=` accumulates on the
-two substeps of the ratio 2.
+(and symmetrically on the right, bottom and top edges). `AmrProgramContext` then accumulates that
+spatial result with the graph-authored local time step and RK/IMEX coefficient. A rejected attempt
+discards the candidate state and the corresponding ledger together.
 
-The final pour is carried by `CoarseFineInterface::route_reflux`. On each bordering coarse
+The final pour from the Program ledger is carried by
+`CoarseFineInterface::route_reflux_integrated`. On each bordering coarse
 cell not covered, it adds to the register
 
 $$
-\text{ref.add}(I_0 - 1,\, J,\, k) \mathrel{+}= -\frac{f_L - c_L \cdot dt}{dx_c}
+\text{ref.add}(I_0 - 1,\, J,\, k) \mathrel{+}= -\frac{f_L - c_L}{dx_c}
 $$
 
-on the left, $+(f_R - c_R \cdot dt)/dx_c$ on the right, and likewise in $y$ with $dy_c$ ($f_B$, $f_T$,
-divided by $dy_c$). One sees the conservative structure: $f_\bullet$ is already the sum of the fine
-time-integrated fluxes, $c_\bullet \cdot dt$ is the coarse flux that the cell has already taken in during
-the macro-step, and the sign (negative on the left / at the bottom, positive on the right / at the top) follows the
-divergence convention of the scheme. The parent footprint is computed by
+on the left, $+(f_R - c_R)/dx_c$ on the right, and likewise in $y$ with $dy_c$ ($f_B$, $f_T$,
+divided by $dy_c$). Both $f_\bullet$ and $c_\bullet$ are already time-integrated by the exact
+Program coefficients. The sign (negative on the left / at the bottom, positive on the right / at the
+top) follows the divergence convention of the scheme. The parent footprint is computed by
 `PatchRange` ($I_0 = lo/2$, $I_1 = (hi-1)/2$), historically distinct from `Box2D::coarsen` to
 preserve the bit-identical arithmetic. The average_down (`mf_average_down_multi` /
 `mf_average_down_mb`) then overwrites each covered coarse cell with the $0.25$ average of the
@@ -345,20 +347,21 @@ four fine cells, closing the coarse/fine coherence.
 
 ## Pipeline of a time step
 
-The time step has two runtime targets that share one generated Program grammar but distinct storage
-providers: `System` on a single-level grid and
-`AmrSystem` on adaptive hierarchy. Both are private execution engines materialized by `pops.bind`
-from one authenticated install plan; their low-level setters and block installers are not authoring
-APIs. The plan declares field providers, composes each block and binds its initial state atomically.
-It is the macro-step that differs.
+The time step has two native storage/operator targets that share one generated Program grammar:
+`System` on a single-level grid and `AmrSystem` on an adaptive hierarchy. Both are private facades
+materialized by `pops.bind` from one authenticated install plan; their low-level setters and block
+installers are not authoring APIs. The plan declares field providers, composes each block and binds
+its initial state atomically. The temporal authority does not differ: both execute the installed
+`ProgramGraph`; only their spatial services and transaction envelopes differ.
 
 ### Single-level runtime execution
 
 The core is `SystemProgramDriver::step_cfl` (and `step`), in
 [`include/pops/runtime/system/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp). The order is an
 explicit invariant (cf. the contract at the head of the file): an installed whole-system Program is
-mandatory and owns every stage. The runtime only supplies cadence, data, operator/provider seams and
-the native CFL-bound reduction; it has no implicit transport, coupling, projection or `AmrRuntime`
+mandatory and owns every stage and cadence. The runtime supplies data,
+operator/provider seams and the native CFL-bound reduction; it has no implicit transport,
+coupling, projection or `AmrRuntime`
 fallback. The former adaptive multirate formula remains available as a low-level `SystemCoupler`
 brick, but `System::step_adaptive` fails closed until `ProgramGraph` can lower that composition.
 
@@ -434,7 +437,7 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v3
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v4
 reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
 before its first write, then restores the hierarchy through the final clock update inside one native
 accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
@@ -445,14 +448,16 @@ temporal relations and every required transfer route.  Restart compares the boun
 provenance before mutation.  Multi-block and active-regrid layouts use this same strict route; PoPS does
 not silently degrade to a weaker regrid-on-restart guarantee.
 
-The transport of a block, in turn, reads this aux:
-`advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and
-this closure does `fill_ghosts` then `assemble_rhs` (limited reconstruction then numerical flux ->
-$R = -\mathrm{div} F + S$) at each SSPRK stage (cf.
+The transport of a block, in turn, reads this aux. The retained low-level `SystemCoupler`
+`advance_transport` utility routes toward the closure `s.advance` (full path) or its disk variants;
+that closure does `fill_ghosts` then `assemble_rhs` (limited reconstruction then numerical flux ->
+$R = -\mathrm{div} F + S$). It is a numerical building block, not a fallback selected by `System` or
+`AmrSystem`: production stages and their coefficients are emitted by the installed Program (cf.
 [`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp), `SSPRK2Step` /
 `SSPRK3`). The step $dt$ returned by `step_cfl` is the min over the evolutive blocks of
 $cfl \cdot h \cdot \mathrm{substeps}_b / (\mathrm{stride}_b \cdot w_b)$, with $h = \min(dx, dy)$ in
-cartesian and $h = \min(dr,\, r_{\min}\, d\theta)$ in polar.
+cartesian and $h = \min(dr,\, r_{\min}\, d\theta)$ in polar. Those metadata contribute only to the
+declared stability bound; they cannot schedule a substep or a stride outside the Program.
 
 ```mermaid
 sequenceDiagram
@@ -528,14 +533,14 @@ sequenceDiagram
     participant Program as AmrProgramContext
     participant AmrRuntime as SpatialHierarchy
     participant EllipticSolver as EllipticSolver (GeometricMG)
-    participant SpatialOperator as SpatialOperator (advance_amr)
+    participant SpatialOperator as SpatialOperator
 
     Note over Utilisateur,Case: Authoring pur (une fois)
     Utilisateur->>Case: layout(AMRHierarchy, tagging, transfer, reflux)
     Utilisateur->>Case: block(...), field(...), program(...), outputs(...), restart(...)
     Utilisateur->>Runtime: bind(compile(resolve(validate(Case))), valeurs)
 
-    Note over Utilisateur,TimeIntegrator: Une tentative de macro-pas transactionnelle
+    Note over Utilisateur,Program: Une tentative de macro-pas transactionnelle
     Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
     Runtime->>Program: propose(dt, snapshot complet)
 
@@ -585,7 +590,7 @@ transport/coupling sub-flows. The AMR conservation suites validate the resulting
 
 **MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_generic_krylov`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
-**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
+**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). Its current `amrmpi_integrated` harness also requires the installed `ProgramGraph` to consume B_z on both the coarse and fine trajectories. These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner); after a temporal-runtime cutover, their host/source checks do not replace a fresh GH200 run. A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
 **Parity of authenticated generated blocks.** The private native block artifact specializes the same
 catalog-selected templates as the builtin leaf. `test_compiled_model_parity` validates their numerical
@@ -697,21 +702,25 @@ generic bricks in `CompositeModel<Hyperbolic, Source, Elliptic>`
 ([`include/pops/physics/composition/composite.hpp`](../include/pops/physics/composition/composite.hpp)), or by writing one's own
 struct.
 
-The model is then instantiated in a coupler, which closes the loop Poisson -> `aux` channel -> advance in
-time. For a single-level domain, it is `Coupler<Model, Elliptic = GeometricMG>`
-([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)): the elliptic solver is a
-template parameter, `GeometricMG` by default. For the multi-patch AMR ExB, it is
-`AmrCouplerMP<Model, Elliptic = GeometricMG>`
-([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)), which orders the
-operations (coarse Poisson -> `aux = grad phi` -> advance + regrid Berger-Rigoutsos) and outputs the
-hierarchy in `AmrLevelStack`. The multi-species coupler carried over AMR is `AmrSystemCoupler`
-([`include/pops/coupling/system/amr_system_coupler.hpp`](../include/pops/coupling/system/amr_system_coupler.hpp)).
+The model is then instantiated behind spatial and field services. For a single-level domain,
+`Coupler<Model, Elliptic = GeometricMG>`
+([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)) provides
+the elliptic solve and auxiliary-field preparation, with `GeometricMG` as the default solver. For
+multi-patch AMR ExB, `AmrCouplerMP<Model, Elliptic = GeometricMG>`
+([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp))
+owns the hierarchy, Poisson-to-`aux` preparation, regridding and conservative spatial transfers in
+`AmrLevelStack`. `AmrSystemCoupler`
+([`include/pops/coupling/system/amr_system_coupler.hpp`](../include/pops/coupling/system/amr_system_coupler.hpp))
+provides the corresponding shared-field services for multiple species. None of these couplers
+chooses a timestep, a stage tableau or a subcycling order: the normalized `ProgramGraph` places
+their operations on the exact parent/child clocks and owns every state advance.
 
-The private engines `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp))
-and `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap
-these couplers for multi-block execution. Pybind exposes only their private installation/execution
-seams, consumed by `pops.bind` and held by `RuntimeInstance`; neither engine is a Python authoring
-surface.
+The private native facades `System`
+([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) and `AmrSystem`
+([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap these spatial
+services for multi-block execution. Pybind exposes only their private installation/execution seams,
+consumed by `pops.bind` and held by `RuntimeInstance`; neither facade is a Python authoring surface
+or a second temporal driver.
 
 ## Component interfaces and registration
 
@@ -789,9 +798,9 @@ include/pops/
   physics/            briques generiques (etat/transport/source/elliptique) -> CompositeModel ; flux Euler, hyperbolique iso, pendants polaires
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
   numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Krylov generique prepare, Poisson FFT (mono + bandes), polaire direct + tensoriel, composite FAC AMR (mg/composite_fac_poisson)
-  numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
+  numerics/time/      ProgramGraph, IR SSPRK/IMEX/Lie/Strang, metadonnees de cadence, helpers spatiaux de transfert/reflux AMR
   coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, sources couplees
-  runtime/            moteurs prives System / AmrSystem, installation authentifiee, block builders, canal aux extensible
+  runtime/            facades natives privees System / AmrSystem, installation authentifiee, block builders, canal aux extensible
   amr/                AmrHierarchy, tag_box, clustering Berger-Rigoutsos, regrid (proper nesting)
   parallel/           seam MPI (comm degenere en serie), load balance (round-robin / SFC)
 ```

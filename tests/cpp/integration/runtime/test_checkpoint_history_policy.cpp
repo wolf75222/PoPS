@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -333,6 +334,63 @@ TEST(CheckpointHistoryPolicy, ReplayUsesQualifiedNonzeroOwner) {
   for (int slot = 0; slot < depth; ++slot)
     EXPECT_EQ(replayed[static_cast<std::size_t>(slot)], golden[static_cast<std::size_t>(slot)])
         << "owner=1 slot=" << slot;
+}
+
+TEST(CheckpointHistoryPolicy, SelectiveReplayRefusesNonDefaultProgramCadence) {
+  kokkos();
+  const SystemConfig cfg = make_cfg();
+  const std::string ring = "state_prev";
+  constexpr int depth = 5;
+  System system(cfg);
+  add_gas(system);
+  register_state_history(system, ring, depth);
+  install_ramp_program(system, ring, 1.0);
+  system.set_program_cadence(/*substeps=*/2, /*stride=*/3);
+
+  const std::vector<double> token = system.history_global(ring, 0);
+  for (const int slot : {0, 2, 4})
+    system.restore_history(ring, slot, token);
+  system.set_history_initialized(ring, true);
+
+  try {
+    (void)system.rebuild_history_slots(ring, {0, 2, 4});
+    FAIL() << "a selective replay under non-default Program cadence must fail closed";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("substeps=1, stride=1"), std::string::npos);
+    EXPECT_NE(std::string(error.what()).find("Dense()"), std::string::npos);
+  }
+}
+
+TEST(CheckpointHistoryPolicy, InvalidOutgoingDtFailsBeforeSelectiveReplayMutation) {
+  kokkos();
+  const SystemConfig cfg = make_cfg();
+  const std::string ring = "state_prev";
+  constexpr int depth = 3;
+  System system(cfg);
+  add_gas(system);
+  register_state_history(system, ring, depth);
+  int executed_steps = 0;
+  install_ramp_program(system, ring, 1.0, /*owner=*/0, &executed_steps);
+
+  EXPECT_THROW(system.restore_history_slot_dt(ring, 0, std::numeric_limits<double>::quiet_NaN()),
+               std::runtime_error);
+  EXPECT_THROW(system.restore_history_slot_dt(ring, 0, std::numeric_limits<double>::infinity()),
+               std::runtime_error);
+  EXPECT_THROW(system.restore_history_slot_dt(ring, 0, -0.01), std::runtime_error);
+
+  const std::vector<double> anchor = system.history_global(ring, 0);
+  system.restore_history(ring, 0, anchor);
+  system.restore_history(ring, 2, anchor);
+  for (int slot = 0; slot < depth; ++slot)
+    system.restore_history_slot_dt(ring, slot, 0.0);
+  system.set_history_initialized(ring, true);
+  const std::vector<double> live_before = system.state_global("gas");
+  const std::vector<double> slot_before = system.history_global(ring, 0);
+
+  EXPECT_THROW((void)system.rebuild_history_slots(ring, {0, 2}), std::runtime_error);
+  EXPECT_EQ(executed_steps, 0);
+  EXPECT_EQ(system.state_global("gas"), live_before);
+  EXPECT_EQ(system.history_global(ring, 0), slot_before);
 }
 
 // (D) The oldest slot MUST be stored: a policy whose stored set omits slot depth-1 is refused verbatim.

@@ -9,6 +9,7 @@ these; they carry no reference back to the system.
 A field whose value the current native build cannot answer is set to ``None`` and rendered as an
 explicit "unavailable (<reason>)" line rather than a fabricated zero (sec.8 honesty rule).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -30,13 +31,23 @@ class PatchReport:
     patches to report.
     """
 
-    def __init__(self, *, built: Any, n_levels: Any, base_cells: Any, domain_bounds: Any,
-                 per_level: Any, coarse_local_boxes: Any, coarse_total_boxes: Any) -> None:
+    def __init__(
+        self,
+        *,
+        built: Any,
+        n_levels: Any,
+        base_cells: Any,
+        domain_bounds: Any,
+        per_level: Any,
+        coarse_local_boxes: Any,
+        coarse_total_boxes: Any,
+    ) -> None:
         self.built = bool(built)
         self.n_levels = n_levels
         self.base_cells = None if base_cells is None else tuple(int(value) for value in base_cells)
         self.domain_bounds = (
-            None if domain_bounds is None
+            None
+            if domain_bounds is None
             else tuple(tuple(float(value) for value in point) for point in domain_bounds)
         )
         # Historical scalar inspection remains truthful for square configurations only.
@@ -86,27 +97,36 @@ class PatchReport:
 
     def __repr__(self) -> Any:
         return "PatchReport(built=%r, n_levels=%r, n_patches=%r)" % (
-            self.built, self.n_levels, self.n_patches)
+            self.built,
+            self.n_levels,
+            self.n_patches,
+        )
 
     def __str__(self) -> Any:
         if not self.built:
-            return ("AMR patch table: hierarchy not built yet (add a block and take a step, or "
-                    "set the initial density, to build the levels).")
+            return (
+                "AMR patch table: hierarchy not built yet (add a block and take a step, or "
+                "set the initial density, to build the levels)."
+            )
         lines = ["AMR patch table (built hierarchy):"]
-        lines.append("  base: cells=%s, bounds=%s, levels=%s"
-                     % (self.base_cells, self.domain_bounds, self.n_levels))
+        lines.append(
+            "  base: cells=%s, bounds=%s, levels=%s"
+            % (self.base_cells, self.domain_bounds, self.n_levels)
+        )
         for lvl in self.per_level:
             if lvl["level"] == 0:
-                lines.append("  level 0 (base): %d box(es), %d cells"
-                             % (lvl["n_patches"], lvl["cells"]))
+                lines.append(
+                    "  level 0 (base): %d box(es), %d cells" % (lvl["n_patches"], lvl["cells"])
+                )
             else:
-                lines.append("  level %d: %d patch(es), %d cells"
-                             % (lvl["level"], lvl["n_patches"], lvl["cells"]))
+                lines.append(
+                    "  level %d: %d patch(es), %d cells"
+                    % (lvl["level"], lvl["n_patches"], lvl["cells"])
+                )
         coarse_l, coarse_t = self.coarse_local_boxes, self.coarse_total_boxes
         if coarse_l is not None and coarse_t is not None:
             tag = "distributed" if self.coarse_is_distributed else "replicated/single-box"
-            lines.append("  coarse base boxes: local=%d total=%d (%s)"
-                         % (coarse_l, coarse_t, tag))
+            lines.append("  coarse base boxes: local=%d total=%d (%s)" % (coarse_l, coarse_t, tag))
         return "\n".join(lines)
 
 
@@ -154,14 +174,11 @@ class RegridReport:
         }
 
     def __repr__(self) -> Any:
-        return (
-            "RegridReport(regrid_every=%r, frozen=%r, regrid_count=%r, topology_epoch=%r)"
-            % (
-                self.regrid_every,
-                self.frozen,
-                self.regrid_count,
-                self.topology_epoch,
-            )
+        return "RegridReport(regrid_every=%r, frozen=%r, regrid_count=%r, topology_epoch=%r)" % (
+            self.regrid_every,
+            self.frozen,
+            self.regrid_count,
+            self.topology_epoch,
         )
 
     def __str__(self) -> Any:
@@ -205,8 +222,9 @@ class GhostReport:
     def __str__(self) -> Any:
         lines = ["AMR ghost cells:"]
         if self.per_level_depth is None:
-            lines.append("  per-level ghost depth: %s"
-                         % _fmt_unavailable("not queryable from this build"))
+            lines.append(
+                "  per-level ghost depth: %s" % _fmt_unavailable("not queryable from this build")
+            )
         else:
             lines.append("  per-level ghost depth: %s" % (self.per_level_depth,))
         lines.append("  requirement: %s" % self.requirement_note)
@@ -242,8 +260,9 @@ class RefluxReport:
     def __str__(self) -> Any:
         lines = ["AMR reflux: %s" % ("enabled" if self.enabled else "disabled")]
         if self.per_stage is None:
-            lines.append("  per-stage timing: %s"
-                         % _fmt_unavailable("route property, not a runtime counter"))
+            lines.append(
+                "  per-stage timing: %s" % _fmt_unavailable("route property, not a runtime counter")
+            )
         else:
             lines.append("  per-stage: %s" % (self.per_stage,))
         for note in self.notes:
@@ -254,7 +273,7 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the strict AMR v3 accepted-state envelope: exact hierarchy and ownership, every block and
+    Surfaces the strict AMR v4 accepted-state envelope: exact hierarchy and ownership, every block and
     level, field/history state, regrid metadata, rational clocks and transfer-plan provenance. Active
     regridding and multi-block layouts are supported under the same authenticated bound composition.
     """
@@ -278,7 +297,7 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (strict bit-identical v3 envelope)" % head]
+        lines = ["AMR checkpoint policy: %s (strict bit-identical v4 envelope)" % head]
         lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")
@@ -298,8 +317,18 @@ class HierarchySnapshot:
     of the hierarchy at the moment it was taken, suitable to ``print()`` or diff between snapshots.
     """
 
-    def __init__(self, *, blocks: Any, max_levels: Any, ratio: Any, regrid_every: Any, frozen: Any, patch_table: Any,
-                 limitations: Any, config_available: Any) -> None:
+    def __init__(
+        self,
+        *,
+        blocks: Any,
+        max_levels: Any,
+        ratio: Any,
+        regrid_every: Any,
+        frozen: Any,
+        patch_table: Any,
+        limitations: Any,
+        config_available: Any,
+    ) -> None:
         self.blocks = list(blocks)
         self.max_levels = max_levels
         self.ratio = ratio
@@ -322,19 +351,26 @@ class HierarchySnapshot:
         }
 
     def __repr__(self) -> Any:
-        return ("HierarchySnapshot(blocks=%r, max_levels=%r, n_patches=%r)"
-                % (self.blocks, self.max_levels, self.patch_table.n_patches))
+        return "HierarchySnapshot(blocks=%r, max_levels=%r, n_patches=%r)" % (
+            self.blocks,
+            self.max_levels,
+            self.patch_table.n_patches,
+        )
 
     def __str__(self) -> Any:
         mode = "frozen" if self.frozen else "dynamic"
         lines = ["AMR hierarchy snapshot:"]
         lines.append("  blocks: %s" % (self.blocks,))
-        lines.append("  levels: max_levels=%s ratio=%s (config available: %s)"
-                     % (self.max_levels, self.ratio, self.config_available))
+        lines.append(
+            "  levels: max_levels=%s ratio=%s (config available: %s)"
+            % (self.max_levels, self.ratio, self.config_available)
+        )
         lines.append("  regrid: %s (regrid_every=%s)" % (mode, self.regrid_every))
         if self.patch_table.built:
-            lines.append("  live patches: %d on %d level(s)"
-                         % (self.patch_table.n_patches, self.patch_table.n_levels))
+            lines.append(
+                "  live patches: %d on %d level(s)"
+                % (self.patch_table.n_patches, self.patch_table.n_levels)
+            )
         else:
             lines.append("  live patches: hierarchy not built yet")
         if self.limitations:
@@ -373,14 +409,18 @@ class RuntimeInspection:
         }
 
     def __repr__(self) -> Any:
-        return ("RuntimeInspection(n_patches=%r, regrid_every=%r, %d limitation(s))"
-                % (self.patches.n_patches, self.regrid.regrid_every, len(self.limitations)))
+        return "RuntimeInspection(n_patches=%r, regrid_every=%r, %d limitation(s))" % (
+            self.patches.n_patches,
+            self.regrid.regrid_every,
+            len(self.limitations),
+        )
 
     def __str__(self) -> Any:
         lines = ["AMR runtime inspection:", str(self.hierarchy), str(self.regrid)]
         if self.limitations:
             lines.append("capability limitations:")
             for row in self.limitations:
-                lines.append("  - %s: %s (%s)"
-                             % (row.get("feature"), row.get("status"), row.get("reason")))
+                lines.append(
+                    "  - %s: %s (%s)" % (row.get("feature"), row.get("status"), row.get("reason"))
+                )
         return "\n".join(lines)

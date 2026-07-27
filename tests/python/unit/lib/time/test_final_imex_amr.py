@@ -63,29 +63,31 @@ def test_manual_and_library_imex_are_the_same_graph_and_consume_every_solve():
         assert len(field_solves) == example.IMEX_CN_HEUN.stages
         assert all(value.attrs["field"] is authored.diagnostic_field for value in field_solves)
         assert all(
-            value.field_context.outputs == ("relaxation_potential",)
-            for value in field_solves
+            value.field_context.outputs == ("relaxation_potential",) for value in field_solves
         )
 
     solves = [
-        node for node in manual_graph.nodes
-        if getattr(node, "op", None) in {
-            "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_local_linear",
-            "solve_residual", "solve_coupled_implicit",
+        node
+        for node in manual_graph.nodes
+        if getattr(node, "op", None)
+        in {
+            "solve_fields",
+            "solve_fields_from_blocks",
+            "solve_linear",
+            "solve_local_linear",
+            "solve_residual",
+            "solve_coupled_implicit",
         }
     ]
     outcomes = [node for node in manual_graph.nodes if getattr(node, "op", None) == "solve_outcome"]
     implicit_solves = sum(
         coefficient != 0
         for index, row in enumerate(example.IMEX_CN_HEUN.implicit_A)
-        for coefficient in row[index:index + 1]
+        for coefficient in row[index : index + 1]
     )
     assert len(solves) == len(outcomes) == example.IMEX_CN_HEUN.stages + implicit_solves
     for solve in solves:
-        consumed = [
-            node for node in outcomes
-            if node.inputs == (ValueRef(solve.node_id),)
-        ]
+        consumed = [node for node in outcomes if node.inputs == (ValueRef(solve.node_id),)]
         assert len(consumed) == 1
         action = consumed[0].attrs.to_data()["attrs"]["action"]
         assert action["kind"] == "reject_attempt"
@@ -208,16 +210,18 @@ def test_every_output_and_checkpoint_schedule_is_accepted_step_only():
     graph = target.authoring.case._consumers
     data = graph.inspect()
     assert len(data["nodes"]) == 4
-    assert {node["output_format"]["provider_id"] for node in data["nodes"]
-            if node["output_format"] is not None} == {
+    assert {
+        node["output_format"]["provider_id"]
+        for node in data["nodes"]
+        if node["output_format"] is not None
+    } == {
         "pops.output.hdf5.v1",
         "pops.output.npz.v1",
         "pops.output.paraview-vtu.v1",
     }
-    assert all(node["schedule"]["domain"]["type"] == "accepted_step"
-               for node in data["nodes"])
-    checkpoint, = [node for node in data["nodes"] if node["operation"] is not None]
-    assert checkpoint["operation"]["provider_id"] == "pops.restart.accepted-state-v3"
+    assert all(node["schedule"]["domain"]["type"] == "accepted_step" for node in data["nodes"])
+    (checkpoint,) = [node for node in data["nodes"] if node["operation"] is not None]
+    assert checkpoint["operation"]["provider_id"] == "pops.restart.accepted-state-v4"
     assert checkpoint["operation"]["bit_identical"] is True
 
 
@@ -275,9 +279,7 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
 
         def amr_transfer_policy_data(self):
             routes = {}
-            for name in (
-                "prolongation", "restriction", "coarse_fine", "time_interpolation"
-            ):
+            for name in ("prolongation", "restriction", "coarse_fine", "time_interpolation"):
                 kernel = getattr(self, name)
                 candidates = getattr(kernel, "amr_transfer_kernel_candidates", None)
                 routes[name] = (
@@ -310,9 +312,8 @@ def test_boolean_tagging_composition_lowers_through_node_protocols():
     from pops.mesh._amr import AnyOf
 
     value = ValueExpr(core.tracer_state)
-    predicate = (
-        (value > core.case.value(core.refine_value))
-        | (norm(grad(value)) > core.case.value(core.refine_gradient))
+    predicate = (value > core.case.value(core.refine_value)) | (
+        norm(grad(value)) > core.case.value(core.refine_gradient)
     )
     tagging = AMRTagging(
         rules=(
@@ -324,8 +325,12 @@ def test_boolean_tagging_composition_lowers_through_node_protocols():
         conflict_policy=authored.tagging.conflict_policy,
     )
     layout = AMR(
-        grid=authored.grid, hierarchy=authored.hierarchy, tagging=tagging,
-        regrid=authored.regrid, transfer=authored.transfer, execution=authored.execution,
+        grid=authored.grid,
+        hierarchy=authored.hierarchy,
+        tagging=tagging,
+        regrid=authored.regrid,
+        transfer=authored.transfer,
+        execution=authored.execution,
     )
     resolved = pops.resolve(pops.validate(core.case), layout=layout)
     assert type(resolved.bootstrap_plan.tagging.graph.refine) is AnyOf

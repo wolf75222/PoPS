@@ -10,7 +10,7 @@
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>  // COMPOSITE FAC 2-level Poisson solver (opt-in)
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
+#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP and prepared AMR transfers
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -40,10 +40,10 @@
 
 /// @file
 /// @brief AmrCouplerMP: MULTI-PATCH E x B AMR coupler (coarse Poisson -> aux = grad phi ->
-///        fine injection -> conservative AMR step), multi-box per-level hierarchy.
+///        fine injection plus conservative transfer/reflux services), multi-box per-level hierarchy.
 ///
 /// Same role as AmrCoupler but each level is multi-box (std::vector<AmrLevelMP> held by an
-/// AmrLevelStack) and integration goes through amr_step_multilevel_multipatch (coverage-aware reflux).
+/// AmrLevelStack). ProgramGraph owns integration and coverage-aware reflux ordering.
 /// regrid() rebuilds the fine level on the fly via Berger-Rigoutsos. Level 0 = single box for the
 /// Poisson. The class only ORDERS the operations (hierarchy stored in AmrLevelStack,
 /// regrid in amr_regrid_coupler.hpp, diagnostics in amr_diagnostics.hpp). INVARIANT: reduces
@@ -691,7 +691,7 @@ class AmrCouplerMP {
   // AMR ACCEPTED-STATE CHECKPOINT / RESTART. The mono-block coupler carries the FULL conservative
   // state per level (all components) plus phi (multigrid warm-start), and can impose a saved fine
   // hierarchy instead of reclustering tags. Local accessors preserve native patch ownership; their
-  // explicit global counterparts perform the MPI gather used by the strict v3 checkpoint provider.
+  // explicit global counterparts perform the MPI gather used by the strict v4 checkpoint provider.
   // ----------------------------------------------------------------------------------------------
 
   // Reads the FULL conservative state (all components) of level @p k into a flat
@@ -725,7 +725,7 @@ class AmrCouplerMP {
 
   // Restores the full conservative state of level @p k from @p s (same layout as level_state).
   // Writes ONLY the VALID cells of the local fabs (the patches): the ghosts are redone at the
-  // next update()/advance (exactly like after a regrid), and a fine cell outside a patch
+  // next Program-owned spatial evaluation (exactly like after a regrid), and a fine cell outside a patch
   // does not exist. NO RE-PROLONGATION: the state is restored AS-IS (no coarse->fine injection).
   void set_level_state(int k, const std::vector<double>& s) {
     std::vector<AmrLevelMP>& L = stack_.L();
@@ -960,64 +960,18 @@ class AmrCouplerMP {
     }
   }
 
-  /// Updates the hierarchy before a step: sync_down (fine -> coarse) then compute_aux (coarse
-  /// Poisson + grad phi + injection to the fine levels).
+  /// Prepares the hierarchy for a Program-authored stage: sync_down (fine -> coarse), then
+  /// compute_aux (coarse Poisson + grad phi + injection to the fine levels). This is a spatial/field
+  /// service, not a stepper.
   void update() {
     sync_down();
     compute_aux();
   }
 
-  // Selectable spatial discretization (default FirstOrder = NoSlope + Rusanov,
-  // strictly identical to the old step()). recon_prim selects the primitive
-  // reconstruction (same parameter as assemble_rhs / System); false (default) -> conservative.
-  // imex: treats the stiff source IMPLICITLY (backward_euler) rather than forward Euler;
-  // false (default) -> historical explicit treatment, bit-identical. The source being
-  // cell-local (outside reflux registers), the implicit split preserves conservation.
-  /// Advances the hierarchy by one step dt: update() then advance_amr (Berger-Oliger subcycling +
-  /// reflux + conservative average_down). @tparam Disc: spatial discretization (limiter + flux,
-  /// default FirstOrder bit-identical to the historical one). recon_prim: primitive reconstruction; imex:
-  /// stiff source implicit (backward_euler). Defaults (false) -> historical explicit path.
-  /// @p nopts: OPTIONS of the IMEX implicit-source Newton (iteration budget, tolerances,
-  /// fd_eps, damping, fail_policy), threaded down to backward_euler_source by advance_amr ->
-  /// subcycle_level_mp -> mf_apply_source_treatment. DEFAULT {} = historical constants (2 iters,
-  /// 1e-7, ...) -> path (2a) BIT-IDENTICAL to the old call. No effect if imex==false. The
-  /// partial IMEX mask is NOT carried by this mono-block path (full backward-Euler), only the OPTIONS
-  /// are (the mono-block AmrSystem wires the Newton options but not the mask or the diagnostics).
-  /// @p tmethod: time method (kEuler = forward Euler; kSsprk2 = order-2 SSPRK2/Heun;
-  /// kSsprk3 = order-3 SSPRK3). SSP methods expose a stage-weighted effective reflux flux and require
-  /// imex == false (rejected otherwise).
-  template <class Disc = FirstOrder>
-  void step(Real dt, bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
-            AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
-            Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false) {
-    update();
-    advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-        model_, stack_.L(), stack_.domain(), dt, transport_periodicity_, replicated_coarse_,
-        recon_prim, imex, nopts, tmethod, pos_floor, weno_eps, wave_speed_cache,
-        transport_boundary_fill_ ? &*transport_boundary_fill_ : nullptr,
-        fill_patch_plan_ ? &*fill_patch_plan_ : nullptr,
-        average_down_plan_ ? &*average_down_plan_ : nullptr);
-  }
-
-  /// TRANSPORT-ONLY ADVANCE (hyperbolic), WITHOUT update() or source. Counterpart of step() stripped
-  /// of its field solve and with imex==false: this is the PURE HYPERBOLIC advance (-div F) of the
-  /// generated-Program path, where the field solve and source update are authored explicitly. The model must be
-  /// SOURCE-FREE (NoSource source brick) so that the source is not counted twice (once
-  /// here in forward Euler, once by the Program): this is the transport-only contract.
-  template <class Disc = FirstOrder>
-  void advance_transport(Real dt, bool recon_prim = false, Real pos_floor = Real(0),
-                         Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false) {
-    advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-        model_, stack_.L(), stack_.domain(), dt, transport_periodicity_, replicated_coarse_,
-        recon_prim, /*imex=*/false, NewtonOptions{}, AmrTimeMethod::kEuler, pos_floor, weno_eps,
-        wave_speed_cache, transport_boundary_fill_ ? &*transport_boundary_fill_ : nullptr,
-        fill_patch_plan_ ? &*fill_patch_plan_ : nullptr,
-        average_down_plan_ ? &*average_down_plan_ : nullptr);
-  }
-
   /// Injects the CURRENT native runtime-param values @p rp into the model's bricks (ADC-514): every
   /// brick (hyp / src / ell) carrying a `pops::RuntimeParams params` member takes @p rp in place of its
-  /// declaration defaults, so the NEXT update() / advance reads the new values -- no recompile. A brick
+  /// declaration defaults, so the NEXT Program spatial evaluation reads the new values -- no
+  /// recompile. A brick
   /// without such a member is a no-op (the SAME apply_runtime_params contract as the AOT ABI). Called at
   /// the top of each macro-step by the runtime block when it declares a runtime param.
   void set_params(const RuntimeParams& rp) {
@@ -1117,12 +1071,8 @@ class AmrCouplerMP {
               detail::ConservativeCellFillRegion::ValidAndGhost, periodicity, topology_generation,
               communicator));
     }
-    auto fill_patch =
-        PreparedAmrFillPatchPlan::prepare(stack_.L(), stack_.domain(), transport_periodicity_,
-                                          replicated_coarse_, topology_generation);
     auto average_down = PreparedAmrAverageDownPlan::prepare(stack_.L(), topology_generation);
     aux_transfer_workspaces_.swap(prepared);
-    fill_patch_plan_ = std::move(fill_patch);
     average_down_plan_ = std::move(average_down);
     transfer_topology_generation_ = topology_generation;
   }
@@ -1222,7 +1172,6 @@ class AmrCouplerMP {
   std::uint64_t transfer_topology_generation_ = 1;
   std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>>
       aux_transfer_workspaces_;
-  std::optional<PreparedAmrFillPatchPlan> fill_patch_plan_;
   std::optional<PreparedAmrAverageDownPlan> average_down_plan_;
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
   // (ny*nx row-major). STATIC user fields are installed once; compute_aux writes only comps 0..2 and

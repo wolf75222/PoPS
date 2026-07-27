@@ -116,7 +116,6 @@ api pops/numerics/spatial/primitives/positivity.hpp
 api pops/numerics/spatial/primitives/state_access.hpp
 api pops/numerics/spatial/primitives/wave_speed.hpp
 api pops/numerics/spatial_operator.hpp
-api pops/numerics/time/amr/advance/amr_advance.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp
 api pops/numerics/time/amr/levels/amr_subcycling.hpp

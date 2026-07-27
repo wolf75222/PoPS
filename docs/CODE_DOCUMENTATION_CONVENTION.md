@@ -118,7 +118,7 @@ Prefer:
 |---|---|---|
 | Folder/file | Architectural role, boundaries | `runtime/System` orchestrates, does not contain the physics formulas. |
 | Class | Usage, contract, invariants, constraints | `AmrSystem` orchestrates a common AMR hierarchy. |
-| Public method | User/API contract, `@param`, `@return`, `@throws` if useful | `add_block` accepts several time policies. |
+| Public method | User/API contract, `@param`, `@return`, `@throws` if useful | `add_block` validates resolved block metadata. |
 | Complex block | Why the order of operations matters | Poisson then aux then RHS. |
 | Line | Rare, only bug/trick | `local_size()==0` MPI guard. |
 

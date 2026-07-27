@@ -2,7 +2,6 @@
 
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
-#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/parallel/comm.hpp>  // all_reduce_sum_inplace (distributed multi-patch reflux)
 
@@ -17,8 +16,8 @@
 /// @file
 /// @brief Named types of the multi-patch coarse-fine interface: PatchRange (coarse footprint
 ///        of a fine patch), FluxRegister (GLOBAL-indexed coarse buffer + all_reduce), CoverageMask
-///        (cells shadowed by a patch), SubcyclingSchedule (Berger-Oliger cadence) and
-///        CoarseFineInterface (coverage + reflux routing), with the multi-box fill/avgdown
+///        (cells shadowed by a patch) and CoarseFineInterface (coverage + reflux routing), with
+///        the multi-box fill/avgdown
 ///        helpers (mf_fill_fine_ghosts_multi, mf_average_down_multi, fill_periodic_local).
 ///
 /// Layer: `include/pops/numerics/time`.
@@ -566,7 +565,7 @@ struct CoverageMask {
   SparseCellLookup lookup_;
 };
 
-/// POD view over one coarse/fine interface strip.  The owning RegMP/EdgeStrip keeps the pinned
+/// POD view over one coarse/fine interface strip. The owning EdgeStrip-shaped carrier keeps the pinned
 /// buffers alive; kernels capture only these raw pointers and integer bounds.
 struct RefluxStripView {
   int I0 = 0, I1 = -1, J0 = 0, J1 = -1;
@@ -791,7 +790,10 @@ struct RouteRefluxStripKernel {
   }
 
   POPS_HD void operator()(int, int) const {
-    const RefluxStripConstView shape = (fine.fL != nullptr || fine.fB != nullptr) ? fine : coarse;
+    const RefluxStripConstView shape =
+        (fine.fL != nullptr || fine.fR != nullptr || fine.fB != nullptr || fine.fT != nullptr)
+            ? fine
+            : coarse;
     for (int J = shape.J0; J <= shape.J1; ++J)
       for (int component = 0; component < shape.components; ++component) {
         const std::size_t index =
@@ -850,34 +852,13 @@ inline void accumulate_fine_strip(const ConstArray4& Fx, const ConstArray4& Fy,
                 detail::AccumulateFineYStripKernel{Fy, strip, scale});
 }
 
-// SubcyclingSchedule (review, point 5: role promoted to a type). Berger-Oliger cadence of a
-// level: temporal refinement ratio r, substep dt/r, and temporal position frac(s)
-// = s/r of substep s in the parent step. Centralizes the `const int r = kAmrRefRatio`, `dt / r` and
-// `Real(s) / r` scattered across the subcycling loops. Arithmetic strictly preserved:
-// dt_sub(dt) == dt / r and frac(s) == Real(s) / r at the same types, thus bit-identical.
-struct SubcyclingSchedule {
-  amr::ParentChildClockRelation clocks;
-
-  SubcyclingSchedule(int parent_level, int child_level, amr::Rational temporal_ratio,
-                     amr::RemainderPolicy remainder_policy)
-      : clocks(parent_level, child_level, temporal_ratio, remainder_policy) {
-    if (!temporal_ratio.integral())
-      throw std::invalid_argument(
-          "SubcyclingSchedule scalar loop requires an integral temporal ratio; use the explicit "
-          "clock partition for a declared remainder");
-  }
-  int count() const { return static_cast<int>(clocks.temporal_ratio().numerator); }
-  Real dt_sub(Real dt) const { return dt / static_cast<Real>(count()); }
-  Real frac(int s) const { return Real(s) / static_cast<Real>(count()); }
-};
-
 // CoarseFineInterface (review, point 2). The coarse-fine interface of a level: coverage
 // (which coarse cells are shadowed by a fine patch, via CoverageMask) + bordering ROUTING
 // of the reflux (which coarse cell borders which fine-patch face, and the conservative
-// correction poured into it). Centralizes the two inline logics previously duplicated
-// in amr_step_2level_multipatch and subcycle_level_mp. Builds the mask on the GLOBAL
+// correction poured into it). Centralizes the conservative coarse/fine routing used by Program-owned
+// reflux. Builds the mask on the GLOBAL
 // box_array() of the fine patches (MPI-safe). route_reflux is a template on the register
-// type (Reg / RegMP, same field layout): named function (no generic lambda), thus
+// type (EdgeStrip-shaped, same field layout): named function (no generic lambda), thus
 // safe under nvcc. Arithmetic bit-identical to the previous bodies.
 struct CoarseFineInterface {
   CoverageMask cmask;
@@ -1039,7 +1020,7 @@ struct CoarseFineInterface {
   // (left/right in x, bottom/top in y) as the original inline bodies.
   template <class Reg>
   void route_reflux(const Reg& g, Real dx, Real dy, Real dt, FluxRegister& ref, int nc) const {
-    validate_route_inputs_(g, g, dx, dy, dt, nc, /*allow_empty_roles=*/false);
+    validate_route_inputs_(g, g, dx, dy, dt, ref, nc, /*allow_empty_roles=*/false);
     const RefluxStripConstView strip = reflux_strip_const_view(g, nc);
     for_each_cell(Box2D{{0, 0}, {0, 0}}, detail::RouteRefluxStripKernel{
                                              strip, strip, ref.view(), cmask.view(), coarse_region,
@@ -1052,10 +1033,10 @@ struct CoarseFineInterface {
   // -(g.fL - g.cL)/dx with NO *dt. Dropping the /dt*dt round-trip keeps the coarse-fine cancellation exact
   // to round-off (a *dt then implicit /dt would re-introduce a rounding step). Same coverage guard, same
   // face order (left/right in x, bottom/top in y), same FluxRegister.add as route_reflux -- only the *dt is
-  // gone. @c Reg is EdgeStrip / RegMP-shaped (I0..J1 + the eight flat strip arrays).
+  // gone. @c Reg is EdgeStrip-shaped (I0..J1 + the eight flat strip arrays).
   template <class Reg>
   void route_reflux_integrated(const Reg& g, Real dx, Real dy, FluxRegister& ref, int nc) const {
-    validate_route_inputs_(g, g, dx, dy, Real(1), nc, /*allow_empty_roles=*/false);
+    validate_route_inputs_(g, g, dx, dy, Real(1), ref, nc, /*allow_empty_roles=*/false);
     const RefluxStripConstView strip = reflux_strip_const_view(g, nc);
     for_each_cell(Box2D{{0, 0}, {0, 0}}, detail::RouteRefluxStripKernel{
                                              strip, strip, ref.view(), cmask.view(), coarse_region,
@@ -1069,19 +1050,36 @@ struct CoarseFineInterface {
   template <class Reg>
   void route_reflux_integrated_pair(const Reg& coarse, const Reg& fine, Real dx, Real dy,
                                     FluxRegister& ref, int nc) const {
-    const bool coarse_present = coarse.I1 >= coarse.I0 && coarse.J1 >= coarse.J0 &&
-                                (!coarse.cL.empty() || !coarse.cB.empty());
+    preflight_reflux_integrated_pair(coarse, fine, dx, dy, ref, nc);
+    route_reflux_integrated_pair_prevalidated_(coarse, fine, dx, dy, ref, nc);
+  }
+
+  /// Host-only structural validation for a Program-owned pair.  A distributed caller performs
+  /// this for every global child and reaches collective consensus before launching any device
+  /// correction kernel.
+  template <class Reg>
+  void preflight_reflux_integrated_pair(const Reg& coarse, const Reg& fine, Real dx, Real dy,
+                                        const FluxRegister& ref, int nc) const {
+    const bool coarse_present =
+        !coarse.cL.empty() || !coarse.cR.empty() || !coarse.cB.empty() || !coarse.cT.empty();
     const bool fine_present =
-        fine.I1 >= fine.I0 && fine.J1 >= fine.J0 && (!fine.fL.empty() || !fine.fB.empty());
+        !fine.fL.empty() || !fine.fR.empty() || !fine.fB.empty() || !fine.fT.empty();
     if (!coarse_present && !fine_present)
       return;
-    const Reg& shape = fine_present ? fine : coarse;
     if (coarse_present && fine_present &&
         (coarse.I0 != fine.I0 || coarse.I1 != fine.I1 || coarse.J0 != fine.J0 ||
          coarse.J1 != fine.J1))
       throw std::runtime_error("coarse/fine reflux strips have different patch footprints");
-    validate_route_inputs_(coarse, fine, dx, dy, Real(1), nc,
+    validate_route_inputs_(coarse, fine, dx, dy, Real(1), ref, nc,
                            /*allow_empty_roles=*/true);
+  }
+
+ private:
+  friend class PreparedAmrProgramRefluxTransition;
+
+  template <class Reg>
+  void route_reflux_integrated_pair_prevalidated_(const Reg& coarse, const Reg& fine, Real dx,
+                                                  Real dy, FluxRegister& ref, int nc) const {
     for_each_cell(Box2D{{0, 0}, {0, 0}},
                   detail::RouteRefluxStripKernel{reflux_strip_const_view(coarse, nc),
                                                  reflux_strip_const_view(fine, nc), ref.view(),
@@ -1091,21 +1089,33 @@ struct CoarseFineInterface {
 
   template <class Reg>
   static void validate_route_inputs_(const Reg& coarse, const Reg& fine, Real dx, Real dy,
-                                     Real coarse_scale, int nc, bool allow_empty_roles) {
+                                     Real coarse_scale, const FluxRegister& ref, int nc,
+                                     bool allow_empty_roles) {
     if (nc <= 0 || !std::isfinite(dx) || !std::isfinite(dy) || dx <= Real(0) || dy <= Real(0) ||
         !std::isfinite(coarse_scale))
       throw std::invalid_argument("reflux route requires finite positive spacing and components");
-    const Reg& shape = (!fine.fL.empty() || !fine.fB.empty()) ? fine : coarse;
-    if (shape.I1 < shape.I0 || shape.J1 < shape.J0)
-      throw std::invalid_argument("reflux strip has an empty footprint");
-    const std::size_t nJ =
-        static_cast<std::size_t>(shape.J1 - shape.J0 + 1) * static_cast<std::size_t>(nc);
-    const std::size_t nI =
-        static_cast<std::size_t>(shape.I1 - shape.I0 + 1) * static_cast<std::size_t>(nc);
+    if (ref.nc != nc)
+      throw std::invalid_argument(
+          "coarse/fine reflux register component count differs from the routed strip");
     const bool coarse_present =
         !coarse.cL.empty() || !coarse.cR.empty() || !coarse.cB.empty() || !coarse.cT.empty();
     const bool fine_present =
         !fine.fL.empty() || !fine.fR.empty() || !fine.fB.empty() || !fine.fT.empty();
+    const Reg& shape = fine_present ? fine : coarse;
+    if (shape.I1 < shape.I0 || shape.J1 < shape.J0)
+      throw std::invalid_argument("reflux strip has an empty footprint");
+    const std::int64_t j_extent =
+        static_cast<std::int64_t>(shape.J1) - static_cast<std::int64_t>(shape.J0) + 1;
+    const std::int64_t i_extent =
+        static_cast<std::int64_t>(shape.I1) - static_cast<std::int64_t>(shape.I0) + 1;
+    const std::size_t components = static_cast<std::size_t>(nc);
+    if (j_extent <= 0 || i_extent <= 0 ||
+        static_cast<std::uint64_t>(j_extent) >
+            std::numeric_limits<std::size_t>::max() / components ||
+        static_cast<std::uint64_t>(i_extent) > std::numeric_limits<std::size_t>::max() / components)
+      throw std::overflow_error("coarse/fine reflux strip size overflow");
+    const std::size_t nJ = static_cast<std::size_t>(j_extent) * components;
+    const std::size_t nI = static_cast<std::size_t>(i_extent) * components;
     const bool coarse_exact = coarse.cL.size() == nJ && coarse.cR.size() == nJ &&
                               coarse.cB.size() == nI && coarse.cT.size() == nI;
     const bool fine_exact = fine.fL.size() == nJ && fine.fR.size() == nJ && fine.fB.size() == nI &&

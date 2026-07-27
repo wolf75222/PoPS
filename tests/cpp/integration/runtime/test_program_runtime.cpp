@@ -151,6 +151,221 @@ TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
   EXPECT_EQ(system.macro_step(), initial_step);
 }
 
+TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System subcycled(config);
+  subcycled.set_clock(1.0, 10);
+  runtime::program::ProgramContext subcycled_context(&subcycled);
+  std::vector<double> subcycled_times;
+  std::vector<int> subcycled_macro_steps;
+  subcycled_context.install([&](double) {
+    subcycled_times.push_back(static_cast<double>(subcycled_context.physical_time()));
+    subcycled_macro_steps.push_back(subcycled.macro_step());
+  });
+  subcycled.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+  subcycled.step(0.2);
+
+  ASSERT_EQ(subcycled_times.size(), 2u);
+  EXPECT_NEAR(subcycled_times[0], 1.0, 1.0e-14);
+  EXPECT_NEAR(subcycled_times[1], 1.1, 1.0e-14);
+  EXPECT_EQ(subcycled_macro_steps, (std::vector<int>{10, 10}));
+  EXPECT_NEAR(subcycled.time(), 1.2, 1.0e-14);
+  EXPECT_EQ(subcycled.macro_step(), 11);
+
+  System catchup(config);
+  runtime::program::ProgramContext catchup_context(&catchup);
+  catchup_context.configure_primary_clock("macro");
+  std::vector<double> catchup_times;
+  std::vector<double> catchup_steps;
+  std::vector<int> catchup_macro_steps;
+  std::vector<bool> catchup_every_one_due;
+  catchup_context.install([&](double h) {
+    catchup_times.push_back(static_cast<double>(catchup_context.physical_time()));
+    catchup_steps.push_back(h);
+    catchup_macro_steps.push_back(catchup.macro_step());
+    catchup_every_one_due.push_back(catchup_context.schedule_is_due(
+        41, 1, runtime::program::ScheduleDomainKind::kAcceptedStep, "macro", "", -1));
+  });
+  catchup.set_program_cadence(/*substeps=*/3, /*stride=*/2);
+
+  catchup.step(0.1);
+  EXPECT_TRUE(catchup_times.empty());
+  EXPECT_NEAR(catchup.time(), 0.1, 1.0e-14);
+  EXPECT_EQ(catchup.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(catchup.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+
+  catchup.step(0.2);
+  ASSERT_EQ(catchup_times.size(), 3u);
+  EXPECT_NEAR(catchup_times[0], 0.0, 1.0e-14);
+  EXPECT_NEAR(catchup_times[1], 0.1, 1.0e-14);
+  EXPECT_NEAR(catchup_times[2], 0.2, 1.0e-14);
+  ASSERT_EQ(catchup_steps.size(), 3u);
+  for (const double h : catchup_steps)
+    EXPECT_NEAR(h, 0.1, 1.0e-14);
+  EXPECT_DOUBLE_EQ(catchup_times.back() + catchup_steps.back(), 0.1 + 0.2);
+  EXPECT_EQ(catchup_macro_steps, (std::vector<int>{0, 0, 0}));
+  EXPECT_EQ(catchup_every_one_due, (std::vector<bool>{true, true, true}));
+  EXPECT_NEAR(catchup.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(catchup.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(catchup.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(ProgramRuntime,
+     CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  system.set_clock(0.1, 0);
+  runtime::program::ProgramContext context(&system);
+  std::vector<double> starts;
+  std::vector<double> steps;
+  context.install([&](double h) {
+    starts.push_back(static_cast<double>(context.physical_time()));
+    steps.push_back(h);
+  });
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/3);
+
+  const double after_first = 0.1 + 0.1;
+  const double after_second = after_first + 0.1;
+  const double accepted_endpoint = after_second + 0.3;
+  const double effective_dt = (0.1 + 0.1) + 0.3;
+  const double reconstructed_endpoint = 0.1 + effective_dt;
+  const double numerical_dt = accepted_endpoint - 0.1;
+  ASSERT_NE(std::bit_cast<std::uint64_t>(accepted_endpoint),
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint))
+      << "fixture must exercise floating-point non-associativity";
+  ASSERT_NE(std::bit_cast<std::uint64_t>(numerical_dt), std::bit_cast<std::uint64_t>(effective_dt))
+      << "fixture must distinguish dt provenance from the representable facade interval";
+
+  system.step(0.1);
+  system.step(0.1);
+  EXPECT_TRUE(starts.empty());
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1 + 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 2);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.1);
+
+  system.step(0.3);
+  ASSERT_EQ(starts.size(), 3u);
+  ASSERT_EQ(steps.size(), 3u);
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(starts.front()), std::bit_cast<std::uint64_t>(0.1));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(starts.back() + steps.back()),
+            std::bit_cast<std::uint64_t>(accepted_endpoint));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
+            std::bit_cast<std::uint64_t>(accepted_endpoint));
+  EXPECT_NE(std::bit_cast<std::uint64_t>(system.time()),
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint));
+  EXPECT_EQ(system.macro_step(), 3);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+}
+
+TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  std::vector<double> accepted_steps;
+  bool reject = true;
+  system.install_program_step([&](double h) {
+    if (reject)
+      throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "cadence",
+                                                  "fault injection in due stride window");
+    accepted_steps.push_back(h);
+  });
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.step(0.1);
+
+  EXPECT_THROW(system.step(0.2), runtime::program::StepAttemptRejected);
+  EXPECT_DOUBLE_EQ(system.time(), 0.1);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+
+  reject = false;
+  system.step(0.2);
+  ASSERT_EQ(accepted_steps.size(), 1u);
+  EXPECT_NEAR(accepted_steps[0], 0.3, 1.0e-14);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+
+  System restarted(config);
+  std::vector<double> restarted_times;
+  restarted.install_program_step([&](double) { restarted_times.push_back(restarted.time()); });
+  restarted.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  restarted.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                           /*window_start_time=*/0.0, /*macro_step=*/1);
+  restarted.set_clock(/*t=*/0.1, /*macro_step=*/1);
+  restarted.step(0.2);
+  EXPECT_EQ(restarted_times, (std::vector<double>{0.0}));
+  EXPECT_NEAR(restarted.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(restarted.macro_step(), 2);
+}
+
+TEST(ProgramRuntime, CadenceRejectsDtAbsorbedByThePhysicalClock) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_clock(1.0e16, 0);
+
+  EXPECT_THROW(system.step(0.5), std::overflow_error);
+  EXPECT_DOUBLE_EQ(system.time(), 1.0e16);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(calls, 0);
+}
+
+TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/1);
+  system.set_clock(1.0, 0);
+  const double one_ulp = std::nextafter(1.0, 2.0) - 1.0;
+
+  EXPECT_THROW(system.step(one_ulp), std::overflow_error);
+  EXPECT_DOUBLE_EQ(system.time(), 1.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(calls, 0);
+}
+
 TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

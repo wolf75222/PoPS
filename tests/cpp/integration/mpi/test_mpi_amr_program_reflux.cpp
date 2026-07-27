@@ -264,6 +264,37 @@ static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
     fails += check_one_writer_per_patch(fine.fine, false);
   }
 
+  // The prepared route authenticates each global strip against the child owner before launching
+  // correction kernels.  A role materialized only on one non-owner rank must therefore make EVERY
+  // rank leave through the same consensus failure, never strand healthy peers in the later sum.
+  AmrLevelMP parent_level{parent, nullptr, Real(1), Real(1)};
+  AmrLevelMP child_level{child, nullptr, Real(0.5), Real(0.5)};
+  parent_level.U.set_val(Real(0));
+  auto transition = PreparedAmrProgramRefluxTransition::prepare(
+      parent_level, child_level, parent_domain, Periodicity{false, false},
+      world_communicator_view());
+  transition.synchronize_integrated(parent_level.U, parent_level.dx, parent_level.dy,
+                                    distributed.coarse, fine.fine, world_communicator_view());
+
+  std::vector<EdgeStrip> duplicated_coarse = distributed.coarse;
+  std::vector<EdgeStrip> duplicated_fine = fine.fine;
+  const int intruder = (child_dm[0] + 1) % np;
+  if (me == intruder) {
+    const Box2D footprint = PatchRange(child_boxes[0]).box();
+    duplicated_coarse[0].alloc(footprint, kNcomp);
+    duplicated_fine[0].alloc(footprint, kNcomp);
+  }
+  bool rejected_non_owner = false;
+  try {
+    transition.synchronize_integrated(parent_level.U, parent_level.dx, parent_level.dy,
+                                      duplicated_coarse, duplicated_fine,
+                                      world_communicator_view());
+  } catch (const std::runtime_error&) {
+    rejected_non_owner = true;
+  }
+  const long rejecting_ranks = all_reduce_sum(rejected_non_owner ? 1L : 0L);
+  fails += rejecting_ranks != np;
+
   // A face array with the right local size but the wrong centering/order must fail before sampling;
   // no local-index fallback is allowed after regridding or redistribution.
   MultiFab wrong_fy(face_boxes(child_boxes, true), child_dm, kNcomp, 0);

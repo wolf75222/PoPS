@@ -828,8 +828,11 @@ Le plan de checkpoint sépare les slots demandés par la politique des slots eff
 Si une regrille est planifiée dans la fenêtre qu'un replay sélectif devrait reconstruire, le plan
 effectif est promu en `dense_regrid_safety` : tous les slots sont persistés et le manifeste authentifié
 enregistre la demande, la promotion et l'empreinte de calendrier. PoPS ne prétend donc jamais qu'un
-replay sur une hiérarchie déjà remappée est bit-identique ; hors d'une telle fenêtre, le plan reste
-`policy` et reconstruit uniquement les slots omis.
+replay sur une hiérarchie déjà remappée est bit-identique. De même, une cadence globale différente de
+`substeps=1, stride=1` est promue en `dense_cadence_safety`, car plusieurs rotations peuvent partager
+un tick public ou sauter des ticks et le payload courant ne porte pas encore une identité d'invocation
+par slot. Hors de ces fenêtres, et seulement pour le graphe propriétaire affine/context-free prouvé à
+la compilation, le plan reste `policy` et reconstruit uniquement les slots omis.
 
 Écriture SSPRK2 normative, uniquement avec les opérations génériques de `Program` :
 
@@ -1266,11 +1269,12 @@ Une ambiguïté entre plusieurs choix valides est une erreur. Une heuristique n'
 omission. Tous les défauts et dérivations entrent dans les rapports et, s'ils changent le comportement,
 dans l'identité sémantique.
 
-### 8.4 Moteurs d'exécution privés
+### 8.4 Façades natives privées
 
 `pops.bind` retourne l'unique `RuntimeInstance` authentifiée et seul `pops.run(instance, **controls)`
-la fait avancer. `RuntimeInstance` n'expose pas de méthode `run`. Les moteurs `System` et `AmrSystem`
-existent uniquement derrière les modules privés d'installation ; `pops.runtime` ne les réexporte pas
+la fait avancer. `RuntimeInstance` n'expose pas de méthode `run`. Les façades `System` et `AmrSystem`
+existent uniquement derrière les modules privés d'installation et exécutent exclusivement le
+`ProgramGraph` installé ; elles ne possèdent aucun stepper temporel de repli. `pops.runtime` ne les réexporte pas
 et les chemins `pops.runtime.system`, `pops.runtime.amr_system` et `pops.runtime.mesh` n'existent pas.
 Une application ne construit donc ni moteur, ni config native, ni plan d'installation pour contourner
 `validate -> resolve -> compile -> bind -> run`.
@@ -1307,7 +1311,7 @@ Le graphe est résolu avec le layout, authentifié dans le plan et l'artefact, p
 `RuntimeInstance`. Le snapshot de bind ne possède aucun registre parallèle `outputs` ou `diagnostics` :
 les recréer à ce niveau constituerait une seconde autorité et est interdit.
 L'autorité de restart manuel est elle aussi matérialisée pendant `resolve` puis conservée dans le
-plan compilé : soit le provider unique d'un nœud `Checkpoint`, soit le builtin v3 identifié quand le
+plan compilé : soit le provider unique d'un nœud `Checkpoint`, soit le builtin v4 identifié quand le
 graphe n'en déclare aucun. `RuntimeInstance` ne construit jamais un provider de repli tardif. Tout
 provider déclare aussi `validate_snapshot()` et doit produire une préparation compensatable portant
 `discard()` et `rollback()` ; ce protocole est vérifié avant qu'un effet accepté puisse être publié.
@@ -1353,14 +1357,14 @@ Un checkpoint strict conserve au minimum : identités du plan/programme/composan
 consommateurs et contrat de plateforme. Un restart refuse toute divergence non autorisée. La garantie
 bit-identique est prouvée par continuation indépendante, pas par comparaison du manifest seul.
 
-Le restart v3 MPI est un protocole collectif du `RuntimeInstance`, jamais une lecture concurrente du
+Le restart v4 MPI est un protocole collectif du `RuntimeInstance`, jamais une lecture concurrente du
 fichier par les moteurs. Tous les rangs authentifient d'abord la même cible ; le rang 0 lit une seule
 fois l'artefact, authentifie son enveloppe et diffuse ses bytes exacts ainsi que les cursors via le
 communicator porté par `ExecutionContext`. Chaque rang décode alors le payload en mémoire et termine
 le préflight complet Uniform, AMR ou multi-layout. Un consensus sans erreur est obligatoire avant la
 première mutation native. L'application conserve un snapshot accepté sur chaque rang jusqu'aux
 consensus `apply` et `commit` ; toute erreur ou divergence déclenche le rollback de tous les moteurs.
-Le multi-layout encapsule les payloads enfants dans le container v3 et les rejoue directement en
+Le multi-layout encapsule les payloads enfants dans le container v4 et les rejoue directement en
 mémoire, sans fichiers enfants temporaires ni `np.load` concurrent sur un filesystem partagé.
 
 La capture suit le contrat symétrique avant tout `*_global` natif : chaque rang construit sans

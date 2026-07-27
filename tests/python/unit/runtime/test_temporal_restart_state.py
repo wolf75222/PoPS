@@ -1,4 +1,5 @@
 """ADC-667 strict Uniform next-attempt checkpoint state."""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +10,11 @@ import pytest
 
 from pops._bootstrap import StepAttemptRejected
 from pops.runtime._native_step_target import native_step_target
+from pops.runtime._program_cadence_checkpoint import (
+    capture_program_cadence,
+    prepare_program_cadence,
+    restore_program_cadence,
+)
 from pops.runtime._step_strategy import (
     resolve_run_strategy,
     run_control_payload,
@@ -51,7 +57,8 @@ def _bound_state(strategy=None):
     state = TemporalRestartState()
     state.begin_run(
         strategy or run_control_payload(FixedDt(0.125)),
-        time=0.0, macro_step=0,
+        time=0.0,
+        macro_step=0,
     )
     return state
 
@@ -74,9 +81,9 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     from pops.time import GuardRole, Program, RejectAttempt
 
     n = 4
-    frame = Rectangle(
-        "temporal-rejection-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("temporal-rejection-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
     x_axis, y_axis = frame.axes
     model = Model("temporal-rejection-model", frame=frame)
     state = model.state("U", components=("rho",))
@@ -91,8 +98,7 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     source_rate = 0.5
     source = model.source("forcing", on=state, value=(source_rate + 0.0 * rho,))
     source_operator = model.module.operator_handle("forcing")
-    rate = model.rate(
-        "transport-rate", equation=ddt(state) == -div(flux) + source)
+    rate = model.rate("transport-rate", equation=ddt(state) == -div(flux) + source)
     case = pops.Case("temporal-rejection-case")
     block = case.block("blk", model)
     numerics = DiscretizationPlan()
@@ -109,8 +115,7 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     program = Program("temporal_native_%s" % attempt_policy)
     temporal = program.state(block[state])
     rhs = program.rhs(state=temporal.n, terms=[Flux(), SourceTerm(source_operator)])
-    candidate = program.value(
-        "candidate", temporal.n + program.dt * rhs, at=temporal.next.point)
+    candidate = program.value("candidate", temporal.n + program.dt * rhs, at=temporal.next.point)
     if attempt_policy == "forced_reject":
         candidate = program.guard(
             "forced_native_rejection",
@@ -138,19 +143,20 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
         candidate = program.guard(
             "dt_dependent_error_estimate",
             candidate,
-            program.norm_inf(increment)
-            <= source_rate * strategy.dt_init * strategy.shrink,
+            program.norm_inf(increment) <= source_rate * strategy.dt_init * strategy.shrink,
             action=RejectAttempt(),
             role=GuardRole.ERROR_ESTIMATE,
         )
     program.commit(temporal.next, candidate)
     program.step_strategy(strategy)
     case.program(program)
-    layout = Uniform(CartesianGrid(
-        frame=frame,
-        cells=(n, n),
-        periodic=PeriodicAxes(frame.axes),
-    ))
+    layout = Uniform(
+        CartesianGrid(
+            frame=frame,
+            cells=(n, n),
+            periodic=PeriodicAxes(frame.axes),
+        )
+    )
     resolved = pops.resolve(
         pops.validate(case),
         layout=layout,
@@ -166,27 +172,38 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
 def _nested_schedule():
     macro = Clock("macro")
     child = Clock("chemistry")
-    return macro, child, {
-        "schema_version": 1,
-        "kind": "pops.temporal-program-schedule",
-        "primary_clock": macro.qualified_id,
-        "clocks": [
-            {"id": macro.qualified_id, "descriptor": macro.to_data(), "ticks_per_macro": 1},
-            {"id": child.qualified_id, "descriptor": child.to_data(), "ticks_per_macro": 3},
-        ],
-        "subcycles": [{
-            "node_id": 7, "parent_clock": macro.qualified_id,
-            "child_clock": child.qualified_id, "count": 3,
-        }],
-        "synchronizations": [{
-            "node_id": 8, "source_clock": macro.qualified_id,
-            "target_clock": child.qualified_id,
-            "relation": {"kind": "sample_and_hold", "schema_version": 1},
-            "point": TimePoint(child).to_data(),
-        }],
-        "schedules": [],
-        "histories": [],
-    }
+    return (
+        macro,
+        child,
+        {
+            "schema_version": 1,
+            "kind": "pops.temporal-program-schedule",
+            "primary_clock": macro.qualified_id,
+            "clocks": [
+                {"id": macro.qualified_id, "descriptor": macro.to_data(), "ticks_per_macro": 1},
+                {"id": child.qualified_id, "descriptor": child.to_data(), "ticks_per_macro": 3},
+            ],
+            "subcycles": [
+                {
+                    "node_id": 7,
+                    "parent_clock": macro.qualified_id,
+                    "child_clock": child.qualified_id,
+                    "count": 3,
+                }
+            ],
+            "synchronizations": [
+                {
+                    "node_id": 8,
+                    "source_clock": macro.qualified_id,
+                    "target_clock": child.qualified_id,
+                    "relation": {"kind": "sample_and_hold", "schema_version": 1},
+                    "point": TimePoint(child).to_data(),
+                }
+            ],
+            "schedules": [],
+            "histories": [],
+        },
+    )
 
 
 def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state():
@@ -196,18 +213,17 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
 
     payload = state.checkpoint_json(time=native.time(), macro_step=native.macro_step())
     restored = TemporalRestartState.from_json(
-        np.array(payload), time=native.time(), macro_step=native.macro_step())
+        np.array(payload), time=native.time(), macro_step=native.macro_step()
+    )
     data = restored.to_data()
     assert data["schedule_cursors"] == {
         "macro_step": {"macro_step": 1, "phase": "accepted"},
     }
     assert data["controller_state"]["last_accepted_dt"] == (0.125).hex()
     assert data["transaction_stats"] == {"accepted": 1, "rejected": 0, "failed": 0}
-    restored.begin_run(
-        run_control_payload(FixedDt(0.125)), time=0.125, macro_step=1)
+    restored.begin_run(run_control_payload(FixedDt(0.125)), time=0.125, macro_step=1)
     with pytest.raises(RuntimeError, match="checkpointed step strategy"):
-        restored.begin_run(
-            run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
+        restored.begin_run(run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
 
 
 def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope():
@@ -267,12 +283,16 @@ def test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary():
     assert state.cursor_for_clock(child)["tick"] == 3
     assert state.schedule_cursors["subcycle:7"]["next_iteration"] == 0
     assert state.synchronization_cursors["8"] == {
-        "macro_step": 1, "source_tick": 1, "target_tick": 3, "phase": "accepted",
+        "macro_step": 1,
+        "source_tick": 1,
+        "target_tick": 3,
+        "phase": "accepted",
     }
 
     payload = state.checkpoint_json(time=0.125, macro_step=1)
     restored = TemporalRestartState.from_json(
-        payload, time=0.125, macro_step=1, program_schedule=schedule)
+        payload, time=0.125, macro_step=1, program_schedule=schedule
+    )
     assert restored.cursor_for_clock(child) == state.cursor_for_clock(child)
     with pytest.raises(RuntimeError, match="no cursor for qualified clock"):
         restored.cursor_for_clock(Clock("unrelated"))
@@ -288,14 +308,16 @@ def test_restart_rejects_a_different_installed_nested_clock_schedule():
     changed["subcycles"][0]["count"] = 2
     changed["clocks"][1]["ticks_per_macro"] = 2
     with pytest.raises(ValueError, match="differs from installed program"):
-        TemporalRestartState.from_json(
-            payload, time=0.0, macro_step=0, program_schedule=changed)
+        TemporalRestartState.from_json(payload, time=0.0, macro_step=0, program_schedule=changed)
 
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
-    tmp_path, isolated_native_cache, native_cxx, kokkos_root,
+    tmp_path,
+    isolated_native_cache,
+    native_cxx,
+    kokkos_root,
 ):
     del isolated_native_cache, kokkos_root
     runtime = _bound_uniform_runtime(native_cxx, attempt_policy="forced_reject")
@@ -306,12 +328,14 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         run_step_attempt(engine, native, FixedDt(0.125), t_end=0.125)
 
     assert (runtime.time(), runtime.macro_step()) == (0.0, 0)
-    assert np.array_equal(
-        np.asarray(runtime.state_global("blk"), dtype=np.float64), initial
-    ), "the rejected native attempt must roll back the complete state"
+    assert np.array_equal(np.asarray(runtime.state_global("blk"), dtype=np.float64), initial), (
+        "the rejected native attempt must roll back the complete state"
+    )
     temporal = runtime.program_report().temporal
     assert temporal["transaction_stats"] == {
-        "accepted": 0, "rejected": 1, "failed": 0,
+        "accepted": 0,
+        "rejected": 1,
+        "failed": 0,
     }
     assert temporal["status"] == "rejected"
     assert temporal["synchronized"] is False
@@ -322,8 +346,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
 
     retrying = _bound_uniform_runtime(native_cxx, attempt_policy="error_retry")
     retrying_engine = retrying._executor
-    retrying_initial = np.asarray(
-        retrying.state_global("blk"), dtype=np.float64).copy()
+    retrying_initial = np.asarray(retrying.state_global("blk"), dtype=np.float64).copy()
     report = run_step_attempt(
         retrying_engine,
         native_step_target(retrying_engine),
@@ -342,7 +365,9 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     ), "only the accepted retry may update the runtime state"
     retrying_temporal = retrying.program_report().temporal
     assert retrying_temporal["transaction_stats"] == {
-        "accepted": 1, "rejected": 1, "failed": 0,
+        "accepted": 1,
+        "rejected": 1,
+        "failed": 0,
     }
     assert retrying_temporal["controller_state"] == {
         "last_accepted_dt": (0.0625).hex(),
@@ -389,15 +414,139 @@ class _Payload(dict):
 
 
 def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore():
-    payload = _Payload({
-        "program_hash": np.array("ab" * 32),
-        "history_names": np.array([], dtype="U1"),
-        "cache_nodes": np.array([], dtype=np.int64),
-        "cache_names": np.array([], dtype="U1"),
-        "temporal_restart_state": np.array("{}"),
-    })
+    payload = _Payload(
+        {
+            "program_hash": np.array("ab" * 32),
+            "history_names": np.array([], dtype="U1"),
+            "cache_nodes": np.array([], dtype=np.int64),
+            "cache_names": np.array([], dtype="U1"),
+            "temporal_restart_state": np.array("{}"),
+            "program_cadence_substeps": np.array(1, dtype=np.int64),
+            "program_cadence_stride": np.array(1, dtype=np.int64),
+            "program_cadence_window_steps": np.array(0, dtype=np.int64),
+            "program_cadence_window_dt": np.array(0.0, dtype=np.float64),
+            "program_cadence_window_start_time": np.array(0.0, dtype=np.float64),
+        }
+    )
     preflight_uniform_restart(payload)
 
     payload["history_names"] = np.array(["rhs"])
     with pytest.raises(ValueError, match="history 'rhs'.*incomplete strict manifest"):
         preflight_uniform_restart(payload)
+
+
+class _CadenceEngine:
+    def __init__(self, *, substeps=2, stride=3, held_steps=2, dt=0.3, start=4.0):
+        self.substeps = substeps
+        self.stride = stride
+        self.held_steps = held_steps
+        self.dt = dt
+        self.start = start
+        self.restored = None
+
+    def program_substeps(self):
+        return self.substeps
+
+    def time(self):
+        return 4.3
+
+    def program_stride(self):
+        return self.stride
+
+    def program_cadence_window_steps(self):
+        return self.held_steps
+
+    def program_cadence_window_dt(self):
+        return self.dt
+
+    def program_cadence_window_start_time(self):
+        return self.start
+
+    def restore_program_cadence_window(
+        self, accumulated_dt, held_steps, window_start_time, macro_step
+    ):
+        self.restored = (
+            accumulated_dt,
+            held_steps,
+            window_start_time,
+            macro_step,
+        )
+
+
+def test_program_cadence_checkpoint_preserves_exact_variable_dt_window():
+    engine = _CadenceEngine()
+    captured = capture_program_cadence(engine, macro_step=5)
+    payload = _Payload({key: np.array(value) for key, value in captured.to_payload().items()})
+
+    prepared = prepare_program_cadence(engine, payload, macro_step=5, accepted_time=4.3)
+    assert prepared == captured
+    assert prepared.to_data()["accumulated_dt"] == (0.3).hex()
+    assert prepared.to_data()["window_start_time"] == (4.0).hex()
+
+    restore_program_cadence(engine, prepared, macro_step=5, accepted_time=4.3)
+    assert engine.restored == (0.3, 2, 4.0, 5)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (lambda payload: payload.pop("program_cadence_window_dt"), "missing"),
+        (
+            lambda payload: payload.__setitem__("program_cadence_window_steps", np.array(2.0)),
+            "exact integer",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "program_cadence_window_steps", np.array(1, dtype=np.int64)
+            ),
+            "macro-step phase",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "program_cadence_window_dt", np.array(float("inf"))
+            ),
+            "finite",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "program_cadence_window_dt", np.array(0.3, dtype=np.float32)
+            ),
+            "binary64",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "program_cadence_stride", np.array(4, dtype=np.int64)
+            ),
+            "macro-step phase",
+        ),
+    ],
+)
+def test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state(mutation, error):
+    engine = _CadenceEngine()
+    payload = _Payload(
+        {
+            "program_cadence_substeps": np.array(2, dtype=np.int64),
+            "program_cadence_stride": np.array(3, dtype=np.int64),
+            "program_cadence_window_steps": np.array(2, dtype=np.int64),
+            "program_cadence_window_dt": np.array(0.3, dtype=np.float64),
+            "program_cadence_window_start_time": np.array(4.0, dtype=np.float64),
+        }
+    )
+    mutation(payload)
+    with pytest.raises((TypeError, ValueError), match=error):
+        prepare_program_cadence(engine, payload, macro_step=5, accepted_time=4.3)
+
+
+def test_program_cadence_checkpoint_rejects_installed_configuration_mismatch():
+    engine = _CadenceEngine(stride=4, held_steps=1)
+    payload = _Payload(
+        {
+            "program_cadence_substeps": np.array(2, dtype=np.int64),
+            "program_cadence_stride": np.array(3, dtype=np.int64),
+            "program_cadence_window_steps": np.array(2, dtype=np.int64),
+            "program_cadence_window_dt": np.array(0.3, dtype=np.float64),
+            "program_cadence_window_start_time": np.array(4.0, dtype=np.float64),
+        }
+    )
+    with pytest.raises(ValueError, match="differs from the installed cadence"):
+        prepare_program_cadence(engine, payload, macro_step=5, accepted_time=4.3)

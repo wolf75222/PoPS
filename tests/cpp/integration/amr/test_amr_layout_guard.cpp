@@ -37,7 +37,7 @@
 
 using namespace pops;
 
-// modele d'advection scalaire minimal (calque de test_amr_system_coupler.cpp).
+// modele d'advection scalaire minimal.
 struct AdvectX {
   using State = StateVec<1>;
   using Aux = pops::Aux;
@@ -198,36 +198,7 @@ TEST(test_amr_layout_guard, Runs) {
         << "guard_passes_on_matching_layout";
   }
 
-  // --- Partie C : chemin MONO-BLOC bit-identique (dmax == 0) ---
-  // Deux coupleurs mono-bloc construits a l'IDENTIQUE et avances d'un pas : le garde-fou (boucle
-  // inter-blocs vide pour un seul bloc) ne change RIEN, donc les champs grossiers coincident au
-  // bit pres apres l'avance AMR (reflux + average_down inclus).
-  {
-    auto build_single = [&]() {
-      MultiFab Uc(ba_coarse, dm, 1, 2), Uf(ba_fine, dm_fine, 1, 2);
-      fill_by_coarse_i(Uc, 1, ne_fn);
-      fill_by_coarse_i(Uf, 2, ne_fn);
-      std::vector<AmrLevelMP> levels;
-      levels.push_back(AmrLevelMP{std::move(Uc), nullptr, dxc, dyc});
-      levels.push_back(AmrLevelMP{std::move(Uf), nullptr, dxc / 2, dyc / 2});
-      MultiFab& coarse = levels[0].U;
-      Blk b{"only", AdvectX{Real(1)}, coarse, BCRec{}};
-      CoupledSystem system{b};
-      std::vector<std::vector<AmrLevelMP>> bl;
-      bl.push_back(std::move(levels));
-      return AmrSystemCoupler(system, geom, ba_coarse, BCRec{}, ZeroSystemRhs{}, std::move(bl));
-    };
-    auto a = build_single();
-    auto b = build_single();
-    a.step(Real(0.01));
-    b.step(Real(0.01));
-    // dmax sur le grossier (composante 0) : difference STRICTEMENT nulle.
-    MultiFab diff(ba_coarse, dm, 1, 0);
-    lincomb(diff, Real(1), a.levels(0)[0].U, Real(-1), b.levels(0)[0].U);
-    EXPECT_EQ(norm_inf(diff), Real(0)) << "single_block_bit_identical_dmax_zero";
-  }
-
-  // --- Partie D : AmrHierarchyLayout::from_levels extrait la grille ---
+  // --- Partie C : AmrHierarchyLayout::from_levels extrait la grille ---
   {
     std::vector<AmrLevelMP> levels = make_two_level_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine,
                                                           dxc / 2, dyc / 2, /*is_e=*/true);

@@ -25,7 +25,9 @@
 /// - CFL PHYSICAL STEP h: Cartesian = min(dx, dy); POLAR = min(dr, r_min * dtheta) (the azimuthal step
 ///   r*dtheta is minimal at the inner radius r_min of the ring -> most constraining edge).
 /// - PROGRAM CADENCE INVARIANT (hold-then-catch-up): a whole-system Program of cadence M is held until
-///   the end of its window, then receives M*dt; the facade clock advances once per accepted macro-step.
+///   the end of its window, then receives a partition of the representable accepted facade interval;
+///   the left-folded dt arguments remain checkpoint provenance and the facade clock advances once per
+///   accepted macro-step.
 /// - PER-BLOCK CFL FORMULA (substeps-aware, post-#121): dt <= cfl * h * substeps_b / (stride_b * w_b);
 ///   the global dt is the min over the evolving blocks.
 ///
@@ -45,17 +47,6 @@ class SystemProgramDriver {
  public:
   /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
   explicit SystemProgramDriver(Impl* owner) : owner_(owner) {}
-
-  /// True if a block of cadence @p stride CATCHES UP at this macro-step (END of window).
-  /// STRIDE SEMANTICS = HOLD-THEN-CATCH-UP (catch-up at the END of the window). A block of cadence M is
-  /// HELD (not advanced) on the macro-steps where (macro_step + 1) % M != 0, then advances by an effective
-  /// step M*dt at the macro-step where (macro_step + 1) % M == 0, i.e. at the END of its window of M
-  /// macro-steps. At macro-step k, the system time is (k+1)*dt and the block that CATCHES UP has then
-  /// advanced by the same cumulative (k+1)*dt: it is temporally CONSISTENT with the fast blocks, never
-  /// "in the future". (The old semantics advanced at the START of the window, macro_step % M == 0: at k=0
-  /// the block already advanced M*dt while the system advanced only dt -> anticipated block, wrong
-  /// Poisson/source coupling.)
-  static bool stride_due(int macro_step, int stride) { return (macro_step + 1) % stride == 0; }
 
   /// Step bound from PER-CELL COUPLED FREQUENCIES (CoupledSource.frequency with an Expr,
   /// refinement of the CONSTANT frequency). For each registered program: reduces the MAX of mu(U)
@@ -160,29 +151,61 @@ class SystemProgramDriver {
   ///
   /// SUBSTEPS + STRIDE (ADC-411):
   ///   - stride M: GLOBAL hold-then-catch-up. The whole program is HELD on the macro-steps where
-  ///     stride_due is false, then runs ONCE with the effective step eff_dt = M*dt at the window end.
+  ///     it is not due, then runs ONCE over the representable accepted facade interval at the window
+  ///     end. The left-folded accepted dt sum remains strict checkpoint provenance; it is never used
+  ///     to reconstruct the endpoint because floating-point addition is not associative.
   ///     A compiled program is ONE whole-system closure, so the stride is GLOBAL (whole-system); this
   ///     equals native per-block stride ONLY for a single-block system (or all blocks sharing M).
-  ///   - substeps n: subdivides the EFFECTIVE step into n calls program_.step_(eff_dt/n). Each call
-  ///     executes the complete authored Program; no hidden block-local subcycling is inferred.
+  ///   - substeps n: partitions the prepared facade interval into n coordinate-qualified calls. Each
+  ///     call executes the complete authored Program; no hidden block-local subcycling is inferred.
   /// The clock ticks EVERY macro-step (held steps included), matching native. Default cadence 1/1 is
-  /// byte-identical to the single program_.step_(dt) call: stride_due(_, 1) is always true and n == 1
+  /// byte-identical to the single program_.step_(dt) call: every one-step window is due and n == 1
   /// collapses the loop to one call with h == dt.
   void run_program_cadence(double dt) {
     Impl* P = owner_;
-    if (stride_due(P->macro_step_, P->program_.stride_)) {
-      const Real eff_dt = Real(dt) * Real(P->program_.stride_);  // catch-up: effective step M*dt
+    const double accepted_time = P->t;
+    const auto cadence =
+        P->program_.prepare_cadence_step(accepted_time, P->macro_step_, dt, "System");
+    if (P->macro_step_ == std::numeric_limits<int>::max())
+      throw std::overflow_error("System Program cadence macro-step counter overflow");
+    if (cadence.due) {
       const int n = P->program_.substeps_;
-      const Real h = eff_dt / Real(n);  // substeps subdivide the EFFECTIVE step (native: eff_dt/n)
-      for (int sub = 0; sub < n; ++sub) {
-        // Record the dt handed to the program BEFORE the call so the runtime's store_history can tag
-        // the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by step() and
-        // step_cfl() (both route here), so no call site is missed. A plain field assignment.
-        P->program_.last_dt_ = h;
-        P->program_.step_(h);
+      P->program_.validate_cadence_partition(cadence, n, "System");
+      const int accepted_macro_step = P->macro_step_;
+      const int held_before_due = cadence.window_steps - 1;
+      if (accepted_macro_step < held_before_due)
+        throw std::logic_error("System Program cadence window starts before macro-step zero");
+      const int window_start_macro_step = accepted_macro_step - held_before_due;
+      try {
+        for (int sub = 0; sub < n; ++sub) {
+          const auto partition = P->program_.prepare_cadence_substep(cadence, sub, n, "System");
+          // Publish the exact accepted start of this Program substep. ProgramContext derives every
+          // stage/boundary physical coordinate from System::time(); leaving the facade at the outer
+          // macro-step start would stamp every substep with the same time and would start a stride
+          // catch-up window one held step too late.
+          P->t = partition.start;
+          // A due stride is one logical public window, irrespective of the number of internal
+          // substeps. Publish its accepted start tick for every Program invocation; schedules and
+          // contexts must not mistake internal calls for additional public macro-steps.
+          P->macro_step_ = window_start_macro_step;
+          // Record the dt handed to the program BEFORE the call so the runtime's store_history can tag
+          // the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by step() and
+          // step_cfl() (both route here), so no call site is missed. A plain data assignment.
+          P->program_.last_dt_ = static_cast<Real>(partition.dt);
+          P->program_.step_(partition.dt);
+          P->t = partition.end;
+        }
+      } catch (...) {
+        P->t = accepted_time;
+        P->macro_step_ = accepted_macro_step;
+        throw;
       }
+      P->macro_step_ = accepted_macro_step;
     }
-    P->t += dt;  // clock ticks EVERY macro-step (held steps included), like native
+    P->program_.commit_cadence_step(cadence, "System");
+    // Use the endpoint prepared once from the accepted facade cursor. Recomputing either
+    // accepted_time + dt or window_start + effective_dt here would reintroduce a second authority.
+    P->t = cadence.window_end;  // clock ticks EVERY macro-step (held steps included), like native
     P->macro_step_++;
   }
 

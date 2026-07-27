@@ -716,8 +716,8 @@ class System {
   /// layout.  This is the native Program primitive for operator splitting: generated Programs pass
   /// their uncommitted endpoint candidates, then project and atomically commit them.  The accepted
   /// live states are therefore never a hidden coupling workspace.
-  POPS_EXPORT std::size_t
-  apply_coupling_operators(Real dt, const std::vector<MultiFab*>& candidate_states);
+  POPS_EXPORT std::size_t apply_coupling_operators(Real dt,
+                                                   const std::vector<MultiFab*>& candidate_states);
 
   POPS_EXPORT SolveReport
   solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
@@ -883,6 +883,15 @@ class System {
   /// ProgramRuntimeReport reads them; there was no Python-visible getter before.
   POPS_EXPORT int program_substeps() const;
   POPS_EXPORT int program_stride() const;
+  /// Exact duration, accepted public-step count and physical start currently held by the GLOBAL
+  /// Program stride window. All are zero at a stride boundary and form mandatory checkpoint state.
+  POPS_EXPORT double program_cadence_window_dt() const;
+  POPS_EXPORT int program_cadence_window_steps() const;
+  POPS_EXPORT double program_cadence_window_start_time() const;
+  /// Restore the exact held-window image before set_clock during strict restart. The image must match
+  /// @p macro_step modulo the installed stride; malformed or missing mid-window state is rejected.
+  POPS_EXPORT void restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                                  double window_start_time, int macro_step);
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
@@ -1249,7 +1258,9 @@ class System {
   POPS_EXPORT int macro_step() const;
   /// RESTORES the clock (t, macro_step) -- reserved for the RESTART (sim.restart). Restoring macro_step
   /// is MANDATORY to resume the stride cadence exactly; a restart that would only restore
-  /// t would desynchronize the blocks at stride > 1. @throws if macro_step < 0.
+  /// t would desynchronize the blocks at stride > 1. A mid-window cursor also requires an immediately
+  /// preceding restore_program_cadence_window; its start and accumulated variable-dt duration cannot
+  /// be inferred from the clock. @throws if macro_step < 0 or the stride-window state is invalid.
   POPS_EXPORT void set_clock(double t, int macro_step);
   /// Extent of the SLOW axis of the field (rows of the (ny, nx) row-major array returned by density / potential
   /// / get_state). Cartesian: ny() == nx() == n (square, UNCHANGED). Polar (ring): ny() == ntheta

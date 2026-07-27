@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -154,11 +155,33 @@ struct ProgramRuntimeState {
   /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
   /// unchanged. The closure owns no Python callback and executes entirely in the compiled module.
   std::function<Real(Real)> dt_bound_;
-  /// GLOBAL macro-step cadence (ADC-411): substeps n runs step_ n times over eff_dt/n; stride M runs
-  /// the program once per M macro-steps with eff_dt = M*dt (hold-then-catch-up). Default 1/1 ->
-  /// byte-identical to a single step_(dt) call. Read by the stepper; guarded by set_cadence.
+  /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
+  /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
+  /// are retained as reproducible left-folded provenance, while one prepared facade endpoint owns the
+  /// numerical interval. Default 1/1 -> byte-identical to a single step_(dt) call. Read by the stepper;
+  /// guarded by set_cadence.
   int substeps_ = 1;
   int stride_ = 1;
+  /// Reproducible left-folded accepted-dt provenance and public-macro-step count currently held by a
+  /// GLOBAL stride window.
+  ///
+  /// A stride window may span unequal adaptive-CFL steps. Reconstructing it as `stride * current_dt`
+  /// loses that history and can advance the Program over a different physical interval than the
+  /// facade clock. The driver therefore accumulates every accepted held dt in double precision for
+  /// provenance, but derives numerical substeps from the explicitly prepared facade endpoint. The
+  /// left fold, count and exact start are strict checkpoint state on Uniform and AMR; none may be
+  /// inferred from `(time, macro_step)` during restart.
+  double cadence_window_dt_ = 0.0;
+  int cadence_window_steps_ = 0;
+  /// Exact accepted physical start of an active held window. Keeping this coordinate explicitly is
+  /// essential at large physical times: reconstructing it as `accepted_time - accumulated_dt` loses
+  /// low bits before the Program starts. Zero is the canonical inactive image.
+  double cadence_window_start_time_ = 0.0;
+  /// A strict checkpoint restore installs the window before restoring the facade clock. This token
+  /// authenticates that one subsequent set_clock targets the exact macro-step used to validate the
+  /// window; direct mid-window clock changes without the window image fail closed.
+  bool cadence_clock_restore_pending_ = false;
+  int cadence_clock_restore_macro_step_ = 0;
   /// LAST macro-step dt handed to step_ (ADC-626). Set by the stepper right before each
   /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
   /// pre-commit store_history can tag its state sample with the outgoing interval that advances it
@@ -166,6 +189,31 @@ struct ProgramRuntimeState {
   /// the template (never a new method it instantiates) -> the mock System. Default 0 -> no program
   /// stepped yet.
   Real last_dt_ = Real(0);
+
+  struct PreparedCadenceStep {
+    bool due = false;
+    /// Reproducible left-fold of the accepted dt arguments. This is checkpoint provenance: it proves
+    /// which accepted intervals were held, but it is not an endpoint reconstruction authority.
+    double effective_dt = 0.0;
+    /// Exact accepted facade coordinates delimiting the window after this public step. window_end is
+    /// computed once as accepted_time + dt and is the sole endpoint authority for facade clocks,
+    /// Program stages and AMR accepted clocks.
+    double window_start = 0.0;
+    double window_end = 0.0;
+    /// Representable displacement whose addition to window_start reproduces window_end. A fresh
+    /// one-step window keeps the authored dt exactly (preserving cadence 1/1); a multi-step catch-up
+    /// uses window_end - window_start. Floating-point associativity permits this to differ by one or
+    /// more low bits from effective_dt. Program substeps partition this displacement, never
+    /// `window_start + effective_dt`, so their final stage is bitwise the facade endpoint.
+    double numerical_dt = 0.0;
+    int window_steps = 0;
+  };
+
+  struct PreparedCadenceSubstep {
+    double start = 0.0;
+    double end = 0.0;
+    double dt = 0.0;
+  };
 
   // --- checkpoint / binding identity ---------------------------------------------------------------
   /// IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until
@@ -176,6 +224,14 @@ struct ProgramRuntimeState {
   /// the native loader before its install entry runs. Contexts may issue an unverified hot-apply
   /// capability only for a member of this table.
   std::vector<std::array<std::uint64_t, 4>> operator_authorities_;
+  /// Exact owner-qualified history rings whose selective replay passed the compiled Program's
+  /// owner-affine/context-free validation. A missing artifact table leaves this empty, so direct
+  /// policy mutation or handcrafted binding calls cannot bypass that proof.
+  std::vector<std::pair<std::string, int>> history_replay_authorities_;
+  /// True only after install_program has authenticated an artifact and its replay-authority table.
+  /// Direct C++ install_program_step is an explicitly trusted native composition seam and remains
+  /// usable by low-level runtime tests; it is not exposed through the Python bindings.
+  bool artifact_backed_ = false;
   /// NAME-based block binding (ADC-457): program-index -> runtime-block-index map. Entry p holds the
   /// runtime block index the Program's block p names. EMPTY = identity (positional convention). Used
   /// by BOTH runtimes; read by the (Amr)ProgramContext.
@@ -217,6 +273,12 @@ struct ProgramRuntimeState {
                              " requires an installed whole-system Program");
   }
 
+  bool authorizes_history_replay(const std::string& ring, int depth) const {
+    return !artifact_backed_ ||
+           std::find(history_replay_authorities_.begin(), history_replay_authorities_.end(),
+                     std::make_pair(ring, depth)) != history_replay_authorities_.end();
+  }
+
   /// Validate + set the GLOBAL macro-step cadence (ADC-411). @p runtime is the caller's runtime name
   /// ("System" / "AmrSystem") so the fail-loud message names the Program subsystem setter verbatim.
   /// @throws std::invalid_argument if @p substeps < 1 or @p stride < 1 (a non-positive cadence is
@@ -228,8 +290,195 @@ struct ProgramRuntimeState {
     if (stride < 1)
       throw std::invalid_argument(runtime + "::set_program_cadence: stride >= 1 required (got " +
                                   std::to_string(stride) + ")");
+    if ((cadence_window_steps_ != 0 || cadence_window_dt_ != 0.0 ||
+         cadence_window_start_time_ != 0.0 || cadence_clock_restore_pending_) &&
+        (substeps != substeps_ || stride != stride_))
+      throw std::logic_error(runtime +
+                             "::set_program_cadence cannot change an active or restoring stride "
+                             "window");
     substeps_ = substeps;
     stride_ = stride;
+  }
+
+  /// Validate the exact held-window image against one accepted facade cursor.
+  void validate_cadence_window(int macro_step, const std::string& runtime) const {
+    if (macro_step < 0)
+      throw std::invalid_argument(runtime + " Program cadence requires macro_step >= 0");
+    if (stride_ < 1 || substeps_ < 1)
+      throw std::logic_error(runtime + " Program cadence configuration is invalid");
+    if (cadence_window_steps_ < 0 || cadence_window_steps_ >= stride_)
+      throw std::runtime_error(runtime + " Program cadence window has an invalid held-step count");
+    if (cadence_window_steps_ != macro_step % stride_)
+      throw std::runtime_error(
+          runtime +
+          " Program cadence window phase differs from the authoritative macro-step; restore the "
+          "strict cadence-window checkpoint state before set_clock");
+    if (!std::isfinite(cadence_window_dt_) || cadence_window_dt_ < 0.0)
+      throw std::runtime_error(runtime +
+                               " Program cadence window duration must be finite and non-negative");
+    if (!std::isfinite(cadence_window_start_time_))
+      throw std::runtime_error(runtime + " Program cadence window start time must be finite");
+    if ((cadence_window_steps_ == 0) != (cadence_window_dt_ == 0.0))
+      throw std::runtime_error(
+          runtime +
+          " Program cadence window duration/count are inconsistent (zero iff no step is held)");
+    if (cadence_window_steps_ == 0 && cadence_window_start_time_ != 0.0)
+      throw std::runtime_error(
+          runtime + " Program cadence inactive window must use the canonical zero start time");
+  }
+
+  /// Bind an active held window to the exact accepted physical cursor that owns it.
+  void validate_cadence_window_time(double accepted_time, const std::string& runtime) const {
+    if (!std::isfinite(accepted_time))
+      throw std::invalid_argument(runtime + " Program cadence requires a finite accepted time");
+    if (cadence_window_steps_ != 0 && !(cadence_window_start_time_ < accepted_time))
+      throw std::runtime_error(
+          runtime + " Program cadence active window start must precede the accepted physical time");
+  }
+
+  /// Prepare one public facade step without mutating the accepted cadence image.
+  PreparedCadenceStep prepare_cadence_step(double accepted_time, int macro_step, double dt,
+                                           const std::string& runtime) const {
+    if (cadence_clock_restore_pending_)
+      throw std::runtime_error(runtime +
+                               " Program cadence clock restore was not completed by set_clock");
+    validate_cadence_window(macro_step, runtime);
+    validate_cadence_window_time(accepted_time, runtime);
+    if (!std::isfinite(dt) || !(dt > 0.0))
+      throw std::invalid_argument(runtime + " Program cadence requires a finite positive dt");
+    const double final_time = accepted_time + dt;
+    if (!std::isfinite(final_time) || !(final_time > accepted_time))
+      throw std::overflow_error(runtime +
+                                " Program cadence dt does not advance the finite physical clock");
+    const double effective_dt = cadence_window_dt_ + dt;
+    if (!std::isfinite(effective_dt) || !(effective_dt > cadence_window_dt_))
+      throw std::overflow_error(
+          runtime + " Program cadence dt does not advance the accumulated window duration");
+    const double window_start =
+        cadence_window_steps_ == 0 ? accepted_time : cadence_window_start_time_;
+    const double numerical_dt = cadence_window_steps_ == 0 ? dt : final_time - window_start;
+    if (!std::isfinite(numerical_dt) || !(numerical_dt > 0.0) ||
+        window_start + numerical_dt != final_time)
+      throw std::overflow_error(
+          runtime +
+          " Program cadence cannot represent one coherent facade/Program window endpoint");
+    const int window_steps = cadence_window_steps_ + 1;
+    if (window_steps < 1 || window_steps > stride_)
+      throw std::logic_error(runtime + " Program cadence window crossed its configured stride");
+    return PreparedCadenceStep{window_steps == stride_,
+                               effective_dt,
+                               window_start,
+                               final_time,
+                               numerical_dt,
+                               window_steps};
+  }
+
+  /// Return one immutable numerical partition of a due cadence window.
+  ///
+  /// The accepted-dt left fold (`effective_dt`) remains exact restart provenance. Numerical stages
+  /// instead partition the representable coordinate interval [window_start, window_end], whose end is
+  /// the prepared facade authority. Every `start + dt == end` check is performed before execution by
+  /// validate_cadence_partition, so a coordinate that cannot be represented coherently fails before
+  /// the first Program mutation.
+  PreparedCadenceSubstep prepare_cadence_substep(const PreparedCadenceStep& step, int substep,
+                                                 int substeps, const std::string& runtime) const {
+    if (!step.due)
+      throw std::logic_error(runtime + " Program cadence cannot partition a held window");
+    if (substeps < 1 || substep < 0 || substep >= substeps)
+      throw std::logic_error(runtime + " Program cadence received an invalid substep partition");
+    const auto endpoint = [&](int boundary) {
+      if (boundary == 0)
+        return step.window_start;
+      if (boundary == substeps)
+        return step.window_end;
+      return step.window_start +
+             step.numerical_dt * (static_cast<double>(boundary) / static_cast<double>(substeps));
+    };
+    const double start = endpoint(substep);
+    const double end = endpoint(substep + 1);
+    const double dt = substeps == 1 ? step.numerical_dt : end - start;
+    if (!std::isfinite(start) || !std::isfinite(end) || !std::isfinite(dt) || !(end > start) ||
+        !(dt > 0.0) || start + dt != end)
+      throw std::overflow_error(runtime +
+                                " Program cadence partition cannot represent a positive coherent "
+                                "substep endpoint");
+    return PreparedCadenceSubstep{start, end, dt};
+  }
+
+  /// Fail before any Program call if an authored substep count collapses the representable window.
+  void validate_cadence_partition(const PreparedCadenceStep& step, int substeps,
+                                  const std::string& runtime) const {
+    if (substeps < 1 || !step.due || !std::isfinite(step.window_start) ||
+        !std::isfinite(step.window_end) || !std::isfinite(step.numerical_dt) ||
+        !(step.window_end > step.window_start) || !(step.numerical_dt > 0.0) ||
+        step.window_start + step.numerical_dt != step.window_end)
+      throw std::logic_error(runtime + " Program cadence prepared an invalid numerical window");
+    for (int substep = 0; substep < substeps; ++substep)
+      (void)prepare_cadence_substep(step, substep, substeps, runtime);
+  }
+
+  /// Commit the already executed public step. A due window is consumed; a held window persists its
+  /// exact accumulated duration for the next adaptive step/checkpoint.
+  void commit_cadence_step(const PreparedCadenceStep& step, const std::string& runtime) {
+    if (step.window_steps != cadence_window_steps_ + 1 || step.window_steps < 1 ||
+        step.window_steps > stride_ || step.due != (step.window_steps == stride_) ||
+        !std::isfinite(step.effective_dt) || !(step.effective_dt > 0.0) ||
+        !std::isfinite(step.window_start) || !std::isfinite(step.window_end) ||
+        !std::isfinite(step.numerical_dt) || !(step.window_end > step.window_start) ||
+        !(step.numerical_dt > 0.0) || step.window_start + step.numerical_dt != step.window_end)
+      throw std::logic_error(runtime +
+                             " Program cadence attempted to commit an invalid step image");
+    if (step.due) {
+      cadence_window_dt_ = 0.0;
+      cadence_window_steps_ = 0;
+      cadence_window_start_time_ = 0.0;
+    } else {
+      cadence_window_dt_ = step.effective_dt;
+      cadence_window_steps_ = step.window_steps;
+      cadence_window_start_time_ = step.window_start;
+    }
+  }
+
+  /// Install an authenticated checkpoint window before set_clock. No historical duration is guessed.
+  void restore_cadence_window(double accumulated_dt, int held_steps, double window_start_time,
+                              int macro_step, const std::string& runtime) {
+    const double saved_dt = cadence_window_dt_;
+    const int saved_steps = cadence_window_steps_;
+    const double saved_start = cadence_window_start_time_;
+    cadence_window_dt_ = accumulated_dt;
+    cadence_window_steps_ = held_steps;
+    cadence_window_start_time_ = window_start_time;
+    try {
+      validate_cadence_window(macro_step, runtime);
+    } catch (...) {
+      cadence_window_dt_ = saved_dt;
+      cadence_window_steps_ = saved_steps;
+      cadence_window_start_time_ = saved_start;
+      throw;
+    }
+    cadence_clock_restore_pending_ = true;
+    cadence_clock_restore_macro_step_ = macro_step;
+  }
+
+  /// Authenticate/consume the cadence image for a facade clock restore. At a clean stride boundary,
+  /// direct set_clock remains valid; a mid-window cursor always requires the explicit checkpoint image.
+  void consume_cadence_clock_restore(double accepted_time, int macro_step,
+                                     const std::string& runtime) {
+    if (cadence_clock_restore_pending_) {
+      if (macro_step != cadence_clock_restore_macro_step_)
+        throw std::runtime_error(runtime +
+                                 " set_clock macro-step differs from the restored cadence window");
+      validate_cadence_window(macro_step, runtime);
+      validate_cadence_window_time(accepted_time, runtime);
+      cadence_clock_restore_pending_ = false;
+      return;
+    }
+    validate_cadence_window(macro_step, runtime);
+    validate_cadence_window_time(accepted_time, runtime);
+    if (cadence_window_steps_ != 0)
+      throw std::runtime_error(
+          runtime +
+          " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
   /// Record a compiled-Program scalar diagnostic (ADC-414): the installed Program writes named scalars

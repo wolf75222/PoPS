@@ -1,4 +1,5 @@
 """ADC-678 strict AMR accepted-state and topology checkpoint contracts."""
+
 from __future__ import annotations
 
 import json
@@ -44,35 +45,78 @@ class _Sim:
         return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
 
     def checkpoint_transfer_routes(self):
-        return [["fluid.U", "prolong", "route.u", "provider.u", "kernel.linear",
-                 "cell.conservative", "cell", "conservative", "dense", "prolong",
-                 "2", "2,2", "2", "2"]]
+        return [
+            [
+                "fluid.U",
+                "prolong",
+                "route.u",
+                "provider.u",
+                "kernel.linear",
+                "cell.conservative",
+                "cell",
+                "conservative",
+                "dense",
+                "prolong",
+                "2",
+                "2,2",
+                "2",
+                "2",
+            ]
+        ]
 
     def program_accepted_state_manifest(self):
-        return [["rhs", "program.block.0", "fluid.U", "cell.conservative",
-                 "clock.macro", "dense.linear", "2", "3"]]
+        return [
+            [
+                "rhs",
+                "program.block.0",
+                "fluid.U",
+                "cell.conservative",
+                "clock.macro",
+                "dense.linear",
+                "2",
+                "3",
+            ]
+        ]
 
     def program_clock_manifest(self):
-        return [["level", "0", "4", "0", "1", "0.4"],
-                ["logical", "clock.macro", "4"]]
+        return [["level", "0", "4", "0", "1", "0.4"], ["logical", "clock.macro", "4"]]
 
     def program_flux_ledger_manifest(self):
-        return [["program.block.0", "fluid.U", "rate.7", "physical_flux", "1",
-                 "4", "1", "2", "1", "2", "x_plus", "0.125", "0.05"]]
+        return [
+            [
+                "program.block.0",
+                "fluid.U",
+                "rate.7",
+                "physical_flux",
+                "1",
+                "4",
+                "1",
+                "2",
+                "1",
+                "2",
+                "x_plus",
+                "0.125",
+                "0.05",
+            ]
+        ]
 
     def program_sync_manifest(self):
-        return [["0", "1", "0", "reflux", "4", "1", "1"],
-                ["0", "1", "0", "average_down", "4", "1", "1"]]
+        return [
+            ["0", "1", "0", "reflux", "4", "1", "1"],
+            ["0", "1", "0", "average_down", "4", "1", "1"],
+        ]
 
 
 def _payload(sim=None):
     sim = sim or _Sim()
-    return _Payload({
-        "amr_accepted_contract": np.array(encode_contract(sim)),
-        "program_accepted_state": np.array([1, 2, 3], dtype=np.uint8),
-        "regrid_count": np.array(4),
-        "topology_epoch": np.array(7, dtype=np.uint64),
-    })
+    return _Payload(
+        {
+            "amr_accepted_contract": np.array(encode_contract(sim)),
+            "program_accepted_state": np.array([1, 2, 3], dtype=np.uint8),
+            "regrid_count": np.array(4),
+            "topology_epoch": np.array(7, dtype=np.uint64),
+        }
+    )
 
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
@@ -82,20 +126,27 @@ def test_contract_names_guarantee_relations_qualified_histories_and_transfer_pla
     assert contract["ledger"]["transaction_depth"] == 0
     assert contract["ledger"]["entries"][0][8:10] == ["1", "2"]
     assert contract["level_relations"] == [
-        {"parent": 0, "child": 1,
-         "temporal_ratio": {"numerator": 2, "denominator": 1},
-         "remainder_policy": "integral_only"},
-        {"parent": 1, "child": 2,
-         "temporal_ratio": {"numerator": 3, "denominator": 1},
-         "remainder_policy": "integral_only"},
+        {
+            "parent": 0,
+            "child": 1,
+            "temporal_ratio": {"numerator": 2, "denominator": 1},
+            "remainder_policy": "integral_only",
+        },
+        {
+            "parent": 1,
+            "child": 2,
+            "temporal_ratio": {"numerator": 3, "denominator": 1},
+            "remainder_policy": "integral_only",
+        },
     ]
     assert contract["history_qualifications"][0][1:4] == [
-        "program.block.0", "fluid.U", "cell.conservative"]
-    assert contract["transfer_routes"][0][2:5] == [
-        "route.u", "provider.u", "kernel.linear"]
+        "program.block.0",
+        "fluid.U",
+        "cell.conservative",
+    ]
+    assert contract["transfer_routes"][0][2:5] == ["route.u", "provider.u", "kernel.linear"]
     assert contract["clocks"][1] == ["logical", "clock.macro", "4"]
-    assert [row[3] for row in contract["synchronization"]] == [
-        "reflux", "average_down"]
+    assert [row[3] for row in contract["synchronization"]] == ["reflux", "average_down"]
 
 
 def test_preflight_returns_exact_native_payload_and_counters():
@@ -119,7 +170,9 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
         preflight_contract(_Sim(), payload)
 
 
-@pytest.mark.parametrize("section", ["history_qualifications", "clocks", "ledger", "synchronization"])
+@pytest.mark.parametrize(
+    "section", ["history_qualifications", "clocks", "ledger", "synchronization"]
+)
 def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section):
     payload = _payload()
     data = json.loads(str(payload["amr_accepted_contract"]))
@@ -173,7 +226,7 @@ def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
         )
 
 
-def test_legacy_v3_level_envelope_uses_files_without_eager_keys_lookup():
+def test_strict_v4_level_envelope_refuses_missing_configured_depth():
     class _FilesOnlyPayload:
         files = ("n_levels",)
 
@@ -183,19 +236,15 @@ def test_legacy_v3_level_envelope_uses_files_without_eager_keys_lookup():
             return np.array(3)
 
     sim = _Sim()
-    assert _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload()) == (3, 3)
-
-
-def test_legacy_v3_level_envelope_requires_its_fixed_depth_to_match_configuration():
-    sim = _Sim()
-    with pytest.raises(ValueError, match="legacy v3.*installed configured depth"):
+    with pytest.raises(ValueError, match="configured_n_levels"):
+        _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload())
+    with pytest.raises(ValueError, match="configured_n_levels"):
         _checkpoint_amr_level_envelope(sim, {"n_levels": np.array(1)})
 
 
 @pytest.mark.parametrize("phase", ["checkpoint capture", "restart"])
 def test_field_provider_depth_must_equal_the_complete_active_hierarchy(phase):
-    assert _require_exact_field_provider_depth(
-        "electric", 3, 3, phase=phase) is None
+    assert _require_exact_field_provider_depth("electric", 3, 3, phase=phase) is None
     with pytest.raises(ValueError, match=r"expected exactly the 3 active AMR levels"):
         _require_exact_field_provider_depth("electric", 2, 3, phase=phase)
 

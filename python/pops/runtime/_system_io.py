@@ -23,6 +23,7 @@ class _PreparedUniformRestart:
     payload: Any
     restart_identity: Any
     temporal_state: Any
+    cadence_state: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class _SystemIO(_System):
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.identity import make_identity
         from pops.output._checkpoint_collective import canonical_checkpoint_path
+        from pops.runtime._program_cadence_checkpoint import capture_program_cadence
         from pops.runtime._system_io_history import prepare_history_capture
 
         target = canonical_checkpoint_path(path)
@@ -68,15 +70,22 @@ class _SystemIO(_System):
         time = float(self._s.time())
         macro_step = int(self._s.macro_step())
         temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
+        cadence = capture_program_cadence(self._s, macro_step=macro_step)
         blocks = tuple(str(block) for block in self._s.block_names())
         if not blocks or len(blocks) != len(set(blocks)):
             raise ValueError("checkpoint requires a non-empty unique Uniform block order")
         required_collectives = ["state_global", "potential_global"]
-        out = {"pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
-               "t": time, "macro_step": macro_step,
-               "nx": int(self._s.nx()), "ny": int(self._s.ny()),
-               "abi_key": abi_key(), "blocks": np.array(blocks),
-               "temporal_restart_state": np.array(temporal_json)}
+        out = {
+            "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            "t": time,
+            "macro_step": macro_step,
+            "nx": int(self._s.nx()),
+            "ny": int(self._s.ny()),
+            "abi_key": abi_key(),
+            "blocks": np.array(blocks),
+            "temporal_restart_state": np.array(temporal_json),
+        }
+        out.update(cadence.to_payload())
         block_evidence = []
         for b in blocks:
             nv = int(self._s.n_vars(b))
@@ -92,8 +101,11 @@ class _SystemIO(_System):
         out["field_provider_slots"] = np.array(field_slots)
         if field_slots:
             required_collectives.append("field_potential_global")
-        prog_hash = str(self._s.installed_program_hash()) \
-            if hasattr(self._s, "installed_program_hash") else ""
+        prog_hash = (
+            str(self._s.installed_program_hash())
+            if hasattr(self._s, "installed_program_hash")
+            else ""
+        )
         if not prog_hash:
             raise RuntimeError("checkpoint requires the installed compiled Program hash")
         out["program_hash"] = prog_hash
@@ -104,20 +116,22 @@ class _SystemIO(_System):
         )
         if any(ring.stored_slots for ring in history_plan.rings):
             required_collectives.append("history_global")
-        cache_nodes = tuple(int(node) for node in self._s.program_cache_nodes()) \
-            if hasattr(self._s, "program_cache_nodes") else ()
+        cache_nodes = (
+            tuple(int(node) for node in self._s.program_cache_nodes())
+            if hasattr(self._s, "program_cache_nodes")
+            else ()
+        )
         if len(cache_nodes) != len(set(cache_nodes)):
             raise ValueError("checkpoint scheduled-cache node ids must be unique")
         if cache_nodes:
             required_collectives.append("program_cache_global")
-        missing_collectives = sorted({
-            name for name in required_collectives
-            if not callable(getattr(self._s, name, None))
-        })
+        missing_collectives = sorted(
+            {name for name in required_collectives if not callable(getattr(self._s, name, None))}
+        )
         if missing_collectives:
             raise TypeError(
-                "checkpoint Uniform engine lacks collective accessors %r"
-                % missing_collectives)
+                "checkpoint Uniform engine lacks collective accessors %r" % missing_collectives
+            )
         out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
         cache_evidence = []
         cache_names = []
@@ -134,29 +148,40 @@ class _SystemIO(_System):
             out["cache_ngrow_%d" % nid] = ngrow
             out["cache_last_update_%d" % nid] = last_update
             out["cache_accum_dt_%d" % nid] = accum_dt
-            cache_evidence.append({
-                "node": nid, "name": name, "ncomp": ncomp, "ngrow": ngrow,
-                "last_update": last_update, "accumulated_dt": accum_dt.hex(),
-            })
+            cache_evidence.append(
+                {
+                    "node": nid,
+                    "name": name,
+                    "ncomp": ncomp,
+                    "ngrow": ngrow,
+                    "last_update": last_update,
+                    "accumulated_dt": accum_dt.hex(),
+                }
+            )
         out["cache_names"] = np.array(cache_names)
         runtime_identities = [value.to_data() for value in self._checkpoint_identities()]
         run_identity = self.last_run_identity.to_data()
-        capture_identity = make_identity("checkpoint-capture-plan", {
-            "runtime_kind": "uniform",
-            "target": str(target),
-            "clock": {"time": time.hex(), "macro_step": macro_step},
-            "grid": {"nx": int(out["nx"]), "ny": int(out["ny"])},
-            "abi_key": str(out["abi_key"]),
-            "blocks": block_evidence,
-            "field_slots": list(field_slots),
-            "program_hash": prog_hash,
-            "histories": history_plan.to_data(),
-            "cache": cache_evidence,
-            "runtime_identities": runtime_identities,
-            "run_identity": run_identity,
-        }).token
+        capture_identity = make_identity(
+            "checkpoint-capture-plan",
+            {
+                "runtime_kind": "uniform",
+                "target": str(target),
+                "clock": {"time": time.hex(), "macro_step": macro_step},
+                "grid": {"nx": int(out["nx"]), "ny": int(out["ny"])},
+                "abi_key": str(out["abi_key"]),
+                "blocks": block_evidence,
+                "field_slots": list(field_slots),
+                "program_hash": prog_hash,
+                "program_cadence": cadence.to_data(),
+                "histories": history_plan.to_data(),
+                "cache": cache_evidence,
+                "runtime_identities": runtime_identities,
+                "run_identity": run_identity,
+            },
+        ).token
         return _PreparedUniformCapture(
-            target, out, blocks, field_slots, history_plan, cache_nodes, capture_identity)
+            target, out, blocks, field_slots, history_plan, cache_nodes, capture_identity
+        )
 
     def _capture_checkpoint(self, prepared: _PreparedUniformCapture) -> tuple[dict[str, Any], str]:
         """Run the agreed native gather sequence and seal the in-memory payload."""
@@ -168,16 +193,17 @@ class _SystemIO(_System):
 
         out = dict(prepared.payload)
         for block in prepared.blocks:
-            out["state_" + block] = np.asarray(
-                self._s.state_global(block), dtype=np.float64)
+            out["state_" + block] = np.asarray(self._s.state_global(block), dtype=np.float64)
         out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
         for index, slot in enumerate(prepared.field_slots):
             out["field_potential_%d" % index] = np.asarray(
-                self._s.field_potential_global(slot), dtype=np.float64)
+                self._s.field_potential_global(slot), dtype=np.float64
+            )
         capture_histories(self._s, prepared.history_plan, out)
         for node in prepared.cache_nodes:
             out["cache_value_%d" % node] = np.asarray(
-                self._s.program_cache_global(node), dtype=np.float64)
+                self._s.program_cache_global(node), dtype=np.float64
+            )
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
         return out, identity.token
 
@@ -206,7 +232,8 @@ class _SystemIO(_System):
             return str(prepared.target)
 
         return collective_checkpoint_capture(
-            self, "Uniform accepted-state capture", prepare, self._capture_checkpoint, publish)
+            self, "Uniform accepted-state capture", prepare, self._capture_checkpoint, publish
+        )
 
     def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedUniformRestart:
         """Authenticate and validate every byte before the first native state write."""
@@ -214,6 +241,7 @@ class _SystemIO(_System):
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
         from pops.time._history.persistence import HistoryPersistence
@@ -232,28 +260,41 @@ class _SystemIO(_System):
                 % (version, UNIFORM_CHECKPOINT_PAYLOAD_VERSION)
             )
         preflight_uniform_restart(d)
+        cadence = prepare_program_cadence(
+            self._s,
+            d,
+            macro_step=int(d["macro_step"]),
+            accepted_time=float(d["t"]),
+        )
         installed_schedule = getattr(
-            getattr(self, "_temporal_restart_state", None), "program_schedule", None)
+            getattr(self, "_temporal_restart_state", None), "program_schedule", None
+        )
         temporal = TemporalRestartState.from_json(
-            d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"],
-            program_schedule=installed_schedule)
+            d["temporal_restart_state"],
+            time=d["t"],
+            macro_step=d["macro_step"],
+            program_schedule=installed_schedule,
+        )
         nx, ny = int(self._s.nx()), int(self._s.ny())
         if int(d["nx"]) != nx or int(d["ny"]) != ny:
             raise ValueError(
                 "restart : checkpoint grid (%d x %d) != system (%d x %d)"
-                % (int(d["nx"]), int(d["ny"]), nx, ny))
+                % (int(d["nx"]), int(d["ny"]), nx, ny)
+            )
         blocks = [str(block) for block in d["blocks"]]
         current_blocks = list(self._s.block_names())
         if blocks != current_blocks:
             raise ValueError(
                 "restart : checkpoint blocks %r != current composition %r "
-                "(replay the SAME composition before restart)" % (blocks, current_blocks))
+                "(replay the SAME composition before restart)" % (blocks, current_blocks)
+            )
         for block in blocks:
             ncomp = int(d["ncomp_" + block])
             if ncomp != int(self._s.n_vars(block)):
                 raise ValueError(
                     "restart : block '%s' has %d components in the checkpoint, %d here"
-                    % (block, ncomp, self._s.n_vars(block)))
+                    % (block, ncomp, self._s.n_vars(block))
+                )
             if np.asarray(d["state_" + block]).size != ncomp * nx * ny:
                 raise ValueError("restart : block '%s' state payload has the wrong size" % block)
         if np.asarray(d["phi"]).size != nx * ny:
@@ -263,25 +304,31 @@ class _SystemIO(_System):
         if slots != current_slots:
             raise RuntimeError(
                 "checkpoint qualified field providers %r != installed providers %r"
-                % (slots, current_slots))
+                % (slots, current_slots)
+            )
         for index, slot in enumerate(slots):
             key = "field_potential_%d" % index
             if key not in d or np.asarray(d[key]).size != nx * ny:
                 raise RuntimeError(
                     "checkpoint potential for qualified field provider %s is missing or malformed"
-                    % slot)
+                    % slot
+                )
         checkpoint_hash = str(d["program_hash"])
-        current_hash = (self._s.installed_program_hash()
-                        if hasattr(self._s, "installed_program_hash") else "")
+        current_hash = (
+            self._s.installed_program_hash() if hasattr(self._s, "installed_program_hash") else ""
+        )
         if current_hash != checkpoint_hash:
             raise RuntimeError("checkpoint was created with a different compiled Program hash")
 
         history_names = [str(name) for name in d["history_names"]]
-        current_histories = list(self._s.history_names()) if hasattr(self._s, "history_names") else []
+        current_histories = (
+            list(self._s.history_names()) if hasattr(self._s, "history_names") else []
+        )
         missing = [name for name in current_histories if name not in history_names]
         if missing:
             raise RuntimeError(
-                "checkpoint does not contain required Program history '%s'" % missing[0])
+                "checkpoint does not contain required Program history '%s'" % missing[0]
+            )
         for name in history_names:
             depth = int(d["history_depth_" + name])
             ncomp = int(d["history_ncomp_" + name])
@@ -289,44 +336,43 @@ class _SystemIO(_System):
                 depth != int(self._s.history_depth(name))
                 or ncomp != int(self._s.history_ncomp(name))
             ):
-                raise ValueError("restart : history '%s' shape differs from the installed ring" % name)
+                raise ValueError(
+                    "restart : history '%s' shape differs from the installed ring" % name
+                )
             policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
             initialized = bool(d["history_init_" + name])
-            fill_count = history_fill_count_from_payload(
-                d, name, depth, initialized)
-            requested = sorted(
-                int(slot)
-                for slot in d["history_requested_stored_slots_" + name]
-            )
+            fill_count = history_fill_count_from_payload(d, name, depth, initialized)
+            requested = sorted(int(slot) for slot in d["history_requested_stored_slots_" + name])
             stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
-            expected_requested, expected_stored, expected_mode, _ = (
-                resolve_history_storage(
-                    policy,
-                    depth,
-                    fill_count=fill_count,
-                    macro_step=int(d["macro_step"]),
-                    regrid_every=0,
-                )
+            expected_requested, expected_stored, expected_mode, _ = resolve_history_storage(
+                policy,
+                depth,
+                fill_count=fill_count,
+                macro_step=int(d["macro_step"]),
+                regrid_every=0,
+                program_substeps=int(d["program_cadence_substeps"]),
+                program_stride=int(d["program_cadence_stride"]),
             )
             if requested != list(expected_requested):
                 raise ValueError(
-                    "restart : history '%s' requested slots differ from its policy"
-                    % name
+                    "restart : history '%s' requested slots differ from its policy" % name
                 )
             if (
                 stored != list(expected_stored)
                 or str(d["history_storage_mode_" + name]) != expected_mode
             ):
                 raise ValueError(
-                    "restart : history '%s' stored slots/mode differ from its resolved plan"
-                    % name
+                    "restart : history '%s' stored slots/mode differ from its resolved plan" % name
                 )
             if len(stored) < depth and not hasattr(self._s, "rebuild_history_slots"):
-                raise RuntimeError("runtime cannot rebuild selectively persisted history '%s'" % name)
+                raise RuntimeError(
+                    "runtime cannot rebuild selectively persisted history '%s'" % name
+                )
             for slot in stored:
                 if np.asarray(d["history_%s_%d" % (name, slot)]).size != ncomp * nx * ny:
                     raise ValueError(
-                        "restart : history '%s' slot %d payload has the wrong size" % (name, slot))
+                        "restart : history '%s' slot %d payload has the wrong size" % (name, slot)
+                    )
 
         cache_nodes = [int(node) for node in d["cache_nodes"]]
         if cache_nodes and not hasattr(self._s, "restore_program_cache"):
@@ -337,8 +383,10 @@ class _SystemIO(_System):
             if ncomp <= 0 or ngrow < 0:
                 raise ValueError("restart : scheduled cache node %d has invalid metadata" % node)
             if np.asarray(d["cache_value_%d" % node]).size != ncomp * nx * ny:
-                raise ValueError("restart : scheduled cache node %d has the wrong value size" % node)
-        return _PreparedUniformRestart(d, identity, temporal)
+                raise ValueError(
+                    "restart : scheduled cache node %d has the wrong value size" % node
+                )
+        return _PreparedUniformRestart(d, identity, temporal, cadence)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -359,6 +407,7 @@ class _SystemIO(_System):
         if type(prepared) is not _PreparedUniformRestart:
             raise TypeError("Uniform restart requires its exact prepared payload")
         import numpy as np
+        from pops.runtime._program_cadence_checkpoint import restore_program_cadence
         from pops.runtime._system_io_history import restore_histories
 
         d = prepared.payload
@@ -367,17 +416,29 @@ class _SystemIO(_System):
         self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
         for index, slot in enumerate(str(value) for value in d["field_provider_slots"]):
             self._s.set_field_potential(
-                slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel())
+                slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel()
+            )
         histories = [str(name) for name in d["history_names"]]
         self._last_restart_report = restore_histories(self._s, d) if histories else None
         cache_names = [str(name) for name in d["cache_names"]]
         for index, node in enumerate(int(value) for value in d["cache_nodes"]):
             self._s.restore_program_cache(
-                node, int(d["cache_ncomp_%d" % node]), int(d["cache_ngrow_%d" % node]),
+                node,
+                int(d["cache_ncomp_%d" % node]),
+                int(d["cache_ngrow_%d" % node]),
                 int(d["cache_last_update_%d" % node]),
-                float(d["cache_accum_dt_%d" % node]), cache_names[index],
-                np.asarray(d["cache_value_%d" % node], dtype=np.float64))
-        self._s.set_clock(float(d["t"]), int(d["macro_step"]))
+                float(d["cache_accum_dt_%d" % node]),
+                cache_names[index],
+                np.asarray(d["cache_value_%d" % node], dtype=np.float64),
+            )
+        macro_step = int(d["macro_step"])
+        restore_program_cadence(
+            self._s,
+            prepared.cadence_state,
+            macro_step=macro_step,
+            accepted_time=float(d["t"]),
+        )
+        self._s.set_clock(float(d["t"]), macro_step)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity
@@ -395,8 +456,12 @@ class _SystemIO(_System):
         try:
             self._s._rollback_step_transaction()
         finally:
-            (self._last_restart_identity, self._last_restart_report,
-             self._temporal_restart_state, self._step_controller) = snapshot
+            (
+                self._last_restart_identity,
+                self._last_restart_report,
+                self._temporal_restart_state,
+                self._step_controller,
+            ) = snapshot
             del self._checkpoint_restart_python_snapshot
 
     def restart(self, path: Any) -> Any:
@@ -404,4 +469,5 @@ class _SystemIO(_System):
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
         return restore_checkpoint_path(
-            self, self, path, phase_prefix="Uniform direct-engine restart")
+            self, self, path, phase_prefix="Uniform direct-engine restart"
+        )

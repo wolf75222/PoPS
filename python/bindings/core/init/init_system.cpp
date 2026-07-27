@@ -325,6 +325,15 @@ void bind_system_program(py::class_<System>& cls) {
       // Const getters (default 1/1 with no program); there was no Python-visible getter before.
       .def("program_substeps", &System::program_substeps)
       .def("program_stride", &System::program_stride)
+      // Exact partially accumulated GLOBAL stride window. These are persistence seams, not an
+      // alternative time controller: checkpoint captures both scalars and restart restores them
+      // immediately before set_clock so adaptive-dt catch-up is bit-identical.
+      .def("program_cadence_window_dt", &System::program_cadence_window_dt)
+      .def("program_cadence_window_steps", &System::program_cadence_window_steps)
+      .def("program_cadence_window_start_time", &System::program_cadence_window_start_time)
+      .def("restore_program_cadence_window", &System::restore_program_cadence_window,
+           py::arg("accumulated_dt"), py::arg("held_steps"), py::arg("window_start_time"),
+           py::arg("macro_step"))
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)

@@ -12,6 +12,7 @@ candidate-state Program primitive, so their tests install a real SSPRK2 transpor
 Program instead of borrowing the retired facade stepper. Polar transport likewise has a genuine
 point-qualified residual and its spatial tests use explicitly authored SSPRK2/SSPRK3 Programs.
 """
+
 from __future__ import annotations
 
 import re
@@ -23,9 +24,13 @@ SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
+AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
+AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
+AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
+LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 MANIFEST = ROOT / "tests/test_manifest.toml"
 
 EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
@@ -36,7 +41,7 @@ LEGACY_DIRECT_AMR_STEP_TESTS = set()
 SEMANTIC_BLOCKERS = {
     "tests/python/integration/amr/test_amr_newton_full.py": (
         "engine.IMEX(",
-        "newton_report(",
+        "expect_native_rejection(",
     ),
     "tests/python/unit/runtime/test_implicit_vars.py": (
         "implicit_vars=",
@@ -44,7 +49,7 @@ SEMANTIC_BLOCKERS = {
     ),
     "tests/python/unit/runtime/test_v3_features.py": (
         "engine.IMEX(",
-        "newton_report(",
+        "expect_amr_newton_rejection(",
     ),
     "tests/python/unit/time/test_imexrk.py": (
         "engine.IMEXRK(",
@@ -81,12 +86,8 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
         assert "SystemStepper" not in body
         assert "driver_->" not in body
 
-    assert "program_driver_.step(dt)" in _function_body(
-        source, "void System::step(double dt)"
-    )
-    assert "program_driver_.step_cfl(" in _function_body(
-        source, "double System::step_cfl("
-    )
+    assert "program_driver_.step(dt)" in _function_body(source, "void System::step(double dt)")
+    assert "program_driver_.step_cfl(" in _function_body(source, "double System::step_cfl(")
     adaptive = _function_body(source, "double System::step_adaptive(double cfl)")
     assert "has no ProgramGraph lowering" in adaptive
 
@@ -104,12 +105,8 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
         assert "runtime->step(" not in body
         assert "runtime->advance(" not in body
 
-    assert "run_program_cadence_(dt)" in _function_body(
-        source, "void AmrSystem::step(double dt)"
-    )
-    assert "run_program_cadence_(dt)" in _function_body(
-        source, "double AmrSystem::step_cfl("
-    )
+    assert "run_program_cadence_(dt)" in _function_body(source, "void AmrSystem::step(double dt)")
+    assert "run_program_cadence_(dt)" in _function_body(source, "double AmrSystem::step_cfl(")
 
 
 def test_amr_program_cfl_does_not_require_native_advance_closures():
@@ -120,6 +117,19 @@ def test_amr_program_cfl_does_not_require_native_advance_closures():
     assert "preflight_native_temporal_step_" not in source
     assert "void step(Real dt)" not in source
     assert "Real step_cfl(Real cfl" not in source
+    assert "has_explicit_temporal_relations_" not in source
+    cfl_preflight = _function_body(source, "void preflight_program_cfl_state_(")
+    assert "temporal_relations_.size()" in cfl_preflight
+    assert "hierarchy_.refinement_ratios.size()" in cfl_preflight
+    assert "time-subcycling ratios" in cfl_preflight
+    temporal_product = _function_body(source, "Real temporal_refinement_product_(")
+    assert "temporal_relations_" in temporal_product
+    assert "hierarchy_.refinement_ratios" not in temporal_product
+    program_context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    refinement_preflight = _function_body(
+        program_context, "static void require_supported_program_refinement_ratios_("
+    )
+    assert "parent_child_temporal_relation(child)" in refinement_preflight
 
 
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
@@ -139,17 +149,88 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
     assert "project_level_state" in builder
 
 
+def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
+    runtime = AMR_RUNTIME.read_text(encoding="utf-8")
+    header = AMR_SYSTEM_HEADER.read_text(encoding="utf-8")
+    binding = AMR_BINDING.read_text(encoding="utf-8")
+    assert "NewtonReport" not in runtime
+    assert "newton_report(" not in runtime
+    assert "SourceNewtonReport" not in header
+    assert "&AmrSystem::newton_report" not in binding
+    assert '"newton_report"' not in binding
+    assert "s.newton_report(" not in binding
+
+    for path in (AMR_DSL_BLOCK, AMR_BLOCK_SEAM):
+        source = path.read_text(encoding="utf-8")
+        assert "implicit_components" not in source
+        assert "NewtonOptions" not in source
+        assert "NewtonReport" not in source
+        assert "resolve_implicit_components_amr" not in source
+        assert "resolve_implicit_components_compiled" not in source
+
+
 def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():
     for path in (
         AMR_SYSTEM_HEADER,
         AMR_SYSTEM_CPP,
         AMR_RUNTIME,
         AMR_DSL_BLOCK,
-        ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp",
+        AMR_BLOCK_SEAM,
     ):
         source = path.read_text(encoding="utf-8")
         assert "AmrTimeMethod" not in source
         assert "amr_time_method_from_wire" not in source
+
+
+def test_production_has_no_second_amr_time_engine():
+    assert not LEGACY_AMR_ADVANCE_HEADER.exists()
+
+    production_sources = tuple((ROOT / "include/pops").rglob("*.hpp")) + tuple(
+        (ROOT / "src").rglob("*.cpp")
+    )
+    forbidden = (
+        "AmrTimeMethod",
+        "amr_time_method_from_wire",
+        "advance_amr(",
+        "amr_step_multilevel_multipatch",
+        "subcycle_level_mp",
+        "PreparedAmrTemporalPlan",
+        "PreparedAmrLevelAdvanceScratch",
+        "PreparedAmrTransitionAdvanceScratch",
+        "PreparedAmrAdvanceScratchPlan",
+        "RegMP",
+        "AmrImplicitSourceStepper",
+        "AmrSystemDriver",
+        "PoissonCadence",
+        "SubcyclingSchedule",
+        "mf_advance_faces(",
+        "mf_apply_source_treatment(",
+        "mf_fill_fine_ghosts_t(",
+    )
+    violations = {
+        path.relative_to(ROOT).as_posix(): token
+        for path in production_sources
+        for token in forbidden
+        if token in path.read_text(encoding="utf-8")
+    }
+    assert violations == {}
+
+
+def test_prepared_amr_program_reflux_plan_is_spatial_only():
+    source = AMR_SUBCYCLING.read_text(encoding="utf-8")
+    assert "class PreparedAmrProgramRefluxPlan" in source
+    assert "class PreparedAmrProgramRefluxTransition" in source
+    assert "synchronize_integrated(" in source
+    for retired_attempt_state in (
+        "begin_attempt(",
+        "publish_attempt(",
+        "abort_attempt(",
+        "stage_flux_x_",
+        "stage_flux_y_",
+        "level_scratch_",
+        "std::vector<AmrLevelMP> attempt_",
+    ):
+        assert retired_attempt_state not in source
 
 
 def test_unlowerable_semantic_tests_remain_real_manifest_tests_without_fe_bridge():
@@ -190,10 +271,13 @@ def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step(
     assert "void step(Real dt)" not in runtime
 
 
-def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
-    """No new C++ test may make the retiring AmrRuntime temporal engine authoritative."""
+def test_direct_amr_runtime_step_callers_remain_absent():
+    """No C++ test may recreate an AmrRuntime temporal authority."""
     direct_step = re.compile(
-        r"\b(?:rt[0-9A-Za-z_]*|runtime|rational|integral)\s*(?:\.|->)\s*step(?:_cfl)?\("
+        r"(?:"
+        r"\b(?:rt[0-9A-Za-z_]*|runtime|rational|integral)\s*(?:\.|->)"
+        r"|\b[A-Za-z_]\w*\.engine\(\)\s*->\s*"
+        r")step(?:_cfl)?\("
     )
     discovered = {
         path.relative_to(ROOT).as_posix()
@@ -201,3 +285,37 @@ def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
         if direct_step.search(path.read_text(encoding="utf-8"))
     }
     assert discovered == LEGACY_DIRECT_AMR_STEP_TESTS
+
+
+def test_gpu_amr_step_harnesses_install_a_program_authority():
+    for path in (ROOT / "tests/gpu/romeo").glob("*.cpp"):
+        source = path.read_text(encoding="utf-8")
+        if "AmrSystem" not in source or re.search(r"\b[A-Za-z_]\w*\.step\(", source) is None:
+            continue
+        assert any(
+            installer in source
+            for installer in (
+                "install_forward_euler_program(",
+                "install_program_step(",
+                "install_program(",
+            )
+        ), path.relative_to(ROOT).as_posix()
+
+
+def test_gpu_amr_program_harness_retains_the_bz_device_probe():
+    source = (ROOT / "tests/gpu/romeo/amrmpi_integrated.cpp").read_text(encoding="utf-8")
+    for marker in (
+        "run_bz_program_probe(",
+        "set_magnetic_field(",
+        'block_level_state_global("magnetic", level)',
+        "baseline.size() < 2",
+        "B_z not consumed on device",
+    ):
+        assert marker in source
+
+    for retired_harness in (
+        "gpu_amr_bz_validate.cpp",
+        "gpu_amr_bz_mpi_validate.cpp",
+        "gpu_amrsys_facade_validate.cpp",
+    ):
+        assert not (ROOT / "tests/gpu/romeo" / retired_harness).exists()

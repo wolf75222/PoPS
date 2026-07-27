@@ -20,10 +20,10 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [1. Finite volumes: first-order Godunov](#1-finite-volumes-first-order-godunov)
 - [2. Numerical fluxes: Rusanov, HLL, HLLC, Roe](#2-numerical-fluxes-rusanov-hll-hllc-roe)
 - [3. MUSCL reconstruction (order 2) and WENO5-Z (order 5)](#3-muscl-reconstruction-order-2-and-weno5-z-order-5)
-- [4. Time integration: SSPRK, object integrators, user integrator](#4-time-integration-ssprk-object-integrators-user-integrator)
+- [4. Time-integration bricks: SSPRK and object integrators](#4-time-integration-bricks-ssprk-and-object-integrators)
 - [5. Stiff sources: asymptotic-preserving IMEX and partial IMEX](#5-stiff-sources-asymptotic-preserving-imex-and-partial-imex)
 - [6. Operator splitting: Lie and Strang](#6-operator-splitting-lie-and-strang)
-- [7. Multirate: subcycling, cadence, adaptive step](#7-multirate-subcycling-cadence-adaptive-step)
+- [7. Retained low-level multirate formulas](#7-retained-low-level-multirate-formulas)
 - [8. Parabolic term: diffusion as face flux](#8-parabolic-term-diffusion-as-face-flux)
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
 - [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
@@ -33,7 +33,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [14. Embedded boundary: Shortley-Weller cut-cell](#14-embedded-boundary-shortley-weller-cut-cell)
 - [15. Disc domain: mask, masked transport, cut-cell transport](#15-disc-domain-mask-masked-transport-cut-cell-transport)
 - [16. Polar geometry: transport and Poisson on a ring (r, theta)](#16-polar-geometry-transport-and-poisson-on-a-ring-r-theta)
-- [17. AMR: Berger-Oliger subcycling + conservative reflux](#17-amr-berger-oliger-subcycling--conservative-reflux)
+- [17. AMR: Program-owned subcycling + conservative reflux](#17-amr-program-owned-subcycling--conservative-reflux)
 - [18. Multi-patch AMR: coverage-aware reflux, MPI-distributed](#18-multi-patch-amr-coverage-aware-reflux-mpi-distributed)
 - [19. Berger-Rigoutsos clustering and regrid](#19-berger-rigoutsos-clustering-and-regrid)
 - [20. Distributed mesh: global BoxArray, halos, load balancing](#20-distributed-mesh-global-boxarray-halos-load-balancing)
@@ -411,13 +411,17 @@ to end).
 
 ---
 
-## 4. Time integration: SSPRK, object integrators, user integrator
+## 4. Time-integration bricks: SSPRK and object integrators
 
 **Intuition.** Strong-Stability-Preserving Runge-Kutta: each stage is a convex combination
 of explicit Eulers, so any stability property (TVD, positivity, bounds) held by a forward
-Euler step under CFL is held by the whole scheme, at order 2 or 3. The time scheme is a
-first-class object (`take_step`) that the coupler calls, rather than inline SSPRK
-duplicated in each coupler; the same contract lets a case bring its own integrator.
+Euler step under CFL is held by the whole scheme, at order 2 or 3. The `take_step`
+objects below are stateless numerical bricks, not temporal drivers. In production,
+the normalized `ProgramGraph` explicitly owns the stage sequence and
+`System`/`AmrSystem` execute only that installed graph. A low-level object integrator can
+therefore participate in production only through an explicitly authored typed Program
+primitive and its registered lowering; no facade infers or falls back to an integrator
+from a descriptor.
 
 **Formula / discretization.** Method of lines: the space gives $\dot U = L(U)$ with
 $L(U) = -\mathrm{div} F(U) + S(U)$, evaluated by $\texttt{rhs}(U, R) \Rightarrow R = L(U)$.
@@ -457,37 +461,40 @@ function take_step_SSPRK3(rhs, U, dt):
     rhs(U2, R); U3 = copy(U2); saxpy(U3, dt, R)
     lincomb(U, 1/3, U, 2/3, U3)                       # U^{n+1} = 1/3 U^n + 2/3 (U^(2)+dt L)
 
-# tag -> politique d'emploi par bloc d'equation (pas le schema lui-meme)
+# tag -> metadonnees numeriques consommees par un lowering Program explicite
 struct TimePolicy<Method, Treatment in {Explicit,Implicit,IMEX,Prescribed}, Substeps>=1, Stride>=1>
 TimePolicyTraits<P>: extrait (Method, treatment, substeps, stride), defaut Explicit/1/1 sur un tag nu
 ExplicitTime<M=SSPRK2,...> / ImplicitTime<...> / IMEXTime<...> / PrescribedTime  # alias de TimePolicy
 
-# integrateur utilisateur : tout objet qui satisfait le concept
+# brique bas niveau : tout objet qui satisfait le concept
 concept TimeStepper<I> = I.take_step(rhs, U, dt) compile
 ```
 
-**Code.** Two expressions coexist, separating the mathematical scheme from its usage policy.
+**Code.** Two low-level representations coexist, separating the mathematical scheme from
+metadata used by an explicit Program lowering.
 The tags [`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
-(`SSPRK2`, `SSPRK3`, `UserTimeIntegrator`) name, per block, the temporal treatment via a
+(`SSPRK2`, `SSPRK3`, `UserTimeIntegrator`) describe numerical metadata via a
 `TimePolicy<Method, TimeTreatment, Substeps, Stride>`; `TimePolicyTraits` reads these fields (and accepts
 a bare tag, then treated as `Explicit` with a single step). The aliases `ExplicitTime` / `ImplicitTime` /
-`IMEXTime` / `PrescribedTime` set the `TimeTreatment`. The object integrators
+`IMEXTime` / `PrescribedTime` set the `TimeTreatment`; none of these descriptors schedules
+an advance, an implicit solve, or a hold by itself. The object integrators
 [`include/pops/numerics/time/integrators/time_steppers.hpp`](../include/pops/numerics/time/integrators/time_steppers.hpp)
 (`ForwardEuler`, `SSPRK2Step`, `SSPRK3Step`) carry the method: each exposes
 `take_step(rhs, U, dt)` and allocates its scratch (`R`, stages `U1`/`U2`/`U3`) only from the layout of
 `U`, with no persistent state. The integrator sees only `rhs(U_stage, R)` (the method-of-lines arrow)
 and the `saxpy`/`lincomb` operations of [`include/pops/mesh/storage/mf_arith.hpp`](../include/pops/mesh/storage/mf_arith.hpp):
 it is agnostic of the model and of the discretization. The `TimeStepper` concept formalizes the contract, so
-that a case can provide its own `take_step` object exactly as it provides a `PhysicalModel`.
+the retained low-level bricks and tests can accept a custom object without making it a
+second production authoring route.
 
 **Constraints / remarks.** SSP with coefficient 1: strong stability is guaranteed only as long as
 $\Delta t$ respects the forward Euler CFL ($C = 1$, no margin gained on the step compared to the
 order-1 scheme). In a coupled system, the order of the elliptic solve caps the global order: a Poisson
 solved once per step limits the field to order 1, whatever SSPRK is chosen on the hyperbolic side
-(see splitting, section 6). The `Substeps` fields (more frequent substeps, $n$ steps of $\Delta t/n$
-for a fast species) and `Stride` (slower cadence, a slow block advances only one macro-step every
-`Stride` steps) are orthogonal and belong to the scheduler, not the integrator (section 7); `Stride = 1`
-gives back the historical behavior. The `SSPRK2Step`/`SSPRK3Step` objects reproduce bit-for-bit the
+(see splitting, section 6). `Substeps` and `Stride` remain metadata used when
+computing declared stability bounds. They do not create a scheduler: production subcycling,
+holds, or catch-up must appear as explicit Program composition (section 7).
+The `SSPRK2Step`/`SSPRK3Step` objects reproduce bit-for-bit the
 old inline copies `SystemCoupler::advance_explicit_ssprk2/ssprk3` (deduplication). Validation:
 `test_user_time_integrator` checks that a user-provided integrator gives the same result
 as a core SSPRK.
@@ -526,7 +533,10 @@ advance by forward Euler at the input state, `W_e = U^n_e + dt S_e(U^n)`, then t
 are solved by Newton on the reduced `n x n` subsystem (`n` = number of implicit ones `<= N`), the
 explicit ones frozen at their advanced value as known data. The partitioning comes either from the model
 (trait `is_implicit(c)`), or from a mask carried by the block (priority over the model default), which
-allows reusing the same model with different treatments depending on the block.
+allows reusing the same model with different treatments depending on the block. This
+partition is read only when an explicitly authored typed implicit Program primitive is
+executed. A trait, mask, `IMEXTime`, or `time="imex"` descriptor alone never schedules
+Newton or an IMEX advance.
 
 ```
 function imex_euler_step(U, dt, Texpl, Simpl):
@@ -578,8 +588,9 @@ goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
 with priority over the model default). `ImplicitSourceStepper` (`iters = 2`) models the concept
-`ImplicitBlockStepper` and wires `backward_euler_source` into the implicit-advance callback of the
-`SystemCoupler`, which itself advances the explicit SSPRK blocks and delegates the implicit / IMEX blocks.
+`ImplicitBlockStepper` for the low-level `SystemCoupler` numerical utility. Production `System` and
+`AmrSystem` do not schedule that helper: their normalized `ProgramGraph` must place a typed implicit
+primitive explicitly, and an unavailable lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
@@ -588,8 +599,11 @@ stiff regime); it is exact in one iteration if `S` is linear in `U`, quadratic c
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
 domain of Schur condensation (section 13). Inactive mask and a model without the `is_implicit` trait:
-everything is implicit (full backward-Euler), strictly bit-identical to the historical behavior. The
-transport of an IMEX block stays advanced explicitly by the core. Validation:
+when the low-level implicit solver is explicitly invoked, everything is implicit
+(full backward-Euler), preserving its historical numerical behavior. This default is a
+component-selection rule inside that solver, not temporal authorization. An IMEX Program
+must place both the transport and the typed implicit primitive explicitly; the spatial
+runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
 `test_imex_partial` (a 2-variable model, only one implicit),
@@ -667,16 +681,22 @@ Lie/Strang endpoints and explicit field-solve placement.
 
 ---
 
-## 7. Multirate: subcycling, cadence, adaptive step
+## 7. Retained low-level multirate formulas
+
+**Scope.** This section records the tested low-level `SystemCoupler` formulas and their
+historical descriptor semantics. They are not a production time engine. `System` and
+`AmrSystem` execute only their installed `ProgramGraph`; production subcycling, holds,
+catch-up, and adaptive-step placement must be authored as typed Program composition.
 
 **Intuition.** Not all species of a coupled system require the same time step.
 A stiff species (electrons) splits a macro-step into several substeps ($\text{substeps}$); a
 slow species (under-resolved gas) is advanced only once every $M$ macro-steps (cadence, $\text{stride}$),
-and then catches up $M$ steps in a single advance. The two mechanisms are orthogonal and read from the
-temporal policy of each block; the scheduler knows no physics.
+and then catches up $M$ steps in a single advance. In the retained low-level algorithm,
+the two mechanisms are orthogonal and read from block metadata.
 
-**Formula / discretization.** Each block carries a `TimePolicy<Method, Treatment, substeps, stride>`
-from which the scheduler extracts only three integers (and the treatment, to skip prescribed blocks).
+**Formula / discretization.** Each block can carry a
+`TimePolicy<Method, Treatment, substeps, stride>` from which the low-level utility
+extracts three integers (and the treatment, to skip prescribed blocks).
 Let $\text{dt}$ be the macro-step, $n = \text{substeps}_b$, $m = \text{stride}_b$ for block $b$.
 
 Cadence: block $b$ is held (hold) as long as macro-step $k$ verifies $(k+1) \bmod m \neq 0$, then
@@ -692,6 +712,16 @@ $$h = \frac{\Delta t^{\text{eff}}_b}{n} = \frac{m \, \text{dt}}{n}.$$
 
 With $m = 1$ and $n = 1$ we recover identically the advance of a step $\text{dt}$ at each macro-step.
 
+The formula $m\,\text{dt}$ is only the constant-step special case. For the whole-Program cadence of
+the production facades, an adaptive window with accepted steps
+$\text{dt}_0,\ldots,\text{dt}_{m-1}$ advances by
+
+$$\Delta t^{\text{eff}} = \sum_{i=0}^{m-1}\text{dt}_i.$$
+
+The runtime stores the window's exact accepted start, accumulated duration, and held-step count.
+Those values are transactional and part of strict restart state; it never reconstructs the interval
+as $m$ times the most recent step.
+
 The macro-step can be chosen by the CFL via `step_cfl`. The stability condition bears on the
 real substep $m\,\text{dt}/n \le \text{cfl}\, h_{\text{cell}} / w_b$, which gives per block
 
@@ -701,7 +731,7 @@ $$\text{dt}_b = \frac{\text{cfl} \; h_{\text{cell}} \; \text{substeps}_b}{\text{
 where $h_{\text{cell}} = \min(dx, dy)$ in Cartesian, $\min(dr, r_{\min}\, d\theta)$ in polar (the
 physical azimuthal step is minimal at the inner radius), and $w_b$ is the max wave speed of the block.
 
-The low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the slowest block,
+The retained low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the slowest block,
 $\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\min}$, and subcycles each faster block
 
 $$n_b = \left\lceil \text{stride}_b \; \frac{w_b}{w_{\min}} \right\rceil$$
@@ -711,6 +741,8 @@ times over its effective step $\Delta t^{\text{eff}}_b = m\,\Delta t$; aux is fr
 lowered by `ProgramGraph`. Consequently, the production `System::step_adaptive` facade fails closed
 even when a Program is installed; multirate subcycling must first become an explicit Program
 composition. `System` and `AmrSystem` never fall back to this low-level scheduler.
+Consequently, `Substeps`, `Stride`, or a `TimePolicy` descriptor by itself has no
+production scheduling effect.
 
 ```
 function advance_subcycled(system, dt, macro_step, advance_block):
@@ -738,7 +770,7 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
         w   = max(max_wave_speed(b.U), 1e-30)     # all_reduce_max sous MPI
         dt  = min(dt, cfl * h_cell * substeps_b / (stride_b * w))
     if dt not finite: dt = cfl * h_cell / 1e-30   # tous geles : pas degenere
-    run_program_cadence(dt)                        # aucun transport/couplage implicite
+    execute_installed_program(dt)                  # cadence et stages lus du ProgramGraph
     t += dt; macro_step += 1
     return dt
 
@@ -756,8 +788,16 @@ defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/i
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
 `!= Prescribed`). The step choice lives in
 [`runtime/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp): `step_cfl` computes
-the bound, while `run_program_cadence` and `stride_due(macro_step, stride)` apply the explicit
-whole-Program cadence $(k+1)\bmod m = 0$. The speed $w_b$ comes from `max_wave_speed_mf`
+the bound, then dispatches the installed normalized graph. Its internal
+`run_program_cadence` mechanically interprets the graph-authored whole-Program cadence
+$(k+1)\bmod m = 0$; it does not read a block `TimePolicy` or
+construct an alternate schedule. During a due window it publishes the exact starting physical time
+and public macro-step to every internal Program substep. The window is partitioned by explicit
+endpoints (the final endpoint is exact), then committed atomically. `substeps=n` deliberately invokes
+the complete authored closure $n$ times. Consequently, a typed schedule such as
+`Every(AcceptedStep(clock), 1)` is evaluated once in each invocation at the same accepted-step
+coordinate; the cadence wrapper performs no implicit node deduplication. A schedule that needs
+hold/cache behavior must author that policy explicitly. The speed $w_b$ comes from `max_wave_speed_mf`
 ([`numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp)), collective
 `all_reduce_max` under MPI so that all ranks pick the same $\text{dt}$.
 
@@ -842,7 +882,8 @@ diffusion-dominated, fix $\text{dt}$ explicitly. Known limit: `SourceFreeModel` 
 IMEX) does not expose `diffusivity()`, so a diffusive IMEX block would lose its Fickian flux in the
 explicit half-step (a separate refinement); and the masked path `assemble_rhs_masked` does not mask the
 Laplacian. Tests: `test_diffusion` (the core $+\nu\,\Delta U$ via the divergence of the Fickian flux),
-`test_amr_diffusion` (face-flux diffusion crosses the AMR reflux correctly).
+and `test_amr_program_diffusion` (a genuinely refined hierarchy smooths while its composite integral
+remains conservative through the Program-owned flux ledger and reflux described in section 17).
 
 
 ---
@@ -1594,13 +1635,15 @@ basis + SSPRK3 transport + wall). On the Python side: `test_polar_system`, `test
 
 ---
 
-## 17. AMR: Berger-Oliger subcycling + conservative reflux
+## 17. AMR: Program-owned subcycling + conservative reflux
 
 **Intuition.** Refine only where needed. A fine level (step $\Delta x_c / r$) covers a
 sub-region; to respect its CFL it does $r$ substeps of $\Delta t / r$ while the coarse does
 a single step of $\Delta t$. At the fine-coarse interface, the two levels compute different fluxes,
 which breaks discrete conservation. Reflux corrects the bordering coarse cell by the difference
-(time-integrated fine flux minus coarse flux).
+(time-integrated fine flux minus coarse flux). The normalized `ProgramGraph` is the sole authority
+for the parent/child clocks, stage points and catch-up order; `AmrRuntime` supplies hierarchy state,
+spatial evaluations, transfers and reflux primitives, but never chooses a time integrator.
 
 **Formula / discretization.** Let a fine-coarse face in $x$ between the coarse cell $(I, J)$ and the
 fine patch. During the coarse step we have already advanced the coarse with its own face flux $F_c$ (over
@@ -1610,65 +1653,61 @@ correction replaces the coarse contribution by the fine contribution:
 $$U_c(I,J) \mathrel{-}= \frac{1}{\Delta x_c}\Big(\textstyle\sum_{s=1}^{r} \Delta t_f\,\bar F_f^{(s)} - \Delta t_c\,F_c\Big)$$
 
 with $\Delta t_f = \Delta t / r$ and $\bar F_f^{(s)}$ the fine flux averaged over the fine faces covering the
-coarse face. In the code the integrated fine quantity is already $\sum_s \Delta t_f \bar F_f^{(s)}$
-(stored `fL/fR/fB/fT` of the per-patch register) and the coarse quantity is $F_c$ (stored `cL/cR/cB/cT`),
-multiplied by $\Delta t$ at the time of deposit. The ratio is fixed at $r = 2$ (`SubcyclingSchedule`),
-hence the coarse footprint $I_0 = \mathrm{lo}/2$, $I_1 = (\mathrm{hi}-1)/2$ of an aligned fine patch
-(`PatchRange`). The interpolation of the fine ghosts from the coarse is linear in time,
-$U^\star = (1-\alpha)\,U_c^{\mathrm{old}} + \alpha\,U_c^{\mathrm{new}}$ with $\alpha = s/r$
-(`SubcyclingSchedule::frac`), constant in space (piecewise injection).
+coarse face. The transactional Program flux ledger stores both sides already integrated with the
+exact stage and time-step coefficients from the graph. The spatial refinement ratio is fixed at
+$r_x = 2$, hence the coarse footprint $I_0 = \mathrm{lo}/2$, $I_1 = (\mathrm{hi}-1)/2$ of an aligned
+fine patch (`PatchRange`). For the usual ratio-2 temporal relation, interpolation of the fine ghosts
+from the coarse is linear in time,
+$U^\star = (1-\alpha)\,U_c^{\mathrm{old}} + \alpha\,U_c^{\mathrm{new}}$ with $\alpha = s/2$,
+constant in space (piecewise injection). Other integral or explicitly remainder-bearing temporal
+relations are graph data rather than a hidden property of the spatial hierarchy.
 
 ```
-function subcycle_level(coarse_level, fine_level, dt, r=2):
-    # 1. avancer le grossier d'un pas dt, en memorisant son flux de face
-    #    le long de l'interface fin-grossier avant de le mettre a jour
-    Fc = sample_coarse_face_flux(coarse_level)        # cL,cR,cB,cT par patch
-    advance_one_step(coarse_level, dt)
+function execute_amr_program(program_graph, hierarchy, macro_dt):
+    begin_atomic_attempt(hierarchy, program_graph.clocks)
+    for clock_event in program_graph.recursive_parent_child_order(macro_dt):
+        fill_ghosts_and_interpolate_parent_state(clock_event.point)
+        rate, edge_flux = evaluate_spatial_operator(clock_event.candidate)
+        candidate = combine_exactly_as_authored(program_graph, rate)
+        flux_ledger.accumulate(edge_flux, program_graph.exact_coefficient(rate))
 
-    # 2. r sous-pas fins de dt/r
-    reg.f{L,R,B,T} = 0                                 # accumulateur fin time-integre
-    for s in 1..r:
-        alpha = s / r                                  # position temporelle (frac)
-        fill_fine_ghosts(fine_level, Uc_old, Uc_new, alpha)   # interp espace + temps
-        fill_boundary(fine_level)                      # fin-fin ecrase les ghosts couverts
-        Ff = compute_face_fluxes(fine_level)
-        advance_one_step(fine_level, dt/r)
-        reg.f{L,R,B,T} += (dt/r) * mean_over_fine_faces(Ff)   # sum_s dt_f * Ff^(s)
+        if clock_event.child_catches_parent:
+            route_reflux_integrated(flux_ledger, hierarchy)
+            average_down(child_state, parent_state)
 
-    # 3. average_down : la zone couverte du grossier = moyenne du fin (conservatif)
-    average_down(fine_level, coarse_level, r)
-
-    # 4. reflux : corriger les cellules grossieres bordantes (non couvertes)
-    cfi = CoarseFineInterface(coarse_region, fine_boxarray_global)
-    for patch g in fine_level:
-        cfi.route_reflux(reg[g], dx, dy, dt, flux_register, nc)
-    flux_register.gather()                             # all_reduce_sum (identite en serie)
-    for cell (I,J) bordante:
-        Uc(I,J) -= flux_register.at(I,J,k)
+    evaluate_collective_guards()
+    commit_every_level_and_clock_or_rollback_everything()
 ```
 
-**Code.** [`numerics/time/amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp) is the
-umbrella that aggregates the sub-headers. The unified production entry is `advance_amr` in
-[`numerics/time/amr_advance.hpp`](../include/pops/numerics/time/amr/advance/amr_advance.hpp) (a faithful facade of the
-N-level multi-patch engine `detail::amr_step_multilevel_multipatch`). The roles are promoted to named types
-in [`numerics/time/amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
-`SubcyclingSchedule` (cadence $r$, $\Delta t/r$, $\mathrm{frac}(s)=s/r$), `PatchRange` (coarse footprint
-$[I_0..I_1]\times[J_0..J_1]$ of a fine patch), `FluxRegister` (a global-index buffer, accumulation
-`add`/`set` then `gather`), `CoverageMask` (shadowed cells), `CoarseFineInterface::route_reflux`
-(bordering deposit). The inter-level transfers `average_down` (conservative average over $r\times r$ blocks),
+**Code.** `Program` is the authoring surface and its immutable `ProgramGraph` is the compiler/runtime
+temporal contract. [`AmrProgramContext`](../include/pops/runtime/program/amr_program_context.hpp)
+executes that graph transactionally over
+[`AmrRuntime`](../include/pops/runtime/amr/amr_runtime.hpp). The latter exposes spatial hierarchy
+state and prepared transfer/reflux services only. The umbrella
+[`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp) aggregates those
+spatial helpers; it is not an alternate stepper. Their named types live in
+[`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
+`PatchRange`
+(coarse footprint $[I_0..I_1]\times[J_0..J_1]$ of a fine patch), `FluxRegister` (a global-index
+buffer, accumulation `add`/`set` then `gather`), `CoverageMask` (shadowed cells), and
+`CoarseFineInterface::route_reflux_integrated` (bordering deposit from the Program-owned ledger).
+The inter-level transfers `average_down` (conservative average over $r\times r$ blocks),
 `interpolate` (piecewise-constant injection) and `parallel_copy` are in
 [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp). The per-cell fine ghost goes through
 `fill_cf_ghost_cell` (space + time interpolation), shared by the three variants `mf_fill_fine_ghosts_*`.
 
-**Constraints / remarks.** The temporal ratio is fixed at $r = 2$: `PatchRange` uses the
-historical arithmetic $(hi-1)/2$ for the upper bound, which is not `Box2D::coarsen` (floor of both bounds), and which
-assumes aligned patches (even lo, odd hi). The order of operations is critical: the coarse flux
-must be sampled before advancing the coarse; the average_down must precede any mass measurement,
-otherwise the covered zone is counted twice. Validation: `test_refinement` (conservative average_down +
-interpolate), `test_amr_hierarchy` (coarse + nested fine + ghost interpolation), `test_flux_register`
-(register indexing), `test_coverage_mask` (covered-cell marking), `test_advance_amr`
-(unified engine 2 AND 3 levels, maxdiff = 0), `test_amr_diagnostics` (mass and drift velocity via the
-seam reducer).
+**Constraints / remarks.** The spatial ratio remains fixed at $r_x = 2$: `PatchRange` uses the
+historical arithmetic $(hi-1)/2$ for the upper bound, which is not `Box2D::coarsen` (floor of both
+bounds), and assumes aligned patches (even lo, odd hi). The order of operations is critical:
+coarse/fine fluxes must be captured at the graph-authored stage points; at each catch-up, reflux
+precedes `average_down`; a rejected attempt publishes neither state nor flux. Validation:
+`test_refinement` (conservative average_down + interpolate), `test_amr_hierarchy` (coarse + nested
+fine + ghost interpolation), `test_flux_register` and `test_cf_interface` (register indexing,
+coverage and routing), `test_program_reflux_ledger` (exact Program coefficients and transactional
+ledger), `test_amr_program_diffusion` (diffusive flux crossing a coarse/fine interface),
+`test_amr_program_positivity_floor` (accepted refined trajectory through the Program),
+`test_amr_history_ring` (recursive clock/catch-up ordering and rollback), and `test_amr_diagnostics`
+(mass and drift velocity via the seam reducer).
 
 ## 18. Multi-patch AMR: coverage-aware reflux, MPI-distributed
 
@@ -1719,16 +1758,16 @@ function reflux_multipatch(coarse_level, fine_boxarray_global, registers, distri
 [`numerics/time/amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
 `CoverageMask` (built on the coarse region, `mark` marks the intersected footprint, `covered` is
 bounded outside the region), `CoarseFineInterface` (assembles the mask on `fine_ba.size()` global patches and
-exposes `route_reflux`, a named function templated on the register type `Reg`/`RegMP` hence safe under nvcc),
+exposes `route_reflux`, a named function templated on an `EdgeStrip`-shaped register hence safe under nvcc),
 `FluxRegister::gather` (inter-rank sum by `all_reduce_sum_inplace`). The MPI routing of the distributed
 coarse goes through `parallel_copy` in
 [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp) (general redistribution between two MultiFab
 on the same domain with different decompositions: local copies via `BoxHash::query`, then
 `MPI_Isend`/`MPI_Irecv` jobs enumerated deterministically, tag 1). The replicated coarse fills its
 periodic ghosts by `fill_periodic_local` (a purely local self-fold, without an MPI plan). The
-`coarse_replicated` flag of `LevelHierarchy` (default `true`) is passed to the engine by `advance_amr` in
-[`numerics/time/amr_advance.hpp`](../include/pops/numerics/time/amr/advance/amr_advance.hpp); without this passing, a
-de-replicated coarse would revert to replicated mode (`mf_find_box` instead of `parallel_copy`).
+prepared hierarchy manifest carries the parent ownership policy into `AmrRuntime`'s spatial
+transfer/reflux services. Without that explicit policy, a de-replicated coarse would revert to
+replicated routing (`mf_find_box` instead of `parallel_copy`).
 
 **Constraints / remarks.** Without a coverage mask, the fine-fine joint would be refluxed twice, hence
 non-conservation: the mask is the central invariant of the correction. The register must be filled locally
@@ -1838,7 +1877,7 @@ fine data interpolated from the coarse).
 of the level, ratio 2) and the facade `AmrSystem.patch_rectangles()` (conversion into physical rectangles
 `(x0, y0, w, h)` on `[0, L]^2`). Same source as `n_patches()` (the same global `box_array()`, so
 rank-independent and MPI-safe); it is a read between the steps, with no cost on the hot path. Wired
-on both engines (mono-block `AmrCouplerMP` and multi-block `AmrRuntime`). Allows tracing the real
+on both spatial stores (mono-block `AmrCouplerMP` and multi-block `AmrRuntime`). Allows tracing the real
 patches (for example a GIF of the refinement) without rebuilding a proxy. Validation:
 `test_amr_patch_boxes` (cardinality equal to `n_patches`, corners consistent in index and in physics, mono and
 multi-block).
@@ -1999,7 +2038,7 @@ closure would read a too-short aux). `B_z` being a function of position, it is s
 per level (exact at the coarse like `eps`, order 2 preserved). A base model (`n_aux` not declared)
 falls back to 3 -> allocation and results bit-identical to the history. **Validation.**
 `test_aux_extra` (a model declares `n_aux > 3`), `test_aux_composite` (a `CompositeModel` propagates
-the aux width of its bricks), `test_aux_coupler_bz` / `test_aux_system_bz` / `test_amr_aux_bz` /
+the aux width of its bricks), `test_aux_coupler_bz` / `test_aux_system_bz` /
 `test_amr_system_bz_pop` / `test_amr_system_bz_multibox` (B_z read and populated along the
 coupler, system, AMR, multi-box paths), `test_aux_te` (T_e derived from `p/rho`), `test_aux_single_source`
 (a single source generates all required `load_aux` accesses). Validated bit-identical on
@@ -2077,10 +2116,12 @@ remains a low-level `SystemCoupler` capability until its explicit `ProgramGraph`
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
 and `set_conservative_state` accepts a complete block-qualified conservative state for every native
 or deferred compiled (`.so`) block. Without an explicit IMEX mask
-(`implicit_vars` / `implicit_roles` empty) the model default applies -> bit-identical.
+(`implicit_vars` / `implicit_roles` empty), an explicitly authored typed implicit
+Program primitive uses the model's component-selection default. The empty mask, an
+`IMEXTime` policy, or `time="imex"` never creates or schedules that primitive.
 **Validation.** `test_system_abstraction`, `test_system_coupler`, `test_two_species_minimal`,
 `test_coupled_source` (inter-species source), `test_system_two_explicit`, `test_assembler_driver`
-(the assembler assembles, the driver advances), `test_amr_system_coupler`, `test_system_hardening`,
+(the assembler assembles, the driver advances), `test_system_hardening`,
 `test_variable_role` (addressing a component by its physical role rather than by index).
 
 ## 23. Symbolic DSL and authenticated native components

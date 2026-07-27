@@ -323,10 +323,10 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver {
     lb.built = true;
   }
 
-  /// Build (or rebuild on a fine-tiling change) the composite FAC over ALL fine levels -- the verbatim
-  /// ensure_fac idiom of the native source stepper (compare per-level boxes + order, rebuild only on a
-  /// change). A single fine level uses the 2-level ctor (bit-identical), deeper towers the N-level ctor;
-  /// the FAC ctor refuses ratio != 2 / non-nested / misaligned patches, precisely.
+  /// Build (or rebuild on a fine-tiling change) the composite FAC over ALL fine levels. The prepared
+  /// field service compares per-level boxes and order and rebuilds only when that topology changes.
+  /// A single fine level uses the 2-level ctor (bit-identical), deeper towers the N-level ctor; the FAC
+  /// ctor refuses ratio != 2 / non-nested / misaligned patches, precisely.
   void ensure_fac(const std::vector<BoxArray>& level_boxes) {
     std::vector<std::vector<Box2D>> key;
     key.reserve(level_boxes.size());

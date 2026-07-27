@@ -22,9 +22,12 @@ BIT-IDENTICALLY (np.array_equal, no tolerance -- extends the ADC-542 acceptance 
   (4) a 5-slot Interval(2) ring stores anchors {0,2,4}; replay reconstructs the two independent gaps
       from their exact older anchors and publishes slots by logical index. This catches shifted-ring
       implementations that trust the Program's internal rotate order instead of the accepted state.
+  (5) a variable-dt stride-3 Program persists its selective history as
+      ``dense_cadence_safety`` and restarts a held window without replaying ambiguous slot/tick pairs.
 
 Missing native prerequisites are explicit local skips and required-lane failures. Pytest + __main__.
 """
+
 import os
 import tempfile
 import hashlib
@@ -63,12 +66,13 @@ try:
     )
     from tests.python.support.typed_program import program_states, state_handle
 except Exception as exc:  # noqa: BLE001
-    require_native_or_skip(
-        "test_amr_history_checkpoint cannot import pops/numpy: %s" % exc)
+    require_native_or_skip("test_amr_history_checkpoint cannot import pops/numpy: %s" % exc)
 
 N = 16
 DT = 2.0e-3
 _C = 0.6  # linear source S(rho) = _C*rho: R changes every step, the ring is load-bearing
+
+
 def _advance(sim, nsteps):
     return sim.run(
         t_end=float(sim.time()) + nsteps * DT,
@@ -87,9 +91,7 @@ def _passive_source_model(name):
     The field-free dynamics make checkpoint replay independent of solver warm starts, which is the
     provably bit-exact replay class. Refinement tags read the density level itself.
     """
-    frame = Rectangle(
-        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = Model(name, frame=frame)
     state = model.state("U", components=("rho",))
@@ -112,8 +114,7 @@ def _ab2_program(model, name="adc631_ckpt_ab2"):
     module = model.module
     case = Case("%s-case" % name)
     state = case.block("blk", module)[state_handle(module)]
-    P = lt.AdamsBashforth(
-        state, rate=module.operator_handle("source_rate"), order=2)
+    P = lt.AdamsBashforth(state, rate=module.operator_handle("source_rate"), order=2)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
 
@@ -134,8 +135,7 @@ def _state3_program(model, name="adc631_ckpt_state3"):
     P.keep_history(U, depth=2, checkpoint_policy=Interval(2))
     # Strictly affine growth (reads U.n only), + a zero-weight prev(2) read that declares the 3-slot
     # ring without breaking the single-step reconstructability of the replay.
-    nxt = P.value(
-        "Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(2), at=U.next.point)
+    nxt = P.value("Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(2), at=U.next.point)
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
@@ -147,8 +147,7 @@ def _state5_program(model, name="adc631_ckpt_state5"):
     _case, states = program_states(P, model, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=4, checkpoint_policy=Interval(2))
-    nxt = P.value(
-        "Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(4), at=U.next.point)
+    nxt = P.value("Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(4), at=U.next.point)
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
@@ -157,7 +156,7 @@ def _state5_program(model, name="adc631_ckpt_state5"):
 def _blob():
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
-    return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / (0.15 ** 2))
+    return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / (0.15**2))
 
 
 def _complete_native_bind(amr, compiled, initial, *, regrid_every):
@@ -196,35 +195,40 @@ def _complete_native_bind(amr, compiled, initial, *, regrid_every):
                 "content_sha256": hashlib.sha256(array.view(np.uint8)).hexdigest(),
             }
         },
-        bind_schema_identity=make_identity(
-            "bind-schema", BindSchema().to_dict()),
+        bind_schema_identity=make_identity("bind-schema", BindSchema().to_dict()),
         execution_context=context.to_data(),
     )
     amr._temporal_restart_state.configure_program(
-        authored.temporal_manifest(), time=amr.time(), macro_step=amr.macro_step())
+        authored.temporal_manifest(), time=amr.time(), macro_step=amr.macro_step()
+    )
     amr._finalize_bind(snapshot)
 
 
-def _build(program_factory, regrid_every=2):
+def _build(program_factory, regrid_every=2, program_cadence=None):
     amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
     # One explicit clock relation for the resolved two-level hierarchy. Spatial refinement never
     # doubles as an implicit time-subcycling authority.
     amr.set_temporal_relations([2], [1], ["integral_only"])
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         require_native_or_skip(
-            "test_amr_history_checkpoint requires install_program/history_names bindings")
+            "test_amr_history_checkpoint requires install_program/history_names bindings"
+        )
     model = _passive_source_model("%s_model" % program_factory.__name__.lstrip("_"))
     program = program_factory(model)
-    compiled = compile_problem(
-        model=model, time=program, target="amr_system")
+    compiled = compile_problem(model=model, time=program, target="amr_system")
     block_cm = compile_block_model(model, target="amr_system")
-    amr.add_equation("blk", block_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
+    amr.add_equation(
+        "blk",
+        block_cm,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="ssprk2"),
+    )
     amr.set_refinement(1.2)  # tags the blob -> a real 2-level hierarchy, regrids at steps 2,4,...
     initial = _blob()
     amr.set_density("blk", initial)
     amr.install_program(compiled.so_path)
+    if program_cadence is not None:
+        amr._s.set_program_cadence(*program_cadence)
     authored = compiled.program
     amr._step_strategy = authored._step_strategy
     amr._step_transaction_plan = authored.transaction_plan()
@@ -234,22 +238,31 @@ def _build(program_factory, regrid_every=2):
     persistence = getattr(getattr(compiled, "program", None), "_history_persistence", None)
     if persistence:
         amr.set_history_persistence(
-            {name: policy for name, (_depth, policy) in persistence.items()})
+            {name: policy for name, (_depth, policy) in persistence.items()}
+        )
     _complete_native_bind(amr, compiled, initial, regrid_every=regrid_every)
     return amr, None
 
 
 def _rings(amr):
-    return {h: [np.asarray(amr.history_global(h, k), dtype=np.float64).ravel()
-                for k in range(int(amr.history_depth(h)))] for h in amr.history_names()}
+    return {
+        h: [
+            np.asarray(amr.history_global(h, k), dtype=np.float64).ravel()
+            for k in range(int(amr.history_depth(h)))
+        ]
+        for h in amr.history_names()
+    }
 
 
 def _rings_equal(first, second):
     return first.keys() == second.keys() and all(
         len(first[name]) == len(second[name])
-        and all(np.array_equal(left, right)
-                for left, right in zip(first[name], second[name], strict=True))
-        for name in first)
+        and all(
+            np.array_equal(left, right)
+            for left, right in zip(first[name], second[name], strict=True)
+        )
+        for name in first
+    )
 
 
 def _run_case(program_factory, nsteps, half, label, regrid_every=2):
@@ -267,13 +280,11 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
         ckpt = run.checkpoint(os.path.join(tmp, label))
         d = np.load(ckpt, allow_pickle=False)
         temporal = json.loads(str(d["temporal_restart_state"]))
-        accepted_dt = float.fromhex(
-            temporal["controller_state"]["last_accepted_dt"])
+        accepted_dt = float.fromhex(temporal["controller_state"]["last_accepted_dt"])
         stored_info = {}
         for h in run.history_names():
             depth = int(d["history_depth_" + h])
-            slot_dts = np.asarray(
-                d["history_slot_dt_" + h], dtype=np.float64).reshape(-1)
+            slot_dts = np.asarray(d["history_slot_dt_" + h], dtype=np.float64).reshape(-1)
             expected_dts = np.full(depth, DT, dtype=np.float64)
             if depth > 1:
                 # Slot 1 is the just-accepted macro step after the terminal ring rotation.  A
@@ -290,8 +301,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
             mode = str(d["history_storage_mode_" + h])
             fp_key = "history_regrid_steps_" + h
             fingerprint = [int(s) for s in d[fp_key]] if fp_key in d else None
-            stored_info[h] = (
-                depth, sorted(requested), sorted(stored), mode, fingerprint)
+            stored_info[h] = (depth, sorted(requested), sorted(stored), mode, fingerprint)
         fresh, _ = _build(program_factory, regrid_every)
         fresh.restart(ckpt)
         rings_after_restart = _rings(fresh)
@@ -306,15 +316,24 @@ def test_ab2_dense_checkpoint_bit_identical():
     out, err = _run_case(_ab2_program, nsteps=6, half=3, label="ab2")
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, _report = out
-    chk(all(len(stored) == depth and requested == stored and mode == "policy"
-            for depth, requested, stored, mode, _ in stored_info.values())
+    chk(
+        all(
+            len(stored) == depth and requested == stored and mode == "policy"
+            for depth, requested, stored, mode, _ in stored_info.values()
+        )
         and bool(stored_info),
-        "Dense stores every ring slot (no replay): %r" % stored_info)
+        "Dense stores every ring slot (no replay): %r" % stored_info,
+    )
     ok_rings = _rings_equal(cont_rings, rest_rings)
-    chk(ok_rings, "the restored ring equals the uninterrupted ring at the checkpoint step, bit-for-bit")
-    chk(np.array_equal(ref, got),
+    chk(
+        ok_rings,
+        "the restored ring equals the uninterrupted ring at the checkpoint step, bit-for-bit",
+    )
+    chk(
+        np.array_equal(ref, got),
         "AB2 continuous == (run, ckpt, restart, continue) BIT-IDENTICALLY (max|d| = %.3e)"
-        % float(np.abs(ref - got).max()))
+        % float(np.abs(ref - got).max()),
+    )
 
 
 def test_state3_interval_replay_bit_identical():
@@ -322,18 +341,28 @@ def test_state3_interval_replay_bit_identical():
     out, err = _run_case(_state3_program, nsteps=12, half=8, label="state3", regrid_every=4)
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, report = out
-    chk(bool(stored_info) and all(
-        requested == stored and len(stored) < depth and mode == "policy" and fp == []
-        for depth, requested, stored, mode, fp in stored_info.values()),
-        "Interval(2) stores a SUBSET of the ring slots (the gap is replayed): %r" % stored_info)
-    chk(report is not None and any(h["recomputed_slots"] >= 1 for h in report.histories),
-        "the restart report records the replayed (recomputed) slots")
+    chk(
+        bool(stored_info)
+        and all(
+            requested == stored and len(stored) < depth and mode == "policy" and fp == []
+            for depth, requested, stored, mode, fp in stored_info.values()
+        ),
+        "Interval(2) stores a SUBSET of the ring slots (the gap is replayed): %r" % stored_info,
+    )
+    chk(
+        report is not None and any(h["recomputed_slots"] >= 1 for h in report.histories),
+        "the restart report records the replayed (recomputed) slots",
+    )
     ok_rings = _rings_equal(cont_rings, rest_rings)
-    chk(ok_rings,
-        "EVERY post-restart ring slot (recomputed included) equals the uninterrupted ring bit-for-bit")
-    chk(np.array_equal(ref, got),
+    chk(
+        ok_rings,
+        "EVERY post-restart ring slot (recomputed included) equals the uninterrupted ring bit-for-bit",
+    )
+    chk(
+        np.array_equal(ref, got),
         "the replayed-ring continuation is BIT-IDENTICAL to uninterrupted (max|d| = %.3e)"
-        % float(np.abs(ref - got).max()))
+        % float(np.abs(ref - got).max()),
+    )
 
 
 def test_state3_replay_window_straddling_regrid_bit_identical():
@@ -341,46 +370,126 @@ def test_state3_replay_window_straddling_regrid_bit_identical():
     out, err = _run_case(_state3_program, nsteps=10, half=6, label="straddle", regrid_every=4)
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, report = out
-    chk(bool(stored_info) and all(
-        len(requested) < depth and len(stored) == depth
-        and mode == "dense_regrid_safety" and fp == [4]
-        for depth, requested, stored, mode, fp in stored_info.values()),
+    chk(
+        bool(stored_info)
+        and all(
+            len(requested) < depth
+            and len(stored) == depth
+            and mode == "dense_regrid_safety"
+            and fp == [4]
+            for depth, requested, stored, mode, fp in stored_info.values()
+        ),
         "Interval(2) intent is promoted to dense_regrid_safety for the straddling window: %r"
-        % stored_info)
-    chk(report is not None and all(
-        h["storage_mode"] == "dense_regrid_safety"
-        and h["requested_slots"] < h["stored_slots"]
-        and h["recomputed_slots"] == 0
-        for h in report.histories),
-        "the restart report exposes the safety promotion and zero replay")
+        % stored_info,
+    )
+    chk(
+        report is not None
+        and all(
+            h["storage_mode"] == "dense_regrid_safety"
+            and h["requested_slots"] < h["stored_slots"]
+            and h["recomputed_slots"] == 0
+            for h in report.histories
+        ),
+        "the restart report exposes the safety promotion and zero replay",
+    )
     ok_rings = _rings_equal(cont_rings, rest_rings)
-    chk(ok_rings,
-        "EVERY post-restart ring slot restored densely equals uninterrupted")
-    chk(np.array_equal(ref, got),
+    chk(ok_rings, "EVERY post-restart ring slot restored densely equals uninterrupted")
+    chk(
+        np.array_equal(ref, got),
         "the straddling-window continuation is BIT-IDENTICAL to uninterrupted (max|d| = %.3e)"
-        % float(np.abs(ref - got).max()))
+        % float(np.abs(ref - got).max()),
+    )
 
 
 def test_state5_multiple_anchor_gaps_replay_by_index_bit_identical():
     print("== (4) 5-slot Interval(2): two anchor gaps replay by exact logical index ==")
     # At m=11 with cadence 6, cursors 7..10 form a stable replay window between the completed
     # regrid at 6 and the next due regrid at 12. Continuation crosses that next real regrid.
-    out, err = _run_case(
-        _state5_program, nsteps=15, half=11, label="state5", regrid_every=6)
+    out, err = _run_case(_state5_program, nsteps=15, half=11, label="state5", regrid_every=6)
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, report = out
-    chk(bool(stored_info) and all(
-        requested == [0, 2, 4] and stored == [0, 2, 4]
-        and depth == 5 and mode == "policy" and fp == []
-        for depth, requested, stored, mode, fp in stored_info.values()),
-        "Interval(2) retains three exact anchors around two gaps: %r" % stored_info)
-    chk(report is not None and all(
-        history["recomputed_slots"] == 2 for history in report.histories),
-        "restart reports exactly the two omitted logical slots")
-    chk(_rings_equal(cont_rings, rest_rings),
-        "both reconstructed gaps equal the uninterrupted ring by index, bit-for-bit")
-    chk(np.array_equal(ref, got),
-        "multi-gap continuation remains BIT-IDENTICAL through the next real regrid")
+    chk(
+        bool(stored_info)
+        and all(
+            requested == [0, 2, 4]
+            and stored == [0, 2, 4]
+            and depth == 5
+            and mode == "policy"
+            and fp == []
+            for depth, requested, stored, mode, fp in stored_info.values()
+        ),
+        "Interval(2) retains three exact anchors around two gaps: %r" % stored_info,
+    )
+    chk(
+        report is not None
+        and all(history["recomputed_slots"] == 2 for history in report.histories),
+        "restart reports exactly the two omitted logical slots",
+    )
+    chk(
+        _rings_equal(cont_rings, rest_rings),
+        "both reconstructed gaps equal the uninterrupted ring by index, bit-for-bit",
+    )
+    chk(
+        np.array_equal(ref, got),
+        "multi-gap continuation remains BIT-IDENTICAL through the next real regrid",
+    )
+
+
+def test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run():
+    """A held AMR window restarts exactly and stores selective histories densely for safety."""
+    steps = tuple(0.01 * index for index in range(1, 13))
+
+    def fresh():
+        system, error = _build(
+            _state3_program,
+            regrid_every=0,
+            program_cadence=(1, 3),
+        )
+        assert system is not None, error
+        return system
+
+    def accepted_levels(system):
+        return tuple(
+            np.asarray(system._s.block_level_state_global("blk", level))
+            for level in range(system._s.n_levels())
+        )
+
+    continuous = fresh()
+    for dt in steps:
+        continuous.step(dt)
+
+    interrupted = fresh()
+    for dt in steps[:10]:
+        interrupted.step(dt)
+    assert interrupted._s.program_cadence_window_steps() == 1
+    assert interrupted._s.program_cadence_window_dt() == steps[9]
+    assert interrupted._s.program_cadence_window_start_time() == sum(steps[:9])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        checkpoint = interrupted.checkpoint(os.path.join(tmp, "amr_variable_stride"))
+        with np.load(checkpoint, allow_pickle=False) as checkpoint_data:
+            for history_name in checkpoint_data["history_names"]:
+                name = str(history_name)
+                assert (
+                    str(checkpoint_data["history_storage_mode_" + name]) == "dense_cadence_safety"
+                )
+                assert len(checkpoint_data["history_stored_slots_" + name]) == int(
+                    checkpoint_data["history_depth_" + name]
+                )
+        restarted = fresh()
+        restarted.restart(checkpoint)
+        assert restarted._s.program_cadence_window_steps() == 1
+        assert restarted._s.program_cadence_window_dt() == steps[9]
+        assert restarted._s.program_cadence_window_start_time() == sum(steps[:9])
+        for dt in steps[10:]:
+            restarted.step(dt)
+
+    assert restarted.macro_step() == continuous.macro_step() == len(steps)
+    assert restarted.time() == continuous.time()
+    expected = accepted_levels(continuous)
+    actual = accepted_levels(restarted)
+    assert len(actual) == len(expected)
+    assert all(np.array_equal(got, want) for got, want in zip(actual, expected, strict=True))
 
 
 def main():
@@ -388,6 +497,7 @@ def main():
     test_state3_interval_replay_bit_identical()
     test_state3_replay_window_straddling_regrid_bit_identical()
     test_state5_multiple_anchor_gaps_replay_by_index_bit_identical()
+    test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run()
     print("PASS test_amr_history_checkpoint")
 
 

@@ -426,13 +426,30 @@ class AmrProgramContext {
   /// A changed topology also rebinds lagged conservative histories and their compact interface-flux
   /// authority before the Program reads prev(k); a layout-identical regrid remains bit-identical.
   void regrid_if_due(int macro_step) const {
+    if (facade_ == nullptr)
+      throw std::logic_error("AMR Program regrid requires the facade's authoritative clock");
+    regrid_if_due_at_(macro_step, facade_->time());
+  }
+
+ private:
+  void regrid_if_due_at_(std::int64_t macro_step, double physical_time) const {
     const HistoryFluxTopology before = history_flux_topology_snapshot_();
     if (history_flux_topology_.bound() &&
         !same_history_flux_topology_(history_flux_topology_, before))
       throw std::runtime_error(
           "AMR lagged-flux topology authority differs from the accepted hierarchy");
     history_flux_topology_ = before;
-    eng_->regrid_if_due(macro_step);
+    if (!std::isfinite(physical_time))
+      throw std::logic_error("AMR Program regrid requires a finite accepted physical time");
+    if (macro_step < 0 || macro_step > std::numeric_limits<int>::max())
+      throw std::overflow_error(
+          "AMR Program regrid logical tick exceeds the runtime integer range");
+    // The Program owns the accepted clock. Publish its exact evaluation coordinate only at the
+    // tagger/regrid boundary so direct AmrProgramContext and restarted executions cannot inherit
+    // stale facade metadata.
+    const int runtime_tick = static_cast<int>(macro_step);
+    eng_->set_component_logical_time(runtime_tick, physical_time);
+    eng_->regrid_if_due(runtime_tick);
     // Regrid is a head-of-attempt operation.  Rebuild every layout-bound face field and its
     // redistribution scratch here, before the first Program stage, never lazily from capture_into_.
     materialize_capture_flux_scratch_();
@@ -441,6 +458,8 @@ class AmrProgramContext {
       rebind_history_flux_topology_(before, after);
     history_flux_topology_ = after;
   }
+
+ public:
   std::uint64_t history_flux_topology_epoch() const {
     return history_flux_topology_.bound() ? history_flux_topology_.epoch : eng_->topology_epoch();
   }
@@ -596,8 +615,8 @@ class AmrProgramContext {
   /// AMR structural mirror of ProgramContext::apply_coupling_operators.  The complete candidate pack
   /// is qualified by the current level cursor; coupling changes only those private candidates and
   /// leaves publication plus hierarchy synchronization to the Program transaction.
-  void apply_coupling_operators(
-      Real dt, std::initializer_list<CouplingStateOverride> candidates) const {
+  void apply_coupling_operators(Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
     if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
       throw std::invalid_argument(
           "AMR Program coupling application requires a finite non-negative dt");
@@ -1612,8 +1631,7 @@ class AmrProgramContext {
     bool in_use = false;
   };
 
-  void prepare_coupling_workspace_(
-      std::initializer_list<CouplingStateOverride> candidates) const {
+  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = facade_->program_block_map();
     const std::size_t runtime_blocks = eng_->n_blocks();
     if (block_map.empty())
@@ -1623,9 +1641,8 @@ class AmrProgramContext {
       throw std::invalid_argument(
           "AMR Program coupling requires a complete candidate pack for every runtime block");
 
-    const bool structure_changed =
-        coupling_workspace_.program_to_runtime != block_map ||
-        coupling_workspace_.runtime_states.size() != runtime_blocks;
+    const bool structure_changed = coupling_workspace_.program_to_runtime != block_map ||
+                                   coupling_workspace_.runtime_states.size() != runtime_blocks;
     if (structure_changed) {
       coupling_workspace_.runtime_states.assign(runtime_blocks, nullptr);
       for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
@@ -1640,8 +1657,8 @@ class AmrProgramContext {
       coupling_workspace_.program_to_runtime.assign(block_map.begin(), block_map.end());
     }
 
-    std::fill(coupling_workspace_.runtime_states.begin(),
-              coupling_workspace_.runtime_states.end(), nullptr);
+    std::fill(coupling_workspace_.runtime_states.begin(), coupling_workspace_.runtime_states.end(),
+              nullptr);
     std::size_t ordinal = 0;
     for (const CouplingStateOverride& candidate : candidates) {
       if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
@@ -1649,22 +1666,19 @@ class AmrProgramContext {
             "AMR Program coupling candidates must be non-null and ordered by Program block");
       const int runtime_block =
           coupling_workspace_.program_to_runtime[static_cast<std::size_t>(candidate.program_block)];
-      const MultiFab& live =
-          eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
+      const MultiFab& live = eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
       if (candidate.state->box_array().boxes() != live.box_array().boxes() ||
           candidate.state->dmap().ranks() != live.dmap().ranks() ||
-          candidate.state->ncomp() != live.ncomp() ||
-          candidate.state->n_grow() != live.n_grow())
+          candidate.state->ncomp() != live.ncomp() || candidate.state->n_grow() != live.n_grow())
         throw std::invalid_argument(
             "AMR Program coupling candidate does not match its exact level layout");
       for (std::size_t other = 0; other < block_map.size(); ++other)
         if (candidate.state ==
-                &eng_->level_state(
-                    static_cast<std::size_t>(sys_block(static_cast<int>(other))), level_))
+            &eng_->level_state(static_cast<std::size_t>(sys_block(static_cast<int>(other))),
+                               level_))
           throw std::invalid_argument(
               "AMR Program coupling candidates cannot alias accepted live states");
-      coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)] =
-          candidate.state;
+      coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)] = candidate.state;
       ++ordinal;
     }
   }
@@ -1696,6 +1710,10 @@ class AmrProgramContext {
   }
   static void require_supported_program_refinement_ratios_(const AmrRuntime& eng) {
     for (int child = 1; child < eng.nlev(); ++child) {
+      // Resolve the independent clock contract at context construction, before any candidate state
+      // can be evaluated. The spatial ratio below validates only the current transfer provider and
+      // is never accepted as a substitute for this temporal relation.
+      (void)eng.parent_child_temporal_relation(child);
       const int parent_refinement = eng.level_refinement(child - 1);
       const int child_refinement = eng.level_refinement(child);
       const int ratio = child_refinement / parent_refinement;
@@ -2240,10 +2258,12 @@ class AmrProgramContext {
       return;
     const double accepted_time =
         level_clocks_.empty() ? facade_->time() : level_clocks_[0].physical_time;
+    const std::int64_t accepted_macro_step =
+        level_clocks_.empty() ? macro_step() : level_clocks_[0].macro_step;
     level_clocks_.clear();
     level_clocks_.reserve(static_cast<std::size_t>(nlev()));
     for (int k = 0; k < nlev(); ++k)
-      level_clocks_.push_back({k, macro_step(), amr::Rational(0, 1), accepted_time});
+      level_clocks_.push_back({k, accepted_macro_step, amr::Rational(0, 1), accepted_time});
   }
 
   template <class Advance>
@@ -2288,15 +2308,35 @@ class AmrProgramContext {
     conservative_ledger_.begin();
     try {
       reset_step();
-      regrid_if_due(macro_step());
+      ensure_level_clocks_();
+      // A GLOBAL Program cadence may call this same closure several times inside one accepted
+      // facade cadence window. The facade publishes the exact BEGINNING of that window while
+      // invoking the Program: all internal substeps therefore share one public macro coordinate
+      // even though their physical start times differ. Regrid and topology workspace rebuilding
+      // happen exactly once at that head-of-window boundary. The marker is part of the attempt image
+      // so a rejected first substep cannot suppress regrid on retry.
+      const std::int64_t window_start_step = macro_step();
+      if (window_start_step < 0)
+        throw std::logic_error("AMR Program cadence window starts at a negative macro-step");
+      if (automatic_regrid_macro_step_ != window_start_step) {
+        regrid_if_due_at_(window_start_step, facade_->time());
+        automatic_regrid_macro_step_ = static_cast<int>(window_start_step);
+      }
       // A head-of-step regrid is the only place the hierarchy may have changed.  Prepare one
       // topology-shaped old/new image per parent level here, then reuse those allocations for every
       // recursive subcycle and every subsequent attempt on the same hierarchy.
       prepare_parent_state_workspaces_();
       ensure_level_clocks_();
-      const double t0 = level_clocks_[0].physical_time;
-      const amr::ClockWindow root{{0, macro_step(), amr::Rational(0, 1), t0},
-                                  {0, macro_step(), amr::Rational(1, 1), t0 + dt}};
+      const double t0 = facade_->time();
+      if (!std::isfinite(t0))
+        throw std::logic_error("AMR Program cadence window starts at a non-finite physical time");
+      const int cadence_window_steps = facade_->program_stride();
+      if (cadence_window_steps < 1 ||
+          window_start_step > std::numeric_limits<std::int64_t>::max() - cadence_window_steps)
+        throw std::overflow_error("AMR Program cadence window macro-step overflow");
+      const std::int64_t window_end_step = window_start_step + cadence_window_steps;
+      const amr::ClockWindow root{{0, window_start_step, amr::Rational(0, 1), t0},
+                                  {0, window_start_step, amr::Rational(1, 1), t0 + dt}};
       advance(root);
       current_sync_clock_ = root.end;
       if (coupling_schedule == CouplingSchedule::HierarchyBarrier)
@@ -2305,9 +2345,9 @@ class AmrProgramContext {
         finalize_history_rotation_();
       for (int k = 0; k < nlev(); ++k)
         level_clocks_[static_cast<std::size_t>(k)] =
-            amr::ClockStamp{k, macro_step() + 1, amr::Rational(0, 1), t0 + dt};
-      clock_schedule_.restore_accepted_ticks(clock_schedule_.accepted_ticks(macro_step() + 1),
-                                             macro_step() + 1);
+            amr::ClockStamp{k, window_end_step, amr::Rational(0, 1), t0 + dt};
+      clock_schedule_.restore_accepted_ticks(clock_schedule_.accepted_ticks(window_end_step),
+                                             window_end_step);
       conservative_ledger_.commit();
       accepted_flux_report_.clear();
       accepted_flux_report_.reserve(conservative_ledger_.entries().size());
@@ -2342,8 +2382,12 @@ class AmrProgramContext {
         invalidate_capture_flux_scratch_();
       if (accepted_state_mutated && saved.engine_captured)
         facade_->restore_program_accepted_state(saved.program_accepted_state);
-      accepted_state_revision_ = facade_->program_accepted_state_revision();
       restore_program_attempt_snapshot_(saved);
+      // A borrowed facade transaction may have rolled back farther than this inner attempt snapshot
+      // (notably when global substep 2 fails after substep 1 committed its context image). Keep the
+      // revision paired with the restored inner image; if the facade now owns an older accepted
+      // revision, the next attempt must import it instead of mistaking stale clocks/history for it.
+      accepted_state_revision_ = saved.program_accepted_state_revision;
       if (accepted_state_mutated) {
         try {
           std::rethrow_exception(attempt_failure);
@@ -2533,6 +2577,10 @@ class AmrProgramContext {
     accepted_flux_report_ = std::move(state.accepted_flux_ledger);
     accepted_sync_report_ = std::move(state.accepted_sync);
     accepted_state_revision_ = revision;
+    // An external restart/rollback may restore the same facade macro-step that this context had
+    // already visited. The restored accepted image starts a fresh public attempt and must therefore
+    // be allowed to run its head-of-step regrid again.
+    automatic_regrid_macro_step_ = -1;
   }
 
   void publish_program_accepted_state_() const {
@@ -2591,6 +2639,7 @@ class AmrProgramContext {
     std::map<std::string, std::string> history_interpolations;
     HistoryFluxTopology history_flux_topology;
     int history_flux_topology_rebind_count = 0;
+    int automatic_regrid_macro_step = -1;
     std::vector<amr::ClockStamp> level_clocks;
     ClockScheduleState clock_schedule;
     std::vector<LiveStateRing> live_state_rings;
@@ -2845,6 +2894,7 @@ class AmrProgramContext {
     copy_map_values_in_place_(snapshot.history_interpolations, history_interpolation_ids_);
     copy_history_flux_topology_in_place_(snapshot.history_flux_topology, history_flux_topology_);
     snapshot.history_flux_topology_rebind_count = history_flux_topology_rebind_count_;
+    snapshot.automatic_regrid_macro_step = automatic_regrid_macro_step_;
     copy_vector_values_in_place_(snapshot.level_clocks, level_clocks_);
     clock_schedule_.copy_into(snapshot.clock_schedule);
     copy_vector_values_in_place_(snapshot.live_state_rings, live_state_rings_);
@@ -2892,6 +2942,7 @@ class AmrProgramContext {
     copy_map_values_in_place_(history_interpolation_ids_, snapshot.history_interpolations);
     copy_history_flux_topology_in_place_(history_flux_topology_, snapshot.history_flux_topology);
     history_flux_topology_rebind_count_ = snapshot.history_flux_topology_rebind_count;
+    automatic_regrid_macro_step_ = snapshot.automatic_regrid_macro_step;
     copy_vector_values_in_place_(level_clocks_, snapshot.level_clocks);
     snapshot.clock_schedule.copy_into(clock_schedule_);
     copy_vector_values_in_place_(live_state_rings_, snapshot.live_state_rings);
@@ -3817,6 +3868,7 @@ class AmrProgramContext {
   // the image resident lets stable retries reuse every compact reflux/history allocation.
   mutable AttemptSnapshot attempt_snapshot_;
   mutable bool attempt_snapshot_active_ = false;
+  mutable int automatic_regrid_macro_step_ = -1;
   mutable std::vector<amr::ClockStamp> level_clocks_;
   mutable std::uint64_t accepted_state_revision_ = 0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;

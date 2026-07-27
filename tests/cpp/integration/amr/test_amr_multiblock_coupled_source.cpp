@@ -119,12 +119,12 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(
-      exb_charge(kIonFieldCharge, B0), "minmod", "rusanov", S, "ions", rho_ions,
-      /*has_density=*/true, 1.4, 1, false, false, stride_ions));
-  blocks.push_back(detail::dispatch_amr_block(
-      exb_charge(kNeutralFieldCharge, B0), "minmod", "rusanov", S, "neutrals", rho_neut,
-      /*has_density=*/true, 1.4, 1, false, false, stride_neut));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(kIonFieldCharge, B0), "minmod", "rusanov",
+                                              S, "ions", rho_ions,
+                                              /*has_density=*/true, 1.4, 1, false, stride_ions));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(kNeutralFieldCharge, B0), "minmod",
+                                              "rusanov", S, "neutrals", rho_neut,
+                                              /*has_density=*/true, 1.4, 1, false, stride_neut));
   AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                      S.replicated_coarse, S.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 2);
@@ -221,19 +221,17 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     const std::vector<double> accepted_ions = rt.density(0);
     const std::vector<double> accepted_neutrals = rt.density(1);
 
-    EXPECT_THROW(
-        rt.apply_coupling_operators_at_level(
-            0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
-        std::invalid_argument)
+    EXPECT_THROW(rt.apply_coupling_operators_at_level(
+                     0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
+                 std::invalid_argument)
         << "accepted hierarchy states are never a hidden Program coupling workspace";
     EXPECT_THROW(
         rt.apply_coupling_operators_at_level(0, dt, std::vector<MultiFab*>{&candidate_ions}),
         std::invalid_argument)
         << "a Program coupling group must contain every block";
-    EXPECT_THROW(
-        rt.apply_coupling_operators_at_level(
-            0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_ions}),
-        std::invalid_argument)
+    EXPECT_THROW(rt.apply_coupling_operators_at_level(
+                     0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_ions}),
+                 std::invalid_argument)
         << "two Program block identities cannot alias one candidate";
     EXPECT_EQ(rt.apply_coupling_operators_at_level(
                   0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_neutrals}),
@@ -252,9 +250,8 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     for (int j = cells.lo[1]; j <= cells.hi[1]; ++j)
       for (int i = cells.lo[0]; i <= cells.hi[0]; ++i) {
         pair_error =
-            std::max(pair_error,
-                     std::fabs((ions_after(i, j, 0) + neutrals_after(i, j, 0)) -
-                               (ions_before(i, j, 0) + neutrals_before(i, j, 0))));
+            std::max(pair_error, std::fabs((ions_after(i, j, 0) + neutrals_after(i, j, 0)) -
+                                           (ions_before(i, j, 0) + neutrals_before(i, j, 0))));
         active_change =
             std::max(active_change, std::fabs(ions_after(i, j, 0) - ions_before(i, j, 0)));
       }

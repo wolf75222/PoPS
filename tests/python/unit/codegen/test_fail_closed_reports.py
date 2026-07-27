@@ -1,4 +1,5 @@
 """Fail-closed native-report and absolute-memory-estimate contracts."""
+
 from types import SimpleNamespace
 
 import pytest
@@ -34,8 +35,9 @@ def test_capability_report_does_not_hide_native_call_failure(monkeypatch):
             raise RuntimeError("native boom")
 
     monkeypatch.setattr(capability_reports, "_native_extension", lambda: BrokenExtension())
-    with pytest.raises(capability_reports.NativeCapabilityReportError,
-                       match="capability_report") as excinfo:
+    with pytest.raises(
+        capability_reports.NativeCapabilityReportError, match="capability_report"
+    ) as excinfo:
         capability_reports._native_capability_report_from_extension()
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
@@ -46,7 +48,8 @@ def test_capability_report_does_not_hide_native_call_failure(monkeypatch):
 )
 def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, expected):
     report = capability_reports.native_capability_report(
-        flags={"supports_mpi": supports_mpi, "supports_amr": True}, source="test-manifest")
+        flags={"supports_mpi": supports_mpi, "supports_amr": True}, source="test-manifest"
+    )
     routes = {row.feature: row for row in report.routes}
     route = routes["parallel:mpi_world_communicator"]
     assert route.status == expected
@@ -57,14 +60,18 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert bool(route.alternative) is (not supports_mpi)
     assert "ParallelContext" not in routes["parallel:custom_communicator"].alternative
     assert "PrecisionPolicy is representable" in routes["precision:single_or_mixed"].limitation
-    assert routes["checkpoint:accepted_state_v3"].status == "available"
-    assert routes["checkpoint:accepted_state_v3"].layout == "uniform|amr"
+    assert routes["checkpoint:accepted_state_v4"].status == "available"
+    assert routes["checkpoint:accepted_state_v4"].layout == "uniform|amr"
     assert routes["checkpoint:amr_dynamic_regrid"].status == "available"
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]
     assert weno.layout == "uniform|amr"
     assert "ratio-2 2D AMR" in weno.limitation
     assert "order-5" in weno.limitation
+    amr_implicit = routes["amr:source_implicit_program"]
+    assert amr_implicit.status == "unavailable"
+    assert "no temporal fallback" in amr_implicit.limitation
+    assert amr_implicit.layout == "amr"
 
 
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
@@ -85,7 +92,9 @@ def test_toolchain_does_not_treat_a_broken_extension_as_absent(monkeypatch):
     def broken_import(name):
         if name == "_pops":
             raise ImportError("missing dependent dylib")
-        raise AssertionError("relative import must not be attempted after a broken top-level extension")
+        raise AssertionError(
+            "relative import must not be attempted after a broken top-level extension"
+        )
 
     monkeypatch.setattr(toolchain.importlib, "import_module", broken_import)
     with pytest.raises(ImportError, match="dependent dylib"):
@@ -97,8 +106,9 @@ def test_absolute_memory_estimate_refuses_unknown_native_precision(monkeypatch):
         raise ModuleNotFoundError("absent", name=name)
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", absent_extension)
-    with pytest.raises(inspect_compiled.MemoryEstimateCapabilityError,
-                       match="source-only") as excinfo:
+    with pytest.raises(
+        inspect_compiled.MemoryEstimateCapabilityError, match="source-only"
+    ) as excinfo:
         inspect_compiled.build_memory_estimate(SimpleNamespace(), SimpleNamespace())
     assert excinfo.value.field == "runtime.precision"
 
@@ -110,8 +120,9 @@ def test_absolute_memory_estimate_refuses_untyped_shape_before_any_formula(monke
             return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 3}
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
-    with pytest.raises(inspect_compiled.MemoryEstimateCapabilityError,
-                       match="CartesianGrid") as excinfo:
+    with pytest.raises(
+        inspect_compiled.MemoryEstimateCapabilityError, match="CartesianGrid"
+    ) as excinfo:
         inspect_compiled.build_memory_estimate(SimpleNamespace(), 32)
     assert excinfo.value.field == "mesh"
 
@@ -133,9 +144,11 @@ def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
     mesh = cartesian_grid(n=4)
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
-        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
     estimate = inspect_compiled.build_memory_estimate(
-        _memory_artifact(program=Program()), mesh, layout=Uniform(mesh))
+        _memory_artifact(program=Program()), mesh, layout=Uniform(mesh)
+    )
     assert estimate.categories["state"] == 2 * 4 * 4 * 16
     assert "16 bytes per cell value" in estimate.assumptions[0]
 
@@ -155,9 +168,11 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     grid = CartesianGrid(frame=frame, cells=(3, 5))
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
-        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
     estimate = inspect_compiled.build_memory_estimate(
-        _memory_artifact(), grid, layout=Uniform(grid))
+        _memory_artifact(), grid, layout=Uniform(grid)
+    )
     assert estimate.mesh_shape == (3, 5)
     assert estimate.cells == 15
     assert estimate.categories["state"] == 2 * 3 * 5 * 16
@@ -177,23 +192,27 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
 
         @staticmethod
         def capabilities():
-            return CapabilitySet({
-                "layout": "amr",
-                "dim": 2,
-                "max_levels": 3,
-                "ratio": 2,
-                "transition_ratios": [2, 2],
-                "supports_amr": True,
-            })
+            return CapabilitySet(
+                {
+                    "layout": "amr",
+                    "dim": 2,
+                    "max_levels": 3,
+                    "ratio": 2,
+                    "transition_ratios": [2, 2],
+                    "supports_amr": True,
+                }
+            )
 
     mesh = cartesian_grid(n=4)
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
-        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
     estimate = inspect_compiled.build_memory_estimate(
-        _memory_artifact(), mesh, layout=FinalAMRProtocol())
+        _memory_artifact(), mesh, layout=FinalAMRProtocol()
+    )
     assert estimate.layout == "amr"
-    assert estimate.categories["amr_patch"] == (2 ** 2 + 2 ** 4) * (2 * 4 * 4 * 16)
+    assert estimate.categories["amr_patch"] == (2**2 + 2**4) * (2 * 4 * 4 * 16)
 
 
 def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypatch):
@@ -212,10 +231,12 @@ def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypa
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
-        inspect_compiled, "_model_metadata", lambda _compiled: ((), 1, {}, (), 0, "U"))
-    with pytest.raises(inspect_compiled.MemoryEstimateCapabilityError,
-                       match="transition_ratios") as excinfo:
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 1, {}, (), 0, "U")
+    )
+    with pytest.raises(
+        inspect_compiled.MemoryEstimateCapabilityError, match="transition_ratios"
+    ) as excinfo:
         inspect_compiled.build_memory_estimate(
-            _memory_artifact(), cartesian_grid(n=4),
-            layout=IncompleteAMR())
+            _memory_artifact(), cartesian_grid(n=4), layout=IncompleteAMR()
+        )
     assert excinfo.value.field == "layout.transition_ratios"

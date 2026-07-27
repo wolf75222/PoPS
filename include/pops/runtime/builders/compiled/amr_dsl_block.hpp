@@ -11,10 +11,9 @@
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial_operator.hpp>  // SourceFreeModel (explicit IMEX half-step, transport only)
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source + ImplicitMask (stiff IMEX source)
-#include <pops/parallel/comm.hpp>                               // n_ranks
-#include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntimeBlock (type-erased multi-block registry)
+#include <pops/numerics/spatial_operator.hpp>  // SourceFreeModel (flux-only Program primitive)
+#include <pops/parallel/comm.hpp>              // n_ranks
+#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntimeBlock (type-erased multi-block registry)
 #include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>  // detail::make_poisson_rhs (rhs += elliptic_rhs(U))
@@ -22,7 +21,6 @@
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE tag registry (validate_limiter/riemann)
 #include <pops/runtime/config/route_ids.hpp>
 
-#include <algorithm>  // std::find, std::sort (resolving the partial IMEX mask of a compiled block)
 #include <cmath>
 #include <functional>
 #include <map>
@@ -46,8 +44,9 @@
 
 namespace pops {
 
-/// Bundle (limiter, Riemann flux) expected by AmrCouplerMP::step<Disc>. Unique definition: the
-/// native path of amr_system.cpp goes through this same header (no more DiscLF duplicated on the .cpp side).
+/// Spatial bundle (limiter, Riemann flux) materialized into an AmrRuntimeBlock and consumed by
+/// ProgramGraph residual evaluations. Unique definition: the native path of amr_system.cpp goes
+/// through this same header (no duplicate DiscLF on the .cpp side).
 template <class L, class F>
 struct AmrDiscLF {
   using Limiter = L;
@@ -198,13 +197,13 @@ inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool sin
 /// PoissonRhs on the flat System side). @p substeps and @p stride remain authored cadence metadata;
 /// normalized Programs, never this builder, decide temporal ordering.
 template <class Model, class Limiter, class Flux>
-AmrRuntimeBlock build_amr_block(
-    const Model& model, const SharedAmrLayout& S, const std::string& name,
-    const std::vector<double>& density, bool has_density, double gamma, int substeps,
-    bool recon_prim, bool imex, int stride = 1, const std::vector<int>& implicit_components = {},
-    const NewtonOptions& nopts = {}, const std::vector<double>* state = nullptr,
-    bool newton_diagnostics = false, double pos_floor = 0.0,
-    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
+AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
+                                const std::string& name, const std::vector<double>& density,
+                                bool has_density, double gamma, int substeps, bool recon_prim,
+                                int stride = 1, const std::vector<double>* state = nullptr,
+                                double pos_floor = 0.0,
+                                double weno_epsilon = static_cast<double>(kWenoEpsilon),
+                                bool wave_speed_cache = false) {
   const int nc = Model::n_vars;
   const int ng = Limiter::n_ghost;
   const int nlev = S.nlev();
@@ -255,23 +254,11 @@ AmrRuntimeBlock build_amr_block(
   b.boundary_plan = boundary_plan;
   b.boundary_field_registry = boundary_field_registry;
   b.transport_boundary_fill = transport_boundary_fill;
-  b.wave_speed_cache = imex ? false : wave_speed_cache;
-
   const bool rprim = recon_prim;
   const Real pf = static_cast<Real>(pos_floor);
   const Real weps = static_cast<Real>(weno_epsilon);
   std::shared_ptr<MultiFab> ws_cache =
       wave_speed_cache ? std::make_shared<MultiFab>() : std::shared_ptr<MultiFab>{};
-  // Until the prepared implicit Program primitive is installed, retain only its diagnostics carrier.
-  // No native split-step closure is materialized: time integration belongs to ProgramGraph.
-  (void)implicit_components;
-  if (imex) {
-    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
-      auto nrep = std::make_shared<NewtonReport>();
-      b.newton_diagnostics = true;
-      b.newton_report = nrep;
-    }
-  }
   // Projection is a typed Program primitive over candidate state, never a live-state post-step hook.
   if constexpr (HasPointwiseProjection<Model>)
     b.project_level_state = [model](MultiFab& U, const MultiFab& aux) {
@@ -582,19 +569,18 @@ AmrRuntimeBlock build_amr_block(
 // dispatcher python/amr_block_compressible.cpp). dispatch_amr_block (below, unchanged) still serves the
 // exb/isothermal seam, where the if constexpr guards prune hllc/roe.
 template <class Model>
-AmrRuntimeBlock dispatch_amr_block_rusanov(
-    const Model& m, const std::string& lim, const SharedAmrLayout& S, const std::string& name,
-    const std::vector<double>& density, bool has_density, double gamma, int substeps,
-    bool recon_prim, bool imex, int stride, const std::vector<int>& implicit_components,
-    const NewtonOptions& nopts, const std::vector<double>* state, bool newton_diagnostics,
-    double pos_floor, double weno_epsilon, bool wave_speed_cache) {
+AmrRuntimeBlock dispatch_amr_block_rusanov(const Model& m, const std::string& lim,
+                                           const SharedAmrLayout& S, const std::string& name,
+                                           const std::vector<double>& density, bool has_density,
+                                           double gamma, int substeps, bool recon_prim, int stride,
+                                           const std::vector<double>* state, double pos_floor,
+                                           double weno_epsilon, bool wave_speed_cache) {
   return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
                           "add_block(AmrSystem, multi-block)", [&](auto tag) {
                             using L = typename decltype(tag)::type;
                             return build_amr_block<Model, L, RusanovFlux>(
-                                m, S, name, density, has_density, gamma, substeps, recon_prim, imex,
-                                stride, implicit_components, nopts, state, newton_diagnostics,
-                                pos_floor, weno_epsilon, wave_speed_cache);
+                                m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                           });
 }
 
@@ -602,10 +588,8 @@ template <class Model>
 AmrRuntimeBlock dispatch_amr_block_hll(const Model& m, const std::string& lim,
                                        const SharedAmrLayout& S, const std::string& name,
                                        const std::vector<double>& density, bool has_density,
-                                       double gamma, int substeps, bool recon_prim, bool imex,
-                                       int stride, const std::vector<int>& implicit_components,
-                                       const NewtonOptions& nopts, const std::vector<double>* state,
-                                       bool newton_diagnostics, double pos_floor,
+                                       double gamma, int substeps, bool recon_prim, int stride,
+                                       const std::vector<double>* state, double pos_floor,
                                        double weno_epsilon, bool wave_speed_cache) {
   if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                   mm.wave_speeds(s, a, 0, r, r);
@@ -615,8 +599,7 @@ AmrRuntimeBlock dispatch_amr_block_hll(const Model& m, const std::string& lim,
                               using L = typename decltype(tag)::type;
                               return build_amr_block<Model, L, HLLFlux>(
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
   } else {
     throw std::runtime_error(
@@ -626,12 +609,12 @@ AmrRuntimeBlock dispatch_amr_block_hll(const Model& m, const std::string& lim,
 }
 
 template <class Model>
-AmrRuntimeBlock dispatch_amr_block_hllc(
-    const Model& m, const std::string& lim, const SharedAmrLayout& S, const std::string& name,
-    const std::vector<double>& density, bool has_density, double gamma, int substeps,
-    bool recon_prim, bool imex, int stride, const std::vector<int>& implicit_components,
-    const NewtonOptions& nopts, const std::vector<double>* state, bool newton_diagnostics,
-    double pos_floor, double weno_epsilon, bool wave_speed_cache) {
+AmrRuntimeBlock dispatch_amr_block_hllc(const Model& m, const std::string& lim,
+                                        const SharedAmrLayout& S, const std::string& name,
+                                        const std::vector<double>& density, bool has_density,
+                                        double gamma, int substeps, bool recon_prim, int stride,
+                                        const std::vector<double>* state, double pos_floor,
+                                        double weno_epsilon, bool wave_speed_cache) {
   // ADC-590 split: the generic HLLCFlux is capability-only (static_assert without
   // HasHLLCStructure); the canonical Euler layout routes the
   // explicit EulerHLLCFlux2D (bit-identical on the true Euler brick).
@@ -641,8 +624,7 @@ AmrRuntimeBlock dispatch_amr_block_hllc(
                               using L = typename decltype(tag)::type;
                               return build_amr_block<Model, L, HLLCFlux>(
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
@@ -651,8 +633,7 @@ AmrRuntimeBlock dispatch_amr_block_hllc(
                               using L = typename decltype(tag)::type;
                               return build_amr_block<Model, L, EulerHLLCFlux2D>(
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
   } else {
     throw std::runtime_error(
@@ -668,10 +649,8 @@ template <class Model>
 AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
                                        const SharedAmrLayout& S, const std::string& name,
                                        const std::vector<double>& density, bool has_density,
-                                       double gamma, int substeps, bool recon_prim, bool imex,
-                                       int stride, const std::vector<int>& implicit_components,
-                                       const NewtonOptions& nopts, const std::vector<double>* state,
-                                       bool newton_diagnostics, double pos_floor,
+                                       double gamma, int substeps, bool recon_prim, int stride,
+                                       const std::vector<double>* state, double pos_floor,
                                        double weno_epsilon, bool wave_speed_cache) {
   // ADC-590 split: generic RoeFlux is capability-only; the canonical Euler layout routes the
   // explicit EulerRoeFlux2D.
@@ -681,8 +660,7 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
                               using L = typename decltype(tag)::type;
                               return build_amr_block<Model, L, RoeFlux>(
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
@@ -691,8 +669,7 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
                               using L = typename decltype(tag)::type;
                               return build_amr_block<Model, L, EulerRoeFlux2D>(
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
   } else {
     throw std::runtime_error(
@@ -705,17 +682,14 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
 
 /// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_block. hllc/roe require the
 /// model's Riemann capability HasHLLCStructure / HasRoeDissipation, OR the canonical Euler 2D layout:
-/// 4 variables + pressure. @p implicit_components is the partial IMEX mask carried by the block
-/// (indices of the implicit components; empty = full backward-Euler), threaded to build_amr_block.
+/// 4 variables + pressure. Time integration and implicit solves are not part of this spatial seam.
 template <class Model>
 AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const std::string& riem,
                                    const SharedAmrLayout& S, const std::string& name,
                                    const std::vector<double>& density, bool has_density,
-                                   double gamma, int substeps, bool recon_prim, bool imex,
-                                   int stride = 1, const std::vector<int>& implicit_components = {},
-                                   const NewtonOptions& nopts = {},
+                                   double gamma, int substeps, bool recon_prim, int stride = 1,
                                    const std::vector<double>* state = nullptr,
-                                   bool newton_diagnostics = false, double pos_floor = 0.0,
+                                   double pos_floor = 0.0,
                                    double weno_epsilon = static_cast<double>(kWenoEpsilon),
                                    bool wave_speed_cache = false) {
   // CENTRALIZED VALIDATION (dispatch_tags.hpp registry) BEFORE the dispatch: same tags accepted /
@@ -739,13 +713,12 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
   switch (parse_riemann_route(riem, "add_block(AmrSystem, multi-block)")) {
     case RiemannRouteId::kRusanov:
       return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
-                                        recon_prim, imex, stride, implicit_components, nopts, state,
-                                        newton_diagnostics, pos_floor, weno_epsilon,
+                                        recon_prim, stride, state, pos_floor, weno_epsilon,
                                         wave_speed_cache);
     case RiemannRouteId::kHll:
       return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
-                                    recon_prim, imex, stride, implicit_components, nopts, state,
-                                    newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                    recon_prim, stride, state, pos_floor, weno_epsilon,
+                                    wave_speed_cache);
     // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
     // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
     // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
@@ -754,55 +727,18 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
     case RiemannRouteId::kHllc:
     case RiemannRouteId::kEulerHllc:
       return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
-                                     recon_prim, imex, stride, implicit_components, nopts, state,
-                                     newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                     recon_prim, stride, state, pos_floor, weno_epsilon,
+                                     wave_speed_cache);
     case RiemannRouteId::kRoe:
     case RiemannRouteId::kEulerRoe:
       return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
-                                    recon_prim, imex, stride, implicit_components, nopts, state,
-                                    newton_diagnostics, pos_floor, weno_epsilon, wave_speed_cache);
+                                    recon_prim, stride, state, pos_floor, weno_epsilon,
+                                    wave_speed_cache);
   }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", riem);
 }
 
 }  // namespace detail
-
-/// Resolves the partial IMEX MASK (implicit_vars / implicit_roles) of a COMPILED block into indices of
-/// conserved components, against the conservative descriptor @p cons of the CONCRETE Model (known here).
-/// SAME strict logic as resolve_implicit_components of amr_system.cpp (missing name/role -> error;
-/// unique sorted indices) -- replicated here because this header does not depend on the facade .cpp. EMPTY
-/// input -> empty -> inactive mask (full backward-Euler). Used by the multi-block runtime builder.
-inline std::vector<int> resolve_implicit_components_compiled(
-    const std::string& block, const VariableSet& cons, const std::vector<std::string>& names,
-    const std::vector<std::string>& roles) {
-  std::vector<int> out;
-  auto push_unique = [&out](int c) {
-    if (std::find(out.begin(), out.end(), c) == out.end())
-      out.push_back(c);
-  };
-  for (const std::string& nm : names) {
-    int idx = -1;
-    for (int i = 0; i < static_cast<int>(cons.names.size()); ++i)
-      if (cons.names[i] == nm) {
-        idx = i;
-        break;
-      }
-    if (idx < 0)
-      throw std::runtime_error("add_compiled_model(AmrSystem): implicit_vars: variable '" + nm +
-                               "' missing from block '" + block + "'");
-    push_unique(idx);
-  }
-  for (const std::string& rn : roles) {
-    const VariableRole role = role_from_name(rn);
-    const int idx = cons.index_of(role);
-    if (role == VariableRole::Custom || idx < 0)
-      throw std::runtime_error("add_compiled_model(AmrSystem): implicit_roles: role '" + rn +
-                               "' missing from block '" + block + "'");
-    push_unique(idx);
-  }
-  std::sort(out.begin(), out.end());
-  return out;
-}
 
 /// Wires @p model (concrete CompositeModel) as an AMR block of @p sys, with the requested scheme. The
 /// build is DEFERRED (like add_block): the captured closures are invoked at the first
@@ -812,7 +748,8 @@ inline std::vector<int> resolve_implicit_components_compiled(
 /// @p time: legacy authoring token normalized into the installed ProgramGraph. The runtime block
 /// builder does not select or execute a time method.
 /// @p stride: HOLD-THEN-CATCH-UP cadence of the block (1 = each macro-step).
-/// @p implicit_vars / @p implicit_roles: partial IMEX mask of the block (requires time=imex).
+/// @p implicit_vars / @p implicit_roles: compatibility authoring inputs. Every non-empty selector
+///   currently fails closed because the AMR target has no typed implicit-source Program primitive.
 /// @p pos_floor: Zhang-Shu positivity floor (ADC-322; 0 = inactive, bit-identical). Stored on the block
 ///   and forwarded to the runtime builder, so the .so floors the Density-role face states like a
 ///   native add_block.
@@ -855,31 +792,24 @@ void add_compiled_model(
         "add_compiled_model(AmrSystem): wave_speed_cache is supported by explicit AMR transport "
         "only");
   // The runtime builder captures the concrete Model/scheme and materializes an AmrRuntimeBlock on
-  // the shared layout for both one and many blocks. It resolves
-  // the partial IMEX mask against cons_vars of the concrete Model (known here), then calls dispatch_amr_block
-  // -- EXACTLY the native path of add_block, only the point of type resolution differs (here at
-  // the add, there from a ModelSpec at build). The outer lambda only materializes concrete spatial
-  // Program primitives; it contains no device kernel.
+  // the shared layout for both one and many blocks. The public builder signature still carries the
+  // authoring-time IMEX fields for loader ABI compatibility, but set_compiled_block validates those
+  // fields before this deferred spatial builder is invoked. The lambda materializes only concrete
+  // spatial Program primitives; it contains no device kernel.
   auto runtime_builder = [model, limiter, riemann](
                              const detail::SharedAmrLayout& S, const std::string& bname,
                              const std::vector<double>& density, bool has_density,
                              const std::vector<double>& state, bool has_state, double bgamma,
-                             int bsub, bool brecon_prim, bool bimex, int bstride,
-                             const std::vector<std::string>& ivars,
-                             const std::vector<std::string>& iroles, double bpos_floor,
+                             int bsub, bool brecon_prim, bool /*bimex*/, int bstride,
+                             const std::vector<std::string>& /*ivars*/,
+                             const std::vector<std::string>& /*iroles*/, double bpos_floor,
                              double bweno_epsilon, bool bwave_speed_cache) {
-    const std::vector<int> impl_components =
-        bimex
-            ? resolve_implicit_components_compiled(bname, Model::conservative_vars(), ivars, iroles)
-            : std::vector<int>{};
     // pos_floor (ADC-322): the .so flat ABI now carries the Zhang-Shu floor; forward it to the SAME
     // dispatch_amr_block -> build_amr_block leaf as a native multi-block. Runtime initial state is
-    // carried by this deferred builder (it is bound after the .so installs the concrete model); Newton
-    // options/diagnostics remain outside this compiled path; the temporal method is captured above.
+    // carried by this deferred builder (it is bound after the .so installs the concrete model).
     return detail::dispatch_amr_block(
-        model, limiter, riemann, S, bname, density, has_density, bgamma, bsub, brecon_prim, bimex,
-        bstride, impl_components, NewtonOptions{}, has_state ? &state : nullptr,
-        /*newton_diagnostics=*/false, bpos_floor, bweno_epsilon, bwave_speed_cache);
+        model, limiter, riemann, S, bname, density, has_density, bgamma, bsub, brecon_prim, bstride,
+        has_state ? &state : nullptr, bpos_floor, bweno_epsilon, bwave_speed_cache);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(runtime_builder), name,
                          recon_prim, imex, time, stride, implicit_vars, implicit_roles, pos_floor,

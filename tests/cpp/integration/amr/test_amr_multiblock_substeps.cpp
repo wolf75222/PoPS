@@ -11,6 +11,8 @@
 //       les DEUX blocs a chaque pas (RHS non trivial), meme quand le bloc lent est tenu.
 //   (3) step_cfl SUBSTEPS/STRIDE-AWARE : pour une config connue, le dt renvoye vaut
 //       cfl*h*min_b(substeps_b/(stride_b*w_b)) a la tolerance fp pres.
+//   (3bis) CADENCE DE CHAMP PROGRAMMEE : placer solve_fields une fois hors d'une boucle de quatre
+//       etages produit exactement 1 solve, le placer dans la boucle en produit exactement 4.
 //   (4) MONO-BLOC DETERMINISTE : deux Programs identiques produisent les memes steps et step_cfl.
 //
 // Toutes les avances passent par AmrSystem + Program. Le test n'appelle AmrRuntime que pour inspecter
@@ -216,8 +218,8 @@ static std::unique_ptr<AmrSystem> make_temporal_contract_system(
           throw std::invalid_argument("temporal-contract test block is explicit");
         return detail::build_amr_block<TemporalContractModel, NoSlope, RusanovFlux>(
             TemporalContractModel{mode}, layout, name, density, has_density, gamma, substeps,
-            recon_prim, /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
-            /*newton_diagnostics=*/false, pos_floor, weno_epsilon, wave_speed_cache);
+            recon_prim, stride, has_state ? &state : nullptr, pos_floor, weno_epsilon,
+            wave_speed_cache);
       };
   system->set_compiled_block(TemporalContractModel::n_vars, 1.4, /*substeps=*/1, std::move(builder),
                              "clocked");
@@ -250,6 +252,70 @@ TEST(test_amr_multiblock_substeps, Runs) {
       << "all charged two-block fixtures must satisfy the periodic nullspace before solve";
   const Real dt = Real(0.01);
   const int K = 6;  // macro-pas
+
+  // ============================================================================================
+  // (3bis) AuthoredFieldSolveCadenceCountsOneVsFour.
+  //     Les deux runs ont la meme hierarchie AMR a deux niveaux et le meme probleme de Poisson.
+  //     Seule la position de solve_fields dans le Program differe : une fois par macro-pas, ou dans
+  //     une boucle explicite de quatre etages. Les appels du corps au niveau fin sont des cache hits ;
+  //     le compteur du runtime mesure donc exactement l'intention ecrite : 1 contre 4 vrais solves.
+  // ============================================================================================
+  {
+    auto make_field_cadence_system = [&](bool per_stage) {
+      AmrSystemConfig cfg;
+      cfg.n = N;
+      cfg.L = L;
+      cfg.level_count = 2;
+      cfg.regrid_every = 0;
+      cfg.periodicity = {true, true};
+      auto system = std::make_unique<AmrSystem>(cfg);
+      system->add_block("A", exb_spec(q0, B0), "minmod", "rusanov", "conservative", "euler", 1);
+      system->add_block("B", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "euler", 1);
+      system->set_poisson("charge_density", "geometric_mg", "periodic");
+      system->set_density("A", rho0);
+      system->set_density("B", rho1);
+      system->set_refinement(1e29);
+      system->set_temporal_relations({2}, {1}, {"integral_only"});
+      system->set_program_block_map({0, 1});
+      system->install_program_step([](double) {});
+      if (!system->uses_runtime_engine() || system->engine() == nullptr)
+        throw std::runtime_error("field-cadence test requires the materialized AMR engine");
+
+      auto context =
+          std::make_shared<runtime::program::AmrProgramContext>(system->engine(), system.get());
+      context->configure_primary_clock("test.clock.field-cadence");
+      context->install([context, per_stage](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context, per_stage](double) {
+          if (!per_stage) {
+            context->set_stage_time(0, 1);
+            (void)context->solve_fields();
+            return;
+          }
+          for (int stage = 0; stage < 4; ++stage) {
+            context->set_stage_time(stage, 4);
+            (void)context->solve_fields();
+          }
+        });
+      });
+      return system;
+    };
+
+    auto once = make_field_cadence_system(false);
+    AmrRuntime& once_runtime = *once->engine();
+    ASSERT_EQ(once_runtime.nlev(), 2);
+    const int once_before = once_runtime.solve_count();
+    once->step(dt);
+    EXPECT_EQ(once_runtime.solve_count() - once_before, 1)
+        << "solve_fields authored outside the stage loop must solve exactly once";
+
+    auto per_stage = make_field_cadence_system(true);
+    AmrRuntime& per_stage_runtime = *per_stage->engine();
+    ASSERT_EQ(per_stage_runtime.nlev(), 2);
+    const int per_stage_before = per_stage_runtime.solve_count();
+    per_stage->step(dt);
+    EXPECT_EQ(per_stage_runtime.solve_count() - per_stage_before, 4)
+        << "solve_fields authored inside four stages must solve exactly four times";
+  }
 
   // ============================================================================================
   // (1) SUBSTEPS exerces : A substeps=4, B substeps=1. Etat fini, masse conservee, et A(sub=4) != A(sub=1).
