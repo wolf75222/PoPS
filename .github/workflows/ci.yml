@@ -1926,13 +1926,12 @@ jobs:
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
   # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
-  # chacun des six shards C++ ni le module Python a recompiler leur socle runtime avant leurs
-  # executables/bindings. Les graphes C++ et Python ont volontairement des defines/visibilites
-  # differents : chaque graphe possede donc ses quatre lanes semantiques exactes. Elles publient
-  # uniquement ccache et le contrat compilateur/flags/revision/sources ; aucun binaire lie n'est
-  # transmis, et chaque consommateur reconfigure puis authentifie son propre contrat.
+  # chacun des six shards a recompiler independamment le meme socle runtime avant ses executables.
+  # Ces quatre lanes configurent le graphe OpenMP exact et compilent une partition disjointe de ses
+  # objets runtime. Elles publient uniquement ccache et le contrat compilateur/flags/revision/sources :
+  # aucun binaire lie n'est transmis, et chaque shard reconfigure puis authentifie le contrat.
   gate-openmp-prewarm:
-    name: ubuntu-latest / Kokkos OpenMP (${{ matrix.graph }} prewarm ${{ matrix.lane }})
+    name: ubuntu-latest / Kokkos OpenMP (C++ prewarm ${{ matrix.lane }})
     runs-on: ubuntu-latest
     timeout-minutes: 32
     needs: set-mode
@@ -1940,7 +1939,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        graph: [cpp, python]
         lane: [system, amr-base, amr-compressible, amr-compiled]
 
     env:
@@ -1957,11 +1955,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-
-      - uses: actions/setup-python@v6
-        if: matrix.graph == 'python'
-        with:
-          python-version: '3.12'
 
       - name: Install OpenMP prewarm dependencies
         run: |
@@ -2012,7 +2005,7 @@ jobs:
           rm -rf "${CCACHE_DIR}"
           mkdir -p "${CCACHE_DIR}"
 
-      - name: Prewarm OpenMP production runtime objects (${{ matrix.graph }}, ${{ matrix.lane }})
+      - name: Prewarm OpenMP production runtime objects (${{ matrix.lane }})
         run: |
           run_with_heartbeat() {
             local label="$1"
@@ -2046,46 +2039,35 @@ jobs:
             return "$status"
           }
           # Deux frontends sont la limite observee sans pression memoire dangereuse sur les
-          # runners publics OpenMP. Les lanes restent executees en parallele.
+          # runners publics OpenMP. Les quatre lanes restent executees en parallele.
           lane_parallelism=2
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          if [ "${{ matrix.graph }}" = "python" ]; then
-            preset=ci-kokkos-python
-            build_dir=build-kokkos-py
-            pool_option=POPS_HEAVY_MODULE_TU_POOL
-          else
-            preset=ci-kokkos
-            build_dir=build-kokkos
-            pool_option=POPS_HEAVY_TEST_TU_POOL
-          fi
-          cmake --preset "$preset" -DCMAKE_LINKER_TYPE=MOLD \
-            -D"${pool_option}=$lane_parallelism" \
+          cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism" \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          python3 scripts/ci_python_module_objects.py --build-dir "$build_dir" --verify
+          python3 scripts/ci_python_module_objects.py --build-dir build-kokkos --verify
           ccache --zero-stats
           mapfile -t object_targets < <(
             python3 scripts/ci_python_module_objects.py \
-              --build-dir "$build_dir" \
+              --build-dir build-kokkos \
               --lane "${{ matrix.lane }}" \
-              --contract-file \
-                "$RUNNER_TEMP/openmp-prewarm-${{ matrix.graph }}-contract-${{ matrix.lane }}.json"
+              --contract-file "$RUNNER_TEMP/openmp-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          run_with_heartbeat "OpenMP ${{ matrix.graph }} prewarm ${{ matrix.lane }}" 24m \
-            cmake --build --preset "$preset" --parallel "$lane_parallelism" \
+          run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m \
+            cmake --build --preset ci-kokkos --parallel "$lane_parallelism" \
               --target "${object_targets[@]}"
           ccache -s
           tar -C "$CCACHE_DIR" \
-            -cf \
-              "$RUNNER_TEMP/openmp-prewarm-${{ matrix.graph }}-ccache-${{ matrix.lane }}.tar" .
+            -cf "$RUNNER_TEMP/openmp-prewarm-ccache-${{ matrix.lane }}.tar" .
 
       - name: Upload OpenMP prewarm cache and compile contract
         uses: actions/upload-artifact@v7
         with:
-          name: gate-openmp-prewarm-${{ matrix.graph }}-${{ matrix.lane }}
+          name: gate-openmp-prewarm-${{ matrix.lane }}
           path: |
-            ${{ runner.temp }}/openmp-prewarm-${{ matrix.graph }}-ccache-${{ matrix.lane }}.tar
-            ${{ runner.temp }}/openmp-prewarm-${{ matrix.graph }}-contract-${{ matrix.lane }}.json
+            ${{ runner.temp }}/openmp-prewarm-ccache-${{ matrix.lane }}.tar
+            ${{ runner.temp }}/openmp-prewarm-contract-${{ matrix.lane }}.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -2275,19 +2257,19 @@ jobs:
         run: ccache --zero-stats
 
       - name: Download parallel OpenMP prewarm caches
-        if: matrix.kind == 'cpp' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
+        if: matrix.kind == 'cpp'
         uses: actions/download-artifact@v8
         with:
-          pattern: gate-openmp-prewarm-${{ matrix.kind }}-*
+          pattern: gate-openmp-prewarm-*
           path: ${{ github.workspace }}/.pops-ci/openmp-prewarm
 
       - name: Merge parallel OpenMP prewarm caches
-        if: matrix.kind == 'cpp' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
+        if: matrix.kind == 'cpp'
         run: |
           mkdir -p "$CCACHE_DIR"
           mapfile -t cache_archives < <(
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
-              -name 'openmp-prewarm-${{ matrix.kind }}-ccache-*.tar' -type f | sort
+              -name 'openmp-prewarm-ccache-*.tar' -type f | sort
           )
           test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
@@ -2341,7 +2323,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           mapfile -t compile_contracts < <(
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
-              -name 'openmp-prewarm-cpp-contract-*.json' -type f | sort
+              -name 'openmp-prewarm-contract-*.json' -type f | sort
           )
           test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
@@ -2458,14 +2440,6 @@ jobs:
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_HEAVY_MODULE_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          mapfile -t compile_contracts < <(
-            find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
-              -name 'openmp-prewarm-python-contract-*.json' -type f | sort
-          )
-          test "${#compile_contracts[@]}" -eq 4
-          python3 scripts/ci_python_module_objects.py \
-            --build-dir build-kokkos-py \
-            --verify-contracts "${compile_contracts[@]}"
           run_with_heartbeat "Kokkos OpenMP Python module build" 45m \
             cmake --build --preset ci-kokkos-python
 

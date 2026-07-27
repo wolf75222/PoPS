@@ -15,7 +15,6 @@ Ground-truth edges asserted below were verified by reading the source:
   ``pops.runtime._bind_adapters`` must be captured, so a ``_bind_adapters`` change
   reaches the orchestration-dependent tests.
 """
-
 import importlib.util
 import json
 import pathlib
@@ -78,18 +77,23 @@ def test_lazy_function_scope_edge_is_captured():
 # Impact query -- ground-truth module -> tests                                 #
 # --------------------------------------------------------------------------- #
 def test_runtime_instance_change_selects_final_runtime_gate():
-    sel = cic.impacted_tests(["python/pops/runtime/_runtime_instance.py"], repo_root=REPO_ROOT)
+    sel = cic.impacted_tests(
+        ["python/pops/runtime/_runtime_instance.py"], repo_root=REPO_ROOT)
     assert "tests/python/unit/runtime/test_runtime_instance_gate.py" in sel
 
 
 def test_waves_change_selects_wave_speed_providers_test():
-    sel = cic.impacted_tests(["python/pops/numerics/riemann/waves.py"], repo_root=REPO_ROOT)
+    sel = cic.impacted_tests(
+        ["python/pops/numerics/riemann/waves.py"], repo_root=REPO_ROOT
+    )
     assert "tests/python/unit/physics/test_wave_speed_providers.py" in sel
 
 
 def test_bind_adapters_change_selects_bind_adapters_test():
     """The lazy orchestration edge means a ``_bind_adapters`` change reaches its tests."""
-    sel = cic.impacted_tests(["python/pops/runtime/_bind_adapters.py"], repo_root=REPO_ROOT)
+    sel = cic.impacted_tests(
+        ["python/pops/runtime/_bind_adapters.py"], repo_root=REPO_ROOT
+    )
     assert "tests/python/unit/runtime/test_typed_bind_phase.py" in sel
 
 
@@ -123,7 +127,9 @@ def test_unknown_new_pops_file_is_off_graph():
     import pytest
 
     with pytest.raises(cic.OffGraphChange):
-        cic.impacted_tests(["python/pops/brand_new_module_not_on_graph.py"], repo_root=REPO_ROOT)
+        cic.impacted_tests(
+            ["python/pops/brand_new_module_not_on_graph.py"], repo_root=REPO_ROOT
+        )
 
 
 def test_non_pops_change_selects_nothing_from_closure():
@@ -163,7 +169,9 @@ def _run_plan_python(tmp_path, changed_lines):
 
 def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
     """A leaf pops change selects a strict subset that includes the smoke tests."""
-    outputs, selected = _run_plan_python(tmp_path, ["python/pops/diagnostics/__init__.py"])
+    outputs, selected = _run_plan_python(
+        tmp_path, ["python/pops/diagnostics/__init__.py"]
+    )
     total = int(outputs["python_total"])
     count = int(outputs["python_count"])
     assert outputs["python_mode"] == "subset"
@@ -180,7 +188,9 @@ def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
 def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
     """A direct edit of the CSE test pulls its sibling helper + smoke."""
     importer = "tests/python/unit/codegen/test_dsl_cse.py"
-    outputs, selected = _run_plan_python(tmp_path, [importer])
+    outputs, selected = _run_plan_python(
+        tmp_path, [importer]
+    )
     assert outputs["python_mode"] == "subset"
     assert "direct-test" in outputs["python_why"]
     assert importer in selected
@@ -218,7 +228,9 @@ def test_plan_python_bindings_change_runs_all(tmp_path):
         "include/pops/mesh/storage/field_replica_consensus.hpp",
     ],
 )
-def test_plan_python_native_elliptic_protocol_runs_all_external_provider_e2es(tmp_path, header):
+def test_plan_python_native_elliptic_protocol_runs_all_external_provider_e2es(
+    tmp_path, header
+):
     outputs, selected = _run_plan_python(tmp_path, [header])
     assert outputs["python_mode"] == "subset"
     assert "elliptic-native-provider-contract" in outputs["python_why"]
@@ -239,7 +251,9 @@ def test_plan_python_changelog_only_selects_none(tmp_path):
 
 def test_plan_python_new_pops_file_fails_safe_to_all(tmp_path):
     """An off-graph (new) pops file falls back to ALL rather than under-selecting."""
-    outputs, _ = _run_plan_python(tmp_path, ["python/pops/a_freshly_added_leaf_module.py"])
+    outputs, _ = _run_plan_python(
+        tmp_path, ["python/pops/a_freshly_added_leaf_module.py"]
+    )
     assert outputs["python_mode"] == "all"
     assert "off-graph-pops-file" in outputs["python_why"]
 
@@ -270,11 +284,15 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     targets = sel.cpp_targets_with_label(manifest, "mpi")
     all_suites = sel.manifest_cpp_suites(manifest, include_mpi=True)
     expected = sorted(
-        suite["name"] for suite in all_suites if "mpi" in suite["labels"] or suite["mpi_variants"]
+        suite["name"]
+        for suite in all_suites
+        if "mpi" in suite["labels"] or suite["mpi_variants"]
     )
     assert targets == expected
     variant_targets = {
-        suite["name"]: suite["mpi_variants"] for suite in all_suites if suite["mpi_variants"]
+        suite["name"]: suite["mpi_variants"]
+        for suite in all_suites
+        if suite["mpi_variants"]
     }
     assert variant_targets == {
         "test_amr_system_bz_multibox": (2, 4),
@@ -286,13 +304,17 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),
     }
-    serial_targets = {suite["name"] for suite in sel.manifest_cpp_suites(manifest)}
+    serial_targets = {
+        suite["name"] for suite in sel.manifest_cpp_suites(manifest)
+    }
     assert set(variant_targets) <= serial_targets
     assert set(targets) - set(variant_targets) == {
         suite["name"] for suite in all_suites if "mpi" in suite["labels"]
     }
     expected_count = sum(
-        len(suite["mpi_nproc"]) + bool(suite["mpi_rank_parity"]) + len(suite["mpi_variants"])
+        len(suite["mpi_nproc"])
+        + bool(suite["mpi_rank_parity"])
+        + len(suite["mpi_variants"])
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
@@ -332,23 +354,21 @@ def test_manifest_rejects_rank_parity_without_an_mpi_label():
 
 
 def _write_mpi_ctest_inventory(path, plan):
-    path.write_text(
-        json.dumps(
+    path.write_text(json.dumps({
+        "tests": [
             {
-                "tests": [
-                    {
-                        "name": name,
-                        "properties": [
-                            {"name": "LABELS", "value": ["backend", "mpi", "medium"]},
-                            {"name": "TIMEOUT", "value": 600.0},
-                        ]
-                        + ([] if nproc == 1 else [{"name": "PROCESSORS", "value": nproc}]),
-                    }
-                    for name, nproc in plan.items()
-                ],
+                "name": name,
+                "properties": [
+                    {"name": "LABELS", "value": ["backend", "mpi", "medium"]},
+                    {"name": "TIMEOUT", "value": 600.0},
+                ] + (
+                    [] if nproc == 1
+                    else [{"name": "PROCESSORS", "value": nproc}]
+                ),
             }
-        )
-    )
+            for name, nproc in plan.items()
+        ],
+    }))
 
 
 def test_cpp_mpi_ctest_fence_authenticates_exact_names_labels_and_ranks(tmp_path):
@@ -404,7 +424,8 @@ def test_cpp_mpi_ctest_fence_rejects_missing_per_test_timeout(tmp_path):
     _write_mpi_ctest_inventory(inventory, plan)
     payload = json.loads(inventory.read_text())
     payload["tests"][0]["properties"] = [
-        prop for prop in payload["tests"][0]["properties"] if prop["name"] != "TIMEOUT"
+        prop for prop in payload["tests"][0]["properties"]
+        if prop["name"] != "TIMEOUT"
     ]
     inventory.write_text(json.dumps(payload))
     with pytest.raises(SystemExit, match="must expose one numeric TIMEOUT"):
@@ -414,35 +435,33 @@ def test_cpp_mpi_ctest_fence_rejects_missing_per_test_timeout(tmp_path):
 def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
     sel = _load("ci_select_tests")
     inventory = tmp_path / "ctest.json"
-    inventory.write_text(
-        json.dumps(
+    inventory.write_text(json.dumps({
+        "tests": [
             {
-                "tests": [
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["unit", "cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "Suite.Two",
+                "properties": [
+                    {"name": "LABELS", "value": "cpp-target:test_two"},
+                ],
+            },
+            {
+                "name": "Suite.Three",
+                "properties": [
                     {
-                        "name": "Suite.One",
-                        "properties": [
-                            {"name": "LABELS", "value": ["unit", "cpp-target:test_one"]},
-                        ],
-                    },
-                    {
-                        "name": "Suite.Two",
-                        "properties": [
-                            {"name": "LABELS", "value": "cpp-target:test_two"},
-                        ],
-                    },
-                    {
-                        "name": "Suite.Three",
-                        "properties": [
-                            {
-                                "name": "LABELS",
-                                "value": ["integration", "amr", "medium", "cpp-target:test_three"],
-                            },
+                        "name": "LABELS",
+                        "value": [
+                            "integration", "amr", "medium", "cpp-target:test_three"
                         ],
                     },
                 ],
-            }
-        )
-    )
+            },
+        ],
+    }))
 
     args = SimpleNamespace(
         ctest_json=str(inventory),
@@ -457,36 +476,28 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
         args.targets.pop()
 
 
-@pytest.mark.parametrize(
-    "encoded_labels",
-    [
-        "integration;amr;medium;cpp-target:test_three",
-        ["integration;amr;medium;cpp-target:test_three"],
-    ],
-)
+@pytest.mark.parametrize("encoded_labels", [
+    "integration;amr;medium;cpp-target:test_three",
+    ["integration;amr;medium;cpp-target:test_three"],
+])
 def test_cpp_target_label_fence_rejects_overescaped_ctest_labels(
-    tmp_path,
-    encoded_labels,
+    tmp_path, encoded_labels,
 ):
     sel = _load("ci_select_tests")
     inventory = tmp_path / "ctest-overescaped.json"
-    inventory.write_text(
-        json.dumps(
+    inventory.write_text(json.dumps({
+        "tests": [
             {
-                "tests": [
+                "name": "Suite.Three",
+                "properties": [
                     {
-                        "name": "Suite.Three",
-                        "properties": [
-                            {
-                                "name": "LABELS",
-                                "value": encoded_labels,
-                            },
-                        ],
+                        "name": "LABELS",
+                        "value": encoded_labels,
                     },
                 ],
-            }
-        )
-    )
+            },
+        ],
+    }))
 
     args = SimpleNamespace(
         ctest_json=str(inventory),
@@ -564,16 +575,26 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
 @pytest.mark.parametrize(
     ("event", "inputs", "expected"),
     (
-        ("pull_request", {"cpp_paths": True}, (False, True, True, True, False, False)),
-        ("pull_request", {"python_paths": True}, (False, False, True, True, False, False)),
-        ("pull_request", {"architecture_paths": True}, (False, False, False, True, False, False)),
-        ("pull_request", {}, (False, False, False, False, False, False)),
-        ("pull_request", {"ci_kokkos": True}, (False, True, True, True, False, False)),
-        ("pull_request", {"ci_full": True}, (True, True, True, True, True, True)),
-        ("pull_request", {"force_full": True}, (True, True, True, True, True, True)),
-        ("push", {}, (False, True, True, True, False, False)),
-        ("push", {"full_paths": True}, (True, True, True, True, True, True)),
-        ("workflow_call", {}, (True, True, True, True, True, True)),
+        ("pull_request", {"cpp_paths": True},
+         (False, True, True, True, False, False)),
+        ("pull_request", {"python_paths": True},
+         (False, False, True, True, False, False)),
+        ("pull_request", {"architecture_paths": True},
+         (False, False, False, True, False, False)),
+        ("pull_request", {},
+         (False, False, False, False, False, False)),
+        ("pull_request", {"ci_kokkos": True},
+         (False, True, True, True, False, False)),
+        ("pull_request", {"ci_full": True},
+         (True, True, True, True, True, True)),
+        ("pull_request", {"force_full": True},
+         (True, True, True, True, True, True)),
+        ("push", {},
+         (False, True, True, True, False, False)),
+        ("push", {"full_paths": True},
+         (True, True, True, True, True, True)),
+        ("workflow_call", {},
+         (True, True, True, True, True, True)),
     ),
 )
 def test_ci_route_authority_covers_pr_labels_push_and_full(event, inputs, expected):
@@ -633,14 +654,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert selector_input in workflow
 
     filter_text = workflow.split("\n          filters: |\n", 1)[1].split(
-        "\n  # Autorite unique de routage", 1
-    )[0]
-    cpp_filter = filter_text.split("            cpp:\n", 1)[1].split("\n            python:\n", 1)[
-        0
-    ]
+        "\n  # Autorite unique de routage", 1)[0]
+    cpp_filter = filter_text.split("            cpp:\n", 1)[1].split(
+        "\n            python:\n", 1)[0]
     python_filter = filter_text.split("            python:\n", 1)[1].split(
-        "\n            python_arch:\n", 1
-    )[0]
+        "\n            python_arch:\n", 1)[0]
     for cpp_control in (
         "tests/cpp/test_sources.cmake",
         "tests/cpp/build_durations.json",
@@ -669,18 +687,16 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     ):
         assert python_control in python_filter
 
-    cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split("\n  # GATE C++", 1)[
-        0
-    ]
+    cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split(
+        "\n  # GATE C++", 1)[0]
     cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
-        "\n  # Check historique", 1
-    )[0]
+        "\n  # Check historique", 1)[0]
     assert "timeout-minutes: 22" in cpp_prewarm_block
     assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in cpp_prewarm_block
     assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
     assert "--contract-file" in cpp_prewarm_block
-    assert '-DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism"' in cpp_prewarm_block
-    assert "amr-base|amr-compressible) lane_parallelism=2 ;;" in cpp_prewarm_block
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in cpp_prewarm_block
+    assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in cpp_prewarm_block
     assert 'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m' in cpp_prewarm_block
     assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
@@ -693,13 +709,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 30" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
-    assert 'test "${#cache_archives[@]}" -eq 4' in cpp_shards_block
-    assert 'test "${#compile_contracts[@]}" -eq 4' in cpp_shards_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in cpp_shards_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in cpp_shards_block
     assert "--verify-contracts" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert (
-        'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m' in cpp_shards_block
-    )
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
@@ -735,12 +749,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m' in mpi_prewarm_block
     assert "compression-level: 0" in mpi_prewarm_block
 
-    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  # PREWARM OPENMP NATIF.", 1)[0]
+    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split(
+        "\n  # PREWARM OPENMP NATIF.", 1
+    )[0]
     assert "needs: [set-mode, changes, gate-mpi-prewarm]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
     assert "actions/download-artifact@v8" in mpi_block
-    assert 'test "${#cache_archives[@]}" -eq 4' in mpi_block
-    assert 'test "${#compile_contracts[@]}" -eq 4' in mpi_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in mpi_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
     assert 'run_with_heartbeat "MPI native test build" 8m' in mpi_block
@@ -761,7 +777,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 2
     assert mpi_block.count("-L '^backend$'") == 2
     assert "ctest --preset ci-mpi --output-on-failure" in mpi_block
-    assert 'POPS_REQUIRE_MPI_TESTS: "1"' in mpi_block
+    assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
     assert "MPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1" in mpi_block
     assert "grep -Eqi 'Open MPI|OpenRTE'" in mpi_block
     assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
@@ -779,7 +795,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 70" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
     assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
-    assert 'mpiexec -n "$mpi_ranks"' not in mpi_block
+    assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
     assert "test_scientific_output_mpi.py" not in mpi_block
@@ -795,12 +811,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 32" in openmp_prewarm_block
     assert "needs: set-mode" in openmp_prewarm_block
     assert "if: needs.set-mode.outputs.openmp_required == 'true'" in openmp_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in openmp_prewarm_block
-    assert "graph: [cpp, python]" in openmp_prewarm_block
-    assert "if: matrix.graph == 'python'" in openmp_prewarm_block
-    assert "python-version: '3.12'" in openmp_prewarm_block
+    assert (
+        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        in openmp_prewarm_block
+    )
     assert "-DKokkos_ENABLE_OPENMP=ON" in openmp_prewarm_block
-    assert 'cmake --preset "$preset"' in openmp_prewarm_block
+    assert "cmake --preset ci-kokkos" in openmp_prewarm_block
     assert "scripts/ci_python_module_objects.py" in openmp_prewarm_block
     assert "--contract-file" in openmp_prewarm_block
     assert "Restore reusable OpenMP ccache" not in openmp_prewarm_block
@@ -808,29 +824,21 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "lane_parallelism=2" in openmp_prewarm_block
     assert "lane_parallelism=4" not in openmp_prewarm_block
     assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_prewarm_block
-    assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in openmp_prewarm_block
-    assert "preset=ci-kokkos-python" in openmp_prewarm_block
-    assert "build_dir=build-kokkos-py" in openmp_prewarm_block
-    assert "pool_option=POPS_HEAVY_MODULE_TU_POOL" in openmp_prewarm_block
-    assert "preset=ci-kokkos" in openmp_prewarm_block
-    assert "build_dir=build-kokkos" in openmp_prewarm_block
-    assert "pool_option=POPS_HEAVY_TEST_TU_POOL" in openmp_prewarm_block
-    assert '-D"${pool_option}=$lane_parallelism"' in openmp_prewarm_block
     assert (
-        'run_with_heartbeat "OpenMP ${{ matrix.graph }} prewarm '
-        '${{ matrix.lane }}" 24m' in openmp_prewarm_block
+        '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."'
+        in openmp_prewarm_block
+    )
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in openmp_prewarm_block
+    assert (
+        'run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m'
+        in openmp_prewarm_block
     )
     assert "compression-level: 0" in openmp_prewarm_block
     openmp_prewarm_upload = openmp_prewarm_block.split(
         "\n      - name: Upload OpenMP prewarm cache and compile contract", 1
     )[1]
-    assert (
-        "openmp-prewarm-${{ matrix.graph }}-ccache-${{ matrix.lane }}.tar" in openmp_prewarm_upload
-    )
-    assert (
-        "openmp-prewarm-${{ matrix.graph }}-contract-${{ matrix.lane }}.json"
-        in openmp_prewarm_upload
-    )
+    assert "openmp-prewarm-ccache-${{ matrix.lane }}.tar" in openmp_prewarm_upload
+    assert "openmp-prewarm-contract-${{ matrix.lane }}.json" in openmp_prewarm_upload
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in openmp_prewarm_upload
 
@@ -868,36 +876,28 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--shard-index "${{ matrix.shard }}"' in openmp_block
     assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
     assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
-    assert "pattern: gate-openmp-prewarm-${{ matrix.kind }}-*" in openmp_block
-    assert (
-        openmp_block.count(
-            "matrix.kind == 'cpp' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
-        )
-        == 2
-    )
-    assert "openmp-prewarm-${{ matrix.kind }}-ccache-*.tar" in openmp_block
-    assert 'test "${#cache_archives[@]}" -eq 4' in openmp_block
-    assert openmp_block.count('test "${#compile_contracts[@]}" -eq 4') == 2
-    assert openmp_block.count("--verify-contracts") == 2
-    assert "openmp-prewarm-cpp-contract-*.json" in openmp_block
-    assert "openmp-prewarm-python-contract-*.json" in openmp_block
+    assert "pattern: gate-openmp-prewarm-*" in openmp_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in openmp_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in openmp_block
+    assert "--verify-contracts" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
     openmp_cpp_build = openmp_block[
-        openmp_block.index(
-            "- name: Configure + build (backend Kokkos OpenMP)"
-        ) : openmp_block.index("- name: Test (ctest, backend Kokkos OpenMP)")
+        openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
+        openmp_block.index("- name: Test (ctest, backend Kokkos OpenMP)")
     ]
     assert "if: matrix.kind == 'cpp'" in openmp_cpp_build
     assert "timeout-minutes: 43" in openmp_cpp_build
     assert (
-        'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m' in openmp_block
+        'run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 38m'
+        in openmp_block
     )
     assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in openmp_cpp_build
     assert openmp_cpp_build.index("--verify-contracts") < openmp_cpp_build.index(
         'read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"'
     )
     assert (
-        'cmake --build --preset ci-kokkos --parallel 2 --target "${cpp_targets[@]}"' in openmp_block
+        'cmake --build --preset ci-kokkos --parallel 2 --target "${cpp_targets[@]}"'
+        in openmp_block
     )
     assert "cmake --build --preset ci-kokkos\n" not in openmp_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in openmp_block
@@ -915,15 +915,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" not in openmp_block
     assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_block
     assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in openmp_block
-    openmp_python_build = openmp_block.split("\n      - name: Build module Python `pops`", 1)[
-        1
-    ].split("\n      - name:", 1)[0]
-    assert "openmp-prewarm-python-contract-*.json" in openmp_python_build
-    assert "--build-dir build-kokkos-py" in openmp_python_build
-    assert "--verify-contracts" in openmp_python_build
-    assert openmp_python_build.index("--verify-contracts") < openmp_python_build.index(
-        'run_with_heartbeat "Kokkos OpenMP Python module build"'
-    )
     assert "name: Cache exact OpenMP Python module" in openmp_block
     assert "id: openmp-python-module-cache" in openmp_block
     assert "pops-module-openmp-${{ runner.os }}" in openmp_block
@@ -952,62 +943,53 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "Restore ccache (Kokkos OpenMP"
     )
     assert (
-        "matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
+        "matrix.kind != 'python' || "
+        "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
     ) in openmp_block
     assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
-    openmp_native_test_block = openmp_block.split("\n      - name: Test ABI natif", 1)[1].split(
-        "\n      - name:", 1
-    )[0]
+    openmp_native_test_block = openmp_block.split(
+        "\n      - name: Test ABI natif", 1)[1].split("\n      - name:", 1)[0]
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in openmp_native_test_block
     assert "cache-hit" not in openmp_native_test_block
     for native_test in (
-        "test_native_abi_std",
-        "test_dsl_production",
-        "test_dsl_production_amr",
+        "test_native_abi_std", "test_dsl_production", "test_dsl_production_amr",
     ):
         assert native_test in openmp_native_test_block
 
-    set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split("\n  # GATE C++", 1)[0]
+    set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
+        "\n  # GATE C++", 1)[0]
     for output in (
-        "cpp_required",
-        "python_required",
-        "architecture_required",
-        "mpi_required",
-        "openmp_required",
+        "cpp_required", "python_required", "architecture_required",
+        "mpi_required", "openmp_required",
     ):
         assert f"{output}: ${{{{ steps.decide.outputs.{output} }}}}" in set_mode_block
     assert "python3 scripts/ci_route_mode.py decide" in set_mode_block
 
     cpp_verdict = workflow.split("\n  gate-cpp:\n", 1)[1].split(
-        "\n  # GATE PYTHON ARCHITECTURE", 1
-    )[0]
+        "\n  # GATE PYTHON ARCHITECTURE", 1)[0]
     assert "scripts/ci_route_mode.py check" in cpp_verdict
     assert "needs.set-mode.outputs.cpp_required" in cpp_verdict
     assert "success|skipped" not in cpp_verdict
 
-    architecture_block = workflow.split("\n  gate-python-architecture:\n", 1)[1].split(
-        "\n  gate-python-prewarm:\n", 1
-    )[0]
+    architecture_block = workflow.split(
+        "\n  gate-python-architecture:\n", 1)[1].split(
+            "\n  gate-python-prewarm:\n", 1)[0]
     assert "if: needs.set-mode.outputs.architecture_required == 'true'" in architecture_block
     assert "python3 scripts/generate_component_catalog.py --check" in architecture_block
 
-    python_prewarm_block = workflow.split("\n  gate-python-prewarm:\n", 1)[1].split(
-        "\n  gate-python-build:\n", 1
-    )[0]
-    python_build_block = workflow.split("\n  gate-python-build:\n", 1)[1].split(
-        "\n  gate-python:\n", 1
-    )[0]
-    python_shards_block = workflow.split("\n  gate-python:\n", 1)[1].split(
-        "\n  gate-python-compile-cache:\n", 1
-    )[0]
-    python_cache_block = workflow.split("\n  gate-python-compile-cache:\n", 1)[1].split(
-        "\n  gate:\n", 1
-    )[0]
+    python_prewarm_block = workflow.split(
+        "\n  gate-python-prewarm:\n", 1)[1].split("\n  gate-python-build:\n", 1)[0]
+    python_build_block = workflow.split(
+        "\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
+    python_shards_block = workflow.split(
+        "\n  gate-python:\n", 1)[1].split("\n  gate-python-compile-cache:\n", 1)[0]
+    python_cache_block = workflow.split(
+        "\n  gate-python-compile-cache:\n", 1)[1].split("\n  gate:\n", 1)[0]
     assert "timeout-minutes: 45" in python_build_block
     assert "timeout-minutes: 42" in python_build_block
     assert "timeout --signal=TERM --kill-after=30s 40m" in python_build_block
     assert "exceeded its 40-minute cold-build watchdog" in python_build_block
-    assert 'exit "$build_status"' in python_build_block
+    assert "exit \"$build_status\"" in python_build_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_build_block
     assert "ccache --zero-stats" in python_build_block
     assert "uses: actions/cache/restore@v6" in python_build_block
@@ -1019,10 +1001,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "github.event_name == 'pull_request'" not in python_build_block
     assert "-py${{ steps.python.outputs.python-version }}-" in python_build_block
     prewarm_module_key = next(
-        line for line in python_prewarm_block.splitlines() if "key: pops-module-" in line
+        line for line in python_prewarm_block.splitlines()
+        if "key: pops-module-" in line
     )
     build_module_key = next(
-        line for line in python_build_block.splitlines() if "key: pops-module-" in line
+        line for line in python_build_block.splitlines()
+        if "key: pops-module-" in line
     )
     for cache_input in (
         "pyproject.toml",
@@ -1034,25 +1018,25 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert repr(cache_input) in build_module_key
     assert "actions/download-artifact@v8" in python_build_block
     assert "--verify-contracts" in python_build_block
-    assert 'test "${#cache_archives[@]}" -eq 4' in python_build_block
-    assert 'test "${#compile_contracts[@]}" -eq 4' in python_build_block
-    assert (
-        "matrix.lane: [system, amr-base, amr-compressible, amr-compiled]"
+    assert "test \"${#cache_archives[@]}\" -eq 4" in python_build_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in python_build_block
+    assert "matrix.lane: [system, amr-base, amr-compressible, amr-compiled]" \
         not in python_prewarm_block
-    )
-    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in python_prewarm_block
+    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" \
+        in python_prewarm_block
     assert "timeout-minutes: 22" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
     assert "scripts/ci_python_module_objects.py" in python_prewarm_block
     assert "--contract-file" in python_prewarm_block
     assert "compression-level: 0" in python_prewarm_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
-    assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in python_prewarm_block
+    assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
     assert python_prewarm_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' in python_prewarm_block
+    assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
+        in python_prewarm_block
     assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
-    assert "amr-base|amr-compressible) lane_parallelism=2 ;;" in python_prewarm_block
-    assert "lane_parallelism=2" in python_prewarm_block
+    assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in python_prewarm_block
+    assert 'lane_parallelism=2' in python_prewarm_block
     assert '--parallel "$lane_parallelism"' in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
     # four would upload its payload four times and erase the cold-build wall-time gain.
@@ -1080,16 +1064,10 @@ def test_native_required_lane_cannot_reclassify_subprocess_failure_as_skip():
     from tests.python import conftest as process_runner
 
     diagnostic = "RuntimeError: required native test unavailable: Kokkos introuvable"
-    assert (
-        process_runner._missing_process_requirement_for_environment(diagnostic, {})
-        == "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
-    )
-    assert (
-        process_runner._missing_process_requirement_for_environment(
-            diagnostic, {"POPS_REQUIRE_NATIVE_TESTS": "1"}
-        )
-        is None
-    )
+    assert process_runner._missing_process_requirement_for_environment(
+        diagnostic, {}) == "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
+    assert process_runner._missing_process_requirement_for_environment(
+        diagnostic, {"POPS_REQUIRE_NATIVE_TESTS": "1"}) is None
 
 
 @pytest.mark.parametrize(
@@ -1122,10 +1100,18 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     assert 'run_with_heartbeat \\\n            "quality ${{ matrix.profile }} prewarm' in prewarm
     assert "50m" in prewarm
     assert "compression-level: 0" in prewarm
-    upload = prewarm.split("\n      - name: Upload exact quality prewarm cache and contract", 1)[1]
+    upload = prewarm.split(
+        "\n      - name: Upload exact quality prewarm cache and contract", 1
+    )[1]
     assert "name: quality-prewarm-${{ matrix.profile }}-${{ matrix.lane }}" in upload
-    assert "quality-${{ matrix.profile }}-prewarm-ccache-${{ matrix.lane }}.tar" in upload
-    assert "quality-${{ matrix.profile }}-prewarm-contract-${{ matrix.lane }}.json" in upload
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-ccache-${{ matrix.lane }}.tar"
+        in upload
+    )
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-contract-${{ matrix.lane }}.json"
+        in upload
+    )
     artifact_names = {
         f"quality-prewarm-{profile}-{lane}"
         for profile in ("warnings", "asan", "coverage")
@@ -1145,11 +1131,13 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
         assert "needs: [set-mode, quality-native-prewarm]" in block
         assert "CCACHE_MAXSIZE: 2G" in block
         assert f"pattern: quality-prewarm-{profile}-*" in block
-        assert 'test "${#cache_archives[@]}" -eq 4' in block
-        assert 'test "${#compile_contracts[@]}" -eq 4' in block
+        assert "test \"${#cache_archives[@]}\" -eq 4" in block
+        assert "test \"${#compile_contracts[@]}\" -eq 4" in block
         assert f"--build-dir {build_dir}" in block
         assert "--verify-contracts" in block
-        assert block.index(f"cmake --preset ci-{profile}") < block.index("--verify-contracts")
+        assert block.index(f"cmake --preset ci-{profile}") < block.index(
+            "--verify-contracts"
+        )
         assert block.index("--verify-contracts") < block.index(
             f"cmake --build --preset ci-{profile}"
         )
