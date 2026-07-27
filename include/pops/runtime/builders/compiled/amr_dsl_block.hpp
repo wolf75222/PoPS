@@ -709,7 +709,7 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
 
 /// Wires @p model (concrete CompositeModel) as an AMR block of @p sys, with the requested scheme. The
 /// build is DEFERRED (like add_block): the captured closures are invoked at the first
-/// step/mass/density via ensure_built(), after set_refinement / set_poisson / set_density.
+/// step/mass/density via ensure_built(), after prepared AMR authorities and initial state are installed.
 ///
 /// Every block count materializes the same type-erased AmrRuntimeBlock on the shared layout.
 /// @p time: legacy authoring token normalized into the installed ProgramGraph. The runtime block

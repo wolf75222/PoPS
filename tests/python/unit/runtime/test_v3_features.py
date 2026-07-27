@@ -167,7 +167,6 @@ print("== (C) set_conservative_state multi-blocs : etat complet seede (avec deri
 amr3 = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr3.set_refinement(1e30)
 amr3.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
 amr3.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
 rho0 = rho16

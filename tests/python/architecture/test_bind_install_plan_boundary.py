@@ -129,13 +129,6 @@ def test_complete_bind_install_path_has_no_live_authoring_fallback():
             "runtime/_runtime_executor.py", "_UniformNativeProvider.install"),
         "Adaptive provider install": (
             "runtime/_runtime_executor.py", "_AdaptiveNativeProvider.install"),
-        "flow_amr_layout": ("runtime/_runtime_mesh_lowering.py", "flow_amr_layout"),
-        "_apply_refine_criterion": (
-            "runtime/_runtime_mesh_lowering.py", "_apply_refine_criterion"),
-        "_refine_threshold_value": (
-            "runtime/_runtime_mesh_lowering.py", "_refine_threshold_value"),
-        "_refine_subject_name": (
-            "runtime/_runtime_mesh_lowering.py", "_refine_subject_name"),
         "run_bind_gates": ("runtime/_bind_validation.py", "run_bind_gates"),
         "validate_install_arguments": (
             "runtime/_bind_validation.py", "validate_install_arguments"),

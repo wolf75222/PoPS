@@ -34,7 +34,7 @@ else:
 # NATIVE structural setter names that the frozen engine must intercept in its ``__getattr__``
 # native passthrough (each exists on System and/or AmrSystem's C++ facade ``_s``). A bound engine
 # returns the freeze RuntimeError instead of the native callable for any of these, so
-# ``instance.install_program(...)`` / ``instance.set_refinement(...)`` cannot bypass the
+# ``instance.install_program(...)`` cannot bypass the
 # freeze even when the native ``mark_bound`` is absent. Raw parameter-carrier setters are also
 # structural after bind: only BindSchema may populate them. State/field/clock data remain mutable.
 FROZEN_STRUCTURAL = frozenset({
@@ -47,8 +47,8 @@ FROZEN_STRUCTURAL = frozenset({
     "add_ionization", "add_collision", "add_thermal_exchange", "add_coupled_source",
     # geometry / disc domain
     "set_disc_domain", "set_geometry_mode",
-    # AMR refinement / layout
-    "set_refinement", "set_phi_refinement", "set_conservative_state",
+    # AMR layout
+    "set_conservative_state",
     # installed time Program
     "install_program", "install_program_step", "set_program_cadence", "add_dt_bound",
     "set_program_params",
@@ -61,7 +61,7 @@ def freeze_error(what: Any) -> Any:
     @p what names the refused operation (a method / attribute name). The message speaks the BIND
     vocabulary and points at the assembly path (``pops.Case`` + ``pops.compile`` + ``pops.bind``);
     it NEVER recommends a legacy setter as the remedy (no ``add_block`` / ``set_poisson`` /
-    ``install_program`` / ``set_refinement`` as an alternative), so it cannot be read as a
+    ``install_program`` as an alternative), so it cannot be read as a
     validation bypass.
     """
     return RuntimeError(

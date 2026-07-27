@@ -94,7 +94,6 @@ except RuntimeError as e:
 print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
 amr_rho0 = gaussian(32)
 amr.add_equation("ions", iso_model(n0=float(amr_rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),

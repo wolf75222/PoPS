@@ -141,6 +141,38 @@ def test_removed_public_modules_do_not_exist() -> None:
         importlib.import_module("pops.mesh.cartesian")
 
 
+def test_native_amr_tagging_has_only_the_prepared_installation_route() -> None:
+    retired = (
+        "set_" + "refinement",
+        "set_phi_" + "refinement",
+        "set_bootstrap_" + "refinement",
+        "flow_amr_" + "layout",
+        "_apply_refine_" + "criterion",
+    )
+    sources = {
+        relative: (ROOT / relative).read_text(encoding="utf-8")
+        for relative in (
+            "include/pops/runtime/amr_system.hpp",
+            "src/runtime/amr/amr_system.cpp",
+            "python/bindings/core/init/init_amr.cpp",
+            "python/pops/runtime/_runtime_mesh_lowering.py",
+        )
+    }
+    violations = [
+        "%s: %s" % (relative, spelling)
+        for relative, source in sources.items()
+        for spelling in retired
+        if spelling in source
+    ]
+    assert not violations, (
+        "scalar AMR tagging aliases bypass the prepared AMRTagging authority:\n  "
+        + "\n  ".join(violations)
+    )
+    assert "_set_bootstrap_tagging" in sources["python/bindings/core/init/init_amr.cpp"]
+    assert "flow_bootstrap_tagging" in sources[
+        "python/pops/runtime/_runtime_mesh_lowering.py"]
+
+
 def test_final_bind_surface_has_no_retired_solver_or_install_contract() -> None:
     from pops.codegen.inspect_compiled import Arguments
     from pops.runtime._amr_system_install import _AmrSystemInstall

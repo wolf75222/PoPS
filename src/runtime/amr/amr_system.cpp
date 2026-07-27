@@ -243,7 +243,7 @@ struct AmrSystem::Impl {
   // presence forces the common AmrRuntime route so the same plan is captured by every level RHS.
   std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans_;
   std::map<std::string, std::string> block_state_identities_;
-  std::map<std::string, std::string> boundary_field_routes_;
+  std::map<std::string, std::string> field_storage_routes_;
   std::shared_ptr<runtime::amr::PreparedTaggerComponent> amr_tagger_component_;
   std::shared_ptr<runtime::amr::PreparedClusteringComponent> amr_clustering_component_;
   struct BootstrapArray {
@@ -289,23 +289,12 @@ struct AmrSystem::Impl {
   // exposes the couplings as typed operators BEFORE the lazy multi-block runtime build. Metadata only.
   std::vector<CouplingOperatorView> coupled_operators;
 
-  double refine_threshold =
-      static_cast<double>(kAmrRefinementDisabledThreshold);  // no refinement by default
-  // ADC-296: refinement variable selected by NAME (refine_var_name) XOR by physical ROLE
-  // (refine_var_role). BOTH empty (default) => component 0 (historical density criterion, bit-identical).
-  // Resolved PER BLOCK at build_multi against the block's cons_vars (STRICT, no silent comp-0 fallback).
-  std::string refine_var_name;
-  std::string refine_var_role;
-  struct BootstrapTagSpec {
-    std::string block;
-    std::string variable;
-    double threshold = 0.0;
-    std::string provider_identity;
-  };
-  std::unique_ptr<BootstrapTagSpec> bootstrap_tag_spec;
   struct TaggingSpec {
+    std::vector<std::string> leaf_subject_kinds;
+    std::vector<std::string> leaf_subject_identities;
     std::vector<std::string> leaf_blocks;
     std::vector<std::string> leaf_variables;
+    std::vector<int> leaf_field_component_indices;
     std::vector<int> leaf_ops;
     std::vector<double> leaf_thresholds;
     std::vector<int> leaf_stencil_indices;
@@ -319,9 +308,6 @@ struct AmrSystem::Impl {
     std::string provider_identity;
   };
   std::unique_ptr<TaggingSpec> tagging_spec;
-  // Shared-potential tag threshold on |grad phi|. build_multi appends one shared-aux gradient leaf to
-  // the same prepared graph as every other criterion; no phi-specific runtime predicate exists.
-  double phi_grad_threshold = 0.0;
 
   std::vector<double> bz_field;  // coarse B_z(x,y), ny*nx row-major (set_magnetic_field)
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (ny*nx row-major).
@@ -742,8 +728,11 @@ struct AmrSystem::Impl {
     bp.mesh.distribute_coarse = cfg.distribute_coarse;
     bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
     bp.mesh.load_balance = load_balance_authority_;
-    // REGRID group: refinement threshold.
-    bp.regrid.threshold = refine_threshold;
+    // The legacy builder carrier still uses this value only as an allocation gate. Its value is
+    // derived solely from prepared-authority presence and is never evaluated as a tag predicate.
+    bp.regrid.threshold = tagging_spec
+                              ? 0.0
+                              : static_cast<double>(kAmrRefinementDisabledThreshold);
     // POISSON group: coarse Poisson BC + conductive wall.
     bp.poisson.bc = poisson_bc();
     bp.poisson.wall = wall_active();
@@ -802,22 +791,10 @@ struct AmrSystem::Impl {
     // on the coarse level and injects it to the fine levels. It takes priority over density.
     AmrBuildParams bp =
         make_layout_params();  // hierarchy/system authority; no representative block
-    // A single block builds a coarse-only hierarchy when no refinement is configured, so a
-    // no-refinement single-block AMR Program is BIT-IDENTICAL to the same Program on System (the
-    // must-pass parity gate). A genuine multi-block AMR keeps the two-level seed.
-    //
-    // REFINEMENT WINS OVER THE COARSE-ONLY OPT-IN (ADC-634): a coarse-only layout has a single-level
-    // template (make_shared_amr_layout single_level -> S.ba == {coarse}), so the regrid has NO fine
-    // BoxArray to grow into and the hierarchy stays nlev == 1 FOREVER, even with a tag predicate armed.
-    // When the user configured refinement (set_refinement -> refine_threshold below the disabled
-    // sentinel, or set_phi_refinement -> phi_grad_threshold > 0), the single-block Program must get the
-    // 2-level template so an active regrid can seed / retain the fine level. Independent of
-    // regrid_every so a regrid_every == 0 frozen-seed run and a regrid_every > 0 run at the same
-    // threshold keep the SAME level count (the null-regrid parity channel). No set_refinement call ->
-    // refine_threshold stays the sentinel -> coarse-only -> the System parity gate is untouched.
-    const bool refinement_active =
-        refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold) ||
-        phi_grad_threshold > 0.0 || bootstrap_tag_spec != nullptr || tagging_spec != nullptr;
+    // A single block builds a coarse-only hierarchy when no prepared AMRTagging authority is
+    // installed. A genuine multi-block AMR keeps the two-level seed. The runtime never infers an
+    // active criterion from a scalar threshold or a representative component.
+    const bool refinement_active = tagging_spec != nullptr;
     const bool single_level = blocks.size() == 1 && !refinement_active;
     const int initial_levels = cfg.explicit_bootstrap ? 1 : (single_level ? 1 : 2);
     detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
@@ -920,7 +897,7 @@ struct AmrSystem::Impl {
     if (amr_clustering_component_)
       runtime->install_external_clustering(amr_clustering_component_);
     if (!boundary_plans_.empty())
-      runtime->install_boundary_storage_routes(boundary_field_routes_);
+      runtime->install_boundary_storage_routes(field_storage_routes_);
     // Low-level facade compatibility has no authored AMRTransfer object.  Resolve its exact
     // coarse/fine requirement through the same native capability catalogue, then install the
     // selected prepared authority explicitly.  AmrRuntime itself owns no default or scheme switch.
@@ -996,112 +973,75 @@ struct AmrSystem::Impl {
     for (const auto& [subject, array] : bootstrap_arrays)
       runtime->register_bootstrap_staggered_field(subject, bootstrap_centering(array.centering),
                                                   array.ncomp, array.initial_values);
-    // Materialize every facade criterion into the same prepared graph consumed by the builtin
-    // Kokkos VM or an installed external Tagger. The convenience threshold APIs never install a
-    // host predicate and the shared-potential criterion is just another qualified field/stencil.
-    if (cfg.explicit_bootstrap || cfg.regrid_every > 0) {
+    // Materialize exactly the prepared graph consumed by the builtin Kokkos VM or an installed
+    // external Tagger. Missing AMRTagging authority means no tagging program; the runtime never
+    // manufactures a component-zero threshold or a shared-potential predicate.
+    if ((cfg.explicit_bootstrap || cfg.regrid_every > 0) && tagging_spec) {
       using Program = AmrRuntime::TaggingProgram;
-      std::vector<Program::Stencil> stencils;
+      std::vector<Program::Stencil> stencils = tagging_spec->stencils;
       std::vector<Program::Leaf> leaves;
-      std::vector<std::int32_t> refine_ops, refine_args, coarsen_ops, coarsen_args;
-      int min_cycles = 0, equality_policy = 0, conflict_policy = 0;
-      std::string clock_identity = "amr::refinement";
-      std::string provider_identity = "pops.amr.tagging.component-threshold@1";
-
-      if (tagging_spec) {
-        stencils = tagging_spec->stencils;
-        leaves.reserve(tagging_spec->leaf_ops.size() + (phi_grad_threshold > 0.0 ? 1u : 0u));
-        for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
+      leaves.reserve(tagging_spec->leaf_ops.size());
+      for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
+        const std::string& kind = tagging_spec->leaf_subject_kinds[index];
+        const std::string& identity = tagging_spec->leaf_subject_identities[index];
+        std::size_t field_index = blocks.size();
+        int component = -1;
+        if (kind == "state") {
           const int block = block_index(tagging_spec->leaf_blocks[index]);
           if (block < 0)
-            throw std::runtime_error("resolved AMR tagging names an unknown block");
-          const int component = detail::resolve_selected_component(
+            throw std::runtime_error("resolved AMR tagging names an unknown state block");
+          const auto installed = block_state_identities_.find(tagging_spec->leaf_blocks[index]);
+          const std::string expected =
+              installed == block_state_identities_.end()
+                  ? direct_amr_state_identity(tagging_spec->leaf_blocks[index])
+                  : installed->second;
+          if (identity != expected)
+            throw std::runtime_error(
+                "resolved AMR tagging state identity disagrees with native block storage");
+          field_index = static_cast<std::size_t>(block);
+          component = detail::resolve_selected_component(
               "AmrSystem::resolved tagging", tagging_spec->leaf_blocks[index],
-              runtime->block_cons_vars(static_cast<std::size_t>(block)),
-              tagging_spec->leaf_variables[index], "");
-          leaves.push_back(Program::Leaf{
-              static_cast<std::size_t>(block), static_cast<std::size_t>(component),
-              tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
-              tagging_spec->leaf_stencil_indices[index] < 0
-                  ? POPS_TAGGING_NO_STENCIL_V1
-                  : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
-        }
-        refine_ops = tagging_spec->refine_ops;
-        refine_args = tagging_spec->refine_args;
-        coarsen_ops = tagging_spec->coarsen_ops;
-        coarsen_args = tagging_spec->coarsen_args;
-        min_cycles = tagging_spec->min_cycles;
-        equality_policy = tagging_spec->equality_policy;
-        conflict_policy = tagging_spec->conflict_policy;
-        clock_identity = tagging_spec->clock_identity;
-        provider_identity = tagging_spec->provider_identity;
-      } else if (bootstrap_tag_spec) {
-        const int b = block_index(bootstrap_tag_spec->block);
-        if (b < 0)
-          throw std::runtime_error("AMR threshold tag provider names an unknown block");
-        const int component = detail::resolve_selected_component(
-            "AmrSystem::prepared threshold tagging", bootstrap_tag_spec->block,
-            runtime->block_cons_vars(static_cast<std::size_t>(b)), bootstrap_tag_spec->variable,
-            "");
-        leaves.push_back(Program::Leaf{static_cast<std::size_t>(b),
-                                       static_cast<std::size_t>(component), POPS_TAGGING_ABOVE_V1,
-                                       bootstrap_tag_spec->threshold, POPS_TAGGING_NO_STENCIL_V1});
-        refine_ops.push_back(POPS_TAGGING_ABOVE_V1);
-        refine_args.push_back(0);
-        provider_identity = bootstrap_tag_spec->provider_identity;
-      } else {
-        const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
-        leaves.reserve(blocks.size() + (phi_grad_threshold > 0.0 ? 1u : 0u));
-        for (std::size_t b = 0; b < blocks.size(); ++b) {
-          int component = 0;
-          if (selected) {
-            component = detail::resolve_selected_component(
-                "AmrSystem::prepared threshold tagging", blocks[b].name,
-                runtime->block_cons_vars(b), refine_var_name, refine_var_role);
-          }
-          leaves.push_back(Program::Leaf{b, static_cast<std::size_t>(component),
-                                         POPS_TAGGING_ABOVE_V1, refine_threshold,
-                                         POPS_TAGGING_NO_STENCIL_V1});
-          refine_ops.push_back(POPS_TAGGING_ABOVE_V1);
-          refine_args.push_back(static_cast<std::int32_t>(b));
-        }
-        if (leaves.size() > 1) {
-          refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
-          refine_args.push_back(static_cast<std::int32_t>(leaves.size()));
-        }
-      }
-
-      if (phi_grad_threshold > 0.0) {
-        const std::size_t stencil_index = stencils.size();
-        stencils.push_back(
-            Program::Stencil{"pops.amr.tagging.shared-aux-gradient@1",
-                             POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-                             "l2",
-                             "inverse_cell_size",
-                             "ghost_extension",
-                             2,
-                             {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
-                              Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}});
-        const std::size_t leaf_index = leaves.size();
-        leaves.push_back(Program::Leaf{blocks.size(), 0, POPS_TAGGING_GRADIENT_ABOVE_V1,
-                                       phi_grad_threshold, stencil_index});
-        if (refine_ops.empty()) {
-          refine_ops.push_back(POPS_TAGGING_GRADIENT_ABOVE_V1);
-          refine_args.push_back(static_cast<std::int32_t>(leaf_index));
+              runtime->block_cons_vars(field_index), tagging_spec->leaf_variables[index], "");
+        } else if (kind == "aux") {
+          if (identity != "pops://runtime/amr/shared-aux")
+            throw std::runtime_error(
+                "resolved AMR tagging aux identity is not the qualified shared-aux carrier");
+          component = aux_canonical_index(tagging_spec->leaf_variables[index]);
+          if (component < 0)
+            throw std::runtime_error(
+                "resolved AMR tagging aux subject is not a canonical aux component");
+        } else if (kind == "field") {
+          const auto route = field_storage_routes_.find(identity);
+          if (route == field_storage_routes_.end())
+            throw std::runtime_error(
+                "resolved AMR tagging field has no authenticated native storage route");
+          const auto plan = field_plans_.find(route->second);
+          if (plan == field_plans_.end())
+            throw std::runtime_error(
+                "resolved AMR tagging field route has no installed provider plan");
+          const auto outputs =
+              ell_field_comps_.find({plan->second.output_block, plan->second.output_key});
+          const int output_index = tagging_spec->leaf_field_component_indices[index];
+          if (outputs == ell_field_comps_.end() || output_index < 0 || output_index >= 3 ||
+              outputs->second[static_cast<std::size_t>(output_index)] < 0)
+            throw std::runtime_error(
+                "resolved AMR tagging field component is absent from its prepared output route");
+          component = outputs->second[static_cast<std::size_t>(output_index)];
         } else {
-          refine_ops.push_back(POPS_TAGGING_GRADIENT_ABOVE_V1);
-          refine_args.push_back(static_cast<std::int32_t>(leaf_index));
-          refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
-          refine_args.push_back(2);
+          throw std::runtime_error("resolved AMR tagging has an unknown subject kind");
         }
-        provider_identity = "pops.amr.tagging.composite@1[" + provider_identity +
-                            ";pops.amr.tagging.shared-aux-gradient@1]";
+        leaves.push_back(Program::Leaf{
+          field_index, static_cast<std::size_t>(component),
+          tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
+          tagging_spec->leaf_stencil_indices[index] < 0
+              ? POPS_TAGGING_NO_STENCIL_V1
+              : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
       }
-
       runtime->set_tagging_program(
-          std::move(stencils), std::move(leaves), std::move(refine_ops), std::move(refine_args),
-          std::move(coarsen_ops), std::move(coarsen_args), min_cycles, equality_policy,
-          conflict_policy, std::move(clock_identity), std::move(provider_identity));
+          std::move(stencils), std::move(leaves), tagging_spec->refine_ops,
+          tagging_spec->refine_args, tagging_spec->coarsen_ops, tagging_spec->coarsen_args,
+          tagging_spec->min_cycles, tagging_spec->equality_policy, tagging_spec->conflict_policy,
+          tagging_spec->clock_identity, tagging_spec->provider_identity);
     }
     // Canonical B_z and model-NAMED aux fields share one native static-field authority. The runtime
     // validates that a block declared each component, publishes coarse->fine immediately, and
@@ -1454,16 +1394,16 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
   P->boundary_plans_.emplace(name, std::move(plan));
 }
 
-POPS_EXPORT void AmrSystem::install_boundary_field_route(const std::string& field_identity,
-                                                         const std::string& provider_slot) {
+POPS_EXPORT void AmrSystem::install_field_storage_route(const std::string& field_identity,
+                                                        const std::string& provider_slot) {
   Impl* P = p_.get();
-  require_assembling_amr(P->bound_, "install_boundary_field_route");
+  require_assembling_amr(P->bound_, "install_field_storage_route");
   if (P->built)
-    throw std::runtime_error("AmrSystem::install_boundary_field_route: system is already built");
+    throw std::runtime_error("AmrSystem::install_field_storage_route: system is already built");
   if (field_identity.empty() || provider_slot.empty() ||
-      !P->boundary_field_routes_.emplace(field_identity, provider_slot).second)
+      !P->field_storage_routes_.emplace(field_identity, provider_slot).second)
     throw std::runtime_error(
-        "AmrSystem boundary field route requires unique non-empty qualified identities");
+        "AmrSystem field storage route requires unique non-empty qualified identities");
 }
 
 POPS_EXPORT void AmrSystem::discard_boundary_plans() {
@@ -1474,7 +1414,7 @@ POPS_EXPORT void AmrSystem::discard_boundary_plans() {
         "AmrSystem::discard_boundary_plans is restricted to a failed pre-block transaction");
   P->boundary_plans_.clear();
   P->block_state_identities_.clear();
-  P->boundary_field_routes_.clear();
+  P->field_storage_routes_.clear();
 }
 
 POPS_EXPORT void AmrSystem::install_ghost_boundary_component(
@@ -2059,37 +1999,11 @@ void AmrSystem::add_external_riemann_block(const std::string& name, const std::s
   }
 }
 
-void AmrSystem::set_refinement(double threshold, const std::string& variable,
-                               const std::string& role) {
-  require_assembling_amr(p_->bound_,
-                         "set_refinement");  // frozen once pops.bind completes (ADC-592)
-  // Reject the ambiguous double selector immediately (fast feedback); cons_vars is only known at the
-  // lazy build, so an absent name/role is caught there (build_multi -> resolve_selected_component).
-  if (!variable.empty() && !role.empty())
-    throw std::runtime_error(
-        "AmrSystem::set_refinement : select the refinement variable by NAME (variable=) or by ROLE "
-        "(role=), not both");
-  if (!std::isfinite(threshold))
-    throw std::runtime_error("AmrSystem::set_refinement : threshold must be finite");
-  p_->refine_threshold = threshold;
-  p_->refine_var_name = variable;
-  p_->refine_var_role = role;
-}
-
-void AmrSystem::set_bootstrap_refinement(const std::string& block, const std::string& variable,
-                                         double threshold, const std::string& provider_identity) {
-  require_assembling_amr(p_->bound_, "set_bootstrap_refinement");
-  if (p_->built || block.empty() || variable.empty() || provider_identity.empty() ||
-      !std::isfinite(threshold) || p_->bootstrap_tag_spec)
-    throw std::runtime_error(
-        "AmrSystem::set_bootstrap_refinement requires one exact pre-build provider manifest");
-  p_->bootstrap_tag_spec = std::make_unique<Impl::BootstrapTagSpec>(
-      Impl::BootstrapTagSpec{block, variable, threshold, provider_identity});
-  p_->refine_threshold = threshold;
-}
-
 void AmrSystem::set_bootstrap_tagging(
+    const std::vector<std::string>& leaf_subject_kinds,
+    const std::vector<std::string>& leaf_subject_identities,
     const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
+    const std::vector<int>& leaf_field_component_indices,
     const std::vector<int>& leaf_ops, const std::vector<double>& leaf_thresholds,
     const std::vector<int>& leaf_stencil_indices,
     const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
@@ -2098,22 +2012,35 @@ void AmrSystem::set_bootstrap_tagging(
     int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
     const std::string& clock_identity, const std::string& provider_identity) {
   require_assembling_amr(p_->bound_, "set_bootstrap_tagging");
-  const std::size_t leaf_count = leaf_blocks.size();
-  if (p_->built || p_->tagging_spec || p_->bootstrap_tag_spec || leaf_count == 0 ||
-      leaf_variables.size() != leaf_count || leaf_ops.size() != leaf_count ||
+  const std::size_t leaf_count = leaf_subject_kinds.size();
+  if (p_->built || p_->tagging_spec || leaf_count == 0 ||
+      leaf_subject_identities.size() != leaf_count || leaf_blocks.size() != leaf_count ||
+      leaf_variables.size() != leaf_count || leaf_field_component_indices.size() != leaf_count ||
+      leaf_ops.size() != leaf_count ||
       leaf_thresholds.size() != leaf_count || leaf_stencil_indices.size() != leaf_count ||
       refine_ops.empty() || refine_ops.size() != refine_args.size() ||
       coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 || clock_identity.empty() ||
       provider_identity.empty())
     throw std::runtime_error(
         "AmrSystem::set_bootstrap_tagging requires one exact pre-build graph manifest");
-  if (std::any_of(leaf_blocks.begin(), leaf_blocks.end(),
+  if (std::any_of(leaf_subject_identities.begin(), leaf_subject_identities.end(),
                   [](const std::string& value) { return value.empty(); }) ||
       std::any_of(leaf_variables.begin(), leaf_variables.end(),
                   [](const std::string& value) { return value.empty(); }) ||
       std::any_of(leaf_thresholds.begin(), leaf_thresholds.end(),
                   [](double value) { return !std::isfinite(value); }))
     throw std::runtime_error("AmrSystem::set_bootstrap_tagging has an invalid leaf");
+  for (std::size_t index = 0; index < leaf_count; ++index) {
+    const std::string& kind = leaf_subject_kinds[index];
+    const bool state = kind == "state";
+    const bool field = kind == "field";
+    const bool aux = kind == "aux";
+    if ((!state && !field && !aux) || (state != !leaf_blocks[index].empty()) ||
+        (field != (leaf_field_component_indices[index] >= 0)) ||
+        (!field && leaf_field_component_indices[index] != -1))
+      throw std::runtime_error(
+          "AmrSystem::set_bootstrap_tagging has an invalid qualified subject route");
+  }
   const auto equality = equality_policy == "hold"      ? 0
                         : equality_policy == "refine"  ? 1
                         : equality_policy == "coarsen" ? 2
@@ -2126,7 +2053,8 @@ void AmrSystem::set_bootstrap_tagging(
   if (equality < 0 || conflict < 0)
     throw std::runtime_error("AmrSystem::set_bootstrap_tagging has an unknown policy");
   p_->tagging_spec = std::make_unique<Impl::TaggingSpec>(Impl::TaggingSpec{
-      leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds, leaf_stencil_indices, stencils,
+      leaf_subject_kinds, leaf_subject_identities, leaf_blocks, leaf_variables,
+      leaf_field_component_indices, leaf_ops, leaf_thresholds, leaf_stencil_indices, stencils,
       refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles, equality, conflict,
       clock_identity, provider_identity});
 }
@@ -2153,21 +2081,6 @@ void AmrSystem::set_temporal_relations(const std::vector<std::int64_t>& numerato
                            ::pops::amr::Rational(numerators[index], denominators[index]), policy);
   }
   p_->temporal_relations_ = std::move(relations);
-}
-
-void AmrSystem::set_phi_refinement(double grad_threshold) {
-  require_assembling_amr(p_->bound_,
-                         "set_phi_refinement");  // frozen once pops.bind completes (ADC-592)
-  if (p_->built)
-    throw std::runtime_error(
-        "AmrSystem::set_phi_refinement : the system is already built (set the "
-        "refinement criterion before any step/mass/density)");
-  // <= 0 (default) -> phi DISABLED (build_multi does not set the phi predicate); bit-identical. > 0 ->
-  // phi tag on |grad phi| added to the tag union (D4), set by the unique runtime route. The order of
-  // configuration calls remains free and the criterion works for one or many blocks.
-  if (!std::isfinite(grad_threshold))
-    throw std::runtime_error("AmrSystem::set_phi_refinement : grad_threshold must be finite");
-  p_->phi_grad_threshold = grad_threshold;
 }
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
@@ -3969,44 +3882,23 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   report.poisson.wall_radius = p_->p_wall_radius;
   report.poisson.epsilon = 1.0;
   report.poisson.abs_tol = static_cast<double>(kMGDefaultAbsTol);
-  const bool has_scalar_threshold =
-      p_->bootstrap_tag_spec != nullptr ||
-      p_->refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold);
   const bool has_prepared_graph = p_->tagging_spec != nullptr;
-  const bool has_phi_gradient =
-      p_->phi_grad_threshold > static_cast<double>(kAmrPhiRefinementDisabledThreshold);
-  report.amr_refinement.disabled =
-      !(has_scalar_threshold || has_prepared_graph || has_phi_gradient);
-  report.amr_refinement.scalar_threshold_available = !has_prepared_graph;
+  report.amr_refinement.disabled = !has_prepared_graph;
+  report.amr_refinement.scalar_threshold_available = false;
   if (has_prepared_graph) {
     report.amr_refinement.disabled_policy = "prepared_tagging_program";
     report.amr_refinement.tagging_provider_identity = p_->tagging_spec->provider_identity;
     report.amr_refinement.tagging_authority = "prepared_program";
-  } else if (p_->bootstrap_tag_spec) {
-    report.amr_refinement.threshold = p_->bootstrap_tag_spec->threshold;
-    report.amr_refinement.disabled_policy = "prepared_threshold";
-    report.amr_refinement.variable =
-        p_->bootstrap_tag_spec->block + "." + p_->bootstrap_tag_spec->variable;
-    report.amr_refinement.tagging_provider_identity = p_->bootstrap_tag_spec->provider_identity;
-    report.amr_refinement.tagging_authority = "prepared_threshold";
   } else {
-    report.amr_refinement.threshold = p_->refine_threshold;
-    report.amr_refinement.disabled_policy =
-        report.amr_refinement.disabled ? "no_active_tagging_criterion" : "facade_threshold";
-    report.amr_refinement.variable = p_->refine_var_name;
-    report.amr_refinement.role = p_->refine_var_role;
-    report.amr_refinement.tagging_provider_identity = "pops.amr.tagging.component-threshold@1";
-    report.amr_refinement.tagging_authority = "native_threshold_program";
+    report.amr_refinement.disabled_policy = "no_prepared_tagging_authority";
+    report.amr_refinement.tagging_authority = "none";
   }
   report.amr_refinement.tagging_execution_provider_identity =
       p_->amr_tagger_component_ ? p_->amr_tagger_component_->provider_identity()
-                                : "pops.amr.tagging.native-kokkos-vm@1";
-  report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
-  report.amr_refinement.phi_refinement_enabled = has_phi_gradient;
-  if (has_phi_gradient)
-    report.amr_refinement.tagging_provider_identity =
-        "pops.amr.tagging.composite@1[" + report.amr_refinement.tagging_provider_identity +
-        ";pops.amr.tagging.shared-aux-gradient@1]";
+                               : "pops.amr.tagging.native-kokkos-vm@1";
+  report.amr_refinement.phi_grad_threshold =
+      static_cast<double>(kAmrPhiRefinementDisabledThreshold);
+  report.amr_refinement.phi_refinement_enabled = false;
   if (p_->amr_clustering_component_) {
     report.amr_refinement.clustering_provider_identity =
         p_->amr_clustering_component_->provider_identity();

@@ -47,6 +47,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -236,7 +238,7 @@ void configure_refined_execution(AmrSystem& system) {
   // The centered BackgroundDensity source has zero integral by construction, so the periodic
   // nullspace is physically compatible without any silent mean projection.
   system.set_poisson("charge_density", "geometric_mg", "periodic");
-  system.set_refinement(1.2);
+  test::install_prepared_threshold_union(system, {{"gas", "rho", 1.2}});
 }
 
 template <class Model>

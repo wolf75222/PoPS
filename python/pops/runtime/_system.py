@@ -271,7 +271,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect(layout) for the "
                 "static authoring report.")
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
-        # passthrough (instance.install_program / set_refinement / ...) with the bind-vocabulary
+        # passthrough (instance.install_program / ...) with the bind-vocabulary
         # RuntimeError -- NOT AttributeError -- so the bypass is closed even under a prebuilt .so whose
         # C++ setters are not yet frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":

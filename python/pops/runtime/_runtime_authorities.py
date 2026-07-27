@@ -196,8 +196,10 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         raise ValueError(
             "boundary component field dependencies lack exact solved-field routes: %s"
             % sorted(missing_fields))
-    field_routes = tuple(
-        (identity, available_fields[identity]) for identity in sorted(required_fields))
+    # The exact solved-field -> provider-storage registry is shared by every prepared runtime
+    # consumer.  Boundary components use a subset, while AMR tagging may consume another subset;
+    # install the complete resolved table once instead of manufacturing a tagging-only route.
+    field_routes = tuple(sorted(available_fields.items()))
 
     # Installation is an all-authorities transaction from Python's point of
     # view.  Validate and authenticate every block/component row before the
@@ -214,7 +216,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     try:
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
-        install_field_route = getattr(native, "_install_boundary_field_route", None)
+        install_field_route = getattr(native, "_install_field_storage_route", None)
         if field_routes and not callable(install_field_route):
             raise NotImplementedError(
                 "the selected native provider cannot bind qualified boundary field storage")
@@ -542,7 +544,9 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
 
         flow_bootstrap_tagging(
             engine, install_plan.bootstrap_plan, install_plan.params,
-            clock_identity=install_plan.amr_providers["tagger"]["clock_identity"])
+            clock_identity=install_plan.amr_providers["tagger"]["clock_identity"],
+            field_plans=install_plan.artifact.plan.field_plans,
+        )
 
 
 __all__ = ["finalize_runtime_authorities", "install_runtime_authorities"]
