@@ -16,9 +16,15 @@ TEST(test_numerical_defaults, newton_options_defaults_are_centralized) {
   EXPECT_EQ(n.abs_tol, kNewtonDefaultAbsTol) << "Newton abs_tol default is centralized";
   EXPECT_EQ(n.fd_eps, kNewtonDefaultFdEps) << "Newton fd_eps default is centralized";
   EXPECT_EQ(n.damping, kNewtonDefaultDamping) << "Newton damping default is centralized";
-  EXPECT_EQ(n.fail_policy, kNewtonDefaultFailPolicy) << "Newton fail_policy default is centralized";
-  EXPECT_EQ(std::string(newton_fail_policy_name(n.fail_policy)), "none")
-      << "Newton fail policy report name is stable";
+  EXPECT_GT(n.rel_tol, Real(0));
+  EXPECT_GT(n.abs_tol, Real(0));
+}
+
+TEST(test_numerical_defaults, newton_rejects_a_missing_convergence_criterion) {
+  NewtonOptions n;
+  n.rel_tol = Real(0);
+  n.abs_tol = Real(0);
+  EXPECT_THROW(validate_newton_options(n, "test"), std::runtime_error);
 }
 
 TEST(test_numerical_defaults, model_spec_defaults_are_centralized) {

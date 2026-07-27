@@ -1,12 +1,11 @@
-// Newton de la source implicite GENERALISE (audit 2026-06, vague 2) : options (tolerances,
-// damping, fail_policy) et diagnostics (cellule fautive / composante) -- preuves :
+// Newton de la source implicite GENERALISE : options (budget, tolerances, damping), SolveOutcome
+// consomme explicitement et diagnostics (cellule fautive / composante) -- preuves :
 //  (1) NON-EULER MULTI-VARIABLES : un systeme de relaxation NON LINEAIRE 3 variables (aucun layout
 //      rho/m/E, aucune pression) converge sous tolerance -- le solveur n'est pas hardcode Euler.
 //      La solution verifie l'equation BE W = Un + dt*S(W) au residu pres.
 //  (2) DAMPING : newton amorti (damping < 1) converge vers la MEME racine (plus d'iterations).
-//  (3) PATHOLOGIE PROPRE : une source qui produit NaN sur UNE cellule -> fail_policy=throw leve
-//      une erreur claire, le rapport identifie LA cellule fautive (i, j) et la composante.
-//  (4) OBSERVATEUR PUR : avec defauts + diagnostics, W est BIT-IDENTIQUE au chemin historique.
+//  (3) PATHOLOGIES : budget, singularite et NaN ne publient aucun candidat.
+//  (4) OBSERVATEUR PUR : les diagnostics ne changent pas le candidat converge.
 #include <gtest/gtest.h>
 
 #include <pops/core/state/state.hpp>
@@ -19,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 using pops::Aux;
@@ -191,6 +191,18 @@ pops::DistributionMapping* NewtonRobustnessTest::dm_ = nullptr;
 pops::MultiFab* NewtonRobustnessTest::aux_ = nullptr;
 pops::MultiFab* NewtonRobustnessTest::U0_ = nullptr;
 
+TEST(ImplicitSolveOutcomeContract, unconsumed_outcome_fails_loud) {
+  EXPECT_DEATH(
+      {
+        pops::MultiFab destination;
+        auto candidate = std::make_unique<pops::MultiFab>();
+        pops::SolveReport solve;
+        solve.mark_solved("test_candidate");
+        pops::ImplicitSolveOutcome outcome(destination, std::move(candidate), solve, nullptr, "");
+      },
+      "PoPS contract violation: ImplicitSolveOutcome destroyed before explicit consumption");
+}
+
 // (1) NON-EULER MULTI-VARIABLES : converge sous tolerance ; W verifie l'equation BE au residu pres.
 TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backward_euler_root) {
   StiffModel m;
@@ -202,7 +214,9 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto outcome = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  ASSERT_TRUE(outcome.report().solved_value_available());
+  (void)outcome.consume(pops::ImplicitSolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0)
       << "non converge (n_failed=" << rep.n_failed
       << ", res=" << static_cast<double>(rep.max_residual) << ")";
@@ -240,7 +254,9 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto reference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  ASSERT_TRUE(reference.report().solved_value_available());
+  (void)reference.consume(pops::ImplicitSolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine de reference non convergee";
 
   pops::MultiFab Ud = make_mf(*ba_, *dm_, 3);
@@ -249,7 +265,9 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   od.damping = 0.5;
   od.max_iters = 80;
   pops::NewtonReport repd;
-  pops::backward_euler_source(m, *aux_, Ud, kDt, od, {}, &repd);
+  auto damped = pops::backward_euler_source(m, *aux_, Ud, kDt, od, {}, &repd);
+  ASSERT_TRUE(damped.report().solved_value_available());
+  (void)damped.consume(pops::ImplicitSolveConsumption::kAccept);
 
   double dmax = 0;
   for (int li = 0; li < U.local_size(); ++li) {
@@ -267,9 +285,8 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
               static_cast<double>(repd.max_iters_used));
 }
 
-// (3) PATHOLOGIE PROPRE : source qui produit NaN sur UNE cellule -> fail_policy=throw leve une
-// erreur claire, le rapport identifie LA cellule fautive (i, j) et la composante.
-TEST_F(NewtonRobustnessTest, fail_policy_throw_reports_offending_cell_on_nan) {
+// (3) Une evaluation non finie produit un outcome invalide qui reste prive et est consomme FailRun.
+TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publish) {
   NanModel nm;
   pops::MultiFab Un2 = make_mf(*ba_, *dm_, 3);
   for (int li = 0; li < Un2.local_size(); ++li) {
@@ -285,64 +302,24 @@ TEST_F(NewtonRobustnessTest, fail_policy_throw_reports_offending_cell_on_nan) {
   Un2.fab(0).array()(2, 3, 0) = -4.0;  // ...sauf la cellule (2, 3) : sqrt(-4) -> NaN composante 1
   pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
   copy3(Un2, accepted);
-  pops::NewtonOptions opf;
-  opf.fail_policy = pops::NewtonOptions::kFailThrow;
+  pops::NewtonOptions options;
   pops::NewtonReport repf;
-  bool threw = false;
-  try {
-    pops::backward_euler_source(nm, *aux_, Un2, 0.1, opf, {}, &repf);
-  } catch (const std::runtime_error& e) {
-    threw = true;
-    std::printf("OK  (3) fail_policy=throw : %s\n", e.what());
-  }
-  ASSERT_TRUE(threw) << "pas de throw (n_failed=" << repf.n_failed << ")";
+  auto outcome = pops::backward_euler_source(nm, *aux_, Un2, 0.1, options, {}, &repf);
+  ASSERT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
   EXPECT_TRUE(repf.n_failed >= 1) << "pas d'echec rapporte (n_failed=" << repf.n_failed << ")";
-  EXPECT_EQ(repf.solve.status, pops::SolveStatus::kInvalidEvaluation);
-  EXPECT_EQ(repf.solve.action, pops::SolveAction::kFailRun);
+  const pops::SolveReport failed =
+      outcome.consume(pops::ImplicitSolveConsumption::kFailRun);
+  EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
   EXPECT_EQ(repf.diagnostics.count("newton.outcome.fail_run"), 1u)
       << "FailRun non reporte comme consommation explicite";
   EXPECT_TRUE(repf.failed_i == 2 && repf.failed_j == 3)
       << "cellule fautive (" << repf.failed_i << ", " << repf.failed_j << ") != (2, 3)";
   EXPECT_EQ(repf.failed_comp, 1) << "la composante NaN initiale doit rester l'origine de l'echec";
-  std::printf("OK  (3) cellule fautive identifiee (%g, %g), composante %g\n", repf.failed_i,
-              repf.failed_j, repf.failed_comp);
 }
 
-// (3b) Les anciens modes none/warn ne peuvent plus publier silencieusement un candidat invalide.
-TEST_F(NewtonRobustnessTest, legacy_warn_policy_fails_closed_without_publishing) {
-  NanModel nm;
-  pops::MultiFab Unw = make_mf(*ba_, *dm_, 3);
-  for (int li = 0; li < Unw.local_size(); ++li) {
-    pops::Array4 u = Unw.fab(li).array();
-    const pops::Box2D b = Unw.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        u(i, j, 0) = 1.0;
-        u(i, j, 1) = 0.2;
-        u(i, j, 2) = 0.1;
-      }
-  }
-  Unw.fab(0).array()(2, 3, 0) = -4.0;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
-  copy3(Unw, accepted);
-  pops::NewtonOptions opw;
-  opw.fail_policy = pops::NewtonOptions::kFailWarn;
-  pops::NewtonReport repw;
-  EXPECT_THROW(pops::backward_euler_source(nm, *aux_, Unw, 0.1, opw, {}, &repw),
-               std::runtime_error);
-  EXPECT_EQ(max_difference3(Unw, accepted), 0.0)
-      << "fail_policy=warn a publie un candidat invalide";
-  EXPECT_EQ(repw.solve.status, pops::SolveStatus::kInvalidEvaluation);
-  EXPECT_EQ(repw.solve.action, pops::SolveAction::kFailRun);
-  EXPECT_EQ(repw.diagnostics.count("newton.outcome.fail_run"), 1u)
-      << "l'ancien warn doit etre consomme comme FailRun";
-  EXPECT_TRUE(repw.n_failed >= 1) << "fail_policy=warn : n_failed=" << repw.n_failed;
-  std::printf("OK  (3b) fail_policy=warn : FailRun sans publication\n");
-}
-
-// (3c) Une tolerance non satisfaite a l'epuisement du budget ne publie jamais le dernier itere.
+// (3b) Une tolerance non satisfaite a l'epuisement du budget ne publie jamais le dernier itere.
 TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   StiffModel model;
   pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
@@ -355,14 +332,16 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   options.abs_tol = 1e-15;
   pops::NewtonReport report;
 
-  EXPECT_THROW(pops::backward_euler_source(model, *aux_, state, kDt, options, {}, &report),
-               std::runtime_error);
-  EXPECT_EQ(report.solve.status, pops::SolveStatus::kIterationLimit);
-  EXPECT_EQ(report.solve.action, pops::SolveAction::kFailRun);
+  auto outcome =
+      pops::backward_euler_source(model, *aux_, state, kDt, options, {}, &report);
+  EXPECT_EQ(outcome.report().status, pops::SolveStatus::kIterationLimit);
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le dernier itere non converge a ete publie";
+  const pops::SolveReport rejected =
+      outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt);
+  EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
 }
 
-// (3d) Un Jacobien singulier a son propre statut et ne publie pas l'itere partiel.
+// (3c) Un Jacobien singulier a son propre statut et ne publie pas l'itere partiel.
 TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) {
   SingularModel model;
   pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
@@ -372,14 +351,14 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
   pops::NewtonOptions options;
   pops::NewtonReport report;
 
-  EXPECT_THROW(pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report),
-               std::runtime_error);
-  EXPECT_EQ(report.solve.status, pops::SolveStatus::kSingular);
-  EXPECT_EQ(report.solve.action, pops::SolveAction::kFailRun);
+  auto outcome =
+      pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report);
+  EXPECT_EQ(outcome.report().status, pops::SolveStatus::kSingular);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
+  (void)outcome.consume(pops::ImplicitSolveConsumption::kFailRun);
 }
 
-// (3e) La voie preparee permet au controleur temporel de consommer explicitement RejectAttempt.
+// (3d) Le controleur temporel peut consommer explicitement RejectAttempt.
 TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt) {
   NanModel model;
   pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
@@ -390,9 +369,11 @@ TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt
   pops::NewtonOptions options;
   pops::NewtonReport diagnostics;
 
-  auto outcome =
-      pops::prepare_backward_euler_source(model, *aux_, state, 0.1, options, {}, &diagnostics);
+  auto outcome = pops::backward_euler_source(model, *aux_, state, 0.1, options, {}, &diagnostics);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
+  EXPECT_THROW(
+      outcome.consume(static_cast<pops::ImplicitSolveConsumption>(255)), std::logic_error);
+  EXPECT_EQ(max_difference3(state, accepted), 0.0);
   const pops::SolveReport rejected =
       outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt);
   EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
@@ -401,7 +382,7 @@ TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt
   EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt), std::logic_error);
 }
 
-// (3f) Meme un succes reste prive jusqu'a sa consommation explicite, puis ne peut etre consomme deux
+// (3e) Meme un succes reste prive jusqu'a sa consommation explicite, puis ne peut etre consomme deux
 // fois.
 TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   StiffModel model;
@@ -414,26 +395,57 @@ TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   options.rel_tol = 1e-12;
   options.abs_tol = 1e-13;
 
-  auto outcome = pops::prepare_backward_euler_source(model, *aux_, state, kDt, options);
+  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, options);
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le candidat est visible avant consommation";
+  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kFailRun), std::logic_error);
+  EXPECT_EQ(max_difference3(state, accepted), 0.0)
+      << "une action incompatible a consomme ou publie le candidat";
   const pops::SolveReport solved = outcome.consume(pops::ImplicitSolveConsumption::kAccept);
   EXPECT_TRUE(solved.solved_value_available());
   EXPECT_GT(max_difference3(state, accepted), 0.0);
   EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kAccept), std::logic_error);
 }
 
-// (4) Demander le rapport optionnel ne change pas un candidat sain ni sa publication.
-TEST_F(NewtonRobustnessTest, optional_diagnostics_preserve_healthy_accepted_state) {
+TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_outcome) {
+  StiffModel model;
+  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  copy3(*U0_, accepted);
+  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  copy3(accepted, state);
+
+  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, pops::NewtonOptions{});
+  ASSERT_TRUE(outcome.report().solved_value_available());
+
+  // A caller changing the destination structure between prepare and consume used to let lincomb
+  // enter an incompatible layout after the outcome had already been marked consumed. The complete
+  // layout guard now rejects before publication and leaves the valid outcome available.
+  state = pops::MultiFab(*ba_, *dm_, 3, 1);
+  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kAccept), std::logic_error);
+
+  state = make_mf(*ba_, *dm_, 3);
+  copy3(accepted, state);
+  const pops::SolveReport solved = outcome.consume(pops::ImplicitSolveConsumption::kAccept);
+  EXPECT_TRUE(solved.solved_value_available());
+  EXPECT_GT(max_difference3(state, accepted), 0.0);
+}
+
+// (4) Le contrat par defaut converge et le rapport optionnel ne change pas le candidat publie.
+TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnostics) {
   StiffModel m;
   pops::MultiFab Ua = make_mf(*ba_, *dm_, 3), Ub = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Ua);
   copy3(*U0_, Ub);
 
-  pops::backward_euler_source(m, *aux_, Ua, kDt, 2);
   pops::NewtonOptions odef;
+  auto without_report = pops::backward_euler_source(m, *aux_, Ua, kDt, odef);
+  ASSERT_TRUE(without_report.report().solved_value_available());
+  (void)without_report.consume(pops::ImplicitSolveConsumption::kAccept);
   pops::NewtonReport repo;
-  pops::backward_euler_source(m, *aux_, Ub, kDt, odef, {}, &repo);
+  auto with_report = pops::backward_euler_source(m, *aux_, Ub, kDt, odef, {}, &repo);
+  ASSERT_TRUE(with_report.report().solved_value_available());
+  (void)with_report.consume(pops::ImplicitSolveConsumption::kAccept);
+  EXPECT_TRUE(repo.converged);
 
   for (int li = 0; li < Ua.local_size(); ++li) {
     const pops::ConstArray4 a4 = Ua.fab(li).const_array();
@@ -461,14 +473,18 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto finite_difference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  ASSERT_TRUE(finite_difference.report().solved_value_available());
+  (void)finite_difference.consume(pops::ImplicitSolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine FD de reference non convergee";
 
   JacStiffModel jm;
   pops::MultiFab Uj = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Uj);
   pops::NewtonReport repj;
-  pops::backward_euler_source(jm, *aux_, Uj, kDt, opts, {}, &repj);
+  auto analytic = pops::backward_euler_source(jm, *aux_, Uj, kDt, opts, {}, &repj);
+  ASSERT_TRUE(analytic.report().solved_value_available());
+  (void)analytic.consume(pops::ImplicitSolveConsumption::kAccept);
 
   double jdiff = 0;
   for (int li = 0; li < U.local_size(); ++li) {
