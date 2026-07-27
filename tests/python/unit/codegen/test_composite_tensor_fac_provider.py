@@ -356,6 +356,7 @@ def _public_amr_hierarchy_case(
     temporal_ratios=(3,),
     bound_plasma=False,
     manufactured_plasma=False,
+    reject_solve_failure=False,
     base_cells=_HIERARCHY_BASE_CELLS,
 ):
     import pops
@@ -395,7 +396,14 @@ def _public_amr_hierarchy_case(
     from pops.projection import ConservativeCellAverage
     from pops.representations import Conservative
     from pops.spaces import CellState
-    from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
+    from pops.time import (
+        FailRun,
+        FixedDt,
+        RejectAttempt,
+        StagePoint,
+        TimePoint,
+        every,
+    )
 
     frame = Rectangle(
         "external-hierarchy-square", lower=(0.0, 0.0), upper=(1.0, 1.0)
@@ -541,7 +549,13 @@ def _public_amr_hierarchy_case(
         ),
         solver=solver,
         name="tensor-potential",
-    ).consume(action=FailRun())
+    ).consume(
+        action=(
+            RejectAttempt(statuses=("iteration_limit",))
+            if reject_solve_failure
+            else FailRun()
+        )
+    )
     program.store_history("plasma.tensor-potential", potential)
     reconstructed = program.condensed_reconstruct(
         "reconstructed-state",
@@ -712,6 +726,13 @@ def _external_hierarchy_carry_metrics(so_path):
         float(library.pops_test_hierarchy_second_guess_norm_sum()),
         int(library.pops_test_hierarchy_second_guess_calls()),
     )
+
+
+def _external_hierarchy_fail_next_solve(so_path):
+    library = ctypes.CDLL(so_path)
+    library.pops_test_hierarchy_fail_next_solve.argtypes = ()
+    library.pops_test_hierarchy_fail_next_solve.restype = None
+    library.pops_test_hierarchy_fail_next_solve()
 
 
 def _nonuniform_plasma_initial():
@@ -886,6 +907,7 @@ std::atomic<std::uint64_t> prepare_calls{0};
 std::atomic<std::uint64_t> execution_queries{0};
 std::atomic<std::uint64_t> solve_calls{0};
 std::atomic<std::uint64_t> second_guess_calls{0};
+std::atomic<bool> fail_next_solve{false};
 // Provider orchestration is single-threaded.  The Kokkos reductions complete before these host-only
 // witnesses are read or written, so atomics would add no safety and are unavailable for double in
 // the project's C++17 contract.
@@ -933,6 +955,10 @@ class DelegatingPrepared final
     const std::uint64_t solve_index =
         solve_calls.fetch_add(1, std::memory_order_relaxed);
     pops::SolveReport report = delegate_->solve(controls);
+    if (fail_next_solve.exchange(false, std::memory_order_relaxed))
+      report.mark_failed(
+          pops::SolveStatus::kIterationLimit, pops::SolveAction::kRejectAttempt,
+          "injected hierarchy solve rejection after provisional solution");
     if (solve_index == 0) {
       for (std::size_t level = 0; level < level_populated_.size(); ++level)
         if (level_populated_[level])
@@ -1081,6 +1107,10 @@ extern "C" POPS_EXPORT double pops_test_hierarchy_second_guess_norm_sum() noexce
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() noexcept {
   return pops_test_hierarchy::second_guess_calls.load(std::memory_order_relaxed);
 }
+
+extern "C" POPS_EXPORT void pops_test_hierarchy_fail_next_solve() noexcept {
+  pops_test_hierarchy::fail_next_solve.store(true, std::memory_order_relaxed);
+}
 """,
         encoding="utf-8",
     )
@@ -1172,13 +1202,14 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     )
     configurations = (
         # Preserve the two-step outflow/reflux/history-carry composition.
-        (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
+        (2, (3,), 2, True, False, True, _HIERARCHY_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
-        (2, (3,), 1, False, True, _HIERARCHY_BASE_CELLS),
-        (2, (3,), 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
-        # Keep the N-level gather/publish and nonbinary temporal-ratio guard.  The nonzero N-level
-        # scientific gate remains open because the general FAC currently diverges on the MMS.
-        (3, (3, 5), 1, False, False, _HIERARCHY_BASE_CELLS),
+        (2, (3,), 1, False, True, False, _HIERARCHY_BASE_CELLS),
+        (2, (3,), 1, False, True, False, 2 * _HIERARCHY_BASE_CELLS),
+        # Keep the N-level gather/publish and nonbinary temporal-ratio guard.  The independent
+        # nonzero convergence proof remains the refined MMS pair above; native scalar and MPI tests
+        # separately exercise the repaired three-level periodic tensor FAC.
+        (3, (3, 5), 1, False, False, False, _HIERARCHY_BASE_CELLS),
     )
     for (
         max_levels,
@@ -1186,6 +1217,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         steps,
         bound_plasma,
         manufactured_plasma,
+        reject_solve_failure,
         base_cells,
     ) in configurations:
         case, layout, plasma_state = _public_amr_hierarchy_case(
@@ -1194,6 +1226,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             temporal_ratios=temporal_ratios,
             bound_plasma=bound_plasma,
             manufactured_plasma=manufactured_plasma,
+            reject_solve_failure=reject_solve_failure,
             base_cells=base_cells,
         )
         resolved = pops.resolve(
@@ -1301,6 +1334,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         }
 
         if bound_plasma:
+            from pops._bootstrap import StepAttemptRejected
+
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
             # sibling plasma block executes its hierarchy solve.  The accepted marker mass remains
             # conservative after both refluxed macro-steps.
@@ -1336,6 +1371,78 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                     dtype=np.float64,
                 )
                 assert actual.size > 0 and np.isfinite(actual).all()
+
+            # The hierarchy solve is part of the same accepted-step transaction as transport,
+            # reflux and the qualified phi history. Force the external provider to report an
+            # iteration-limit after it has produced a provisional solution. RejectAttempt must leave
+            # every externally visible store at the preceding accepted boundary.
+            accepted_time = simulation.time()
+            accepted_step = simulation.macro_step()
+            accepted_states = {
+                (block_name, level): np.asarray(
+                    simulation.block_level_state_global(block_name, level),
+                    dtype=np.float64,
+                ).copy()
+                for block_name in ("plasma", "marker")
+                for level in range(max_levels)
+            }
+            accepted_history = np.asarray(
+                simulation.history_global("plasma.tensor-potential", 1),
+                dtype=np.float64,
+            ).copy()
+            accepted_program_report = simulation.program_report()
+            solve_calls_before_rejection = _external_hierarchy_counters(
+                compiled.so_path
+            )[3]
+            _external_hierarchy_fail_next_solve(compiled.so_path)
+            with pytest.raises(StepAttemptRejected, match="iteration_limit"):
+                pops.run(
+                    simulation,
+                    t_end=accepted_time + _HIERARCHY_DT,
+                    max_steps=1,
+                    console=False,
+                )
+            assert simulation.time() == pytest.approx(accepted_time)
+            assert simulation.macro_step() == accepted_step
+            assert _external_hierarchy_counters(compiled.so_path)[3] == (
+                solve_calls_before_rejection + 1
+            )
+            for (block_name, level), accepted_state in accepted_states.items():
+                np.testing.assert_array_equal(
+                    simulation.block_level_state_global(block_name, level),
+                    accepted_state,
+                )
+            np.testing.assert_array_equal(
+                simulation.history_global("plasma.tensor-potential", 1),
+                accepted_history,
+            )
+            rejected_program_report = simulation.program_report()
+            assert rejected_program_report.clocks == accepted_program_report.clocks
+            assert (
+                rejected_program_report.histories
+                == accepted_program_report.histories
+            )
+            assert (
+                rejected_program_report.flux_ledger
+                == accepted_program_report.flux_ledger
+            )
+            assert (
+                rejected_program_report.synchronization
+                == accepted_program_report.synchronization
+            )
+
+            # A clean retry must consume restored accepted phi^n and commit one new macro-step.
+            retry_report = pops.run(
+                simulation,
+                t_end=accepted_time + _HIERARCHY_DT,
+                max_steps=1,
+                console=False,
+            )
+            assert retry_report.accepted_steps == 1
+            assert simulation.time() == pytest.approx(
+                accepted_time + _HIERARCHY_DT
+            )
+            assert simulation.macro_step() == accepted_step + 1
             continue
 
         if not manufactured_plasma:
