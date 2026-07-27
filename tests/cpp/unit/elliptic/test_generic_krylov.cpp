@@ -589,7 +589,7 @@ SolveReport run_prepared_with_preconditioner(
   KrylovWorkspace workspace(iterate, method, footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);
-  return solve_prepared_affine(problem, workspace, iterate, rhs,
+  return detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                                KrylovControls{method, rel_tol, abs_tol, max_iterations});
 }
 
@@ -1201,11 +1201,11 @@ TEST(test_krylov_method_provider, external_method_uses_registry_and_generic_work
   problem.prepare(snapshot);
   workspace.bind(problem);
 
-  const SolveReport report = solve_prepared_affine(problem, workspace, iterate, rhs,
+  const SolveReport report = detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                                                    KrylovControls{method, Real(1e-12), Real(0), 1});
   EXPECT_TRUE(report.solved());
   EXPECT_EQ(report.iters, 1);
-  EXPECT_EQ(workspace.allocation_count(), 2u);
+  EXPECT_EQ(workspace.allocation_count(), 3u);
   EXPECT_EQ(workspace.scalar_value_count(), 1u);
   EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
 }
@@ -1278,7 +1278,7 @@ TEST(test_vector_distribution_provider,
   KrylovWorkspace workspace(iterate, method, footprint, distribution);
   problem.prepare(snapshot);
   workspace.bind(problem);
-  const SolveReport report = solve_prepared_affine(problem, workspace, iterate, rhs,
+  const SolveReport report = detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                                                    KrylovControls{method, Real(1e-12), Real(0), 4});
   EXPECT_TRUE(report.solved());
   const Real roundoff = Real(8) * std::numeric_limits<Real>::epsilon() * Real(2.5);
@@ -2718,6 +2718,79 @@ TEST_F(GenericKrylov, final_true_residual_promotes_an_exhausted_iteration_budget
   EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
 }
 
+TEST_F(GenericKrylov, outcome_keeps_candidate_private_until_accept_and_holds_reservations) {
+  ApplyFn identity = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+  MultiFab rhs(*ba_, *dm_, 1, 0);
+  MultiFab iterate(*ba_, *dm_, 1, 1);
+  MultiFab accepted_before(*ba_, *dm_, 1, 1);
+  rhs.set_val(Real(3.25));
+  iterate.set_val(Real(-7));
+  PureFieldAlgebra::copy(accepted_before, iterate);
+
+  const PreparedKrylovMethod method = richardson_krylov_method(Real(1));
+  const KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(), false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, reentrant_test_operator(identity), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
+      [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(iterate, method, footprint);
+  const KrylovControls controls{method, Real(1e-14), Real(0), 1};
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  SolveOutcome outcome =
+      solve_prepared_affine_outcome(problem, workspace, iterate, rhs, controls);
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_EQ(max_abs_diff(iterate, accepted_before), Real(0));
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls),
+               std::logic_error);
+
+  const SolveReport report = outcome.consume(SolveConsumption::kAccept);
+  ASSERT_TRUE(report.solved_value_available()) << report.reason;
+  EXPECT_EQ(max_abs_diff(iterate, rhs), Real(0));
+  EXPECT_NO_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls));
+}
+
+TEST_F(GenericKrylov, failed_outcome_discards_candidate_and_releases_reservations) {
+  ApplyFn identity = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+  MultiFab rhs(*ba_, *dm_, 1, 0);
+  MultiFab iterate(*ba_, *dm_, 1, 1);
+  MultiFab accepted_before(*ba_, *dm_, 1, 1);
+  rhs.set_val(Real(1));
+  iterate.set_val(Real(0));
+  PureFieldAlgebra::copy(accepted_before, iterate);
+
+  const PreparedKrylovMethod method = richardson_krylov_method(Real(0.25));
+  const KrylovFootprint footprint{iterate.ncomp(), iterate.n_grow(), false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, reentrant_test_operator(identity), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
+      [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(iterate, method, footprint);
+  const KrylovControls controls{method, Real(1e-14), Real(0), 1};
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  SolveOutcome outcome =
+      solve_prepared_affine_outcome(problem, workspace, iterate, rhs, controls);
+  ASSERT_FALSE(outcome.report().solved_value_available());
+  EXPECT_EQ(outcome.report().status, SolveStatus::kIterationLimit);
+  EXPECT_EQ(max_abs_diff(iterate, accepted_before), Real(0));
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls),
+               std::logic_error);
+
+  const SolveReport report = outcome.consume(SolveConsumption::kFailRun);
+  EXPECT_EQ(report.action, SolveAction::kFailRun);
+  EXPECT_EQ(max_abs_diff(iterate, accepted_before), Real(0));
+  EXPECT_NO_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls));
+}
+
 TEST_F(GenericKrylov, snapshot_rejects_nonfinite_or_incoherent_time_identity) {
   OperatorEvaluationSnapshot snapshot = snapshot_for(*phi_exact_mf_);
   EXPECT_TRUE(snapshot.valid());
@@ -2755,14 +2828,14 @@ TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
   if (n_ranks() > 1)
     EXPECT_GT(halo_resources, 0u);
   snapshot.revision += 1;
-  EXPECT_THROW((void)solve_prepared_affine(problem, workspace, x, *rhs_, controls),
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_, controls),
                std::logic_error);
 
   snapshot.resources[0] += 1;
   problem.prepare(snapshot);
   workspace.bind(problem);
   const AllocationEventStats before_hot_solve = allocation_event_stats();
-  const SolveReport first = solve_prepared_affine(problem, workspace, x, *rhs_, controls);
+  const SolveReport first = detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_, controls);
   const AllocationEventStats after_hot_solve = allocation_event_stats();
   EXPECT_TRUE(first.solved());
   EXPECT_GT(first.iters, 0);
@@ -2772,7 +2845,7 @@ TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
   snapshot.revision += 1;
   problem.prepare(snapshot);
   workspace.bind(problem);
-  const SolveReport second = solve_prepared_affine(problem, workspace, x, *rhs_, controls);
+  const SolveReport second = detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_, controls);
   EXPECT_TRUE(second.solved());
   EXPECT_EQ(workspace.allocation_count(), allocations);
   EXPECT_EQ(x.halo_cache().exchange_pool_size(), halo_resources);
@@ -2821,7 +2894,7 @@ TEST_F(GenericKrylov, prepared_hot_solves_allocate_no_fab_or_communication_stora
       const AllocationEventStats before_hot_solve = allocation_event_stats();
       const std::uint64_t consensus_calls_before = exact_consensus_dynamic_storage_calls();
       const SolveReport report =
-          solve_prepared_affine(problem, workspace, iterate, *rhs_, controls);
+          detail::solve_prepared_affine_in_place(problem, workspace, iterate, *rhs_, controls);
       const std::uint64_t consensus_calls_after = exact_consensus_dynamic_storage_calls();
       const AllocationEventStats after_hot_solve = allocation_event_stats();
 
@@ -2862,7 +2935,7 @@ TEST_F(GenericKrylov, iterate_and_rhs_must_not_alias) {
   workspace.bind(problem);
 
   EXPECT_THROW(
-      (void)solve_prepared_affine(problem, workspace, x, x,
+      (void)detail::solve_prepared_affine_in_place(problem, workspace, x, x,
                                   KrylovControls{cg_krylov_method(), kRelTol, Real(0), 10}),
       std::invalid_argument);
 }
@@ -2891,7 +2964,7 @@ TEST_F(GenericKrylov, extension_apply_mutation_is_refused_before_result_consumpt
   mutate_during_apply = true;
 
   EXPECT_THROW(
-      (void)solve_prepared_affine(problem, workspace, x, *rhs_,
+      (void)detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_,
                                   KrylovControls{cg_krylov_method(), kRelTol, Real(0), 10}),
       std::logic_error);
 }
@@ -2970,7 +3043,7 @@ TEST_F(GenericKrylov, rank_local_snapshot_drift_is_refused_collectively_at_all_s
   if (my_rank() == 0)
     ++observed.revision;
   expect_collective_logic_error(
-      [&]() { (void)solve_prepared_affine(problem, workspace, x, *rhs_, controls); },
+      [&]() { (void)detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_, controls); },
       "operator snapshot mutated after preparation on at least one communicator rank");
 
   observed = expected;
@@ -2978,6 +3051,6 @@ TEST_F(GenericKrylov, rank_local_snapshot_drift_is_refused_collectively_at_all_s
   workspace.bind(problem);
   mutate_during_apply = true;
   expect_collective_logic_error(
-      [&]() { (void)solve_prepared_affine(problem, workspace, x, *rhs_, controls); },
+      [&]() { (void)detail::solve_prepared_affine_in_place(problem, workspace, x, *rhs_, controls); },
       "operator snapshot mutated after preparation on at least one communicator rank");
 }

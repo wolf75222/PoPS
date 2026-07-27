@@ -534,7 +534,7 @@ TEST(test_krylov_workspace_reentrancy,
   std::string rejection;
   if (entered_on_every_rank) {
     try {
-      (void)prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+      (void)detail::prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls);
     } catch (const std::logic_error& error) {
       rejected_as_logic_error = true;
       rejection = error.what();
@@ -610,7 +610,7 @@ TEST(test_krylov_workspace_reentrancy,
   std::string rejection;
   if (entered_on_every_rank) {
     try {
-      (void)prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+      (void)detail::prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls);
     } catch (const std::logic_error& error) {
       rejected_as_logic_error = true;
       rejection = error.what();
@@ -775,9 +775,9 @@ TEST(test_krylov_workspace_reentrancy,
   fill_rhs(right_rhs, Real(-2));
   const KrylovControls controls{method, Real(1e-12), Real(0), 100};
 
-  const SolveReport oracle_left_report = solve_prepared_affine(
+  const SolveReport oracle_left_report = detail::solve_prepared_affine_in_place(
       problem, oracle_left_workspace, oracle_left_iterate, oracle_left_rhs, controls);
-  const SolveReport oracle_right_report = solve_prepared_affine(
+  const SolveReport oracle_right_report = detail::solve_prepared_affine_in_place(
       problem, oracle_right_workspace, oracle_right_iterate, oracle_right_rhs, controls);
   ASSERT_TRUE(oracle_left_report.solved()) << oracle_left_report.reason;
   ASSERT_TRUE(oracle_right_report.solved()) << oracle_right_report.reason;
@@ -786,9 +786,9 @@ TEST(test_krylov_workspace_reentrancy,
   // The worker entry order is then deliberately reversed on odd ranks. If both solves accidentally
   // share WORLD (or any one collective trace), this opposite interleaving deadlocks or mismatches.
   PreparedKrylovInvocation left_invocation =
-      prepare_krylov_solve(problem, left_workspace, left_iterate, left_rhs, controls);
+      detail::prepare_krylov_solve_in_place(problem, left_workspace, left_iterate, left_rhs, controls);
   PreparedKrylovInvocation right_invocation =
-      prepare_krylov_solve(problem, right_workspace, right_iterate, right_rhs, controls);
+      detail::prepare_krylov_solve_in_place(problem, right_workspace, right_iterate, right_rhs, controls);
   SolveReport left_report;
   SolveReport right_report;
   std::exception_ptr left_failure;
@@ -893,7 +893,7 @@ TEST(test_krylov_workspace_reentrancy,
   problem.prepare(snapshot);
   workspace.bind(problem);
 
-  const SolveReport report = solve_prepared_affine(problem, workspace, iterate, rhs,
+  const SolveReport report = detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                                                    KrylovControls{method, Real(0), Real(0), 1});
 
   EXPECT_EQ(report.status, SolveStatus::kIterationLimit);
@@ -946,10 +946,10 @@ TEST(test_krylov_workspace_reentrancy,
 
   {
     PreparedKrylovInvocation first =
-        prepare_krylov_solve(problem, first_workspace, first_iterate, first_rhs, controls);
+        detail::prepare_krylov_solve_in_place(problem, first_workspace, first_iterate, first_rhs, controls);
     std::string rejection;
     try {
-      (void)prepare_krylov_solve(problem, second_workspace, second_iterate, second_rhs, controls);
+      (void)detail::prepare_krylov_solve_in_place(problem, second_workspace, second_iterate, second_rhs, controls);
     } catch (const std::logic_error& error) {
       rejection = error.what();
     }
@@ -961,7 +961,7 @@ TEST(test_krylov_workspace_reentrancy,
   }
 
   PreparedKrylovInvocation second =
-      prepare_krylov_solve(problem, second_workspace, second_iterate, second_rhs, controls);
+      detail::prepare_krylov_solve_in_place(problem, second_workspace, second_iterate, second_rhs, controls);
   const SolveReport second_report = second.execute();
   EXPECT_TRUE(second_report.solved()) << second_report.reason;
 }
@@ -1016,7 +1016,7 @@ TEST(test_krylov_workspace_reentrancy,
 
   {
     PreparedKrylovInvocation first =
-        prepare_krylov_solve(first_problem, first_workspace, first_iterate, first_rhs, controls);
+        detail::prepare_krylov_solve_in_place(first_problem, first_workspace, first_iterate, first_rhs, controls);
     std::string prepare_rejection;
     try {
       second_problem.prepare(second_snapshot);
@@ -1047,7 +1047,7 @@ TEST(test_krylov_workspace_reentrancy,
         "another prepared operation is active");
     std::string rejection;
     try {
-      (void)prepare_krylov_solve(second_problem, second_workspace, second_iterate, second_rhs,
+      (void)detail::prepare_krylov_solve_in_place(second_problem, second_workspace, second_iterate, second_rhs,
                                  controls);
     } catch (const std::logic_error& error) {
       rejection = error.what();
@@ -1060,7 +1060,7 @@ TEST(test_krylov_workspace_reentrancy,
   }
 
   PreparedKrylovInvocation second =
-      prepare_krylov_solve(second_problem, second_workspace, second_iterate, second_rhs, controls);
+      detail::prepare_krylov_solve_in_place(second_problem, second_workspace, second_iterate, second_rhs, controls);
   const SolveReport second_report = second.execute();
   EXPECT_TRUE(second_report.solved()) << second_report.reason;
 }
@@ -1098,7 +1098,7 @@ TEST(test_krylov_workspace_reentrancy,
 
   {
     PreparedKrylovInvocation invocation =
-        prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+        detail::prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls);
     std::string apply_rejection;
     try {
       problem.apply_linear(output, rhs);
@@ -1191,7 +1191,7 @@ TEST(test_krylov_workspace_reentrancy,
   MultiFab rhs(boxes, mapping, 1, 0);
   iterate.set_val(Real(0));
   rhs.set_val(Real(2));
-  const SolveReport report = solve_prepared_affine(second_problem, workspace, iterate, rhs,
+  const SolveReport report = detail::solve_prepared_affine_in_place(second_problem, workspace, iterate, rhs,
                                                    KrylovControls{method, Real(1e-12), Real(0), 4});
   EXPECT_TRUE(report.solved()) << report.reason;
 }
@@ -1353,7 +1353,7 @@ TEST(test_krylov_workspace_reentrancy,
     iterate.set_val(Real(0));
     rhs.set_val(Real(0));
     fill_rhs(rhs, Real(1));
-    const SolveReport report = solve_prepared_affine(
+    const SolveReport report = detail::solve_prepared_affine_in_place(
         problem, workspace, iterate, rhs, KrylovControls{method, Real(1e-12), Real(0), 100});
     EXPECT_TRUE(report.solved()) << report.reason;
     EXPECT_GT(report.iters, 0);

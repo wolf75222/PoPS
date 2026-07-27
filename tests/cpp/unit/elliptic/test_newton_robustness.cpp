@@ -13,6 +13,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
@@ -191,16 +192,36 @@ pops::DistributionMapping* NewtonRobustnessTest::dm_ = nullptr;
 pops::MultiFab* NewtonRobustnessTest::aux_ = nullptr;
 pops::MultiFab* NewtonRobustnessTest::U0_ = nullptr;
 
-TEST(ImplicitSolveOutcomeContract, unconsumed_outcome_fails_loud) {
+TEST(SolveOutcomeContract, unconsumed_outcome_fails_loud) {
   EXPECT_DEATH(
       {
-        pops::MultiFab destination;
-        auto candidate = std::make_unique<pops::MultiFab>();
         pops::SolveReport solve;
         solve.mark_solved("test_candidate");
-        pops::ImplicitSolveOutcome outcome(destination, std::move(candidate), solve, nullptr, "");
+        auto outcome = pops::SolveOutcome::serial(std::move(solve));
       },
-      "PoPS contract violation: ImplicitSolveOutcome destroyed before explicit consumption");
+      "PoPS contract violation: SolveOutcome destroyed before explicit consumption");
+}
+
+TEST(SolveOutcomeContract, incompatible_action_does_not_consume_a_valid_outcome) {
+  pops::SolveReport solve;
+  solve.mark_solved("test_candidate");
+  auto outcome = pops::SolveOutcome::serial(std::move(solve));
+
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
+  EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved_value_available());
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
+}
+
+TEST(SolveOutcomeContract, explicit_failure_action_is_the_published_report_action) {
+  pops::SolveReport solve;
+  solve.mark_failed(pops::SolveStatus::kBreakdown, pops::SolveAction::kFailRun,
+                    "injected breakdown");
+  auto outcome = pops::SolveOutcome::serial(std::move(solve));
+
+  const pops::SolveReport rejected =
+      outcome.consume(pops::SolveConsumption::kRejectAttempt);
+  EXPECT_EQ(rejected.status, pops::SolveStatus::kBreakdown);
+  EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
 }
 
 // (1) NON-EULER MULTI-VARIABLES : converge sous tolerance ; W verifie l'equation BE au residu pres.
@@ -216,7 +237,7 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
   pops::NewtonReport rep;
   auto outcome = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(outcome.report().solved_value_available());
-  (void)outcome.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)outcome.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0)
       << "non converge (n_failed=" << rep.n_failed
       << ", res=" << static_cast<double>(rep.max_residual) << ")";
@@ -256,7 +277,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   pops::NewtonReport rep;
   auto reference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(reference.report().solved_value_available());
-  (void)reference.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)reference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine de reference non convergee";
 
   pops::MultiFab Ud = make_mf(*ba_, *dm_, 3);
@@ -267,7 +288,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   pops::NewtonReport repd;
   auto damped = pops::backward_euler_source(m, *aux_, Ud, kDt, od, {}, &repd);
   ASSERT_TRUE(damped.report().solved_value_available());
-  (void)damped.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)damped.consume(pops::SolveConsumption::kAccept);
 
   double dmax = 0;
   for (int li = 0; li < U.local_size(); ++li) {
@@ -310,7 +331,7 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
       << "un candidat invalide a ete publie dans l'etat accepte";
   EXPECT_TRUE(repf.n_failed >= 1) << "pas d'echec rapporte (n_failed=" << repf.n_failed << ")";
   const pops::SolveReport failed =
-      outcome.consume(pops::ImplicitSolveConsumption::kFailRun);
+      outcome.consume(pops::SolveConsumption::kFailRun);
   EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
   EXPECT_EQ(repf.diagnostics.count("newton.outcome.fail_run"), 1u)
       << "FailRun non reporte comme consommation explicite";
@@ -337,7 +358,7 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kIterationLimit);
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le dernier itere non converge a ete publie";
   const pops::SolveReport rejected =
-      outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt);
+      outcome.consume(pops::SolveConsumption::kRejectAttempt);
   EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
 }
 
@@ -355,7 +376,7 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
       pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kSingular);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
-  (void)outcome.consume(pops::ImplicitSolveConsumption::kFailRun);
+  (void)outcome.consume(pops::SolveConsumption::kFailRun);
 }
 
 // (3d) Le controleur temporel peut consommer explicitement RejectAttempt.
@@ -372,14 +393,14 @@ TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt
   auto outcome = pops::backward_euler_source(model, *aux_, state, 0.1, options, {}, &diagnostics);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_THROW(
-      outcome.consume(static_cast<pops::ImplicitSolveConsumption>(255)), std::logic_error);
+      outcome.consume(static_cast<pops::SolveConsumption>(255)), std::logic_error);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
   const pops::SolveReport rejected =
-      outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt);
+      outcome.consume(pops::SolveConsumption::kRejectAttempt);
   EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
   EXPECT_EQ(diagnostics.diagnostics.count("newton.outcome.reject_attempt"), 1u);
-  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kRejectAttempt), std::logic_error);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kRejectAttempt), std::logic_error);
 }
 
 // (3e) Meme un succes reste prive jusqu'a sa consommation explicite, puis ne peut etre consomme deux
@@ -398,13 +419,13 @@ TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, options);
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le candidat est visible avant consommation";
-  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kFailRun), std::logic_error);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
   EXPECT_EQ(max_difference3(state, accepted), 0.0)
       << "une action incompatible a consomme ou publie le candidat";
-  const pops::SolveReport solved = outcome.consume(pops::ImplicitSolveConsumption::kAccept);
+  const pops::SolveReport solved = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(solved.solved_value_available());
   EXPECT_GT(max_difference3(state, accepted), 0.0);
-  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
 }
 
 TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_outcome) {
@@ -421,11 +442,11 @@ TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_out
   // enter an incompatible layout after the outcome had already been marked consumed. The complete
   // layout guard now rejects before publication and leaves the valid outcome available.
   state = pops::MultiFab(*ba_, *dm_, 3, 1);
-  EXPECT_THROW(outcome.consume(pops::ImplicitSolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
 
   state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
-  const pops::SolveReport solved = outcome.consume(pops::ImplicitSolveConsumption::kAccept);
+  const pops::SolveReport solved = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(solved.solved_value_available());
   EXPECT_GT(max_difference3(state, accepted), 0.0);
 }
@@ -440,11 +461,11 @@ TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnost
   pops::NewtonOptions odef;
   auto without_report = pops::backward_euler_source(m, *aux_, Ua, kDt, odef);
   ASSERT_TRUE(without_report.report().solved_value_available());
-  (void)without_report.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)without_report.consume(pops::SolveConsumption::kAccept);
   pops::NewtonReport repo;
   auto with_report = pops::backward_euler_source(m, *aux_, Ub, kDt, odef, {}, &repo);
   ASSERT_TRUE(with_report.report().solved_value_available());
-  (void)with_report.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)with_report.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(repo.converged);
 
   for (int li = 0; li < Ua.local_size(); ++li) {
@@ -475,7 +496,7 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   pops::NewtonReport rep;
   auto finite_difference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(finite_difference.report().solved_value_available());
-  (void)finite_difference.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)finite_difference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine FD de reference non convergee";
 
   JacStiffModel jm;
@@ -484,7 +505,7 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   pops::NewtonReport repj;
   auto analytic = pops::backward_euler_source(jm, *aux_, Uj, kDt, opts, {}, &repj);
   ASSERT_TRUE(analytic.report().solved_value_available());
-  (void)analytic.consume(pops::ImplicitSolveConsumption::kAccept);
+  (void)analytic.consume(pops::SolveConsumption::kAccept);
 
   double jdiff = 0;
   for (int li = 0; li < U.local_size(); ++li) {

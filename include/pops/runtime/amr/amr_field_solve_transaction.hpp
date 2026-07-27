@@ -15,29 +15,6 @@
 namespace pops {
 namespace detail {
 
-/// Scope-bound rollback for a field solve. The callable is noexcept so a rejected report or an
-/// exception restores the previously published fields while preserving the original failure.
-template <class Rollback, class Release>
-class FieldSolveTransaction {
- public:
-  FieldSolveTransaction(Rollback rollback, Release release)
-      : rollback_(std::move(rollback)), release_(std::move(release)) {}
-  FieldSolveTransaction(const FieldSolveTransaction&) = delete;
-  FieldSolveTransaction& operator=(const FieldSolveTransaction&) = delete;
-  ~FieldSolveTransaction() noexcept {
-    if (!committed_)
-      rollback_();
-    release_();
-  }
-
-  void commit() noexcept { committed_ = true; }
-
- private:
-  Rollback rollback_;
-  Release release_;
-  bool committed_ = false;
-};
-
 struct CopyAuxComponentKernel {
   ConstArray4 source;
   Array4 destination;
@@ -256,9 +233,11 @@ inline void AmrRuntime::publish_refined_aux_components(const std::vector<int>& c
 }
 
 inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
-    const FieldSolveScope& scope) {
-  if (field_solve_transaction_active_)
-    throw std::logic_error("AmrRuntime field solves are sequential and cannot be re-entered");
+    const FieldSolveScope& scope, bool candidate_slot) {
+  if (candidate_slot != field_solve_transaction_active_)
+    throw std::logic_error(candidate_slot
+                               ? "AmrRuntime field candidate capture requires an active transaction"
+                               : "AmrRuntime field solves are sequential and cannot be re-entered");
   if (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
       scope.selected_named_field == nullptr)
     throw std::invalid_argument("selected field-solve scope requires an exact field identity");
@@ -273,7 +252,8 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
   const auto same_scope = [&](const FieldSolveSnapshot& snapshot) {
     return snapshot.scope_default_field == scope.default_field &&
            snapshot.scope_named_fields == scope.named_fields &&
-           snapshot.scope_selected_named_field == selected;
+           snapshot.scope_selected_named_field == selected &&
+           snapshot.candidate_slot == candidate_slot;
   };
   const auto compatible = [&](const FieldSolveSnapshot& snapshot) {
     if (!same_scope(snapshot) ||
@@ -335,6 +315,7 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
     candidate.scope_default_field = scope.default_field;
     candidate.scope_named_fields = scope.named_fields;
     candidate.scope_selected_named_field = selected;
+    candidate.candidate_slot = candidate_slot;
     candidate.aux_components = components;
     candidate.packed_aux = allocate_aux_component_carriers_(components);
     if (scope.default_field) {
@@ -379,9 +360,6 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
   }
   for (auto& [name, state] : workspace->named) {
     const NamedField& field = named_fields_.at(name);
-    state.nullspace = field.nullspace;
-    state.level_nullspace = field.level_nullspace;
-    state.nullspace_ready = field.nullspace_ready;
     if (!field.solver)
       continue;
     for (int level = 0; level < field.solver->level_count(); ++level) {
@@ -392,14 +370,14 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
     }
   }
   device_fence();
-  field_solve_transaction_active_ = true;
+  if (!candidate_slot)
+    field_solve_transaction_active_ = true;
   return *workspace;
 }
 
-inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot& snapshot) noexcept {
-  try {
+inline void AmrRuntime::restore_field_solve_snapshot(const FieldSolveSnapshot& snapshot) {
     if (snapshot.topology_generation != topology_materialization_generation_)
-      std::terminate();
+      throw std::logic_error("field publication snapshot crossed an AMR topology generation");
     device_fence();
     if (snapshot.has_default) {
       PureFieldAlgebra::copy_allocated(default_field_solver_->phi_level(0), snapshot.default_phi);
@@ -409,17 +387,19 @@ inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot& snapsho
     for (auto& [name, state] : snapshot.named) {
       const auto found = named_fields_.find(name);
       if (found == named_fields_.end())
-        std::terminate();
+        throw std::logic_error("field publication snapshot names an unknown AMR field");
       NamedField& field = found->second;
       using Storage = FieldSolveSnapshot::NamedFieldState::Storage;
       if (state.storage == Storage::kUnallocated) {
         invalidate_named_field_solver(field);
       } else {
         const bool composite = state.storage == Storage::kComposite;
+        if (!field.solver)
+          ensure_named_elliptic(field);
         if (!field.solver || field.solver->couples_hierarchy_levels() != composite ||
             state.phi.size() != static_cast<std::size_t>(field.solver->level_count()) ||
             state.rhs.size() != state.phi.size())
-          std::terminate();
+          throw std::logic_error("field publication snapshot has incompatible AMR solver storage");
         for (int level = 0; level < field.solver->level_count(); ++level) {
           PureFieldAlgebra::copy_allocated(field.solver->phi_level(level),
                                            state.phi[static_cast<std::size_t>(level)]);
@@ -427,33 +407,62 @@ inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot& snapsho
                                            state.rhs[static_cast<std::size_t>(level)]);
         }
       }
-      if (!state.nullspace_ready) {
-        field.nullspace_workspace.reset();
-        field.level_nullspace_workspaces.clear();
-        field.nullspace_rhs_levels.clear();
-        field.nullspace_phi_levels.clear();
-      }
-      std::swap(field.nullspace, state.nullspace);
-      field.level_nullspace.swap(state.level_nullspace);
-      std::swap(field.nullspace_ready, state.nullspace_ready);
+      // Nullspace workspaces are structural caches bound to the materialized solver storage, not
+      // published scientific values. Keep an already compatible workspace alive across accepted /
+      // candidate copies. If the snapshot required an unallocated solver, the invalidation branch
+      // above cleared it; if Accept rematerialized a solver, the next solve prepares it lazily.
     }
     device_fence();
-  } catch (...) {
-    std::terminate();
-  }
 }
 
 template <class Solve>
-inline SolveReport AmrRuntime::run_field_solve_transaction(const FieldSolveScope& scope,
-                                                           Solve&& solve) {
+inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScope& scope,
+                                                            Solve&& solve) {
   FieldSolveSnapshot& snapshot = capture_field_solve_snapshot(scope);
-  detail::FieldSolveTransaction rollback(
-      [this, &snapshot]() noexcept { restore_field_solve_snapshot(snapshot); },
-      [this]() noexcept { release_field_solve_snapshot_(); });
-  SolveReport report = std::forward<Solve>(solve)();
-  if (report.solved())
-    rollback.commit();
-  return report;
+  SolveReport report;
+  try {
+    report = std::forward<Solve>(solve)();
+  } catch (...) {
+    restore_field_solve_snapshot_noexcept(snapshot);
+    release_field_solve_snapshot_();
+    throw;
+  }
+  if (!report.solved_value_available()) {
+    restore_field_solve_snapshot_noexcept(snapshot);
+    release_field_solve_snapshot_();
+    return SolveOutcome::collective_world(std::move(report));
+  }
+
+  FieldSolveSnapshot& candidate =
+      capture_field_solve_snapshot(scope, /*candidate_slot=*/true);
+  restore_field_solve_snapshot_noexcept(snapshot);
+  snapshot.publication_owner = this;
+  snapshot.publication_candidate = &candidate;
+
+  // Every physically readable aux/phi/rhs buffer now contains the previous accepted state. The
+  // candidate remains in persistent private carriers and is copied back only after collective
+  // Accept; release alone leaves the old publication untouched.
+  return SolveOutcome::collective_world(
+      std::move(report),
+      SolveOutcome::PublicationHooks{
+          &snapshot,
+          [](void* context) {
+            auto* accepted = static_cast<FieldSolveSnapshot*>(context);
+            if (accepted->publication_owner == nullptr ||
+                accepted->publication_candidate == nullptr)
+              throw std::logic_error("AMR field publication candidate is unavailable");
+            accepted->publication_owner->restore_field_solve_snapshot(
+                *accepted->publication_candidate);
+          },
+          nullptr,
+          [](void* context) noexcept {
+            auto* accepted = static_cast<FieldSolveSnapshot*>(context);
+            AmrRuntime* owner = accepted->publication_owner;
+            accepted->publication_owner = nullptr;
+            accepted->publication_candidate = nullptr;
+            if (owner != nullptr)
+              owner->release_field_solve_snapshot_();
+          }});
 }
 
 }  // namespace pops

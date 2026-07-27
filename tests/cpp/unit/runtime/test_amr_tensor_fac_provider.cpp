@@ -34,6 +34,7 @@ class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
   }
+  int level_count() const noexcept override { return 0; }
   pops::MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("test provider has no materialized build request");
   }
@@ -114,6 +115,7 @@ class ReportOnlyHierarchyPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 0; }
   pops::MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("report-only provider has no field storage");
   }
@@ -148,6 +150,7 @@ class FlatIdentityPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 1; }
   pops::MultiFab& assembly_target(std::string_view slot, int level) override {
     if (slot != "pops.test.identity.rhs" || level != 0)
       throw std::invalid_argument("flat identity provider received an unknown field slot");
@@ -359,7 +362,14 @@ TEST(HierarchyTensorSolverProviderContract,
       registry, "pops.test.hierarchy.flat-identity", request);
   ASSERT_EQ(prepared->execution_path(), HierarchyTensorSolverExecutionPath::DirectProvider);
   prepared->assembly_target("pops.test.identity.rhs", 0).set_val(Real(3.25));
-  const pops::SolveReport report = prepared->solve({Real(1.0e-12), Real(0), 1});
+  prepared->solution(0).set_val(Real(-7));
+  pops::SolveOutcome outcome =
+      pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+          *prepared, {Real(1.0e-12), Real(0), 1});
+  ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
+  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(7))
+      << "the provider solution must remain physically unchanged before Accept";
+  const pops::SolveReport report = outcome.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(3.25));
 }

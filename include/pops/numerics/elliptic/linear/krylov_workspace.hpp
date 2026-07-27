@@ -137,6 +137,9 @@ class KrylovWorkspace {
       fields_.front().halo_cache();
       for (std::size_t index = 1; index < fields_.size(); ++index)
         fields_[index].share_halo_cache_from(fields_.front());
+      publication_candidate_.emplace(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+                                     footprint_.input_ghosts);
+      publication_candidate_->share_halo_cache_from(fields_.front());
       real_values_.assign(requirements_.real_count, Real(0));
       scaled_values_.assign(requirements_.scaled_scalar_count, detail::ScaledScalar::zero());
       collective_values_.assign(requirements_.collective_value_count, 0.0);
@@ -164,11 +167,13 @@ class KrylovWorkspace {
       distribution_validation_data_.clear();
       state_words_.clear();
       preconditioner_constant_.reset();
+      publication_candidate_.reset();
       throw std::runtime_error(
           "prepared Krylov persistent workspace materialization failed on at least one "
           "communicator rank");
     }
-    allocation_count_ = requirements_.field_count + (footprint_.preconditioned ? 1u : 0u);
+    allocation_count_ =
+        requirements_.field_count + (footprint_.preconditioned ? 1u : 0u) + 1u;
   }
   static std::size_t required_fields(const PreparedKrylovMethod& method,
                                      const KrylovWorkspaceRequest& request) {
@@ -636,6 +641,32 @@ class KrylovWorkspace {
   const KrylovWorkspaceRequirements& requirements() const { return requirements_; }
   std::size_t metric_robust_payload_width() const { return metric_.robust_payload_width(); }
 
+  MultiFab& publication_candidate_field_() {
+    if (!publication_candidate_)
+      throw std::logic_error("KrylovWorkspace has no publication candidate");
+    return *publication_candidate_;
+  }
+  void arm_publication_(const PreparedAffineLinearProblem& problem,
+                        MultiFab& destination) noexcept {
+    publication_problem_ = &problem;
+    publication_destination_ = &destination;
+    publication_active_ = true;
+  }
+  void publish_candidate_() {
+    if (!publication_active_ || publication_destination_ == nullptr || !publication_candidate_)
+      throw std::logic_error("KrylovWorkspace has no active publication");
+    detail::PreparedFieldAlgebra::copy(*publication_destination_, *publication_candidate_);
+  }
+  void release_publication_() noexcept {
+    const PreparedAffineLinearProblem* problem = publication_problem_;
+    publication_problem_ = nullptr;
+    publication_destination_ = nullptr;
+    publication_active_ = false;
+    release_solve_();
+    if (problem != nullptr)
+      detail::PreparedProblemAccess::release_use(*problem);
+  }
+
   bool provider_report_agrees_(const SolveReport& report) {
     return provider_report_consensus_.agrees(report, lane_);
   }
@@ -714,6 +745,10 @@ class KrylovWorkspace {
   std::size_t preconditioner_session_allocation_count_ = 0;
   PreparedApplyStatus provider_apply_status_ = PreparedApplyStatus::Success;
   std::optional<MultiFab> preconditioner_constant_{};
+  std::optional<MultiFab> publication_candidate_{};
+  MultiFab* publication_destination_ = nullptr;
+  const PreparedAffineLinearProblem* publication_problem_ = nullptr;
+  bool publication_active_ = false;
   ExactSolveReportConsensusScratch provider_report_consensus_{};
   std::atomic<ReservationState> reservation_state_{ReservationState::Idle};
 };

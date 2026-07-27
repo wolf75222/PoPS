@@ -74,7 +74,7 @@ TEST(AuxTe, DerivedFromGasDrivesProbeSource) {
   sys.set_state("gas", Ug);
   sys.set_density("probe", std::vector<double>(nn, 1.0));
   sys.set_electron_temperature_from("gas");  // T_e <- p/rho du gaz, recalcule a chaque solve
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
 
   // eval_rhs(probe) = -div F + S ; flux ExB(grad=0)=0 -> R = source = T_e * n = Te.
   const std::vector<double> R = sys.eval_rhs("probe");

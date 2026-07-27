@@ -88,6 +88,7 @@ api pops/numerics/elliptic/linear/prepared_vector_metric.hpp
 api pops/numerics/elliptic/linear/pure_field_algebra.hpp
 sdk-support pops/numerics/elliptic/linear/scaled_field_algebra.hpp
 sdk-support pops/numerics/elliptic/linear/scaled_scalar.hpp
+api pops/numerics/elliptic/linear/solve_outcome.hpp
 api pops/numerics/elliptic/linear/solve_report.hpp
 api pops/numerics/elliptic/linear/vector_distribution.hpp
 api pops/numerics/elliptic/mg/composite_fac_nlevel.hpp

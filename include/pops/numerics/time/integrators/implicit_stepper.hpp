@@ -6,7 +6,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial_operator.hpp>  // load_state, load_aux
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -40,7 +40,7 @@
 ///   model default. Inactive mask (default) -> all implicit -> bit-identical to before;
 /// - NewtonOptions always carries a convergence criterion and a finite iteration budget;
 /// - device kernels = NAMED functors (BackwardEulerSourceStatKernel, NewtonStat*Kernel);
-/// - publication is transactional: every candidate is reduced into an ImplicitSolveOutcome and
+/// - publication is transactional: every candidate is reduced into the common SolveOutcome and
 ///   consumed exactly once; invalid/non-converged candidates never overwrite the accepted state.
 
 namespace pops {
@@ -466,116 +466,56 @@ struct NewtonStatFailureCountKernel {
 };
 }  // namespace detail
 
-enum class ImplicitSolveConsumption {
-  kAccept,
-  kRejectAttempt,
-  kFailRun,
+namespace detail {
+
+/// Publication state owned by the common SolveOutcome returned by a local implicit solve. Keeping
+/// the candidate here makes the local route obey the same one-shot contract as Krylov, field and
+/// hierarchy solves instead of maintaining a second outcome implementation.
+struct ImplicitSourcePublication {
+  MultiFab* destination = nullptr;
+  std::unique_ptr<MultiFab> candidate;
+  NewtonReport* diagnostics = nullptr;
+  std::string failure_message;
+
+  bool layout_matches() const noexcept {
+    return destination != nullptr && candidate != nullptr &&
+           destination->box_array().boxes() == candidate->box_array().boxes() &&
+           destination->dmap().ranks() == candidate->dmap().ranks() &&
+           destination->ncomp() == candidate->ncomp() &&
+           destination->n_grow() == candidate->n_grow() &&
+           destination->local_size() == candidate->local_size();
+  }
+
+  static void validate_accept(void* context) {
+    const auto& publication = *static_cast<const ImplicitSourcePublication*>(context);
+    if (!publication.layout_matches())
+      throw std::logic_error(
+          "cannot accept a local implicit SolveOutcome after its destination layout changed");
+  }
+
+  static void accept(void* context) {
+    auto& publication = *static_cast<ImplicitSourcePublication*>(context);
+    lincomb(*publication.destination, Real(1), *publication.candidate, Real(0),
+            *publication.candidate);
+  }
+
+  static void consume_failure(void* context, SolveConsumption action) {
+    auto& publication = *static_cast<ImplicitSourcePublication*>(context);
+    if (publication.diagnostics == nullptr)
+      return;
+    publication.diagnostics->solve.action =
+        action == SolveConsumption::kRejectAttempt ? SolveAction::kRejectAttempt
+                                                   : SolveAction::kFailRun;
+    publication.diagnostics->diagnostics.record(
+        action == SolveConsumption::kRejectAttempt ? "newton.outcome.reject_attempt"
+                                                   : "newton.outcome.fail_run",
+        "ImplicitSourceNewton",
+        action == SolveConsumption::kRejectAttempt ? "warning" : "error",
+        publication.failure_message, -1, publication.diagnostics->n_failed);
+  }
 };
 
-/// Transactional result of one local implicit-source solve.
-///
-/// The candidate state is private until exactly one explicit consumption action is selected.
-/// Accept publishes a solved candidate; RejectAttempt and FailRun discard a failed candidate.
-/// Destroying an unconsumed outcome is a contract violation and terminates instead of silently
-/// dropping the solver result.
-class ImplicitSolveOutcome {
- public:
-  ImplicitSolveOutcome(MultiFab& destination, std::unique_ptr<MultiFab> candidate,
-                       SolveReport solve, NewtonReport* diagnostics, std::string failure_message)
-      : destination_(&destination),
-        candidate_(std::move(candidate)),
-        solve_(std::move(solve)),
-        diagnostics_(diagnostics),
-        failure_message_(std::move(failure_message)) {}
-
-  ImplicitSolveOutcome(const ImplicitSolveOutcome&) = delete;
-  ImplicitSolveOutcome& operator=(const ImplicitSolveOutcome&) = delete;
-  ImplicitSolveOutcome& operator=(ImplicitSolveOutcome&&) = delete;
-  ImplicitSolveOutcome(ImplicitSolveOutcome&& other) noexcept
-      : destination_(other.destination_),
-        candidate_(std::move(other.candidate_)),
-        solve_(std::move(other.solve_)),
-        diagnostics_(other.diagnostics_),
-        failure_message_(std::move(other.failure_message_)),
-        consumed_(other.consumed_) {
-    other.consumed_ = true;
-    other.destination_ = nullptr;
-    other.diagnostics_ = nullptr;
-  }
-
-  ~ImplicitSolveOutcome() {
-    if (!consumed_) {
-      std::fputs(
-          "PoPS contract violation: ImplicitSolveOutcome destroyed before explicit consumption\n",
-          stderr);
-      std::fflush(stderr);
-      std::abort();
-    }
-  }
-
-  const SolveReport& report() const noexcept { return solve_; }
-  const std::string& failure_message() const noexcept { return failure_message_; }
-
-  SolveReport consume(ImplicitSolveConsumption action) {
-    if (consumed_)
-      throw std::logic_error("ImplicitSolveOutcome has already been consumed");
-
-    if (action == ImplicitSolveConsumption::kAccept) {
-      if (!solve_.solved_value_available())
-        throw std::logic_error("cannot accept a failed ImplicitSolveOutcome");
-      if (!publication_layout_matches())
-        throw std::logic_error(
-            "cannot accept an ImplicitSolveOutcome after its destination layout changed");
-    } else if (action == ImplicitSolveConsumption::kRejectAttempt ||
-               action == ImplicitSolveConsumption::kFailRun) {
-      if (solve_.solved_value_available())
-        throw std::logic_error("cannot reject a solved ImplicitSolveOutcome");
-    } else
-      throw std::logic_error("invalid ImplicitSolveConsumption action");
-
-    // From this point the action and its candidate status are compatible. Mark the outcome consumed
-    // immediately before the irreversible publication/discard boundary. In particular, a backend
-    // exception while launching/copying the accepted candidate propagates to the enclosing
-    // StepTransaction, which restores the accepted state; retrying a potentially partial publication
-    // through the same outcome is forbidden.
-    consumed_ = true;
-    if (action == ImplicitSolveConsumption::kAccept) {
-      lincomb(*destination_, Real(1), *candidate_, Real(0), *candidate_);
-    } else {
-      solve_.action = action == ImplicitSolveConsumption::kRejectAttempt
-                          ? SolveAction::kRejectAttempt
-                          : SolveAction::kFailRun;
-      if (diagnostics_) {
-        diagnostics_->diagnostics.record(
-            action == ImplicitSolveConsumption::kRejectAttempt ? "newton.outcome.reject_attempt"
-                                                               : "newton.outcome.fail_run",
-            "ImplicitSourceNewton",
-            action == ImplicitSolveConsumption::kRejectAttempt ? "warning" : "error",
-            failure_message_, -1, diagnostics_->n_failed);
-      }
-    }
-    if (diagnostics_)
-      diagnostics_->solve = solve_;
-    return solve_;
-  }
-
- private:
-  bool publication_layout_matches() const noexcept {
-    return destination_ != nullptr && candidate_ != nullptr &&
-           destination_->box_array().boxes() == candidate_->box_array().boxes() &&
-           destination_->dmap().ranks() == candidate_->dmap().ranks() &&
-           destination_->ncomp() == candidate_->ncomp() &&
-           destination_->n_grow() == candidate_->n_grow() &&
-           destination_->local_size() == candidate_->local_size();
-  }
-
-  MultiFab* destination_ = nullptr;
-  std::unique_ptr<MultiFab> candidate_;
-  SolveReport solve_;
-  NewtonReport* diagnostics_ = nullptr;
-  std::string failure_message_;
-  bool consumed_ = false;
-};
+}  // namespace detail
 
 inline SolveStatus newton_failure_status(NewtonFailureKind failure) {
   switch (failure) {
@@ -592,10 +532,10 @@ inline SolveStatus newton_failure_status(NewtonFailureKind failure) {
 }
 
 // Prepare W = U + dt * model.source(W, aux) without publishing W. The candidate is solved by local
-// Newton, reduced collectively into one SolveReport, and returned in an ImplicitSolveOutcome that
+// Newton, reduced collectively into one SolveReport, and returned in the common SolveOutcome that
 // must be consumed exactly once. Only consume(kAccept) can mutate U.
 template <class Model>
-[[nodiscard]] ImplicitSolveOutcome backward_euler_source(
+[[nodiscard]] SolveOutcome backward_euler_source(
     const Model& model, const MultiFab& aux, MultiFab& U, Real dt, const NewtonOptions& opts,
     const ImplicitMask<Model::n_vars>& mask = {}, NewtonReport* report = nullptr,
     const MultiFab* active_cells = nullptr) {
@@ -689,17 +629,30 @@ template <class Model>
       report->converged = false;
     report->solve = solve;
   }
-  return ImplicitSolveOutcome(U, std::move(candidate), std::move(solve), report, message.str());
+  auto publication = std::make_shared<detail::ImplicitSourcePublication>(
+      detail::ImplicitSourcePublication{&U, std::move(candidate), report, message.str()});
+  return SolveOutcome::collective_world(
+      std::move(solve),
+      SolveOutcome::PublicationHooks{
+          publication.get(),
+          &detail::ImplicitSourcePublication::accept,
+          nullptr,
+          nullptr,
+          std::static_pointer_cast<void>(publication),
+          &detail::ImplicitSourcePublication::validate_accept,
+          &detail::ImplicitSourcePublication::consume_failure});
 }
 
 /// Consume one prepared local solve with the fail-fast runtime policy used by native engine routes.
 /// The caller still owns the outcome and names the policy at the publication boundary.
-inline SolveReport consume_implicit_source_fail_run(ImplicitSolveOutcome& outcome) {
+inline SolveReport consume_implicit_source_fail_run(SolveOutcome& outcome) {
   if (outcome.report().solved_value_available())
-    return outcome.consume(ImplicitSolveConsumption::kAccept);
-  const std::string message = outcome.failure_message();
-  const SolveReport failed = outcome.consume(ImplicitSolveConsumption::kFailRun);
-  throw std::runtime_error(message + " action=" + failed.action_name());
+    return outcome.consume(SolveConsumption::kAccept);
+  const std::string status = outcome.report().status_name();
+  const std::string reason = outcome.report().reason;
+  const SolveReport failed = outcome.consume(SolveConsumption::kFailRun);
+  throw std::runtime_error("Implicit source Newton failed: status=" + status + " reason=" + reason +
+                           " action=" + failed.action_name());
 }
 
 // Default implicit stepper: backward-Euler (Newton) on the model source. Models
