@@ -951,8 +951,19 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
                 + ", ".join(owner_labels)
             )
         if not owner_labels:
+            if "cpp-standalone" not in labels:
+                raise SystemExit(
+                    "CTest target-label contract failed; test "
+                    f"{test_name!r} has neither one cpp-target:* owner nor "
+                    "the explicit cpp-standalone label"
+                )
             standalone.append(test_name)
             continue
+        if "cpp-standalone" in labels:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} cannot have both {owner_labels[0]} and cpp-standalone"
+            )
         owner_label = owner_labels[0]
         if owner_label not in expected:
             raise SystemExit(

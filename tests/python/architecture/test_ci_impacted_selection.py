@@ -464,7 +464,10 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
             {
                 "name": "test_standalone_contract",
                 "properties": [
-                    {"name": "LABELS", "value": ["cmake", "integration"]},
+                    {
+                        "name": "LABELS",
+                        "value": ["cmake", "integration", "cpp-standalone"],
+                    },
                 ],
             },
         ],
@@ -518,6 +521,39 @@ def test_cpp_target_label_fence_rejects_ambiguous_or_unselected_owners(tmp_path)
     ]
     inventory.write_text(json.dumps(payload))
     with pytest.raises(SystemExit, match="multiple C\\+\\+ target owners"):
+        sel.verify_cpp_target_labels(args)
+
+
+def test_cpp_target_label_fence_rejects_implicit_or_double_standalone(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-invalid-standalone.json"
+    payload = {
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "test_missing_owner",
+                "properties": [
+                    {"name": "LABELS", "value": ["cmake", "integration"]},
+                ],
+            },
+        ],
+    }
+    inventory.write_text(json.dumps(payload))
+    args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
+    with pytest.raises(SystemExit, match="neither one cpp-target"):
+        sel.verify_cpp_target_labels(args)
+
+    payload["tests"][1]["properties"][0]["value"] = [
+        "cpp-target:test_one",
+        "cpp-standalone",
+    ]
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="cannot have both"):
         sel.verify_cpp_target_labels(args)
 
 

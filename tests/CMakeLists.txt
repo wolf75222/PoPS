@@ -402,7 +402,7 @@ if(Python3_Interpreter_FOUND)
             "${Python3_EXECUTABLE}"
             "${CMAKE_SOURCE_DIR}/scripts/generate_component_catalog.py" --check)
   set_tests_properties(test_component_catalog_generated PROPERTIES
-    LABELS "python;architecture;generated")
+    LABELS "python;architecture;generated;cpp-standalone")
 
   set(_pops_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
   file(GLOB_RECURSE _pops_gen_solver_pysrc CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/python/pops/*.py")
