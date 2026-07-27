@@ -161,6 +161,7 @@ static std::unique_ptr<AmrSystem> make_two_block(int N, double L, double q0, dou
   system->set_poisson("charge_density", "geometric_mg", "periodic");
   system->set_density("A", rho0);
   system->set_density("B", rho1);
+  system->set_temporal_relations({2}, {1}, {"integral_only"});
   install_multirate_forward_euler_program(*system, {sub0, sub1}, {stride0, stride1});
   return system;
 }
@@ -450,6 +451,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
@@ -468,6 +470,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       test::install_forward_euler_program(sim);
       double last = 0;
       for (int s = 0; s < 5; ++s)
@@ -511,12 +514,15 @@ TEST(test_amr_multiblock_substeps, Runs) {
     EXPECT_GT(std::fabs(rational_max - integral_max), Real(1e-4))
         << "an installed temporal ratio must change the real native trajectory";
 
-    // Strong preparation guarantee: the rejected candidate neither replaces the accepted chain nor
-    // changes any level state.
+    // Strong preparation guarantee: validating a rejected candidate neither replaces the accepted
+    // chain nor changes any level state. Runtime installation is deliberately separate from clock
+    // partition validation, so exercise the relation's fail-closed partition contract directly.
     const auto before_rejected_set = rational.block_level_state_global(0, 1);
-    EXPECT_THROW(rational.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
-                     0, 1, amr::Rational(5, 2), amr::RemainderPolicy::IntegralOnly)}),
-                 std::runtime_error);
+    const amr::ParentChildClockRelation rejected_relation(0, 1, amr::Rational(5, 2),
+                                                          amr::RemainderPolicy::IntegralOnly);
+    const amr::ClockWindow parent_window{{0, 0, amr::Rational(0, 1), 0.0},
+                                         {0, 0, amr::Rational(1, 1), 1.0}};
+    EXPECT_THROW(rejected_relation.partition(parent_window), std::runtime_error);
     EXPECT_EQ(rational.block_level_state_global(0, 1), before_rejected_set);
     ASSERT_EQ(rational.checkpoint_temporal_relations().size(), 1u);
     EXPECT_EQ(rational.checkpoint_temporal_relations()[0].temporal_ratio(), amr::Rational(5, 2));

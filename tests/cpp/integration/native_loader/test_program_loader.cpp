@@ -21,6 +21,7 @@
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>

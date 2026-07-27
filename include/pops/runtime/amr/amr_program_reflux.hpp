@@ -270,6 +270,26 @@ inline bool edge_strip_has_storage(const EdgeStrip& strip) noexcept {
          !strip.fL.empty() || !strip.fR.empty() || !strip.fB.empty() || !strip.fT.empty();
 }
 
+inline bool same_edge_strip_footprint(const EdgeStrip& left, const EdgeStrip& right) noexcept {
+  return left.I0 == right.I0 && left.I1 == right.I1 && left.J0 == right.J0 && left.J1 == right.J1;
+}
+
+inline bool same_edge_strip_storage_shape(const EdgeStrip& left, const EdgeStrip& right) noexcept {
+  return left.cL.size() == right.cL.size() && left.cR.size() == right.cR.size() &&
+         left.cB.size() == right.cB.size() && left.cT.size() == right.cT.size() &&
+         left.fL.size() == right.fL.size() && left.fR.size() == right.fR.size() &&
+         left.fB.size() == right.fB.size() && left.fT.size() == right.fT.size();
+}
+
+inline bool edge_strip_copy_requires_rebind(const EdgeStrip& destination,
+                                            const EdgeStrip& source) noexcept {
+  const bool destination_has_storage = edge_strip_has_storage(destination);
+  const bool source_has_storage = edge_strip_has_storage(source);
+  return destination_has_storage != source_has_storage ||
+         (source_has_storage && (!same_edge_strip_footprint(destination, source) ||
+                                 !same_edge_strip_storage_shape(destination, source)));
+}
+
 inline void preflight_edge_strip_axpy(const EdgeStrip& destination, const EdgeStrip& source) {
   if (!edge_strip_has_storage(source))
     return;
@@ -328,12 +348,30 @@ inline void edge_flux_axpy(EdgeFlux& dst, Real a, const EdgeFlux& src) {
 inline void edge_flux_copy_into(EdgeFlux& dst, const EdgeFlux& src) {
   if (&dst == &src)
     return;
+  bool requires_rebind =
+      dst.coarse.size() != src.coarse.size() || dst.fine.size() != src.fine.size();
   for (std::size_t index = 0; index < src.coarse.size() && index < dst.coarse.size(); ++index)
-    preflight_edge_strip_axpy(dst.coarse[index], src.coarse[index]);
+    requires_rebind =
+        requires_rebind || edge_strip_copy_requires_rebind(dst.coarse[index], src.coarse[index]);
   for (std::size_t index = 0; index < src.fine.size() && index < dst.fine.size(); ++index)
-    preflight_edge_strip_axpy(dst.fine[index], src.fine[index]);
+    requires_rebind =
+        requires_rebind || edge_strip_copy_requires_rebind(dst.fine[index], src.fine[index]);
+  // A rejected regrid restores an accepted snapshot whose compact strips have the old patch
+  // footprints.  Those values are a replacement, not an algebraic combination: retire only the
+  // incompatible pinned storage (after its device work is complete), while retaining every
+  // allocation on the common unchanged-topology path.
+  if (requires_rebind)
+    device_fence();
   dst.coarse.resize(src.coarse.size());
   dst.fine.resize(src.fine.size());
+  const auto prepare_destination = [](EdgeStrip& destination, const EdgeStrip& source) {
+    if (!edge_strip_has_storage(source) || edge_strip_copy_requires_rebind(destination, source))
+      destination = EdgeStrip{};
+  };
+  for (std::size_t index = 0; index < src.coarse.size(); ++index)
+    prepare_destination(dst.coarse[index], src.coarse[index]);
+  for (std::size_t index = 0; index < src.fine.size(); ++index)
+    prepare_destination(dst.fine[index], src.fine[index]);
   clear_edge_flux_role_on_device(dst.coarse);
   clear_edge_flux_role_on_device(dst.fine);
   for (std::size_t index = 0; index < src.coarse.size(); ++index)

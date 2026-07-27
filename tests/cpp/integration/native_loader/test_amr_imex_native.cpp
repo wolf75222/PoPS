@@ -349,8 +349,8 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem s(make_cfg(n));
     add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(s);
-    install_single_block_test_program(s, make_pot(), /*implicit_source=*/true);
     s.set_density("gas", rho);
+    install_single_block_test_program(s, make_pot(), /*implicit_source=*/true);
     const double m0 = s.mass();
     for (int k = 0; k < nsteps; ++k)
       s.step(dtA);
@@ -458,16 +458,16 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
-    install_single_block_test_program(A, make_pot(), /*implicit_source=*/true);
     A.set_density("pot", rho);
+    install_single_block_test_program(A, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtA);
 
     AmrSystem B(make_cfg(n));
     add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(B);
-    install_single_block_test_program(B, make_pot(), /*implicit_source=*/true);
     B.set_density("gas", rho);
+    install_single_block_test_program(B, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       B.step(dtA);
 
@@ -482,8 +482,8 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
-    install_single_block_test_program(A, make_stiff(eps), /*implicit_source=*/true);
     A.set_density(bname, rho);
+    install_single_block_test_program(A, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtB);
 
@@ -491,8 +491,8 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
                        kGamma);
     configure_refined_execution(B);
-    install_single_block_test_program(B, make_stiff(eps), /*implicit_source=*/true);
     B.set_density("gas", rho);
+    install_single_block_test_program(B, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       B.step(dtB);
 
