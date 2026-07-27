@@ -275,12 +275,16 @@ def test_global_missing_and_overlapping_producers_fail_before_compile_lowering()
     assert authority.compile_calls == 0
 
 
-def test_extra_producers_fail_without_order_priority():
+def test_overlapping_regions_and_extra_producers_fail_without_order_priority():
     topology = _topology()
     first = _region("first")
     producer = SameLevelHaloMPI(
         handle=_producer_handle("halo"), protocol=_protocol("halo"),
         mpi_capability=_h("mpi", "capability"))
+    with pytest.raises(ValueError, match="overlapping ghost regions"):
+        GhostProducerRegistry(producer).resolve(
+            topology, _coverage(first), (first, first),
+            (GhostProduction(first, producer),))
     unused = SameLevelHaloMPI(
         handle=_producer_handle("unused"), protocol=_protocol("halo"),
         mpi_capability=_h("mpi_other", "capability"))
