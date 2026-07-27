@@ -423,17 +423,22 @@ jobs:
 
   # --- Sanitizers : ctest sous ASan + UBSan ------------------------------------------------------
   sanitizers:
-    name: sanitizers ASan+UBSan (ctest, informatif)
+    name: sanitizers ASan+UBSan (ctest, shard ${{ matrix.shard }}/4, informatif)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [set-mode, quality-native-prewarm]
     if: needs.set-mode.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
+      ASAN_SHARD_TOTAL: '4'
       # Kokkos n'est pas instrumente -> on coupe LSan (singletons Kokkos) et les faux positifs de
       # frontiere instrumente/non instrumente. halt_on_error=0 : on collecte tous les rapports.
       ASAN_OPTIONS: detect_leaks=0:detect_container_overflow=0:abort_on_error=0:halt_on_error=0
@@ -448,7 +453,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-quality-asan-${{ github.sha }}
+          key: ccache-${{ runner.os }}-quality-asan-${{ github.sha }}-shard${{ matrix.shard }}
           restore-keys: |
             ccache-${{ runner.os }}-quality-asan-
       - name: Download exact ASan prewarm caches
@@ -486,25 +491,28 @@ jobs:
             --build-dir build-kokkos-asan \
             --verify-contracts "${compile_contracts[@]}"
           cmake --build --preset ci-asan
+          shard_start=$(( ${{ matrix.shard }} + 1 ))
+          shard_log="asan-shard-${{ matrix.shard }}.log"
           set +e
-          ctest --preset ci-asan --output-on-failure 2>&1 | tee asan.log
+          ctest --preset ci-asan --output-on-failure \
+            -I "${shard_start},,${ASAN_SHARD_TOTAL}" 2>&1 | tee "$shard_log"
           rc=${PIPESTATUS[0]}
           {
             echo "### Sanitizers (ASan + UBSan)"
             echo ""
             if [ "$rc" -eq 0 ]; then
-              echo "- ctest : **vert** sous instrumentation."
+              echo "- shard ${{ matrix.shard }}/4 : **vert** sous instrumentation."
             else
-              echo "- ctest : **$rc** test(s) en echec / rapport sanitizer (voir l'artefact \`asan-log\`)."
-              echo "::warning::sanitizers : au moins un test a signale un probleme sous ASan/UBSan (run informatif, non bloquant)."
+              echo "- shard ${{ matrix.shard }}/4 : **$rc** test(s) en echec / rapport sanitizer (voir l'artefact correspondant)."
+              echo "::warning::sanitizers : le shard ${{ matrix.shard }}/4 a signale un probleme sous ASan/UBSan (run informatif, non bloquant)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload log sanitizers
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: asan-log
-          path: asan.log
+          name: asan-log-shard-${{ matrix.shard }}
+          path: asan-shard-${{ matrix.shard }}.log
           if-no-files-found: ignore
 
   # --- TSan : ctest sous ThreadSanitizer (backend Kokkos OpenMP) ---------------------------------

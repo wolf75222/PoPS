@@ -1142,6 +1142,13 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
             f"cmake --build --preset ci-{profile}"
         )
 
+    asan = workflow.split("\n  sanitizers:\n", 1)[1].split("\n  # --- TSan", 1)[0]
+    assert "shard: [0, 1, 2, 3]" in asan
+    assert "ASAN_SHARD_TOTAL: '4'" in asan
+    assert "shard_start=$(( ${{ matrix.shard }} + 1 ))" in asan
+    assert '-I "${shard_start},,${ASAN_SHARD_TOTAL}"' in asan
+    assert "asan-log-shard-${{ matrix.shard }}" in asan
+
 
 def test_ci_control_plane_inputs_force_full_functional_selection():
     selector = _load("ci_select_tests")
