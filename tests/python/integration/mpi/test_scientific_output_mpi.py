@@ -4,10 +4,11 @@
 This script is an MPI entrypoint, not a pytest-launched nested MPI job.  It proves both Uniform and
 AMR ``Case -> validate -> resolve -> compile -> ExecutionContext.mpi_world -> bind -> run`` routes
 against the exact HDF5 COLLECTIVE writer, both synchronously and on a duplicated async MPI lane.
-The Uniform route also proves the public ParaView PER_RANK transaction: one VTU per rank, one
-authenticated PVTU, and one temporal PVD. The AMR route repeats ParaView on the async lane. The AMR
-witness includes a replicated coarse level, one sparse fine patch, and therefore at least one rank
-with no fine-level piece.
+The Uniform and AMR routes prove the public ParaView PER_RANK transaction: rank-local VTU leaves,
+one authenticated PVTU, and one temporal PVD. A rank-local full-step failure and rank-local ParaView
+publication failures produce one deterministic MPI decision and roll back scientific state, output
+artifacts, and consumer cursors. The AMR witness includes a replicated coarse level, one sparse fine
+patch, and therefore at least one rank with no fine-level piece.
 """
 from __future__ import annotations
 
@@ -61,6 +62,7 @@ try:
     from pops.output import (
         AsyncScientificOutput,
         ConsumerGraph,
+        FailRun as OutputFailRun,
         HDF5,
         ParaView,
         ParallelMode,
@@ -248,7 +250,7 @@ def _authored_case(*, adaptive: bool) -> tuple[pops.Case, Any, np.ndarray | None
         target="density_async_second",
         queue_capacity=1,
     ))
-    # The Uniform rank-one publication fault below is injected below the public writer facade.
+    # The rank-local publication faults below are injected beneath the public writer facade.
     # Both Uniform and sparse AMR then publish standard PVTU/PVD companions for their rank leaves.
     consumers.append(ScientificOutput(
         format=ParaView(mode=ParallelMode.PER_RANK),
@@ -344,13 +346,21 @@ def _run_case(root: Path, *, adaptive: bool) -> tuple[
     if levels != (expected_levels,) * SIZE:
         raise AssertionError("%s hierarchy differs across ranks: %r" % (label, levels))
     output_root = root / label
-    if not adaptive:
-        _validate_paraview_collective_rollback(runtime, output_root, initial)
+    if adaptive:
+        _validate_rank_local_full_step_rollback(runtime, output_root)
+    _validate_paraview_collective_rollback(
+        runtime,
+        output_root,
+        adaptive=adaptive,
+    )
     expected_steps = 1 if adaptive else 2
+    # The two AMR failure witnesses and this recovery run share one RuntimeInstance. Give each
+    # invocation a distinct run identity while retaining the same one-step physical interval.
+    run_max_steps = 3 if adaptive else expected_steps
     report = pops.run(
         runtime,
         t_end=expected_steps * DT,
-        max_steps=expected_steps,
+        max_steps=run_max_steps,
         output_dir=output_root,
     )
     reports = allgather_value(COMM, (
@@ -409,52 +419,115 @@ def _run_case(root: Path, *, adaptive: bool) -> tuple[
     )
 
 
-def _validate_paraview_collective_rollback(
+def _accepted_state(runtime: Any, *, adaptive: bool) -> tuple[np.ndarray, ...]:
+    if adaptive:
+        return tuple(
+            np.asarray(
+                runtime.block_level_state_global("fluid", level),
+                dtype=np.float64,
+            ).copy()
+            for level in range(runtime.n_levels())
+        )
+    return (np.asarray(runtime.state_global("fluid"), dtype=np.float64).copy(),)
+
+
+def _assert_step_report(
     runtime: Any,
-    output_root: Path,
-    initial: np.ndarray | None,
+    *,
+    status: str,
+    phase: str,
+    action: str,
 ) -> None:
-    """Inject one rank-local publication fault and prove whole-step compensation."""
-    if initial is None:
-        raise AssertionError("ParaView rollback witness requires the exact Uniform bind array")
-    from pops.output._writers.common import _StagedOutputFile
+    report = runtime._executor._last_step_transaction_report
+    row = (
+        report.status,
+        report.phase,
+        report.action,
+        report.committed_effects,
+        report.rolled_back_effects,
+    )
+    rows = allgather_value(COMM, row)
+    if any(candidate != rows[0] for candidate in rows[1:]):
+        raise AssertionError("step-transaction reports differ across ranks: %r" % (rows,))
+    if row[:3] != (status, phase, action):
+        raise AssertionError("unexpected step-transaction report: %r" % (row,))
+    if row[3]:
+        raise AssertionError("failed step transaction reported committed effects: %r" % (row,))
+    if "external_effects" not in row[4] or "consumers" not in row[4]:
+        raise AssertionError("failed step transaction omitted output rollback stores: %r" % (row,))
 
-    before = np.asarray(runtime.state_global("fluid"), dtype=np.float64).copy()
-    original_publish = _StagedOutputFile.publish
-    injected = False
 
-    def fail_one_leaf(staged: Any) -> Any:
-        nonlocal injected
-        if not injected and staged.target.suffix == ".vtu":
-            injected = True
-            raise OSError("injected rank-one ParaView leaf publication failure")
-        return original_publish(staged)
+def _validate_rank_local_full_step_rollback(runtime: Any, output_root: Path) -> None:
+    """Fail one rank after native mutation and prove one collective pre-publication decision."""
+    from pops._bootstrap import StepAttemptRejected
+    from pops.runtime._native_step_target import native_step_target
 
-    if RANK == 1:
-        _StagedOutputFile.publish = fail_one_leaf
+    owner = runtime._executor
+    base = native_step_target(owner)
+    before = _accepted_state(runtime, adaptive=True)
+    patches_before = tuple(runtime.patch_boxes())
+    cursors_before = runtime.consumer_cursors.to_data()
+
+    class _RankLocalFailureTarget:
+        def time(self):
+            return base.time()
+
+        def macro_step(self):
+            return base.macro_step()
+
+        def step(self, dt):
+            result = base.step(dt)
+            if RANK == 1:
+                rejection = StepAttemptRejected(
+                    "injected rank-local full-step rejection after native mutation")
+                rejection.status = "invalid_evaluation"
+                rejection.phase = "solve"
+                rejection.detail = "rank-local full-step rejection after native mutation"
+                rejection.disposition = "reject"
+                rejection.reason_code = 666
+                raise rejection
+            return result
+
+    owner._native_step_target = lambda: _RankLocalFailureTarget()
     error = None
     try:
         pops.run(runtime, t_end=DT, max_steps=1, output_dir=output_root)
     except RuntimeError as exc:
         error = str(exc)
     finally:
-        if RANK == 1:
-            _StagedOutputFile.publish = original_publish
+        del owner.__dict__["_native_step_target"]
     errors = allgather_value(COMM, error)
     if not all(
-            item is not None and "rank 1" in item
-            and "injected rank-one ParaView leaf publication failure" in item
-            for item in errors):
-        raise AssertionError(
-            "rank-local ParaView publication fault did not reach every rank: %r" % (errors,))
+        item is not None
+        and "rank 1" in item
+        and "injected rank-local full-step rejection after native mutation" in item
+        for item in errors
+    ):
+        raise AssertionError("rank-local full-step fault did not reach every rank: %r" % (errors,))
     if len(set(errors)) != 1:
-        raise AssertionError(
-            "ParaView publication-fault consensus differs across ranks: %r" % (errors,))
+        raise AssertionError("full-step failure decision differs across ranks: %r" % (errors,))
     if runtime.macro_step() != 0 or runtime.time() != 0.0:
-        raise AssertionError("failed ParaView publication committed the accepted clock")
-    np.testing.assert_array_equal(
-        np.asarray(runtime.state_global("fluid"), dtype=np.float64), before)
+        raise AssertionError("rank-local full-step failure committed the accepted clock")
+    after = _accepted_state(runtime, adaptive=True)
+    if any(
+        not np.array_equal(actual, expected)
+        for actual, expected in zip(after, before, strict=True)
+    ):
+        raise AssertionError("rank-local full-step failure leaked AMR scientific state")
+    if tuple(runtime.patch_boxes()) != patches_before:
+        raise AssertionError("rank-local full-step failure leaked AMR topology")
+    if runtime.consumer_cursors.to_data() != cursors_before:
+        raise AssertionError("rank-local full-step failure advanced a consumer cursor")
+    _assert_step_report(
+        runtime,
+        status="failed",
+        phase="solve",
+        action="fail_run",
+    )
+    _validate_no_output_residue(output_root, label="full-step MPI rollback")
 
+
+def _validate_no_output_residue(output_root: Path, *, label: str) -> None:
     def validate_residue() -> None:
         if RANK != 0:
             return
@@ -463,11 +536,86 @@ def _validate_paraview_collective_rollback(
             for path in output_root.rglob("*") if path.is_file()
         ))
         if files:
-            raise AssertionError(
-                "collective ParaView rollback left published/staged residue: %r" % (files,))
+            raise AssertionError("%s left published/staged residue: %r" % (label, files))
 
-    _collective_local("ParaView rollback residue verification", validate_residue)
+    _collective_local(label + " residue verification", validate_residue)
     barrier(COMM)
+
+
+def _validate_paraview_collective_rollback(
+    runtime: Any,
+    output_root: Path,
+    *,
+    adaptive: bool,
+) -> None:
+    """Inject one rank-local ParaView fault and prove policy-driven whole-step compensation."""
+    from pops.output._writers.common import _StagedOutputFile
+
+    paraview_policies = tuple(
+        manifest.failure_action
+        for manifest in runtime.consumer_graph.nodes
+        if manifest.output_format_data is not None
+        and manifest.output_format_data["format_name"] == ParaView.format_name
+    )
+    if not paraview_policies or any(
+        type(policy) is not OutputFailRun for policy in paraview_policies
+    ):
+        raise AssertionError("ParaView failure witness requires the resolved FailRun policy")
+    before = _accepted_state(runtime, adaptive=adaptive)
+    patches_before = tuple(runtime.patch_boxes()) if adaptive else ()
+    cursors_before = runtime.consumer_cursors.to_data()
+    original_publish = _StagedOutputFile.publish
+    failure_rank = 0 if adaptive else 1
+    injected = False
+
+    def fail_one_leaf(staged: Any) -> Any:
+        nonlocal injected
+        if not injected and staged.target.suffix == ".vtu":
+            injected = True
+            raise OSError("injected rank-local ParaView leaf publication failure")
+        return original_publish(staged)
+
+    if RANK == failure_rank:
+        _StagedOutputFile.publish = fail_one_leaf
+    error = None
+    try:
+        pops.run(
+            runtime,
+            t_end=DT,
+            max_steps=2 if adaptive else 1,
+            output_dir=output_root,
+        )
+    except RuntimeError as exc:
+        error = str(exc)
+    finally:
+        if RANK == failure_rank:
+            _StagedOutputFile.publish = original_publish
+    errors = allgather_value(COMM, error)
+    if not all(
+            item is not None and "rank %d" % failure_rank in item
+            and "injected rank-local ParaView leaf publication failure" in item
+            for item in errors):
+        raise AssertionError(
+            "rank-local ParaView publication fault did not reach every rank: %r" % (errors,))
+    if len(set(errors)) != 1:
+        raise AssertionError(
+            "ParaView publication-fault consensus differs across ranks: %r" % (errors,))
+    if runtime.macro_step() != 0 or runtime.time() != 0.0:
+        raise AssertionError("failed ParaView publication committed the accepted clock")
+    after = _accepted_state(runtime, adaptive=adaptive)
+    for actual, expected in zip(after, before, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+    if adaptive and tuple(runtime.patch_boxes()) != patches_before:
+        raise AssertionError("failed ParaView publication leaked AMR topology")
+    if runtime.consumer_cursors.to_data() != cursors_before:
+        raise AssertionError("failed ParaView publication advanced a consumer cursor")
+    _assert_step_report(
+        runtime,
+        status="failed",
+        phase="effect",
+        action="fail_run",
+    )
+    _validate_no_output_residue(output_root, label="collective ParaView rollback")
 
 
 def _validate_paraview(
