@@ -12,6 +12,7 @@ Program residual, so its spatial tests use explicitly authored SSPRK2/SSPRK3 Pro
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -23,6 +24,12 @@ AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.h
 MANIFEST = ROOT / "tests/test_manifest.toml"
 
 EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
+LEGACY_DIRECT_AMR_STEP_TESTS = {
+    "tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp",
+    "tests/cpp/integration/amr/test_amr_multiblock_imex.cpp",
+    "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp",
+    "tests/cpp/integration/amr/test_amr_multiblock_substeps.cpp",
+}
 
 # These remain executable semantic tests in the normal manifest.  They are blockers, not candidates
 # for an explicit-Euler compatibility rewrite.
@@ -137,3 +144,16 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             "newton_report(",
         ):
             assert legacy_engine_primitive not in source
+
+
+def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
+    """No new C++ test may make the retiring AmrRuntime temporal engine authoritative."""
+    direct_step = re.compile(
+        r"\b(?:rt[0-9A-Za-z_]*|rational|integral)\.step(?:_cfl)?\("
+    )
+    discovered = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "tests/cpp").rglob("*.cpp")
+        if direct_step.search(path.read_text(encoding="utf-8"))
+    }
+    assert discovered == LEGACY_DIRECT_AMR_STEP_TESTS
