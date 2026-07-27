@@ -38,6 +38,7 @@ from pops.runtime._engine_descriptors import (
     BackgroundDensity, Explicit, FluidState, IMEX, IsothermalFlux, Model, NoSource, Spatial,
 )
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 fails = 0
 
@@ -85,6 +86,8 @@ s_off = make_sim(cache=False)
 s_on = make_sim(cache=True)
 s_off.set_state("ions", U0)
 s_on.set_state("ions", U0)
+install_forward_euler_program(s_off)
+install_forward_euler_program(s_on)
 for _ in range(20):
     s_off.step_cfl(0.4)
     s_on.step_cfl(0.4)
@@ -102,6 +105,7 @@ s_def.add_block("ions",
                 spatial=Spatial(limiter=FirstOrder(), flux=HLL()),
                 time=Explicit())
 s_def.set_state("ions", U0)
+install_forward_euler_program(s_def)
 for _ in range(20):
     s_def.step_cfl(0.4)
 chk(np.array_equal(np.array(s_def.get_state("ions")), A_off),

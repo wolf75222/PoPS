@@ -29,6 +29,11 @@ import pytest
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import (
+    install_forward_euler_program,
+    install_ssprk2_program,
+    install_ssprk3_program,
+)
 
 
 def _bump(n, amp):
@@ -58,6 +63,7 @@ def _check_mono(n=32):
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
     sim.set_density("ne", _bump(n, 0.40))
+    install_ssprk3_program(sim)
     m0 = sim.mass()
     sim.advance(0.002, 12)
     d1 = np.asarray(sim.density())
@@ -83,6 +89,7 @@ def _check_multi(n=32):
     sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
+    install_ssprk3_program(sim)
     m0i, m0e = sim.mass("ions"), sim.mass("electrons")
     sim.advance(0.002, 12)
     d1i = np.asarray(sim.density("ions"))
@@ -109,6 +116,7 @@ def _check_default_ssprk2_bit_identical(n=32):
         s.add_equation("ne", _scalar_charge(+1.0), **kwargs)
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
+        install_ssprk2_program(s)
         s.advance(0.002, 10)
         return np.asarray(s.density())
 
@@ -131,6 +139,10 @@ def _build_advect(n, kind):
                       else engine.Explicit(method="euler")))
     s.set_poisson(bc=Periodic())
     s.set_density("ne", _bump(n, 0.40))
+    if kind == "ssprk3":
+        install_ssprk3_program(s)
+    else:
+        install_forward_euler_program(s)
     return s
 
 

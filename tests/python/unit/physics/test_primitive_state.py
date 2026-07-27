@@ -15,6 +15,7 @@ import pops
 import pops.runtime._engine_descriptors as engine
 from pops.physics import Density, Energy, Model, Momentum, Pressure, Velocity
 from pops.runtime._system import System
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import repo_include
 
@@ -168,6 +169,7 @@ def test_compressible_primitive_roundtrip_and_step():
     np.testing.assert_allclose(state[3], expected_energy, rtol=0.0, atol=1e-13)
 
     runtime.set_poisson()
+    install_forward_euler_program(runtime)
     for _ in range(5):
         runtime.step_cfl(0.4)
     advanced = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
@@ -192,6 +194,7 @@ def test_isothermal_primitive_roundtrip_and_step():
     np.testing.assert_allclose(state[2], rho * v, rtol=0.0, atol=1e-13)
 
     runtime.set_poisson()
+    install_forward_euler_program(runtime)
     for _ in range(5):
         runtime.step_cfl(0.4)
     advanced = np.asarray(runtime.get_state("gas")).reshape(3, N, N)

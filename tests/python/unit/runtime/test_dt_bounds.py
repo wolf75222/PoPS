@@ -12,7 +12,7 @@ Verifie :
   - NO-DEFAULT-CHANGE : sans borne optionnelle, dt identique et last_dt_bound()=="transport:<bloc>" ;
   - add_dt_bound contraint step_cfl (dt == borne, last_dt_bound()=="global:<label>") ;
   - une borne lache (1e9) / non-positive (-1) ne contraint PAS (dt inchange) ;
-  - step_adaptive honore aussi la borne globale ;
+  - step_adaptive refuse explicitement tant que le ProgramGraph multirate n'est pas abaisse ;
  (B, avec compilateur -- auto-skip sinon)
   - DSL m.stability_speed(lambda*) : pilote la CFL (dt reduit du ratio attendu) ;
   - DSL m.stability_dt(dt_adm) : borne directe (dt == dt_adm, cfl NON applique,
@@ -32,6 +32,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.physics._facade import Model
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -67,6 +68,7 @@ def build(n=24):
                      time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("ions", gaussian(n).ravel())
+    install_forward_euler_program(sim)
     return sim
 
 
@@ -96,23 +98,33 @@ dt3 = sim3.step_cfl(0.4)
 chk(abs(dt3 - dt0) < 1e-15, "dt inchange (bornes inactives)")
 chk(sim3.last_dt_bound() == "transport:ions", "borne active reste transport")
 
-print("== (A4) step_adaptive honore la borne globale ==")
+print("== (A4) step_adaptive reste fail-closed sans ProgramGraph multirate ==")
 sim4 = build()
 sim4.add_dt_bound("cap_adapt", lambda: cap)
-dt4 = sim4.step_adaptive(0.4)
-chk(dt4 <= cap + 1e-15, f"macro-pas adaptatif <= borne ({dt4:.3e} <= {cap:.3e})")
+try:
+    sim4.step_adaptive(0.4)
+    chk(False, "step_adaptive sans ProgramGraph multirate aurait du lever")
+except RuntimeError as exc:
+    chk("ProgramGraph" in str(exc), "refus explicite nomme le ProgramGraph multirate")
 
 # --- (C) AMR : StabilityPolicy cablee (audit vague 2) -------------------------------
 print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 
-def build_amr(n=24):
+def build_amr(n=24, *, second_block=False):
     amr = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
+    if second_block:
+        amr.set_temporal_relations([2], [1], ["integral_only"])
     amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
     amr.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
     amr.set_density("ions", gaussian(n))
+    if second_block:
+        amr.add_equation("e2", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+                         time=engine.Explicit())
+        amr.set_density("e2", gaussian(n))
+    install_forward_euler_program(amr)
     return amr
 
 
@@ -131,11 +143,7 @@ chk(amr2.last_dt_bound() == "global:cap_amr",
     f"AMR borne active = global:cap_amr (recu {amr2.last_dt_bound()!r})")
 
 print("== (C2) AMR multi-blocs : borne globale via AmrRuntime ==")
-amr3 = build_amr()
-amr3.set_temporal_relations([2], [1], ["integral_only"])
-amr3.add_equation("e2", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
-                  time=engine.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
-amr3.set_density("e2", gaussian(24))
+amr3 = build_amr(second_block=True)  # 2e bloc -> moteur multi-blocs (AmrRuntime)
 amr3.add_dt_bound("cap_multi", lambda: cap_amr)
 dta3 = amr3.step_cfl(0.4)
 chk(dta3 <= cap_amr + 1e-15, f"AMR multi-blocs dt <= borne ({dta3:.3e})")
@@ -176,6 +184,7 @@ def build_dsl(cm, n=16):
                      time=engine.Explicit())
     sim.set_poisson()
     sim.set_density("s", gaussian(n).ravel())
+    install_forward_euler_program(sim)
     return sim
 
 
@@ -239,6 +248,7 @@ try:
     amr_dsl.add_equation("s", model=cm_dt_amr, spatial=engine.Spatial(limiter=Minmod()),
                          time=engine.Explicit())
     amr_dsl.set_density("s", gaussian(16))
+    install_forward_euler_program(amr_dsl)
     dt_amr = amr_dsl.step_cfl(cfl)
     chk(abs(dt_amr - 1e-4) < 1e-12, f"AMR DSL dt = 1e-4 ({dt_amr:.3e})")
     chk(amr_dsl.last_dt_bound() == "stability_dt:s",

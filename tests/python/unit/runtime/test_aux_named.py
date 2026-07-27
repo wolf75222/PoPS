@@ -20,6 +20,7 @@ from pops.physics._model import HyperbolicModel
 from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem, System
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.requirements import repo_include
 
 
@@ -183,6 +184,7 @@ def test_end_to_end():
         residual = np.asarray(runtime.eval_rhs("decay"))
         assert float(np.max(np.abs(residual + spatial_kappa))) < 1e-12
 
+        install_forward_euler_program(runtime)
         for _ in range(5):
             runtime.step_cfl(0.4)
         assert float(np.max(np.abs(
@@ -253,6 +255,7 @@ def test_amr_named_aux_single_block_regrid():
         reference.set_refinement(2.0)
         reference.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         initial_mass = reference.mass("decay")
+        install_forward_euler_program(reference)
         for _ in range(3):
             reference.step(1e-2)
         assert abs(reference.mass("decay") - initial_mass) < 1e-10
@@ -271,6 +274,7 @@ def test_amr_named_aux_single_block_regrid():
         runtime.set_density("decay", density)
         runtime.set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
         masses = [runtime.mass("decay")]
+        install_forward_euler_program(runtime)
         for _ in range(5):
             runtime.step(1e-2)
             masses.append(runtime.mass("decay"))
@@ -326,6 +330,7 @@ def test_amr_named_aux_multiblock_regrid():
         runtime.set_density("plain", np.ones((n, n)))
         runtime.set_aux_field("decay", "kappa", 50.0 * np.ones((n, n)))
         decay_before, plain_before = runtime.mass("decay"), runtime.mass("plain")
+        install_forward_euler_program(runtime)
         for _ in range(5):
             runtime.step(1e-2)
         decay_after, plain_after = runtime.mass("decay"), runtime.mass("plain")

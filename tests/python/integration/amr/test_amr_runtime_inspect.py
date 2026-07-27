@@ -26,6 +26,7 @@ from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
     HierarchySnapshot, RuntimeInspection)
 from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
+from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
 
 
 def _model():
@@ -47,6 +48,7 @@ def _built_amr(regrid_every=2, n=32):
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
     sim.set_density("ne", ne)
     sim.set_density("ni", np.ones((n, n)))
+    install_forward_euler_program(sim)
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim

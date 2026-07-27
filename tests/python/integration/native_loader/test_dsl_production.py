@@ -15,6 +15,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -116,6 +117,8 @@ def main():
         # deux cotes -> pas de derive numerique possible si la numerique est la meme).
         prod = build_native("minmod", "hllc", "primitive")
         ref = build_ref("minmod", "hllc", "primitive")
+        install_ssprk2_program(prod)
+        install_ssprk2_program(ref)
         dt = 1e-3
         for _ in range(12):
             prod.step(dt)

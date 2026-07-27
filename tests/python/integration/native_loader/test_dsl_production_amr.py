@@ -43,6 +43,7 @@ from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.initial_states import bubble_amr as _bubble
 from tests.python.support.requirements import (
     default_cxx,
@@ -117,6 +118,7 @@ def _amr(n, L, branch, refine=1.2):
     rho = np.asarray(_bubble(n), dtype=float)
     rho += 1.0 - float(rho.mean())
     s.set_density("gas", rho)
+    install_forward_euler_program(s)
     return s
 
 
@@ -323,6 +325,7 @@ def main():
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         E.set_refinement(1.2)
         E.set_density("gas", _bubble(n))
+        install_forward_euler_program(E)
         for _ in range(4):
             E.step(dt)
         assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6

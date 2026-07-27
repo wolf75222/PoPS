@@ -28,6 +28,7 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 GAMMA = 1.4
 fails = 0
@@ -72,6 +73,7 @@ for riem in (HLLC(), Roe()):
     s.add_equation("gas", euler_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=riem), time=engine.Explicit())
     s.set_density("gas", rho.copy())
+    install_forward_euler_program(s)
     for _ in range(3):
         s.step(1e-4)
     d = np.asarray(s.density("gas"))
@@ -87,6 +89,7 @@ s.add_equation("b", euler_spec(),
                spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
 s.set_density("a", rho.copy())
 s.set_density("b", rho.copy())
+install_forward_euler_program(s)
 s.step(1e-4)
 chk(np.all(np.isfinite(np.asarray(s.density("a")))),
     "weno5 multi-niveaux avance avec le fournisseur coarse/fine ordre 5")
@@ -100,6 +103,7 @@ try:
     s.add_equation("iso", iso_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
     s.set_density("iso", rho.copy())
+    install_forward_euler_program(s)
     s.step(1e-4)
     chk(False, "weno5 + hllc sur isotherme aurait du lever (capability)")
 except RuntimeError as e:

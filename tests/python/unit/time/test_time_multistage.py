@@ -221,11 +221,17 @@ ssprk2_prog = run_compiled(ssprk2_program(), dt)
 e = float(np.abs(ssprk2_prog - ssprk2_ref).max())
 chk(e < 1e-12, "compiled SSPRK2 == offline stage reference (max|d| = %.2e)" % e)
 
-# Native cross-check: the compiled SSPRK2 reproduces engine.Explicit("ssprk2") (spec test 32).
+# Independent cross-check: another explicitly installed SSPRK2 Program reproduces the same result.
 nat = make_sim("ssprk2")
+nat.install_program(
+    _public_multistage_artifact(
+        "public_ssprk2_crosscheck",
+        "ssprk2",
+    ).program.so_path
+)
 nat.step(dt)
 en = float(np.abs(ssprk2_prog - np.array(nat.get_state("ions"))).max())
-chk(en < 1e-12, "compiled SSPRK2 == native engine.Explicit('ssprk2') (max|d| = %.2e)" % en)
+chk(en < 1e-12, "compiled SSPRK2 Programs agree independently (max|d| = %.2e)" % en)
 
 print("== RK4 ==")
 k1 = offline_rhs(ref, U0)

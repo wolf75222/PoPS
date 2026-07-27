@@ -33,6 +33,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._profile import PerformanceSummary, Profile  # noqa: E402
+from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
 
 
 def _comp():
@@ -67,6 +68,7 @@ def _built_multiblock(n=64, regrid_every=1):
     sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background
+    install_forward_euler_program(sim)
     return sim
 
 

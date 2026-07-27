@@ -282,9 +282,9 @@ def install(prog):
     return sim
 
 
-# Baseline: a NATIVE System (no program) computes the native CFL dt on the same state.
-dt_native = make_sim().step_cfl(CFL)
-chk(dt_native > 0 and np.isfinite(dt_native), "native step_cfl dt finite (%.6g)" % dt_native)
+# Baseline: the explicit no-bound Program computes the native CFL dt on the same state.
+dt_native = install(prog_none).step_cfl(CFL)
+chk(dt_native > 0 and np.isfinite(dt_native), "no-bound step_cfl dt finite (%.6g)" % dt_native)
 
 # (B1) a Program WITHOUT a dt bound: step_cfl uses the native CFL dt UNCHANGED.
 dt_no = install(prog_none).step_cfl(CFL)

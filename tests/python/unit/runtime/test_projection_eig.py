@@ -40,6 +40,7 @@ from pops._ir.expr import Const, Var
 from pops._ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
 from pops.physics._model import HyperbolicModel
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 from tests.python.support.requirements import repo_include
 
 dsl = SimpleNamespace(
@@ -349,12 +350,14 @@ def test_system_end_to_end():
         plain_component = compiled_component(m_none, so_n)
         # run AVEC hook
         s = make_sys(eig_component)
+        install_ssprk2_program(s, project_blocks=("toy",))
         run = []
         for _ in range(NSTEPS):
             s.step(DT)
             run.append(np.array(s.get_state("toy")).reshape(3, N, N))
         # reference : transport SANS hook un pas, puis projection numpy (miroir projection_value)
         sr = make_sys(plain_component)
+        install_ssprk2_program(sr)
         cur, ref = init(N), []
         for _ in range(NSTEPS):
             sr.set_state("toy", cur)

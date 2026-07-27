@@ -45,9 +45,22 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import (
+    install_forward_euler_program,
+    install_ssprk2_program,
+)
 from tests.python.support.requirements import repo_include
 
 fails = 0
+
+
+def _install_explicit_method(sim, method):
+    if method == "euler":
+        install_forward_euler_program(sim)
+    elif method in (None, "ssprk2"):
+        install_ssprk2_program(sim)
+    else:
+        raise ValueError("unsupported method %r" % method)
 
 
 def chk(cond, label):
@@ -84,6 +97,7 @@ def make_sim(method):
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    _install_explicit_method(sim, method)
     return sim
 
 
@@ -116,6 +130,7 @@ s_def.add_equation("ions", transport_model(),
                    spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                    time=engine.Explicit())
 s_def.set_state("ions", np.array(sd.get_state("ions")))
+install_ssprk2_program(s_def)
 sd.step(dt)
 s_def.step(dt)
 chk(np.array_equal(np.array(sd.get_state("ions")), np.array(s_def.get_state("ions"))),
@@ -143,6 +158,7 @@ def make_amr_sim(method):
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_density("ions", rho)
+    _install_explicit_method(sim, method)
     return sim, rho
 
 
@@ -258,6 +274,7 @@ def make_prod_sim(method):
     X, Y = np.meshgrid(x, x, indexing="ij")
     sim.set_state("q", np.stack([1.0 + 0.3 * np.sin(2 * np.pi * X),
                                  1.0 + 0.2 * np.cos(2 * np.pi * Y)]))
+    _install_explicit_method(sim, method)
     return sim
 
 

@@ -216,6 +216,7 @@ def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import System
+    from tests.python.support.explicit_program import install_forward_euler_program
 
     n = 8
     dt = 0.01
@@ -236,6 +237,7 @@ def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope
     rho = 1.0 + 0.2 * np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
     initial = np.stack((rho, 0.3 * rho, -0.1 * rho))
     system.set_state("scalar", initial)
+    install_forward_euler_program(system)
 
     system.step(dt)
 

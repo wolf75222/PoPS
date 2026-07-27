@@ -22,6 +22,11 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from tests.python.support.explicit_program import (  # noqa: E402
+    install_source_free_imex_program,
+    install_ssprk2_program,
+    install_ssprk3_program,
+)
 
 
 def _scalar_charge(q, B0=1.0):
@@ -61,6 +66,13 @@ def _run_amr_explicit_family(time_brick, *, multi, n=32):
     sim.set_density("ions", _bump(n, 0.40))
     if multi:
         sim.set_density("electrons", _bump(n, 0.20))
+    if time_brick.kind == "ssprk3":
+        install_ssprk3_program(sim)
+    elif time_brick.kind == "imex":
+        # This fixture has NoSource: the authored split contains only its explicit transport stage.
+        install_source_free_imex_program(sim)
+    else:
+        install_ssprk2_program(sim)
     blocks = ("ions", "electrons") if multi else ("ions",)
     m0 = {b: sim.mass(b) for b in blocks}
     sim.advance(0.002, 10)
@@ -96,11 +108,11 @@ def test_amr_ssprk3_runs_finite_and_conserved(multi):
 
 
 def test_amr_imex_mono_runs_finite_and_conserved():
-    """AMR x IMEX x mono: the local backward-Euler stiff source (kind='imex') runs on AMR.
+    """AMR x source-free IMEX x mono: the authored split reduces to its explicit transport stage.
 
-    IMEX is the LOCAL per-cell implicit source (parity with the Cartesian System), wired on the AMR
-    transport. The mono cell pins the IMEX time brick is accepted and steps to a finite, conserved
-    state; a coupled multi-block IMEX source is exercised by the dedicated C++ AMR suites.
+    The fixture intentionally has ``NoSource``; no implicit solve is fabricated. The dedicated
+    implicit-operator suites cover non-trivial local solves. This cell pins the exact source-free
+    reduction and its finite conservative AMR trajectory.
     """
     sim, m0 = _run_amr_explicit_family(engine.IMEX(), multi=False)
     _assert_finite_and_conserved(sim, m0, "AMR/IMEX/mono")

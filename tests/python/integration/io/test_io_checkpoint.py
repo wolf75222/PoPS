@@ -22,6 +22,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 fails = 0
 
@@ -58,6 +59,7 @@ def build(n=16):
                   time=engine.Explicit(stride=2))
     sim.set_density("ions", ions.ravel())
     sim.set_density("slow", slow.ravel())
+    install_forward_euler_program(sim)
     return sim
 
 

@@ -30,6 +30,7 @@ import pytest
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 def _build(n=16):
@@ -46,6 +47,7 @@ def _build(n=16):
                                 alpha=1.0, n0=float(density.mean()))),
                   spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
     sim.set_density("ions", density.ravel())
+    install_forward_euler_program(sim)
     return sim
 
 

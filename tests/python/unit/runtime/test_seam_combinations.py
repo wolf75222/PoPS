@@ -18,6 +18,7 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem, System
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 _COMBINATIONS = (
@@ -89,6 +90,7 @@ def test_system_generated_seam_advances(transport: str, flux: str | None) -> Non
         spatial=_spatial(transport, flux),
     )
     _seed_density(runtime, "block", n)
+    install_forward_euler_program(runtime)
     dt = runtime.step_cfl(0.4)
     assert math.isfinite(dt) and dt > 0.0
 
@@ -103,5 +105,6 @@ def test_amr_generated_seam_advances(transport: str, flux: str | None) -> None:
         spatial=_spatial(transport, flux),
     )
     _seed_density(runtime, "block", n)
+    install_forward_euler_program(runtime)
     dt = runtime.step_cfl(0.4)
     assert math.isfinite(dt) and dt > 0.0
