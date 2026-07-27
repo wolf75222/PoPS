@@ -79,6 +79,139 @@ def _control_identity(controls: Mapping[str, Any] | None) -> tuple[tuple[str, An
     ))
 
 
+def _attempt_world(engine: Any) -> Any:
+    """Return the authenticated MPI world for one installed engine, if distributed."""
+    if getattr(engine, "_collective_step_envelope_active", False) is not True:
+        return None
+    context = getattr(engine, "_execution_context", None)
+    resource = getattr(context, "communicator", None)
+    identity = getattr(resource, "identity", None)
+    handle = getattr(resource, "handle", None)
+    if identity is None:
+        # Small direct-engine and unit-test seams have no installed execution authority.
+        return None
+    if identity == "serial":
+        if handle is not None:
+            raise ValueError("serial step execution hides a communicator handle")
+        return None
+    if identity != "MPI_COMM_WORLD":
+        raise ValueError(
+            "distributed step execution requires the authenticated MPI_COMM_WORLD resource")
+    from pops._native_collectives import require_world
+
+    return require_world(handle)
+
+
+def _attempt_error_record(error: BaseException) -> dict[str, Any]:
+    rejected = isinstance(error, StepAttemptRejected)
+
+    def attribute(name: str, default: Any) -> Any:
+        try:
+            value = getattr(error, name, default)
+            return value() if callable(value) else value
+        except BaseException:
+            return default
+
+    def text(value: Any, default: str) -> str:
+        try:
+            return str(value)
+        except BaseException:
+            return default
+
+    message = text(error, "<unprintable rank-local exception>")
+    try:
+        phase = _phase(error)
+    except BaseException:
+        phase = "solve"
+    try:
+        reason_code = int(attribute("reason_code", 0)) if rejected else None
+    except (TypeError, ValueError, OverflowError):
+        reason_code = 0
+
+    return {
+        "kind": "reject" if rejected else "fail",
+        "type": type(error).__name__,
+        "message": message,
+        "status": text(
+            attribute("status", "invalid_evaluation"), "invalid_evaluation",
+        ) if rejected else None,
+        "phase": phase,
+        "detail": text(attribute("detail", message), message) if rejected else None,
+        "disposition": text(attribute("disposition", "reject"), "reject")
+        if rejected else None,
+        "reason_code": reason_code,
+    }
+
+
+def _collective_attempt_error(
+    engine: Any, local_error: BaseException | None,
+) -> BaseException | None:
+    """Turn rank-local attempt results into one deterministic pre-publication decision."""
+    world = _attempt_world(engine)
+    if world is None or int(world.size) == 1:
+        return local_error
+
+    from pops._native_collectives import allgather_value
+
+    rows = allgather_value(world, {
+        "rank": int(world.rank),
+        "error": None if local_error is None else _attempt_error_record(local_error),
+    })
+    failures: list[tuple[int, Mapping[str, Any]]] = []
+    expected_error_keys = {
+        "kind", "type", "message", "status", "phase", "detail", "disposition", "reason_code",
+    }
+    for rank, row in enumerate(rows):
+        if not isinstance(row, Mapping) or set(row) != {"rank", "error"} \
+                or row["rank"] != rank:
+            return RuntimeError("collective step attempt returned an invalid rank envelope")
+        error = row["error"]
+        if error is None:
+            continue
+        if not isinstance(error, Mapping) or set(error) != expected_error_keys:
+            return RuntimeError(
+                "collective step attempt returned an invalid error envelope on rank %d" % rank)
+        failures.append((rank, error))
+    if not failures:
+        return None
+
+    fatal = tuple(row for row in failures if row[1]["kind"] == "fail")
+    rank_divergent = len(failures) != len(rows)
+    rejection_controls = {
+        (
+            error["status"],
+            error["phase"],
+            error["disposition"],
+            error["reason_code"],
+        )
+        for _, error in failures
+        if error["kind"] == "reject"
+    }
+    rejection_divergent = len(rejection_controls) > 1
+    selected_rank, selected = (fatal or tuple(failures))[0]
+    diagnostics = "; ".join(
+        "rank %d %s: %s" % (rank, error["type"], error["message"])
+        for rank, error in failures
+    )
+    phase = str(selected["phase"])
+    # A controller may retry only when every rank rejected and therefore every native backend
+    # already restored its attempt-local state.  A mixed success/rejection is escalated to FailRun;
+    # the enclosing RuntimeInstance transaction then rolls every rank back before publication.
+    if fatal or rank_divergent or rejection_divergent:
+        return RuntimeError(
+            "collective step attempt failed during %s: %s" % (phase, diagnostics))
+
+    rejection = StepAttemptRejected(
+        "collective step attempt rejected during %s: %s" % (phase, diagnostics))
+    rejection.status = str(selected["status"])
+    rejection.phase = phase
+    rejection.detail = diagnostics
+    rejection.disposition = str(selected["disposition"])
+    rejection.reason_code = int(selected["reason_code"])
+    rejection.failed_rank = selected_rank
+    return rejection
+
+
 def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
     rejected = isinstance(error, StepAttemptRejected)
     stores = _stores(engine)
@@ -98,9 +231,14 @@ def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
     before_time, before_step = native.time(), native.macro_step()
     if temporal is not None:
         temporal.before_attempt(time=before_time, macro_step=before_step)
+    result = None
+    local_error = None
     try:
         result = advance()
     except BaseException as error:
+        local_error = error
+    error = _collective_attempt_error(engine, local_error)
+    if error is not None:
         if temporal is not None:
             from pops.runtime._temporal_restart import is_rejected_attempt
             recorder = temporal.reject if is_rejected_attempt(error) else temporal.fail
@@ -110,7 +248,7 @@ def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
             # transaction owns native rollback, while the temporal envelope remains at this captured
             # pre-attempt clock by definition.
             recorder(time=before_time, macro_step=before_step)
-        raise
+        raise error
     if temporal is not None:
         temporal.accept(
             before_time=before_time, before_step=before_step,
