@@ -252,7 +252,7 @@ void install_single_block_test_program(AmrSystem& system, Model model, bool impl
   context->install([context, model, implicit_source](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context, model, implicit_source](double level_dt) {
       context->set_stage_time(0, 1);
-      (void)context->solve_fields();
+      (void)consume_solve_outcome(context->solve_fields());
 
       MultiFab& live = context->state(0);
       MultiFab& candidate = context->scratch_state(1000, 0, live);
@@ -261,8 +261,9 @@ void install_single_block_test_program(AmrSystem& system, Model model, bool impl
       if (implicit_source) {
         context->neg_div_flux_default_into(0, candidate, rate, 3000);
         context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
-        backward_euler_source(model, context->aux(), candidate, Real(level_dt), NewtonOptions{},
-                              ImplicitMask<Model::n_vars>{}, nullptr);
+        (void)consume_solve_outcome(backward_euler_source(model, context->aux(), candidate,
+                                                          Real(level_dt), NewtonOptions{},
+                                                          ImplicitMask<Model::n_vars>{}, nullptr));
       } else {
         context->rhs_into(0, candidate, rate, 3000);
         context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});

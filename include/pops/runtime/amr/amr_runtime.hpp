@@ -246,7 +246,7 @@ class AmrPreparedFieldSolver {
   static bool same_publication_layout_(const MultiFab& lhs, const MultiFab& rhs) noexcept {
     return lhs.box_array().boxes() == rhs.box_array().boxes() &&
            lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
-           lhs.n_grow() == rhs.n_grow();
+           lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
   }
   void capture_publication_(std::vector<MultiFab>& storage) {
     const int levels = level_count();
@@ -265,8 +265,15 @@ class AmrPreparedFieldSolver {
     if (storage.size() != static_cast<std::size_t>(level_count()))
       throw std::logic_error("AMR field publication depth changed during a solve");
     for (int level = 0; level < level_count(); ++level)
-      PureFieldAlgebra::copy_allocated(phi_level(level),
-                                       storage[static_cast<std::size_t>(level)]);
+      PureFieldAlgebra::copy_allocated(phi_level(level), storage[static_cast<std::size_t>(level)]);
+  }
+  void validate_candidate_publication_() {
+    if (candidate_publication_.size() != static_cast<std::size_t>(level_count()))
+      throw std::logic_error("AMR field publication depth changed before Accept");
+    for (int level = 0; level < level_count(); ++level)
+      if (!same_publication_layout_(phi_level(level),
+                                    candidate_publication_[static_cast<std::size_t>(level)]))
+        throw std::logic_error("AMR field publication layout changed before Accept");
   }
   void release_publication_() noexcept { publication_active_ = false; }
 
@@ -276,9 +283,10 @@ class AmrPreparedFieldSolver {
 };
 
 /// Execute one provider-owned AMR field solve behind an exact collective publication boundary.
-/// Providers may either return a report or throw after recording a typed reject-attempt report;
-/// both forms are normalized before the core decides whether to publish or roll back. Unknown
-/// exceptions, malformed reports, and valid-but-rank-divergent reports fail uniformly.
+/// Providers return a report for every recoverable solve failure. Exceptions are infrastructure
+/// failures and therefore fail the run uniformly; the core never reuses an unversioned prior report
+/// to reinterpret an unknown exception as a retry. Malformed and valid-but-rank-divergent reports
+/// likewise fail uniformly.
 inline SolveOutcome solve_prepared_amr_field_solver_collectively(AmrPreparedFieldSolver& solver) {
   if (all_reduce_max(solver.publication_active_ ? 1L : 0L) != 0)
     throw std::logic_error("AMR field solve is reserved until its prior outcome is consumed");
@@ -297,11 +305,7 @@ inline SolveOutcome solve_prepared_amr_field_solver_collectively(AmrPreparedFiel
   try {
     report = solver.solve();
   } catch (...) {
-    const SolveReport& attempted = solver.last_solve_report();
-    if (attempted.failed() && attempted.action == SolveAction::kRejectAttempt)
-      report = attempted;
-    else
-      provider_failed = true;
+    provider_failed = true;
   }
   if (all_reduce_max(provider_failed ? 1L : 0L) != 0) {
     try {
@@ -363,13 +367,17 @@ inline SolveOutcome solve_prepared_amr_field_solver_collectively(AmrPreparedFiel
       std::move(report),
       SolveOutcome::PublicationHooks{
           &solver,
-          [](void* context) {
+          [](void* context) noexcept {
             auto* prepared = static_cast<AmrPreparedFieldSolver*>(context);
             prepared->restore_publication_(prepared->candidate_publication_);
           },
           nullptr,
           [](void* context) noexcept {
             static_cast<AmrPreparedFieldSolver*>(context)->release_publication_();
+          },
+          {},
+          [](void* context) {
+            static_cast<AmrPreparedFieldSolver*>(context)->validate_candidate_publication_();
           }});
 }
 
@@ -3634,16 +3642,19 @@ class AmrRuntime {
         [&]() { return solve_named_fields_uncommitted(selected); });
   }
 
+  [[nodiscard]] bool field_solve_transaction_active() const noexcept {
+    return field_solve_transaction_active_;
+  }
+
   std::int64_t recompute_bootstrap_field(const std::string& field) {
     if (!bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::recompute_bootstrap_field requires a transaction");
-    SolveOutcome outcome =
-        field == "phi" ? solve_default_field() : [&]() -> SolveOutcome {
-          if (!has_named_field(field))
-            throw std::runtime_error("AmrRuntime::recompute_bootstrap_field has no runtime field '" +
-                                     field + "'");
-          return solve_named_fields(&field);
-        }();
+    SolveOutcome outcome = field == "phi" ? solve_default_field() : [&]() -> SolveOutcome {
+      if (!has_named_field(field))
+        throw std::runtime_error("AmrRuntime::recompute_bootstrap_field has no runtime field '" +
+                                 field + "'");
+      return solve_named_fields(&field);
+    }();
     const SolveReport report =
         outcome.consume(outcome.report().solved_value_available()
                             ? SolveConsumption::kAccept
@@ -3688,8 +3699,7 @@ class AmrRuntime {
     for (auto& b : blocks_)
       b.add_elliptic_rhs((*b.levels)[0].U, default_field_solver_->rhs_level(0));
     default_field_nullspace_workspace_->require_compatible(default_field_solver_->rhs_level(0));
-    SolveOutcome outcome =
-        solve_prepared_amr_field_solver_collectively(*default_field_solver_);
+    SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(*default_field_solver_);
     const SolveReport report =
         outcome.consume(outcome.report().solved_value_available()
                             ? SolveConsumption::kAccept
@@ -5202,6 +5212,7 @@ class AmrRuntime {
   void publish_refined_aux_components(const std::vector<int>& components);
   FieldSolveSnapshot& capture_field_solve_snapshot(const FieldSolveScope& scope,
                                                    bool candidate_slot = false);
+  void validate_field_solve_snapshot(const FieldSolveSnapshot& snapshot);
   void restore_field_solve_snapshot(const FieldSolveSnapshot& snapshot);
   void restore_field_solve_snapshot_noexcept(const FieldSolveSnapshot& snapshot) noexcept {
     try {
@@ -5210,9 +5221,7 @@ class AmrRuntime {
       std::terminate();
     }
   }
-  void release_field_solve_snapshot_() noexcept {
-    field_solve_transaction_active_ = false;
-  }
+  void release_field_solve_snapshot_() noexcept { field_solve_transaction_active_ = false; }
 
   template <class Solve>
   SolveOutcome run_field_solve_transaction(const FieldSolveScope& scope, Solve&& solve);
@@ -5719,7 +5728,7 @@ class AmrRuntime {
   static bool same_exact_multifab_layout_(const MultiFab& left, const MultiFab& right) {
     return left.box_array().boxes() == right.box_array().boxes() &&
            left.dmap().ranks() == right.dmap().ranks() && left.ncomp() == right.ncomp() &&
-           left.n_grow() == right.n_grow();
+           left.n_grow() == right.n_grow() && left.local_size() == right.local_size();
   }
 
   [[nodiscard]] Periodicity aux_periodicity_() const noexcept {

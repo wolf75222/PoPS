@@ -356,9 +356,10 @@ PolarGeometry System::program_polar_geometry() const {
 std::string System::installed_program_hash() const {
   return p_->program_.installed_hash_;
 }
-// Configured field (Poisson) solver token, owned by SystemFieldSolver (p_solver, default
-// "geometric_mg"). Read by install_program (Spec criterion 24, solver requirement) and exposed for
-// introspection. Returns the last set_poisson solver, never empty (the default stands).
+// Configured field (Poisson) solver token, owned by SystemFieldSolver (p_solver, geometry-specific
+// default "geometric_mg" Cartesian / "polar" on a ring). Read by install_program (Spec criterion 24,
+// solver requirement) and exposed for introspection. Returns the last set_poisson solver, never
+// empty (the default stands).
 std::string System::poisson_solver() const {
   return p_->fields_.p_solver;
 }

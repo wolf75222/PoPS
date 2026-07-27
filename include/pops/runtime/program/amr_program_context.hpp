@@ -574,6 +574,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         default_solve_report_ = report;
       return outcome;
     }
+    if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+      throw std::logic_error(
+          "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
     return SolveOutcome::collective_world(*default_solve_report_);
   }
   /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
@@ -605,9 +608,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "the default per-stage fine-level field re-solve requires a composite stage solver; use "
         "OncePerStep field cadence or an exact named field provider");
   }
-  SolveOutcome solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int b, MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          const std::string& provider_slot, int b,
+                                          MultiFab& u_stage) const {
     if (provider_slot.empty())
       throw std::invalid_argument(
           "AmrProgramContext::solve_fields_from_state_at requires an exact provider slot");
@@ -641,7 +644,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                     const std::string& provider_slot, int b,
                                     MultiFab& evaluation_state, MultiFab& restore_state,
-    Body&& body) const {
+                                    Body&& body) const {
     const auto restore = [&]() {
       const SolveReport restored = consume_field_outcome_(
           solve_fields_from_state_at(point, provider_slot, b, restore_state));
@@ -665,9 +668,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b,
-                                       MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     if (level_ != 0) {
+      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+        throw std::logic_error(
+            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
       const auto cached = named_solve_reports_.find(field);
       if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
@@ -697,8 +702,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.
-  SolveOutcome solve_fields_from_blocks(
-      const std::vector<const MultiFab*>& /*u_stages*/) const {
+  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
     deferred_op(
         "solve_fields_from_blocks_default",
         "an unqualified coupled multi-block field solve has no AMR provider authority; use the "
@@ -708,6 +712,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   SolveOutcome solve_fields_from_blocks(const std::string& field,
                                         const std::vector<const MultiFab*>& u_stages) const {
     if (level_ != 0) {
+      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+        throw std::logic_error(
+            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
       const auto cached = named_solve_reports_.find(field);
       if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
@@ -1450,8 +1457,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// Level-local prepared Krylov route. Direct composite hierarchy solves remain a separate typed
   /// backend and never discard an authored prepared operator.
   SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                     KrylovWorkspace& workspace, MultiFab& sol,
-                                     const MultiFab& rhs,
+                                     KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
                                      const KrylovControls& controls) const {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }

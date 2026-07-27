@@ -99,14 +99,20 @@ def _append_solve_report_guard(
     """Consume one native ``SolveOutcome`` with the unique authored action.
 
     Success is accepted explicitly. Failure is consumed as RejectAttempt or FailRun according to the
-    authored status filter; ``SolveOutcome`` then materializes the authoritative report action.
+    authored status filter; ``SolveOutcome`` then materializes the authoritative report action.  The
+    generated exception includes ``report.reason`` so typed native evaluation detail is not replaced
+    by the coarser status name at the Python/C++ program boundary.
     """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
     report = "%s_report" % outcome
     if action_kind == "reject_attempt":
-        selected = " || ".join(
+        selected_status = " || ".join(
             "%s.report().status == %s" % (outcome, _SOLVE_STATUS_CPP[status])
             for status in action_statuses)
+        selected = (
+            "%s.report().action == pops::SolveAction::kRejectAttempt && (%s)"
+            % (outcome, selected_status)
+        )
         failure_consumption = (
             "(%s ? pops::SolveConsumption::kRejectAttempt : "
             "pops::SolveConsumption::kFailRun)"
@@ -123,13 +129,13 @@ def _append_solve_report_guard(
         lines.append("  if (%s.action == pops::SolveAction::kRejectAttempt) {" % report)
         lines.append(
             "    throw pops::runtime::program::StepAttemptRejected("
-            "%s.status, %s, std::string(%s) + %s.status_name());"
+            "%s.status, %s, std::string(%s) + %s.reason);"
             % (report, json.dumps(failure_phase), json.dumps(label + " failed: "), report))
         lines.append("  }")
     lines.append(
         "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
-        "\" action=\" + %s.action_name());"
-        % (json.dumps(label + " failed: "), report, report))
+        "\" action=\" + %s.action_name() + \" reason=\" + %s.reason);"
+        % (json.dumps(label + " failed: "), report, report, report))
     lines.append("}")
     lines.append(
         "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)

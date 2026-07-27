@@ -16,7 +16,7 @@
 ///        CompositeFacPoisson. Tail-included by composite_fac_poisson.hpp; every definition here is an
 ///        out-of-line member so the class API (declared in the main header) is untouched.
 ///
-/// The 2-level non-adjacent mono-rank envelope is dispatched to the VERBATIM legacy body
+/// The 2-level non-adjacent mono-rank envelope is dispatched to the legacy arithmetic body
 /// (solve_two_level_legacy_) and never reaches this file. This is the general path taken by N > 2
 /// levels, adjacent fine patches, or n_ranks() > 1.
 ///
@@ -507,15 +507,17 @@ inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, R
   try {
     solver.solve(rel_tol, max_iters, abs_tol);
     residual = solver.last_residual();
+    last_solve_report_ = solver.last_solve_report();
   } catch (...) {
     last_solve_report_ = solver.last_solve_report();
     throw;
   }
-  last_solve_report_ = solver.last_solve_report();
-  copy0_(phi_level(finest), solver.phi());
-  cascade_avgdown_();
   last_residual_ = residual;
   record_residual(last_solve_report_.iters, residual);
+  if (!last_solve_report_.solved())
+    return residual;
+  copy0_(phi_level(finest), solver.phi());
+  cascade_avgdown_();
   return residual;
 }
 
@@ -907,6 +909,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     copy0_(mg_.rhs(), res_c_);
     mg_.phi().set_val(Real(0));
     mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+    require_usable_fixed_cycle_result_(mg_, "level-0 correction solve");
     add_uncovered_level_(0, phi_c_, mg_.phi());
     return;
   }
@@ -954,6 +957,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     copy0_(mgk.rhs(), res_rep);
     mgk.phi().set_val(Real(0));
     mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+    require_usable_fixed_cycle_result_(mgk, "replicated level correction solve");
     // write the correction back to the distributed patch on its owner (add_uncovered on the local fab).
     const CoverageMaskView coverage = cov_of_[m].view();
     MultiFab& phim = phi_level(m);
@@ -977,6 +981,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
   copy0_(mgk.rhs(), res_level_(m));
   mgk.phi().set_val(Real(0));
   mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+  require_usable_fixed_cycle_result_(mgk, "distributed level correction solve");
   add_uncovered_level_(m, phi_level(m), mgk.phi());
 }
 
@@ -992,6 +997,7 @@ inline CompositeFacPoisson::LinearSolveResult CompositeFacPoisson::solve_composi
   copy0_(mg_.rhs(), f_c_);
   mg_.phi().set_val(Real(0));
   mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+  require_usable_fixed_cycle_result_(mg_, "initial coarse solve");
   copy0_(phi_c_, mg_.phi());
 
   // 1) relax every patch level coarse-to-fine, then a fine-to-coarse average-down cascade (==

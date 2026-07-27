@@ -12,8 +12,9 @@
 
 #include <algorithm>  // std::max (Newton report aggregation, host)
 #include <concepts>
-#include <cstdio>     // stderr diagnostics for an unconsumed outcome contract violation
-#include <cstdlib>    // std::abort
+#include <cstdint>
+#include <cstdio>   // stderr diagnostics for an unconsumed outcome contract violation
+#include <cstdlib>  // std::abort
 #include <memory>
 #include <sstream>    // structured host failure message, never in kernel
 #include <stdexcept>  // explicit FailRun/contract errors, host after reductions
@@ -80,6 +81,57 @@ concept HasSourceJacobian =
       m.source_jacobian(u, a, J);
     };
 
+/// Device-safe result of one pointwise implicit source or source-Jacobian evaluation.
+///
+/// Fallible models expose
+///   evaluate_source(state, aux, output)
+/// and/or
+///   evaluate_source_jacobian(state, aux, output_matrix)
+/// returning this POD. Models that only expose the historical source()/source_jacobian() methods
+/// remain valid and are adapted to kOk without a runtime branch. A non-success result never makes
+/// the model-provided output observable outside the private Newton candidate.
+enum class ImplicitEvaluationStatus : int {
+  kOk = 0,
+  kRetry = 1,
+  kReject = 2,
+  kFailed = 3,
+  kInvalid = 4,
+};
+
+struct ImplicitEvaluationResult {
+  ImplicitEvaluationStatus status = ImplicitEvaluationStatus::kInvalid;
+  std::uint32_t reason_code = 0;
+
+  POPS_HD static constexpr ImplicitEvaluationResult ok() {
+    return {ImplicitEvaluationStatus::kOk, 0};
+  }
+  POPS_HD static constexpr ImplicitEvaluationResult retry(std::uint32_t reason) {
+    return {ImplicitEvaluationStatus::kRetry, reason};
+  }
+  POPS_HD static constexpr ImplicitEvaluationResult reject(std::uint32_t reason) {
+    return {ImplicitEvaluationStatus::kReject, reason};
+  }
+  POPS_HD static constexpr ImplicitEvaluationResult failed(std::uint32_t reason) {
+    return {ImplicitEvaluationStatus::kFailed, reason};
+  }
+  POPS_HD static constexpr ImplicitEvaluationResult invalid(std::uint32_t reason) {
+    return {ImplicitEvaluationStatus::kInvalid, reason};
+  }
+  POPS_HD constexpr bool succeeded() const { return status == ImplicitEvaluationStatus::kOk; }
+};
+
+template <class M>
+concept HasFallibleSourceEvaluation =
+    requires(const M m, const typename M::State u, const Aux a, typename M::State& output) {
+      { m.evaluate_source(u, a, output) } -> std::same_as<ImplicitEvaluationResult>;
+    };
+
+template <class M>
+concept HasFallibleSourceJacobianEvaluation =
+    requires(const M m, const typename M::State u, const Aux a, Real (&J)[M::n_vars][M::n_vars]) {
+      { m.evaluate_source_jacobian(u, a, J) } -> std::same_as<ImplicitEvaluationResult>;
+    };
+
 // Implicit mask CARRIED BY THE BLOCK / time policy (and NOT by the model): device-clean POD carrier
 // (fixed array N, passed BY VALUE into the kernel, no host pointer dereference on device).
 // When active (active == true), it OVERRIDES the model default (model_is_implicit): only the
@@ -140,7 +192,10 @@ enum class NewtonFailureKind : int {
   kNone = 0,
   kIterationLimit = 1,
   kSingular = 2,
-  kInvalidEvaluation = 3,
+  kEvaluationRetry = 3,
+  kEvaluationReject = 4,
+  kEvaluationFailed = 5,
+  kInvalidEvaluation = 6,
 };
 
 /// OUTPUT statistic of the Newton of ONE cell (device POD, written into the diagnostics scratch):
@@ -153,6 +208,7 @@ struct NewtonCellStat {
   Real iters = Real(0);
   NewtonFailureKind failure = NewtonFailureKind::kNone;
   Real comp = Real(-1);
+  std::uint32_t reason_code = 0;
 };
 
 /// AGGREGATED report (whole block, all substeps of one advance) of the implicit-source Newton.
@@ -181,6 +237,66 @@ POPS_HD inline bool newton_finite(Real x) {
 }
 
 namespace detail {
+inline constexpr std::uint32_t kImplicitUnknownEvaluationStatus = 0x4e570001u;
+inline constexpr std::uint32_t kImplicitNonFiniteSource = 0x4e570002u;
+inline constexpr std::uint32_t kImplicitNonFiniteJacobian = 0x4e570003u;
+
+POPS_HD inline bool implicit_evaluation_status_known(ImplicitEvaluationStatus status) {
+  switch (status) {
+    case ImplicitEvaluationStatus::kOk:
+    case ImplicitEvaluationStatus::kRetry:
+    case ImplicitEvaluationStatus::kReject:
+    case ImplicitEvaluationStatus::kFailed:
+    case ImplicitEvaluationStatus::kInvalid:
+      return true;
+  }
+  return false;
+}
+
+POPS_HD inline ImplicitEvaluationResult sanitize_implicit_evaluation(
+    ImplicitEvaluationResult result) {
+  return implicit_evaluation_status_known(result.status)
+             ? result
+             : ImplicitEvaluationResult::invalid(kImplicitUnknownEvaluationStatus);
+}
+
+POPS_HD inline NewtonFailureKind newton_evaluation_failure(ImplicitEvaluationStatus status) {
+  switch (status) {
+    case ImplicitEvaluationStatus::kOk:
+      return NewtonFailureKind::kNone;
+    case ImplicitEvaluationStatus::kRetry:
+      return NewtonFailureKind::kEvaluationRetry;
+    case ImplicitEvaluationStatus::kReject:
+      return NewtonFailureKind::kEvaluationReject;
+    case ImplicitEvaluationStatus::kFailed:
+      return NewtonFailureKind::kEvaluationFailed;
+    case ImplicitEvaluationStatus::kInvalid:
+      return NewtonFailureKind::kInvalidEvaluation;
+  }
+  return NewtonFailureKind::kInvalidEvaluation;
+}
+
+template <class Model>
+POPS_HD inline ImplicitEvaluationResult evaluate_implicit_source(const Model& model,
+                                                                 const typename Model::State& state,
+                                                                 const Aux& aux,
+                                                                 typename Model::State& output) {
+  if constexpr (HasFallibleSourceEvaluation<Model>)
+    return sanitize_implicit_evaluation(model.evaluate_source(state, aux, output));
+  else {
+    output = model.source(state, aux);
+    return ImplicitEvaluationResult::ok();
+  }
+}
+
+template <class Model>
+POPS_HD inline int first_non_finite_source_component(const typename Model::State& source) {
+  for (int component = 0; component < Model::n_vars; ++component)
+    if (!newton_finite(source[component]))
+      return component;
+  return -1;
+}
+
 // Dense solve J x = b on the leading n x n block (n <= N), partial pivoting. J and b
 // destroyed. N is constexpr (= Model::n_vars) -> fixed array, no allocation,
 // device-callable; n (<= N) is the number of implicit variables (partial IMEX).
@@ -233,14 +349,37 @@ POPS_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
 // POPS_HD because called from newton_source_solve (device-callable). S0 = m.source(W, a) already computed
 // by the caller (reused as is by the finite differences).
 template <class Model, int N>
-POPS_HD inline void assemble_newton_jacobian(const Model& m, const typename Model::State& W,
-                                             const Aux& a, Real dt, const NewtonOptions& opts,
-                                             const int impl[N], int m_impl,
-                                             const typename Model::State& S0, Real J[N][N]) {
-  if constexpr (HasSourceJacobian<Model>) {
+POPS_HD inline ImplicitEvaluationResult assemble_newton_jacobian(
+    const Model& m, const typename Model::State& W, const Aux& a, Real dt,
+    const NewtonOptions& opts, const int impl[N], int m_impl, const typename Model::State& S0,
+    Real J[N][N], int& invalid_component) {
+  if constexpr (HasFallibleSourceJacobianEvaluation<Model>) {
+    Real dS[N][N];
+    const ImplicitEvaluationResult evaluation =
+        sanitize_implicit_evaluation(m.evaluate_source_jacobian(W, a, dS));
+    if (!evaluation.succeeded())
+      return evaluation;
+    for (int row = 0; row < N; ++row)
+      for (int col = 0; col < N; ++col)
+        if (!newton_finite(dS[row][col])) {
+          invalid_component = row;
+          return ImplicitEvaluationResult::invalid(kImplicitNonFiniteJacobian);
+        }
+    for (int cc = 0; cc < m_impl; ++cc)
+      for (int rr = 0; rr < m_impl; ++rr) {
+        const int row = impl[rr], col = impl[cc];
+        J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dS[row][col];
+      }
+  } else if constexpr (HasSourceJacobian<Model>) {
     // ANALYTIC JACOBIAN (trait, wave 3): J = I - dt * dS/dU restricted to the implicit ones.
     Real dS[N][N];
     m.source_jacobian(W, a, dS);
+    for (int row = 0; row < N; ++row)
+      for (int col = 0; col < N; ++col)
+        if (!newton_finite(dS[row][col])) {
+          invalid_component = row;
+          return ImplicitEvaluationResult::invalid(kImplicitNonFiniteJacobian);
+        }
     for (int cc = 0; cc < m_impl; ++cc)
       for (int rr = 0; rr < m_impl; ++rr) {
         const int row = impl[rr], col = impl[cc];
@@ -253,7 +392,14 @@ POPS_HD inline void assemble_newton_jacobian(const Model& m, const typename Mode
       const Real h = opts.fd_eps * wc + opts.fd_eps;
       typename Model::State Wp = W;
       Wp[col] += h;
-      const typename Model::State Sp = m.source(Wp, a);
+      typename Model::State Sp{};
+      const ImplicitEvaluationResult evaluation = evaluate_implicit_source(m, Wp, a, Sp);
+      if (!evaluation.succeeded())
+        return evaluation;
+      if (const int component = first_non_finite_source_component<Model>(Sp); component >= 0) {
+        invalid_component = component;
+        return ImplicitEvaluationResult::invalid(kImplicitNonFiniteSource);
+      }
       for (int rr = 0; rr < m_impl; ++rr) {
         const int row = impl[rr];
         const Real dSdW = (Sp[row] - S0[row]) / h;
@@ -261,6 +407,7 @@ POPS_HD inline void assemble_newton_jacobian(const Model& m, const typename Mode
       }
     }
   }
+  return ImplicitEvaluationResult::ok();
 }
 
 // Solve W such that W = Un + dt*S(W,a) in forward-backward Euler (partial IMEX):
@@ -283,9 +430,22 @@ POPS_HD inline typename Model::State newton_source_solve(
       impl[m_impl++] = c;
 
   typename Model::State W = Un;
+  std::uint32_t evaluation_reason = 0;
   // (1) explicit: forward Euler on the non-implicit components (source at the input).
   if (m_impl < N) {
-    const typename Model::State S_in = m.source(Un, a);
+    typename Model::State S_in{};
+    const ImplicitEvaluationResult evaluation = evaluate_implicit_source(m, Un, a, S_in);
+    if (!evaluation.succeeded()) {
+      stat.failure = newton_evaluation_failure(evaluation.status);
+      stat.reason_code = evaluation.reason_code;
+      return W;
+    }
+    if (const int component = first_non_finite_source_component<Model>(S_in); component >= 0) {
+      stat.failure = NewtonFailureKind::kInvalidEvaluation;
+      stat.comp = Real(component);
+      stat.reason_code = kImplicitNonFiniteSource;
+      return W;
+    }
     for (int c = 0; c < N; ++c)
       if (!is_implicit_component<Model>(mask, c))
         W[c] = Un[c] + dt * S_in[c];
@@ -302,7 +462,19 @@ POPS_HD inline typename Model::State newton_source_solve(
   NewtonFailureKind failure = NewtonFailureKind::kNone;
   bool converged = (m_impl == 0);  // nothing implicit: trivially converged
   for (int it = 0; it < opts.max_iters; ++it) {
-    const typename Model::State S0 = m.source(W, a);
+    typename Model::State S0{};
+    const ImplicitEvaluationResult source_evaluation = evaluate_implicit_source(m, W, a, S0);
+    if (!source_evaluation.succeeded()) {
+      failure = newton_evaluation_failure(source_evaluation.status);
+      evaluation_reason = source_evaluation.reason_code;
+      break;
+    }
+    if (const int component = first_non_finite_source_component<Model>(S0); component >= 0) {
+      failure = NewtonFailureKind::kInvalidEvaluation;
+      evaluation_reason = kImplicitNonFiniteSource;
+      worst_comp = component;
+      break;
+    }
     Real F[N];
     res = Real(0);
     for (int r = 0; r < m_impl; ++r) {
@@ -331,7 +503,16 @@ POPS_HD inline typename Model::State newton_source_solve(
       break;
     }
     Real J[N][N];
-    assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
+    int invalid_component = -1;
+    const ImplicitEvaluationResult jacobian_evaluation = assemble_newton_jacobian<Model, N>(
+        m, W, a, dt, opts, impl, m_impl, S0, J, invalid_component);
+    if (!jacobian_evaluation.succeeded()) {
+      failure = newton_evaluation_failure(jacobian_evaluation.status);
+      evaluation_reason = jacobian_evaluation.reason_code;
+      worst_comp = invalid_component;
+      used = it + 1;
+      break;
+    }
     Real delta[N];
     const bool ok = solve_dense<N>(J, F, delta, m_impl);
     if (!ok) {
@@ -347,9 +528,21 @@ POPS_HD inline typename Model::State newton_source_solve(
   // report; the loop residual precedes the update). One extra source evaluation,
   // only on this instrumented path.
   if (failure == NewtonFailureKind::kNone && used == opts.max_iters && m_impl > 0) {
-    const typename Model::State S0 = m.source(W, a);
+    typename Model::State S0{};
+    const ImplicitEvaluationResult source_evaluation = evaluate_implicit_source(m, W, a, S0);
+    if (!source_evaluation.succeeded()) {
+      failure = newton_evaluation_failure(source_evaluation.status);
+      evaluation_reason = source_evaluation.reason_code;
+    }
+    if (failure == NewtonFailureKind::kNone) {
+      if (const int component = first_non_finite_source_component<Model>(S0); component >= 0) {
+        failure = NewtonFailureKind::kInvalidEvaluation;
+        evaluation_reason = kImplicitNonFiniteSource;
+        worst_comp = component;
+      }
+    }
     res = Real(0);
-    for (int r = 0; r < m_impl; ++r) {
+    for (int r = 0; failure == NewtonFailureKind::kNone && r < m_impl; ++r) {
       const int c = impl[r];
       const Real fr = W[c] - Un[c] - dt * S0[c];
       if (!newton_finite(fr)) {
@@ -376,6 +569,7 @@ POPS_HD inline typename Model::State newton_source_solve(
   stat.iters = Real(used);
   stat.failure = failure;
   stat.comp = Real(worst_comp);
+  stat.reason_code = evaluation_reason;
   return W;
 }
 }  // namespace detail
@@ -383,7 +577,8 @@ POPS_HD inline typename Model::State newton_source_solve(
 namespace detail {
 // INSTRUMENTED variant: same Newton, but writes the exit statistic of EACH cell into
 // the scratch st (comp 0 = ||F||_inf, 1 = ||F0||_inf, 2 = iterations,
-// 3 = NewtonFailureKind, 4 = ENCODED OFFENDING CELL).
+// 3 = NewtonFailureKind, 4 = ENCODED OFFENDING CELL, 5/6 = high/low 16-bit halves of
+// the evaluation reason code. Splitting keeps all 32 reason bits exact in float and double builds.
 // Encoding comp 4: -1 if the cell did not fail; otherwise (j*2^20 + i)*16 + (offending_comp + 1) --
 // exact integer in double up to ~2^44 (i, j < 2^20), so that a MAX reduction yields ONE offending
 // cell (the largest in index) decodable host side without a dedicated arg-max reduction. NAMED
@@ -410,6 +605,8 @@ struct BackwardEulerSourceStatKernel {
     st(i, j, 4) = s.failure != NewtonFailureKind::kNone
                       ? (Real(j) * Real(1048576) + Real(i)) * Real(16) + (s.comp + Real(1))
                       : Real(-1);
+    st(i, j, 5) = Real(s.reason_code >> 16);
+    st(i, j, 6) = Real(s.reason_code & 0xffffu);
   }
 };
 
@@ -428,6 +625,8 @@ struct BackwardEulerSourceActiveStatKernel {
       st(i, j, 2) = Real(0);
       st(i, j, 3) = Real(0);
       st(i, j, 4) = Real(-1);
+      st(i, j, 5) = Real(0);
+      st(i, j, 6) = Real(0);
       return;
     }
     const typename Model::State Un = load_state<Model>(uc, i, j);
@@ -443,6 +642,8 @@ struct BackwardEulerSourceActiveStatKernel {
     st(i, j, 4) = s.failure != NewtonFailureKind::kNone
                       ? (Real(j) * Real(1048576) + Real(i)) * Real(16) + (s.comp + Real(1))
                       : Real(-1);
+    st(i, j, 5) = Real(s.reason_code >> 16);
+    st(i, j, 6) = Real(s.reason_code & 0xffffu);
   }
 };
 
@@ -462,6 +663,30 @@ struct NewtonStatFailureCountKernel {
   POPS_HD void operator()(int i, int j, Real& acc) const {
     if (st(i, j, 3) > Real(0))
       acc += Real(1);
+  }
+};
+struct NewtonStatMaxForFailureKernel {
+  ConstArray4 st;
+  int failure;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (static_cast<int>(st(i, j, 3)) != failure)
+      return;
+    const Real value = st(i, j, comp);
+    if (value > acc)
+      acc = value;
+  }
+};
+struct NewtonStatReasonLowKernel {
+  ConstArray4 st;
+  int failure;
+  int reason_high;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (static_cast<int>(st(i, j, 3)) != failure || static_cast<int>(st(i, j, 5)) != reason_high)
+      return;
+    const Real value = st(i, j, 6);
+    if (value > acc)
+      acc = value;
   }
 };
 }  // namespace detail
@@ -493,7 +718,7 @@ struct ImplicitSourcePublication {
           "cannot accept a local implicit SolveOutcome after its destination layout changed");
   }
 
-  static void accept(void* context) {
+  static void accept(void* context) noexcept {
     auto& publication = *static_cast<ImplicitSourcePublication*>(context);
     lincomb(*publication.destination, Real(1), *publication.candidate, Real(0),
             *publication.candidate);
@@ -503,14 +728,13 @@ struct ImplicitSourcePublication {
     auto& publication = *static_cast<ImplicitSourcePublication*>(context);
     if (publication.diagnostics == nullptr)
       return;
-    publication.diagnostics->solve.action =
-        action == SolveConsumption::kRejectAttempt ? SolveAction::kRejectAttempt
-                                                   : SolveAction::kFailRun;
+    publication.diagnostics->solve.action = action == SolveConsumption::kRejectAttempt
+                                                ? SolveAction::kRejectAttempt
+                                                : SolveAction::kFailRun;
     publication.diagnostics->diagnostics.record(
         action == SolveConsumption::kRejectAttempt ? "newton.outcome.reject_attempt"
                                                    : "newton.outcome.fail_run",
-        "ImplicitSourceNewton",
-        action == SolveConsumption::kRejectAttempt ? "warning" : "error",
+        "ImplicitSourceNewton", action == SolveConsumption::kRejectAttempt ? "warning" : "error",
         publication.failure_message, -1, publication.diagnostics->n_failed);
   }
 };
@@ -525,20 +749,60 @@ inline SolveStatus newton_failure_status(NewtonFailureKind failure) {
       return SolveStatus::kIterationLimit;
     case NewtonFailureKind::kSingular:
       return SolveStatus::kSingular;
+    case NewtonFailureKind::kEvaluationRetry:
+    case NewtonFailureKind::kEvaluationReject:
+    case NewtonFailureKind::kEvaluationFailed:
     case NewtonFailureKind::kInvalidEvaluation:
       return SolveStatus::kInvalidEvaluation;
   }
   return SolveStatus::kInvalidEvaluation;
 }
 
+inline SolveAction newton_failure_action(NewtonFailureKind failure) {
+  switch (failure) {
+    case NewtonFailureKind::kEvaluationRetry:
+    case NewtonFailureKind::kEvaluationReject:
+    case NewtonFailureKind::kIterationLimit:
+      return SolveAction::kRejectAttempt;
+    case NewtonFailureKind::kNone:
+      return SolveAction::kNone;
+    case NewtonFailureKind::kSingular:
+    case NewtonFailureKind::kEvaluationFailed:
+    case NewtonFailureKind::kInvalidEvaluation:
+      return SolveAction::kFailRun;
+  }
+  return SolveAction::kFailRun;
+}
+
+inline const char* newton_failure_reason(NewtonFailureKind failure) {
+  switch (failure) {
+    case NewtonFailureKind::kNone:
+      return "converged";
+    case NewtonFailureKind::kIterationLimit:
+      return "iteration_limit";
+    case NewtonFailureKind::kSingular:
+      return "singular";
+    case NewtonFailureKind::kEvaluationRetry:
+      return "evaluation_retry";
+    case NewtonFailureKind::kEvaluationReject:
+      return "evaluation_reject";
+    case NewtonFailureKind::kEvaluationFailed:
+      return "evaluation_failed";
+    case NewtonFailureKind::kInvalidEvaluation:
+      return "invalid_evaluation";
+  }
+  return "invalid_evaluation";
+}
+
 // Prepare W = U + dt * model.source(W, aux) without publishing W. The candidate is solved by local
 // Newton, reduced collectively into one SolveReport, and returned in the common SolveOutcome that
 // must be consumed exactly once. Only consume(kAccept) can mutate U.
 template <class Model>
-[[nodiscard]] SolveOutcome backward_euler_source(
-    const Model& model, const MultiFab& aux, MultiFab& U, Real dt, const NewtonOptions& opts,
-    const ImplicitMask<Model::n_vars>& mask = {}, NewtonReport* report = nullptr,
-    const MultiFab* active_cells = nullptr) {
+[[nodiscard]] SolveOutcome backward_euler_source(const Model& model, const MultiFab& aux,
+                                                 MultiFab& U, Real dt, const NewtonOptions& opts,
+                                                 const ImplicitMask<Model::n_vars>& mask = {},
+                                                 NewtonReport* report = nullptr,
+                                                 const MultiFab* active_cells = nullptr) {
   if (active_cells != nullptr &&
       (active_cells->ncomp() != 1 || active_cells->local_size() != U.local_size()))
     throw std::invalid_argument(
@@ -546,7 +810,7 @@ template <class Model>
 
   auto candidate = std::make_unique<MultiFab>(U.box_array(), U.dmap(), U.ncomp(), U.n_grow());
   lincomb(*candidate, Real(1), U, Real(0), U);
-  MultiFab stats(U.box_array(), U.dmap(), 5, 0);
+  MultiFab stats(U.box_array(), U.dmap(), 7, 0);
   for (int li = 0; li < candidate->local_size(); ++li) {
     Array4 u = candidate->fab(li).array();
     Array4 st = stats.fab(li).array();
@@ -562,7 +826,7 @@ template <class Model>
           b, detail::BackwardEulerSourceStatKernel<Model>{model, uc, ax, u, st, dt, opts, mask});
   }
   Real rmax = Real(0), reference_max = Real(0), imax = Real(0), nfail = Real(0);
-  Real failure_max = Real(0), enc = Real(-1);
+  Real failure_max = Real(0);
   for (int li = 0; li < stats.local_size(); ++li) {
     const ConstArray4 st = stats.fab(li).const_array();
     const Box2D b = stats.box(li);
@@ -571,14 +835,41 @@ template <class Model>
     imax = std::max(imax, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 2}));
     nfail += reduce_sum_cell(b, detail::NewtonStatFailureCountKernel{st});
     failure_max = std::max(failure_max, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 3}));
-    enc = std::max(enc, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 4}));
   }
   rmax = static_cast<Real>(all_reduce_max(static_cast<double>(rmax)));
   reference_max = static_cast<Real>(all_reduce_max(static_cast<double>(reference_max)));
   imax = static_cast<Real>(all_reduce_max(static_cast<double>(imax)));
   const double nfail_g = all_reduce_sum(static_cast<double>(nfail));
   const int failure_g = static_cast<int>(all_reduce_max(static_cast<double>(failure_max)));
-  const double enc_g = all_reduce_max(static_cast<double>(enc));
+  Real selected_enc = Real(-1), selected_reason_high = Real(0);
+  if (failure_g != static_cast<int>(NewtonFailureKind::kNone)) {
+    for (int li = 0; li < stats.local_size(); ++li) {
+      const ConstArray4 st = stats.fab(li).const_array();
+      const Box2D b = stats.box(li);
+      selected_enc =
+          std::max(selected_enc,
+                   reduce_max_cell(b, detail::NewtonStatMaxForFailureKernel{st, failure_g, 4}));
+      selected_reason_high =
+          std::max(selected_reason_high,
+                   reduce_max_cell(b, detail::NewtonStatMaxForFailureKernel{st, failure_g, 5}));
+    }
+  }
+  const double enc_g = all_reduce_max(static_cast<double>(selected_enc));
+  const int reason_high_g =
+      static_cast<int>(all_reduce_max(static_cast<double>(selected_reason_high)));
+  Real selected_reason_low = Real(0);
+  if (failure_g != static_cast<int>(NewtonFailureKind::kNone)) {
+    for (int li = 0; li < stats.local_size(); ++li) {
+      const ConstArray4 st = stats.fab(li).const_array();
+      const Box2D b = stats.box(li);
+      selected_reason_low = std::max(
+          selected_reason_low,
+          reduce_max_cell(b, detail::NewtonStatReasonLowKernel{st, failure_g, reason_high_g}));
+    }
+  }
+  const auto reason_low_g =
+      static_cast<std::uint32_t>(all_reduce_max(static_cast<double>(selected_reason_low)));
+  const std::uint32_t reason_g = (static_cast<std::uint32_t>(reason_high_g) << 16) | reason_low_g;
   double fi = -1, fj = -1, fc = -1;
   if (nfail_g > 0 && enc_g >= 0) {  // decode the offending cell with maximal index (cf. StatKernel)
     const long long k = static_cast<long long>(enc_g);
@@ -602,10 +893,13 @@ template <class Model>
   }
   if (failure == NewtonFailureKind::kNone)
     solve.mark_solved("implicit_source_newton_converged");
-  else
-    solve.mark_failed(
-        newton_failure_status(failure), SolveAction::kFailRun,
-        std::string("implicit_source_newton_") + solve_status_name(newton_failure_status(failure)));
+  else {
+    std::string reason = std::string("implicit_source_newton_") + newton_failure_reason(failure);
+    if (reason_g != 0)
+      reason += "_reason_" + std::to_string(reason_g);
+    solve.mark_failed(newton_failure_status(failure), newton_failure_action(failure),
+                      std::move(reason));
+  }
   if (!solve_report_is_publishable(solve, opts.max_iters))
     throw std::runtime_error("implicit source Newton produced a malformed SolveReport");
 
@@ -633,14 +927,10 @@ template <class Model>
       detail::ImplicitSourcePublication{&U, std::move(candidate), report, message.str()});
   return SolveOutcome::collective_world(
       std::move(solve),
-      SolveOutcome::PublicationHooks{
-          publication.get(),
-          &detail::ImplicitSourcePublication::accept,
-          nullptr,
-          nullptr,
-          std::static_pointer_cast<void>(publication),
-          &detail::ImplicitSourcePublication::validate_accept,
-          &detail::ImplicitSourcePublication::consume_failure});
+      SolveOutcome::PublicationHooks{publication.get(), &detail::ImplicitSourcePublication::accept,
+                                     nullptr, nullptr, std::static_pointer_cast<void>(publication),
+                                     &detail::ImplicitSourcePublication::validate_accept,
+                                     &detail::ImplicitSourcePublication::consume_failure});
 }
 
 /// Consume one prepared local solve with the fail-fast runtime policy used by native engine routes.
@@ -674,8 +964,7 @@ struct ImplicitSourceStepper {
 
   template <class Coupler, class Block>
   void operator()(Coupler& coupler, Block& block, Real dt, int /*substep*/, int /*nsub*/) const {
-    auto outcome =
-        backward_euler_source(block.model, coupler.aux(), block.U(), dt, options);
+    auto outcome = backward_euler_source(block.model, coupler.aux(), block.U(), dt, options);
     (void)consume_implicit_source_fail_run(outcome);
   }
 };
