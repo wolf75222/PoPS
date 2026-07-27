@@ -17,23 +17,53 @@ IDENTITY_KEY = "pops_restart_identity"
 
 def require_exact_payload_version(
     payload: Any,
+    *,
     key: str,
     expected: int,
-    *,
-    runtime: str,
+    runtime_kind: str,
 ) -> int:
-    """Read one payload version without numeric or textual coercion."""
+    """Require one current integer payload version without coercing legacy values.
+
+    The canonical envelope version authenticates the outer container. Uniform and AMR also carry
+    a codec-specific payload version, which must remain an exact scalar integer: strings, floats,
+    booleans, arrays, and missing values are migration inputs, never runtime compatibility routes.
+    """
+    if not isinstance(key, str) or not key:
+        raise TypeError("checkpoint payload version key must be non-empty text")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 1:
+        raise TypeError("expected checkpoint payload version must be a positive integer")
+    if not isinstance(runtime_kind, str) or not runtime_kind:
+        raise TypeError("checkpoint runtime kind must be non-empty text")
+
+    stored_files = getattr(payload, "files", None)
+    if stored_files is None:
+        keys = getattr(payload, "keys", None)
+        if not callable(keys):
+            raise TypeError("checkpoint payload exposes neither files nor keys()")
+        stored_files = keys()
+    elif callable(stored_files):
+        stored_files = stored_files()
+    files = set(stored_files)
+    if key not in files:
+        raise ValueError(
+            "restart: strict %s checkpoint is missing payload version %r; "
+            "historical checkpoints require offline migration" % (runtime_kind, key)
+        )
+
     import numpy as np
 
     value = np.asarray(payload[key])
-    if value.ndim != 0 or value.dtype.kind not in "iu":
-        raise TypeError("%s checkpoint version must be an exact integer scalar" % runtime)
+    if value.shape != () or value.dtype.kind not in "iu":
+        raise TypeError(
+            "restart: %s checkpoint payload version must be an exact integer scalar; "
+            "historical checkpoints require offline migration" % runtime_kind
+        )
     version = int(value.item())
     if version != expected:
         raise ValueError(
-            "%s checkpoint version %r is unsupported (expected exactly %d; "
-            "historical checkpoints require offline migration)"
-            % (runtime, version, expected)
+            "restart: %s checkpoint payload version %r unsupported; expected exactly %d; "
+            "historical checkpoints require offline migration"
+            % (runtime_kind, version, expected)
         )
     return version
 
