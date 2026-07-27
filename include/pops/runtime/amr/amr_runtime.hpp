@@ -3169,8 +3169,8 @@ class AmrRuntime {
   std::vector<double> level_aux_flat(int k) const;
   std::vector<double> level_aux_flat_global(int k) const;
   void set_level_aux_flat(int k, const std::vector<double>& v);
-  /// Head-of-step union-tags regrid at the Program driver's cadence (the SAME regrid() the native step
-  /// runs at its head). @p macro_step gates it like AmrRuntime::step (skip step 0; honor regrid_every_).
+  /// Head-of-step union-tags regrid at the Program driver's cadence. @p macro_step gates it by
+  /// skipping step zero and honoring regrid_every_.
   void regrid_if_due(int macro_step) {
     if (regrid_every_ > 0 && macro_step > 0 && macro_step % regrid_every_ == 0)
       regrid();
@@ -3178,12 +3178,11 @@ class AmrRuntime {
   /// @}
 
   /// Activates the UNION-TAGS REGRID at the cadence @p every (in macro-steps): every @p every
-  /// macro-steps, BEFORE the macro-step's step(dt) (D2, consistent with the single-block
-  /// amr_dsl_block.hpp:104), the shared hierarchy is re-gridded from the UNION of the tags of all
-  /// blocks + phi. @p every == 0 (DEFAULT) -> FROZEN hierarchy, regrid never called -> BIT-IDENTICAL
-  /// trajectory to the historical one (the feature is opt-in). @p grow: tag dilation (nesting +
-  /// anticipation); @p margin: nesting (clamp the patches to the boundaries). Must be called BEFORE
-  /// the first step. Body in amr_restore.hpp.
+  /// macro-steps, BEFORE the Program advances its candidates, the shared hierarchy is re-gridded from
+  /// the UNION of the tags of all blocks + phi. @p every == 0 (DEFAULT) -> FROZEN hierarchy, regrid
+  /// never called -> BIT-IDENTICAL trajectory to the historical one (the feature is opt-in). @p grow:
+  /// tag dilation (nesting + anticipation); @p margin: nesting (clamp the patches to the boundaries).
+  /// Must be called BEFORE the first step. Body in amr_restore.hpp.
   void set_regrid(int every, int grow = 2, int margin = 2);
 
   /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
@@ -4518,124 +4517,11 @@ class AmrRuntime {
       throw;
     }
   }
-  /// Advances the system by one macro-step dt. We first solve the fields (co-located summed Poisson,
-  /// ONCE per macro-step: OncePerStep cadence), then each block advances over ITS level stack with ITS
-  /// scheme, honoring its stride cadence and its substeps, and ITS temporal treatment. Runtime
-  /// counterpart of AmrSystemCoupler::step (OncePerStep): the compile-time version carries
-  /// substeps/stride in block_substeps_v / block_stride_v and chooses the treatment by the constexpr
-  /// block_time_treatment_v; here the engine carries the substep loop, the stride filter AND the
-  /// IMEX-vs-explicit selection.
-  ///
-  /// TREATMENT SELECTION (capstone vii):
-  ///  - EXPLICIT block (b.imex == false): the advance closure does ONE advance_amr (transport +
-  ///    forward-Euler source), called substeps times;
-  ///  - IMEX block (b.imex == true): the imex_advance closure does ONE SOURCE-FREE advance_amr then the
-  ///    IMPLICIT stiff source backward_euler_source per level + cascade (cf.
-  ///    AmrRuntimeBlock::imex_advance), called substeps times. Unconditionally stable on a stiff
-  ///    relaxation (where the explicit, of factor |1 - dt/eps|, DIVERGES as soon as dt > 2 eps).
-  /// The substep loop is COMMON to both treatments (substeps applications of h = bdt/substeps), so the
-  /// runtime also SUB-CYCLES the IMEX splitting. At substeps=1 this sub-cycling is a no-op and the IMEX
-  /// path coincides with the IMEX branch of the compile-time engine AmrSystemCoupler::step; for
-  /// substeps>1 it DIVERGES deliberately from that engine (which itself ignores substeps on its IMEX
-  /// branch): see IMEX SEMANTICS UNDER substeps in the header (CFL-safe on the transport,
-  /// backward-Euler stable at any step, stiff relaxation more accurate). imex == false everywhere ->
-  /// advance path only -> bit-identical trajectory to the historical one (the IMEX is opt-in).
-  void step(Real dt) {
-    if (!coupled_sources_.empty())
-      throw std::logic_error(
-          "AmrRuntime::step cannot execute registered coupled sources; install a Program that "
-          "applies them to a complete candidate-state pack");
-    // PREPARE before any observable mutation (including regrid, field warm-start and diagnostics).
-    // This rejects an invalid rational IntegralOnly relation or an old block without the explicit
-    // execution closure while the accepted numerical state is still untouched.
-    preflight_native_temporal_step_();
-    solve_count_ = 0;
-    // UNION-TAGS REGRID (capstone Phase 2, C.6; D2: BEFORE the macro-step's step, consistent with the
-    // single-block amr_dsl_block.hpp:108). regrid_every_ cadence in MACRO-STEPS, OUTSIDE the substep
-    // loops and the stride windows (macro-step granularity ONLY, D3). regrid_every_ == 0 -> FROZEN
-    // hierarchy, regrid never called -> BIT-IDENTICAL trajectory to the historical one. The guard
-    // macro_step_ > 0 (like the single-block) avoids a regrid at the very first step (the initial grid
-    // is already the build one). The regrid sits BEFORE solve_fields below: it does its own
-    // solve_fields (R0/R8), then the step's solve_fields recomputes phi on the re-gridded grid.
-    if (regrid_every_ > 0 && macro_step_ > 0 && macro_step_ % regrid_every_ == 0)
-      regrid();
-    // System Poisson solved ONCE on the current state (OncePerStep cadence). A HELD block (stride > 1,
-    // outside end-of-window) contributed with its FROZEN state since its last advance: loose coupling
-    // assumed by the multirate, exactly like System::step / AmrSystemCoupler in OncePerStep. phi stays
-    // frozen during the blocks' advance (no per-substep re-solve here). When reached from step_cfl this
-    // re-solves an unchanged state (a second solve), kept on purpose; see the ADC-318 note in step_cfl.
-    require_solved_field_report(solve_fields(), "AmrRuntime::step");
-    for (auto& b : blocks_) {
-      // HOLD-THEN-CATCH-UP cadence (cf. AmrRuntimeBlock::stride, #140): the block is HELD as long as
-      // (macro_step_+1) % stride != 0, then CATCHES UP at end-of-window by an effective step stride*dt.
-      // The end-of-window catch-up keeps the block temporally consistent with the fast ones at the
-      // coupling point (never in the future). stride=1: always true -> every step, bit-identical.
-      if ((macro_step_ + 1) % b.stride != 0)
-        continue;
-      // NEWTON DIAGNOSTICS (OPT-IN): RESET of the report at the HEAD of the block advance (parity with
-      // System::AdvanceImex::operator() which resets nreport before its substep loop). The report then
-      // AGGREGATES over all the levels AND substeps of THIS advance (imex_advance accumulates per level
-      // via backward_euler_source; step() calls imex_advance substeps times without re-resetting).
-      // Placed AFTER the stride skip: a HELD block keeps the report of its LAST advance ("last advance"
-      // semantics of System). No-op for a block without diagnostics (newton_report null).
-      if (b.newton_diagnostics && b.newton_report)
-        b.newton_report->reset();
-      const Real bdt = dt * static_cast<Real>(b.stride);  // catch-up: effective step stride*dt
-      // substeps equal substeps of bdt/substeps. The chosen closure does ONE advance per call;
-      // substeps=1 -> a single advance of bdt (bit-identical to the single-substep case). Per-block
-      // treatment SELECTION: IMEX (source-free transport + implicit stiff source, mirrors the IMEX
-      // branch of AmrSystemCoupler::step) if b.imex, otherwise EXPLICIT (transport + forward-Euler
-      // source). The test is PER BLOCK and stable: a single IMEX block changes nothing for the
-      // neighboring explicit blocks.
-      // NOTE substeps>1: the loop below calls step_block substeps times for BOTH treatments, so the
-      // IMEX splitting is SUB-CYCLED (K Lie steps over bdt/K). The compile-time, for its part, applies
-      // its IMEX only once over bdt (it ignores substeps on its IMEX branch): divergence INTENTIONAL
-      // and sound for substeps>1 (cf. IMEX SEMANTICS UNDER substeps in the file header).
-      const Real h = bdt / static_cast<Real>(b.substeps);
-      for (int s = 0; s < b.substeps; ++s) {
-        if (!b.fill_patch_plan || !b.average_down_plan || !b.advance_scratch_plan)
-          throw std::logic_error("AMR block lost its prepared topology execution plans");
-        if (has_explicit_temporal_relations_()) {
-          auto& step_block =
-              b.imex ? b.imex_advance_with_temporal_plan : b.advance_with_temporal_plan;
-          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_, *temporal_execution_plan_,
-                     &*b.fill_patch_plan, &*b.average_down_plan, &*b.advance_scratch_plan);
-        } else {
-          // Low-level compatibility route: no temporal relation was installed, so the block keeps
-          // the historical spatial-ratio cadence.  This branch is unreachable once a relation exists.
-          auto& step_block = b.imex ? b.imex_advance : b.advance;
-          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_, &*b.fill_patch_plan,
-                     &*b.average_down_plan, &*b.advance_scratch_plan);
-        }
-      }
-      // PROJECTION PONCTUELLE post-pas (ADC-177) : par niveau, APRES substeps + reflux/cascade.
-      // Cell-local + idempotente -> conservation preservee (flux-registres deja regles). No-op si vide.
-      if (b.project_per_level)
-        b.project_per_level(*b.levels);
-    }
-    ++macro_step_;
-  }
-
-  /// substeps/stride-aware CFL step (runtime counterpart of System::step_cfl, EXACT mirror of its
-  /// formula). A block of stride cadence advances by an effective step stride*dt in substeps substeps,
-  /// so each substep is worth stride*dt/substeps; the per-substep stability condition
-  /// stride*dt/substeps <= cfl*h/w_b gives dt <= cfl*h*substeps_b/(stride_b*w_b). The GLOBAL dt is the
-  /// min over the blocks (the most constraining). We first solve the fields (per-block max_speed
-  /// requires the aux up to date), compute dt, then advance by one step(dt). @p h = coarse mesh spacing
-  /// (dx_coarse). Returns the dt used. Single-block (a single block, stride=1): if w_b is the only
-  /// constraining one, dt = cfl*h*substeps/w (identical to System::step_cfl single-block).
-  Real step_cfl(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
-    const Real dt = cfl_dt(cfl, h, speed_floor);
-    step(dt);
-    return dt;
-  }
-
-  /// The CFL dt computation of @ref step_cfl WITHOUT the trailing advance (no step(dt)): solves the
+  /// Computes the Program-owned CFL bound without advancing the accepted state: solves the
   /// fields (max_speed needs the aux), scans the per-block transport / source / stability bounds + the
-  /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_). Split
-  /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
-  /// (AmrSystem::step_cfl's Program route, parity SystemProgramDriver::step_cfl) instead of the native step.
-  /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
+  /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_).
+  /// AmrSystem::step_cfl passes that bound to the installed Program; AmrRuntime has no temporal
+  /// advancement entry point of its own.
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
     preflight_program_temporal_state_();
     // This pre-solve provides the field required by max_speed. step(dt) keeps its own transaction-level
@@ -5139,20 +5025,6 @@ class AmrRuntime {
     if (!temporal_execution_plan_ || temporal_execution_plan_->nlevels() != nlev_)
       throw std::runtime_error(
           "AMR explicit temporal relations lack their prepared execution plan");
-  }
-
-  /// Completes the additional checks needed only by the legacy native route before any mutation.
-  void preflight_native_temporal_step_() const {
-    preflight_program_temporal_state_();
-    if (!has_explicit_temporal_relations_())
-      return;
-    for (const auto& block : blocks_) {
-      const bool prepared = block.imex ? static_cast<bool>(block.imex_advance_with_temporal_plan)
-                                       : static_cast<bool>(block.advance_with_temporal_plan);
-      if (!prepared)
-        throw std::runtime_error("AMR block '" + block.name +
-                                 "' cannot execute its installed explicit temporal relations");
-    }
   }
 
   /// Product parent_dt/child_dt from level zero to @p level.  With an explicit clock chain this is

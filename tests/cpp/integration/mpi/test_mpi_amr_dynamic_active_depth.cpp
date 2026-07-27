@@ -69,13 +69,6 @@ int run_dynamic_active_depth(int n, int me, int np) {
   block.name = "moving";
   block.state_identity = "test://mpi-active-depth/block/moving/state/U";
   block.levels = levels;
-  block.advance = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                     PreparedAmrAdvanceScratchPlan*) {};
-  block.advance_with_temporal_plan = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity,
-                                        bool, const detail::PreparedAmrTemporalPlan&,
-                                        PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                                        PreparedAmrAdvanceScratchPlan*) {};
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };
   block.mass = [levels, geometry] {

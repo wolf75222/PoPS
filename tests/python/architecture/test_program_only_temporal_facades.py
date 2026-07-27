@@ -116,9 +116,9 @@ def test_amr_program_cfl_does_not_require_native_advance_closures():
     cfl = _function_body(source, "Real cfl_dt(")
     assert "preflight_program_temporal_state_()" in cfl
     assert "preflight_native_temporal_step_()" not in cfl
-    assert "preflight_native_temporal_step_()" in _function_body(
-        source, "void step(Real dt)"
-    )
+    assert "preflight_native_temporal_step_" not in source
+    assert "void step(Real dt)" not in source
+    assert "Real step_cfl(Real cfl" not in source
 
 
 def test_unlowerable_semantic_tests_remain_real_manifest_tests_without_fe_bridge():
@@ -156,7 +156,7 @@ def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step(
     assert "cannot alias accepted live states" in amr
     assert "apply_coupling_operators_at_level(" in runtime
     assert "void coupled_source_step(" not in runtime
-    assert "AmrRuntime::step cannot execute registered coupled sources" in runtime
+    assert "void step(Real dt)" not in runtime
 
 
 def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
