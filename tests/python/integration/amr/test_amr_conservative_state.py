@@ -217,6 +217,19 @@ def test_public_amr_bind_preserves_every_conservative_component(
     ]
     assert [int(row[1]) for row in level_clocks] == [0, 1]
     assert all(int(row[2]) == 0 and float(row[5]) == 0.0 for row in level_clocks)
+
+    def assert_cold_two_level_history(runtime):
+        (history_name,) = list(runtime._s.history_names())
+        assert runtime._s.history_depth(history_name) == 2
+        assert runtime._s.history_initialized(history_name) is False
+        assert runtime._s.history_fill_count(history_name) == 0
+        (history_row,) = runtime._s.program_accepted_state_manifest()
+        assert history_row[0] == history_name
+        assert int(history_row[6]) == 2
+        assert int(history_row[7]) == 2
+        return history_name
+
+    history_name = assert_cold_two_level_history(simulation)
     # Checkpoints carry an exact run-controls identity. Establish it with a zero-step run while
     # preserving the same post-bind accepted boundary; no Program step or hierarchy mutation occurs.
     initial_report = pops.run(
@@ -226,6 +239,7 @@ def test_public_amr_bind_preserves_every_conservative_component(
     checkpoint = simulation.checkpoint(tmp_path / "before-first-accepted-step")
     restarted = pops.bind(artifact, initial_values={gas_state: initial})
     restarted.restart(checkpoint)
+    assert assert_cold_two_level_history(restarted) == history_name
     restarted_levels = [
         row for row in restarted._s.program_clock_manifest()
         if row and row[0] == "level"
