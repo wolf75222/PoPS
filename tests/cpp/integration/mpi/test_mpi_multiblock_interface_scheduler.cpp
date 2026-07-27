@@ -60,6 +60,7 @@ void initialize_left(MultiFab& field) {
 }
 
 void initialize_right(MultiFab& field, const std::vector<int>& right_component_for_left) {
+  const int upper_tangential_index = field.box_array().bounding_box().hi[1];
   for (int local = 0; local < field.local_size(); ++local) {
     const Box2D box = field.box(local);
     Array4 values = field.fab(local).array();
@@ -67,7 +68,7 @@ void initialize_right(MultiFab& field, const std::vector<int>& right_component_f
       for (int i = box.lo[0]; i <= box.hi[0]; ++i)
         for (int component = 0; component < field.ncomp(); ++component)
           values(i, j, right_component_for_left[static_cast<std::size_t>(component)]) =
-              right_value(j, component);
+              right_value(upper_tangential_index - j, component);
   }
 }
 
@@ -118,7 +119,11 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       route.left_axis = route.right_axis = InterfaceAxis::X;
       route.left_side = InterfaceSide::High;
       route.right_side = InterfaceSide::Low;
+      route.tangential_orientation = TangentialOrientation::Reversed;
       route.right_component_for_left = {1, 0};
+      route.affine_mapping_identity = "mpi-reversed-y";
+      route.right_tangential_scale = Real(-1);
+      route.right_tangential_offset = Real(1);
       initialize_left(left_state);
       initialize_right(right_state, route.right_component_for_left);
 
@@ -177,12 +182,35 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
                 if (route.right_component_for_left[static_cast<std::size_t>(candidate)] ==
                     component)
                   canonical_component = candidate;
+              const int canonical_face = right_domain.hi[1] - j;
               const Real expected = i == right_domain.lo[0]
-                                        ? shared_flux(j, canonical_component) / right_geometry.dx()
+                                        ? shared_flux(canonical_face, canonical_component) /
+                                              right_geometry.dx()
                                         : Real(0);
               require(canonical_component >= 0 && values(i, j, component) == expected);
             }
       }
+      for (int component = 0; component < 2; ++component) {
+        Real local_balance = 0;
+        for (int local = 0; local < left_rhs.local_size(); ++local) {
+          const Box2D box = left_rhs.box(local);
+          const ConstArray4 values = left_rhs.fab(local).const_array();
+          for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+            local_balance += values(left_domain.hi[0], j, component);
+        }
+        const int right_component =
+            route.right_component_for_left[static_cast<std::size_t>(component)];
+        for (int local = 0; local < right_rhs.local_size(); ++local) {
+          const Box2D box = right_rhs.box(local);
+          const ConstArray4 values = right_rhs.fab(local).const_array();
+          for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+            local_balance += values(right_domain.lo[0], j, right_component);
+        }
+        require(all_reduce_sum(local_balance) == Real(0));
+      }
+      if (my_rank() == 0)
+        std::cout << "MULTIBLOCK_INTERFACE_MPI np=2 evaluations=1 remote_owners=1 "
+                     "component_permutation=1 reversed_orientation=1 conservative=1\n";
 
       left_rhs.set_val(Real(0));
       right_rhs.set_val(Real(0));

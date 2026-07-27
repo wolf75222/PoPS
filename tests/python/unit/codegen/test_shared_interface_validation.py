@@ -73,10 +73,16 @@ def _resolved_context() -> tuple[tuple[object, ...], object]:
     return blocks, layout_plan
 
 
-def _validate(program: Program) -> None:
+def _validate(
+    program: Program,
+    *,
+    target: str = "system",
+    resolved_hierarchy: object = None,
+) -> None:
     blocks, layout_plan = _resolved_context()
     validate_shared_interface_program(
-        blocks, layout_plan, program, target="system")
+        blocks, layout_plan, program, target=target,
+        resolved_hierarchy=resolved_hierarchy)
 
 
 def test_shared_interface_rejects_default_flux_rhs_nested_in_branch() -> None:
@@ -169,6 +175,35 @@ def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> No
         group = next(line for line in source.splitlines() if "ctx.rhs_group(" in line)
         requests = re.findall(r"\{(\d+), &u\d+, &r\d+, \d+, 1\}", group)
         assert requests == ["0", "1"]
+
+
+def test_shared_interface_amr_accepts_only_one_frozen_coarse_level() -> None:
+    from pops.mesh._amr import FrozenHierarchy
+
+    program = Program("coarse_amr_shared_interface")
+    left = typed_state(program, "left", state_name="U")
+    right = typed_state(program, "right", state_name="U")
+    program.rhs("left_rate", state=left.n, terms=[Flux()])
+    program.rhs("right_rate", state=right.n, terms=[Flux()])
+
+    frozen_coarse = SimpleNamespace(
+        plan=SimpleNamespace(level_count=1, regrid=FrozenHierarchy()))
+    _validate(
+        program, target="amr_system", resolved_hierarchy=frozen_coarse)
+
+    unsupported = (
+        SimpleNamespace(plan=SimpleNamespace(
+            level_count=2, regrid=FrozenHierarchy())),
+        SimpleNamespace(plan=SimpleNamespace(
+            level_count=1, regrid=object())),
+    )
+    for hierarchy in unsupported:
+        with pytest.raises(
+                NotImplementedError,
+                match="prepared interface-flux reflux ledger.*one frozen level"):
+            _validate(
+                program, target="amr_system",
+                resolved_hierarchy=hierarchy)
 
 
 def test_same_stage_repeated_blocks_form_two_deterministic_rhs_rounds() -> None:

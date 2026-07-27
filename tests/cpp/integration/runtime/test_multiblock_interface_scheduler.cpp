@@ -478,9 +478,12 @@ TEST(test_multiblock_interface_scheduler,
   route.left_axis = route.right_axis = InterfaceAxis::X;
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
+  route.tangential_orientation = TangentialOrientation::Reversed;
   route.right_component_for_left = {0};
-  route.affine_mapping_identity = "periodic-x-translation";
+  route.affine_mapping_identity = "periodic-x-translation-reversed-y";
   route.right_normal_translation = Real(1);
+  route.right_tangential_scale = Real(-1);
+  route.right_tangential_offset = Real(1);
 
   int evaluator_calls = 0;
   runtime.install_level_interface_flux(
@@ -511,6 +514,9 @@ TEST(test_multiblock_interface_scheduler,
   const Box2D box = left_state.box(0);
   for (int j = box.lo[1]; j <= box.hi[1]; ++j)
     EXPECT_EQ(left_result(box.hi[0], j, 0) + right_result(box.lo[0], j, 0), Real(0));
+
+  // This is deliberately the one frozen coarse AMR level supported by the resolved plan. Refined,
+  // regridded and subcycled interface-flux ledgers remain the separate ADC-758 runtime contract.
 }
 
 TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProvisionalStageState) {

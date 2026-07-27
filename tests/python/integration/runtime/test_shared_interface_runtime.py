@@ -214,7 +214,26 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     assert endpoint_interfaces[0].canonical_identity() == \
         endpoint_interfaces[1].canonical_identity()
     interface = endpoint_interfaces[0]
+    assert interface.left.orientation.outward_sign == \
+        -interface.right.orientation.outward_sign
+    assert len({row.shared_conservative_flux for row in endpoint_interfaces}) == 1
     assert interface.left.boundary.owner_path != interface.right.boundary.owner_path
+    for resolved_block, side, omitted_face in zip(
+            resolved.blocks, ("left", "right"), (1, 0), strict=True):
+        plan = resolved_block.numerics.boundaries[0]
+        endpoint = getattr(interface, side)
+        productions = [
+            row for row in plan.productions
+            if row.region.boundary == endpoint.boundary
+        ]
+        assert len(productions) == 1
+        producer = productions[0].producer
+        assert producer.interfaces == (interface,)
+        assert producer.boundary_providers == ()
+        assert producer.periodic == ()
+        assert len(plan.component_bindings) == 1
+        assert plan.component_bindings[0].target == interface.shared_conservative_flux
+        assert plan.compile_boundary_data()["omitted_interface_faces"] == [omitted_face]
     for resolved_block, authored_block in zip(
             resolved.blocks, (core.tracer, right), strict=True):
         expected = core.case.resolve(core.inlet_x_param, block=authored_block)
