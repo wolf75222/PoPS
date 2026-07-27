@@ -605,10 +605,12 @@ jobs:
           # Inventory CTest once and fail target-by-target before execution: a missing/malformed
           # target label must never turn this shard into a false-green "No tests were found" run.
           ctest_inventory="$RUNNER_TEMP/ctest-shard-${{ matrix.shard }}.json"
+          standalone_regex_file="$RUNNER_TEMP/ctest-standalone-shard-${{ matrix.shard }}.regex"
           ctest --preset ci-kokkos -N --show-only=json-v1 > "$ctest_inventory"
           python3 scripts/ci_select_tests.py verify-cpp-target-labels \
             --ctest-json "$ctest_inventory" \
-            --targets "${cpp_targets[@]}"
+            --targets "${cpp_targets[@]}" \
+            --standalone-regex-file "$standalone_regex_file"
           test_watchdog=7m
           run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" "$test_watchdog" \
             ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
@@ -633,12 +635,16 @@ jobs:
         if: ${{ always() && steps.kokkos.outcome == 'success' }}
         run: ccache -s
 
-      - name: Installed package smoke (CXX-only + HDF5 fail-closed)
+      - name: Standalone CTest contracts
         if: matrix.shard == 0
         run: |
+          standalone_regex_file="$RUNNER_TEMP/ctest-standalone-shard-${{ matrix.shard }}.regex"
+          test -s "$standalone_regex_file"
+          standalone_regex=$(<"$standalone_regex_file")
+          test -n "$standalone_regex" && test "$standalone_regex" != '$^'
           ctest --preset ci-kokkos --output-on-failure \
             --no-tests=error \
-            -R '^test_(installed_package_consumer|hdf5_without_mpi_rejected)$'
+            -R "$standalone_regex"
 
       - name: Save ccache (Kokkos Serial, shard ${{ matrix.shard }})
         if: ${{ always() && steps.kokkos.outcome == 'success' }}

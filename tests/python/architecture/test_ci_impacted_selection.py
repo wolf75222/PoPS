@@ -18,6 +18,7 @@ Ground-truth edges asserted below were verified by reading the source:
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 from types import SimpleNamespace
 
@@ -460,20 +461,64 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
                     },
                 ],
             },
+            {
+                "name": "test_standalone_contract",
+                "properties": [
+                    {"name": "LABELS", "value": ["cmake", "integration"]},
+                ],
+            },
         ],
     }))
 
+    standalone_regex = tmp_path / "standalone.regex"
     args = SimpleNamespace(
         ctest_json=str(inventory),
         targets=["test_one", "test_two", "test_three"],
+        standalone_regex_file=str(standalone_regex),
     )
     assert sel.verify_cpp_target_labels(args) == 0
+    pattern = standalone_regex.read_text().strip()
+    assert re.fullmatch(pattern, "test_standalone_contract")
+    assert not re.fullmatch(pattern, "Suite.One")
 
     for missing in ("test", "test_missing"):
         args.targets.append(missing)
         with pytest.raises(SystemExit, match=rf"cpp-target:{missing}"):
             sel.verify_cpp_target_labels(args)
         args.targets.pop()
+
+
+def test_cpp_target_label_fence_rejects_ambiguous_or_unselected_owners(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-invalid-owner.json"
+    payload = {
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "Suite.Other",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_other"]},
+                ],
+            },
+        ],
+    }
+    inventory.write_text(json.dumps(payload))
+    args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
+    with pytest.raises(SystemExit, match="unselected cpp-target:test_other"):
+        sel.verify_cpp_target_labels(args)
+
+    payload["tests"][1]["properties"][0]["value"] = [
+        "cpp-target:test_one",
+        "cpp-target:test_other",
+    ]
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="multiple C\\+\\+ target owners"):
+        sel.verify_cpp_target_labels(args)
 
 
 @pytest.mark.parametrize("encoded_labels", [
@@ -701,6 +746,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
+    assert "--standalone-regex-file" in cpp_shards_block
+    assert "name: Standalone CTest contracts" in cpp_shards_block
+    assert 'standalone_regex=$(<"$standalone_regex_file")' in cpp_shards_block
+    assert '-R "$standalone_regex"' in cpp_shards_block
+    assert "installed_package_consumer|hdf5_without_mpi_rejected" not in cpp_shards_block
     assert '--targets "${cpp_targets[@]}"' in cpp_shards_block
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"

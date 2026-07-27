@@ -909,13 +909,15 @@ def _ctest_timeout(test: dict) -> float:
 
 
 def verify_cpp_target_labels(args: argparse.Namespace) -> int:
-    """Fail unless every selected build target owns discovered CTest cases.
+    """Fail unless discovered CTests exactly separate into selected targets and standalones.
 
     ``gtest_discover_tests`` names cases after their GTest suite rather than their
     CMake executable, so the C++ shards execute through exact ``cpp-target:*``
     labels.  Verifying the labels from CTest's JSON model before execution keeps
     a malformed CMake property list from turning a shard into a false-green
-    ``No tests were found`` run.
+    ``No tests were found`` run.  Top-level CMake/Python contract tests have no
+    build target by design; they are returned as one exact anchored regex so a
+    designated shard can execute them once rather than silently dropping them.
     """
     targets = list(dict.fromkeys(args.targets))
     if not targets:
@@ -925,15 +927,39 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
 
     expected = {f"cpp-target:{target}": target for target in targets}
     hits: dict[str, list[str]] = {target: [] for target in targets}
+    standalone: list[str] = []
+    seen_names: set[str] = set()
     for test in tests:
         if not isinstance(test, dict):
             continue
         test_name = test.get("name")
         if not isinstance(test_name, str):
-            continue
+            raise SystemExit("CTest target-label contract failed; test without a string name")
+        if test_name in seen_names:
+            raise SystemExit(
+                f"CTest target-label contract failed; duplicate test name {test_name!r}"
+            )
+        seen_names.add(test_name)
         labels = _ctest_labels(test)
-        for label in labels & expected.keys():
-            hits[expected[label]].append(test_name)
+        owner_labels = sorted(
+            label for label in labels if label.startswith("cpp-target:")
+        )
+        if len(owner_labels) > 1:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} has multiple C++ target owners: "
+                + ", ".join(owner_labels)
+            )
+        if not owner_labels:
+            standalone.append(test_name)
+            continue
+        owner_label = owner_labels[0]
+        if owner_label not in expected:
+            raise SystemExit(
+                "CTest target-label contract failed; discovered test "
+                f"{test_name!r} belongs to unselected {owner_label}"
+            )
+        hits[expected[owner_label]].append(test_name)
 
     missing = [target for target in targets if not hits[target]]
     if missing:
@@ -945,10 +971,23 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
             + details
         )
 
+    standalone_regex_file = getattr(args, "standalone_regex_file", None)
+    if standalone_regex_file:
+        escaped = [re.escape(name) for name in standalone]
+        standalone_regex = (
+            "^(" + "|".join(escaped) + ")$" if escaped else "$^"
+        )
+        Path(standalone_regex_file).write_text(
+            standalone_regex + "\n", encoding="utf-8"
+        )
+
     print(
         f"verified {len(targets)} C++ target labels across "
-        f"{sum(len(names) for names in hits.values())} discovered cases"
+        f"{sum(len(names) for names in hits.values())} discovered cases; "
+        f"{len(standalone)} standalone CTest contract(s)"
     )
+    for test_name in standalone:
+        print(f"standalone: {test_name}")
     return 0
 
 
@@ -1651,6 +1690,7 @@ def main() -> int:
     cpp_target_labels = sub.add_parser("verify-cpp-target-labels")
     cpp_target_labels.add_argument("--ctest-json", required=True)
     cpp_target_labels.add_argument("--targets", nargs="+", required=True)
+    cpp_target_labels.add_argument("--standalone-regex-file")
     cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
 
     cpp_mpi_ctests = sub.add_parser("verify-cpp-mpi-ctests")
