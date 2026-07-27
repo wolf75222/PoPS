@@ -20,6 +20,7 @@ from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY,
     MANIFEST_KEY,
     authenticate_checkpoint_payload,
+    inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
 )
 from pops.runtime._run_manifest import RunManifest
@@ -360,6 +361,12 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
         def __contains__(self, key):
             return key in payload
 
+    inspected_manifest, inspected_restart = inspect_checkpoint_payload_integrity(
+        PayloadView(),
+        runtime_kind="uniform",
+    )
+    assert inspected_restart == restart
+    assert inspected_manifest["runtime_kind"] == "uniform"
     assert authenticate_checkpoint_payload(owner, PayloadView(), runtime_kind="uniform") == restart
     assert str(payload[IDENTITY_KEY]) == restart.token
     manifest = json.loads(payload[MANIFEST_KEY])
