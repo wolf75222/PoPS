@@ -20,6 +20,8 @@
 #include <pops/physics/fluids/euler.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/parallel/comm.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -69,7 +71,7 @@ static int run_mode(int n, bool distribute, const char* tag) {
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
-  sys.set_refinement(1.2);
+  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
 
   const double m0 = sys.mass();  // build paresseux (regrid initial distribue)

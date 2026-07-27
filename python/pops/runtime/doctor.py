@@ -368,16 +368,10 @@ def capabilities() -> Any:
                                       "(.so loaders ; complete block-qualified conservative state)",
         },
         "regrid": {
-            # ADC-296 / ADR-0001 Decision 5. The MULTI-BLOCK AMR regrid variable is selectable PER BLOCK
-            # by name or physical role (set_refinement(threshold, variable=|role=)); default = component
-            # 0 (historical density), bit-identical 1e30 no-op. A block lacking the requested name/role
-            # raises at build (no silent component-0 fallback). Every native or compiled runtime block
-            # carries the same exact conserved-variable descriptor.
-            "variable_selector": ["component_0", "by_name", "by_role"],
-            "multi_block": "component_0 | by_name (variable=) | by_role (role=)",
-            "mono_block": "component_0 | by_name (variable=) | by_role (role=)",
-            "compiled_so": "component_0 | by_name (variable=) | by_role (role=)",
-            "phi_gradient": "set_phi_refinement(grad_threshold) : prepared |grad phi| leaf, unioned",
+            "authority": "resolved AMRTagging graph installed as one prepared native program",
+            "state_and_field_leaves": "block-qualified exact Handle identities",
+            "logical_nodes": "prepared not/any/all bytecode; no scalar threshold fallback",
+            "phi_gradient": "ordinary prepared field-gradient leaf",
         },
         "aux": {
             "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "

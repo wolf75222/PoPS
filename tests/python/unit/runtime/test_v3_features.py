@@ -106,7 +106,6 @@ print("== (B) AMR : options Newton et diagnostics cablees en mono ET multi-blocs
 amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr.set_refinement(1e30)
 amr.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
               time=engine.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
 amr.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
@@ -120,7 +119,6 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
 mono = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 mono.set_temporal_relations([2], [1], ["integral_only"])
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-mono.set_refinement(1e30)
 mono.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
 mono.set_density("e", rho16)
@@ -131,7 +129,6 @@ chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
 amrd = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amrd.set_temporal_relations([2], [1], ["integral_only"])
 amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amrd.set_refinement(1e30)
 amrd.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
 amrd.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
@@ -147,7 +144,6 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
 monod = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 monod.set_temporal_relations([2], [1], ["integral_only"])
 monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-monod.set_refinement(1e30)
 monod.add_equation("e", iso_model(n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
                 time=engine.IMEX(newton_diagnostics=True))
 monod.set_density("e", rho16)
@@ -166,7 +162,6 @@ print("== (C) set_conservative_state multi-blocs : etat complet seede (avec deri
 amr3 = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr3.set_refinement(1e30)
 amr3.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
 amr3.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()))
 rho0 = rho16

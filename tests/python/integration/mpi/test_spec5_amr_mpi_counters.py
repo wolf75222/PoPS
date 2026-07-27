@@ -22,6 +22,7 @@ Pre-rebuild (an ``_pops`` that predates ``AmrSystem.enable_profiling`` or the en
 SKIPS cleanly: the binding / scope is simply absent and the typed view stays unavailable.
 """
 from tests.python.support.requirements import require_native_or_skip
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 import sys
 
 import numpy as np
@@ -57,14 +58,15 @@ def _built_multiblock(n=64, regrid_every=1):
     """A small built MULTI-block AmrSystem (>= 2 blocks -> AmrRuntime engine) with a refining bump.
 
     Two Euler blocks on the shared hierarchy; block 0 carries an energy bump in the bottom-left
-    corner and the refinement tags on energy (role) so the union regrid forms a real fine patch.
+    corner and the prepared refinement graph tags exact variable ``E``.
     """
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("gas0", _comp(), time=engine.Explicit())
     sim.add_equation("gas1", _comp(), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
+    install_prepared_threshold_union(
+        sim, (("gas0", "E", 6.0), ("gas1", "E", 6.0)))
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background
     return sim

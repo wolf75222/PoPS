@@ -1386,7 +1386,7 @@ inline std::vector<int> resolve_implicit_components_compiled(
 
 /// Wires @p model (concrete CompositeModel) as an AMR block of @p sys, with the requested scheme. The
 /// build is DEFERRED (like add_block): the captured closures are invoked at the first
-/// step/mass/density via ensure_built(), after set_refinement / set_poisson / set_density.
+/// step/mass/density via ensure_built(), after prepared AMR authorities and initial state are installed.
 ///
 /// Every block count materializes the same type-erased AmrRuntimeBlock on the shared layout.
 /// @p time: "explicit" (SSPRK2/Heun), "euler", "ssprk3", or "imex" (forward-Euler transport

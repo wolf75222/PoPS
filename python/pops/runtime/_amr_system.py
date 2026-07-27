@@ -82,18 +82,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     imex), MULTIRATE (substeps / stride), COUPLED inter-species SOURCES and the multi-block production
     DSL. In multi-block the block NAME indexes set_density(name) / mass(name) / density(name).
 
-    UNION-OF-TAGS REGRID (regrid_every > 0) : the shared hierarchy is re-gridded from the UNION of
-    the prepared tags of all blocks. Two criteria compose (cell-by-cell OR) :
-
-    - PER-BLOCK VARIABLE (set_refinement(threshold, variable=, role=)) : refine where the SELECTED
-      variable of a block exceeds threshold. Default = component 0 (historical density), bit-identical ;
-      ADC-296 lets you select it per block by name (variable=) or physical role (role=), resolved against
-      the block's conserved variables (a block lacking the name/role raises, no silent component-0
-      fallback). The resolved runtime block descriptor carries the same names and roles for native
-      and compiled blocks ;
-    - ``grad phi`` (set_phi_refinement(grad_threshold)) : refine where the norm of the gradient of the
-      electrostatic potential exceeds grad_threshold (diocotron ring edge). Disabled by default
-      (grad_threshold <= 0).
+    UNION-OF-TAGS REGRID (regrid_every > 0): the shared hierarchy consumes the exact prepared
+    AMRTagging graph resolved from the layout. State, field-gradient and logical nodes keep their
+    block-qualified identities; the native engine never substitutes a component-zero threshold.
 
     regrid_every == 0 -> FROZEN hierarchy (regrid never called, bit-identical).
     """
@@ -212,7 +203,6 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
 
         Usage::
 
-            sim.set_refinement(threshold)  # regrid_every > 0 in the config
             with sim.profile() as prof:
                 for _ in range(n_steps):
                     sim.step_cfl(0.4)
@@ -450,7 +440,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
 
     def __getattr__(self, attr: Any) -> Any:
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
-        # passthrough (instance.set_refinement / install_program / ...) with the bind-vocabulary
+        # passthrough (install_program / ...) with the bind-vocabulary
         # RuntimeError, so the bypass is closed even under a prebuilt .so whose C++ setters are not yet
         # frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":

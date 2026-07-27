@@ -68,7 +68,6 @@ for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
     s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
-    s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
     s.add_equation("gas", euler_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=riem), time=engine.Explicit())
     s.set_density("gas", rho.copy())
@@ -96,7 +95,6 @@ print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le li
 try:
     s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
-    s.set_refinement(1e30)
     s.add_equation("iso", iso_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
     s.set_density("iso", rho.copy())

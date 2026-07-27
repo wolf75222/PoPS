@@ -32,6 +32,8 @@
 #include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include <cmath>
@@ -109,7 +111,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
-  sys.set_refinement(1.2);  // raffine la bulle (rho > 1.2 au coeur)
+  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
 
   const double m0 = sys.mass();  // declenche le build paresseux (regrid initial distribue)

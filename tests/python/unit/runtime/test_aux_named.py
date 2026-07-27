@@ -20,6 +20,7 @@ from pops.physics._model import HyperbolicModel
 from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem, System
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 from tests.python.support.requirements import repo_include
 
 
@@ -250,7 +251,7 @@ def test_amr_named_aux_single_block_regrid():
             time=engine.Explicit(),
         )
         reference.set_poisson(rhs="charge_density", solver="geometric_mg")
-        reference.set_refinement(2.0)
+        install_prepared_threshold_union(reference, (("decay", "n", 2.0),))
         reference.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         initial_mass = reference.mass("decay")
         for _ in range(3):
@@ -266,7 +267,7 @@ def test_amr_named_aux_single_block_regrid():
             time=engine.Explicit(),
         )
         runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
-        runtime.set_refinement(2.0)
+        install_prepared_threshold_union(runtime, (("decay", "n", 2.0),))
         density = _bump_density(n, lo, hi, 1.0, 5.0)
         runtime.set_density("decay", density)
         runtime.set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
@@ -321,7 +322,8 @@ def test_amr_named_aux_multiblock_regrid():
         runtime.add_equation(
             "plain", model=plain, spatial=_spatial(), time=engine.Explicit())
         runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
-        runtime.set_refinement(2.0)
+        install_prepared_threshold_union(
+            runtime, (("decay", "n", 2.0), ("plain", "n", 2.0)))
         runtime.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         runtime.set_density("plain", np.ones((n, n)))
         runtime.set_aux_field("decay", "kappa", 50.0 * np.ones((n, n)))

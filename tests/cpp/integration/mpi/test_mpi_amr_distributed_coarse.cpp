@@ -36,6 +36,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr_system.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/world_communicator.hpp>
 
@@ -283,7 +285,7 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
-  sys.set_refinement(1.2);
+  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
 
   Result R;

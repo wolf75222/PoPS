@@ -36,6 +36,7 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
@@ -221,7 +222,7 @@ def _build(program_factory, regrid_every=2):
     amr.add_equation("blk", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
-    amr.set_refinement(1.2)  # tags the blob -> a real 2-level hierarchy, regrids at steps 2,4,...
+    install_prepared_threshold_union(amr, (("blk", "n", 1.2),))
     initial = _blob()
     amr.set_density("blk", initial)
     amr.install_program(compiled.so_path)

@@ -186,7 +186,8 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", 1.2}, {"b", "n", 1.2}});
   const auto neutral_density = blob(n, 0.35, 0.5, 0.5, 1.0, 0.12);
   sim.set_density("a", neutral_density);
   sim.set_density("b", neutral_density);
@@ -783,7 +784,8 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "dirichlet");
-  sim.set_refinement(1.2);
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", 1.2}, {"b", "n", 1.2}});
   const auto neutral_density = blob(n, 0.5, 0.5, 0.5, 1.0, 0.12);
   sim.set_density("a", neutral_density);
   sim.set_density("b", neutral_density);
@@ -890,7 +892,8 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", 1.2}, {"b", "n", 1.2}});
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
   sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
   sim.set_program_block_map({0, 1});
@@ -1200,7 +1203,8 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", 1.2}, {"b", "n", 1.2}});
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
   ASSERT_TRUE(sim.uses_runtime_engine());
@@ -1256,7 +1260,8 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", 1.2}, {"b", "n", 1.2}});
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
   ASSERT_TRUE(sim.uses_runtime_engine());

@@ -68,7 +68,6 @@ def mono_imex(time):
     s = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    s.set_refinement(1e30)
     s.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()), time=time)
     s.set_density("e", gaussian(16))
     s.step(2e-3)
@@ -97,7 +96,6 @@ print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') cohere
 amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr.set_refinement(1e30)
 amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
                  time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
 amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),

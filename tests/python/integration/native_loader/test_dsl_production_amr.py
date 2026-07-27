@@ -44,6 +44,7 @@ from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.initial_states import bubble_amr as _bubble
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -113,7 +114,7 @@ def _amr(n, L, branch, refine=1.2):
     s = AmrSystem(cfg)
     s.set_temporal_relations([2], [1], ["integral_only"])
     branch(s)
-    s.set_refinement(refine)
+    install_prepared_threshold_union(s, (("gas", "rho", refine),))
     rho = np.asarray(_bubble(n), dtype=float)
     rho += 1.0 - float(rho.mean())
     s.set_density("gas", rho)
@@ -321,7 +322,7 @@ def main():
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
-        E.set_refinement(1.2)
+        install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
         E.set_density("gas", _bubble(n))
         for _ in range(4):
             E.step(dt)

@@ -19,6 +19,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 def _bump(n, amp):
@@ -104,7 +105,8 @@ def main():
     # reste valide (au moins un patch fin). Le mouvement effectif de la grille est verrouille en C++
     # (test_amr_multiblock_regrid_union) ; ici on assure la non-regression de la facade Python.
     s = _build(n=n, regrid_every=2)  # regrid_every > 0 en multi-blocs : DESORMAIS supporte
-    s.set_refinement(1.05)  # seuil bas -> l'union des tags des deux bumps raffine effectivement
+    install_prepared_threshold_union(
+        s, (("ions", "n", 1.05), ("electrons", "n", 1.05)))
     s.advance(0.001, 6)     # declenche le build paresseux + plusieurs regrids
     assert s.n_patches() >= 1, "hierarchie sans patch fin apres regrid d'union"
     assert np.isfinite(np.asarray(s.density("ions"))).all(), "etat ions non fini apres regrid"

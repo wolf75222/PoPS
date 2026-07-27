@@ -22,6 +22,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from tests.python.support.amr_tagging import install_prepared_threshold_union  # noqa: E402
 
 
 def _scalar_charge(q, B0=1.0):
@@ -57,11 +58,12 @@ def _run_amr_explicit_family(time_brick, *, multi, n=32):
             time=time_brick,
         )
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # low threshold -> the bump tags + refines (live fine patches)
+    blocks = ("ions", "electrons") if multi else ("ions",)
+    install_prepared_threshold_union(
+        sim, ((block, "n", 1.05) for block in blocks))
     sim.set_density("ions", _bump(n, 0.40))
     if multi:
         sim.set_density("electrons", _bump(n, 0.20))
-    blocks = ("ions", "electrons") if multi else ("ions",)
     m0 = {b: sim.mass(b) for b in blocks}
     sim.advance(0.002, 10)
     return sim, m0

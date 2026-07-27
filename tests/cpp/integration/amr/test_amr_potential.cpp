@@ -70,7 +70,6 @@ TEST(test_amr_potential, Runs) {
   AmrSystem amr(cfg);
   amr.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   amr.set_poisson("charge_density", "geometric_mg", "auto");
-  amr.set_refinement(1e30);  // jamais : un seul niveau (base couvre tout le domaine)
   amr.set_density("phi_test", rho);
 
   const std::vector<double> pa = amr.potential();

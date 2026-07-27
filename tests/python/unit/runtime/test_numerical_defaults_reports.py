@@ -1,7 +1,5 @@
 """ADC-603 numerical defaults and effective options reports."""
 
-import math
-
 import pytest
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
@@ -103,15 +101,9 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert block["positivity_floor"] == pytest.approx(1e-12)
 
 
-def test_invalid_newton_and_refinement_values_are_rejected():
+def test_invalid_newton_values_are_rejected():
     with pytest.raises(ValueError, match="newton_max_iters"):
         engine.IMEX(newton_max_iters=0)
-
-    amr = AmrSystem(n=8, L=1.0, periodicity=(True, True))
-    with pytest.raises(RuntimeError, match="threshold must be finite"):
-        amr.set_refinement(math.inf)
-    with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
-        amr.set_phi_refinement(math.nan)
 
     partial = AmrSystem(n=8, L=1.0, periodicity=(False, True))
     assert partial.inspect().to_dict()["options"]["topology"] == {

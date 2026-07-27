@@ -35,6 +35,7 @@ from pops.codegen._compiled_model_identity import compiled_model_identity  # noq
 from pops.layouts import Uniform  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from tests.python.support.amr_tagging import install_prepared_threshold_union  # noqa: E402
 from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
 from tests.python.support.native_execution_context import (  # noqa: E402
     artifact_execution_context,
@@ -132,7 +133,7 @@ def _built_amr(n=32):
                                    engine.BackgroundDensity(alpha=1.0, n0=1.0)),
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(threshold=1.05)
+    install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)
     ne = 1.0 + 0.4 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
