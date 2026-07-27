@@ -1042,7 +1042,7 @@ class RuntimeInstance:
         at_end: Any = False,
     ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
-        from pops.time import StepTransactionReport
+        from pops.time import ProjectAndRecheck, StepTransactionReport
 
         self._retry_consumer_finalizers()
         native = self._executor
@@ -1145,6 +1145,11 @@ class RuntimeInstance:
                     attempts=attempts,
                     staged_effects=stores,
                     rolled_back_effects=stores,
+                    projections=tuple(
+                        guard.name
+                        for guard in getattr(transaction_plan, "guards", ())
+                        if type(getattr(guard, "action", None)) is ProjectAndRecheck
+                    ),
                     diagnostics=(str(error),),
                 )
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):

@@ -1082,8 +1082,10 @@ class ProgramContext {
   }
 
   /// Publish a complete multi-state commit group only after every target/source pair validates.
-  /// The enclosing System step snapshot is the exception-safety boundary: an allocation/copy failure
-  /// in this final phase restores the entire accepted group before the exception escapes.
+  /// A source may itself be another target (for example, an authored state permutation). Snapshot
+  /// those aliases before the first write so the group has simultaneous-assignment semantics.
+  /// The enclosing System step snapshot remains the exception-safety boundary for a publication
+  /// failure after validation.
   void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
     std::vector<MultiFab*> targets;
     targets.reserve(commits.size());
@@ -1097,7 +1099,28 @@ class ProgramContext {
         throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
       targets.push_back(target);
     }
-    for (const auto& [target, source] : commits)
+    const bool has_aliased_source = std::any_of(
+        commits.begin(), commits.end(), [&targets](const auto& commit) {
+          return commit.first != commit.second &&
+                 std::find(targets.begin(), targets.end(), commit.second) != targets.end();
+        });
+    if (!has_aliased_source) {
+      for (const auto& [target, source] : commits)
+        if (target != source)
+          lincomb(*target, Real(0), *target, Real(1), *source);
+      return;
+    }
+    std::vector<std::pair<MultiFab*, const MultiFab*>> prepared(commits);
+    std::vector<MultiFab> aliased_sources;
+    aliased_sources.reserve(prepared.size());
+    for (auto& [target, source] : prepared) {
+      if (target != source &&
+          std::find(targets.begin(), targets.end(), source) != targets.end()) {
+        aliased_sources.emplace_back(*source);
+        source = &aliased_sources.back();
+      }
+    }
+    for (const auto& [target, source] : prepared)
       if (target != source)
         lincomb(*target, Real(0), *target, Real(1), *source);
   }

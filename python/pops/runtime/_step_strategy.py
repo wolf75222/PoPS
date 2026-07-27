@@ -15,7 +15,7 @@ from pops.time._step.strategy import (
     FixedDt,
     StepStrategy,
 )
-from pops.time._step.transaction import StepTransactionReport
+from pops.time._step.transaction import ProjectAndRecheck, StepTransactionReport
 
 
 _StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
@@ -50,6 +50,14 @@ def register_step_controller_factory(
 def _stores(engine: Any) -> tuple[str, ...]:
     plan = getattr(engine, "_step_transaction_plan", None)
     return tuple(store.value for store in plan.stores) if plan is not None else ()
+
+
+def _projections(engine: Any) -> tuple[str, ...]:
+    plan = getattr(engine, "_step_transaction_plan", None)
+    return tuple(
+        guard.name for guard in getattr(plan, "guards", ())
+        if type(guard.action) is ProjectAndRecheck
+    )
 
 
 def _phase(error: BaseException) -> str:
@@ -89,6 +97,7 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
         attempts=attempts,
         staged_effects=stores,
         rolled_back_effects=stores,
+        projections=_projections(engine),
         diagnostics=(str(error),),
     )
 
@@ -350,6 +359,7 @@ def run_step_attempt(
     report = StepTransactionReport(
         status="accepted", phase="commit", action="commit", attempts=attempts,
         staged_effects=stores, committed_effects=stores,
+        projections=_projections(engine),
     )
     engine._last_step_transaction_report = report
     return report

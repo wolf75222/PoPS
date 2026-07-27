@@ -294,6 +294,31 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
       << "the conservative per-level count reaches full depth together";
 }
 
+TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargets) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  ASSERT_FALSE(context.capturing());
+  MultiFab first = rt->level_state(0, 0);
+  MultiFab second = rt->level_state(1, 0);
+  first.set_val(Real(5));
+  second.set_val(Real(11));
+
+  context.commit_many({{&first, &second}, {&second, &first}});
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(11));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
+}
+
 TEST(test_amr_history_ring, CheckpointRoundTrip) {
   AmrRuntime rt = make_two_block(32, 1.0, 1.0);
   detail::AmrHistoryOps::register_history(rt, 0, "R", 2);  // depth 3
