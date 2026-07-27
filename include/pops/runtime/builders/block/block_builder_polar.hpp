@@ -177,6 +177,13 @@ struct PolarRhsInto {
     assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim, wall_radial,
                                       pos_floor);
   }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    if (point.level != 0)
+      throw std::invalid_argument(
+          "uniform polar Program residual requires BoundaryEvaluationPoint.level == 0");
+    (*this)(U, R);
+  }
 };
 
 /// Max wave-speed functor of the POLAR block: reduction over the valid cells of
@@ -281,6 +288,11 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
                                "' (ssprk2|ssprk3)");
   }
   bc.rhs_into =
+      detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
+  // A polar Program owns the same exact stage/clock identity as a Cartesian Program even though
+  // the current radial-wall/theta-periodic ghost producer is time independent.  Install a genuine
+  // point-qualified polar residual instead of falling back to the legacy unqualified advance.
+  bc.rhs_at_point =
       detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
   return bc;
 }

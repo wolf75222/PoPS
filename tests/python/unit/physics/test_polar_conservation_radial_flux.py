@@ -52,6 +52,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.mesh import PolarMesh
 from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 
 # Parametres geometriques
 RMIN, RMAX = 0.30, 1.00
@@ -144,6 +145,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
     )
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
+    install_ssprk2_program(sim)
 
     # --- etat initial ---
     rho0 = np.asarray(sim.density("ne"), dtype=float)

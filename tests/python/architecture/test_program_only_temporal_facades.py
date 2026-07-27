@@ -7,7 +7,8 @@ Euler, partial IMEX, ARS(2,2,2), Newton diagnostics, or a missing point-qualifie
 
 This source-only gate records the current blockers deliberately.  Once typed Program primitives for
 one family land, its semantic test must be migrated to that real primitive and removed from
-``SEMANTIC_BLOCKERS`` in the same change.
+``SEMANTIC_BLOCKERS`` in the same change. Polar transport now has a genuine point-qualified
+Program residual, so its spatial tests use explicitly authored SSPRK2/SSPRK3 Programs.
 """
 from __future__ import annotations
 
@@ -34,10 +35,6 @@ SEMANTIC_BLOCKERS = {
         "add_coupling(",
         ".step(",
     ),
-    "tests/python/integration/runtime/test_polar_system.py": (
-        "PolarMesh(",
-        ".step_cfl(",
-    ),
     "tests/python/unit/codegen/test_dsl_coupled_source.py": (
         "add_coupling(",
         ".step(",
@@ -45,22 +42,6 @@ SEMANTIC_BLOCKERS = {
     "tests/python/unit/codegen/test_dsl_coupled_source_conservation.py": (
         "add_coupling(",
         ".step(",
-    ),
-    "tests/python/unit/physics/test_polar_conservation_radial_flux.py": (
-        "PolarMesh(",
-        ".step_cfl(",
-    ),
-    "tests/python/unit/physics/test_polar_diocotron.py": (
-        "PolarMesh(",
-        ".step_cfl(",
-    ),
-    "tests/python/unit/physics/test_polar_hll.py": (
-        "PolarMesh(",
-        "sim.step(",
-    ),
-    "tests/python/unit/physics/test_polar_teardown_stability.py": (
-        "PolarMesh(",
-        "sim.step(",
     ),
     "tests/python/unit/runtime/test_implicit_vars.py": (
         "implicit_vars=",
