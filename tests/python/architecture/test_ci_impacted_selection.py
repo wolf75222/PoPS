@@ -815,8 +815,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "lane: [system, amr-base, amr-compressible, amr-compiled]"
         in openmp_prewarm_block
     )
+    assert "graph: [cpp, python]" in openmp_prewarm_block
+    assert "if: matrix.graph == 'python'" in openmp_prewarm_block
+    assert "python-version: '3.12'" in openmp_prewarm_block
     assert "-DKokkos_ENABLE_OPENMP=ON" in openmp_prewarm_block
-    assert "cmake --preset ci-kokkos" in openmp_prewarm_block
+    assert 'cmake --preset "$preset"' in openmp_prewarm_block
     assert "scripts/ci_python_module_objects.py" in openmp_prewarm_block
     assert "--contract-file" in openmp_prewarm_block
     assert "Restore reusable OpenMP ccache" not in openmp_prewarm_block
@@ -828,17 +831,30 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."'
         in openmp_prewarm_block
     )
-    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in openmp_prewarm_block
+    assert "preset=ci-kokkos-python" in openmp_prewarm_block
+    assert "build_dir=build-kokkos-py" in openmp_prewarm_block
+    assert "pool_option=POPS_HEAVY_MODULE_TU_POOL" in openmp_prewarm_block
+    assert "preset=ci-kokkos" in openmp_prewarm_block
+    assert "build_dir=build-kokkos" in openmp_prewarm_block
+    assert "pool_option=POPS_HEAVY_TEST_TU_POOL" in openmp_prewarm_block
+    assert '-D"${pool_option}=$lane_parallelism"' in openmp_prewarm_block
     assert (
-        'run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m'
+        'run_with_heartbeat "OpenMP ${{ matrix.graph }} prewarm '
+        '${{ matrix.lane }}" 24m'
         in openmp_prewarm_block
     )
     assert "compression-level: 0" in openmp_prewarm_block
     openmp_prewarm_upload = openmp_prewarm_block.split(
         "\n      - name: Upload OpenMP prewarm cache and compile contract", 1
     )[1]
-    assert "openmp-prewarm-ccache-${{ matrix.lane }}.tar" in openmp_prewarm_upload
-    assert "openmp-prewarm-contract-${{ matrix.lane }}.json" in openmp_prewarm_upload
+    assert (
+        "openmp-prewarm-${{ matrix.graph }}-ccache-${{ matrix.lane }}.tar"
+        in openmp_prewarm_upload
+    )
+    assert (
+        "openmp-prewarm-${{ matrix.graph }}-contract-${{ matrix.lane }}.json"
+        in openmp_prewarm_upload
+    )
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in openmp_prewarm_upload
 
@@ -876,10 +892,17 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--shard-index "${{ matrix.shard }}"' in openmp_block
     assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
     assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
-    assert "pattern: gate-openmp-prewarm-*" in openmp_block
+    assert "pattern: gate-openmp-prewarm-${{ matrix.kind }}-*" in openmp_block
+    assert openmp_block.count(
+        "matrix.kind == 'cpp' || "
+        "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
+    ) == 2
+    assert "openmp-prewarm-${{ matrix.kind }}-ccache-*.tar" in openmp_block
     assert "test \"${#cache_archives[@]}\" -eq 4" in openmp_block
-    assert "test \"${#compile_contracts[@]}\" -eq 4" in openmp_block
-    assert "--verify-contracts" in openmp_block
+    assert openmp_block.count("test \"${#compile_contracts[@]}\" -eq 4") == 2
+    assert openmp_block.count("--verify-contracts") == 2
+    assert "openmp-prewarm-cpp-contract-*.json" in openmp_block
+    assert "openmp-prewarm-python-contract-*.json" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
     openmp_cpp_build = openmp_block[
         openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
@@ -915,6 +938,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" not in openmp_block
     assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_block
     assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in openmp_block
+    openmp_python_build = openmp_block.split(
+        "\n      - name: Build module Python `pops`", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "openmp-prewarm-python-contract-*.json" in openmp_python_build
+    assert "--build-dir build-kokkos-py" in openmp_python_build
+    assert "--verify-contracts" in openmp_python_build
+    assert openmp_python_build.index("--verify-contracts") < openmp_python_build.index(
+        'run_with_heartbeat "Kokkos OpenMP Python module build"'
+    )
     assert "name: Cache exact OpenMP Python module" in openmp_block
     assert "id: openmp-python-module-cache" in openmp_block
     assert "pops-module-openmp-${{ runner.os }}" in openmp_block
