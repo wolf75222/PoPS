@@ -52,14 +52,13 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {
-  require_exact_keys(
-      row,
-      {"execution_identity", "context_version", "memory_space", "backend_identity",
-       "device_identity", "scalar_type", "storage_precision", "compute_precision",
-       "accumulation_precision", "reduction_precision", "stream_handle", "stream_identity",
-       "communicator_f_handle", "communicator_datatype_f_handle", "communicator_identity",
-       "communicator_datatype_identity"},
-      "prepared layout-transfer execution context");
+  require_exact_keys(row,
+                     {"execution_identity", "context_version", "memory_space", "backend_identity",
+                      "device_identity", "scalar_type", "storage_precision", "compute_precision",
+                      "accumulation_precision", "reduction_precision", "stream_handle",
+                      "stream_identity", "communicator_f_handle", "communicator_datatype_f_handle",
+                      "communicator_identity", "communicator_datatype_identity"},
+                     "prepared layout-transfer execution context");
   return {py::cast<std::uint32_t>(row["context_version"]),
           py::cast<std::string>(row["execution_identity"]),
           py::cast<std::int32_t>(row["memory_space"]),
@@ -301,12 +300,11 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
-      .def("_install_external_riemann_block", &System::add_external_riemann_block,
-           py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"),
-           py::arg("limiter"), py::arg("recon"), py::arg("time"), py::arg("gamma"),
-           py::arg("substeps"), py::arg("evolve"), py::arg("stride"),
-           py::arg("expected_nvars"), py::arg("expected_naux"),
-           py::arg("expected_model_identity"),
+      .def("_install_external_riemann_block", &System::add_external_riemann_block, py::arg("name"),
+           py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"), py::arg("limiter"),
+           py::arg("recon"), py::arg("time"), py::arg("gamma"), py::arg("substeps"),
+           py::arg("evolve"), py::arg("stride"), py::arg("expected_nvars"),
+           py::arg("expected_naux"), py::arg("expected_model_identity"),
            py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
@@ -762,15 +760,14 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def(
           "_prepare_layout_transfer",
           [](System& source, System& target,
-             std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& spec, const py::dict& execution) {
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& spec,
+             const py::dict& execution) {
             return PreparedSystemLayoutTransfer::prepare(
-                source, target, std::move(component),
-                layout_transfer_spec_from_python(spec),
+                source, target, std::move(component), layout_transfer_spec_from_python(spec),
                 layout_transfer_execution_from_python(execution));
           },
-          py::arg("target"), py::arg("component"), py::arg("spec"),
-          py::arg("execution_context"), py::keep_alive<0, 1>(), py::keep_alive<0, 2>(),
+          py::arg("target"), py::arg("component"), py::arg("spec"), py::arg("execution_context"),
+          py::keep_alive<0, 1>(), py::keep_alive<0, 2>(),
           "Prepare one persistent native System-to-System mapping session.")
       .def("step_cfl", &System::step_cfl,
            "Advances by ONE step at dt = cfl * h / max wave speed of the system (also honors the "
@@ -846,12 +843,11 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_set_analytic_expression_state", &System::set_analytic_expression_state,
            py::arg("name"), py::arg("space"), py::arg("centering"), py::arg("projection"),
            py::arg("opcodes"), py::arg("literals"))
-      .def("_set_analytic_mapped_state", &System::set_analytic_mapped_state,
-           py::arg("name"), py::arg("opcodes"), py::arg("literals"),
-           py::arg("input_sources"))
-      .def("_set_analytic_gaussian_state", &System::set_analytic_gaussian_state,
-           py::arg("name"), py::arg("center_x"), py::arg("center_y"),
-           py::arg("background"), py::arg("amplitude"), py::arg("inverse_width"));
+      .def("_set_analytic_mapped_state", &System::set_analytic_mapped_state, py::arg("name"),
+           py::arg("opcodes"), py::arg("literals"), py::arg("input_sources"))
+      .def("_set_analytic_gaussian_state", &System::set_analytic_gaussian_state, py::arg("name"),
+           py::arg("center_x"), py::arg("center_y"), py::arg("background"), py::arg("amplitude"),
+           py::arg("inverse_width"));
 }
 
 // Data + IO accessors: shape/introspection, mass/density/potential, MPI-safe globals, local hyperslabs.
@@ -988,31 +984,26 @@ void init_system(py::module_& m) {
                     &SystemLayoutTransferReceipt::provider_component_identity)
       .def_readonly("provider_manifest_identity",
                     &SystemLayoutTransferReceipt::provider_manifest_identity)
-      .def_readonly("source_layout_identity",
-                    &SystemLayoutTransferReceipt::source_layout_identity)
-      .def_readonly("target_layout_identity",
-                    &SystemLayoutTransferReceipt::target_layout_identity)
+      .def_readonly("source_layout_identity", &SystemLayoutTransferReceipt::source_layout_identity)
+      .def_readonly("target_layout_identity", &SystemLayoutTransferReceipt::target_layout_identity)
       .def_readonly("source_block", &SystemLayoutTransferReceipt::source_block)
       .def_readonly("target_block", &SystemLayoutTransferReceipt::target_block)
       .def_readonly("execution_identity", &SystemLayoutTransferReceipt::execution_identity)
       .def_readonly("operation", &SystemLayoutTransferReceipt::operation)
       .def_readonly("generation", &SystemLayoutTransferReceipt::generation)
       .def_readonly("attempt", &SystemLayoutTransferReceipt::attempt)
-      .def_readonly("source_element_count",
-                    &SystemLayoutTransferReceipt::source_element_count)
+      .def_readonly("source_element_count", &SystemLayoutTransferReceipt::source_element_count)
       .def_readonly("destination_element_count",
                     &SystemLayoutTransferReceipt::destination_element_count);
-  py::class_<PreparedSystemLayoutTransfer,
-             std::shared_ptr<PreparedSystemLayoutTransfer>>(
+  py::class_<PreparedSystemLayoutTransfer, std::shared_ptr<PreparedSystemLayoutTransfer>>(
       m, "_PreparedSystemLayoutTransfer")
       .def("begin_transaction", &PreparedSystemLayoutTransfer::begin_transaction,
            py::arg("generation"))
       .def("capture", &PreparedSystemLayoutTransfer::capture, py::arg("generation"),
            py::arg("attempt"))
-      .def("apply", &PreparedSystemLayoutTransfer::apply, py::arg("generation"),
+      .def("apply", &PreparedSystemLayoutTransfer::apply, py::arg("generation"), py::arg("attempt"))
+      .def("reject_attempt", &PreparedSystemLayoutTransfer::reject_attempt, py::arg("generation"),
            py::arg("attempt"))
-      .def("reject_attempt", &PreparedSystemLayoutTransfer::reject_attempt,
-           py::arg("generation"), py::arg("attempt"))
       .def("finalize_transaction", &PreparedSystemLayoutTransfer::finalize_transaction,
            py::arg("generation"))
       .def("rollback_transaction", &PreparedSystemLayoutTransfer::rollback_transaction,

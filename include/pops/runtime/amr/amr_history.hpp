@@ -107,8 +107,7 @@ struct AmrHistoryOps {
     eng.hist_block_owner_[name] = block;
     eng.hist_init_[name] = std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
     eng.hist_fill_count_[name] = std::vector<int>(static_cast<std::size_t>(eng.nlev_), 0);
-    eng.hist_store_pending_[name] =
-        std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
+    eng.hist_store_pending_[name] = std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
     eng.hist_slot_dt_[name] = std::vector<Real>(static_cast<std::size_t>(want_depth), Real(0));
   }
 
@@ -183,13 +182,11 @@ struct AmrHistoryOps {
       std::vector<char>& pending = eng.hist_store_pending_[name];
       if (fill_count.size() != static_cast<std::size_t>(eng.nlev_) ||
           pending.size() != static_cast<std::size_t>(eng.nlev_))
-        throw std::runtime_error(
-            "AMR history fill metadata disagrees with the active hierarchy");
+        throw std::runtime_error("AMR history fill metadata disagrees with the active hierarchy");
       for (int level = 0; level < eng.nlev_; ++level) {
         const auto index = static_cast<std::size_t>(level);
         if (pending[index]) {
-          fill_count[index] =
-              std::min(static_cast<int>(ring.size()), fill_count[index] + 1);
+          fill_count[index] = std::min(static_cast<int>(ring.size()), fill_count[index] + 1);
           pending[index] = 0;
         }
       }
@@ -328,9 +325,10 @@ struct AmrHistoryOps {
       expected_size += static_cast<std::size_t>(nc) * domain.nx() * domain.ny();
     }
     if (flat.size() != expected_size)
-      throw std::runtime_error("AmrRuntime::restore_history: payload size differs from the exact "
-                               "active hierarchy extent for history '" +
-                               name + "'");
+      throw std::runtime_error(
+          "AmrRuntime::restore_history: payload size differs from the exact "
+          "active hierarchy extent for history '" +
+          name + "'");
     if (slot >= static_cast<int>(ring.size())) {
       const int nco = ring[0][0].ncomp();
       for (int s = static_cast<int>(ring.size()); s <= slot; ++s)
@@ -426,17 +424,16 @@ struct AmrHistoryOps {
         auto initialized = eng.hist_init_.find(name);
         auto fill_count = eng.hist_fill_count_.find(name);
         auto pending = eng.hist_store_pending_.find(name);
-        if (initialized == eng.hist_init_.end() ||
-            fill_count == eng.hist_fill_count_.end() ||
+        if (initialized == eng.hist_init_.end() || fill_count == eng.hist_fill_count_.end() ||
             pending == eng.hist_store_pending_.end() ||
             initialized->second.size() != static_cast<std::size_t>(pk + 1) ||
             fill_count->second.size() != static_cast<std::size_t>(pk + 1) ||
             pending->second.size() != static_cast<std::size_t>(pk + 1))
           throw std::runtime_error("AMR history initialization mask disagrees with activation");
-        initialized->second.push_back(
-            prolong ? initialized->second[static_cast<std::size_t>(pk)] : char(0));
-        fill_count->second.push_back(
-            prolong ? fill_count->second[static_cast<std::size_t>(pk)] : 0);
+        initialized->second.push_back(prolong ? initialized->second[static_cast<std::size_t>(pk)]
+                                              : char(0));
+        fill_count->second.push_back(prolong ? fill_count->second[static_cast<std::size_t>(pk)]
+                                             : 0);
         pending->second.push_back(0);
       }
     }
@@ -451,7 +448,8 @@ struct AmrHistoryOps {
         while (slot.size() > static_cast<std::size_t>(parent_level + 1)) {
           const int fine_level = static_cast<int>(slot.size()) - 1;
           const int coarse_level = fine_level - 1;
-          const int ratio = eng.hierarchy_.refinement_ratios[static_cast<std::size_t>(coarse_level)];
+          const int ratio =
+              eng.hierarchy_.refinement_ratios[static_cast<std::size_t>(coarse_level)];
           eng.restrict_block_field(owner->second, slot[static_cast<std::size_t>(fine_level)],
                                    slot[static_cast<std::size_t>(coarse_level)], coarse_level,
                                    ratio);
@@ -696,7 +694,8 @@ struct AmrHistoryOps {
       MultiFab no_old_fine(BoxArray{}, DistributionMapping{}, fine.ncomp(), fine.n_grow());
       const auto owner = eng.hist_block_owner_.find(name);
       if (owner == eng.hist_block_owner_.end())
-        throw std::runtime_error("conservative AMR history lost its owner-qualified transfer route");
+        throw std::runtime_error(
+            "conservative AMR history lost its owner-qualified transfer route");
       MultiFab fine_delta = eng.regrid_block_field(owner->second, fb, dmap, delta, no_old_fine, pk,
                                                    fine.n_grow(), refinement_ratio);
       saxpy(fine, Real(1), fine_delta);

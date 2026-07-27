@@ -4,4 +4,6 @@ set(Kokkos_FOUND TRUE)
 set(Kokkos_VERSION "99.0-test-fixture")
 if(NOT TARGET Kokkos::kokkos)
   add_library(Kokkos::kokkos INTERFACE IMPORTED)
+  set_target_properties(Kokkos::kokkos PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/include")
 endif()

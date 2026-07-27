@@ -976,18 +976,15 @@ TEST(test_krylov_workspace_reentrancy,
   prototype.set_val(Real(0));
   OperatorEvaluationSnapshot first_snapshot = test_snapshot(prototype);
   OperatorEvaluationSnapshot second_snapshot = test_snapshot(prototype);
-  PreparedAffineOperatorProvider first_provider =
-      PreparedAffineOperatorProvider::trusted_extension(
-          {"pops.test.krylov.shared-exclusive-operator", 1}, {},
-          [](const ExecutionLane&) {
-            return PreparedAffineOperatorSessionCallbacks{{},
-                                                          [](MultiFab& out, const MultiFab& in) {
-                                                            detail::PreparedFieldAlgebra::copy(out,
-                                                                                               in);
-                                                          },
-                                                          [] { return std::size_t{0}; }};
-          },
-          PreparedOperatorConcurrency::Exclusive);
+  PreparedAffineOperatorProvider first_provider = PreparedAffineOperatorProvider::trusted_extension(
+      {"pops.test.krylov.shared-exclusive-operator", 1}, {},
+      [](const ExecutionLane&) {
+        return PreparedAffineOperatorSessionCallbacks{
+            {},
+            [](MultiFab& out, const MultiFab& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+            [] { return std::size_t{0}; }};
+      },
+      PreparedOperatorConcurrency::Exclusive);
   PreparedAffineOperatorProvider second_provider = first_provider;
   const KrylovFootprint footprint{1, 0, false};
   PreparedAffineLinearProblem first_problem(
@@ -1018,8 +1015,8 @@ TEST(test_krylov_workspace_reentrancy,
   const KrylovControls controls{method, Real(1e-12), Real(0), 4};
 
   {
-    PreparedKrylovInvocation first = prepare_krylov_solve(
-        first_problem, first_workspace, first_iterate, first_rhs, controls);
+    PreparedKrylovInvocation first =
+        prepare_krylov_solve(first_problem, first_workspace, first_iterate, first_rhs, controls);
     std::string prepare_rejection;
     try {
       second_problem.prepare(second_snapshot);
@@ -1062,8 +1059,8 @@ TEST(test_krylov_workspace_reentrancy,
     EXPECT_TRUE(first_report.solved()) << first_report.reason;
   }
 
-  PreparedKrylovInvocation second = prepare_krylov_solve(
-      second_problem, second_workspace, second_iterate, second_rhs, controls);
+  PreparedKrylovInvocation second =
+      prepare_krylov_solve(second_problem, second_workspace, second_iterate, second_rhs, controls);
   const SolveReport second_report = second.execute();
   EXPECT_TRUE(second_report.solved()) << second_report.reason;
 }
@@ -1082,8 +1079,8 @@ TEST(test_krylov_workspace_reentrancy,
   const KrylovFootprint footprint{1, 0, true};
   PreparedAffineLinearProblem problem(
       prototype, lifecycle_operator_provider(operator_probe),
-      PreparedLinearPreconditioner(
-          prototype, lifecycle_preconditioner_provider(preconditioner_probe)),
+      PreparedLinearPreconditioner(prototype,
+                                   lifecycle_preconditioner_provider(preconditioner_probe)),
       LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
       [&snapshot] { return snapshot; });
   const PreparedKrylovMethod method = bicgstab_krylov_method();
@@ -1154,18 +1151,15 @@ TEST(test_krylov_workspace_reentrancy,
   prototype.set_val(Real(0));
   OperatorEvaluationSnapshot first_snapshot = test_snapshot(prototype);
   OperatorEvaluationSnapshot second_snapshot = test_snapshot(prototype);
-  PreparedAffineOperatorProvider first_provider =
-      PreparedAffineOperatorProvider::trusted_extension(
-          {"pops.test.krylov.exception-safe-exclusive-operator", 1}, {},
-          [](const ExecutionLane&) {
-            return PreparedAffineOperatorSessionCallbacks{{},
-                                                          [](MultiFab& out, const MultiFab& in) {
-                                                            detail::PreparedFieldAlgebra::copy(out,
-                                                                                               in);
-                                                          },
-                                                          [] { return std::size_t{0}; }};
-          },
-          PreparedOperatorConcurrency::Exclusive);
+  PreparedAffineOperatorProvider first_provider = PreparedAffineOperatorProvider::trusted_extension(
+      {"pops.test.krylov.exception-safe-exclusive-operator", 1}, {},
+      [](const ExecutionLane&) {
+        return PreparedAffineOperatorSessionCallbacks{
+            {},
+            [](MultiFab& out, const MultiFab& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+            [] { return std::size_t{0}; }};
+      },
+      PreparedOperatorConcurrency::Exclusive);
   PreparedAffineOperatorProvider second_provider = first_provider;
   const KrylovFootprint footprint{1, 0, false};
   PreparedAffineLinearProblem first_problem(
@@ -1187,8 +1181,7 @@ TEST(test_krylov_workspace_reentrancy,
   } catch (const std::logic_error& error) {
     prepare_rejection = error.what();
   }
-  EXPECT_EQ(prepare_rejection,
-            "prepared resource freeze failed on at least one communicator rank");
+  EXPECT_EQ(prepare_rejection, "prepared resource freeze failed on at least one communicator rank");
 
   const PreparedKrylovMethod method = cg_krylov_method();
   KrylovWorkspace workspace(prototype, method, footprint);
@@ -1198,9 +1191,8 @@ TEST(test_krylov_workspace_reentrancy,
   MultiFab rhs(boxes, mapping, 1, 0);
   iterate.set_val(Real(0));
   rhs.set_val(Real(2));
-  const SolveReport report = solve_prepared_affine(
-      second_problem, workspace, iterate, rhs,
-      KrylovControls{method, Real(1e-12), Real(0), 4});
+  const SolveReport report = solve_prepared_affine(second_problem, workspace, iterate, rhs,
+                                                   KrylovControls{method, Real(1e-12), Real(0), 4});
   EXPECT_TRUE(report.solved()) << report.reason;
 }
 
@@ -1272,8 +1264,7 @@ TEST(test_krylov_workspace_reentrancy,
                     detail::PreparedFieldAlgebra::copy(out, in);
                     return;
                   }
-                  const BoxArray incompatible_boxes(
-                      std::vector<Box2D>{Box2D{{0, 0}, {0, 0}}});
+                  const BoxArray incompatible_boxes(std::vector<Box2D>{Box2D{{0, 0}, {0, 0}}});
                   const DistributionMapping incompatible_mapping(incompatible_boxes.size(),
                                                                  n_ranks());
                   out = MultiFab(incompatible_boxes, incompatible_mapping, 1, 0);

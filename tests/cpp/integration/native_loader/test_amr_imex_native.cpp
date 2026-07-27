@@ -339,23 +339,20 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     } catch (const runtime::program::StepAttemptRejected& rejection) {
       if (rejection.status() != SolveStatus::kInvalidEvaluation ||
           rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u ||
-          rejection.phase() != "stage")
+          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
         throw;
       explicit_rejected_nonfinite = true;
     }
     chk(all_finite(B_imex.density) && maxabs(B_imex.density) < 1e3,
         "[B] IMEX stable sur source raide (fini, borne)");
-    chk(explicit_rejected_nonfinite ||
-            (all_finite(B_expl.density) && maxabs(B_expl.density) > 1e3),
+    chk(explicit_rejected_nonfinite || (all_finite(B_expl.density) && maxabs(B_expl.density) > 1e3),
         "[B] explicite refuse avant publication ou diverge en restant fini");
     std::printf(
         "OK  [B] source raide (eps=%.0e, dt=%.0e) : IMEX max=%.3e (stable) | explicite %s\n", eps,
         dtB, maxabs(B_imex.density),
         explicit_rejected_nonfinite
             ? "REJETE NON FINI (fail-closed)"
-            : (all_finite(B_expl.density) ? "borne >> 1"
-                                          : "ETAT NON FINI PUBLIE (ECHEC)"));
+            : (all_finite(B_expl.density) ? "borne >> 1" : "ETAT NON FINI PUBLIE (ECHEC)"));
   }
 
   // (B2) PARITE add_compiled_model == add_block sous IMEX en regime NON explosif (eps modere) :
@@ -410,8 +407,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       A.step(dtA);
 
     AmrSystem B(make_cfg(n));
-    add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
-                       kGamma);
+    add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(B);
     B.set_density("gas", rho);
     for (int k = 0; k < nsteps; ++k)

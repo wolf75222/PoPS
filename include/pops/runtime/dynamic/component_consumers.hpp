@@ -36,7 +36,7 @@ inline PopsComponentStatusV1 unwritten_component_status() {
           "native component did not write its status"};
 }
 
-inline bool component_action_is_known(PopsComponentActionV1 action) {
+inline bool component_action_is_known(std::int32_t action) {
   return action == POPS_COMPONENT_CONTINUE_V1 || action == POPS_COMPONENT_RETRY_STEP_V1 ||
          action == POPS_COMPONENT_REJECT_STEP_V1 || action == POPS_COMPONENT_ABORT_RUN_V1;
 }
@@ -46,7 +46,7 @@ inline bool component_status_is_well_formed(const PopsComponentStatusV1& status)
          status.code != kUnwrittenComponentStatusCode && component_action_is_known(status.action);
 }
 
-inline bool solve_status_is_known(PopsSolveStatusV2 status) {
+inline bool solve_status_is_known(std::int32_t status) {
   switch (status) {
     case POPS_SOLVE_SOLVED_V2:
     case POPS_SOLVE_SINGULAR_V2:
@@ -61,7 +61,7 @@ inline bool solve_status_is_known(PopsSolveStatusV2 status) {
   return false;
 }
 
-inline bool solve_action_is_known(PopsSolveActionV2 action) {
+inline bool solve_action_is_known(std::int32_t action) {
   return action == POPS_SOLVE_ACTION_NONE_V2 || action == POPS_SOLVE_ACTION_FAIL_RUN_V2 ||
          action == POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2;
 }
@@ -89,8 +89,7 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
         "native component execution context has invalid size, identities or precision policy");
   const std::string communicator_identity(context.communicator_identity);
   const bool serial = communicator_identity == "serial";
-  const bool noncollective =
-      communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1;
+  const bool noncollective = communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1;
   if (serial || noncollective) {
     // MPI_Comm_c2f/MPI_Type_c2f may legally return zero for predefined handles.  The explicit
     // identities, not a guessed numeric sentinel, therefore distinguish serial from distributed
@@ -112,8 +111,7 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
 
 inline void validate_noncollective_execution_context(const PopsExecutionContextV1& context) {
   validate_execution_context(context);
-  if (std::string(context.communicator_identity) !=
-          POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
+  if (std::string(context.communicator_identity) != POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
       context.communicator_f_handle != 0 || context.communicator_datatype_f_handle != 0 ||
       std::string(context.communicator_datatype_identity) != "none")
     throw std::invalid_argument(
@@ -419,8 +417,9 @@ inline int tag_batch(const PopsTaggerApiV2& api, void* state, const PopsTaggerRe
   if (request.struct_size < sizeof(PopsTaggerRequestV2) ||
       request.collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
       (request.execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
-       request.execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) || request.state_count == 0 ||
-      request.states == nullptr || request.program.struct_size < sizeof(PopsTaggingProgramV1) ||
+       request.execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) ||
+      request.state_count == 0 || request.states == nullptr ||
+      request.program.struct_size < sizeof(PopsTaggingProgramV1) ||
       request.program.program_identity == nullptr || request.program.leaf_count == 0 ||
       request.program.leaves == nullptr || request.program.refine_instruction_count == 0 ||
       request.program.refine_opcodes == nullptr || request.program.refine_arguments == nullptr ||
@@ -528,8 +527,8 @@ inline int tag_batch(const PopsTaggerApiV2& api, void* state, const PopsTaggerRe
         throw std::invalid_argument("tagger graph stencil exceeds the supplied state halo");
   }
   for (const PopsTaggerMaskViewV2* output :
-       {&request.refine_candidates, &request.coarsen_candidates,
-        &request.refine_equalities, &request.coarsen_equalities})
+       {&request.refine_candidates, &request.coarsen_candidates, &request.refine_equalities,
+        &request.coarsen_equalities})
     if (output->struct_size < sizeof(PopsTaggerMaskViewV2) || output->data == nullptr ||
         output->size != points || output->ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
         (request.execution_mode == POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
@@ -1519,8 +1518,8 @@ inline int solve_field(const PopsFieldSolverApiV2& api, void* state,
   validate_request_authority();
   report = {};
   report.struct_size = sizeof(PopsSolveReportV2);
-  report.status = static_cast<PopsSolveStatusV2>(-1);
-  report.action = static_cast<PopsSolveActionV2>(-1);
+  report.status = -1;
+  report.action = -1;
   report.iterations = -1;
   report.relative_residual = std::numeric_limits<double>::quiet_NaN();
   report.reference_residual_norm = std::numeric_limits<double>::quiet_NaN();

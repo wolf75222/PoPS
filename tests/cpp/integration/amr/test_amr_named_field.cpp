@@ -34,9 +34,9 @@
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
-#include <pops/core/state/state.hpp>       // kAuxNamedBase
+#include <pops/core/state/state.hpp>        // kAuxNamedBase
 #include <pops/mesh/layout/refinement.hpp>  // parallel_copy
-#include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
+#include <pops/mesh/storage/mf_arith.hpp>   // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
 #include "amr_transfer_test_authority.hpp"
@@ -78,8 +78,7 @@ static AmrFieldHierarchyPolicyAuthority external_graph_hierarchy_policy() {
   return {
       "tests.field-hierarchy.coupled-graph",
       3,
-      {"tests.field-hierarchy.coupled-graph.options@3",
-       {{"coupling_radius", std::uint64_t{2}}}},
+      {"tests.field-hierarchy.coupled-graph.options@3", {{"coupling_radius", std::uint64_t{2}}}},
   };
 }
 
@@ -179,16 +178,15 @@ class ExternalGraphIdentityProvider final : public AmrFieldSolverProvider {
     return accepted ? PreparedProviderSupport::accept()
                     : PreparedProviderSupport::reject(2, "graph identity request is invalid");
   }
-  std::string expected_prepared_contract(
-      const AmrFieldSolverBuildRequest& request) const override {
+  std::string expected_prepared_contract(const AmrFieldSolverBuildRequest& request) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("external graph-identity provider rejected the request");
     return make_amr_field_solver_contract(identity(), request);
   }
   std::unique_ptr<AmrPreparedFieldSolver> build(
       const AmrFieldSolverBuildRequest& request) const override {
-    return std::make_unique<ExternalGraphIdentityPrepared>(
-        request, expected_prepared_contract(request));
+    return std::make_unique<ExternalGraphIdentityPrepared>(request,
+                                                           expected_prepared_contract(request));
   }
 };
 
@@ -329,8 +327,7 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
                                                     const MultiFab& fine, int component) {
   if (expected_fine.box_array().boxes() != fine.box_array().boxes() ||
       expected_fine.dmap().ranks() != fine.dmap().ranks() ||
-      expected_fine.local_size() != fine.local_size() ||
-      expected_fine.ncomp() != fine.ncomp() ||
+      expected_fine.local_size() != fine.local_size() || expected_fine.ncomp() != fine.ncomp() ||
       expected_fine.n_grow() != fine.n_grow())
     throw std::invalid_argument("coarse/fine ghost oracle requires identical fine layouts");
   device_fence();
@@ -365,7 +362,10 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
 }
 
 static Real max_valid_coarse_injection_gap(const MultiFab& coarse, const MultiFab& fine,
-                                           int component) {
+                                           int coarse_component, int fine_component) {
+  if (coarse_component < 0 || coarse_component >= coarse.ncomp() || fine_component < 0 ||
+      fine_component >= fine.ncomp())
+    throw std::invalid_argument("coarse injection oracle component is outside its field");
   device_fence();
   Real result = Real(0);
   for (int li = 0; li < fine.local_size(); ++li) {
@@ -378,8 +378,8 @@ static Real max_valid_coarse_injection_gap(const MultiFab& coarse, const MultiFa
         const int parent_box = mf_find_box(coarse, ci, cj);
         if (parent_box < 0)
           continue;
-        const Real parent = coarse.fab(parent_box).const_array()(ci, cj, component);
-        result = std::max(result, std::fabs(child(i, j, component) - parent));
+        const Real parent = coarse.fab(parent_box).const_array()(ci, cj, coarse_component);
+        result = std::max(result, std::fabs(child(i, j, fine_component) - parent));
       }
   }
   return result;
@@ -433,9 +433,8 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   EXPECT_TRUE(external->capability_contracts().empty());
   EXPECT_NO_THROW((void)exact_amr_field_solver_provider_declaration(*external));
 
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall,
-                     registry);
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall, registry);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
   AmrFieldSolveConfig plan;
   plan.plan_identity = "tests.amr.field-solver.graph-identity.plan@4";
@@ -452,15 +451,15 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   plan.nullspace = operator_topology_zero_mean_nullspace();
   plan.has_reaction = true;
   plan.reaction = Real(1);
-  plan.providers.push_back(FieldProviderBinding{
-      "tests:plasma/graph-identity/rhs", "plasma", "graph_identity", Real(1)});
+  plan.providers.push_back(
+      FieldProviderBinding{"tests:plasma/graph-identity/rhs", "plasma", "graph_identity", Real(1)});
   runtime.install_field_plan("graph_identity", plan);
   runtime.register_named_field("plasma", "graph_identity", kAuxNamedBase, -1, -1,
                                /*gradient_sign=*/Real(1));
-  runtime.set_block_named_elliptic_rhs(
-      0, "graph_identity", [charge](const MultiFab& state, MultiFab& rhs) {
-        add_scaled_component(state, charge, 0, rhs);
-      });
+  runtime.set_block_named_elliptic_rhs(0, "graph_identity",
+                                       [charge](const MultiFab& state, MultiFab& rhs) {
+                                         add_scaled_component(state, charge, 0, rhs);
+                                       });
 
   const std::string selected = "graph_identity";
   const SolveReport report = runtime.solve_named_fields(&selected);
@@ -802,7 +801,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
         << "resolved FAC valid cells remain authoritative on level " << level;
 
   EXPECT_GT(max_valid_coarse_injection_gap(
-                runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component),
+                runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component, 0),
             Real(1e-8))
       << "the fine FAC solution must differ from full-grown coarse injection for this oracle";
 
@@ -811,8 +810,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   // parent carrier after the solve without freezing the test to the historical piecewise-constant
   // fill: the configured second-order authority reconstructs child means from limited parent
   // slopes.
-  MultiFab expected_fine(runtime.aux(1).box_array(), runtime.aux(1).dmap(),
-                         runtime.aux(1).ncomp(), runtime.aux(1).n_grow());
+  MultiFab expected_fine(runtime.aux(1).box_array(), runtime.aux(1).dmap(), runtime.aux(1).ncomp(),
+                         runtime.aux(1).n_grow());
   expected_fine.set_val(Real(0));
   ::pops::runtime::amr::PreparedTransferKernel coarse_fine =
       ::pops::runtime::amr::prepare_conservative_coarse_fine();
@@ -820,9 +819,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   const CommunicatorView communicator =
       layout.replicated_coarse ? CommunicatorView{} : world_communicator_view();
   auto expected_transfer = detail::PreparedConservativeCellTransferWorkspace::prepare(
-      runtime.aux(0), expected_fine, layout.geom.domain,
-      layout.geom.domain.refine(kAmrRefRatio), layout.replicated_coarse,
-      detail::ConservativeCellFillRegion::Ghost, layout.base_per,
+      runtime.aux(0), expected_fine, layout.geom.domain, layout.geom.domain.refine(kAmrRefRatio),
+      layout.replicated_coarse, detail::ConservativeCellFillRegion::Ghost, layout.base_per,
       /*topology_generation=*/0, communicator, coarse_fine.prepared_coarse_fine);
   expected_transfer.publish_prepared(expected_fine);
 
@@ -835,8 +833,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
          "configured spatial authority";
 }
 
-TEST(test_amr_named_field,
-     CoarseAuthoritativeAuxUsesPreparedTransferAndComponentBcOnFineBoundary) {
+TEST(test_amr_named_field, CoarseAuthoritativeAuxUsesPreparedTransferAndComponentBcOnFineBoundary) {
   constexpr int n = 16;
   constexpr int component = kAuxNamedBase;
   constexpr Real boundary_value = Real(-50);
@@ -853,18 +850,17 @@ TEST(test_amr_named_field,
   detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
   layout.base_per = Periodicity{false, false};
   // Coarse footprint [0..7]x[4..11]: the child touches x-low but remains interior in y.
-  const BoxArray boundary_fine(
-      std::vector<Box2D>{Box2D{{0, 8}, {15, 23}}});
+  const BoxArray boundary_fine(std::vector<Box2D>{Box2D{{0, 8}, {15, 23}}});
   layout.ba[1] = boundary_fine;
   layout.dm[1] = DistributionMapping(boundary_fine.size(), n_ranks());
 
   std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(
-      exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma", blob(n, 0.25),
-      /*has_density=*/true, 1.4, 1, false, false));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false, false));
   blocks[0].aux_ncomp = component + 1;
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                     std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
 
   std::vector<double> field(static_cast<std::size_t>(n) * n);
   for (int j = 0; j < n; ++j)
@@ -873,8 +869,7 @@ TEST(test_amr_named_field,
   runtime.set_named_aux(component, field);
   // The component BC is authoritative on every active level. Its Dirichlet ghost therefore
   // differs from the coarse transfer's reconstructed boundary value.
-  runtime.set_named_aux_bc(
-      component, AuxHaloPolicy{BCType::Dirichlet, boundary_value});
+  runtime.set_named_aux_bc(component, AuxHaloPolicy{BCType::Dirichlet, boundary_value});
   device_fence();
 
   const MultiFab& coarse = runtime.aux(0);
@@ -885,9 +880,8 @@ TEST(test_amr_named_field,
   const CommunicatorView communicator =
       layout.replicated_coarse ? CommunicatorView{} : world_communicator_view();
   auto expected_transfer = detail::PreparedConservativeCellTransferWorkspace::prepare(
-      coarse, expected_fine, layout.geom.domain,
-      layout.geom.domain.refine(kAmrRefRatio), layout.replicated_coarse,
-      detail::ConservativeCellFillRegion::Valid, layout.base_per,
+      coarse, expected_fine, layout.geom.domain, layout.geom.domain.refine(kAmrRefRatio),
+      layout.replicated_coarse, detail::ConservativeCellFillRegion::Valid, layout.base_per,
       /*topology_generation=*/0, communicator);
   expected_transfer.publish_prepared(expected_fine);
 
@@ -903,8 +897,7 @@ TEST(test_amr_named_field,
   const ConstArray4 parent = coarse.fab(0).const_array();
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
     const int cj = coarsen_index(j, kAmrRefRatio);
-    EXPECT_EQ(values(-1, j, component),
-              Real(2) * boundary_value - values(0, j, component))
+    EXPECT_EQ(values(-1, j, component), Real(2) * boundary_value - values(0, j, component))
         << "fine x-low ghost applies the component Dirichlet authority";
     EXPECT_NE(values(-1, j, component), parent(-1, cj, component))
         << "fine component BC must overwrite the injected coarse ghost";
@@ -942,17 +935,16 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     params.mesh.coarse_max_grid = 8;
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    blocks.push_back(detail::dispatch_amr_block(
-        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
-        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
+    blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                                "plasma", blob(params.mesh.n, 0.25),
+                                                /*has_density=*/true, 1.4, 1, false, false));
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
     test::install_second_order_amr_transfer_authorities(runtime, 1);
     std::string diagnostic;
     try {
       runtime.install_field_plan("distributed-composite",
-                                 make_plan("distributed-composite",
-                                           composite_hierarchy_policy()));
+                                 make_plan("distributed-composite", composite_hierarchy_policy()));
       ADD_FAILURE()
           << "FAC's replicated coarse storage must not be paired with distributed runtime coverage";
     } catch (const std::invalid_argument& error) {
@@ -975,9 +967,9 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
         [](Real x, Real y) { return x < Real(0.25) && y < Real(0.25); });
     const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
     std::vector<AmrRuntimeBlock> blocks;
-    blocks.push_back(detail::dispatch_amr_block(
-        exb_charge(-1.0, 1.0), "minmod", "rusanov", layout, "plasma",
-        blob(params.mesh.n, 0.25), /*has_density=*/true, 1.4, 1, false, false));
+    blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                                "plasma", blob(params.mesh.n, 0.25),
+                                                /*has_density=*/true, 1.4, 1, false, false));
     blocks[0].aux_ncomp = kAuxNamedBase + 1;
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
@@ -986,10 +978,9 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
                                make_plan("wall-field", level_local_hierarchy_policy()));
     runtime.register_named_field("plasma", "wall-field", kAuxNamedBase, -1, -1,
                                  /*gradient_sign=*/Real(1));
-    runtime.set_block_named_elliptic_rhs(0, "wall-field",
-                                         [](const MultiFab& state, MultiFab& rhs) {
-                                           add_scaled_component(state, Real(-1), 0, rhs);
-                                         });
+    runtime.set_block_named_elliptic_rhs(0, "wall-field", [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(-1), 0, rhs);
+    });
     const std::string wall_field = "wall-field";
     EXPECT_GT(norm_inf(runtime.level_state(0, 0)), Real(0))
         << "the embedded-Dirichlet solve must receive a non-trivial source field";
@@ -997,15 +988,16 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     ASSERT_TRUE(wall_report.solved()) << wall_report.reason;
     const MultiFab first_wall_solution = runtime.provider_potential(wall_field);
     EXPECT_GT(norm_inf(first_wall_solution), Real(0))
-        << "the level-local active-region provider must execute a non-trivial embedded-Dirichlet solve";
+        << "the level-local active-region provider must execute a non-trivial embedded-Dirichlet "
+           "solve";
     runtime.provider_potential(wall_field).set_val(Real(0));
     const SolveReport repeated_wall_report = runtime.solve_named_fields(&wall_field);
     ASSERT_TRUE(repeated_wall_report.solved()) << repeated_wall_report.reason;
     EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(wall_field), first_wall_solution),
               Real(0))
-        << "the represented wall topology must reproduce the same solution from the same zero start";
-    AmrFieldSolveConfig screened =
-        make_plan("wall-screened", level_local_hierarchy_policy());
+        << "the represented wall topology must reproduce the same solution from the same zero "
+           "start";
+    AmrFieldSolveConfig screened = make_plan("wall-screened", level_local_hierarchy_policy());
     screened.has_reaction = true;
     screened.reaction = Real(1);
     EXPECT_NO_THROW(runtime.install_field_plan("wall-screened", screened))

@@ -125,12 +125,10 @@ struct PreparedInterfaceFluxFilter {
 };
 
 template <class Limiter, class Flux, class Model>
-inline void assemble_rhs_without_prepared_interfaces(const Model& model, MultiFab& state,
-                                                     const GridContext& context, MultiFab& residual,
-                                                     bool reconstruct_primitive,
-                                                     Real positivity_floor,
-                                                     Real weno_epsilon = kWenoEpsilon,
-                                                     const std::shared_ptr<MultiFab>& ws_cache = {}) {
+inline void assemble_rhs_without_prepared_interfaces(
+    const Model& model, MultiFab& state, const GridContext& context, MultiFab& residual,
+    bool reconstruct_primitive, Real positivity_floor, Real weno_epsilon = kWenoEpsilon,
+    const std::shared_ptr<MultiFab>& ws_cache = {}) {
   std::vector<Box2D> xboxes;
   std::vector<Box2D> yboxes;
   xboxes.reserve(static_cast<std::size_t>(state.box_array().size()));

@@ -761,6 +761,40 @@ def cpp_target_weights(targets: list[str]) -> dict[str, float]:
     }
 
 
+def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
+    """Require both C++ duration catalogues to exactly cover the manifest inventory.
+
+    A selected subset is not enough to authenticate these files: otherwise deleting or renaming a
+    manifest target could leave an orphan weight indefinitely.  Validate the complete serial target
+    universe before planning any shard, and keep missing, stale and non-positive weights fatal.
+    """
+    expected = set(targets)
+    catalogues: list[tuple[str, dict[str, float]]] = []
+    for label, path in (
+        ("build", CPP_BUILD_DURATIONS_JSON),
+        ("test", CPP_DURATIONS_JSON),
+    ):
+        try:
+            durations = ci_shard_binpack.load_durations(path)
+        except ci_shard_binpack.PartitionError as exc:
+            raise SystemExit(f"C++ {label} duration catalog is invalid: {exc}") from exc
+        catalogues.append((label, durations))
+    failures: list[str] = []
+    for label, durations in catalogues:
+        actual = set(durations)
+        missing = sorted(expected - actual)
+        orphaned = sorted(actual - expected)
+        non_positive = sorted(name for name, seconds in durations.items() if seconds <= 0)
+        if missing:
+            failures.append(f"{label} missing={missing}")
+        if orphaned:
+            failures.append(f"{label} orphaned={orphaned}")
+        if non_positive:
+            failures.append(f"{label} non-positive={non_positive}")
+    if failures:
+        raise SystemExit("C++ duration catalog inventory mismatch: " + "; ".join(failures))
+
+
 def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
     if total <= 0:
@@ -875,13 +909,17 @@ def _ctest_timeout(test: dict) -> float:
 
 
 def verify_cpp_target_labels(args: argparse.Namespace) -> int:
-    """Fail unless every selected build target owns discovered CTest cases.
+    """Authenticate every CTest owner and require cases for every selected target.
 
     ``gtest_discover_tests`` names cases after their GTest suite rather than their
     CMake executable, so the C++ shards execute through exact ``cpp-target:*``
     labels.  Verifying the labels from CTest's JSON model before execution keeps
     a malformed CMake property list from turning a shard into a false-green
-    ``No tests were found`` run.
+    ``No tests were found`` run. Configure-time discovery exposes other shards'
+    independently owned cases too; those remain authenticated but are not selected.
+    Top-level CMake/Python contract tests have no build target by design; they are
+    returned as one exact anchored regex so a designated shard can execute them
+    once rather than silently dropping them.
     """
     targets = list(dict.fromkeys(args.targets))
     if not targets:
@@ -891,15 +929,51 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
 
     expected = {f"cpp-target:{target}": target for target in targets}
     hits: dict[str, list[str]] = {target: [] for target in targets}
+    standalone: list[str] = []
+    seen_names: set[str] = set()
     for test in tests:
         if not isinstance(test, dict):
             continue
         test_name = test.get("name")
         if not isinstance(test_name, str):
-            continue
+            raise SystemExit("CTest target-label contract failed; test without a string name")
+        if test_name in seen_names:
+            raise SystemExit(
+                f"CTest target-label contract failed; duplicate test name {test_name!r}"
+            )
+        seen_names.add(test_name)
         labels = _ctest_labels(test)
-        for label in labels & expected.keys():
-            hits[expected[label]].append(test_name)
+        owner_labels = sorted(
+            label for label in labels if label.startswith("cpp-target:")
+        )
+        if len(owner_labels) > 1:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} has multiple C++ target owners: "
+                + ", ".join(owner_labels)
+            )
+        if not owner_labels:
+            if "cpp-standalone" not in labels:
+                raise SystemExit(
+                    "CTest target-label contract failed; test "
+                    f"{test_name!r} has neither one cpp-target:* owner nor "
+                    "the explicit cpp-standalone label"
+                )
+            standalone.append(test_name)
+            continue
+        if "cpp-standalone" in labels:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} cannot have both {owner_labels[0]} and cpp-standalone"
+            )
+        owner_label = owner_labels[0]
+        if owner_label not in expected:
+            # Configure-time GoogleTest discovery deliberately registers the complete CTest
+            # catalogue even when this shard builds only its selected executables.  The owner is
+            # still authenticated above, but an independently owned, unselected target belongs to
+            # another shard and must not make this one fail.
+            continue
+        hits[expected[owner_label]].append(test_name)
 
     missing = [target for target in targets if not hits[target]]
     if missing:
@@ -911,10 +985,23 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
             + details
         )
 
+    standalone_regex_file = getattr(args, "standalone_regex_file", None)
+    if standalone_regex_file:
+        escaped = [re.escape(name) for name in standalone]
+        standalone_regex = (
+            "^(" + "|".join(escaped) + ")$" if escaped else "$^"
+        )
+        Path(standalone_regex_file).write_text(
+            standalone_regex + "\n", encoding="utf-8"
+        )
+
     print(
         f"verified {len(targets)} C++ target labels across "
-        f"{sum(len(names) for names in hits.values())} discovered cases"
+        f"{sum(len(names) for names in hits.values())} discovered cases; "
+        f"{len(standalone)} standalone CTest contract(s)"
     )
+    for test_name in standalone:
+        print(f"standalone: {test_name}")
     return 0
 
 
@@ -1133,6 +1220,7 @@ def plan_cpp(args: argparse.Namespace) -> int:
 
     if not all_targets:
         raise SystemExit("no non-MPI C++ suites found in tests/test_manifest.toml")
+    validate_cpp_duration_catalogs(all_targets)
 
     full_reasons: list[str] = []
     if args.force_all:
@@ -1616,6 +1704,7 @@ def main() -> int:
     cpp_target_labels = sub.add_parser("verify-cpp-target-labels")
     cpp_target_labels.add_argument("--ctest-json", required=True)
     cpp_target_labels.add_argument("--targets", nargs="+", required=True)
+    cpp_target_labels.add_argument("--standalone-regex-file")
     cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
 
     cpp_mpi_ctests = sub.add_parser("verify-cpp-mpi-ctests")

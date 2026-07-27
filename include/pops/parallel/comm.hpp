@@ -220,9 +220,8 @@ inline std::uint64_t all_reduce_max(std::uint64_t x) {
   if (!detail::comm_active_unlocked())
     return x;
   std::uint64_t r = x;
-  detail::require_mpi_success(
-      MPI_Allreduce(&x, &r, 1, MPI_UINT64_T, MPI_MAX, MPI_COMM_WORLD),
-      "MPI_Allreduce(uint64 max)");
+  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, MPI_UINT64_T, MPI_MAX, MPI_COMM_WORLD),
+                              "MPI_Allreduce(uint64 max)");
   return r;
 }
 
@@ -553,15 +552,13 @@ inline double all_reduce_max(double value, const CommunicatorView& communicator)
 #endif
 }
 
-inline std::uint64_t all_reduce_max(std::uint64_t value,
-                                    const CommunicatorView& communicator) {
+inline std::uint64_t all_reduce_max(std::uint64_t value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())
     return value;
   std::uint64_t result = value;
   detail::require_mpi_success(
-      MPI_Allreduce(&value, &result, 1, MPI_UINT64_T, MPI_MAX,
-                    communicator.native_handle()),
+      MPI_Allreduce(&value, &result, 1, MPI_UINT64_T, MPI_MAX, communicator.native_handle()),
       "MPI_Allreduce(uint64 max, execution communicator)");
   return result;
 #else

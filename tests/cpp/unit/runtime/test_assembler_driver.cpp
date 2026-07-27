@@ -317,8 +317,7 @@ TEST(AssemblerDriver, ExactMappingReachesUniformAndAmrFactories) {
   FactoryProbe amr_probe;
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   AmrCouplerMP<Scalar, FactoryOnlyElliptic> amr(Scalar{}, geom, ba, bc, std::move(levels), {},
-                                                /*replicated_coarse=*/false,
-                                                load_balance,
+                                                /*replicated_coarse=*/false, load_balance,
                                                 FactoryOnlyEllipticBuilder{&amr_probe});
   EXPECT_EQ(amr_probe.mapping, mapping.ranks());
   EXPECT_EQ(amr_probe.distribution, FieldDistribution::Distributed);
@@ -332,8 +331,7 @@ TEST(AssemblerDriver, ExactMappingReachesUniformAndAmrFactories) {
   FactoryProbe replicated_probe;
   AmrCouplerMP<Scalar, FactoryOnlyElliptic> replicated_amr(
       Scalar{}, geom, ba, bc, std::move(replicated_levels), {},
-      /*replicated_coarse=*/true, load_balance,
-      FactoryOnlyEllipticBuilder{&replicated_probe});
+      /*replicated_coarse=*/true, load_balance, FactoryOnlyEllipticBuilder{&replicated_probe});
   EXPECT_EQ(replicated_probe.mapping, replicated_mapping.ranks());
   EXPECT_EQ(replicated_probe.distribution, FieldDistribution::Replicated);
 }

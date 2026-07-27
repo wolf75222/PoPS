@@ -30,8 +30,7 @@ inline std::vector<AnalyticProgram> compile_component_programs(
   result.reserve(opcodes.size());
   for (std::size_t component = 0; component < opcodes.size(); ++component) {
     if (opcodes[component].empty() || opcodes[component].size() != literals[component].size())
-      throw std::invalid_argument(
-          "analytic initial component has mismatched opcode/literal rows");
+      throw std::invalid_argument("analytic initial component has mismatched opcode/literal rows");
     std::vector<AnalyticToken> tokens;
     tokens.reserve(opcodes[component].size());
     for (std::size_t index = 0; index < opcodes[component].size(); ++index) {
@@ -65,9 +64,8 @@ POPS_HD inline Real gauss_node(int index) {
 }
 
 POPS_HD inline Real gauss_weight(int index) {
-  return index == 0 || index == 3
-             ? Real(0.347854845137453857373063949221999408)
-             : Real(0.652145154862546142626936050778000593);
+  return index == 0 || index == 3 ? Real(0.347854845137453857373063949221999408)
+                                  : Real(0.652145154862546142626936050778000593);
 }
 
 struct AnalyticCellAverage {
@@ -92,9 +90,7 @@ struct AnalyticInitialKernel {
   int component;
   AnalyticCellAverage average;
 
-  POPS_HD void operator()(int i, int j) const {
-    values(i, j, component) = average(i, j);
-  }
+  POPS_HD void operator()(int i, int j) const { values(i, j, component) = average(i, j); }
 };
 
 struct AnalyticInitialFiniteKernel {
@@ -124,15 +120,14 @@ struct AnalyticMappedInitialKernel {
     Real inputs[kAnalyticMaxStack];
     for (int slot = 0; slot < binding_count; ++slot) {
       const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] = binding.source == 0 ? state(i, j, binding.component)
-                                         : aux(i, j, binding.component);
+      inputs[slot] =
+          binding.source == 0 ? state(i, j, binding.component) : aux(i, j, binding.component);
     }
     const Real x_center = xlo + (static_cast<Real>(i) + Real(0.5)) * dx;
     const Real y_center = ylo + (static_cast<Real>(j) + Real(0.5)) * dy;
     const AnalyticEvaluation result =
         program.eval_checked(x_center, y_center, inputs, static_cast<std::uint8_t>(binding_count));
-    values(i, j, component) =
-        result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
+    values(i, j, component) = result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
   }
 };
 
@@ -148,8 +143,8 @@ struct AnalyticMappedInitialFiniteKernel {
     Real inputs[kAnalyticMaxStack];
     for (int slot = 0; slot < binding_count; ++slot) {
       const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] = binding.source == 0 ? state(i, j, binding.component)
-                                         : aux(i, j, binding.component);
+      inputs[slot] =
+          binding.source == 0 ? state(i, j, binding.component) : aux(i, j, binding.component);
     }
     const Real x_center = xlo + (static_cast<Real>(i) + Real(0.5)) * dx;
     const Real y_center = ylo + (static_cast<Real>(j) + Real(0.5)) * dy;
@@ -169,11 +164,9 @@ struct GaussianCellAverage {
     const Real ay = root * (ylo + static_cast<Real>(j) * dy - center_y);
     const Real by = root * (ylo + static_cast<Real>(j + 1) * dy - center_y);
     const Real scale_x =
-        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) /
-        (Real(2) * root * dx);
+        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dx);
     const Real scale_y =
-        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) /
-        (Real(2) * root * dy);
+        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dy);
     return background + amplitude * scale_x * (Kokkos::erf(bx) - Kokkos::erf(ax)) * scale_y *
                             (Kokkos::erf(by) - Kokkos::erf(ay));
   }
@@ -197,12 +190,10 @@ struct GaussianCellAverageFiniteKernel {
 }  // namespace detail
 
 /// Project each expression to a cell average with deterministic tensor Gauss--Legendre quadrature.
-inline std::int64_t materialize_cell_average(
-    MultiFab& values, Real xlo, Real ylo, Real dx, Real dy,
-    const std::vector<AnalyticProgram>& programs) {
+inline std::int64_t materialize_cell_average(MultiFab& values, Real xlo, Real ylo, Real dx, Real dy,
+                                             const std::vector<AnalyticProgram>& programs) {
   const long invalid_target = all_reduce_sum(
-      !(dx > Real(0)) || !(dy > Real(0)) ||
-              !std::isfinite(static_cast<double>(xlo)) ||
+      !(dx > Real(0)) || !(dy > Real(0)) || !std::isfinite(static_cast<double>(xlo)) ||
               !std::isfinite(static_cast<double>(ylo)) ||
               programs.size() != static_cast<std::size_t>(values.ncomp())
           ? 1L
@@ -220,16 +211,16 @@ inline std::int64_t materialize_cell_average(
   }
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
-    throw std::runtime_error(
-        "analytic initial expression produced non-finite cell values (count=" +
-        std::to_string(static_cast<std::int64_t>(invalid)) + ")");
+    throw std::runtime_error("analytic initial expression produced non-finite cell values (count=" +
+                             std::to_string(static_cast<std::int64_t>(invalid)) + ")");
   for (int local = 0; local < values.local_size(); ++local) {
     const Box2D valid = values.box(local);
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(
-          valid, detail::AnalyticInitialKernel{
-                     values.fab(local).array(), component,
-                     {programs[static_cast<std::size_t>(component)].view(), xlo, ylo, dx, dy}});
+      for_each_cell(valid,
+                    detail::AnalyticInitialKernel{
+                        values.fab(local).array(),
+                        component,
+                        {programs[static_cast<std::size_t>(component)].view(), xlo, ylo, dx, dy}});
   }
   // AnalyticProgramView borrows device pointers from @p programs. The caller owns those programs as
   // setup-time locals, so projection kernels must finish before this function permits destruction.
@@ -240,12 +231,10 @@ inline std::int64_t materialize_cell_average(
 
 inline std::int64_t materialize_discrete_mapped_state(
     MultiFab& values, const MultiFab& seed, const MultiFab& aux, Real xlo, Real ylo, Real dx,
-    Real dy,
-    const std::vector<AnalyticProgram>& programs,
+    Real dy, const std::vector<AnalyticProgram>& programs,
     const std::vector<detail::AnalyticInputBinding>& bindings) {
   const long invalid_target = all_reduce_sum(
-      !(dx > Real(0)) || !(dy > Real(0)) ||
-              !std::isfinite(static_cast<double>(xlo)) ||
+      !(dx > Real(0)) || !(dy > Real(0)) || !std::isfinite(static_cast<double>(xlo)) ||
               !std::isfinite(static_cast<double>(ylo)) ||
               programs.size() != static_cast<std::size_t>(values.ncomp()) || bindings.empty() ||
               bindings.size() > kAnalyticMaxStack || values.local_size() != seed.local_size() ||
@@ -255,12 +244,12 @@ inline std::int64_t materialize_discrete_mapped_state(
   if (invalid_target != 0)
     throw std::invalid_argument("analytic mapped initial state target/profile mismatch");
   for (const auto& binding : bindings) {
-    const long invalid_binding = all_reduce_sum(
-        (binding.source != 0 && binding.source != 1) || binding.component < 0 ||
-                (binding.source == 0 && binding.component >= seed.ncomp()) ||
-                (binding.source == 1 && binding.component >= aux.ncomp())
-            ? 1L
-            : 0L);
+    const long invalid_binding =
+        all_reduce_sum((binding.source != 0 && binding.source != 1) || binding.component < 0 ||
+                               (binding.source == 0 && binding.component >= seed.ncomp()) ||
+                               (binding.source == 1 && binding.component >= aux.ncomp())
+                           ? 1L
+                           : 0L);
     if (invalid_binding != 0)
       throw std::invalid_argument("analytic mapped initial state input binding is invalid");
   }
@@ -274,11 +263,10 @@ inline std::int64_t materialize_discrete_mapped_state(
     const ConstArray4 aux_view = aux.fab(local).const_array();
     for (int component = 0; component < values.ncomp(); ++component) {
       invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          valid, detail::AnalyticMappedInitialFiniteKernel{
-                     state_view, aux_view,
-                     programs[static_cast<std::size_t>(component)].view(),
-                     device_bindings.data(), static_cast<int>(device_bindings.size()),
-                     xlo, ylo, dx, dy}));
+          valid,
+          detail::AnalyticMappedInitialFiniteKernel{
+              state_view, aux_view, programs[static_cast<std::size_t>(component)].view(),
+              device_bindings.data(), static_cast<int>(device_bindings.size()), xlo, ylo, dx, dy}));
     }
   }
   const long invalid = all_reduce_sum(invalid_local);
@@ -292,24 +280,25 @@ inline std::int64_t materialize_discrete_mapped_state(
     const ConstArray4 aux_view = aux.fab(local).const_array();
     Array4 output = values.fab(local).array();
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(valid, detail::AnalyticMappedInitialKernel{
-                               state_view, aux_view, output, component,
-                               programs[static_cast<std::size_t>(component)].view(),
-                               device_bindings.data(), static_cast<int>(device_bindings.size()),
-                               xlo, ylo, dx, dy});
+      for_each_cell(
+          valid, detail::AnalyticMappedInitialKernel{
+                     state_view, aux_view, output, component,
+                     programs[static_cast<std::size_t>(component)].view(), device_bindings.data(),
+                     static_cast<int>(device_bindings.size()), xlo, ylo, dx, dy});
   }
   device_fence();
   return values.box_array().num_cells() * values.ncomp();
 }
 
-inline std::int64_t materialize_gaussian_cell_average(
-    MultiFab& values, Real xlo, Real ylo, Real dx, Real dy, Real center_x, Real center_y,
-    Real background, Real amplitude, Real inverse_width) {
+inline std::int64_t materialize_gaussian_cell_average(MultiFab& values, Real xlo, Real ylo, Real dx,
+                                                      Real dy, Real center_x, Real center_y,
+                                                      Real background, Real amplitude,
+                                                      Real inverse_width) {
   const long invalid_arguments = all_reduce_sum(
       values.ncomp() != 1 || !(dx > Real(0)) || !(dy > Real(0)) ||
               !std::isfinite(static_cast<double>(xlo)) ||
-              !std::isfinite(static_cast<double>(ylo)) ||
-              !(inverse_width > Real(0)) || !std::isfinite(static_cast<double>(center_x)) ||
+              !std::isfinite(static_cast<double>(ylo)) || !(inverse_width > Real(0)) ||
+              !std::isfinite(static_cast<double>(center_x)) ||
               !std::isfinite(static_cast<double>(center_y)) ||
               !std::isfinite(static_cast<double>(background)) ||
               !std::isfinite(static_cast<double>(amplitude)) ||
@@ -318,17 +307,16 @@ inline std::int64_t materialize_gaussian_cell_average(
           : 0L);
   if (invalid_arguments != 0)
     throw std::invalid_argument("analytic Gaussian initial profile is invalid");
-  const detail::GaussianCellAverage average{
-      xlo, ylo, dx, dy, center_x, center_y, background, amplitude, inverse_width};
+  const detail::GaussianCellAverage average{xlo,      ylo,        dx,        dy,           center_x,
+                                            center_y, background, amplitude, inverse_width};
   long invalid_local = 0;
   for (int local = 0; local < values.local_size(); ++local)
     invalid_local += static_cast<long>(for_each_cell_reduce_sum(
         values.box(local), detail::GaussianCellAverageFiniteKernel{average}));
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
-    throw std::runtime_error(
-        "analytic Gaussian profile produced non-finite cell averages (count=" +
-        std::to_string(invalid) + ")");
+    throw std::runtime_error("analytic Gaussian profile produced non-finite cell averages (count=" +
+                             std::to_string(invalid) + ")");
   for (int local = 0; local < values.local_size(); ++local)
     for_each_cell(values.box(local),
                   detail::GaussianCellAverageKernel{values.fab(local).array(), average});

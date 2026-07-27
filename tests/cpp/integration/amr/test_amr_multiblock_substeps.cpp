@@ -431,9 +431,8 @@ TEST(test_amr_multiblock_substeps, Runs) {
     // active AMR level. The coarse state remains one while the fine-only spike sets the global max.
     AmrRuntime coupled_bound = make_temporal_contract_runtime(/*mode=*/0, ratio_three_halves);
     coupled_bound.set_block_level_state(0, 1, fine_state_spike(spike));
-    coupled_bound.add_coupled_frequency_expr(
-        "fine_frequency", {"clocked"}, {"scalar"}, {},
-        {static_cast<int>(CsOp::PushReg)}, {0});
+    coupled_bound.add_coupled_frequency_expr("fine_frequency", {"clocked"}, {"scalar"}, {},
+                                             {static_cast<int>(CsOp::PushReg)}, {0});
     EXPECT_NEAR(coupled_bound.cfl_dt(cfl, h), cfl / spike, 2e-15);
     EXPECT_EQ(coupled_bound.last_dt_bound(), "coupled_source:fine_frequency");
   }

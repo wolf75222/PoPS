@@ -144,15 +144,15 @@ static void expect_reconstructed_face_cache_exact_and_engaged(const char* recons
 
   device_fence();
   EXPECT_EQ(count_diff_bits(residual_direct, residual_cached, dom), 0)
-      << reconstruction_name
-      << ": exact face-trace cache must preserve every residual bit";
+      << reconstruction_name << ": exact face-trace cache must preserve every residual bit";
   EXPECT_LT(calls_cached, calls_direct)
-      << reconstruction_name << ": shared faces must reduce wave_speeds calls (direct="
-      << calls_direct << ", cached=" << calls_cached << ")";
+      << reconstruction_name
+      << ": shared faces must reduce wave_speeds calls (direct=" << calls_direct
+      << ", cached=" << calls_cached << ")";
   EXPECT_GT(calls_cached, 0) << reconstruction_name << ": cache pre-pass really evaluated waves";
 
-  compute_face_fluxes<Limiter, HLLFlux>(model, state, aux, flux_x_direct, flux_y_direct,
-                                        geom.dx(), geom.dy());
+  compute_face_fluxes<Limiter, HLLFlux>(model, state, aux, flux_x_direct, flux_y_direct, geom.dx(),
+                                        geom.dy());
   compute_face_fluxes_hll_cached<Limiter>(model, state, aux, flux_x_cached, flux_y_cached, cache,
                                           geom.dx(), geom.dy());
   device_fence();

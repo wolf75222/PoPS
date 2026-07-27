@@ -78,10 +78,10 @@ POPS_DEFINE_BRICK_MANIFEST();
 std::string legacy_brick_source() {
   return R"CPP(
 #include <pops/runtime/program/external_brick.hpp>
-POPS_REGISTER_BRICK("legacy_riemann", "riemann", "physical_flux");
-POPS_DEFINE_BRICK_MANIFEST();
-extern "C" void pops_brick_residual() {}
-)CPP";
+    POPS_REGISTER_BRICK("legacy_riemann", "riemann", "physical_flux");
+    POPS_DEFINE_BRICK_MANIFEST();
+    extern "C" void pops_brick_residual() {}
+  )CPP";
 }
 
 // A smooth periodic Euler state (rho, mx, my, E) in component-major layout c*n*n + j*n + i.
@@ -125,8 +125,8 @@ static int pops_run_test_external_riemann_dispatch() {
   pops::test::Checker chk;
 
   // (1) dlopen + manifest visibility + requirements surface.
-  ExternalBrickHandle handle(so, "my_riemann", {}, RefModel::n_vars,
-                             pops::aux_comps<RefModel>(), "test.euler-rusanov.v1");
+  ExternalBrickHandle handle(so, "my_riemann", {}, RefModel::n_vars, pops::aux_comps<RefModel>(),
+                             "test.euler-rusanov.v1");
   chk(handle.id() == "my_riemann", "handle_id");
   chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
       "requirements_surface");
@@ -152,15 +152,15 @@ static int pops_run_test_external_riemann_dispatch() {
   const std::size_t nn = static_cast<std::size_t>(n) * n;
   std::vector<double> Rext(4 * nn, 0.0), Rnat(4 * nn, 0.0);
 
-  const std::array<pops::Periodicity, 4> topologies{{
-      {false, false}, {true, false}, {false, true}, {true, true}}};
+  const std::array<pops::Periodicity, 4> topologies{
+      {{false, false}, {true, false}, {false, true}, {true, true}}};
   std::vector<double> residual_x_only, residual_y_only;
   for (const auto periodicity : topologies) {
     std::fill(Rext.begin(), Rext.end(), 0.0);
     std::fill(Rnat.begin(), Rnat.end(), 0.0);
     // External brick: v2 carries x/y independently into the exact same static native leaf.
-    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy,
-                      periodicity.x ? 1 : 0, periodicity.y ? 1 : 0, "minmod",
+    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy, periodicity.x ? 1 : 0,
+                      periodicity.y ? 1 : 0, "minmod",
                       /*recon_prim=*/0, /*pos_floor=*/0.0);
     pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
         U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, periodicity, "minmod",
@@ -203,7 +203,7 @@ static int pops_run_test_external_riemann_dispatch() {
   const auto legacy_package = pops::test::native_dso::compile_shared(legacy_src, legacy_so);
   if (!legacy_package.ok) {
     pops::test::native_dso::report_compile_failure("test_external_riemann_dispatch_legacy",
-                                                    legacy_package);
+                                                   legacy_package);
     return 1;
   }
   threw = false;

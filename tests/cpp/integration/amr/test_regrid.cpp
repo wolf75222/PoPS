@@ -41,16 +41,16 @@ bool close(Real x, Real y) {
 
 void regrid_test_hierarchy(AmrHierarchy& hierarchy, int tag_buffer) {
   const amr::BergerRigoutsosProvider clustering(ClusterParams{});
-  const RegridProlongation prolongation = [](const MultiFab& coarse, MultiFab& fine,
-                                             int, int refinement_ratio, bool,
+  const RegridProlongation prolongation = [](const MultiFab& coarse, MultiFab& fine, int,
+                                             int refinement_ratio, bool,
                                              const CommunicatorView& communicator) {
     interpolate(coarse, fine, refinement_ratio, communicator);
   };
   const HierarchyRegridOptions options{/*tag_buffer=*/tag_buffer,
-                                       /*nesting_margin=*/0,
-                                       RegridPeriodicity{false, false}, nullptr};
-  (void)regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, clustering,
-                               prolongation, world_communicator_view());
+                                       /*nesting_margin=*/0, RegridPeriodicity{false, false},
+                                       nullptr};
+  (void)regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, clustering, prolongation,
+                               world_communicator_view());
 }
 
 class FixedClusteringProvider final : public amr::ClusteringProvider {
@@ -135,28 +135,26 @@ TEST(test_regrid, Runs) {
 
 TEST(test_regrid, HierarchyPublicationIsAtomicAcrossProviderAndTransferFailures) {
   const Box2D domain = Box2D::from_extents(16, 16);
-  AmrHierarchy hierarchy(domain, 16, 1, 1,
-                         test::prepare_test_space_filling_curve_load_balance(), 2);
+  AmrHierarchy hierarchy(domain, 16, 1, 1, test::prepare_test_space_filling_curve_load_balance(),
+                         2);
   Array4 values = hierarchy.data(0).fab(0).array();
-  for_each_cell(domain,
-                [values](int i, int j) { values(i, j, 0) = feature(i, j); });
+  for_each_cell(domain, [values](int i, int j) { values(i, j, 0) = feature(i, j); });
   regrid_test_hierarchy(hierarchy, /*tag_buffer=*/0);
   ASSERT_EQ(hierarchy.num_levels(), 2);
   hierarchy.data(1).fab(0)(12, 12, 0) = 1234.0;
   const std::vector<Box2D> stable_boxes = hierarchy.boxes(1).boxes();
 
   const HierarchyRegridOptions options{/*tag_buffer=*/0,
-                                       /*nesting_margin=*/0,
-                                       RegridPeriodicity{false, false}, nullptr};
-  const RegridProlongation interpolation = [](const MultiFab& coarse, MultiFab& fine,
-                                              int, int refinement_ratio, bool,
+                                       /*nesting_margin=*/0, RegridPeriodicity{false, false},
+                                       nullptr};
+  const RegridProlongation interpolation = [](const MultiFab& coarse, MultiFab& fine, int,
+                                              int refinement_ratio, bool,
                                               const CommunicatorView& communicator) {
     interpolate(coarse, fine, refinement_ratio, communicator);
   };
   const FixedClusteringProvider provider_failure({}, true);
-  EXPECT_THROW(regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options,
-                                      provider_failure, interpolation,
-                                      world_communicator_view()),
+  EXPECT_THROW(regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, provider_failure,
+                                      interpolation, world_communicator_view()),
                std::runtime_error);
   EXPECT_EQ(hierarchy.num_levels(), 2);
   EXPECT_EQ(hierarchy.boxes(1).boxes(), stable_boxes);
@@ -164,7 +162,7 @@ TEST(test_regrid, HierarchyPublicationIsAtomicAcrossProviderAndTransferFailures)
 
   const FixedClusteringProvider valid({Box2D{{6, 6}, {9, 9}}});
   const RegridProlongation transfer_failure = [](const MultiFab&, MultiFab&, int, int, bool,
-                                                  const CommunicatorView&) {
+                                                 const CommunicatorView&) {
     throw std::runtime_error("synthetic transfer failure");
   };
   EXPECT_THROW(regrid_hierarchy_level(hierarchy, 0, threshold_crit(), options, valid,
@@ -187,12 +185,11 @@ TEST(test_regrid, RejectsNegativeTagGrowthWithoutChangingInput) {
 TEST(test_regrid, TaggingRejectsLayoutsThatCouldWriteOutsideOrRaceTheMask) {
   const Box2D domain = Box2D::from_extents(4, 4);
   const auto criterion = threshold_crit();
-  MultiFab outside(BoxArray({Box2D{{3, 0}, {4, 1}}}),
-                   DistributionMapping(std::vector<int>{0}), 1, 0);
+  MultiFab outside(BoxArray({Box2D{{3, 0}, {4, 1}}}), DistributionMapping(std::vector<int>{0}), 1,
+                   0);
   EXPECT_THROW((void)tag_cells(outside, domain, criterion), std::invalid_argument);
 
-  const BoxArray overlapping(
-      {Box2D{{0, 0}, {2, 3}}, Box2D{{2, 0}, {3, 3}}});
+  const BoxArray overlapping({Box2D{{0, 0}, {2, 3}}, Box2D{{2, 0}, {3, 3}}});
   MultiFab raced(overlapping, DistributionMapping(std::vector<int>{0, 0}), 1, 0);
   EXPECT_THROW((void)tag_cells(raced, domain, criterion), std::invalid_argument);
 
@@ -221,10 +218,10 @@ TEST(test_regrid, ThirdLevelClusteringUsesTheParentLevelCoverage) {
     for (int i = 13; i <= 18; ++i)
       tags(i, j) = 1;
 
-  auto [children, mapping] = regrid_compute_fine_layout(
-      std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
-      /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
-      world_communicator_view(), /*refinement_ratio=*/2, &parents);
+  auto [children, mapping] =
+      regrid_compute_fine_layout(std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
+                                 /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
+                                 world_communicator_view(), /*refinement_ratio=*/2, &parents);
 
   ASSERT_GT(children.size(), 0);
   EXPECT_EQ(mapping.size(), children.size());
@@ -243,10 +240,10 @@ TEST(test_regrid, ThirdLevelTagsAreProjectedOntoTheProperlyNestedParentRegion) {
   tags(4, 12) = 1;
   tags(6, 12) = 1;
 
-  auto [children, mapping] = regrid_compute_fine_layout(
-      std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
-      /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
-      world_communicator_view(), /*refinement_ratio=*/2, &parents);
+  auto [children, mapping] =
+      regrid_compute_fine_layout(std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
+                                 /*coarse_replicated=*/true, ClusterParams{}, *load_balance,
+                                 world_communicator_view(), /*refinement_ratio=*/2, &parents);
 
   ASSERT_GT(children.size(), 0);
   EXPECT_EQ(mapping.size(), children.size());
@@ -263,21 +260,20 @@ TEST(test_regrid, ProperNestingWrapsOnlyOnDeclaredPeriodicAxes) {
   const BoxArray parents(std::vector<Box2D>{domain});
   const BoxArray edge_child(std::vector<Box2D>{Box2D{{0, 0}, {1, 1}}});
 
-  EXPECT_THROW(validate_fine_layout_proper_nesting(
-                   edge_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/1,
-                   RegridPeriodicity{false, false}),
-               std::runtime_error);
-  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
-      edge_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/1,
-      RegridPeriodicity{true, true}));
+  EXPECT_THROW(
+      validate_fine_layout_proper_nesting(edge_child, parents, domain, /*refinement_ratio=*/2,
+                                          /*margin=*/1, RegridPeriodicity{false, false}),
+      std::runtime_error);
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(edge_child, parents, domain,
+                                                      /*refinement_ratio=*/2, /*margin=*/1,
+                                                      RegridPeriodicity{true, true}));
 }
 
 TEST(test_regrid, TagGrowthWrapsOnlyOnDeclaredPeriodicAxesAtOffsetOrigin) {
   const Box2D domain{{3, 5}, {10, 12}};
   TagBox tags(domain);
   tags(domain.lo[0], domain.lo[1]) = 1;
-  const TagBox grown =
-      grow_regrid_tags(tags, /*radius=*/1, domain, RegridPeriodicity{true, false});
+  const TagBox grown = grow_regrid_tags(tags, /*radius=*/1, domain, RegridPeriodicity{true, false});
   EXPECT_TRUE(grown.tagged(domain.hi[0], domain.lo[1]));
   EXPECT_TRUE(grown.tagged(domain.lo[0], domain.lo[1]));
   EXPECT_TRUE(grown.tagged(domain.lo[0] + 1, domain.lo[1]));
@@ -287,25 +283,24 @@ TEST(test_regrid, TagGrowthWrapsOnlyOnDeclaredPeriodicAxesAtOffsetOrigin) {
 TEST(test_regrid, ProperNestingAtPhysicalWallRequiresCertifiedGhostDepth) {
   const Box2D domain{{3, 5}, {10, 12}};
   const BoxArray parents(std::vector<Box2D>{domain});
-  const BoxArray wall_child(
-      std::vector<Box2D>{Box2D{{2 * domain.lo[0], 2 * domain.lo[1]},
-                               {2 * domain.lo[0] + 3, 2 * domain.lo[1] + 3}}});
+  const BoxArray wall_child(std::vector<Box2D>{
+      Box2D{{2 * domain.lo[0], 2 * domain.lo[1]}, {2 * domain.lo[0] + 3, 2 * domain.lo[1] + 3}}});
 
-  EXPECT_THROW(validate_fine_layout_proper_nesting(
-                   wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
-                   RegridPeriodicity{false, false}),
-               std::runtime_error);
+  EXPECT_THROW(
+      validate_fine_layout_proper_nesting(wall_child, parents, domain, /*refinement_ratio=*/2,
+                                          /*margin=*/2, RegridPeriodicity{false, false}),
+      std::runtime_error);
   const RegridPhysicalGhostSupport insufficient{/*provided_depth=*/1,
                                                 /*fills_all_requested_depth=*/false};
-  EXPECT_THROW(validate_fine_layout_proper_nesting(
-                   wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
-                   RegridPeriodicity{false, false}, &insufficient),
+  EXPECT_THROW(validate_fine_layout_proper_nesting(wall_child, parents, domain,
+                                                   /*refinement_ratio=*/2, /*margin=*/2,
+                                                   RegridPeriodicity{false, false}, &insufficient),
                std::runtime_error);
   const RegridPhysicalGhostSupport certified{/*provided_depth=*/2,
                                              /*fills_all_requested_depth=*/false};
-  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
-      wall_child, parents, domain, /*refinement_ratio=*/2, /*margin=*/2,
-      RegridPeriodicity{false, false}, &certified));
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(wall_child, parents, domain,
+                                                      /*refinement_ratio=*/2, /*margin=*/2,
+                                                      RegridPeriodicity{false, false}, &certified));
 }
 
 TEST(test_regrid, ExternalClusteringProviderOutputIsValidatedBeforeLayoutPublication) {
@@ -325,8 +320,7 @@ TEST(test_regrid, ExternalClusteringProviderOutputIsValidatedBeforeLayoutPublica
   EXPECT_THROW(invoke(empty_box), std::runtime_error);
   const FixedClusteringProvider outside({Box2D{{2, 5}, {6, 8}}});
   EXPECT_THROW(invoke(outside), std::runtime_error);
-  const FixedClusteringProvider overlap(
-      {Box2D{{5, 7}, {7, 9}}, Box2D{{6, 8}, {8, 10}}});
+  const FixedClusteringProvider overlap({Box2D{{5, 7}, {7, 9}}, Box2D{{6, 8}, {8, 10}}});
   EXPECT_THROW(invoke(overlap), std::runtime_error);
   const FixedClusteringProvider drops_tag({Box2D{{3, 5}, {4, 6}}});
   EXPECT_THROW(invoke(drops_tag), std::runtime_error);
@@ -345,10 +339,9 @@ TEST(test_regrid, RefinedLayoutOverflowFailsBeforePublication) {
   tags(high, 0) = 1;
   const FixedClusteringProvider provider({domain});
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
-  EXPECT_THROW(
-      (void)regrid_compute_fine_layout_with_provider(
-          std::move(tags), domain, /*parent_level=*/0, /*margin=*/0,
-          /*coarse_replicated=*/true, provider, *load_balance,
-          world_communicator_view(), /*refinement_ratio=*/2),
-      std::overflow_error);
+  EXPECT_THROW((void)regrid_compute_fine_layout_with_provider(
+                   std::move(tags), domain, /*parent_level=*/0, /*margin=*/0,
+                   /*coarse_replicated=*/true, provider, *load_balance, world_communicator_view(),
+                   /*refinement_ratio=*/2),
+               std::overflow_error);
 }

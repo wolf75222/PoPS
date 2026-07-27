@@ -104,10 +104,9 @@ inline AnalyticLevelSetMaterialization materialize_analytic_level_set(
   AnalyticLevelSetMaterialization staged(valid, n_ghost);
   const Box2D sampled = staged.grown_box();
 
-  for_each_cell(sampled,
-                detail::MaterializeAnalyticLevelSetKernel{
-                    make_analytic_level_set(program), geometry, staged.values.array(),
-                    staged.active_mask.array()});
+  for_each_cell(sampled, detail::MaterializeAnalyticLevelSetKernel{make_analytic_level_set(program),
+                                                                   geometry, staged.values.array(),
+                                                                   staged.active_mask.array()});
   const Real has_non_finite = for_each_cell_reduce_max(
       sampled, detail::NonFiniteLevelSetIndicator{staged.values.const_array()});
   if (has_non_finite != Real(0))
@@ -117,9 +116,10 @@ inline AnalyticLevelSetMaterialization materialize_analytic_level_set(
 }
 
 /// Strong transactional replacement for runtime owners that already hold a materialization.
-inline void replace_analytic_level_set_materialization(
-    AnalyticLevelSetMaterialization& destination, const AnalyticProgram& program,
-    const Geometry& geometry, const Box2D& valid, int n_ghost) {
+inline void replace_analytic_level_set_materialization(AnalyticLevelSetMaterialization& destination,
+                                                       const AnalyticProgram& program,
+                                                       const Geometry& geometry, const Box2D& valid,
+                                                       int n_ghost) {
   AnalyticLevelSetMaterialization staged =
       materialize_analytic_level_set(program, geometry, valid, n_ghost);
   destination = std::move(staged);

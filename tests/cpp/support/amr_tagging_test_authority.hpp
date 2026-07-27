@@ -32,20 +32,19 @@ inline void install_prepared_threshold_decisions(
   std::vector<std::int32_t> refine_ops, refine_args, coarsen_ops, coarsen_args;
   leaves.reserve(refine_criteria.size() + coarsen_criteria.size());
   const auto append_union = [&](std::initializer_list<PreparedThresholdTag> criteria,
-                                std::vector<std::int32_t>& ops,
-                                std::vector<std::int32_t>& args) {
+                                std::vector<std::int32_t>& ops, std::vector<std::int32_t>& args) {
     ops.reserve(criteria.size() + (criteria.size() > 1 ? 1u : 0u));
     args.reserve(ops.capacity());
     for (const PreparedThresholdTag& criterion : criteria) {
       if (criterion.component < 0)
         throw std::invalid_argument("test threshold decision has a negative component");
-      const std::int32_t opcode =
-          criterion.relation == PreparedThresholdRelation::Above ? POPS_TAGGING_ABOVE_V1
-                                                                 : POPS_TAGGING_BELOW_V1;
+      const std::int32_t opcode = criterion.relation == PreparedThresholdRelation::Above
+                                      ? POPS_TAGGING_ABOVE_V1
+                                      : POPS_TAGGING_BELOW_V1;
       const auto leaf_index = static_cast<std::int32_t>(leaves.size());
       leaves.push_back(Program::Leaf{criterion.field_index,
-                                     static_cast<std::size_t>(criterion.component),
-                                     opcode, criterion.threshold, POPS_TAGGING_NO_STENCIL_V1});
+                                     static_cast<std::size_t>(criterion.component), opcode,
+                                     criterion.threshold, POPS_TAGGING_NO_STENCIL_V1});
       ops.push_back(opcode);
       args.push_back(leaf_index);
     }
@@ -56,9 +55,8 @@ inline void install_prepared_threshold_decisions(
   };
   append_union(refine_criteria, refine_ops, refine_args);
   append_union(coarsen_criteria, coarsen_ops, coarsen_args);
-  runtime.set_tagging_program({}, std::move(leaves), std::move(refine_ops),
-                              std::move(refine_args), std::move(coarsen_ops),
-                              std::move(coarsen_args), 0, 0, 0,
+  runtime.set_tagging_program({}, std::move(leaves), std::move(refine_ops), std::move(refine_args),
+                              std::move(coarsen_ops), std::move(coarsen_args), 0, 0, 0,
                               "test::prepared-tagging-clock", std::move(provider_identity));
 }
 
@@ -84,8 +82,8 @@ inline void install_prepared_shared_aux_gradient(
   runtime.set_tagging_program(
       std::move(stencils),
       {Program::Leaf{block_count, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, threshold, 0}},
-      {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0,
-      "test::prepared-tagging-clock", std::move(provider_identity));
+      {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0, "test::prepared-tagging-clock",
+      std::move(provider_identity));
 }
 
 }  // namespace pops::test

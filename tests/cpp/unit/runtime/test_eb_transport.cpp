@@ -99,8 +99,8 @@ TEST(EbTransport, NonFiniteRoeCannotReachCutCellState) {
   FailedRoeAdvect failed_roe;
   failed_roe.vx = Real(0.7);
   failed_roe.vy = Real(-0.4);
-  EXPECT_THROW((assemble_rhs_eb<NoSlope, RoeFlux>(failed_roe, state, providers,
-                                                  AllActiveLevelSet{}, geometry, residual)),
+  EXPECT_THROW((assemble_rhs_eb<NoSlope, RoeFlux>(failed_roe, state, providers, AllActiveLevelSet{},
+                                                  geometry, residual)),
                std::runtime_error);
 }
 

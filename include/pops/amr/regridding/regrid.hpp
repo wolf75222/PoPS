@@ -79,9 +79,8 @@ TagBox tag_cells(const MultiFab& mf, const Box2D& domain, Crit crit) {
   for (int li = 0; li < mf.local_size(); ++li) {
     const Fab2D& f = mf.fab(li);
     const Box2D v = f.box();
-    for_each_cell(v, detail::PortableTagCellsKernel<Crit>{
-                         f.const_array(), crit, device_mask.data(), domain.nx(), domain.lo[0],
-                         domain.lo[1]});
+    for_each_cell(v, detail::PortableTagCellsKernel<Crit>{f.const_array(), crit, device_mask.data(),
+                                                          domain.nx(), domain.lo[0], domain.lo[1]});
   }
   device_fence();
   std::copy(device_mask.begin(), device_mask.end(), tb.t.begin());

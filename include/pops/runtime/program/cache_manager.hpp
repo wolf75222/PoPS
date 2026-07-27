@@ -61,8 +61,7 @@ inline bool same_cache_value_layout(const MultiFab& left, const MultiFab& right)
 /// only when the exact decomposition/component/ghost contract changes.
 inline void copy_cache_value_into(MultiFab& destination, const MultiFab& source) {
   if (!same_cache_value_layout(destination, source))
-    destination =
-        MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
+    destination = MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
   for (int local = 0; local < destination.local_size(); ++local) {
     const int global = destination.global_index(local);
     const int source_local = source.local_index_of(global);

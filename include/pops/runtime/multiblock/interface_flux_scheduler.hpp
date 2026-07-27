@@ -266,8 +266,8 @@ class InterfaceFluxScheduler {
                                    collective_identity,
                                    InterfaceFluxEvaluator{},
                                    0};
-      const std::size_t packed_size = static_cast<std::size_t>(left_faces) *
-                                      static_cast<std::size_t>(component_count);
+      const std::size_t packed_size =
+          static_cast<std::size_t>(left_faces) * static_cast<std::size_t>(component_count);
       if (packed_size > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 2)
         throw std::overflow_error(
             "multi-block interface trace batch exceeds the native MPI count domain");
@@ -670,8 +670,7 @@ class InterfaceFluxScheduler {
         prepared.consensus.size() != packed_size)
       throw std::logic_error("multi-block interface prepared scratch changed size");
     std::fill(prepared.traces.begin(), prepared.traces.end(), Real(0));
-    std::fill(prepared.flux.begin(), prepared.flux.end(),
-              std::numeric_limits<Real>::quiet_NaN());
+    std::fill(prepared.flux.begin(), prepared.flux.end(), std::numeric_limits<Real>::quiet_NaN());
     Real* const left = prepared.traces.data();
     Real* const right = prepared.traces.data() + packed_size;
     for (int face = 0; face < prepared.face_count; ++face) {

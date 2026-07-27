@@ -176,10 +176,9 @@ struct ReconstructionStencilEnvelope {
 };
 
 template <class Reconstruction>
-struct ReconstructionStencilEnvelope<
-    Reconstruction,
-    std::void_t<decltype(Reconstruction::stencil_min_offset),
-                decltype(Reconstruction::stencil_max_offset)>> {
+struct ReconstructionStencilEnvelope<Reconstruction,
+                                     std::void_t<decltype(Reconstruction::stencil_min_offset),
+                                                 decltype(Reconstruction::stencil_max_offset)>> {
   static constexpr bool declared = true;
   static constexpr int min_offset = static_cast<int>(Reconstruction::stencil_min_offset);
   static constexpr int max_offset = static_cast<int>(Reconstruction::stencil_max_offset);
@@ -221,8 +220,7 @@ consteval bool stencil_envelope_fits_storage_contract() {
     return true;
   } else {
     using Envelope = ReconstructionStencilEnvelope<Reconstruction>;
-    return Reconstruction::n_ghost > 0 &&
-           Envelope::min_offset >= 1 - Reconstruction::n_ghost &&
+    return Reconstruction::n_ghost > 0 && Envelope::min_offset >= 1 - Reconstruction::n_ghost &&
            Envelope::max_offset <= Reconstruction::n_ghost - 1;
   }
 }
@@ -238,9 +236,7 @@ inline Reconstruction configured_reconstruction(Real smoothness_epsilon = kWenoE
       "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
       "exactly one pointwise protocol");
   Reconstruction reconstruction{};
-  if constexpr (requires(Reconstruction& value, Real eps) {
-                  value.set_smoothness_epsilon(eps);
-                })
+  if constexpr (requires(Reconstruction& value, Real eps) { value.set_smoothness_epsilon(eps); })
     reconstruction.set_smoothness_epsilon(smoothness_epsilon);
   return reconstruction;
 }

@@ -179,10 +179,10 @@ void assemble_rhs_masked_impl(const Model& model, const MultiFab& U, const Multi
     const ConstArray4 mk = mask.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    failures.merge(reduce_max_uint64_cell(
-        v, AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
-               model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp, omission,
-               failures.recorder()}));
+    failures.merge(
+        reduce_max_uint64_cell(v, AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
+                                      model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim,
+                                      pos_floor, pos_comp, omission, failures.recorder()}));
   }
   failures.throw_if_failed("assemble_rhs_masked");
 }

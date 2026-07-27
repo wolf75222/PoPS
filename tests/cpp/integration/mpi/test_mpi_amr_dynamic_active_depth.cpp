@@ -36,9 +36,9 @@ int run_dynamic_active_depth(int n, int me, int np) {
   const Box2D level_two_patch = level_two_parent.refine(2);
 
   auto levels = std::make_shared<std::vector<AmrLevelMP>>();
-  levels->push_back(AmrLevelMP{MultiFab(coarse_boxes,
-                                        DistributionMapping(coarse_boxes.size(), n_ranks()), 1, 1),
-                               nullptr, geometry.dx(), geometry.dy()});
+  levels->push_back(
+      AmrLevelMP{MultiFab(coarse_boxes, DistributionMapping(coarse_boxes.size(), n_ranks()), 1, 1),
+                 nullptr, geometry.dx(), geometry.dy()});
   levels->push_back(
       AmrLevelMP{MultiFab(BoxArray({level_one_patch}), DistributionMapping({0}), 1, 1), nullptr,
                  geometry.dx() / Real(2), geometry.dy() / Real(2)});
@@ -72,10 +72,10 @@ int run_dynamic_active_depth(int n, int me, int np) {
   block.advance = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
                      PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
                      PreparedAmrAdvanceScratchPlan*) {};
-  block.advance_with_temporal_plan =
-      [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-         const detail::PreparedAmrTemporalPlan&, PreparedAmrFillPatchPlan*,
-         PreparedAmrAverageDownPlan*, PreparedAmrAdvanceScratchPlan*) {};
+  block.advance_with_temporal_plan = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity,
+                                        bool, const detail::PreparedAmrTemporalPlan&,
+                                        PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
+                                        PreparedAmrAdvanceScratchPlan*) {};
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };
   block.mass = [levels, geometry] {
@@ -97,8 +97,7 @@ int run_dynamic_active_depth(int n, int me, int np) {
                      Periodicity{true, true}, /*replicated_coarse=*/false);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
   runtime.set_parent_child_temporal_relations(
-      {amr::ParentChildClockRelation(0, 1, amr::Rational(2, 1),
-                                     amr::RemainderPolicy::IntegralOnly),
+      {amr::ParentChildClockRelation(0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly),
        amr::ParentChildClockRelation(1, 2, amr::Rational(2, 1),
                                      amr::RemainderPolicy::IntegralOnly)});
 
@@ -108,8 +107,7 @@ int run_dynamic_active_depth(int n, int me, int np) {
       {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
       "test::mpi-active-depth-coarsen@1");
   runtime.regrid();
-  const bool removed =
-      runtime.nlev() == 1 && runtime.max_levels() == 3 && runtime.n_patches() == 0;
+  const bool removed = runtime.nlev() == 1 && runtime.max_levels() == 3 && runtime.n_patches() == 0;
   const double removed_mass = runtime.mass(0);
 
   runtime.step(Real(1e-4));
@@ -118,13 +116,10 @@ int run_dynamic_active_depth(int n, int me, int np) {
       {{0, 0, Real(1.05), test::PreparedThresholdRelation::Below}},
       "test::mpi-active-depth-regrow@1");
   runtime.regrid();
-  const bool regrown =
-      runtime.nlev() == 3 && runtime.max_levels() == 3 && runtime.n_patches() > 0;
+  const bool regrown = runtime.nlev() == 3 && runtime.max_levels() == 3 && runtime.n_patches() > 0;
   const double regrown_mass = runtime.mass(0);
 
-  auto spread = [](double value) {
-    return all_reduce_max(value) - (-all_reduce_max(-value));
-  };
+  auto spread = [](double value) { return all_reduce_max(value) - (-all_reduce_max(-value)); };
   const double cross_rank_spread =
       std::fmax(spread(static_cast<double>(runtime.nlev())),
                 std::fmax(spread(static_cast<double>(runtime.n_patches())),

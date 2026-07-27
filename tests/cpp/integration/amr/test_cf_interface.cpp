@@ -131,8 +131,7 @@ TEST(test_cf_interface, PeriodicSeamsWrapCoverageAndRefluxDestinations) {
 
   // If another fine patch covers the opposite x edge at the same J, the periodic seam is fine-fine:
   // coverage wrapping must suppress the correction rather than double-reflux it.
-  const BoxArray xboth(std::vector<Box2D>{Box2D{{0, 4}, {7, 11}},
-                                         Box2D{{12, 4}, {15, 11}}});
+  const BoxArray xboth(std::vector<Box2D>{Box2D{{0, 4}, {7, 11}}, Box2D{{12, 4}, {15, 11}}});
   const CoarseFineInterface cfix_both(coarse, xboth, Periodicity{true, false});
   EXPECT_TRUE(cfix_both.covered(-1, 2)) << "x-low neighbour wraps into covered x-high cell";
   FluxRegister refx_both(cfix_both.reflux_register_regions(xboth), nc);

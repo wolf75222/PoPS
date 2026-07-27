@@ -57,8 +57,8 @@ inline void append_serialized_flags(std::string& command, const char* value,
   std::size_t begin = 0;
   while (begin <= records.size()) {
     const std::size_t end = records.find('|', begin);
-    const std::string token = records.substr(
-        begin, end == std::string::npos ? std::string::npos : end - begin);
+    const std::string token =
+        records.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
     if (!token.empty()) {
       if (prefix.empty() && token.rfind("SHELL:", 0) == 0)
         command += " " + token.substr(6);
@@ -89,8 +89,8 @@ inline CompileResult compile_shared(const std::string& source_path, const std::s
   if (result.compiler.empty())
     return result;
 
-  std::string command = shell_quote(result.compiler) + " -shared -fPIC -std=" +
-                        std::string(POPS_TEST_CXX_STD) + " -O2 -I" +
+  std::string command = shell_quote(result.compiler) +
+                        " -shared -fPIC -std=" + std::string(POPS_TEST_CXX_STD) + " -O2 -I" +
                         shell_quote(POPS_TEST_INCLUDE);
 #if defined(POPS_TEST_HEADER_SIG)
   command += " -D" + shell_quote(std::string("POPS_HEADER_SIG=\"") + POPS_TEST_HEADER_SIG + "\"");
@@ -110,8 +110,8 @@ inline CompileResult compile_shared(const std::string& source_path, const std::s
   append_serialized_flags(command, POPS_TEST_MPI_INCLUDE, "-I");
   append_serialized_flags(command, POPS_TEST_MPI_COMPILE_DEFINITIONS, "-D");
   append_serialized_flags(command, POPS_TEST_MPI_COMPILE_OPTIONS);
-  command += " -DPOPS_HAS_MPI -D" +
-             shell_quote(std::string("POPS_MPI_ABI=\"") + POPS_TEST_MPI_ABI + "\"");
+  command +=
+      " -DPOPS_HAS_MPI -D" + shell_quote(std::string("POPS_MPI_ABI=\"") + POPS_TEST_MPI_ABI + "\"");
 #endif
   if (!extra_flags.empty())
     command += " " + extra_flags;
@@ -131,7 +131,8 @@ inline CompileResult compile_shared(const std::string& source_path, const std::s
 
 inline void report_compile_failure(const char* test_name, const CompileResult& result) {
   if (result.compiler.empty()) {
-    std::fprintf(stderr, "%s: POPS_TEST_CXX is empty; native package was not compiled\n", test_name);
+    std::fprintf(stderr, "%s: POPS_TEST_CXX is empty; native package was not compiled\n",
+                 test_name);
     return;
   }
   std::fprintf(stderr, "%s: native package compilation failed with %s (status %d); log: %s\n",

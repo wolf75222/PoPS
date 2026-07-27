@@ -97,9 +97,8 @@ TEST(test_amr_composite_poisson, Runs) {
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
 
-  auto [bac, dm] =
-      detail::coupler_make_coarse_layout(n, /*distribute=*/false, 0,
-                                         *load_balance);  // mono-box replique
+  auto [bac, dm] = detail::coupler_make_coarse_layout(n, /*distribute=*/false, 0,
+                                                      *load_balance);  // mono-box replique
   const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
   Box2D fb{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
   BoxArray baf(std::vector<Box2D>{fb});
@@ -144,8 +143,7 @@ TEST(test_amr_composite_poisson, Runs) {
     std::vector<AmrLevelMP> lv2;
     lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
     lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
-    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, std::move(lv2), {}, true,
-                                   load_balance);
+    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, std::move(lv2), {}, true, load_balance);
     set_state_f(ref.coarse(), g);
     set_state_f(ref.levels()[1].U, gf);
     ref.compute_aux();  // Option A (composite OFF par defaut)

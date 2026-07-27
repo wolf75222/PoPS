@@ -375,7 +375,8 @@ class ObserverMpiLane {
 #ifdef POPS_HAS_MPI
         communicator_(std::exchange(other.communicator_, MPI_COMM_NULL)),
 #endif
-        closed_(std::exchange(other.closed_, true)) {}
+        closed_(std::exchange(other.closed_, true)) {
+  }
 
   /// Intentionally non-owning at destruction time; see the class contract above.
   ~ObserverMpiLane() = default;
@@ -452,8 +453,7 @@ class ObserverMpiLane {
     long length_overflow = 0;
     if constexpr (sizeof(std::size_t) > sizeof(unsigned long long)) {
       if (me == root &&
-          payload.size() >
-              static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max()))
+          payload.size() > static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max()))
         length_overflow = 1;
     }
     if (all_reduce_max(length_overflow, lane) != 0)
@@ -483,10 +483,9 @@ class ObserverMpiLane {
     while (offset < length) {
       const int count = static_cast<int>(std::min<unsigned long long>(
           length - offset, static_cast<unsigned long long>(std::numeric_limits<int>::max())));
-      detail::require_mpi_success(
-          MPI_Bcast(payload.data() + static_cast<std::size_t>(offset), count, MPI_BYTE, root,
-                    lane.native_handle()),
-          "MPI_Bcast(observer payload chunk)");
+      detail::require_mpi_success(MPI_Bcast(payload.data() + static_cast<std::size_t>(offset),
+                                            count, MPI_BYTE, root, lane.native_handle()),
+                                  "MPI_Bcast(observer payload chunk)");
       offset += static_cast<unsigned long long>(count);
     }
     return payload;
@@ -532,8 +531,7 @@ class ObserverMpiLane {
       }
       if (all_reduce_max(copy_failed, lane) != 0)
         throw std::runtime_error("an observer rank could not stage its allgather payload");
-      result[static_cast<std::size_t>(source)] =
-          broadcast_bytes(std::move(source_payload), source);
+      result[static_cast<std::size_t>(source)] = broadcast_bytes(std::move(source_payload), source);
     }
     return result;
 #else
@@ -609,8 +607,7 @@ class ObserverMpiLane {
       return;
 #ifdef POPS_HAS_MPI
     if (communicator_ != MPI_COMM_NULL && detail::comm_active_unlocked()) {
-      detail::require_mpi_success(MPI_Comm_free(&communicator_),
-                                  "MPI_Comm_free(observer lane)");
+      detail::require_mpi_success(MPI_Comm_free(&communicator_), "MPI_Comm_free(observer lane)");
     } else {
       // MPI_Finalize has already reclaimed MPI resources; never invoke MPI from this state.
       communicator_ = MPI_COMM_NULL;
@@ -675,15 +672,13 @@ inline long all_reduce_min(long value, const ExecutionLane& lane) {
 inline void all_reduce_sum_inplace(double* buffer, int count, const ExecutionLane& lane) {
   all_reduce_sum_inplace(buffer, count, lane.communicator());
 }
-inline void all_reduce_sum_inplace(double* buffer, std::size_t count,
-                                   const ExecutionLane& lane) {
+inline void all_reduce_sum_inplace(double* buffer, std::size_t count, const ExecutionLane& lane) {
   all_reduce_sum_inplace(buffer, count, lane.communicator());
 }
 inline void all_reduce_max_inplace(double* buffer, int count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
-inline void all_reduce_max_inplace(double* buffer, std::size_t count,
-                                   const ExecutionLane& lane) {
+inline void all_reduce_max_inplace(double* buffer, std::size_t count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
 inline void all_reduce_or_inplace(char* buffer, std::size_t count, const ExecutionLane& lane) {

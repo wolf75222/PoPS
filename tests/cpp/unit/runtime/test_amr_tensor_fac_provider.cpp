@@ -43,8 +43,7 @@ class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
   void stage_initial_guess(int, const pops::MultiFab*) override {
     throw std::logic_error("test provider has no materialized build request");
   }
-  pops::SolveReport solve(
-      const pops::runtime::program::HierarchyTensorSolveControls&) override {
+  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
     return pops::SolveReport::capability_failure();
   }
 
@@ -54,10 +53,9 @@ class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
 
 class DistinctHierarchyProvider final : public HierarchyTensorSolverProvider {
  public:
-  explicit DistinctHierarchyProvider(std::string collective_contract =
-                                         "pops.test.hierarchy.distinct@1",
-                                     std::vector<std::string> capabilities = {
-                                         "pops.test.hierarchy.distinct.flat-krylov@1"})
+  explicit DistinctHierarchyProvider(
+      std::string collective_contract = "pops.test.hierarchy.distinct@1",
+      std::vector<std::string> capabilities = {"pops.test.hierarchy.distinct.flat-krylov@1"})
       : collective_contract_(std::move(collective_contract)),
         capabilities_(std::move(capabilities)) {}
   std::string_view identity() const noexcept override { return "pops.test.hierarchy.distinct"; }
@@ -88,8 +86,7 @@ class DistinctHierarchyProvider final : public HierarchyTensorSolverProvider {
                ? PreparedProviderSupport::accept()
                : PreparedProviderSupport::reject(3, "distinct provider execution is invalid");
   }
-  std::string expected_prepared_contract(
-      const HierarchyTensorSolverBuildRequest&) const override {
+  std::string expected_prepared_contract(const HierarchyTensorSolverBuildRequest&) const override {
     return "pops.test.hierarchy.distinct.prepared@1";
   }
   std::unique_ptr<PreparedHierarchyTensorSolver> prepare(
@@ -124,8 +121,7 @@ class ReportOnlyHierarchyPrepared final : public PreparedHierarchyTensorSolver {
     throw std::logic_error("report-only provider has no field storage");
   }
   void stage_initial_guess(int, const pops::MultiFab*) override {}
-  pops::SolveReport solve(
-      const pops::runtime::program::HierarchyTensorSolveControls&) override {
+  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
     return report_;
   }
 
@@ -166,8 +162,7 @@ class FlatIdentityPrepared final : public PreparedHierarchyTensorSolver {
     if (level != 0)
       throw std::out_of_range("flat identity provider has exactly one level");
   }
-  pops::SolveReport solve(
-      const pops::runtime::program::HierarchyTensorSolveControls&) override {
+  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
     pops::parallel_copy(solution_, rhs_);  // Exact inverse of the authenticated identity operator.
     pops::SolveReport report;
     report.reference_residual_norm = pops::norm_inf(rhs_);
@@ -216,8 +211,7 @@ class FlatIdentityProvider final : public HierarchyTensorSolverProvider {
             std::vector<pops::FieldDistribution>{pops::FieldDistribution::Distributed} &&
         request.components == 1 &&
         request.operator_contract_identity == "pops.test.operator.identity@1" &&
-        request.assembly_field_slots ==
-            std::vector<std::string>{"pops.test.identity.rhs"} &&
+        request.assembly_field_slots == std::vector<std::string>{"pops.test.identity.rhs"} &&
         request.solution_field_slot == "pops.test.identity.solution" &&
         accepts_options(request.options).accepted();
     return accepted ? PreparedProviderSupport::accept()
@@ -238,18 +232,15 @@ class FlatIdentityProvider final : public HierarchyTensorSolverProvider {
         .scalar(std::uint32_t{1})
         .text(request.plan_identity)
         .text(request.operator_contract_identity)
-        .sequence(request.assembly_field_slots,
-                  [](pops::ExactContractBuilder& item, const std::string& slot) {
-                    item.text(slot);
-                  })
+        .sequence(request.assembly_field_slots, [](pops::ExactContractBuilder& item,
+                                                   const std::string& slot) { item.text(slot); })
         .text(request.solution_field_slot)
         .sequence(request.level_populated,
-                  [](pops::ExactContractBuilder& item, bool populated) {
-                    item.scalar(populated);
-                  })
+                  [](pops::ExactContractBuilder& item, bool populated) { item.scalar(populated); })
         .sequence(request.level_distributions,
-                  [](pops::ExactContractBuilder& item,
-                     pops::FieldDistribution distribution) { item.scalar(distribution); })
+                  [](pops::ExactContractBuilder& item, pops::FieldDistribution distribution) {
+                    item.scalar(distribution);
+                  })
         .bytes(request.options.exact_contract());
     return std::move(contract).release();
   }
@@ -262,14 +253,12 @@ class FlatIdentityProvider final : public HierarchyTensorSolverProvider {
 };
 
 using ConfigureSolver = void (AmrProgramContext::*)(int, int, const std::string&,
-                                                    const std::string&,
-                                                    const std::string&,
+                                                    const std::string&, const std::string&,
                                                     const std::vector<std::string>&,
                                                     const std::string&,
                                                     const PreparedProviderOptions&) const;
-static_assert(
-    std::is_same_v<decltype(&AmrProgramContext::configure_hierarchy_tensor_solver),
-                   ConfigureSolver>);
+static_assert(std::is_same_v<decltype(&AmrProgramContext::configure_hierarchy_tensor_solver),
+                             ConfigureSolver>);
 
 TEST(HierarchyTensorSolverProviderContract, BuiltinAdvertisesOnlyItsStructuralEnvelope) {
   const auto registry =
@@ -315,17 +304,13 @@ TEST(HierarchyTensorSolverProviderContract,
   pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
   EXPECT_NO_THROW(registry.add(std::make_shared<DistinctHierarchyProvider>(
       "pops.test.hierarchy.distinct@1", std::vector<std::string>{})));
-  EXPECT_TRUE(registry.resolve("pops.test.hierarchy.distinct")
-                  ->capability_contracts()
-                  .empty());
+  EXPECT_TRUE(registry.resolve("pops.test.hierarchy.distinct")->capability_contracts().empty());
 }
 
-TEST(HierarchyTensorSolverProviderContract,
-     InvalidDeclarationIsRejectedBeforeRegistryMutation) {
+TEST(HierarchyTensorSolverProviderContract, InvalidDeclarationIsRejectedBeforeRegistryMutation) {
   pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
   const std::vector<std::string> duplicate_capabilities = {
-      "pops.test.hierarchy.distinct.duplicate@1",
-      "pops.test.hierarchy.distinct.duplicate@1"};
+      "pops.test.hierarchy.distinct.duplicate@1", "pops.test.hierarchy.distinct.duplicate@1"};
   EXPECT_THROW(registry.add(std::make_shared<DistinctHierarchyProvider>(
                    "pops.test.hierarchy.distinct@1", duplicate_capabilities)),
                std::invalid_argument);
@@ -388,46 +373,41 @@ TEST(HierarchyTensorSolverProviderContract,
   invalid_status.action = pops::SolveAction::kFailRun;
   invalid_status.reason = "unknown provider status";
   ReportOnlyHierarchyPrepared invalid_status_solver(invalid_status);
-  EXPECT_THROW(
-      (void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          invalid_status_solver, controls),
-      std::runtime_error);
+  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+                   invalid_status_solver, controls),
+               std::runtime_error);
 
   pops::SolveReport invalid_action;
   invalid_action.status = pops::SolveStatus::kBreakdown;
   invalid_action.action = static_cast<pops::SolveAction>(999);
   invalid_action.reason = "unknown provider action";
   ReportOnlyHierarchyPrepared invalid_action_solver(invalid_action);
-  EXPECT_THROW(
-      (void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          invalid_action_solver, controls),
-      std::runtime_error);
+  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+                   invalid_action_solver, controls),
+               std::runtime_error);
 
   pops::SolveReport nonfinite;
   nonfinite.mark_solved();
   nonfinite.residual_norm = std::numeric_limits<Real>::quiet_NaN();
   ReportOnlyHierarchyPrepared nonfinite_solver(nonfinite);
-  EXPECT_THROW(
-      (void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          nonfinite_solver, controls),
-      std::runtime_error);
+  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+                   nonfinite_solver, controls),
+               std::runtime_error);
 
   pops::SolveReport impossible_iterations;
   impossible_iterations.mark_solved();
   impossible_iterations.iters = controls.maximum_iterations + 1;
   ReportOnlyHierarchyPrepared impossible_iterations_solver(impossible_iterations);
-  EXPECT_THROW(
-      (void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          impossible_iterations_solver, controls),
-      std::runtime_error);
+  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+                   impossible_iterations_solver, controls),
+               std::runtime_error);
 }
 
 TEST(HierarchyTensorSolverProviderContract,
      ProgramContextRegistersADistinctProviderThroughTheRuntimeFacade) {
   pops::AmrSystem system(pops::AmrSystemConfig{16});
   AmrProgramContext context(nullptr, &system);
-  context.register_hierarchy_tensor_solver_provider(
-      std::make_shared<DistinctHierarchyProvider>());
+  context.register_hierarchy_tensor_solver_provider(std::make_shared<DistinctHierarchyProvider>());
   EXPECT_EQ(system.hierarchy_tensor_solver_provider_registry()
                 ->resolve("pops.test.hierarchy.distinct")
                 ->collective_contract(),

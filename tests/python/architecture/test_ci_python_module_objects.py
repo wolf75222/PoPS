@@ -68,5 +68,5 @@ def test_runtime_object_prewarm_rejects_an_empty_lane():
             _target("runtime/amr/amr_system.cpp.o", "pops_runtime_amr"),
         )
     )
-    with pytest.raises(SystemExit, match="empty Python module prewarm lanes"):
+    with pytest.raises(SystemExit, match="empty native runtime prewarm lanes"):
         module.partition_runtime_objects(inventory)

@@ -261,8 +261,8 @@ inline std::shared_ptr<const HaloSchedule> get_halo_schedule(const MultiFab& mf,
 
 struct HaloExchange;
 namespace detail {
-HaloExchange fill_boundary_begin_on(MultiFab&, const Box2D&, Periodicity,
-                                     const CommunicatorView&, int);
+HaloExchange fill_boundary_begin_on(MultiFab&, const Box2D&, Periodicity, const CommunicatorView&,
+                                    int);
 }
 
 /// Opaque state of an in-flight halo exchange, returned by fill_boundary_begin and consumed by
@@ -423,9 +423,8 @@ inline HaloExchange fill_boundary_begin_on(MultiFab& mf, const Box2D& domain, Pe
   if (communicator.size() > 1) {
     // Schedule construction allocates rank-local storage once.  It is part of the pre-post
     // transaction too: no rank may continue to a later collective if a peer failed here.
-    collectively_prepare_before_halo_post(communicator, [&] {
-      sched = get_halo_schedule(mf, domain, per, communicator);
-    });
+    collectively_prepare_before_halo_post(
+        communicator, [&] { sched = get_halo_schedule(mf, domain, per, communicator); });
     try {
       collectively_prepare_before_halo_post(
           communicator, [&] { lease = mf.halo_cache().acquire_exchange(sched, nc); });
@@ -464,8 +463,7 @@ inline HaloExchange fill_boundary_begin_on(MultiFab& mf, const Box2D& domain, Pe
     return h;
   }
   const int np = communicator.size();
-  if (all_reduce_max(np > std::numeric_limits<int>::max() / 2 ? 1L : 0L,
-                     communicator) != 0)
+  if (all_reduce_max(np > std::numeric_limits<int>::max() / 2 ? 1L : 0L, communicator) != 0)
     throw std::overflow_error(
         "fill_boundary: execution communicator exceeds the MPI request-count range");
   bool payload_overflow = false;
@@ -602,9 +600,9 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #ifdef POPS_HAS_MPI
   if (h.storage_ && !h.storage_->reqs.empty()) {
     HaloExchangeStorage& storage = *h.storage_;
-    detail::require_mpi_success(
-        MPI_Waitall(static_cast<int>(storage.reqs.size()), storage.reqs.data(), MPI_STATUSES_IGNORE),
-        "MPI_Waitall(fill_boundary)");
+    detail::require_mpi_success(MPI_Waitall(static_cast<int>(storage.reqs.size()),
+                                            storage.reqs.data(), MPI_STATUSES_IGNORE),
+                                "MPI_Waitall(fill_boundary)");
     storage.reqs.clear();
     // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer
     // is complete; the kernel launched next reads the pinned host (device-accessible, coherent).

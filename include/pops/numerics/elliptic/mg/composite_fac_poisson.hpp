@@ -159,12 +159,10 @@ struct FacLegacySorKernel {
     const Real eym = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j - 1, 0)) : Real(1);
     const Real eyp = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j + 1, 0)) : Real(1);
     const Real diagonal = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
-    const Real neighbours =
-        (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
-        (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
-    const Real cross = has_cross
-                           ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy)
-                           : Real(0);
+    const Real neighbours = (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
+                            (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
+    const Real cross =
+        has_cross ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy) : Real(0);
     const Real candidate = (neighbours + cross - rhs(i, j, 0)) / diagonal;
     phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * candidate;
   }
@@ -177,8 +175,7 @@ struct FacLegacyMaskedResidualKernel {
   CoverageMaskView coverage;
 
   POPS_HD void operator()(int i, int j) const {
-    residual(i, j, 0) =
-        coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
+    residual(i, j, 0) = coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
   }
 };
 
@@ -229,12 +226,10 @@ struct FacLegacyFluxCorrectionKernel {
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int jf = ratio * j + t;
-        const Real face = has_eps
-                              ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0),
-                                             fine_eps(ratio * ilo, jf, 0))
-                              : Real(1);
-        fine_sum += face *
-                    (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
+        const Real face =
+            has_eps ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0), fine_eps(ratio * ilo, jf, 0))
+                    : Real(1);
+        fine_sum += face * (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
       }
       residual(i, j, 0) += coarse_face - fine_sum * idx2;
       return;
@@ -246,10 +241,9 @@ struct FacLegacyFluxCorrectionKernel {
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int jf = ratio * j + t;
-        const Real face =
-            has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
-                                    fine_eps(ratio * ihi + ratio, jf, 0))
-                    : Real(1);
+        const Real face = has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
+                                                 fine_eps(ratio * ihi + ratio, jf, 0))
+                                  : Real(1);
         fine_sum += face * (fine_phi(ratio * ihi + ratio - 1, jf, 0) -
                             fine_phi(ratio * ihi + ratio, jf, 0));
       }
@@ -258,34 +252,29 @@ struct FacLegacyFluxCorrectionKernel {
     }
     if (j == jlo - 1 && i >= ilo && i <= ihi) {
       const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0))
-                   : Real(1)) *
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0)) : Real(1)) *
           (coarse_phi(i, j + 1, 0) - coarse_phi(i, j, 0)) * idy2;
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int fi = ratio * i + t;
-        const Real face = has_eps
-                              ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
-                                             fine_eps_y(fi, ratio * jlo, 0))
-                              : Real(1);
-        fine_sum += face *
-                    (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
+        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
+                                                 fine_eps_y(fi, ratio * jlo, 0))
+                                  : Real(1);
+        fine_sum += face * (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
       }
       residual(i, j, 0) += coarse_face - fine_sum * idy2;
       return;
     }
     if (j == jhi + 1 && i >= ilo && i <= ihi) {
       const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0))
-                   : Real(1)) *
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0)) : Real(1)) *
           (coarse_phi(i, j - 1, 0) - coarse_phi(i, j, 0)) * idy2;
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int fi = ratio * i + t;
-        const Real face =
-            has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
-                                    fine_eps_y(fi, ratio * jhi + ratio, 0))
-                    : Real(1);
+        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
+                                                 fine_eps_y(fi, ratio * jhi + ratio, 0))
+                                  : Real(1);
         fine_sum += face * (fine_phi(fi, ratio * jhi + ratio - 1, 0) -
                             fine_phi(fi, ratio * jhi + ratio, 0));
       }
@@ -1024,9 +1013,9 @@ class CompositeFacPoisson {
       const int color_count = hc ? 4 : 2;
       for (int s = 0; s < sweeps; ++s)
         for (int color = 0; color < color_count; ++color)
-          for_each_cell(vb, detail::FacLegacySorKernel{
-                                P, Pc, F, E, EY, AXY, AYX, idx2, idy2, idx, idy, omega,
-                                has_reaction_ ? reaction_ : Real(0), color, he, hc});
+          for_each_cell(
+              vb, detail::FacLegacySorKernel{P, Pc, F, E, EY, AXY, AYX, idx2, idy2, idx, idy, omega,
+                                             has_reaction_ ? reaction_ : Real(0), color, he, hc});
     }
   }
 
@@ -1075,14 +1064,13 @@ class CompositeFacPoisson {
       const ConstArray4 EYF =
           has_eps_y_ ? eps_y_f_.fab(g).const_array() : eps_f_.fab(g).const_array();
       for_each_cell(patch_coarse_[g].grow(1),
-                    detail::FacLegacyFluxCorrectionKernel{
-                        R, PC, EC, EYC, PF, EF, EYF, coverage, patch_coarse_[g], idx2, idy2, r,
-                        he});
+                    detail::FacLegacyFluxCorrectionKernel{R, PC, EC, EYC, PF, EF, EYF, coverage,
+                                                          patch_coarse_[g], idx2, idy2, r, he});
     }
 
     // inf norm of the residual over the NON covered cells.
-    return reduce_max_cell(b, detail::FacLegacyMaskedNormKernel{res_c_.fab(0).const_array(),
-                                                                coverage});
+    return reduce_max_cell(
+        b, detail::FacLegacyMaskedNormKernel{res_c_.fab(0).const_array(), coverage});
   }
 
   void record_residual(int iteration, Real residual) {

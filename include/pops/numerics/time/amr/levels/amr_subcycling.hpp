@@ -58,8 +58,7 @@ struct AmrBoundaryFillContext {
   Real dy = Real(1);
 };
 
-using AmrPhysicalBoundaryFill =
-    std::function<void(MultiFab&, const AmrBoundaryFillContext&)>;
+using AmrPhysicalBoundaryFill = std::function<void(MultiFab&, const AmrBoundaryFillContext&)>;
 
 /// Exact host-side authority for physical AMR ghosts.  Same-level and periodic exchange remain
 /// native runtime responsibilities; this callback owns only faces where periodicity is false.
@@ -77,9 +76,7 @@ inline AmrBoundaryFillAuthority make_amr_boundary_fill_authority(const BCRec& bo
   detail::validate_periodic_pairs(boundary);
   BCRec prepared = boundary;
   return AmrBoundaryFillAuthority{
-      Periodicity{boundary.xlo == BCType::Periodic, boundary.ylo == BCType::Periodic},
-      0,
-      true,
+      Periodicity{boundary.xlo == BCType::Periodic, boundary.ylo == BCType::Periodic}, 0, true,
       [prepared](MultiFab& state, const AmrBoundaryFillContext& context) mutable {
         prepared.dx = context.dx;
         prepared.dy = context.dy;
@@ -87,8 +84,8 @@ inline AmrBoundaryFillAuthority make_amr_boundary_fill_authority(const BCRec& bo
       }};
 }
 
-inline void validate_amr_boundary_fill_authority(
-    Periodicity periodicity, const AmrBoundaryFillAuthority* authority) {
+inline void validate_amr_boundary_fill_authority(Periodicity periodicity,
+                                                 const AmrBoundaryFillAuthority* authority) {
   const bool has_physical_face = !periodicity.x || !periodicity.y;
   if (authority == nullptr) {
     if (has_physical_face)
@@ -97,27 +94,27 @@ inline void validate_amr_boundary_fill_authority(
     return;
   }
   if (!same_periodicity(periodicity, authority->periodicity))
-    throw std::runtime_error("AMR boundary-fill authority periodicity disagrees with the hierarchy");
+    throw std::runtime_error(
+        "AMR boundary-fill authority periodicity disagrees with the hierarchy");
   if (authority->provided_depth < 0 || (has_physical_face && !authority->fill_physical))
     throw std::runtime_error("AMR boundary-fill authority is incomplete");
 }
 
 template <class Levels>
-inline void validate_amr_boundary_fill_authority(
-    Periodicity periodicity, const AmrBoundaryFillAuthority* authority,
-    const Levels& levels) {
+inline void validate_amr_boundary_fill_authority(Periodicity periodicity,
+                                                 const AmrBoundaryFillAuthority* authority,
+                                                 const Levels& levels) {
   validate_amr_boundary_fill_authority(periodicity, authority);
   if (authority == nullptr)
     return;
   for (const auto& level : levels)
-    if (!authority->fills_all_allocated_ghosts &&
-        authority->provided_depth < level.U.n_grow())
+    if (!authority->fills_all_allocated_ghosts && authority->provided_depth < level.U.n_grow())
       throw std::runtime_error("AMR boundary-fill authority does not cover all state ghosts");
 }
 
-inline void fill_amr_same_level_and_physical(
-    MultiFab& state, const Box2D& domain, int level, Real dx, Real dy,
-    Periodicity periodicity, const AmrBoundaryFillAuthority* authority) {
+inline void fill_amr_same_level_and_physical(MultiFab& state, const Box2D& domain, int level,
+                                             Real dx, Real dy, Periodicity periodicity,
+                                             const AmrBoundaryFillAuthority* authority) {
   fill_boundary(state, domain, periodicity);
   if ((!periodicity.x || !periodicity.y) && authority != nullptr) {
     std::string local_error;
@@ -131,8 +128,7 @@ inline void fill_amr_same_level_and_physical(
     if (all_reduce_max(local_error.empty() ? 0L : 1L) != 0) {
       if (n_ranks() == 1)
         throw std::runtime_error(local_error);
-      throw std::runtime_error(
-          "physical AMR boundary callback failed on at least one MPI rank");
+      throw std::runtime_error("physical AMR boundary callback failed on at least one MPI rank");
     }
   }
 }
@@ -163,8 +159,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
                                 const AmrBoundaryFillAuthority* boundary_fill = nullptr) {
   validate_amr_boundary_fill_authority(base_periodicity, boundary_fill);
   if (boundary_fill != nullptr && !boundary_fill->fills_all_allocated_ghosts &&
-      (boundary_fill->provided_depth < Uc.n_grow() ||
-       boundary_fill->provided_depth < Uf.n_grow()))
+      (boundary_fill->provided_depth < Uc.n_grow() || boundary_fill->provided_depth < Uf.n_grow()))
     throw std::runtime_error("AMR boundary-fill authority does not cover all state ghosts");
   // The complete coarse/fine attempt is private.  A failed fine substep must not leave the
   // coarse level advanced, and a failed coarse source must not even refresh the public ghosts.
@@ -184,8 +179,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   MultiFab Uc_old = coarse;
   fill_periodic_local(coarse, dom, base_periodicity);  // replicated coarse -> local periodic fill
   if ((!base_periodicity.x || !base_periodicity.y) && boundary_fill != nullptr)
-    boundary_fill->fill_physical(
-        coarse, AmrBoundaryFillContext{dom, 0, dxc, dyc});
+    boundary_fill->fill_physical(coarse, AmrBoundaryFillContext{dom, 0, dxc, dyc});
   MultiFab fxc(BoxArray(std::vector<Box2D>{xface_box(coarse.box(0))}), coarse.dmap(), nc, 0);
   MultiFab fyc(BoxArray(std::vector<Box2D>{yface_box(coarse.box(0))}), coarse.dmap(), nc, 0);
   compute_face_fluxes<Limiter, NumericalFlux>(m, coarse, auxc, fxc, fyc, dxc, dyc);
@@ -193,7 +187,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   mf_apply_source(m, coarse, auxc, dt);  // source S(U,aux) at the substep
   // One collective covers every value the accepted coarse attempt would publish or record.
   detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(coarse)", coarse, fxc,
-                                               fyc);
+                                              fyc);
 
   // per fine-box register: coarse flux (without dt) saved at the 4 faces.
   struct Reg {
@@ -242,8 +236,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
     mf_advance_faces(fine, fxf, fyf, dxf, dyf, dtf);
     mf_apply_source(m, fine, auxf, dtf);  // source S(U,aux) at the substep
     // Validate before this substep contributes to the time-integrated fine register.
-    detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(fine)", fine, fxf,
-                                                 fyf);
+    detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(fine)", fine, fxf, fyf);
     for (int li = 0; li < fine.local_size(); ++li) {
       Reg& g = regs[li];
       const ConstArray4 FX = fxf.fab(li).const_array(), FY = fyf.fab(li).const_array();
@@ -271,8 +264,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 f = fine.fab(li).const_array();
     Reg& g = regs[li];
-    for_each_cell(g.I0 <= g.I1 && g.J0 <= g.J1 ? Box2D{{g.I0, g.J0}, {g.I1, g.J1}}
-                                                : Box2D{},
+    for_each_cell(g.I0 <= g.I1 && g.J0 <= g.J1 ? Box2D{{g.I0, g.J0}, {g.I1, g.J1}} : Box2D{},
                   detail::AverageDownRegisterKernel{f, avg.view(), nc});
   }
   // The edge-strip kernels write pinned device-visible buffers.  Reflux routing is a sequence of
@@ -286,13 +278,13 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   ref.gather();
   if (coarse.local_size() > 0) {  // each rank holding a copy of the coarse level applies it
     const Box2D cb = coarse.box(0);
-    for_each_cell(cb, detail::ApplyRefluxThenAverageKernel{
-                          coarse.fab(0).array(), ref.view(), avg.view(), cfi.cmask.view(), nc});
+    for_each_cell(cb, detail::ApplyRefluxThenAverageKernel{coarse.fab(0).array(), ref.view(),
+                                                           avg.view(), cfi.cmask.view(), nc});
   }
   // Reflux and average-down are arithmetic too: finite stage data may still overflow while being
   // accumulated or synchronized.  Reject the complete candidate before either public state moves.
-  detail::reject_nonfinite_finite_volume_data(
-      "amr_step_2level_multipatch(synchronization)", coarse, fine);
+  detail::reject_nonfinite_finite_volume_data("amr_step_2level_multipatch(synchronization)", coarse,
+                                              fine);
   device_fence();
   Uc = std::move(coarse);
   Uf = std::move(fine);
@@ -407,10 +399,11 @@ class PreparedFillPatchWorkspace {
   PreparedFillPatchWorkspace(PreparedFillPatchWorkspace&&) noexcept = default;
   PreparedFillPatchWorkspace& operator=(PreparedFillPatchWorkspace&&) noexcept = default;
 
-  static PreparedFillPatchWorkspace prepare(
-      const MultiFab& fine, const MultiFab& old_parent, const MultiFab& new_parent,
-      const Box2D& coarse_domain, bool replicated_parent, Periodicity periodicity,
-      std::uint64_t topology_generation, const CommunicatorView& communicator) {
+  static PreparedFillPatchWorkspace prepare(const MultiFab& fine, const MultiFab& old_parent,
+                                            const MultiFab& new_parent, const Box2D& coarse_domain,
+                                            bool replicated_parent, Periodicity periodicity,
+                                            std::uint64_t topology_generation,
+                                            const CommunicatorView& communicator) {
     return prepare(fine, old_parent, new_parent, coarse_domain, replicated_parent, periodicity,
                    topology_generation, communicator,
                    std::make_shared<const PreparedCoarseFineOperator>(
@@ -427,17 +420,15 @@ class PreparedFillPatchWorkspace {
       throw std::invalid_argument("prepared FillPatch lacks its coarse/fine operator");
     prepared_operator->validate_domain(coarse_domain);
     if (replicated_parent && communicator.active())
-      throw std::invalid_argument(
-          "replicated FillPatch parent requires a rank-local communicator");
+      throw std::invalid_argument("replicated FillPatch parent requires a rank-local communicator");
 
     // The carrier contains every source cell used by the selected route, including the furthest
     // one-sided stencil next to a non-periodic boundary.  This is prepared once per topology.
     const int reach =
         std::max(prepared_operator->parent_reach_x, prepared_operator->parent_reach_y);
-    const int fine_growth = detail::checked_coarse_fine_carrier_growth(
-        fine.n_grow(), kAmrRefRatio, reach);
-    const BoxArray carrier_boxes =
-        coarsen_grown(fine.box_array(), fine_growth, kAmrRefRatio);
+    const int fine_growth =
+        detail::checked_coarse_fine_carrier_growth(fine.n_grow(), kAmrRefRatio, reach);
+    const BoxArray carrier_boxes = coarsen_grown(fine.box_array(), fine_growth, kAmrRefRatio);
     for (const Box2D& box : carrier_boxes.boxes())
       if (box.nx() < prepared_operator->minimum_axis_cells_x ||
           box.ny() < prepared_operator->minimum_axis_cells_y)
@@ -448,26 +439,26 @@ class PreparedFillPatchWorkspace {
       carrier_mapping = DistributionMapping(
           std::vector<int>(static_cast<std::size_t>(carrier_boxes.size()), my_rank()));
 
-    PreparedFillPatchWorkspace workspace(
-        MultiFab(carrier_boxes, carrier_mapping, fine.ncomp(), 0),
-        MultiFab(carrier_boxes, carrier_mapping, fine.ncomp(), 0), fine, old_parent, new_parent,
-        coarse_domain, replicated_parent, periodicity, topology_generation,
-        std::move(prepared_operator));
-    workspace.old_copy_plan_.emplace(PreparedPeriodicCopyPlan::prepare(
-        workspace.old_parent_carrier_, old_parent, coarse_domain, periodicity,
-        topology_generation, communicator));
-    workspace.new_copy_plan_.emplace(PreparedPeriodicCopyPlan::prepare(
-        workspace.new_parent_carrier_, new_parent, coarse_domain, periodicity,
-        topology_generation, communicator));
+    PreparedFillPatchWorkspace workspace(MultiFab(carrier_boxes, carrier_mapping, fine.ncomp(), 0),
+                                         MultiFab(carrier_boxes, carrier_mapping, fine.ncomp(), 0),
+                                         fine, old_parent, new_parent, coarse_domain,
+                                         replicated_parent, periodicity, topology_generation,
+                                         std::move(prepared_operator));
+    workspace.old_copy_plan_.emplace(
+        PreparedPeriodicCopyPlan::prepare(workspace.old_parent_carrier_, old_parent, coarse_domain,
+                                          periodicity, topology_generation, communicator));
+    workspace.new_copy_plan_.emplace(
+        PreparedPeriodicCopyPlan::prepare(workspace.new_parent_carrier_, new_parent, coarse_domain,
+                                          periodicity, topology_generation, communicator));
     workspace.validate_carrier_ownership_(fine);
     return workspace;
   }
 
   void apply(MultiFab& fine, const MultiFab& old_parent, const MultiFab& new_parent, Real fraction,
-             Real positivity_floor, int positivity_component,
-             std::uint64_t topology_generation, const CommunicatorView& communicator) {
-    validate_replay_(fine, old_parent, new_parent, fraction, positivity_floor,
-                     positivity_component, topology_generation);
+             Real positivity_floor, int positivity_component, std::uint64_t topology_generation,
+             const CommunicatorView& communicator) {
+    validate_replay_(fine, old_parent, new_parent, fraction, positivity_floor, positivity_component,
+                     topology_generation);
     // Validate both sources before posting either transfer: an invalid new snapshot cannot leave
     // only the old carrier refreshed.  PreparedPeriodicCopyPlan repeats the same exact check at the
     // collective boundary and authenticates the communicator.
@@ -485,9 +476,7 @@ class PreparedFillPatchWorkspace {
     fill_from_prepared_carriers_(fine, fraction, positivity_floor, positivity_component);
   }
 
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
   [[nodiscard]] const std::shared_ptr<const PreparedCoarseFineOperator>& prepared_operator()
       const noexcept {
     return prepared_operator_;
@@ -515,15 +504,14 @@ class PreparedFillPatchWorkspace {
         coarse_domain_(coarse_domain),
         fine_domain_(coarse_domain.refine(kAmrRefRatio)),
         transform_{coarse_domain.lo[0], coarse_domain.lo[1], fine_domain_.lo[0],
-                   fine_domain_.lo[1], kAmrRefRatio, kAmrRefRatio},
+                   fine_domain_.lo[1],  kAmrRefRatio,        kAmrRefRatio},
         replicated_parent_(replicated_parent),
         periodicity_(periodicity),
         topology_generation_(topology_generation),
         prepared_operator_(std::move(prepared_operator)) {}
 
   static void validate_temporal_window_(const MultiFab& fine, const MultiFab& old_parent,
-                                        const MultiFab& new_parent,
-                                        const Box2D& coarse_domain) {
+                                        const MultiFab& new_parent, const Box2D& coarse_domain) {
     if (coarse_domain.empty())
       throw std::invalid_argument("FillPatch requires a non-empty coarse domain");
     if (fine.ncomp() <= 0 || old_parent.ncomp() != fine.ncomp() ||
@@ -532,8 +520,7 @@ class PreparedFillPatchWorkspace {
     if (old_parent.box_array().boxes() != new_parent.box_array().boxes() ||
         old_parent.dmap().ranks() != new_parent.dmap().ranks() ||
         old_parent.n_grow() != new_parent.n_grow())
-      throw std::invalid_argument(
-          "FillPatch old/new parent snapshots require one exact layout");
+      throw std::invalid_argument("FillPatch old/new parent snapshots require one exact layout");
     validate_ratio_aligned_disjoint_fine_layout(fine.box_array(), &coarse_domain);
   }
 
@@ -561,13 +548,12 @@ class PreparedFillPatchWorkspace {
                         int positivity_component, std::uint64_t topology_generation) const {
     validate_fine_(fine, topology_generation);
     validate_numerical_inputs_(fine_ncomp_, fraction, positivity_floor, positivity_component);
-    if (!old_copy_plan_ || !new_copy_plan_ ||
-        old_parent.box_array().boxes() != old_parent_boxes_ ||
-        old_parent.dmap().ranks() != old_parent_ranks_ ||
-        old_parent.ncomp() != fine_ncomp_ || old_parent.n_grow() != old_parent_ngrow_ ||
+    if (!old_copy_plan_ || !new_copy_plan_ || old_parent.box_array().boxes() != old_parent_boxes_ ||
+        old_parent.dmap().ranks() != old_parent_ranks_ || old_parent.ncomp() != fine_ncomp_ ||
+        old_parent.n_grow() != old_parent_ngrow_ ||
         new_parent.box_array().boxes() != new_parent_boxes_ ||
-        new_parent.dmap().ranks() != new_parent_ranks_ ||
-        new_parent.ncomp() != fine_ncomp_ || new_parent.n_grow() != new_parent_ngrow_)
+        new_parent.dmap().ranks() != new_parent_ranks_ || new_parent.ncomp() != fine_ncomp_ ||
+        new_parent.n_grow() != new_parent_ngrow_)
       throw std::invalid_argument("prepared FillPatch crossed an exact parent layout");
   }
 
@@ -589,8 +575,7 @@ class PreparedFillPatchWorkspace {
       const int new_carrier_local = new_parent_carrier_.local_index_of(global);
       const Box2D valid = fine.box(local_fine);
       prepared_operator_->launch_space_time(
-          fine.fab(local_fine).array(),
-          old_parent_carrier_.fab(old_carrier_local).const_array(),
+          fine.fab(local_fine).array(), old_parent_carrier_.fab(old_carrier_local).const_array(),
           new_parent_carrier_.fab(new_carrier_local).const_array(),
           fine.fab(local_fine).grown_box(), valid, coarse_domain_, fine_domain_, transform_,
           fine_ncomp_, fraction, positivity_floor, positivity_component, periodicity_);
@@ -634,26 +619,26 @@ class PreparedFillPatchWorkspace {
 //    interpolated. No more silent remote failures.
 // In serial both paths are identical (parent local everywhere, parallel_copy = memory copy).
 inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const MultiFab& Pn,
-                                   const Box2D& coarse_domain, Real frac,
-                                   bool replicated_parent, Real pos_floor, int pos_comp,
-                                   Periodicity periodicity) {
+                                   const Box2D& coarse_domain, Real frac, bool replicated_parent,
+                                   Real pos_floor, int pos_comp, Periodicity periodicity) {
   const CommunicatorView communicator =
       replicated_parent ? CommunicatorView{} : world_communicator_view();
-  auto workspace = PreparedFillPatchWorkspace::prepare(
-      Uf, Po, Pn, coarse_domain, replicated_parent, periodicity,
-      /*topology_generation=*/0, communicator);
+  auto workspace =
+      PreparedFillPatchWorkspace::prepare(Uf, Po, Pn, coarse_domain, replicated_parent, periodicity,
+                                          /*topology_generation=*/0, communicator);
   workspace.publish_prepared(Uf, frac, pos_floor, pos_comp);
 }
 
 /// Allocation-free FillPatch replay used by prepared runtimes.  The owning hierarchy keeps one
 /// workspace per parent/child transition and replaces it only after a topology-generation change.
-inline void mf_fill_fine_ghosts_mb(
-    MultiFab& fine, const MultiFab& old_parent, const MultiFab& new_parent,
-    PreparedFillPatchWorkspace& workspace, Real fraction, Real positivity_floor,
-    int positivity_component, std::uint64_t topology_generation,
-    const CommunicatorView& communicator) {
-  workspace.apply(fine, old_parent, new_parent, fraction, positivity_floor,
-                  positivity_component, topology_generation, communicator);
+inline void mf_fill_fine_ghosts_mb(MultiFab& fine, const MultiFab& old_parent,
+                                   const MultiFab& new_parent,
+                                   PreparedFillPatchWorkspace& workspace, Real fraction,
+                                   Real positivity_floor, int positivity_component,
+                                   std::uint64_t topology_generation,
+                                   const CommunicatorView& communicator) {
+  workspace.apply(fine, old_parent, new_parent, fraction, positivity_floor, positivity_component,
+                  topology_generation, communicator);
 }
 
 // Prepared coarse/fine spatial transfer. Unlike mf_fill_fine_ghosts_mb this operation has exactly
@@ -661,8 +646,8 @@ inline void mf_fill_fine_ghosts_mb(
 // TimePoints. Keeping the two protocols separate prevents callers from manufacturing a fake
 // `(parent, parent)` temporal window merely to request conservative spatial ghost materialization.
 inline void mf_fill_fine_ghosts_spatial_mb(MultiFab& Uf, const MultiFab& parent,
-                                           const Box2D& coarse_domain,
-                                           bool replicated_parent, Periodicity periodicity) {
+                                           const Box2D& coarse_domain, bool replicated_parent,
+                                           Periodicity periodicity) {
   if (parent.ncomp() != Uf.ncomp())
     throw std::runtime_error("coarse/fine spatial transfer component mismatch");
   mf_fill_fine_ghosts_mb(Uf, parent, parent, coarse_domain, Real(0), replicated_parent, Real(0), 0,
@@ -680,7 +665,7 @@ class PreparedAverageDownWorkspace {
   PreparedAverageDownWorkspace& operator=(PreparedAverageDownWorkspace&&) noexcept = default;
 
   static PreparedAverageDownWorkspace prepare(const MultiFab& fine, const MultiFab& coarse,
-                                               std::uint64_t topology_generation) {
+                                              std::uint64_t topology_generation) {
     if (fine.ncomp() <= 0 || fine.ncomp() != coarse.ncomp())
       throw std::invalid_argument("average-down parent/child component mismatch");
     if (fine.box_array().size() == 0 || coarse.box_array().size() == 0)
@@ -704,7 +689,7 @@ class PreparedAverageDownWorkspace {
 
     const Box2D bounds = parent_footprints.bounding_box();
     PreparedAverageDownWorkspace workspace(fine, coarse, parent_footprints.boxes(), bounds,
-                                            topology_generation);
+                                           topology_generation);
     for (const Box2D& footprint : parent_footprints.boxes())
       workspace.coverage_.mark(footprint);
     return workspace;
@@ -750,9 +735,8 @@ class PreparedAverageDownWorkspace {
                         std::uint64_t topology_generation) const {
     if (fine.box_array().boxes() != fine_boxes_ || fine.dmap().ranks() != fine_ranks_ ||
         fine.n_grow() != fine_ngrow_ || fine.ncomp() != ncomp_ ||
-        coarse.box_array().boxes() != coarse_boxes_ ||
-        coarse.dmap().ranks() != coarse_ranks_ || coarse.n_grow() != coarse_ngrow_ ||
-        coarse.ncomp() != ncomp_)
+        coarse.box_array().boxes() != coarse_boxes_ || coarse.dmap().ranks() != coarse_ranks_ ||
+        coarse.n_grow() != coarse_ngrow_ || coarse.ncomp() != ncomp_)
       throw std::invalid_argument("prepared average-down crossed an exact layout");
     if (topology_generation != topology_generation_)
       throw std::invalid_argument("prepared average-down crossed a topology generation");
@@ -780,8 +764,7 @@ class PreparedAverageDownWorkspace {
 // apply the same value to their copy. Distributed: only the owner applies. In serial all_reduce
 // is the identity (0 + average = average) -> bit-for-bit identical to the direct routing.
 inline void mf_average_down_mb(const MultiFab& Uf, MultiFab& Uc) {
-  auto workspace = PreparedAverageDownWorkspace::prepare(
-      Uf, Uc, /*topology_generation=*/0);
+  auto workspace = PreparedAverageDownWorkspace::prepare(Uf, Uc, /*topology_generation=*/0);
   workspace.apply(Uf, Uc, /*topology_generation=*/0, world_communicator_view());
 }
 
@@ -810,8 +793,8 @@ class PreparedAmrFillPatchPlan {
   PreparedAmrFillPatchPlan& operator=(PreparedAmrFillPatchPlan&&) noexcept = default;
 
   static PreparedAmrFillPatchPlan prepare(const std::vector<AmrLevelMP>& levels,
-                                          const Box2D& base_domain,
-                                          Periodicity periodicity, bool coarse_replicated,
+                                          const Box2D& base_domain, Periodicity periodicity,
+                                          bool coarse_replicated,
                                           std::uint64_t topology_generation) {
     return prepare(levels, base_domain, periodicity, coarse_replicated, topology_generation,
                    std::make_shared<const PreparedCoarseFineOperator>(
@@ -819,8 +802,8 @@ class PreparedAmrFillPatchPlan {
   }
 
   static PreparedAmrFillPatchPlan prepare(
-      const std::vector<AmrLevelMP>& levels, const Box2D& base_domain,
-      Periodicity periodicity, bool coarse_replicated, std::uint64_t topology_generation,
+      const std::vector<AmrLevelMP>& levels, const Box2D& base_domain, Periodicity periodicity,
+      bool coarse_replicated, std::uint64_t topology_generation,
       std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator) {
     if (levels.empty() || base_domain.empty())
       throw std::invalid_argument(
@@ -834,13 +817,12 @@ class PreparedAmrFillPatchPlan {
       const MultiFab& parent = levels[child - 1].U;
       transitions.push_back(PreparedFillPatchWorkspace::prepare(
           levels[child].U, parent, parent,
-          amr_level_index_domain(base_domain, static_cast<int>(child - 1)),
-          replicated_parent, periodicity, topology_generation, communicator,
-          prepared_operator));
+          amr_level_index_domain(base_domain, static_cast<int>(child - 1)), replicated_parent,
+          periodicity, topology_generation, communicator, prepared_operator));
     }
     return PreparedAmrFillPatchPlan(static_cast<int>(levels.size()), base_domain, periodicity,
-                                    coarse_replicated, topology_generation,
-                                    std::move(transitions), std::move(prepared_operator));
+                                    coarse_replicated, topology_generation, std::move(transitions),
+                                    std::move(prepared_operator));
   }
 
   PreparedFillPatchWorkspace& transition_for_child(int child_level) {
@@ -850,21 +832,17 @@ class PreparedAmrFillPatchPlan {
   }
 
   [[nodiscard]] int nlevels() const noexcept { return nlevels_; }
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
   [[nodiscard]] const std::shared_ptr<const PreparedCoarseFineOperator>& prepared_operator()
       const noexcept {
     return prepared_operator_;
   }
 
-  void validate_hierarchy_contract(int nlevels, const Box2D& base_domain,
-                                   Periodicity periodicity, bool coarse_replicated,
-                                   const std::shared_ptr<const PreparedCoarseFineOperator>&
-                                       prepared_operator) const {
-    if (nlevels != nlevels_ || base_domain != base_domain_ ||
-        periodicity.x != periodicity_.x || periodicity.y != periodicity_.y ||
-        coarse_replicated != coarse_replicated_ ||
+  void validate_hierarchy_contract(
+      int nlevels, const Box2D& base_domain, Periodicity periodicity, bool coarse_replicated,
+      const std::shared_ptr<const PreparedCoarseFineOperator>& prepared_operator) const {
+    if (nlevels != nlevels_ || base_domain != base_domain_ || periodicity.x != periodicity_.x ||
+        periodicity.y != periodicity_.y || coarse_replicated != coarse_replicated_ ||
         prepared_operator.get() != prepared_operator_.get())
       throw std::invalid_argument(
           "prepared AMR FillPatch plan does not match the hierarchy contract");
@@ -902,8 +880,7 @@ class PreparedAmrAverageDownPlan {
   static PreparedAmrAverageDownPlan prepare(const std::vector<AmrLevelMP>& levels,
                                             std::uint64_t topology_generation) {
     if (levels.empty())
-      throw std::invalid_argument(
-          "prepared AMR average-down plan requires a non-empty hierarchy");
+      throw std::invalid_argument("prepared AMR average-down plan requires a non-empty hierarchy");
     std::vector<PreparedAverageDownWorkspace> transitions;
     transitions.reserve(levels.size() - 1);
     for (std::size_t child = 1; child < levels.size(); ++child)
@@ -920,9 +897,7 @@ class PreparedAmrAverageDownPlan {
   }
 
   [[nodiscard]] int nlevels() const noexcept { return nlevels_; }
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
 
  private:
   PreparedAmrAverageDownPlan(int nlevels, std::uint64_t topology_generation,
@@ -1009,8 +984,7 @@ class PreparedAmrLevelAdvanceScratch {
   PreparedAmrLevelAdvanceScratch(PreparedAmrLevelAdvanceScratch&&) noexcept = default;
   PreparedAmrLevelAdvanceScratch& operator=(PreparedAmrLevelAdvanceScratch&&) noexcept = default;
 
-  static PreparedAmrLevelAdvanceScratch prepare(const AmrLevelMP& level,
-                                                bool wave_speed_cache) {
+  static PreparedAmrLevelAdvanceScratch prepare(const AmrLevelMP& level, bool wave_speed_cache) {
     if (level.aux == nullptr)
       throw std::invalid_argument("prepared AMR advance requires a level auxiliary field");
     if (level.U.ncomp() <= 0 || level.U.box_array().size() == 0)
@@ -1059,10 +1033,10 @@ class PreparedAmrLevelAdvanceScratch {
         flux_x_(detail::amr_face_boxes(level.U.box_array(), true), level.U.dmap(), ncomp_, 0),
         flux_y_(detail::amr_face_boxes(level.U.box_array(), false), level.U.dmap(), ncomp_, 0),
         stage_flux_x_(detail::amr_face_boxes(level.U.box_array(), true), level.U.dmap(), ncomp_, 0),
-        stage_flux_y_(detail::amr_face_boxes(level.U.box_array(), false), level.U.dmap(), ncomp_, 0),
-        wave_speed_cache_(wave_speed_cache
-                              ? MultiFab(level.U.box_array(), level.U.dmap(), 4, 1)
-                              : MultiFab()) {
+        stage_flux_y_(detail::amr_face_boxes(level.U.box_array(), false), level.U.dmap(), ncomp_,
+                      0),
+        wave_speed_cache_(wave_speed_cache ? MultiFab(level.U.box_array(), level.U.dmap(), 4, 1)
+                                           : MultiFab()) {
     // Transition preparation deliberately warms distributed face-copy schedules.  Give every
     // persistent carrier a defined device value before that cold-path copy so neither sanitizers nor
     // a non-host execution space can observe uninitialised storage during materialisation.
@@ -1122,17 +1096,16 @@ class PreparedAmrTransitionAdvanceScratch {
     MultiFab coarse_flux_y;
     if (!replicated_parent) {
       coarse_flux_x = MultiFab(detail::amr_face_boxes(child_parent_boxes, true), child.U.dmap(),
-                              parent.U.ncomp(), 0);
+                               parent.U.ncomp(), 0);
       coarse_flux_y = MultiFab(detail::amr_face_boxes(child_parent_boxes, false), child.U.dmap(),
-                              parent.U.ncomp(), 0);
+                               parent.U.ncomp(), 0);
     }
     CoarseFineInterface interface(parent_domain, child.U.box_array(), periodicity);
-    std::vector<Box2D> correction_regions =
-        interface.reflux_register_regions(child.U.box_array());
+    std::vector<Box2D> correction_regions = interface.reflux_register_regions(child.U.box_array());
     PreparedAmrTransitionAdvanceScratch result(
-        parent, child, parent_flux_x, parent_flux_y, parent_domain, periodicity,
-        replicated_parent, topology_generation, communicator, std::move(coarse_flux_x),
-        std::move(coarse_flux_y), std::move(interface), std::move(correction_regions));
+        parent, child, parent_flux_x, parent_flux_y, parent_domain, periodicity, replicated_parent,
+        topology_generation, communicator, std::move(coarse_flux_x), std::move(coarse_flux_y),
+        std::move(interface), std::move(correction_regions));
     result.prepare_strips_(child);
     if (!replicated_parent) {
       detail::parallel_copy_on(result.coarse_flux_x_, parent_flux_x, communicator,
@@ -1147,8 +1120,7 @@ class PreparedAmrTransitionAdvanceScratch {
 
   void begin_replay(const AmrLevelMP& parent, const AmrLevelMP& child,
                     const MultiFab& parent_flux_x, const MultiFab& parent_flux_y,
-                    std::uint64_t topology_generation,
-                    const CommunicatorView& communicator) {
+                    std::uint64_t topology_generation, const CommunicatorView& communicator) {
     validate_replay_(parent, child, parent_flux_x, parent_flux_y, topology_generation,
                      communicator);
     correction_.clear_on_device();
@@ -1181,8 +1153,7 @@ class PreparedAmrTransitionAdvanceScratch {
 
   template <class CoarseStripRange, class FineStripRange>
   void synchronize_integrated(MultiFab& parent_state, Real dx, Real dy,
-                              const CoarseStripRange& coarse_role,
-                              const FineStripRange& fine_role,
+                              const CoarseStripRange& coarse_role, const FineStripRange& fine_role,
                               const CommunicatorView& communicator) {
     validate_communicator_(communicator);
     using CoarseStrip = typename CoarseStripRange::value_type;
@@ -1191,9 +1162,8 @@ class PreparedAmrTransitionAdvanceScratch {
     const FineStrip empty_fine{};
     correction_.clear_on_device();
     for (std::size_t global_child = 0; global_child < child_global_size_; ++global_child) {
-      const CoarseStrip& coarse = global_child < coarse_role.size()
-                                      ? coarse_role[global_child]
-                                      : empty_coarse;
+      const CoarseStrip& coarse =
+          global_child < coarse_role.size() ? coarse_role[global_child] : empty_coarse;
       const FineStrip& fine =
           global_child < fine_role.size() ? fine_role[global_child] : empty_fine;
       if (coarse.cL.empty() && coarse.cB.empty() && fine.fL.empty() && fine.fB.empty())
@@ -1213,12 +1183,13 @@ class PreparedAmrTransitionAdvanceScratch {
   }
 
  private:
-  PreparedAmrTransitionAdvanceScratch(
-      const AmrLevelMP& parent, const AmrLevelMP& child, const MultiFab& parent_flux_x,
-      const MultiFab& parent_flux_y, Box2D parent_domain, Periodicity periodicity,
-      bool replicated_parent, std::uint64_t topology_generation,
-      const CommunicatorView& communicator, MultiFab coarse_flux_x, MultiFab coarse_flux_y,
-      CoarseFineInterface interface, std::vector<Box2D> correction_regions)
+  PreparedAmrTransitionAdvanceScratch(const AmrLevelMP& parent, const AmrLevelMP& child,
+                                      const MultiFab& parent_flux_x, const MultiFab& parent_flux_y,
+                                      Box2D parent_domain, Periodicity periodicity,
+                                      bool replicated_parent, std::uint64_t topology_generation,
+                                      const CommunicatorView& communicator, MultiFab coarse_flux_x,
+                                      MultiFab coarse_flux_y, CoarseFineInterface interface,
+                                      std::vector<Box2D> correction_regions)
       : parent_boxes_(parent.U.box_array().boxes()),
         parent_ranks_(parent.U.dmap().ranks()),
         child_boxes_(child.U.box_array().boxes()),
@@ -1238,9 +1209,8 @@ class PreparedAmrTransitionAdvanceScratch {
         communicator_identity_(detail::parallel_copy_communicator_identity(communicator)),
         coarse_flux_x_(std::move(coarse_flux_x)),
         coarse_flux_y_(std::move(coarse_flux_y)),
-        replicated_parent_lookup_(replicated_parent
-                                      ? std::optional<MfBoxLookup>(std::in_place, parent.U)
-                                      : std::nullopt),
+        replicated_parent_lookup_(
+            replicated_parent ? std::optional<MfBoxLookup>(std::in_place, parent.U) : std::nullopt),
         interface_(std::move(interface)),
         correction_(std::move(correction_regions), ncomp_) {}
 
@@ -1297,25 +1267,22 @@ class PreparedAmrTransitionAdvanceScratch {
     (void)parent;
   }
 
-  void sample_coarse_fluxes_(const MultiFab& parent_flux_x,
-                             const MultiFab& parent_flux_y) {
+  void sample_coarse_fluxes_(const MultiFab& parent_flux_x, const MultiFab& parent_flux_y) {
     for (std::size_t local_child = 0; local_child < strips_.size(); ++local_child) {
       RegMP& strip = strips_[local_child];
       const RefluxStripView view = reflux_strip_view(strip, ncomp_);
       if (!replicated_parent_) {
         const int local = static_cast<int>(local_child);
-        sample_coarse_strip(coarse_flux_x_.fab(local).const_array(),
-                            coarse_flux_x_.fab(local).const_array(),
-                            coarse_flux_y_.fab(local).const_array(),
-                            coarse_flux_y_.fab(local).const_array(), view);
+        sample_coarse_strip(
+            coarse_flux_x_.fab(local).const_array(), coarse_flux_x_.fab(local).const_array(),
+            coarse_flux_y_.fab(local).const_array(), coarse_flux_y_.fab(local).const_array(), view);
         continue;
       }
       for (int j = strip.J0; j <= strip.J1;) {
         const int left = replicated_parent_lookup_->find(strip.I0, j);
         const int right = replicated_parent_lookup_->find(strip.I1, j);
         int end = j;
-        while (end < strip.J1 &&
-               replicated_parent_lookup_->find(strip.I0, end + 1) == left &&
+        while (end < strip.J1 && replicated_parent_lookup_->find(strip.I0, end + 1) == left &&
                replicated_parent_lookup_->find(strip.I1, end + 1) == right)
           ++end;
         sample_coarse_x_strip(parent_flux_x.fab(left).const_array(),
@@ -1326,8 +1293,7 @@ class PreparedAmrTransitionAdvanceScratch {
         const int bottom = replicated_parent_lookup_->find(i, strip.J0);
         const int top = replicated_parent_lookup_->find(i, strip.J1);
         int end = i;
-        while (end < strip.I1 &&
-               replicated_parent_lookup_->find(end + 1, strip.J0) == bottom &&
+        while (end < strip.I1 && replicated_parent_lookup_->find(end + 1, strip.J0) == bottom &&
                replicated_parent_lookup_->find(end + 1, strip.J1) == top)
           ++end;
         sample_coarse_y_strip(parent_flux_y.fab(bottom).const_array(),
@@ -1347,11 +1313,10 @@ class PreparedAmrTransitionAdvanceScratch {
                         const MultiFab& parent_flux_x, const MultiFab& parent_flux_y,
                         std::uint64_t topology_generation,
                         const CommunicatorView& communicator) const {
-    if (parent.U.box_array().boxes() != parent_boxes_ ||
-        parent.U.dmap().ranks() != parent_ranks_ || parent.U.n_grow() != parent_ngrow_ ||
-        parent.U.ncomp() != ncomp_ || child.U.box_array().boxes() != child_boxes_ ||
-        child.U.dmap().ranks() != child_ranks_ || child.U.n_grow() != child_ngrow_ ||
-        child.U.ncomp() != ncomp_ ||
+    if (parent.U.box_array().boxes() != parent_boxes_ || parent.U.dmap().ranks() != parent_ranks_ ||
+        parent.U.n_grow() != parent_ngrow_ || parent.U.ncomp() != ncomp_ ||
+        child.U.box_array().boxes() != child_boxes_ || child.U.dmap().ranks() != child_ranks_ ||
+        child.U.n_grow() != child_ngrow_ || child.U.ncomp() != ncomp_ ||
         parent_flux_x.box_array().boxes() != parent_flux_x_boxes_ ||
         parent_flux_y.box_array().boxes() != parent_flux_y_boxes_ ||
         parent_flux_x.dmap().ranks() != parent_ranks_ ||
@@ -1408,35 +1373,31 @@ class PreparedAmrAdvanceScratchPlan {
     level_scratch.reserve(levels.size());
     attempt.reserve(levels.size());
     for (const AmrLevelMP& level : levels) {
-      level_scratch.push_back(
-          PreparedAmrLevelAdvanceScratch::prepare(level, wave_speed_cache));
-      attempt.push_back({MultiFab(level.U.box_array(), level.U.dmap(), level.U.ncomp(),
-                                  level.U.n_grow()),
-                         level.aux, level.dx, level.dy});
+      level_scratch.push_back(PreparedAmrLevelAdvanceScratch::prepare(level, wave_speed_cache));
+      attempt.push_back(
+          {MultiFab(level.U.box_array(), level.U.dmap(), level.U.ncomp(), level.U.n_grow()),
+           level.aux, level.dx, level.dy});
     }
     std::vector<PreparedAmrTransitionAdvanceScratch> transitions;
     transitions.reserve(levels.size() - 1);
     for (std::size_t parent = 0; parent + 1 < levels.size(); ++parent)
       transitions.push_back(PreparedAmrTransitionAdvanceScratch::prepare(
           levels[parent], levels[parent + 1], level_scratch[parent].flux_x(),
-          level_scratch[parent].flux_y(), amr_level_index_domain(base_domain,
-                                                                 static_cast<int>(parent)),
-          periodicity, parent == 0 && coarse_replicated, topology_generation, communicator));
+          level_scratch[parent].flux_y(),
+          amr_level_index_domain(base_domain, static_cast<int>(parent)), periodicity,
+          parent == 0 && coarse_replicated, topology_generation, communicator));
     return PreparedAmrAdvanceScratchPlan(
-        levels, base_domain, periodicity, coarse_replicated, wave_speed_cache,
-        topology_generation, communicator, std::move(level_scratch), std::move(transitions),
-        std::move(attempt));
+        levels, base_domain, periodicity, coarse_replicated, wave_speed_cache, topology_generation,
+        communicator, std::move(level_scratch), std::move(transitions), std::move(attempt));
   }
 
-  void validate_hierarchy_contract(const std::vector<AmrLevelMP>& levels,
-                                   const Box2D& base_domain, Periodicity periodicity,
-                                   bool coarse_replicated, bool wave_speed_cache,
-                                   std::uint64_t topology_generation,
+  void validate_hierarchy_contract(const std::vector<AmrLevelMP>& levels, const Box2D& base_domain,
+                                   Periodicity periodicity, bool coarse_replicated,
+                                   bool wave_speed_cache, std::uint64_t topology_generation,
                                    const CommunicatorView& communicator) const {
     if (levels.size() != levels_.size() || base_domain != base_domain_ ||
-        !same_periodicity(periodicity, periodicity_) ||
-        coarse_replicated != coarse_replicated_ || wave_speed_cache != wave_speed_cache_ ||
-        topology_generation != topology_generation_)
+        !same_periodicity(periodicity, periodicity_) || coarse_replicated != coarse_replicated_ ||
+        wave_speed_cache != wave_speed_cache_ || topology_generation != topology_generation_)
       throw std::invalid_argument("prepared AMR advance changed its hierarchy contract");
     if (communicator.size() != communicator_size_ || communicator.rank() != communicator_rank_ ||
         detail::parallel_copy_communicator_identity(communicator) != communicator_identity_)
@@ -1482,18 +1443,16 @@ class PreparedAmrAdvanceScratchPlan {
       throw std::out_of_range("prepared AMR advance child level is out of range");
     return transitions_.at(static_cast<std::size_t>(child_level - 1));
   }
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
 
  private:
-  PreparedAmrAdvanceScratchPlan(
-      const std::vector<AmrLevelMP>& levels, Box2D base_domain, Periodicity periodicity,
-      bool coarse_replicated, bool wave_speed_cache, std::uint64_t topology_generation,
-      const CommunicatorView& communicator,
-      std::vector<PreparedAmrLevelAdvanceScratch> level_scratch,
-      std::vector<PreparedAmrTransitionAdvanceScratch> transitions,
-      std::vector<AmrLevelMP> attempt)
+  PreparedAmrAdvanceScratchPlan(const std::vector<AmrLevelMP>& levels, Box2D base_domain,
+                                Periodicity periodicity, bool coarse_replicated,
+                                bool wave_speed_cache, std::uint64_t topology_generation,
+                                const CommunicatorView& communicator,
+                                std::vector<PreparedAmrLevelAdvanceScratch> level_scratch,
+                                std::vector<PreparedAmrTransitionAdvanceScratch> transitions,
+                                std::vector<AmrLevelMP> attempt)
       : base_domain_(base_domain),
         periodicity_(periodicity),
         coarse_replicated_(coarse_replicated),
@@ -1616,16 +1575,15 @@ class PreparedAmrTemporalPlan {
 
 inline void fill_amr_coarse_fine_temporal_ghosts(
     MultiFab& fine, int child_level, const Box2D& base_domain, Periodicity periodicity,
-    const MultiFab& old_parent, const MultiFab& new_parent, Real fraction,
-    bool coarse_replicated, Real positivity_floor, int positivity_component,
-    PreparedAmrFillPatchPlan* fill_patch_plan) {
+    const MultiFab& old_parent, const MultiFab& new_parent, Real fraction, bool coarse_replicated,
+    Real positivity_floor, int positivity_component, PreparedAmrFillPatchPlan* fill_patch_plan) {
   if (child_level <= 0)
     throw std::invalid_argument("coarse/fine temporal ghost fill requires a fine level");
   const bool replicated_parent = child_level == 1 && coarse_replicated;
   if (fill_patch_plan == nullptr) {
-    mf_fill_fine_ghosts_mb(
-        fine, old_parent, new_parent, amr_level_index_domain(base_domain, child_level - 1),
-        fraction, replicated_parent, positivity_floor, positivity_component, periodicity);
+    mf_fill_fine_ghosts_mb(fine, old_parent, new_parent,
+                           amr_level_index_domain(base_domain, child_level - 1), fraction,
+                           replicated_parent, positivity_floor, positivity_component, periodicity);
     return;
   }
   const CommunicatorView communicator =
@@ -1652,8 +1610,7 @@ inline void ssprk_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_do
     fill_amr_same_level_and_physical(U, base_dom, lev, dx, dy, base_per, boundary_fill);
   } else {
     fill_amr_coarse_fine_temporal_ghosts(U, lev, base_dom, base_per, *pOld, *pNew, frac,
-                                         coarse_replicated, pos_floor, pos_comp,
-                                         fill_patch_plan);
+                                         coarse_replicated, pos_floor, pos_comp, fill_patch_plan);
     const Box2D fdom = amr_level_index_domain(base_dom, lev);
     fill_amr_same_level_and_physical(U, fdom, lev, dx, dy, base_per, boundary_fill);
   }
@@ -1737,7 +1694,7 @@ void ssprk2_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
       weno_eps);
   device_fence();
   detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, *Fxs, *Fys, lv.dx, lv.dy, *R);
-  saxpy(lv.U, dt, *R);                                  // U1 + dt L(U1)
+  saxpy(lv.U, dt, *R);                                 // U1 + dt L(U1)
   lincomb(lv.U, Real(1) / 2, *U0, Real(1) / 2, lv.U);  // Shu-Osher U_new
   saxpy(fx, Real(1) / 2, *Fxs);                        // Feff += 1/2 F(U1)
   saxpy(fy, Real(1) / 2, *Fys);
@@ -1811,10 +1768,10 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
       weno_eps);
   device_fence();
   detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, *Fxs, *Fys, lv.dx, lv.dy,
-                                *R);  // R1 = -div F1 + S(U1)
-  saxpy(lv.U, dt, *R);                                       // lv.U = U1 + dt R1
-  lincomb(lv.U, Real(3) / 4, *U0, Real(1) / 4, lv.U);        // lv.U = U2
-  saxpy(fx, Real(1) / 6, *Fxs);                              // Feff += 1/6 F1
+                                *R);                   // R1 = -div F1 + S(U1)
+  saxpy(lv.U, dt, *R);                                 // lv.U = U1 + dt R1
+  lincomb(lv.U, Real(3) / 4, *U0, Real(1) / 4, lv.U);  // lv.U = U2
+  saxpy(fx, Real(1) / 6, *Fxs);                        // Feff += 1/6 F1
   saxpy(fy, Real(1) / 6, *Fys);
   detail::reject_nonfinite_finite_volume_data("ssprk3_advance_level(stage 1)", lv.U, fx, fy);
 
@@ -1828,10 +1785,10 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
       weno_eps);
   device_fence();
   detail::mf_eval_rhs_unchecked(m, lv.U, *lv.aux, *Fxs, *Fys, lv.dx, lv.dy,
-                                *R);  // R2 = -div F2 + S(U2)
-  saxpy(lv.U, dt, *R);                                       // lv.U = U2 + dt R2
-  lincomb(lv.U, Real(1) / 3, *U0, Real(2) / 3, lv.U);        // lv.U = U_new (t + dt)
-  saxpy(fx, Real(2) / 3, *Fxs);                              // Feff += 2/3 F2
+                                *R);                   // R2 = -div F2 + S(U2)
+  saxpy(lv.U, dt, *R);                                 // lv.U = U2 + dt R2
+  lincomb(lv.U, Real(1) / 3, *U0, Real(2) / 3, lv.U);  // lv.U = U_new (t + dt)
+  saxpy(fx, Real(2) / 3, *Fxs);                        // Feff += 2/3 F2
   saxpy(fy, Real(2) / 3, *Fys);
   detail::reject_nonfinite_finite_volume_data("ssprk3_advance_level(stage 2)", lv.U, fx, fy);
 }
@@ -1843,8 +1800,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                        std::vector<RegMP>* parentRegs, bool coarse_replicated = true,
                        bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
                        AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
-                       Real weno_eps = kWenoEpsilon,
-                       bool wave_speed_cache = false,
+                       Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
                        const PreparedAmrTemporalPlan* temporal_plan = nullptr,
                        const AmrBoundaryFillAuthority* boundary_fill = nullptr,
                        PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
@@ -1883,14 +1839,12 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     level_scratch->validate(lv, wave_speed_cache);
 
   if (lev == 0) {
-    fill_amr_same_level_and_physical(lv.U, base_dom, lev, lv.dx, lv.dy, base_per,
-                                     boundary_fill);
+    fill_amr_same_level_and_physical(lv.U, base_dom, lev, lv.dx, lv.dy, base_per, boundary_fill);
   } else {
     // parent (level lev-1) REPLICATED only if it is level 0 (lev == 1); otherwise distributed ->
     // FillPatch by parallel_copy.
     fill_amr_coarse_fine_temporal_ghosts(lv.U, lev, base_dom, base_per, *pOld, *pNew, frac,
-                                         coarse_replicated, pos_floor, pos_comp,
-                                         fill_patch_plan);
+                                         coarse_replicated, pos_floor, pos_comp, fill_patch_plan);
     const Box2D fdom = amr_level_index_domain(base_dom, lev);
     fill_amr_same_level_and_physical(lv.U, fdom, lev, lv.dx, lv.dy, base_per, boundary_fill);
   }
@@ -1910,8 +1864,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   MultiFab* wave_cache_ptr = nullptr;
   if constexpr (std::is_same_v<NumericalFlux, HLLFlux>) {
     if (wave_speed_cache)
-      wave_cache_ptr = level_scratch == nullptr ? &owned_wave_cache
-                                                : level_scratch->wave_speed_cache();
+      wave_cache_ptr =
+          level_scratch == nullptr ? &owned_wave_cache : level_scratch->wave_speed_cache();
   }
   compute_face_fluxes_with_optional_hll_cache<Limiter, NumericalFlux>(
       m, lv.U, *lv.aux, fx, fy, wave_cache_ptr, lv.dx, lv.dy, recon_prim, pos_floor, weno_eps);
@@ -1927,17 +1881,15 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     if (!is_leaf && level_scratch == nullptr)
       ssp_U_old = lv.U;  // the children interpolate between this state (t) and advanced lv.U (t+dt)
     if (ssprk2)
-      ssprk2_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
-                                                   base_per, pOld, pNew, frac, parent_span,
-                                                   coarse_replicated, pos_floor, weno_eps,
-                                                   wave_cache_ptr, boundary_fill,
-                                                   fill_patch_plan, level_scratch);
+      ssprk2_advance_level<Limiter, NumericalFlux>(
+          m, lv, dt, fx, fy, recon_prim, lev, base_dom, base_per, pOld, pNew, frac, parent_span,
+          coarse_replicated, pos_floor, weno_eps, wave_cache_ptr, boundary_fill, fill_patch_plan,
+          level_scratch);
     else
-      ssprk3_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
-                                                   base_per, pOld, pNew, frac, parent_span,
-                                                   coarse_replicated, pos_floor, weno_eps,
-                                                   wave_cache_ptr, boundary_fill,
-                                                   fill_patch_plan, level_scratch);
+      ssprk3_advance_level<Limiter, NumericalFlux>(
+          m, lv, dt, fx, fy, recon_prim, lev, base_dom, base_per, pOld, pNew, frac, parent_span,
+          coarse_replicated, pos_floor, weno_eps, wave_cache_ptr, boundary_fill, fill_patch_plan,
+          level_scratch);
   }
 
   // Euler owns one private hierarchy transaction (created by the public driver below).  Advance
@@ -1992,9 +1944,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   // State t for temporal interpolation of the children.  Both methods are already advanced; the
   // method-specific snapshot was captured immediately before its first arithmetic update.
-  const MultiFab& U_old = level_scratch != nullptr
-                              ? level_scratch->start_state()
-                              : (ssprk ? ssp_U_old : euler_U_old);
+  const MultiFab& U_old =
+      level_scratch != nullptr ? level_scratch->start_state() : (ssprk ? ssp_U_old : euler_U_old);
   if (temporal_plan != nullptr) {
     for (const ExplicitTemporalSubstep& child : temporal_plan->transition(lev))
       subcycle_level_mp<Limiter, NumericalFlux>(
@@ -2021,9 +1972,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   // interface correction to uncovered parent cells, then replace covered cells by the child average.
   // The two regions are disjoint, but preserving this order makes the phase observable and extensible.
   if (average_down_plan != nullptr) {
-    mf_average_down_mb(
-        L[lev + 1].U, lv.U, average_down_plan->transition_for_child(lev + 1),
-        average_down_plan->topology_generation(), world_communicator_view());
+    mf_average_down_mb(L[lev + 1].U, lv.U, average_down_plan->transition_for_child(lev + 1),
+                       average_down_plan->topology_generation(), world_communicator_view());
   } else {
     mf_average_down_mb(L[lev + 1].U, lv.U);  // one-shot compatibility route
   }
@@ -2034,8 +1984,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 // on the private attempt when this function is reached.
 inline void publish_amr_state_transaction(std::vector<AmrLevelMP>& live,
                                           std::vector<AmrLevelMP>& attempt) {
-  reject_nonfinite_finite_volume_hierarchy(
-      "publish_amr_state_transaction(synchronization)", attempt);
+  reject_nonfinite_finite_volume_hierarchy("publish_amr_state_transaction(synchronization)",
+                                           attempt);
   device_fence();
   for (std::size_t level = 0; level < live.size(); ++level)
     live[level].U = std::move(attempt[level].U);
@@ -2044,12 +1994,11 @@ inline void publish_amr_state_transaction(std::vector<AmrLevelMP>& live,
 // Driver: one dt step of the N-level multi-patch hierarchy (level 0 = coarse).
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom,
-                                    Real dt, Periodicity per,
-                                    bool coarse_replicated = true, bool recon_prim = false,
-                                    bool imex = false, const NewtonOptions& nopts = {},
+                                    Real dt, Periodicity per, bool coarse_replicated = true,
+                                    bool recon_prim = false, bool imex = false,
+                                    const NewtonOptions& nopts = {},
                                     AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
-                                    Real pos_floor = Real(0),
-                                    Real weno_eps = kWenoEpsilon,
+                                    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon,
                                     bool wave_speed_cache = false,
                                     const AmrBoundaryFillAuthority* boundary_fill = nullptr,
                                     PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
@@ -2065,10 +2014,9 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
         "prepared AMR average-down plan does not match the hierarchy level count");
   const auto execute = [&](std::vector<AmrLevelMP>& attempt) {
     subcycle_level_mp<Limiter, NumericalFlux>(
-        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr,
-        coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor, weno_eps,
-        wave_speed_cache, nullptr, boundary_fill, fill_patch_plan, average_down_plan,
-        advance_scratch_plan);
+        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr, coarse_replicated,
+        recon_prim, imex, nopts, tmethod, pos_floor, weno_eps, wave_speed_cache, nullptr,
+        boundary_fill, fill_patch_plan, average_down_plan, advance_scratch_plan);
   };
   if (advance_scratch_plan == nullptr) {
     std::vector<AmrLevelMP> attempt = L;
@@ -2077,8 +2025,8 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
     return;
   }
   advance_scratch_plan->validate_hierarchy_contract(
-      L, dom, per, coarse_replicated, wave_speed_cache,
-      advance_scratch_plan->topology_generation(), world_communicator_view());
+      L, dom, per, coarse_replicated, wave_speed_cache, advance_scratch_plan->topology_generation(),
+      world_communicator_view());
   std::vector<AmrLevelMP>& attempt = advance_scratch_plan->begin_attempt(L);
   try {
     execute(attempt);
@@ -2096,11 +2044,10 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch_with_temporal_relations(
     const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
-    const std::vector<amr::ParentChildClockRelation>& temporal_relations,
-    Periodicity per, bool coarse_replicated = true,
-    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
-    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
-    Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations, Periodicity per,
+    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
+    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
     const AmrBoundaryFillAuthority* boundary_fill = nullptr,
     PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
     PreparedAmrAverageDownPlan* average_down_plan = nullptr,
@@ -2117,10 +2064,9 @@ void amr_step_multilevel_multipatch_with_temporal_relations(
         "prepared AMR average-down plan does not match the hierarchy level count");
   const auto execute = [&](std::vector<AmrLevelMP>& attempt) {
     subcycle_level_mp<Limiter, NumericalFlux>(
-        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr,
-        coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor, weno_eps,
-        wave_speed_cache, &plan, boundary_fill, fill_patch_plan, average_down_plan,
-        advance_scratch_plan);
+        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr, coarse_replicated,
+        recon_prim, imex, nopts, tmethod, pos_floor, weno_eps, wave_speed_cache, &plan,
+        boundary_fill, fill_patch_plan, average_down_plan, advance_scratch_plan);
   };
   if (advance_scratch_plan == nullptr) {
     std::vector<AmrLevelMP> attempt = L;
@@ -2129,8 +2075,8 @@ void amr_step_multilevel_multipatch_with_temporal_relations(
     return;
   }
   advance_scratch_plan->validate_hierarchy_contract(
-      L, dom, per, coarse_replicated, wave_speed_cache,
-      advance_scratch_plan->topology_generation(), world_communicator_view());
+      L, dom, per, coarse_replicated, wave_speed_cache, advance_scratch_plan->topology_generation(),
+      world_communicator_view());
   std::vector<AmrLevelMP>& attempt = advance_scratch_plan->begin_attempt(L);
   try {
     execute(attempt);
@@ -2147,11 +2093,10 @@ void amr_step_multilevel_multipatch_with_temporal_relations(
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch_with_temporal_plan(
     const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
-    const PreparedAmrTemporalPlan& temporal_plan, Periodicity per,
-    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
-    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
-    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon,
-    bool wave_speed_cache = false,
+    const PreparedAmrTemporalPlan& temporal_plan, Periodicity per, bool coarse_replicated = true,
+    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
+    Real weno_eps = kWenoEpsilon, bool wave_speed_cache = false,
     const AmrBoundaryFillAuthority* boundary_fill = nullptr,
     PreparedAmrFillPatchPlan* fill_patch_plan = nullptr,
     PreparedAmrAverageDownPlan* average_down_plan = nullptr,
@@ -2168,10 +2113,9 @@ void amr_step_multilevel_multipatch_with_temporal_plan(
         "prepared AMR average-down plan does not match the hierarchy level count");
   const auto execute = [&](std::vector<AmrLevelMP>& attempt) {
     subcycle_level_mp<Limiter, NumericalFlux>(
-        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr,
-        coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor, weno_eps,
-        wave_speed_cache, &temporal_plan, boundary_fill, fill_patch_plan, average_down_plan,
-        advance_scratch_plan);
+        m, attempt, 0, dt, dom, per, nullptr, nullptr, Real(0), Real(0), nullptr, coarse_replicated,
+        recon_prim, imex, nopts, tmethod, pos_floor, weno_eps, wave_speed_cache, &temporal_plan,
+        boundary_fill, fill_patch_plan, average_down_plan, advance_scratch_plan);
   };
   if (advance_scratch_plan == nullptr) {
     std::vector<AmrLevelMP> attempt = L;
@@ -2180,8 +2124,8 @@ void amr_step_multilevel_multipatch_with_temporal_plan(
     return;
   }
   advance_scratch_plan->validate_hierarchy_contract(
-      L, dom, per, coarse_replicated, wave_speed_cache,
-      advance_scratch_plan->topology_generation(), world_communicator_view());
+      L, dom, per, coarse_replicated, wave_speed_cache, advance_scratch_plan->topology_generation(),
+      world_communicator_view());
   std::vector<AmrLevelMP>& attempt = advance_scratch_plan->begin_attempt(L);
   try {
     execute(attempt);

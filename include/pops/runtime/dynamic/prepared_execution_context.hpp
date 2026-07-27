@@ -58,8 +58,8 @@ class PreparedExecutionContextV1 final {
   /// for callbacks invoked independently per local patch; all MPI consensus remains in PoPS.
   [[nodiscard]] PreparedExecutionContextV1 without_collective_authority() const {
     return PreparedExecutionContextV1(
-        execution_identity_ + "/noncollective", context_version_, memory_space_,
-        backend_identity_, device_identity_, scalar_type_, storage_precision_, compute_precision_,
+        execution_identity_ + "/noncollective", context_version_, memory_space_, backend_identity_,
+        device_identity_, scalar_type_, storage_precision_, compute_precision_,
         accumulation_precision_, reduction_precision_, stream_handle_, stream_identity_, 0, 0,
         POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1, "none");
   }

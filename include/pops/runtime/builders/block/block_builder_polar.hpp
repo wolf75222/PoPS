@@ -229,16 +229,13 @@ struct DerivePolarAuxKernel {
     aux(i, j, 0) = phi(i, j);
     if (i == ilo)
       aux(i, j, 1) =
-          (Real(-3) * phi(i, j) + Real(4) * phi(i + 1, j) - phi(i + 2, j)) /
-          (Real(2) * dr);
+          (Real(-3) * phi(i, j) + Real(4) * phi(i + 1, j) - phi(i + 2, j)) / (Real(2) * dr);
     else if (i == ihi)
       aux(i, j, 1) =
-          (Real(3) * phi(i, j) - Real(4) * phi(i - 1, j) + phi(i - 2, j)) /
-          (Real(2) * dr);
+          (Real(3) * phi(i, j) - Real(4) * phi(i - 1, j) + phi(i - 2, j)) / (Real(2) * dr);
     else
       aux(i, j, 1) = (phi(i + 1, j) - phi(i - 1, j)) / (Real(2) * dr);
-    aux(i, j, 2) = (phi(i, jp) - phi(i, jm)) /
-                   (Real(2) * geometry.dtheta() * geometry.r_cell(i));
+    aux(i, j, 2) = (phi(i, jp) - phi(i, jm)) / (Real(2) * geometry.dtheta() * geometry.r_cell(i));
   }
 };
 

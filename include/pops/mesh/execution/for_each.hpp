@@ -23,8 +23,8 @@
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/index/box2d.hpp>
 
-#include <cstdint>      // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
-#include <cstdlib>      // getenv / strtol: overridable serial fallback threshold (#165)
+#include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
+#include <cstdlib>  // getenv / strtol: overridable serial fallback threshold (#165)
 #include <limits>
 #include <stdexcept>
 #include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
@@ -75,10 +75,10 @@ inline void require_iterable_box(const Box2D& box) {
   const std::int64_t nx = static_cast<std::int64_t>(box.hi[0]) - box.lo[0] + 1;
   const std::int64_t ny = static_cast<std::int64_t>(box.hi[1]) - box.lo[1] + 1;
   if (nx > std::numeric_limits<int>::max() || ny > std::numeric_limits<int>::max() ||
-      box.hi[0] == std::numeric_limits<int>::max() ||
-      box.hi[1] == std::numeric_limits<int>::max())
+      box.hi[0] == std::numeric_limits<int>::max() || box.hi[1] == std::numeric_limits<int>::max())
     throw std::overflow_error(
-        "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index below INT_MAX");
+        "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index below "
+        "INT_MAX");
 }
 
 inline std::int64_t foreach_serial_threshold() {

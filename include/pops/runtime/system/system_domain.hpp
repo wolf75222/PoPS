@@ -152,8 +152,8 @@ struct SystemDomain {
     bool eb_active;
   };
   LayoutReport layout_report() const {
-    return LayoutReport{polar_, dom.nx(), dom.ny(), static_cast<int>(ba.size()),
-                        aux_ncomp_, per_.x, per_.y, eb_set_};
+    return LayoutReport{polar_,     dom.nx(), dom.ny(), static_cast<int>(ba.size()),
+                        aux_ncomp_, per_.x,   per_.y,   eb_set_};
   }
 };
 

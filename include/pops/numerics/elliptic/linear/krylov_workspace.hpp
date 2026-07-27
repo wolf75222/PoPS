@@ -332,11 +332,10 @@ class KrylovWorkspace {
     long operator_comparison_failure_local = 0;
     long operator_constant_mismatch_local = 0;
     try {
-      operator_constant_mismatch_local =
-          detail::PreparedFieldAlgebra::local_exact_values_equal(operator_probe,
-                                                                 problem.constant_term())
-              ? 0L
-              : 1L;
+      operator_constant_mismatch_local = detail::PreparedFieldAlgebra::local_exact_values_equal(
+                                             operator_probe, problem.constant_term())
+                                             ? 0L
+                                             : 1L;
     } catch (...) {
       operator_comparison_failure_local = 1;
     }

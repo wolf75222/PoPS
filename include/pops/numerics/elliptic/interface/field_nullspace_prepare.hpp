@@ -34,16 +34,15 @@ inline PreparedFieldNullspace prepare_field_nullspace_collectively(
     operator_facts_failed = true;
   }
   if (all_reduce_max(operator_facts_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "field-nullspace operator facts are malformed on at least one rank");
+    throw std::runtime_error("field-nullspace operator facts are malformed on at least one rank");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"field-nullspace-operator-facts", operator_facts_contract}}))
     throw std::runtime_error("field-nullspace operator facts differ across MPI ranks");
 
   std::shared_ptr<const FieldNullspaceProvider> provider;
   std::string provider_contract;
-  PreparedProviderSupport support = PreparedProviderSupport::reject(
-      1, "field-nullspace provider resolution failed");
+  PreparedProviderSupport support =
+      PreparedProviderSupport::reject(1, "field-nullspace provider resolution failed");
   std::string support_contract;
   std::string expected_contract;
   bool declaration_failed = false;
@@ -59,14 +58,12 @@ inline PreparedFieldNullspace prepare_field_nullspace_collectively(
     declaration_failed = true;
   }
   if (all_reduce_max(declaration_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "field-nullspace provider declaration failed on at least one rank");
+    throw std::runtime_error("field-nullspace provider declaration failed on at least one rank");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"field-nullspace-provider", provider_contract},
            {"field-nullspace-support", support_contract},
            {"field-nullspace-expected-contract", expected_contract}}))
-    throw std::runtime_error(
-        "field-nullspace provider declaration differs across MPI ranks");
+    throw std::runtime_error("field-nullspace provider declaration differs across MPI ranks");
   if (!support.accepted())
     throw std::runtime_error("field-nullspace provider rejected the exact prepared request: " +
                              std::string(support.reason) + " (provider status " +
@@ -83,14 +80,12 @@ inline PreparedFieldNullspace prepare_field_nullspace_collectively(
     preparation_failed = true;
   }
   if (all_reduce_max(preparation_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "field-nullspace provider preparation failed on at least one rank");
+    throw std::runtime_error("field-nullspace provider preparation failed on at least one rank");
   const bool mismatch = prepared.provider_identity != provider->identity() ||
                         prepared.provider_version != provider->interface_version() ||
                         prepared.exact_prepared_contract != expected_contract;
   if (all_reduce_max(mismatch ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "field-nullspace provider published an invalid prepared contract");
+    throw std::runtime_error("field-nullspace provider published an invalid prepared contract");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"field-nullspace-actual-contract", prepared.exact_prepared_contract}}))
     throw std::runtime_error("prepared field nullspace differs across MPI ranks");

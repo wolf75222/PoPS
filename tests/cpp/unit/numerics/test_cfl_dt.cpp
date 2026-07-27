@@ -165,9 +165,9 @@ TEST(test_cfl_dt, native_bound_reductions_reject_every_invalid_scalar_category) 
   const Real nan = std::numeric_limits<Real>::quiet_NaN();
   const Real inf = std::numeric_limits<Real>::infinity();
   for (const Real invalid : {Real(-1), nan, inf}) {
-    EXPECT_THROW((void)max_wave_speed_mf(
-                     BoundProbe{invalid, Real(1), Real(0), Real(0), Real(0)}, U, aux),
-                 std::domain_error);
+    EXPECT_THROW(
+        (void)max_wave_speed_mf(BoundProbe{invalid, Real(1), Real(0), Real(0), Real(0)}, U, aux),
+        std::domain_error);
     EXPECT_THROW((void)max_stability_speed_mf(
                      BoundProbe{Real(0), Real(0), invalid, Real(1), Real(0)}, U, aux),
                  std::domain_error);
@@ -176,8 +176,7 @@ TEST(test_cfl_dt, native_bound_reductions_reject_every_invalid_scalar_category) 
                  std::domain_error);
   }
 
-  for (const Real invalid_dt : {Real(-1), Real(0), nan,
-                                -std::numeric_limits<Real>::infinity()}) {
+  for (const Real invalid_dt : {Real(-1), Real(0), nan, -std::numeric_limits<Real>::infinity()}) {
     EXPECT_THROW((void)min_stability_dt_mf(
                      BoundProbe{Real(0), Real(0), Real(0), Real(0), Real(0), invalid_dt}, U, aux),
                  std::domain_error);
@@ -189,7 +188,7 @@ TEST(test_cfl_dt, native_bound_reductions_reject_every_invalid_scalar_category) 
   EXPECT_EQ(max_source_frequency_mf(valid, U, aux), Real(4));
   EXPECT_EQ(min_stability_dt_mf(valid, U, aux), Real(0));  // documented +inf means no direct bound
   const Real tiny = std::numeric_limits<Real>::denorm_min();
-  EXPECT_EQ(min_stability_dt_mf(
-                BoundProbe{Real(0), Real(0), Real(0), Real(0), Real(0), tiny}, U, aux),
-            tiny);
+  EXPECT_EQ(
+      min_stability_dt_mf(BoundProbe{Real(0), Real(0), Real(0), Real(0), Real(0), tiny}, U, aux),
+      tiny);
 }

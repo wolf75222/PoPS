@@ -84,8 +84,8 @@ TEST(test_flux_register, device_view_preserves_negative_origin_and_compact_holes
   const Box2D coarse_box{{-4, -3}, {0, 0}};
   MultiFab coarse(BoxArray(std::vector<Box2D>{coarse_box}), DistributionMapping(1, 1), 1, 0);
   coarse.set_val(Real(7));
-  for_each_cell(coarse_box, detail::ApplyRefluxRegisterKernel{
-                                coarse.fab(0).array(), correction.view(), 1});
+  for_each_cell(coarse_box,
+                detail::ApplyRefluxRegisterKernel{coarse.fab(0).array(), correction.view(), 1});
   device_fence();
   EXPECT_EQ(coarse.fab(0)(-4, -3, 0), Real(7 - 304));
   EXPECT_EQ(coarse.fab(0)(-2, -1, 0), Real(7)) << "a multibox hole is never overwritten";
@@ -94,7 +94,7 @@ TEST(test_flux_register, device_view_preserves_negative_origin_and_compact_holes
 
 TEST(test_flux_register, sparse_lookup_storage_is_independent_of_bounding_box_span) {
   const std::vector<Box2D> regions{Box2D{{-1000000000, -7}, {-999999999, -7}},
-                                      Box2D{{999999999, 11}, {1000000000, 11}}};
+                                   Box2D{{999999999, 11}, {1000000000, 11}}};
   FluxRegister correction(regions, 2);
 
   EXPECT_EQ(correction.covered_cell_count(), 4u);
@@ -126,8 +126,7 @@ TEST(test_flux_register, multifab_box_lookup_is_sparse_across_far_apart_patches)
 }
 
 TEST(test_flux_register, average_down_device_path_preserves_multibox_holes) {
-  const std::vector<Box2D> fine_boxes{Box2D{{-8, -4}, {-5, -1}},
-                                      Box2D{{-2, -4}, {1, -1}}};
+  const std::vector<Box2D> fine_boxes{Box2D{{-8, -4}, {-5, -1}}, Box2D{{-2, -4}, {1, -1}}};
   MultiFab fine(BoxArray(fine_boxes), DistributionMapping(2, 1), 1, 0);
   for (int local = 0; local < fine.local_size(); ++local)
     for_each_cell(fine.box(local), FillFineFromParentIndex{fine.fab(local).array()});
@@ -146,12 +145,10 @@ TEST(test_flux_register, average_down_device_path_preserves_multibox_holes) {
 
   // Stable replay reuses the same register/coverage storage and refreshes only values.
   for (int local = 0; local < fine.local_size(); ++local)
-    for_each_cell(fine.box(local),
-                  FillFineFromParentIndex{fine.fab(local).array(), Real(100)});
+    for_each_cell(fine.box(local), FillFineFromParentIndex{fine.fab(local).array(), Real(100)});
   coarse.set_val(Real(99));
   workspace.apply(fine, coarse, 17, world_communicator_view());
   EXPECT_EQ(coarse.fab(0)(-4, -2, 0), Real(58));
   EXPECT_EQ(coarse.fab(0)(-2, -2, 0), Real(99));
-  EXPECT_THROW(workspace.apply(fine, coarse, 18, world_communicator_view()),
-               std::invalid_argument);
+  EXPECT_THROW(workspace.apply(fine, coarse, 18, world_communicator_view()), std::invalid_argument);
 }

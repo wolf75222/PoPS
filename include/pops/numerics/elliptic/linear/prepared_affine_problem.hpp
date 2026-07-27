@@ -438,8 +438,7 @@ class PreparedAffineOperatorProvider {
   }
 
   void release_source_() const noexcept {
-    if (implementation_ &&
-        implementation_->concurrency() == PreparedOperatorConcurrency::Exclusive)
+    if (implementation_ && implementation_->concurrency() == PreparedOperatorConcurrency::Exclusive)
       implementation_->release_exclusive();
   }
 
@@ -456,8 +455,8 @@ class PreparedAffineOperatorProvider {
 
     [[nodiscard]] bool try_reserve_exclusive() const noexcept {
       bool expected = false;
-      return exclusive_reserved_.compare_exchange_strong(
-          expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
+      return exclusive_reserved_.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                         std::memory_order_acquire);
     }
 
     void release_exclusive() const noexcept {
@@ -579,8 +578,7 @@ class PreparedLinearPreconditionerSession {
   PreparedLinearPreconditionerSession() = default;
 
   template <class Session>
-    requires(!std::same_as<std::remove_cvref_t<Session>,
-                           PreparedLinearPreconditionerSession> &&
+    requires(!std::same_as<std::remove_cvref_t<Session>, PreparedLinearPreconditionerSession> &&
              PreparedLinearPreconditionerSessionSource<Session>)
   explicit PreparedLinearPreconditionerSession(Session session)
       : implementation_(std::make_unique<Model<std::remove_cvref_t<Session>>>(std::move(session))) {
@@ -1904,8 +1902,7 @@ class PreparedAffineLinearProblem {
             detail::PreparedProblemControlOperation::ApplyLinear, true, use_reserved,
             preparation_lane_);
     if (!reservation_consensus.operation_agrees)
-      throw std::logic_error(
-          "prepared affine public operations differ across communicator ranks");
+      throw std::logic_error("prepared affine public operations differ across communicator ranks");
     if (reservation_consensus.problem_reservation_failed != 0)
       throw std::logic_error(
           "PreparedAffineLinearProblem::apply_linear cannot use its public operator session while "
@@ -1928,8 +1925,7 @@ class PreparedAffineLinearProblem {
             detail::PreparedProblemControlOperation::TrueResidual, true, use_reserved,
             preparation_lane_);
     if (!reservation_consensus.operation_agrees)
-      throw std::logic_error(
-          "prepared affine public operations differ across communicator ranks");
+      throw std::logic_error("prepared affine public operations differ across communicator ranks");
     if (reservation_consensus.problem_reservation_failed != 0)
       throw std::logic_error(
           "PreparedAffineLinearProblem::true_residual cannot use its public operator session while "
@@ -1954,8 +1950,7 @@ class PreparedAffineLinearProblem {
             detail::PreparedProblemControlOperation::ApplyPreconditioner, true, use_reserved,
             preparation_lane_);
     if (!reservation_consensus.operation_agrees)
-      throw std::logic_error(
-          "prepared affine public operations differ across communicator ranks");
+      throw std::logic_error("prepared affine public operations differ across communicator ranks");
     if (reservation_consensus.problem_reservation_failed != 0)
       throw std::logic_error(
           "PreparedAffineLinearProblem::apply_preconditioner cannot use its public session while "
@@ -2018,8 +2013,7 @@ class PreparedAffineLinearProblem {
   [[nodiscard]] bool try_reserve_mutation_() const noexcept {
     std::size_t expected = 0;
     if (!active_use_reservations_.compare_exchange_strong(
-            expected, kMutationReservation, std::memory_order_acq_rel,
-            std::memory_order_acquire))
+            expected, kMutationReservation, std::memory_order_acq_rel, std::memory_order_acquire))
       return false;
     if (operator_provider_.try_reserve_source_())
       return true;

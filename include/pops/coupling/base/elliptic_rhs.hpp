@@ -76,9 +76,9 @@ inline void add_model_elliptic_rhs(const Model& model, const MultiFab& state, Mu
     throw std::invalid_argument(
         "add_model_elliptic_rhs requires an exactly co-distributed scalar destination");
   for (int local = 0; local < rhs.local_size(); ++local)
-    for_each_cell(rhs.box(local), detail::AddModelEllipticRhsKernel<Model>{
-                                          model, state.fab(local).const_array(),
-                                          rhs.fab(local).array()});
+    for_each_cell(rhs.box(local),
+                  detail::AddModelEllipticRhsKernel<Model>{model, state.fab(local).const_array(),
+                                                           rhs.fab(local).array()});
 }
 
 namespace detail {

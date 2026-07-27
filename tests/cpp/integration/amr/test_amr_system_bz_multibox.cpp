@@ -147,11 +147,11 @@ TEST(test_amr_system_bz_multibox, Runs) {
 
     ChargeDensityRhs charge{{{Real(0), 0}, {Real(0), 0}}};  // charges nulles -> phi = 0
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
-    auto sim = std::make_unique<Sim>(
-        system, geom, ba_coarse, BCRec{}, charge, std::move(bl), Periodicity{true, true},
-        /*replicated_coarse=*/false,  // grossier multi-box reparti
-        PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
-        use_setter ? ScalarFieldProvider2D{} : bz_user);
+    auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
+                                     Periodicity{true, true},
+                                     /*replicated_coarse=*/false,  // grossier multi-box reparti
+                                     PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
+                                     use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
     return sim;

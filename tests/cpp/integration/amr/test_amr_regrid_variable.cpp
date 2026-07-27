@@ -193,20 +193,19 @@ TEST(test_amr_regrid_variable, Runs) {
       << "absent_role_throws_at_build_no_silent_comp0";
   // SINGLE-BLOCK : le meme descripteur VariableSet alimente le graphe prepare ; le role est donc
   // supporte sans repli vers la composante 0.
-  EXPECT_NO_THROW(
-      {
-        AmrSystemConfig cfg;
-        cfg.n = N;
-        cfg.L = 1.0;
-        cfg.regrid_every = 1;
-        AmrSystem sim(cfg);
-        sim.set_temporal_relations({2}, {1}, {"integral_only"});
-        sim.add_block("solo", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-        sim.set_poisson("charge_density", "geometric_mg", "periodic");
-        sim.set_refinement(6.0, "", "energy");
-        sim.set_density("solo", std::vector<double>(static_cast<std::size_t>(N) * N, 1.0));
-        (void)sim.n_patches();
-      }) << "single_block_selector_uses_prepared_runtime_descriptor";
+  EXPECT_NO_THROW({
+    AmrSystemConfig cfg;
+    cfg.n = N;
+    cfg.L = 1.0;
+    cfg.regrid_every = 1;
+    AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
+    sim.add_block("solo", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
+    sim.set_poisson("charge_density", "geometric_mg", "periodic");
+    sim.set_refinement(6.0, "", "energy");
+    sim.set_density("solo", std::vector<double>(static_cast<std::size_t>(N) * N, 1.0));
+    (void)sim.n_patches();
+  }) << "single_block_selector_uses_prepared_runtime_descriptor";
   EXPECT_THROW(
       {
         AmrSystemConfig cfg;

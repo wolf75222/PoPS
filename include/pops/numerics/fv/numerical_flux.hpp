@@ -31,8 +31,8 @@ POPS_HD inline bool max_normal_stability_bound(const StabilityBound& left,
                                                StabilityBound& result) {
   if (!valid_normal_stability_bound(left) || !valid_normal_stability_bound(right))
     return false;
-  result = {left.value > right.value ? left.value : right.value,
-            StabilityUnit::kLengthPerTime, StabilityConvention::kNormalSpectralRadius};
+  result = {left.value > right.value ? left.value : right.value, StabilityUnit::kLengthPerTime,
+            StabilityConvention::kNormalSpectralRadius};
   return true;
 }
 
@@ -79,8 +79,8 @@ struct RusanovFlux {
     if (face.orientation == FaceOrientation::kNegative)
       return detail::canonical_evaluation(*this, physical, left, right, face);
     StabilityBound bound{};
-    if (!detail::max_normal_stability_bound(
-            physical.stability(left, face), physical.stability(right, face), bound))
+    if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                            physical.stability(right, face), bound))
       return FluxEvaluation<typename Physical::State>::reject(0x53544201u);
     const auto left_density = physical.evaluate(left, face);
     const auto right_density = physical.evaluate(right, face);
@@ -115,8 +115,8 @@ POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
   if (!detail::valid_hll_speed_interval(lower, upper))
     return FluxEvaluation<typename Physical::State>::reject(0x484c4c01u);
   StabilityBound bound{};
-  if (!detail::max_normal_stability_bound(
-          physical.stability(left, face), physical.stability(right, face), bound))
+  if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                          physical.stability(right, face), bound))
     return FluxEvaluation<typename Physical::State>::reject(0x53544202u);
   const auto left_density = physical.evaluate(left, face);
   const auto right_density = physical.evaluate(right, face);
@@ -188,8 +188,8 @@ struct HLLCFlux {
       if (!detail::valid_hll_speed_interval(lower, upper))
         return FluxEvaluation<typename Physical::State>::reject(0x484c4c02u);
       StabilityBound bound{};
-      if (!detail::max_normal_stability_bound(
-              physical.stability(left, face), physical.stability(right, face), bound))
+      if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                              physical.stability(right, face), bound))
         return FluxEvaluation<typename Physical::State>::reject(0x53544203u);
       const auto left_density = physical.evaluate(left, face);
       const auto right_density = physical.evaluate(right, face);
@@ -241,8 +241,8 @@ struct RoeFlux {
       return detail::canonical_evaluation(*this, physical, left, right, face);
     if constexpr (RoePhysicalFlux<Physical>) {
       StabilityBound bound{};
-      if (!detail::max_normal_stability_bound(
-              physical.stability(left, face), physical.stability(right, face), bound))
+      if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                              physical.stability(right, face), bound))
         return FluxEvaluation<typename Physical::State>::reject(0x53544204u);
       const auto left_density = physical.evaluate(left, face);
       const auto right_density = physical.evaluate(right, face);
@@ -306,8 +306,8 @@ struct EulerHLLCFlux2D {
     if (!detail::valid_hll_speed_interval(speed_left, speed_right))
       return FluxEvaluation<typename Physical::State>::reject(0x484c4c03u);
     StabilityBound bound{};
-    if (!detail::max_normal_stability_bound(
-            physical.stability(left, face), physical.stability(right, face), bound))
+    if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                            physical.stability(right, face), bound))
       return FluxEvaluation<typename Physical::State>::reject(0x53544205u);
     const auto flux_left = physical.evaluate(left, face);
     const auto flux_right = physical.evaluate(right, face);
@@ -435,8 +435,8 @@ struct EulerRoeFlux2D {
         fixed_right * amplitude_right * (enthalpy + normal * sound);
 
     StabilityBound bound{};
-    if (!detail::max_normal_stability_bound(
-            physical.stability(left, face), physical.stability(right, face), bound))
+    if (!detail::max_normal_stability_bound(physical.stability(left, face),
+                                            physical.stability(right, face), bound))
       return FluxEvaluation<typename Physical::State>::reject(0x53544206u);
     const auto flux_left = physical.evaluate(left, face);
     const auto flux_right = physical.evaluate(right, face);

@@ -152,12 +152,10 @@ struct FacMaskedSorKernel {
     const Real eym = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j - 1, 0)) : Real(1);
     const Real eyp = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j + 1, 0)) : Real(1);
     const Real diagonal = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
-    const Real neighbours =
-        (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
-        (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
-    const Real cross = has_cross
-                           ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy)
-                           : Real(0);
+    const Real neighbours = (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
+                            (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
+    const Real cross =
+        has_cross ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy) : Real(0);
     const Real candidate = (neighbours + cross - rhs(i, j, 0)) / diagonal;
     phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * candidate;
   }
@@ -170,8 +168,7 @@ struct FacMaskedResidualKernel {
   CoverageMaskView coverage;
 
   POPS_HD void operator()(int i, int j) const {
-    residual(i, j, 0) =
-        coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
+    residual(i, j, 0) = coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
   }
 };
 
@@ -200,8 +197,8 @@ struct FacFluxFoldKernel {
 
   POPS_HD void operator()(int i, int j) const {
     if (!coverage.covered(i, j))
-      destination(i, j, 0) += flux.at(i, j, 0) + flux.at(i, j, 1) + flux.at(i, j, 2) +
-                              flux.at(i, j, 3);
+      destination(i, j, 0) +=
+          flux.at(i, j, 0) + flux.at(i, j, 1) + flux.at(i, j, 2) + flux.at(i, j, 3);
   }
 };
 
@@ -234,12 +231,10 @@ struct FacFluxCorrectionKernel {
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int jf = ratio * j + t;
-        const Real face = has_eps
-                              ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0),
-                                             fine_eps(ratio * ilo, jf, 0))
-                              : Real(1);
-        fine_sum += face *
-                    (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
+        const Real face =
+            has_eps ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0), fine_eps(ratio * ilo, jf, 0))
+                    : Real(1);
+        fine_sum += face * (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
       }
       flux.add(i, j, 1, coarse_face - fine_sum * idx2);
       return;
@@ -251,10 +246,9 @@ struct FacFluxCorrectionKernel {
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int jf = ratio * j + t;
-        const Real face =
-            has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
-                                    fine_eps(ratio * ihi + ratio, jf, 0))
-                    : Real(1);
+        const Real face = has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
+                                                 fine_eps(ratio * ihi + ratio, jf, 0))
+                                  : Real(1);
         fine_sum += face * (fine_phi(ratio * ihi + ratio - 1, jf, 0) -
                             fine_phi(ratio * ihi + ratio, jf, 0));
       }
@@ -263,34 +257,29 @@ struct FacFluxCorrectionKernel {
     }
     if (j == jlo - 1 && i >= ilo && i <= ihi) {
       const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0))
-                   : Real(1)) *
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0)) : Real(1)) *
           (coarse_phi(i, j + 1, 0) - coarse_phi(i, j, 0)) * idy2;
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int fi = ratio * i + t;
-        const Real face = has_eps
-                              ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
-                                             fine_eps_y(fi, ratio * jlo, 0))
-                              : Real(1);
-        fine_sum += face *
-                    (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
+        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
+                                                 fine_eps_y(fi, ratio * jlo, 0))
+                                  : Real(1);
+        fine_sum += face * (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
       }
       flux.add(i, j, 3, coarse_face - fine_sum * idy2);
       return;
     }
     if (j == jhi + 1 && i >= ilo && i <= ihi) {
       const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0))
-                   : Real(1)) *
+          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0)) : Real(1)) *
           (coarse_phi(i, j - 1, 0) - coarse_phi(i, j, 0)) * idy2;
       Real fine_sum = Real(0);
       for (int t = 0; t < ratio; ++t) {
         const int fi = ratio * i + t;
-        const Real face =
-            has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
-                                    fine_eps_y(fi, ratio * jhi + ratio, 0))
-                    : Real(1);
+        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
+                                                 fine_eps_y(fi, ratio * jhi + ratio, 0))
+                                  : Real(1);
         fine_sum += face * (fine_phi(fi, ratio * jhi + ratio - 1, 0) -
                             fine_phi(fi, ratio * jhi + ratio, 0));
       }
@@ -371,8 +360,7 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
     ba_lv_.push_back(bak);
     dm_lv_.push_back(dmk);
     MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0), lapk(bak, dmk, 1, 0);
-    MultiFab epk(bak, dmk, 1, 1), eyk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1),
-        ayk(bak, dmk, 1, 1);
+    MultiFab epk(bak, dmk, 1, 1), eyk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1), ayk(bak, dmk, 1, 1);
     phik.set_val(Real(0));
     fk.set_val(Real(0));
     rk.set_val(Real(0));
@@ -490,17 +478,17 @@ inline void CompositeFacPoisson::prepare_fully_refined_solver_() {
 
   const int finest = n_levels_ - 1;
   MultiFab& layout = phi_level(finest);
-  fully_refined_solver_ = std::make_unique<GeometricMG>(
-      geom_level(finest), layout.box_array(), layout.dmap(), bc_, ActiveRegionProvider2D{},
-      FieldDistribution::Distributed);
+  fully_refined_solver_ =
+      std::make_unique<GeometricMG>(geom_level(finest), layout.box_array(), layout.dmap(), bc_,
+                                    ActiveRegionProvider2D{}, FieldDistribution::Distributed);
   if (has_reaction_)
     fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction_));
   if (has_boundary_kernel_)
     fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
 }
 
-inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(
-    int max_iters, Real rel_tol, Real abs_tol) {
+inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, Real rel_tol,
+                                                                Real abs_tol) {
   const int finest = n_levels_ - 1;
   GeometricMG& solver = *fully_refined_solver_;
   if (has_eps_) {
@@ -668,17 +656,16 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
     const ConstArray4 Pc = phim.fab(li).const_array();
     const ConstArray4 F = f_eff.fab(li).const_array();
     const ConstArray4 E = eps_level(m).fab(li).const_array();
-    const ConstArray4 EY = has_eps_y_ ? eps_y_level(m).fab(li).const_array()
-                                     : eps_level(m).fab(li).const_array();
+    const ConstArray4 EY =
+        has_eps_y_ ? eps_y_level(m).fab(li).const_array() : eps_level(m).fab(li).const_array();
     const ConstArray4 AXY = a_xy_level(m).fab(li).const_array();
     const ConstArray4 AYX = a_yx_level(m).fab(li).const_array();
     if (finest_unmasked && !hc) {
       for (int s = 0; s < sweeps; ++s)
         for (int color = 0; color < 2; ++color)
-          for_each_cell(
-              vb, detail::FacRedBlackFivePointSorKernel{
-                      P, F, E, EY, idx2, idy2, omega,
-                      has_reaction_ ? reaction_ : Real(0), color, he});
+          for_each_cell(vb, detail::FacRedBlackFivePointSorKernel{
+                                P, F, E, EY, idx2, idy2, omega, has_reaction_ ? reaction_ : Real(0),
+                                color, he});
       continue;
     }
     const int color_count = hc ? 4 : 2;
@@ -738,8 +725,8 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
       throw std::runtime_error(
           "CompositeFacPoisson: co-located coarse interface storage is missing");
     for_each_cell(coarse_need,
-                  detail::FacFluxCorrectionKernel{PC, EC, EYC, PF, EF, EYF, coverage,
-                                                  register_view, pc, idx2, idy2, r, he});
+                  detail::FacFluxCorrectionKernel{PC, EC, EYC, PF, EF, EYF, coverage, register_view,
+                                                  pc, idx2, idy2, r, he});
   }
   reg.gather();  // all_reduce_sum of single-writer slots -> exact; serial identity.
   // fold the 4 slots into dst in a FIXED direction order (xm, xp, ym, yp) -> np-invariant bits.
@@ -778,8 +765,7 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   MultiFab& operator_view = (m == 0 && has_boundary_kernel_) ? boundary_view_c_ : phim;
   apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr, has_eps_ ? &eps_level(m) : nullptr,
                   /*kappa=*/nullptr, has_eps_y_ ? &eps_y_level(m) : nullptr,
-                  has_cross_ ? &a_xy_level(m) : nullptr,
-                  has_cross_ ? &a_yx_level(m) : nullptr);
+                  has_cross_ ? &a_xy_level(m) : nullptr, has_cross_ ? &a_yx_level(m) : nullptr);
   if (has_reaction_)
     apply_constant_reaction_(lap, operator_view);
   if (m + 1 == n_levels_) {
@@ -809,9 +795,8 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   Real nrm = Real(0);
   for (int li = 0; li < resm.local_size(); ++li) {
     const Box2D b = resm.box(li);
-    nrm = std::max(nrm, reduce_max_cell(
-                            b, detail::FacMaskedNormInfKernel{resm.fab(li).const_array(),
-                                                              coverage}));
+    nrm = std::max(nrm, reduce_max_cell(b, detail::FacMaskedNormInfKernel{
+                                               resm.fab(li).const_array(), coverage}));
   }
   return Real(all_reduce_max(static_cast<double>(nrm)));
 }
@@ -907,8 +892,8 @@ inline void CompositeFacPoisson::average_down_level_(int m) {
   }
   reg.gather();  // all_reduce_sum of single-writer slots -> exact; every rank now has the averages.
   Array4 P = parent.fab(0).array();  // replicated coarse (fab(0) on every rank)
-  for_each_cell(parent.box(0), detail::FacCopyCoveredRegisterKernel{
-                                   P, cov_of_[0].view(), register_view});
+  for_each_cell(parent.box(0),
+                detail::FacCopyCoveredRegisterKernel{P, cov_of_[0].view(), register_view});
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -944,8 +929,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
         for_each_cell(b, detail::FacCopyAllKernel{R, S, 0});
       }
       device_fence();  // MPI consumes the managed allocation from the host.
-      all_reduce_sum_inplace(rep.fab(0).array().p,
-                             static_cast<std::size_t>(rep.fab(0).size()));
+      all_reduce_sum_inplace(rep.fab(0).array().p, static_cast<std::size_t>(rep.fab(0).size()));
     };
     MultiFab& res_rep = correction_residual_replicated_[static_cast<std::size_t>(m)];
     broadcast(res_rep, res_level_(m));

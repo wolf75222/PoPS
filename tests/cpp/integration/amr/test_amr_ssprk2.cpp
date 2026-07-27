@@ -380,28 +380,26 @@ TEST(test_amr_ssprk2, euler_nonfinite_source_or_flux_never_publishes_state) {
   const MultiFab snapshot = initial;
 
   for (const bool imex : {false, true}) {
-    std::vector<AmrLevelMP> levels{
-        AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+    std::vector<AmrLevelMP> levels{AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
     const NonFiniteSource model{};
     EXPECT_THROW((pops::advance_amr<NoSlope, RusanovFlux>(
                      model, levels, domain, Real(1e-3), Periodicity{true, true},
-                     /*coarse_replicated=*/true, /*recon_prim=*/false, imex,
-                     pops::NewtonOptions{}, AmrTimeMethod::kEuler)),
+                     /*coarse_replicated=*/true, /*recon_prim=*/false, imex, pops::NewtonOptions{},
+                     AmrTimeMethod::kEuler)),
                  std::runtime_error);
     EXPECT_TRUE(same_complete_storage(levels.front().U, snapshot))
         << (imex ? "implicit" : "explicit") << " source failure published state";
   }
 
-  std::vector<AmrLevelMP> rejected_flux_levels{
-      AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+  std::vector<AmrLevelMP> rejected_flux_levels{AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
   const pops::validation::AdvectionDiffusion finite_model{/*ax=*/Real(1), /*ay=*/Real(0),
                                                           /*nu=*/Real(0)};
-  EXPECT_THROW((pops::advance_amr<NoSlope, RejectingNumericalFlux>(
-                   finite_model, rejected_flux_levels, domain, Real(1e-3),
-                   Periodicity{true, true}, /*coarse_replicated=*/true,
-                   /*recon_prim=*/false, /*imex=*/false, pops::NewtonOptions{},
-                   AmrTimeMethod::kEuler)),
-               std::runtime_error);
+  EXPECT_THROW(
+      (pops::advance_amr<NoSlope, RejectingNumericalFlux>(
+          finite_model, rejected_flux_levels, domain, Real(1e-3), Periodicity{true, true},
+          /*coarse_replicated=*/true,
+          /*recon_prim=*/false, /*imex=*/false, pops::NewtonOptions{}, AmrTimeMethod::kEuler)),
+      std::runtime_error);
   EXPECT_TRUE(same_complete_storage(rejected_flux_levels.front().U, snapshot));
 }
 
@@ -417,8 +415,7 @@ TEST(test_amr_ssprk2, finite_stage_data_that_overflows_is_not_published) {
   const HugeFiniteSource model{};
 
   for (const AmrTimeMethod method : {AmrTimeMethod::kSsprk2, AmrTimeMethod::kSsprk3}) {
-    std::vector<AmrLevelMP> levels{
-        AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
+    std::vector<AmrLevelMP> levels{AmrLevelMP{initial, &aux, Real(1) / 8, Real(1) / 8}};
     EXPECT_THROW((pops::advance_amr<NoSlope, RusanovFlux>(
                      model, levels, domain, Real(2), Periodicity{true, true},
                      /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/false,
@@ -437,8 +434,7 @@ TEST(test_amr_ssprk2, synchronization_overflow_is_rejected_before_hierarchy_publ
   initial.set_val(Real(3));
   aux.set_val(Real(0));
 
-  std::vector<AmrLevelMP> live{
-      AmrLevelMP{initial, &aux, Real(1) / 4, Real(1) / 4}};
+  std::vector<AmrLevelMP> live{AmrLevelMP{initial, &aux, Real(1) / 4, Real(1) / 4}};
   const MultiFab snapshot = live.front().U;
   std::vector<AmrLevelMP> attempt = live;
   MultiFab finite_increment(layout, ownership, 1, NoSlope::n_ghost);
@@ -501,8 +497,8 @@ TEST(test_amr_ssprk2, prepared_multilevel_replay_reuses_native_storage_and_trans
       AmrLevelMP{std::move(fine), &fine_aux, Real(1) / 16, Real(1) / 16}};
 
   constexpr std::uint64_t generation = 41;
-  auto fill = pops::PreparedAmrFillPatchPlan::prepare(
-      levels, coarse_domain, periodicity, /*coarse_replicated=*/true, generation);
+  auto fill = pops::PreparedAmrFillPatchPlan::prepare(levels, coarse_domain, periodicity,
+                                                      /*coarse_replicated=*/true, generation);
   auto average = pops::PreparedAmrAverageDownPlan::prepare(levels, generation);
   auto scratch = pops::PreparedAmrAdvanceScratchPlan::prepare(
       levels, coarse_domain, periodicity, /*coarse_replicated=*/true,
@@ -513,10 +509,9 @@ TEST(test_amr_ssprk2, prepared_multilevel_replay_reuses_native_storage_and_trans
   const auto step = [&] {
     pops::advance_amr<NoSlope, RusanovFlux>(
         model, levels, coarse_domain, Real(1e-3), periodicity,
-        /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/false,
-        pops::NewtonOptions{}, AmrTimeMethod::kSsprk2, /*pos_floor=*/Real(0),
-        pops::kWenoEpsilon, /*wave_speed_cache=*/false, /*boundary_fill=*/nullptr, &fill,
-        &average, &scratch);
+        /*coarse_replicated=*/true, /*recon_prim=*/false, /*imex=*/false, pops::NewtonOptions{},
+        AmrTimeMethod::kSsprk2, /*pos_floor=*/Real(0), pops::kWenoEpsilon,
+        /*wave_speed_cache=*/false, /*boundary_fill=*/nullptr, &fill, &average, &scratch);
   };
 
   step();  // materialize backend-internal schedules before observing the stable replay

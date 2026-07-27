@@ -132,8 +132,7 @@ static int pops_run_test_mpi_mbox_parity(int argc, char** argv) {
   MultiFab nonfinite_probe(ba1, dm1, 1, 0);
   nonfinite_probe.set_val(Real(0));
   if (me == 0)
-    nonfinite_probe.fab(0)(dom.lo[0], dom.lo[1], 0) =
-        std::numeric_limits<Real>::quiet_NaN();
+    nonfinite_probe.fab(0)(dom.lo[0], dom.lo[1], 0) = std::numeric_limits<Real>::quiet_NaN();
   bool rejected_nonfinite = false;
   try {
     detail::reject_nonfinite_finite_volume_data("test_mpi_mbox_parity", nonfinite_probe);

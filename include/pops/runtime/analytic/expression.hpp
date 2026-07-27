@@ -83,9 +83,7 @@ struct AnalyticNode {
   Real literal = Real(0);
   std::vector<AnalyticNode> args;
 
-  static AnalyticNode constant(Real value) {
-    return AnalyticNode{AnalyticOp::Constant, value, {}};
-  }
+  static AnalyticNode constant(Real value) { return AnalyticNode{AnalyticOp::Constant, value, {}}; }
   static AnalyticNode x() { return AnalyticNode{AnalyticOp::X, Real(0), {}}; }
   static AnalyticNode y() { return AnalyticNode{AnalyticOp::Y, Real(0), {}}; }
   static AnalyticNode apply(AnalyticOp operation, std::vector<AnalyticNode> arguments) {
@@ -243,8 +241,7 @@ inline AnalyticOp analytic_op_from_name(std::string_view name) {
     return AnalyticOp::Between;
   if (name == "input")
     return AnalyticOp::Input;
-  throw std::invalid_argument("analytic expression: unknown operation '" + std::string(name) +
-                              "'");
+  throw std::invalid_argument("analytic expression: unknown operation '" + std::string(name) + "'");
 }
 
 inline bool is_known(AnalyticOp op) {
@@ -347,8 +344,8 @@ struct AnalyticProgramView {
           const std::uint32_t slot = instruction.operand;
           const bool ok = inputs != nullptr && slot < input_count;
           values[sp] = ok ? inputs[slot] : std::numeric_limits<Real>::quiet_NaN();
-          validity[sp++] = ok && Kokkos::isfinite(values[sp - 1]) ? std::uint8_t{1}
-                                                                  : std::uint8_t{0};
+          validity[sp++] =
+              ok && Kokkos::isfinite(values[sp - 1]) ? std::uint8_t{1} : std::uint8_t{0};
         } break;
         case AnalyticOp::Add: {
           const std::size_t right = --sp;
@@ -533,7 +530,6 @@ struct AnalyticProgramView {
     assert(result.valid);
     return result.valid && result.value != Real(0);
   }
-
 };
 
 static_assert(std::is_trivially_copyable_v<AnalyticProgramView>);
@@ -604,9 +600,9 @@ inline bool comparison(AnalyticOp op) {
 inline void require_type(AnalyticValueType actual, AnalyticValueType expected, AnalyticOp op,
                          std::size_t token_index) {
   if (actual != expected)
-    reject("operator '" + std::string(op_name(op)) + "' at token " +
-           std::to_string(token_index) + " requires " +
-           (expected == AnalyticValueType::Scalar ? "scalar" : "predicate") + " arguments");
+    reject("operator '" + std::string(op_name(op)) + "' at token " + std::to_string(token_index) +
+           " requires " + (expected == AnalyticValueType::Scalar ? "scalar" : "predicate") +
+           " arguments");
 }
 
 struct TypedStackEntry {
@@ -626,8 +622,8 @@ inline void flatten_node(const AnalyticNode& node, const AnalyticLimits& limits,
     reject("unknown opcode " + std::to_string(static_cast<unsigned>(node.op)));
   const int expected = arity(node.op);
   if (node.args.size() != static_cast<std::size_t>(expected))
-    reject("operator '" + std::string(op_name(node.op)) + "' requires " +
-           std::to_string(expected) + " arguments, got " + std::to_string(node.args.size()));
+    reject("operator '" + std::string(op_name(node.op)) + "' requires " + std::to_string(expected) +
+           " arguments, got " + std::to_string(node.args.size()));
   for (const AnalyticNode& argument : node.args)
     flatten_node(argument, limits, depth + 1, node_count, tokens);
   tokens.push_back(AnalyticToken{node.op, node.literal});
@@ -642,8 +638,8 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
   if (tokens.empty())
     detail::reject("postfix program is empty");
   if (tokens.size() > limits.max_nodes)
-    detail::reject("node count " + std::to_string(tokens.size()) + " exceeds max_nodes=" +
-                   std::to_string(limits.max_nodes));
+    detail::reject("node count " + std::to_string(tokens.size()) +
+                   " exceeds max_nodes=" + std::to_string(limits.max_nodes));
 
   std::array<detail::TypedStackEntry, kAnalyticMaxStack> stack{};
   std::size_t sp = 0;
@@ -711,8 +707,8 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
         if (token.op == AnalyticOp::Pow && !right.literal_constant)
           detail::reject("operator 'pow' at token " + std::to_string(index) +
                          " requires a literal exponent");
-        result = detail::comparison(token.op) ? AnalyticValueType::Predicate
-                                              : AnalyticValueType::Scalar;
+        result =
+            detail::comparison(token.op) ? AnalyticValueType::Predicate : AnalyticValueType::Scalar;
       }
     } else if (token.op == AnalyticOp::Select) {
       const detail::TypedStackEntry otherwise = stack[--sp];
@@ -743,8 +739,7 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
       detail::reject("expression depth exceeds max_depth=" + std::to_string(limits.max_depth));
     if (sp >= limits.max_stack)
       detail::reject("postfix stack exceeds max_stack=" + std::to_string(limits.max_stack));
-    stack[sp++] =
-        detail::TypedStackEntry{result, result_depth, result_is_literal, result_literal};
+    stack[sp++] = detail::TypedStackEntry{result, result_depth, result_is_literal, result_literal};
     maximum_stack = std::max(maximum_stack, sp);
 
     AnalyticInstruction instruction{};

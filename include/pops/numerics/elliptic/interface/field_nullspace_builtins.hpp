@@ -69,8 +69,7 @@ inline Real operator_topology_gauge_value(const PreparedProviderOptions& options
     throw std::invalid_argument(
         "operator-topology nullspace provider requires a binary64 gauge.value");
   const double value = std::get<double>(found->second);
-  if (!std::isfinite(value) ||
-      !std::isfinite(static_cast<double>(static_cast<Real>(value))))
+  if (!std::isfinite(value) || !std::isfinite(static_cast<double>(static_cast<Real>(value))))
     throw std::invalid_argument(
         "operator-topology nullspace provider requires a finite gauge.value");
   return static_cast<Real>(value);
@@ -93,8 +92,7 @@ inline std::string operator_topology_nullspace_contract(
       .scalar(static_cast<std::uint64_t>(request.topology.layouts.size()))
       .sequence(request.topology.cell_measure)
       .sequence(request.topology.level_distributions,
-                [](ExactContractBuilder& item,
-                   const PreparedVectorDistribution& distribution) {
+                [](ExactContractBuilder& item, const PreparedVectorDistribution& distribution) {
                   item.bytes(distribution.collective_contract());
                 })
       .sequence(request.topology.connected_components,
@@ -103,14 +101,12 @@ inline std::string operator_topology_nullspace_contract(
                       .text(component.identity)
                       .text(component.provenance);
                 })
-      .sequence(request.topology.component_label_contracts,
-                [](ExactContractBuilder& item, const std::string& resource) {
-                  item.bytes(resource);
-                })
-      .sequence(request.topology.coverage_contracts,
-                [](ExactContractBuilder& item, const std::string& resource) {
-                  item.bytes(resource);
-                })
+      .sequence(
+          request.topology.component_label_contracts,
+          [](ExactContractBuilder& item, const std::string& resource) { item.bytes(resource); })
+      .sequence(
+          request.topology.coverage_contracts,
+          [](ExactContractBuilder& item, const std::string& resource) { item.bytes(resource); })
       .bytes(request.options.exact_contract());
   return std::move(contract).release();
 }
@@ -147,8 +143,7 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
     return "pops.field-nullspace.operator-topology-derived@2";
   }
   [[nodiscard]] PreparedProviderOptions default_options() const override {
-    return {"pops.field-nullspace.operator-topology-derived.options@1",
-            {{"gauge.value", 0.0}}};
+    return {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}};
   }
   [[nodiscard]] bool accepts_options(
       const PreparedProviderOptions& options) const noexcept override {
@@ -205,10 +200,9 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
       } else {
         plan = labelled_mean_zero_nullspace(
             request.plan_identity + ":nullspace", request.topology.identity,
-            request.topology.component_labels,
-            request.topology.connected_components, request.topology.coverage,
-            request.topology.cell_measure, request.topology.field_component,
-            request.topology.level_distributions,
+            request.topology.component_labels, request.topology.connected_components,
+            request.topology.coverage, request.topology.cell_measure,
+            request.topology.field_component, request.topology.level_distributions,
             request.topology.first_level);
         for (FieldGaugeConstraint& gauge : plan.gauges)
           gauge.value = gauge_value;
@@ -230,8 +224,8 @@ make_default_field_nullspace_provider_registry() {
 inline FieldNullspaceProviderSelection operator_topology_zero_mean_nullspace() {
   FieldNullspaceProviderSelection selection;
   selection.provider_identity = "pops.field-nullspace.operator-topology-derived";
-  selection.options =
-      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}};
+  selection.options = {"pops.field-nullspace.operator-topology-derived.options@1",
+                       {{"gauge.value", 0.0}}};
   return selection;
 }
 

@@ -313,6 +313,73 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
     assert max(loads) <= lpt_bound + 1.0e-9
 
 
+@pytest.mark.parametrize(
+    ("catalog", "mutation", "message"),
+    (
+        ("build", "missing", "build missing"),
+        ("build", "orphaned", "build orphaned"),
+        ("test", "missing", "test missing"),
+        ("test", "orphaned", "test orphaned"),
+    ),
+)
+def test_cpp_duration_catalog_inventory_rejects_added_or_removed_targets(
+    tmp_path, monkeypatch, catalog, mutation, message,
+):
+    """A manifest/catalogue rename mismatch fails before any C++ build is scheduled."""
+    targets = ["test_alpha", "test_beta"]
+    build = {"test_alpha": 1.0, "test_beta": 2.0}
+    test = {"test_alpha": 0.1, "test_beta": 0.2}
+    selected = build if catalog == "build" else test
+    if mutation == "missing":
+        selected.pop("test_beta")
+    else:
+        selected["test_removed"] = 3.0
+
+    build_path = tmp_path / "build.json"
+    test_path = tmp_path / "test.json"
+    build_path.write_text(json.dumps(build), encoding="utf-8")
+    test_path.write_text(json.dumps(test), encoding="utf-8")
+    monkeypatch.setattr(sel, "CPP_BUILD_DURATIONS_JSON", build_path)
+    monkeypatch.setattr(sel, "CPP_DURATIONS_JSON", test_path)
+
+    with pytest.raises(SystemExit, match=message):
+        sel.validate_cpp_duration_catalogs(targets)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (True, 0, -1.0, float("nan"), float("inf"), "2.0"),
+)
+def test_cpp_duration_catalog_inventory_rejects_invalid_weights(
+    tmp_path, monkeypatch, invalid,
+):
+    """Duration weights are exact finite measurements, never coercible JSON values."""
+    build_path = tmp_path / "build.json"
+    test_path = tmp_path / "test.json"
+    build_path.write_text(json.dumps({"test_alpha": invalid}), encoding="utf-8")
+    test_path.write_text(json.dumps({"test_alpha": 0.2}), encoding="utf-8")
+    monkeypatch.setattr(sel, "CPP_BUILD_DURATIONS_JSON", build_path)
+    monkeypatch.setattr(sel, "CPP_DURATIONS_JSON", test_path)
+
+    with pytest.raises(SystemExit, match="build duration catalog is invalid"):
+        sel.validate_cpp_duration_catalogs(["test_alpha"])
+
+
+def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
+    """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
+    output = _run_plan_cpp_shard(
+        tmp_path,
+        ["include/pops/runtime/program/amr_program_context.hpp"],
+        shard_index=0,
+        shard_total=1,
+    )
+    selected = output["cpp_targets"].split()
+    sharded = output["cpp_shard_targets"].split()
+    assert {"test_analytic_expression", "test_analytic_level_set"} <= set(selected)
+    assert sharded == selected
+    assert len(sharded) == len(set(sharded))
+
+
 def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     build = sel.ci_shard_binpack.load_durations(sel.CPP_BUILD_DURATIONS_JSON)
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)

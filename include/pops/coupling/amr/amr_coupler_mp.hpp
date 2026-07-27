@@ -65,31 +65,32 @@ inline void coupler_conservative_linear_fill_ghosts_mb(const MultiFab& coarse, M
                                                        bool replicated_parent,
                                                        Periodicity periodicity = {});
 inline void coupler_conservative_linear_fill_all_mb(const MultiFab& coarse, MultiFab& fine,
-                                                     const Box2D& logical_coarse_domain,
-                                                     const Box2D& logical_fine_domain,
-                                                     bool replicated_parent,
-                                                     Periodicity periodicity = {});
+                                                    const Box2D& logical_coarse_domain,
+                                                    const Box2D& logical_fine_domain,
+                                                    bool replicated_parent,
+                                                    Periodicity periodicity = {});
 inline void coupler_conservative_polynomial5_to_fine_mb(
     const MultiFab& coarse, MultiFab& fine, const Box2D& logical_coarse_domain,
     const Box2D& logical_fine_domain, const std::vector<int>& coarse_origin,
     const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio,
     bool replicated_parent = false, Periodicity periodicity = {});
-inline void coupler_conservative_polynomial5_fill_ghosts_mb(
-    const MultiFab& coarse, MultiFab& fine, const Box2D& logical_coarse_domain,
-    const Box2D& logical_fine_domain, bool replicated_parent,
-    Periodicity periodicity = {});
+inline void coupler_conservative_polynomial5_fill_ghosts_mb(const MultiFab& coarse, MultiFab& fine,
+                                                            const Box2D& logical_coarse_domain,
+                                                            const Box2D& logical_fine_domain,
+                                                            bool replicated_parent,
+                                                            Periodicity periodicity = {});
 
 // Cell-centred aux publication uses the same certified conservative-linear spatial provider as
 // state prolongation.  This covers phi, gradients and named aux uniformly; valid cells and every
 // parent-supported ghost are materialized, with no piecewise-constant lower route.
 inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
                                   const Box2D& logical_parent_domain,
-                                  const Box2D& logical_child_domain,
-                                  bool replicated_parent = true, Periodicity periodicity = {}) {
+                                  const Box2D& logical_child_domain, bool replicated_parent = true,
+                                  Periodicity periodicity = {}) {
   if (parent.ncomp() != child.ncomp())
     throw std::runtime_error("aux conservative-linear prolongation component mismatch");
   coupler_conservative_linear_fill_all_mb(parent, child, logical_parent_domain,
-                                           logical_child_domain, replicated_parent, periodicity);
+                                          logical_child_domain, replicated_parent, periodicity);
 }
 // Writes an initial density (component 0, ny*nx row-major in GLOBAL indices) on the coarse
 // level, MULTI-BOX and DISTRIBUTION-AWARE: each rank touches only its LOCAL fabs and reads
@@ -167,7 +168,6 @@ inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& s
   U.sync_device();
 }
 
-
 inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int n,
                                        int ncomp) {
   coupler_write_coarse_state(U, state, n, n, ncomp);
@@ -179,8 +179,7 @@ inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& s
 // boxes are disjoint -> the cross-rank sum reconstructs the field exactly). Replicated mono-box:
 // a single fab covers everything, the buffer is already complete, all_reduce would be the identity
 // -> we avoid it (bit-identical to the historical direct read fab(0)).
-inline std::vector<double> coupler_read_coarse(const MultiFab& U, int nx, int ny,
-                                               bool replicated) {
+inline std::vector<double> coupler_read_coarse(const MultiFab& U, int nx, int ny, bool replicated) {
   // Explicit output packing: make the device result host-visible once before the linear pack.
   U.sync_host();
   const Box2D logical_domain = U.box_array().bounding_box();
@@ -232,8 +231,7 @@ inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int nx,
   return out;
 }
 
-inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n,
-                                                   bool replicated) {
+inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n, bool replicated) {
   return coupler_read_coarse_phi(aux0, n, n, replicated);
 }
 
@@ -244,15 +242,14 @@ inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n,
 // Distributed multi-box: we bring the needed coarse regions onto a LOCAL child-coarsen grid
 // via parallel_copy (same scheme as coupler_inject_aux_mb), then reconstruct.
 inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf,
-                                             const Box2D& coarse_domain,
-                                             const Box2D& fine_domain, bool replicated,
-                                             Periodicity periodicity = {}) {
+                                             const Box2D& coarse_domain, const Box2D& fine_domain,
+                                             bool replicated, Periodicity periodicity = {}) {
   if (Uc.ncomp() != Uf.ncomp())
     throw std::runtime_error("initial conservative-linear prolongation component mismatch");
-  coupler_conservative_linear_to_fine_mb(
-      Uc, Uf, coarse_domain, fine_domain, {coarse_domain.lo[0], coarse_domain.lo[1]},
-      {fine_domain.lo[0], fine_domain.lo[1]}, {kAmrRefRatio, kAmrRefRatio}, replicated,
-      periodicity);
+  coupler_conservative_linear_to_fine_mb(Uc, Uf, coarse_domain, fine_domain,
+                                         {coarse_domain.lo[0], coarse_domain.lo[1]},
+                                         {fine_domain.lo[0], fine_domain.lo[1]},
+                                         {kAmrRefRatio, kAmrRefRatio}, replicated, periodicity);
 }
 
 enum class ConservativeCellFillRegion : unsigned char { Valid, Ghost, ValidAndGhost };
@@ -263,12 +260,12 @@ enum class ConservativeCellFillRegion : unsigned char { Valid, Ghost, ValidAndGh
 /// owned by the coupler/runtime that owns the hierarchy, never by a process-global cache.
 class PreparedConservativeCellTransferWorkspace {
  public:
-  PreparedConservativeCellTransferWorkspace(
-      const PreparedConservativeCellTransferWorkspace&) = delete;
+  PreparedConservativeCellTransferWorkspace(const PreparedConservativeCellTransferWorkspace&) =
+      delete;
   PreparedConservativeCellTransferWorkspace& operator=(
       const PreparedConservativeCellTransferWorkspace&) = delete;
-  PreparedConservativeCellTransferWorkspace(
-      PreparedConservativeCellTransferWorkspace&&) noexcept = default;
+  PreparedConservativeCellTransferWorkspace(PreparedConservativeCellTransferWorkspace&&) noexcept =
+      default;
   PreparedConservativeCellTransferWorkspace& operator=(
       PreparedConservativeCellTransferWorkspace&&) noexcept = default;
 
@@ -277,8 +274,8 @@ class PreparedConservativeCellTransferWorkspace {
       const Box2D& fine_domain, bool replicated_parent, ConservativeCellFillRegion region,
       Periodicity periodicity, std::uint64_t topology_generation,
       const CommunicatorView& communicator) {
-    return prepare(coarse, fine, coarse_domain, fine_domain, replicated_parent, region,
-                   periodicity, topology_generation, communicator,
+    return prepare(coarse, fine, coarse_domain, fine_domain, replicated_parent, region, periodicity,
+                   topology_generation, communicator,
                    std::make_shared<const PreparedCoarseFineOperator>(
                        prepare_limited_linear_coarse_fine_operator()));
   }
@@ -290,8 +287,7 @@ class PreparedConservativeCellTransferWorkspace {
       const CommunicatorView& communicator,
       std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator) {
     if (fine.ncomp() != coarse.ncomp())
-      throw std::invalid_argument(
-          "prepared conservative cell transfer component mismatch");
+      throw std::invalid_argument("prepared conservative cell transfer component mismatch");
     if (coarse_domain.empty() || fine_domain != coarse_domain.refine(kAmrRefRatio))
       throw std::invalid_argument(
           "prepared conservative cell transfer has inconsistent logical domains");
@@ -307,10 +303,9 @@ class PreparedConservativeCellTransferWorkspace {
     // over-allocation for an anisotropic provider), while retaining directional validation below.
     const int reach =
         std::max(prepared_operator->parent_reach_x, prepared_operator->parent_reach_y);
-    const int fine_growth = checked_coarse_fine_carrier_growth(
-        includes_ghosts ? fine.n_grow() : 0, kAmrRefRatio, reach);
-    const BoxArray parent_boxes =
-        coarsen_grown(fine.box_array(), fine_growth, kAmrRefRatio);
+    const int fine_growth = checked_coarse_fine_carrier_growth(includes_ghosts ? fine.n_grow() : 0,
+                                                               kAmrRefRatio, reach);
+    const BoxArray parent_boxes = coarsen_grown(fine.box_array(), fine_growth, kAmrRefRatio);
     for (const Box2D& box : parent_boxes.boxes())
       if (box.nx() < prepared_operator->minimum_axis_cells_x ||
           box.ny() < prepared_operator->minimum_axis_cells_y)
@@ -322,12 +317,11 @@ class PreparedConservativeCellTransferWorkspace {
           std::vector<int>(static_cast<std::size_t>(parent_boxes.size()), my_rank()));
 
     PreparedConservativeCellTransferWorkspace workspace(
-        MultiFab(parent_boxes, parent_mapping, coarse.ncomp(), 0), fine, coarse_domain,
-        fine_domain, replicated_parent, region, periodicity, topology_generation,
-        std::move(prepared_operator));
-    workspace.copy_plan_.emplace(PreparedPeriodicCopyPlan::prepare(
-        workspace.parent_carrier_, coarse, coarse_domain, periodicity, topology_generation,
-        communicator));
+        MultiFab(parent_boxes, parent_mapping, coarse.ncomp(), 0), fine, coarse_domain, fine_domain,
+        replicated_parent, region, periodicity, topology_generation, std::move(prepared_operator));
+    workspace.copy_plan_.emplace(
+        PreparedPeriodicCopyPlan::prepare(workspace.parent_carrier_, coarse, coarse_domain,
+                                          periodicity, topology_generation, communicator));
     return workspace;
   }
 
@@ -343,8 +337,7 @@ class PreparedConservativeCellTransferWorkspace {
     validate_(coarse, fine, topology_generation);
     for (const int component : components)
       if (component < 0 || component >= fine.ncomp())
-        throw std::out_of_range(
-            "prepared conservative-linear selected component is out of range");
+        throw std::out_of_range("prepared conservative-linear selected component is out of range");
     copy_plan_->apply(parent_carrier_, coarse, topology_generation, communicator);
     fill_components_(fine, components);
   }
@@ -375,7 +368,7 @@ class PreparedConservativeCellTransferWorkspace {
         coarse_domain_(coarse_domain),
         fine_domain_(fine_domain),
         transform_{coarse_domain.lo[0], coarse_domain.lo[1], fine_domain.lo[0],
-                   fine_domain.lo[1], kAmrRefRatio, kAmrRefRatio},
+                   fine_domain.lo[1],   kAmrRefRatio,        kAmrRefRatio},
         replicated_parent_(replicated_parent),
         region_(region),
         periodicity_(periodicity),
@@ -445,16 +438,14 @@ class PreparedConservativeCellTransferWorkspace {
   std::shared_ptr<const PreparedCoarseFineOperator> prepared_operator_;
 };
 
-using PreparedConservativeLinearTransferWorkspace =
-    PreparedConservativeCellTransferWorkspace;
+using PreparedConservativeLinearTransferWorkspace = PreparedConservativeCellTransferWorkspace;
 
 /// Materialize a selected region through one migrated parent carrier.  Valid+ghost publication is
 /// intentionally a single pass: aux propagation runs every field update and must not pay for two
 /// parallel_copy schedules, two carrier allocations and four device fences per level.
 inline void coupler_conservative_linear_fill_region_mb(
-    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
-    const Box2D& fine_domain, bool replicated_parent,
-    ConservativeCellFillRegion region, Periodicity periodicity) {
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain, const Box2D& fine_domain,
+    bool replicated_parent, ConservativeCellFillRegion region, Periodicity periodicity) {
   const CommunicatorView communicator =
       replicated_parent ? CommunicatorView{} : world_communicator_view();
   auto workspace = PreparedConservativeCellTransferWorkspace::prepare(
@@ -466,14 +457,10 @@ inline void coupler_conservative_linear_fill_region_mb(
 /// Ratio-2 conservative piecewise-linear prolongation. The four fine children average exactly to
 /// the parent value; minmod-limited slopes make the operator monotone. Parent regions are first
 /// migrated onto the child DistributionMapping, so the per-patch kernel is MPI/GPU-safe.
-inline void coupler_conservative_linear_to_fine_mb(const MultiFab& coarse, MultiFab& fine,
-                                                   const Box2D& coarse_domain,
-                                                   const Box2D& fine_domain,
-                                                   const std::vector<int>& coarse_origin,
-                                                   const std::vector<int>& fine_origin,
-                                                   const std::vector<int>& refinement_ratio,
-                                                   bool replicated_parent,
-                                                   Periodicity periodicity) {
+inline void coupler_conservative_linear_to_fine_mb(
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain, const Box2D& fine_domain,
+    const std::vector<int>& coarse_origin, const std::vector<int>& fine_origin,
+    const std::vector<int>& refinement_ratio, bool replicated_parent, Periodicity periodicity) {
   if (fine.ncomp() != coarse.ncomp())
     throw std::runtime_error("conservative-linear prolongation component mismatch");
   if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
@@ -485,9 +472,9 @@ inline void coupler_conservative_linear_to_fine_mb(const MultiFab& coarse, Multi
   if (coarse_domain.lo[0] != coarse_origin[0] || coarse_domain.lo[1] != coarse_origin[1] ||
       fine_domain.lo[0] != fine_origin[0] || fine_domain.lo[1] != fine_origin[1])
     throw std::runtime_error("conservative-linear prolongation index origin mismatch");
-  coupler_conservative_linear_fill_region_mb(
-      coarse, fine, coarse_domain, fine_domain, replicated_parent,
-      ConservativeCellFillRegion::Valid, periodicity);
+  coupler_conservative_linear_fill_region_mb(coarse, fine, coarse_domain, fine_domain,
+                                             replicated_parent, ConservativeCellFillRegion::Valid,
+                                             periodicity);
 }
 
 /// Ratio-2 conservative piecewise-linear coarse/fine ghost production. The provider fills every
@@ -500,25 +487,24 @@ inline void coupler_conservative_linear_fill_ghosts_mb(const MultiFab& coarse, M
                                                        const Box2D& fine_domain,
                                                        bool replicated_parent,
                                                        Periodicity periodicity) {
-  coupler_conservative_linear_fill_region_mb(
-      coarse, fine, coarse_domain, fine_domain, replicated_parent,
-      ConservativeCellFillRegion::Ghost, periodicity);
+  coupler_conservative_linear_fill_region_mb(coarse, fine, coarse_domain, fine_domain,
+                                             replicated_parent, ConservativeCellFillRegion::Ghost,
+                                             periodicity);
 }
 
 inline void coupler_conservative_linear_fill_all_mb(const MultiFab& coarse, MultiFab& fine,
-                                                     const Box2D& coarse_domain,
-                                                     const Box2D& fine_domain,
-                                                     bool replicated_parent,
-                                                     Periodicity periodicity) {
+                                                    const Box2D& coarse_domain,
+                                                    const Box2D& fine_domain,
+                                                    bool replicated_parent,
+                                                    Periodicity periodicity) {
   coupler_conservative_linear_fill_region_mb(
       coarse, fine, coarse_domain, fine_domain, replicated_parent,
       ConservativeCellFillRegion::ValidAndGhost, periodicity);
 }
 
 inline void coupler_conservative_polynomial5_fill_region_mb(
-    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
-    const Box2D& fine_domain, bool replicated_parent,
-    ConservativeCellFillRegion region, Periodicity periodicity) {
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain, const Box2D& fine_domain,
+    bool replicated_parent, ConservativeCellFillRegion region, Periodicity periodicity) {
   const CommunicatorView communicator =
       replicated_parent ? CommunicatorView{} : world_communicator_view();
   auto workspace = PreparedConservativeCellTransferWorkspace::prepare(
@@ -530,10 +516,9 @@ inline void coupler_conservative_polynomial5_fill_region_mb(
 }
 
 inline void coupler_conservative_polynomial5_to_fine_mb(
-    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
-    const Box2D& fine_domain, const std::vector<int>& coarse_origin,
-    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio,
-    bool replicated_parent, Periodicity periodicity) {
+    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain, const Box2D& fine_domain,
+    const std::vector<int>& coarse_origin, const std::vector<int>& fine_origin,
+    const std::vector<int>& refinement_ratio, bool replicated_parent, Periodicity periodicity) {
   if (fine.ncomp() != coarse.ncomp())
     throw std::runtime_error("degree-four conservative prolongation component mismatch");
   if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
@@ -544,17 +529,19 @@ inline void coupler_conservative_polynomial5_to_fine_mb(
       coarse_origin != std::vector<int>{coarse_domain.lo[0], coarse_domain.lo[1]} ||
       fine_origin != std::vector<int>{fine_domain.lo[0], fine_domain.lo[1]})
     throw std::runtime_error("degree-four conservative prolongation logical-domain mismatch");
-  coupler_conservative_polynomial5_fill_region_mb(
-      coarse, fine, coarse_domain, fine_domain, replicated_parent,
-      ConservativeCellFillRegion::Valid, periodicity);
+  coupler_conservative_polynomial5_fill_region_mb(coarse, fine, coarse_domain, fine_domain,
+                                                  replicated_parent,
+                                                  ConservativeCellFillRegion::Valid, periodicity);
 }
 
-inline void coupler_conservative_polynomial5_fill_ghosts_mb(
-    const MultiFab& coarse, MultiFab& fine, const Box2D& coarse_domain,
-    const Box2D& fine_domain, bool replicated_parent, Periodicity periodicity) {
-  coupler_conservative_polynomial5_fill_region_mb(
-      coarse, fine, coarse_domain, fine_domain, replicated_parent,
-      ConservativeCellFillRegion::Ghost, periodicity);
+inline void coupler_conservative_polynomial5_fill_ghosts_mb(const MultiFab& coarse, MultiFab& fine,
+                                                            const Box2D& coarse_domain,
+                                                            const Box2D& fine_domain,
+                                                            bool replicated_parent,
+                                                            Periodicity periodicity) {
+  coupler_conservative_polynomial5_fill_region_mb(coarse, fine, coarse_domain, fine_domain,
+                                                  replicated_parent,
+                                                  ConservativeCellFillRegion::Ghost, periodicity);
 }
 
 // Builds the coarse level (BoxArray + DistributionMapping) of the AmrSystem path according to the
@@ -580,8 +567,7 @@ inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(
 }
 
 inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(
-    int n, bool distribute, int max_grid,
-    const PreparedLoadBalanceAuthority& load_balance) {
+    int n, bool distribute, int max_grid, const PreparedLoadBalanceAuthority& load_balance) {
   return coupler_make_coarse_layout(n, n, distribute, max_grid, load_balance);
 }
 
@@ -878,22 +864,18 @@ class AmrCouplerMP {
     DistributionMapping dmap = load_balance_authority_->distribute(fb, n_ranks());
     const RegridProlongation prolong = [base_domain = stack_.domain(),
                                         periodicity = transport_periodicity_](
-                                          const MultiFab& parent, MultiFab& fine,
-                                          int parent_level, int ratio,
-                                          bool parent_replicated,
-                                          const CommunicatorView&) {
+                                           const MultiFab& parent, MultiFab& fine, int parent_level,
+                                           int ratio, bool parent_replicated,
+                                           const CommunicatorView&) {
       const Box2D coarse_domain = amr_level_index_domain(base_domain, parent_level);
       const Box2D fine_domain = coarse_domain.refine(ratio);
       detail::coupler_conservative_linear_to_fine_mb(
-          parent, fine, coarse_domain, fine_domain,
-          {coarse_domain.lo[0], coarse_domain.lo[1]},
-          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated,
-          periodicity);
+          parent, fine, coarse_domain, fine_domain, {coarse_domain.lo[0], coarse_domain.lo[1]},
+          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated, periodicity);
       (void)parent_level;
     };
-    L[1].U = regrid_field_on_layout_with_provider(
-        fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, prolong, world_communicator_view(),
-        replicated_coarse_);
+    L[1].U = regrid_field_on_layout_with_provider(fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, prolong,
+                                                  world_communicator_view(), replicated_coarse_);
     stack_.reattach_aux(1);  // realloc aux[1] on the new layout + rewire L[1].aux
     prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
   }
@@ -903,10 +885,8 @@ class AmrCouplerMP {
     if (!average_down_plan_)
       throw std::logic_error("AmrCouplerMP average-down plan was not prepared");
     for (int k = stack_.nlev() - 1; k >= 1; --k)
-      mf_average_down_mb(L[k].U, L[k - 1].U,
-                         average_down_plan_->transition_for_child(k),
-                         average_down_plan_->topology_generation(),
-                         world_communicator_view());
+      mf_average_down_mb(L[k].U, L[k - 1].U, average_down_plan_->transition_for_child(k),
+                         average_down_plan_->topology_generation(), world_communicator_view());
   }
 
   /// OPT-IN: replaces the coarse-only AMR Poisson with a COMPOSITE FAC elliptic solve (the fine
@@ -946,8 +926,7 @@ class AmrCouplerMP {
     // Use the same named device kernel as the single-block and composite-FAC paths. This is the
     // exact centered operation order, handles every local box (including non-zero origins), and
     // leaves model-named aux components untouched.
-    detail::coupler_grad_phi(mg_.phi(), stack_.aux(0),
-                             Real(1) / (Real(2) * geom_.dx()),
+    detail::coupler_grad_phi(mg_.phi(), stack_.aux(0), Real(1) / (Real(2) * geom_.dx()),
                              Real(1) / (Real(2) * geom_.dy()));
     // Named aux components are installed once by set_named_aux. The gradient kernel writes only
     // comps 0..2, so replaying a host field on every update was redundant. The accepted coarse
@@ -1054,30 +1033,25 @@ class AmrCouplerMP {
   void regrid(Crit crit, int grow = 2, int margin = 2) {
     const RegridProlongation prolong = [base_domain = stack_.domain(),
                                         periodicity = transport_periodicity_](
-                                          const MultiFab& parent, MultiFab& fine,
-                                          int parent_level, int ratio,
-                                          bool parent_replicated,
-                                          const CommunicatorView&) {
+                                           const MultiFab& parent, MultiFab& fine, int parent_level,
+                                           int ratio, bool parent_replicated,
+                                           const CommunicatorView&) {
       const Box2D coarse_domain = amr_level_index_domain(base_domain, parent_level);
       const Box2D fine_domain = coarse_domain.refine(ratio);
       detail::coupler_conservative_linear_to_fine_mb(
-          parent, fine, coarse_domain, fine_domain,
-          {coarse_domain.lo[0], coarse_domain.lo[1]},
-          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated,
-          periodicity);
+          parent, fine, coarse_domain, fine_domain, {coarse_domain.lo[0], coarse_domain.lo[1]},
+          {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated, periodicity);
       (void)parent_level;
     };
     std::optional<RegridPhysicalGhostSupport> physical_support;
     if (transport_boundary_fill_)
-      physical_support = RegridPhysicalGhostSupport{
-          transport_boundary_fill_->provided_depth,
-          transport_boundary_fill_->fills_all_allocated_ghosts};
-    amr_regrid_finest(
-        stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin, prolong,
-        aux_comps<Model>(), replicated_coarse_, *load_balance_authority_,
-        RegridPeriodicity{transport_periodicity_.x, transport_periodicity_.y},
-        world_communicator_view(),
-        physical_support ? &*physical_support : nullptr);
+      physical_support =
+          RegridPhysicalGhostSupport{transport_boundary_fill_->provided_depth,
+                                     transport_boundary_fill_->fills_all_allocated_ghosts};
+    amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin, prolong,
+                      aux_comps<Model>(), replicated_coarse_, *load_balance_authority_,
+                      RegridPeriodicity{transport_periodicity_.x, transport_periodicity_.y},
+                      world_communicator_view(), physical_support ? &*physical_support : nullptr);
     prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
   }
 
@@ -1140,14 +1114,13 @@ class AmrCouplerMP {
               stack_.aux(level - 1), stack_.aux(level),
               amr_level_index_domain(stack_.domain(), level - 1),
               amr_level_index_domain(stack_.domain(), level), replicated_parent,
-              detail::ConservativeCellFillRegion::ValidAndGhost, periodicity,
-              topology_generation, communicator));
+              detail::ConservativeCellFillRegion::ValidAndGhost, periodicity, topology_generation,
+              communicator));
     }
-    auto fill_patch = PreparedAmrFillPatchPlan::prepare(
-        stack_.L(), stack_.domain(), transport_periodicity_, replicated_coarse_,
-        topology_generation);
-    auto average_down =
-        PreparedAmrAverageDownPlan::prepare(stack_.L(), topology_generation);
+    auto fill_patch =
+        PreparedAmrFillPatchPlan::prepare(stack_.L(), stack_.domain(), transport_periodicity_,
+                                          replicated_coarse_, topology_generation);
+    auto average_down = PreparedAmrAverageDownPlan::prepare(stack_.L(), topology_generation);
     aux_transfer_workspaces_.swap(prepared);
     fill_patch_plan_ = std::move(fill_patch);
     average_down_plan_ = std::move(average_down);
@@ -1196,8 +1169,7 @@ class AmrCouplerMP {
         throw std::logic_error("composite AMR named-aux transfer workspace was not prepared");
       const CommunicatorView communicator =
           replicated_coarse_ ? CommunicatorView{} : world_communicator_view();
-      workspace->apply(stack_.aux(0), stack_.aux(1),
-                       std::span<const int>(named_aux_components_),
+      workspace->apply(stack_.aux(0), stack_.aux(1), std::span<const int>(named_aux_components_),
                        transfer_topology_generation_, communicator);
     }
     BCRec fine_aux_bc = coarse_aux_bc;
@@ -1285,9 +1257,8 @@ class AmrCouplerMP {
         const Box2D v = stack_.aux(0).box(li);
         for (int j = v.lo[1]; j <= v.hi[1]; ++j)
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            a(i, j, comp) =
-                field[static_cast<std::size_t>(j - logical_domain.lo[1]) * row +
-                      static_cast<std::size_t>(i - logical_domain.lo[0])];
+            a(i, j, comp) = field[static_cast<std::size_t>(j - logical_domain.lo[1]) * row +
+                                  static_cast<std::size_t>(i - logical_domain.lo[0])];
       }
     }
     stack_.aux(0).sync_device();

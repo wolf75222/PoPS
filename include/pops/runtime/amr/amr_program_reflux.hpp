@@ -58,15 +58,12 @@ struct EdgeStrip {
     fT.assign(nI, Real(0));
   }
 
-
   bool matches(const Box2D& coarse_footprint, int nc) const noexcept {
     if (nc <= 0 || I0 != coarse_footprint.lo[0] || I1 != coarse_footprint.hi[0] ||
         J0 != coarse_footprint.lo[1] || J1 != coarse_footprint.hi[1])
       return false;
-    const std::size_t nj = static_cast<std::size_t>(J1 - J0 + 1) *
-                           static_cast<std::size_t>(nc);
-    const std::size_t ni = static_cast<std::size_t>(I1 - I0 + 1) *
-                           static_cast<std::size_t>(nc);
+    const std::size_t nj = static_cast<std::size_t>(J1 - J0 + 1) * static_cast<std::size_t>(nc);
+    const std::size_t ni = static_cast<std::size_t>(I1 - I0 + 1) * static_cast<std::size_t>(nc);
     return cL.size() == nj && cR.size() == nj && fL.size() == nj && fR.size() == nj &&
            cB.size() == ni && cT.size() == ni && fB.size() == ni && fT.size() == ni;
   }
@@ -158,16 +155,16 @@ struct CoarseRoleScratch {
   MultiFab Fy;
   std::optional<MfBoxLookup> parent_lookup;
 
-  bool matches(const MultiFab& parent, const MultiFab& child, bool replicated,
-               std::uint64_t epoch, int nc) const {
+  bool matches(const MultiFab& parent, const MultiFab& child, bool replicated, std::uint64_t epoch,
+               int nc) const {
     return topology_epoch == epoch && ncomp == nc && child_boxes == child.box_array().boxes() &&
            child_ranks == child.dmap().ranks() && parent_boxes == parent.box_array().boxes() &&
            parent_ranks == parent.dmap().ranks() && replicated_parent == replicated &&
            (replicated ? parent_lookup.has_value() : !parent_lookup.has_value());
   }
 
-  void prepare(const MultiFab& parent, const MultiFab& child, bool replicated,
-               std::uint64_t epoch, int nc) {
+  void prepare(const MultiFab& parent, const MultiFab& child, bool replicated, std::uint64_t epoch,
+               int nc) {
     if (matches(parent, child, replicated, epoch, nc))
       return;
     if (replicated) {
@@ -210,8 +207,7 @@ inline void prepare_edge_flux_fine_role(EdgeFlux& flux, const MultiFab& state, i
   flux.fine.resize(static_cast<std::size_t>(state.box_array().size()));
   for (int local = 0; local < state.local_size(); ++local) {
     const int global = state.global_index(local);
-    flux.fine.at(static_cast<std::size_t>(global))
-        .prepare(PatchRange(state.box(local)).box(), nc);
+    flux.fine.at(static_cast<std::size_t>(global)).prepare(PatchRange(state.box(local)).box(), nc);
   }
 }
 
@@ -477,8 +473,7 @@ inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const Ed
     return;
   const Geometry gc = eng.level_geom(k - 1);
   eng.prepared_reflux_transition(b, k).synchronize_integrated(
-      Uc, gc.dx(), gc.dy(), coarse_role.coarse, fine_role.fine,
-      world_communicator_view());
+      Uc, gc.dx(), gc.dy(), coarse_role.coarse, fine_role.fine, world_communicator_view());
 }
 
 }  // namespace detail

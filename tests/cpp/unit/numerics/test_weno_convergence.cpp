@@ -34,8 +34,7 @@ struct ExternalFourSamplePolicy {
 
   template <class Sample>
   POPS_HD Real stencil_face_value(const Sample& sample) const {
-    return (sample(-3) + Real(2) * sample(-1) + Real(3) * sample(0) +
-            Real(4) * sample(2)) /
+    return (sample(-3) + Real(2) * sample(-1) + Real(3) * sample(0) + Real(4) * sample(2)) /
            Real(10);
   }
 };
@@ -119,8 +118,7 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   const auto sample_x = [](int offset) { return Real(2) + Real(0.2) * Real(offset); };
   const auto sample_y = [](int offset) { return Real(1) + Real(0.1) * Real(offset); };
   const auto combine = [](auto&& sample) {
-    return (sample(-3) + Real(2) * sample(-1) + Real(3) * sample(0) +
-            Real(4) * sample(2)) /
+    return (sample(-3) + Real(2) * sample(-1) + Real(3) * sample(0) + Real(4) * sample(2)) /
            Real(10);
   };
 
@@ -132,17 +130,14 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   EXPECT_DOUBLE_EQ(left[0], combine([&](int offset) { return sample_x(5 - offset); }));
   EXPECT_DOUBLE_EQ(left[1], combine([&](int offset) { return sample_y(5 - offset); }));
 
-  const auto primitive =
-      reconstruct(model, values.const_array(), 5, 0, 0, Real(1), policy, true);
-  EXPECT_EQ(primitive_calls,
-            ExternalFourSamplePolicy::stencil_max_offset -
-                ExternalFourSamplePolicy::stencil_min_offset + 1)
+  const auto primitive = reconstruct(model, values.const_array(), 5, 0, 0, Real(1), policy, true);
+  EXPECT_EQ(primitive_calls, ExternalFourSamplePolicy::stencil_max_offset -
+                                 ExternalFourSamplePolicy::stencil_min_offset + 1)
       << "primitive states are converted once per declared offset, not once per component";
-  const Real primitive_component =
-      combine([&](int offset) {
-        const Real conservative = sample_x(5 + offset);
-        return conservative * conservative;
-      });
+  const Real primitive_component = combine([&](int offset) {
+    const Real conservative = sample_x(5 + offset);
+    return conservative * conservative;
+  });
   EXPECT_NEAR(primitive[0], std::sqrt(primitive_component), Real(1e-14));
   EXPECT_DOUBLE_EQ(primitive[1], combine([&](int offset) { return sample_y(5 + offset); }));
   EXPECT_NE(primitive[0], right[0]);

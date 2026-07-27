@@ -181,8 +181,7 @@ inline AmrRuntime::AuxPublicationWorkspace& AmrRuntime::acquire_aux_publication_
 }
 
 inline void AmrRuntime::apply_named_aux_bc(MultiFab& packed, const std::vector<int>& components,
-                                           const Box2D& level_domain,
-                                           const BCRec& level_bc) {
+                                           const Box2D& level_domain, const BCRec& level_bc) {
   if (named_aux_bc_.empty())
     return;
   for (std::size_t packed_component = 0; packed_component < components.size(); ++packed_component) {
@@ -213,8 +212,7 @@ inline void AmrRuntime::publish_aux_components(const std::vector<int>& component
     const CommunicatorView communicator =
         replicated_parent ? CommunicatorView{} : world_communicator_view();
     workspace.coarse_transfers.at(static_cast<std::size_t>(level - 1))
-        .apply(packed[static_cast<std::size_t>(level - 1)],
-               packed[static_cast<std::size_t>(level)],
+        .apply(packed[static_cast<std::size_t>(level - 1)], packed[static_cast<std::size_t>(level)],
                topology_materialization_generation_, communicator);
     fill_ghosts_profiled(packed[static_cast<std::size_t>(level)], level_domain, level_bc);
     apply_named_aux_bc(packed[static_cast<std::size_t>(level)], components, level_domain, level_bc);
@@ -260,15 +258,13 @@ inline void AmrRuntime::publish_refined_aux_components(const std::vector<int>& c
 inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
     const FieldSolveScope& scope) {
   if (field_solve_transaction_active_)
-    throw std::logic_error(
-        "AmrRuntime field solves are sequential and cannot be re-entered");
+    throw std::logic_error("AmrRuntime field solves are sequential and cannot be re-entered");
   if (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
       scope.selected_named_field == nullptr)
     throw std::invalid_argument("selected field-solve scope requires an exact field identity");
 
-  const std::string selected = scope.selected_named_field == nullptr
-                                   ? std::string{}
-                                   : *scope.selected_named_field;
+  const std::string selected =
+      scope.selected_named_field == nullptr ? std::string{} : *scope.selected_named_field;
   const std::vector<int> components = field_solve_aux_components(scope);
   const auto includes = [&](const std::string& name) {
     return scope.named_fields == NamedFieldSnapshotScope::kAll ||
@@ -290,15 +286,12 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
       const MultiFab& live = aux_[level];
       if (packed.box_array().boxes() != live.box_array().boxes() ||
           packed.dmap().ranks() != live.dmap().ranks() ||
-          packed.ncomp() != static_cast<int>(components.size()) ||
-          packed.n_grow() != live.n_grow())
+          packed.ncomp() != static_cast<int>(components.size()) || packed.n_grow() != live.n_grow())
         return false;
     }
     if (scope.default_field &&
-        (!same_exact_multifab_layout_(snapshot.default_phi,
-                                     default_field_solver_->phi_level(0)) ||
-         !same_exact_multifab_layout_(snapshot.default_rhs,
-                                     default_field_solver_->rhs_level(0))))
+        (!same_exact_multifab_layout_(snapshot.default_phi, default_field_solver_->phi_level(0)) ||
+         !same_exact_multifab_layout_(snapshot.default_rhs, default_field_solver_->rhs_level(0))))
       return false;
     std::size_t expected_named = 0;
     for (const auto& [name, field] : named_fields_) {
@@ -322,9 +315,9 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
         return false;
       for (std::size_t level = 0; level < levels; ++level)
         if (!same_exact_multifab_layout_(state.phi[level],
-                                        field.solver->phi_level(static_cast<int>(level))) ||
+                                         field.solver->phi_level(static_cast<int>(level))) ||
             !same_exact_multifab_layout_(state.rhs[level],
-                                        field.solver->rhs_level(static_cast<int>(level))))
+                                         field.solver->rhs_level(static_cast<int>(level))))
           return false;
     }
     return snapshot.named.size() == expected_named;
@@ -348,10 +341,8 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
       candidate.has_default = true;
       const MultiFab& phi = default_field_solver_->phi_level(0);
       const MultiFab& rhs = default_field_solver_->rhs_level(0);
-      candidate.default_phi =
-          MultiFab(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-      candidate.default_rhs =
-          MultiFab(rhs.box_array(), rhs.dmap(), rhs.ncomp(), rhs.n_grow());
+      candidate.default_phi = MultiFab(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+      candidate.default_rhs = MultiFab(rhs.box_array(), rhs.dmap(), rhs.ncomp(), rhs.n_grow());
     }
     for (const auto& [name, field] : named_fields_) {
       if (!includes(name))
@@ -383,10 +374,8 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
   device_fence();
   copy_aux_components_to_(workspace->packed_aux, workspace->aux_components);
   if (workspace->has_default) {
-    PureFieldAlgebra::copy_allocated(workspace->default_phi,
-                                     default_field_solver_->phi_level(0));
-    PureFieldAlgebra::copy_allocated(workspace->default_rhs,
-                                     default_field_solver_->rhs_level(0));
+    PureFieldAlgebra::copy_allocated(workspace->default_phi, default_field_solver_->phi_level(0));
+    PureFieldAlgebra::copy_allocated(workspace->default_rhs, default_field_solver_->rhs_level(0));
   }
   for (auto& [name, state] : workspace->named) {
     const NamedField& field = named_fields_.at(name);
@@ -413,10 +402,8 @@ inline void AmrRuntime::restore_field_solve_snapshot(FieldSolveSnapshot& snapsho
       std::terminate();
     device_fence();
     if (snapshot.has_default) {
-      PureFieldAlgebra::copy_allocated(default_field_solver_->phi_level(0),
-                                       snapshot.default_phi);
-      PureFieldAlgebra::copy_allocated(default_field_solver_->rhs_level(0),
-                                       snapshot.default_rhs);
+      PureFieldAlgebra::copy_allocated(default_field_solver_->phi_level(0), snapshot.default_phi);
+      PureFieldAlgebra::copy_allocated(default_field_solver_->rhs_level(0), snapshot.default_rhs);
     }
     unpack_aux_components(snapshot.packed_aux, snapshot.aux_components);
     for (auto& [name, state] : snapshot.named) {

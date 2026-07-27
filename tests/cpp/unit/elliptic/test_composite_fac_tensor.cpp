@@ -49,14 +49,12 @@ static double f_rhs(double x, double y) {
   const double u = u_exact(x, y);
   const double ux = 3 * kPi * std::cos(3 * kPi * x) * std::sin(3 * kPi * y);
   const double uy = 3 * kPi * std::sin(3 * kPi * x) * std::cos(3 * kPi * y);
-  const double eps_x_dx =
-      0.6 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
-  const double eps_y_dy =
-      -0.4 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
+  const double eps_x_dx = 0.6 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
+  const double eps_y_dy = -0.4 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
   const double axyx = 0.4 * kPi * std::cos(2 * kPi * x) * std::sin(2 * kPi * y);
   const double axyy = 0.4 * kPi * std::sin(2 * kPi * x) * std::cos(2 * kPi * y);
-  return -(eps_x_xy(x, y) + eps_y_xy(x, y)) * 9.0 * kPi * kPi * u +
-         eps_x_dx * ux + eps_y_dy * uy + axyx * uy - axyy * ux;
+  return -(eps_x_xy(x, y) + eps_y_xy(x, y)) * 9.0 * kPi * kPi * u + eps_x_dx * ux + eps_y_dy * uy +
+         axyx * uy - axyy * ux;
 }
 
 template <class Setter>

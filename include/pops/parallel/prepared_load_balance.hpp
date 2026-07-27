@@ -139,9 +139,7 @@ class PreparedLoadBalanceAuthority {
       throw std::invalid_argument("prepared load-balance authority is incomplete");
   }
 
-  [[nodiscard]] const std::string& semantic_identity() const noexcept {
-    return semantic_identity_;
-  }
+  [[nodiscard]] const std::string& semantic_identity() const noexcept { return semantic_identity_; }
   [[nodiscard]] const std::string& implementation() const noexcept {
     return provider_.implementation();
   }
@@ -153,26 +151,23 @@ class PreparedLoadBalanceAuthority {
       const BoxArray& boxes, int rank_count, LoadBalanceWeights weights = {},
       const CommunicatorView& communicator = world_communicator_view()) const {
     std::string request_contract;
-    detail::collective_load_balance_preflight(
-        "load-balance request", communicator, [&] {
-          if (rank_count <= 0 || rank_count != communicator.size())
-            throw std::invalid_argument(
-                "load-balance rank count must equal the execution communicator size");
-          if (!weights.empty() && weights.size() != static_cast<std::size_t>(boxes.size()))
-            throw std::invalid_argument(
-                "load-balance weight count must equal the BoxArray size");
-          for (int index = 0; index < boxes.size(); ++index) {
-            if (boxes[index].empty())
-              throw std::invalid_argument("load-balance BoxArray contains an empty box");
-            if (!weights.empty() && weights[static_cast<std::size_t>(index)] <= 0)
-              throw std::invalid_argument("load-balance weights must be strictly positive");
-          }
-          request_contract = detail::exact_load_balance_request(boxes, rank_count, weights);
-        });
+    detail::collective_load_balance_preflight("load-balance request", communicator, [&] {
+      if (rank_count <= 0 || rank_count != communicator.size())
+        throw std::invalid_argument(
+            "load-balance rank count must equal the execution communicator size");
+      if (!weights.empty() && weights.size() != static_cast<std::size_t>(boxes.size()))
+        throw std::invalid_argument("load-balance weight count must equal the BoxArray size");
+      for (int index = 0; index < boxes.size(); ++index) {
+        if (boxes[index].empty())
+          throw std::invalid_argument("load-balance BoxArray contains an empty box");
+        if (!weights.empty() && weights[static_cast<std::size_t>(index)] <= 0)
+          throw std::invalid_argument("load-balance weights must be strictly positive");
+      }
+      request_contract = detail::exact_load_balance_request(boxes, rank_count, weights);
+    });
 
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{semantic_identity_, provider_.collective_contract()},
-             {"request", request_contract}},
+            {{semantic_identity_, provider_.collective_contract()}, {"request", request_contract}},
             communicator))
       throw std::invalid_argument(
           "load-balance provider identity or request differs across MPI ranks");
@@ -191,8 +186,8 @@ class PreparedLoadBalanceAuthority {
           throw std::invalid_argument("load-balance provider returned an invalid owner rank");
       mapping_contract = detail::exact_load_balance_mapping(*mapping);
     });
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{semantic_identity_, mapping_contract}}, communicator))
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{semantic_identity_, mapping_contract}},
+                                                  communicator))
       throw std::invalid_argument("load-balance provider returned different mappings across ranks");
     return std::move(*mapping);
   }
@@ -217,9 +212,9 @@ class LoadBalanceProviderRegistry {
       throw std::invalid_argument("load-balance provider route is already registered");
   }
 
-  [[nodiscard]] PreparedLoadBalanceAuthority prepare(
-      std::string_view route, std::string semantic_identity,
-      const PreparedProviderOptions& options) const {
+  [[nodiscard]] PreparedLoadBalanceAuthority prepare(std::string_view route,
+                                                     std::string semantic_identity,
+                                                     const PreparedProviderOptions& options) const {
     LoadBalanceAuthorityFactory factory;
     {
       std::lock_guard<std::mutex> guard(mutex_);
@@ -242,8 +237,8 @@ inline LoadBalanceProviderRegistry& load_balance_provider_registry() {
   std::call_once(builtins, [&] {
     registry.add("space_filling_curve", [](std::string identity,
                                            const PreparedProviderOptions& options) {
-      detail::require_empty_load_balance_options(
-          options, "pops.amr.load-balance.space-filling-curve@1");
+      detail::require_empty_load_balance_options(options,
+                                                 "pops.amr.load-balance.space-filling-curve@1");
       return PreparedLoadBalanceAuthority(
           std::move(identity), PreparedLoadBalanceProvider(detail::SpaceFillingCurveLoadBalance{}));
     });
@@ -252,8 +247,7 @@ inline LoadBalanceProviderRegistry& load_balance_provider_registry() {
       return PreparedLoadBalanceAuthority(
           std::move(identity), PreparedLoadBalanceProvider(detail::KnapsackLoadBalance{}));
     });
-    registry.add("round_robin", [](std::string identity,
-                                   const PreparedProviderOptions& options) {
+    registry.add("round_robin", [](std::string identity, const PreparedProviderOptions& options) {
       detail::require_empty_load_balance_options(options, "pops.amr.load-balance.round-robin@1");
       return PreparedLoadBalanceAuthority(
           std::move(identity), PreparedLoadBalanceProvider(detail::RoundRobinLoadBalance{}));
@@ -262,14 +256,12 @@ inline LoadBalanceProviderRegistry& load_balance_provider_registry() {
   return registry;
 }
 
-inline void register_load_balance_provider(std::string route,
-                                           LoadBalanceAuthorityFactory factory) {
+inline void register_load_balance_provider(std::string route, LoadBalanceAuthorityFactory factory) {
   load_balance_provider_registry().add(std::move(route), std::move(factory));
 }
 
 inline PreparedLoadBalanceAuthority prepare_load_balance_authority(
-    std::string_view route, std::string semantic_identity,
-    const PreparedProviderOptions& options) {
+    std::string_view route, std::string semantic_identity, const PreparedProviderOptions& options) {
   return load_balance_provider_registry().prepare(route, std::move(semantic_identity), options);
 }
 

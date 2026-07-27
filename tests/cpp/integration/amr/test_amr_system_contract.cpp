@@ -47,8 +47,8 @@ static ModelSpec magnetic_fluid_spec() {
   return s;
 }
 
-static void install_regrid_state_authorities(
-    AmrSystem& system, std::initializer_list<const char*> blocks) {
+static void install_regrid_state_authorities(AmrSystem& system,
+                                             std::initializer_list<const char*> blocks) {
   for (const char* block : blocks) {
     const std::string subject =
         std::string("test://amr-system-contract/block/") + block + "/state/U";
@@ -56,21 +56,19 @@ static void install_regrid_state_authorities(
         std::string("test://amr-system-contract/block/") + block + "/transfer/";
     system.install_block_state_route(block, subject);
     system.register_bootstrap_transfer_route(
-        prefix + "prolongation", {subject}, "test::amr-system-contract-transfer@1", "cell",
-        "cell", "conservative", "dense", "prolongation", "conservative_linear", 2, {1},
-        2, kAmrRefRatio);
+        prefix + "prolongation", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
+        "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2, kAmrRefRatio);
     system.register_bootstrap_transfer_route(
-        prefix + "restriction", {subject}, "test::amr-system-contract-transfer@1", "cell",
-        "cell", "conservative", "dense", "restriction", "volume_average", 1, {0}, 2,
-        kAmrRefRatio);
-    system.register_bootstrap_transfer_route(
-        prefix + "coarse-fine", {subject}, "test::amr-system-contract-transfer@1", "cell",
-        "cell", "conservative", "dense", "coarse_fine_fill", "conservative_coarse_fine", 2,
-        {2}, 2, kAmrRefRatio);
-    system.register_bootstrap_transfer_route(
-        prefix + "temporal", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
-        "conservative", "dense", "temporal_interpolation", "linear_time_interpolation", 2,
-        {0}, 2, kAmrRefRatio);
+        prefix + "restriction", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
+        "conservative", "dense", "restriction", "volume_average", 1, {0}, 2, kAmrRefRatio);
+    system.register_bootstrap_transfer_route(prefix + "coarse-fine", {subject},
+                                             "test::amr-system-contract-transfer@1", "cell", "cell",
+                                             "conservative", "dense", "coarse_fine_fill",
+                                             "conservative_coarse_fine", 2, {2}, 2, kAmrRefRatio);
+    system.register_bootstrap_transfer_route(prefix + "temporal", {subject},
+                                             "test::amr-system-contract-transfer@1", "cell", "cell",
+                                             "conservative", "dense", "temporal_interpolation",
+                                             "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
     system.bind_bootstrap_block_subject(subject, block);
   }
 }
@@ -120,15 +118,11 @@ TEST(test_amr_system_contract, Runs) {
     ASSERT_EQ(state.local_size(), 1);
     const ConstArray4 values = state.fab(0).const_array();
     const int sample_j = domain.lo[1] + 2;
-    EXPECT_EQ(values(domain.lo[0] - 1, sample_j, 0),
-              values(domain.hi[0], sample_j, 0));
-    EXPECT_NE(values(domain.lo[0] - 1, sample_j, 0),
-              values(domain.lo[0], sample_j, 0));
+    EXPECT_EQ(values(domain.lo[0] - 1, sample_j, 0), values(domain.hi[0], sample_j, 0));
+    EXPECT_NE(values(domain.lo[0] - 1, sample_j, 0), values(domain.lo[0], sample_j, 0));
     const int sample_i = domain.lo[0] + 2;
-    EXPECT_EQ(values(sample_i, domain.lo[1] - 1, 0),
-              values(sample_i, domain.lo[1], 0));
-    EXPECT_NE(values(sample_i, domain.lo[1] - 1, 0),
-              values(sample_i, domain.hi[1], 0));
+    EXPECT_EQ(values(sample_i, domain.lo[1] - 1, 0), values(sample_i, domain.lo[1], 0));
+    EXPECT_NE(values(sample_i, domain.lo[1] - 1, 0), values(sample_i, domain.hi[1], 0));
   }
 
   // The native hierarchy carries Cartesian axes independently: logical extents, physical bounds,

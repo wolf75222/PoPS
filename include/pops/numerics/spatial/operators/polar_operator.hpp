@@ -113,7 +113,7 @@ template <class Limiter, class NumericalFlux, class Model>
 struct PolarFaceFluxRKernel {
   Model model;
   ConstArray4 u, ax;
-  Array4 fr;       // output: r_face(i) * Fr at the radial face i (ncomp components)
+  Array4 fr;  // output: r_face(i) * Fr at the radial face i (ncomp components)
   Real r_min, dr;
   int radial_index_origin;
   Limiter lim;
@@ -217,8 +217,7 @@ struct PolarAssembleRhsKernel {
   int radial_index_origin;
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const Real ri =
-        r_min + (Real(i) - Real(radial_index_origin) + Real(0.5)) * dr;
+    const Real ri = r_min + (Real(i) - Real(radial_index_origin) + Real(0.5)) * dr;
     const Real inv_r = Real(1) / ri;
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
     const auto Us = load_state<Model>(u, i, j);
@@ -298,15 +297,15 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
     const Box2D v = R.box(li);
     // Radial faces: i in [lo..hi+1], j in [lo..hi] (cf. xface_box).
     failures.merge(reduce_max_uint64_cell(
-        xface_box(v), detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
-                          model, u, ax, fr, r_min, dr, geom.domain.lo[0], lim, nflux,
-                          recon_prim, wall_radial, i_lo_face, i_hi_face, pos_floor, pos_comp,
-                          failures.recorder()}));
+        xface_box(v),
+        detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
+            model, u, ax, fr, r_min, dr, geom.domain.lo[0], lim, nflux, recon_prim, wall_radial,
+            i_lo_face, i_hi_face, pos_floor, pos_comp, failures.recorder()}));
     // Azimuthal faces: i in [lo..hi], j in [lo..hi+1] (cf. yface_box).
     failures.merge(reduce_max_uint64_cell(
-        yface_box(v), detail::PolarFaceFluxThetaKernel<Limiter, NumericalFlux, Model>{
-                          model, u, ax, ft, lim, nflux, recon_prim, pos_floor, pos_comp,
-                          failures.recorder()}));
+        yface_box(v),
+        detail::PolarFaceFluxThetaKernel<Limiter, NumericalFlux, Model>{
+            model, u, ax, ft, lim, nflux, recon_prim, pos_floor, pos_comp, failures.recorder()}));
   }
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Partition the production Python runtime objects for parallel CI prewarming.
+"""Partition production native runtime objects for exact parallel CI prewarming.
 
-The final ``_pops`` build remains the single build and link authority.  These lanes only
-populate ccache with object files compiled from the same configured Ninja graph, compiler,
-flags, and source revision.  Splitting the large System and AMR template seams across runners
-shortens a genuinely cold build without weakening optimisation or reusing linked binaries.
+The final consumer build remains the single build, link, and test authority.  These lanes only
+populate ccache with object files compiled from the same configured Ninja graph, compiler, flags,
+and source revision.  Splitting the large System and AMR template seams across runners shortens a
+genuinely cold Python, C++, or instrumented quality build without weakening its compile contract or
+reusing linked binaries.
 """
 
 from __future__ import annotations
@@ -57,12 +58,12 @@ def partition_runtime_objects(ninja_targets: str) -> dict[str, list[str]]:
 
     empty = [lane for lane, targets in lanes.items() if not targets]
     if empty:
-        raise SystemExit("empty Python module prewarm lanes: " + ", ".join(empty))
+        raise SystemExit("empty native runtime prewarm lanes: " + ", ".join(empty))
 
     expected = _runtime_objects(ninja_targets)
     flattened = [target for lane in LANES for target in lanes[lane]]
     if sorted(flattened) != expected or len(flattened) != len(set(flattened)):
-        raise SystemExit("Python module prewarm lanes are not an exact disjoint object cover")
+        raise SystemExit("native runtime prewarm lanes are not an exact disjoint object cover")
     return lanes
 
 
@@ -202,7 +203,7 @@ def main() -> int:
         return 0
     if args.verify:
         counts = ", ".join(f"{lane}={len(lanes[lane])}" for lane in LANES)
-        print(f"verified exact Python runtime object partition: {counts}")
+        print(f"verified exact native runtime object partition: {counts}")
         return 0
     if args.contract_file is None:
         parser.error("--lane requires --contract-file")

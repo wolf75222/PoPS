@@ -539,8 +539,7 @@ struct NewtonStatSumKernel {
 template <class Model>
 void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
                            const NewtonOptions& opts, const ImplicitMask<Model::n_vars>& mask = {},
-                           NewtonReport* report = nullptr,
-                           const MultiFab* active_cells = nullptr) {
+                           NewtonReport* report = nullptr, const MultiFab* active_cells = nullptr) {
   if (active_cells != nullptr &&
       (active_cells->ncomp() != 1 || active_cells->local_size() != U.local_size()))
     throw std::invalid_argument(
@@ -555,9 +554,9 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
       const ConstArray4 ax = aux.fab(li).const_array();
       const Box2D b = U.box(li);
       if (active_cells != nullptr)
-        for_each_cell(
-            b, detail::BackwardEulerSourceActiveKernel<Model>{
-                   model, uc, ax, active_cells->fab(li).const_array(), u, dt, opts, mask});
+        for_each_cell(b,
+                      detail::BackwardEulerSourceActiveKernel<Model>{
+                          model, uc, ax, active_cells->fab(li).const_array(), u, dt, opts, mask});
       else
         for_each_cell(b,
                       detail::BackwardEulerSourceKernel<Model>{model, uc, ax, u, dt, opts, mask});
@@ -574,9 +573,9 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
     const ConstArray4 ax = aux.fab(li).const_array();
     const Box2D b = U.box(li);
     if (active_cells != nullptr)
-      for_each_cell(
-          b, detail::BackwardEulerSourceActiveStatKernel<Model>{
-                 model, uc, ax, active_cells->fab(li).const_array(), u, st, dt, opts, mask});
+      for_each_cell(b,
+                    detail::BackwardEulerSourceActiveStatKernel<Model>{
+                        model, uc, ax, active_cells->fab(li).const_array(), u, st, dt, opts, mask});
     else
       for_each_cell(
           b, detail::BackwardEulerSourceStatKernel<Model>{model, uc, ax, u, st, dt, opts, mask});

@@ -165,9 +165,9 @@ struct CallableEbMetrics {
   }
   POPS_HD Real inverse_kappa(int i, int j) const {
     const Real center = value(i, j);
-    const CutFraction fraction = cut_fraction_from_samples(
-        center, value(i - 1, j), value(i + 1, j), value(i, j - 1), value(i, j + 1), dx,
-        dy, cut_theta_min);
+    const CutFraction fraction =
+        cut_fraction_from_samples(center, value(i - 1, j), value(i + 1, j), value(i, j - 1),
+                                  value(i, j + 1), dx, dy, cut_theta_min);
     const Real effective = fraction.kappa > kappa_min ? fraction.kappa : kappa_min;
     return Real(1) / effective;
   }
@@ -187,9 +187,7 @@ struct PreparedEbMetricsView {
   POPS_HD Real y_face_aperture(int i, int j) const {
     return active(i, j - 1) && active(i, j) ? Real(1) : Real(0);
   }
-  POPS_HD Real inverse_kappa(int i, int j) const {
-    return inverse_volume_fraction(i, j, 0);
-  }
+  POPS_HD Real inverse_kappa(int i, int j) const { return inverse_volume_fraction(i, j, 0); }
 };
 
 /// FACE FLUX kernel for x (dir 0) of the EB transport: numerical flux at the face between (i-1, j) and
@@ -357,9 +355,8 @@ template <class Limiter, class NumericalFlux, class Model, class MetricsProvider
           class FaceFluxTransform = KeepEbFaceFluxes>
 void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const MultiFab& aux,
                                   const MetricsProvider& provider, const Geometry& geom,
-                                  MultiFab& R, bool recon_prim, Real pos_floor,
-                                  Real face_open_eps, Real weno_eps,
-                                  FaceFluxTransform transform = {}) {
+                                  MultiFab& R, bool recon_prim, Real pos_floor, Real face_open_eps,
+                                  Real weno_eps, FaceFluxTransform transform = {}) {
   require_reconstruction_ghosts<Limiter>(U);
   const Real dx = geom.dx(), dy = geom.dy();
   Limiter lim = configured_reconstruction<Limiter>(weno_eps);
@@ -383,15 +380,13 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
     const Box2D v = R.box(li);
     auto metrics = provider.local(li);
     failures.merge(reduce_max_uint64_cell(
-        xface_box(v),
-        EbFaceFluxXKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
-            model, u, ax, fx, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
-            face_open_eps, failures.recorder()}));
+        xface_box(v), EbFaceFluxXKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
+                          model, u, ax, fx, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
+                          face_open_eps, failures.recorder()}));
     failures.merge(reduce_max_uint64_cell(
-        yface_box(v),
-        EbFaceFluxYKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
-            model, u, ax, fy, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
-            face_open_eps, failures.recorder()}));
+        yface_box(v), EbFaceFluxYKernel<Limiter, NumericalFlux, Model, decltype(metrics)>{
+                          model, u, ax, fy, metrics, lim, nflux, recon_prim, pos_floor, pos_comp,
+                          face_open_eps, failures.recorder()}));
   }
   // A shared-interface Program owns selected outer faces in its pair scheduler.  The transform is a
   // zero-cost no-op for ordinary callers and a small host-side face filter for that prepared route;
@@ -406,8 +401,8 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
     const Box2D v = R.box(li);
     auto metrics = provider.local(li);
     failures.merge(reduce_max_uint64_cell(
-        v, EbAssembleRhsKernel<Model, decltype(metrics)>{model, u, ax, fx, fy, r, dx, dy,
-                                                         metrics, failures.recorder()}));
+        v, EbAssembleRhsKernel<Model, decltype(metrics)>{model, u, ax, fx, fy, r, dx, dy, metrics,
+                                                         failures.recorder()}));
   }
   failures.throw_if_failed("assemble_rhs_eb");
 }
@@ -442,8 +437,7 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux, const LevelSet& ls,
                      const Geometry& geom, MultiFab& R, bool recon_prim = false,
                      Real kappa_min = kEbKappaMin, Real pos_floor = Real(0),
-                     Real face_open_eps = kEbFaceOpenEps,
-                     Real cut_theta_min = kEbCutFractionFloor,
+                     Real face_open_eps = kEbFaceOpenEps, Real cut_theta_min = kEbCutFractionFloor,
                      Real weno_eps = kWenoEpsilon) {
   const Real dx = geom.dx(), dy = geom.dy();
   const detail::CallableEbMetricsProvider<LevelSet> provider{
@@ -457,17 +451,15 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
 /// installation. The time-step hot path performs no analytic-program interpretation.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs_eb_prepared(const Model& model, const MultiFab& U, const MultiFab& aux,
-                              const MultiFab& active_mask,
-                              const MultiFab& inverse_volume_fraction, const Geometry& geom,
-                              MultiFab& R, bool recon_prim = false, Real pos_floor = Real(0),
-                              Real face_open_eps = kEbFaceOpenEps,
+                              const MultiFab& active_mask, const MultiFab& inverse_volume_fraction,
+                              const Geometry& geom, MultiFab& R, bool recon_prim = false,
+                              Real pos_floor = Real(0), Real face_open_eps = kEbFaceOpenEps,
                               Real weno_eps = kWenoEpsilon) {
   assert(active_mask.ncomp() == 1 && active_mask.n_grow() >= 1);
   assert(inverse_volume_fraction.ncomp() == 1);
   assert(active_mask.local_size() == U.local_size());
   assert(inverse_volume_fraction.local_size() == U.local_size());
-  const detail::PreparedEbMetricsProvider provider{&active_mask,
-                                                   &inverse_volume_fraction};
+  const detail::PreparedEbMetricsProvider provider{&active_mask, &inverse_volume_fraction};
   detail::assemble_rhs_eb_with_metrics<Limiter, NumericalFlux>(
       model, U, aux, provider, geom, R, recon_prim, pos_floor, face_open_eps, weno_eps);
 }

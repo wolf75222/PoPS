@@ -307,8 +307,7 @@ TEST(ProgramContextContract,
   Real* const live_b_storage = live_b.fab(0).array().p;
 
   auto missing_field_solve = [&]() {
-    return ctx.solve_fields_from_blocks(
-        501, "missing-provider", {{0, &stage_a}, {1, &stage_b}});
+    return ctx.solve_fields_from_blocks(501, "missing-provider", {{0, &stage_a}, {1, &stage_b}});
   };
   EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
   EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
@@ -329,15 +328,12 @@ TEST(ProgramContextContract,
   // The complete request is validated before the first substitution: neither a cross-owner live
   // alias nor one wrong ghost footprint may expose a provisional state.
   EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(
-          502, "missing-provider", {{0, &live_b}, {1, &stage_b}}),
+      (void)ctx.solve_fields_from_blocks(502, "missing-provider", {{0, &live_b}, {1, &stage_b}}),
       std::invalid_argument);
-  MultiFab wrong_layout(stage_b.box_array(), stage_b.dmap(), stage_b.ncomp(),
-                        stage_b.n_grow() + 1);
-  EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(
-          503, "missing-provider", {{0, &stage_a}, {1, &wrong_layout}}),
-      std::invalid_argument);
+  MultiFab wrong_layout(stage_b.box_array(), stage_b.dmap(), stage_b.ncomp(), stage_b.n_grow() + 1);
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks(503, "missing-provider",
+                                                  {{0, &stage_a}, {1, &wrong_layout}}),
+               std::invalid_argument);
   EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
   EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
   EXPECT_EQ(live_a.fab(0).const_array()(live_a.box(0).lo[0], live_a.box(0).lo[1], 0), Real(2));
@@ -351,8 +347,7 @@ TEST(ProgramContextContract,
                         subset_live.n_grow());
   subset_stage.set_val(Real(11));
   auto subset_solve = [&]() {
-    return ctx.solve_fields_from_blocks(
-        504, "missing-subset-provider", {{0, &subset_stage}});
+    return ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &subset_stage}});
   };
   EXPECT_THROW((void)subset_solve(), std::runtime_error);
   const AllocationEventStats before_subset_retry = allocation_event_stats();
@@ -371,15 +366,13 @@ TEST(ProgramContextContract,
   rebound_stage.set_val(Real(13));
   const AllocationEventStats before_layout_change = allocation_event_stats();
   EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(
-          504, "missing-subset-provider", {{0, &rebound_stage}}),
+      (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
       std::runtime_error);
   const AllocationEventStats after_layout_change = allocation_event_stats();
   EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
   EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(
-          504, "missing-subset-provider", {{0, &rebound_stage}}),
+      (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
       std::runtime_error);
   const AllocationEventStats after_rebound_retry = allocation_event_stats();
   EXPECT_EQ(after_rebound_retry.fab_calls, before_rebound_retry.fab_calls);

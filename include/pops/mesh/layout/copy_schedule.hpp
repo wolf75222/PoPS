@@ -89,16 +89,13 @@ class CopyScheduleCache {
   /// Existing schedule whose SRC-layout fingerprint matches (sba, sdm), or nullptr if none is
   /// cached yet.
   std::shared_ptr<const CopySchedule> find(const BoxArray& sba, const DistributionMapping& sdm,
-                                           int ncomp, int communicator_size,
-                                           int communicator_rank,
+                                           int ncomp, int communicator_size, int communicator_rank,
                                            std::int64_t communicator_identity,
                                            int message_tag) const {
     for (const auto& s : entries_) {
       if (s->key.matches(sba, sdm) && s->ncomp == ncomp &&
-          s->communicator_size == communicator_size &&
-          s->communicator_rank == communicator_rank &&
-          s->communicator_identity == communicator_identity &&
-          s->message_tag == message_tag) {
+          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank &&
+          s->communicator_identity == communicator_identity && s->message_tag == message_tag) {
         return s;
       }
     }

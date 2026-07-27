@@ -190,9 +190,7 @@ struct RelativeCellAbsSumKernel {
       return;
     const Real value = values(i, j, comp);
     const Real magnitude = value < Real(0) ? -value : value;
-    acc += has_inverse_volume_fraction
-               ? magnitude / inverse_volume_fraction(i, j, 0)
-               : magnitude;
+    acc += has_inverse_volume_fraction ? magnitude / inverse_volume_fraction(i, j, 0) : magnitude;
   }
 };
 
@@ -204,9 +202,7 @@ struct RelativeCellDotKernel {
     if (active_cells(i, j, 0) < Real(0.5))
       return;
     const Real product = left(i, j, comp) * right(i, j, comp);
-    acc += has_inverse_volume_fraction
-               ? product / inverse_volume_fraction(i, j, 0)
-               : product;
+    acc += has_inverse_volume_fraction ? product / inverse_volume_fraction(i, j, 0) : product;
   }
 };
 
@@ -219,9 +215,7 @@ struct RelativeCellDifferenceSqKernel {
       return;
     const Real difference = current(i, j, comp) - previous(i, j, comp);
     const Real square = difference * difference;
-    acc += has_inverse_volume_fraction
-               ? square / inverse_volume_fraction(i, j, 0)
-               : square;
+    acc += has_inverse_volume_fraction ? square / inverse_volume_fraction(i, j, 0) : square;
   }
 };
 
@@ -277,8 +271,7 @@ inline void validate_relative_cell_measure(const MultiFab& field,
   }
   const auto require_same_layout = [&](const MultiFab& metric, const char* metric_name) {
     if (metric.ncomp() != 1 || metric.box_array().boxes() != field.box_array().boxes() ||
-        metric.dmap().ranks() != field.dmap().ranks() ||
-        metric.local_size() != field.local_size())
+        metric.dmap().ranks() != field.dmap().ranks() || metric.local_size() != field.local_size())
       throw std::invalid_argument(std::string(operation) + ": " + metric_name +
                                   " must be a one-component metric on the field layout");
   };
@@ -455,8 +448,7 @@ inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previ
     const ConstArray4 now = current.fab(li).const_array();
     const ConstArray4 before = previous.fab(li).const_array();
     for (int comp = 0; comp < current.ncomp(); ++comp)
-      local += reduce_sum_cell(
-          current.box(li), detail::DifferenceSqKernel{now, before, comp});
+      local += reduce_sum_cell(current.box(li), detail::DifferenceSqKernel{now, before, comp});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
 }
@@ -526,16 +518,14 @@ inline Real reduce_sum(const MultiFab& field, int comp, const RelativeCellMeasur
                                     ? ConstArray4{}
                                     : measure.inverse_volume_fraction->fab(li).const_array();
     local += reduce_sum_cell(
-        field.box(li),
-        detail::RelativeCellSumKernel{field.fab(li).const_array(),
-                                      measure.active_cells->fab(li).const_array(), inverse, comp,
-                                      measure.inverse_volume_fraction != nullptr});
+        field.box(li), detail::RelativeCellSumKernel{
+                           field.fab(li).const_array(), measure.active_cells->fab(li).const_array(),
+                           inverse, comp, measure.inverse_volume_fraction != nullptr});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
 }
 
-inline Real reduce_abs_sum(const MultiFab& field, int comp,
-                           const RelativeCellMeasure& measure) {
+inline Real reduce_abs_sum(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
   detail::validate_relative_cell_measure(field, measure, "reduce_abs_sum(measure)");
   if (measure.active_cells == nullptr)
     return reduce_abs_sum(field, comp);
@@ -545,10 +535,9 @@ inline Real reduce_abs_sum(const MultiFab& field, int comp,
                                     ? ConstArray4{}
                                     : measure.inverse_volume_fraction->fab(li).const_array();
     local += reduce_sum_cell(
-        field.box(li),
-        detail::RelativeCellAbsSumKernel{field.fab(li).const_array(),
-                                         measure.active_cells->fab(li).const_array(), inverse, comp,
-                                         measure.inverse_volume_fraction != nullptr});
+        field.box(li), detail::RelativeCellAbsSumKernel{
+                           field.fab(li).const_array(), measure.active_cells->fab(li).const_array(),
+                           inverse, comp, measure.inverse_volume_fraction != nullptr});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
 }
@@ -578,8 +567,7 @@ inline Real dot(const MultiFab& left, const MultiFab& right, int comp,
 inline Real dot_all(const MultiFab& left, const MultiFab& right,
                     const RelativeCellMeasure& measure) {
   detail::validate_relative_cell_measure(left, measure, "dot_all(measure)");
-  if (left.ncomp() != right.ncomp() ||
-      left.box_array().boxes() != right.box_array().boxes() ||
+  if (left.ncomp() != right.ncomp() || left.box_array().boxes() != right.box_array().boxes() ||
       left.dmap().ranks() != right.dmap().ranks() || left.local_size() != right.local_size())
     throw std::invalid_argument(
         "dot_all(measure): left and right fields must have the same component layout");
@@ -602,8 +590,7 @@ inline Real dot_all(const MultiFab& left, const MultiFab& right,
 
 inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previous,
                                   const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(
-      current, measure, "difference_sum_sq_all(measure)");
+  detail::validate_relative_cell_measure(current, measure, "difference_sum_sq_all(measure)");
   if (current.ncomp() != previous.ncomp() ||
       current.box_array().boxes() != previous.box_array().boxes() ||
       current.dmap().ranks() != previous.dmap().ranks() ||
@@ -618,12 +605,11 @@ inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previ
                                     ? ConstArray4{}
                                     : measure.inverse_volume_fraction->fab(li).const_array();
     for (int comp = 0; comp < current.ncomp(); ++comp)
-      local += reduce_sum_cell(
-          current.box(li),
-          detail::RelativeCellDifferenceSqKernel{
-              current.fab(li).const_array(), previous.fab(li).const_array(),
-              measure.active_cells->fab(li).const_array(), inverse, comp,
-              measure.inverse_volume_fraction != nullptr});
+      local += reduce_sum_cell(current.box(li),
+                               detail::RelativeCellDifferenceSqKernel{
+                                   current.fab(li).const_array(), previous.fab(li).const_array(),
+                                   measure.active_cells->fab(li).const_array(), inverse, comp,
+                                   measure.inverse_volume_fraction != nullptr});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
 }
@@ -636,10 +622,9 @@ inline Real reduce_max(const MultiFab& field, int comp, const RelativeCellMeasur
   for (int li = 0; li < field.local_size(); ++li)
     local = std::max(
         local,
-        reduce_max_cell(field.box(li),
-                        detail::RelativeCellMaxKernel{field.fab(li).const_array(),
-                                                      measure.active_cells->fab(li).const_array(),
-                                                      comp}));
+        reduce_max_cell(field.box(li), detail::RelativeCellMaxKernel{
+                                           field.fab(li).const_array(),
+                                           measure.active_cells->fab(li).const_array(), comp}));
   return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
 }
 
@@ -651,15 +636,13 @@ inline Real reduce_min(const MultiFab& field, int comp, const RelativeCellMeasur
   for (int li = 0; li < field.local_size(); ++li)
     local = std::min(
         local,
-        reduce_min_cell(field.box(li),
-                        detail::RelativeCellMinKernel{field.fab(li).const_array(),
-                                                      measure.active_cells->fab(li).const_array(),
-                                                      comp}));
+        reduce_min_cell(field.box(li), detail::RelativeCellMinKernel{
+                                           field.fab(li).const_array(),
+                                           measure.active_cells->fab(li).const_array(), comp}));
   return static_cast<Real>(all_reduce_min(static_cast<double>(local)));
 }
 
-inline Real reduce_norm_inf(const MultiFab& field, int comp,
-                            const RelativeCellMeasure& measure) {
+inline Real reduce_norm_inf(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
   detail::validate_relative_cell_measure(field, measure, "reduce_norm_inf(measure)");
   if (measure.active_cells == nullptr)
     return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field, comp))));
@@ -667,10 +650,9 @@ inline Real reduce_norm_inf(const MultiFab& field, int comp,
   for (int li = 0; li < field.local_size(); ++li)
     local = std::max(
         local,
-        reduce_max_cell(field.box(li),
-                        detail::RelativeCellNormInfKernel{
-                            field.fab(li).const_array(),
-                            measure.active_cells->fab(li).const_array(), comp}));
+        reduce_max_cell(field.box(li), detail::RelativeCellNormInfKernel{
+                                           field.fab(li).const_array(),
+                                           measure.active_cells->fab(li).const_array(), comp}));
   return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
 }
 

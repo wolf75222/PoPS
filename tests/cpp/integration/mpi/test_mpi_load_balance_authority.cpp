@@ -47,9 +47,8 @@ bool hierarchy_regrid_is_collective_and_owner_authenticated(
   const Box2D domain = Box2D::from_extents(std::max(8, ranks * 4), 4);
   const HierarchyRegridOptions options{/*tag_buffer=*/0, /*nesting_margin=*/0,
                                        RegridPeriodicity{false, false}, nullptr};
-  const RegridProlongation prolong = [](const MultiFab& coarse, MultiFab& fine, int,
-                                        int ratio, bool,
-                                        const CommunicatorView& communicator) {
+  const RegridProlongation prolong = [](const MultiFab& coarse, MultiFab& fine, int, int ratio,
+                                        bool, const CommunicatorView& communicator) {
     interpolate(coarse, fine, ratio, communicator);
   };
 
@@ -81,15 +80,13 @@ bool hierarchy_regrid_is_collective_and_owner_authenticated(
   } catch (const std::exception&) {
     rejected = true;
   }
-  if (!rejected || hierarchy.num_levels() != 2 ||
-      hierarchy.boxes(1).boxes() != stable_boxes)
+  if (!rejected || hierarchy.num_levels() != 2 || hierarchy.boxes(1).boxes() != stable_boxes)
     return false;
 
   // install_level authenticates the exact owner vector against the same prepared authority. A
   // geometrically valid field with a rotated owner map is not accepted as equivalent provenance.
   if (ranks > 1) {
-    AmrHierarchy install_target(domain, /*max_grid_size=*/2, /*ncomp=*/1, /*ngrow=*/1,
-                                authority);
+    AmrHierarchy install_target(domain, /*max_grid_size=*/2, /*ncomp=*/1, /*ngrow=*/1, authority);
     const BoxArray fine = BoxArray::from_domain(domain.refine(2), 4);
     const DistributionMapping expected =
         authority->distribute(fine, ranks, {}, world_communicator_view());
@@ -124,16 +121,15 @@ int run_mpi_load_balance_authority(int argc, char** argv) {
   long failures = 0;
 
   const int box_count = std::max(4, ranks * 4);
-  const BoxArray boxes =
-      BoxArray::from_domain(Box2D::from_extents(box_count, 1), 1);
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(box_count, 1), 1);
   std::vector<std::int64_t> weights(static_cast<std::size_t>(box_count), 1);
   weights.front() = 17;
 
   const auto authority = prepare_load_balance_authority(
       "space_filling_curve", "test.mpi.weighted-sfc.semantic-identity",
       PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}});
-  const auto hierarchy_authority = std::make_shared<PreparedLoadBalanceAuthority>(
-      prepare_load_balance_authority(
+  const auto hierarchy_authority =
+      std::make_shared<PreparedLoadBalanceAuthority>(prepare_load_balance_authority(
           "space_filling_curve", "test.mpi.hierarchy-sfc.semantic-identity",
           PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}}));
   if (!hierarchy_regrid_is_collective_and_owner_authenticated(hierarchy_authority))
@@ -188,8 +184,8 @@ int run_mpi_load_balance_authority(int argc, char** argv) {
 
   failures = all_reduce_sum(failures);
   if (rank == 0)
-    std::printf("%s test_mpi_load_balance_authority (np=%d)\n",
-                failures == 0 ? "OK" : "FAIL", ranks);
+    std::printf("%s test_mpi_load_balance_authority (np=%d)\n", failures == 0 ? "OK" : "FAIL",
+                ranks);
   comm_finalize();
   return failures == 0 ? 0 : 1;
 }
@@ -197,7 +193,7 @@ int run_mpi_load_balance_authority(int argc, char** argv) {
 }  // namespace
 
 TEST(test_mpi_load_balance_authority, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&run_mpi_load_balance_authority,
-                                    "test_mpi_load_balance_authority"),
-            0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&run_mpi_load_balance_authority, "test_mpi_load_balance_authority"),
+      0);
 }

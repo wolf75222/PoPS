@@ -241,7 +241,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     // (c2) disque ENGLOBANT (rayon > demi-diagonale) : TOUTE cellule est active, AUCUNE face coupee ->
     // assemble_rhs_eb == assemble_rhs (kappa=1, alpha=1 partout, cf. test_eb_transport bit-identite).
     // Un pas cutcell doit alors etre BIT-IDENTIQUE au pas carre sur le meme init.
-    const double R_big = 10.0 * L;         // englobe largement la boite
+    const double R_big = 10.0 * L;                             // englobe largement la boite
     System sq(SystemConfig{n, L, Periodicity{false, false}});  // reference 1 pas plein
     build_exb(sq, R_wall);
     sq.set_density("n", rho0);
@@ -299,17 +299,17 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
   (void)kokkos_scope();
 #endif
   System system(SystemConfig{20, 1.0, Periodicity{false, false}});
-  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0},
-                                "staircase", 0.2, 1e-5, 0.1);
+  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
+                                0.1);
   const std::vector<double> original = system.disc_mask();
 
   // (x - x) / 0 is structurally valid but non-finite at every sampled cell. Rejection must happen
   // before publishing either the new program, the new mask, the thresholds, or the routing mode.
   const std::vector<std::string> invalid_ops{"x", "x", "sub", "constant", "div"};
   const std::vector<double> invalid_literals{0.0, 0.0, 0.0, 0.0, 0.0};
-  EXPECT_THROW(system.set_analytic_level_set(invalid_ops, invalid_literals, "cutcell", 0.3,
-                                             2e-5, 0.2),
-               std::domain_error);
+  EXPECT_THROW(
+      system.set_analytic_level_set(invalid_ops, invalid_literals, "cutcell", 0.3, 2e-5, 0.2),
+      std::domain_error);
   EXPECT_EQ(original, system.disc_mask());
 }
 
@@ -327,17 +327,15 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   System topology(SystemConfig{n, 1.0, Periodicity{true, true}});
   topology.add_block("n", periodic_exb_model(), "none");
   topology.set_density("n", rho0);
-  topology.set_analytic_level_set({"x", "constant", "sub"},
-                                  {0.0, 0.25, 0.0}, "cutcell");
+  topology.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.25, 0.0}, "cutcell");
 
   System explicit_wrap(SystemConfig{n, 1.0, Periodicity{true, true}});
   explicit_wrap.add_block("n", periodic_exb_model(), "none");
   explicit_wrap.set_density("n", rho0);
   explicit_wrap.set_analytic_level_set(
-      {"x", "constant", "lt", "x", "constant", "add", "constant", "sub",
-       "x", "constant", "sub", "where"},
-      {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0},
-      "cutcell");
+      {"x", "constant", "lt", "x", "constant", "add", "constant", "sub", "x", "constant", "sub",
+       "where"},
+      {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0}, "cutcell");
 
   ASSERT_EQ(topology.disc_mask(), explicit_wrap.disc_mask());
   topology.step(2e-4);

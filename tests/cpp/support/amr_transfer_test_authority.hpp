@@ -9,14 +9,15 @@
 
 namespace pops::test {
 
-inline void install_second_order_amr_transfer_authorities(
-    AmrRuntime& runtime, std::size_t block_count, int refinement_ratio = kAmrRefRatio) {
+inline void install_second_order_amr_transfer_authorities(AmrRuntime& runtime,
+                                                          std::size_t block_count,
+                                                          int refinement_ratio = kAmrRefRatio) {
   for (std::size_t block = 0; block < block_count; ++block) {
-    runtime.set_block_transfer_authority(
-        block, ::pops::runtime::amr::prepare_conservative_linear(),
-        ::pops::runtime::amr::prepare_volume_average(),
-        ::pops::runtime::amr::prepare_conservative_coarse_fine(),
-        ::pops::runtime::amr::prepare_linear_time_interpolation(), refinement_ratio);
+    runtime.set_block_transfer_authority(block, ::pops::runtime::amr::prepare_conservative_linear(),
+                                         ::pops::runtime::amr::prepare_volume_average(),
+                                         ::pops::runtime::amr::prepare_conservative_coarse_fine(),
+                                         ::pops::runtime::amr::prepare_linear_time_interpolation(),
+                                         refinement_ratio);
   }
 }
 

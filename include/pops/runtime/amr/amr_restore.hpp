@@ -46,10 +46,9 @@ inline std::map<std::string, double> AmrRuntime::step_change_l2(
     throw std::runtime_error("AmrRuntime::step_change_l2 snapshot composition mismatch");
   std::map<std::string, double> result;
   for (std::size_t block = 0; block < blocks_.size(); ++block)
-    result.emplace(
-        blocks_[block].name,
-        runtime::amr::composite_difference_l2_levels(
-            *blocks_[block].levels, previous.block_levels[block], replicated_coarse_));
+    result.emplace(blocks_[block].name,
+                   runtime::amr::composite_difference_l2_levels(
+                       *blocks_[block].levels, previous.block_levels[block], replicated_coarse_));
   return result;
 }
 
@@ -156,10 +155,10 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : level_boxes and level_owner_ranks length mismatch");
   if (n_levels > max_levels())
-    throw std::runtime_error(
-        "AmrRuntime::rebuild_hierarchy : checkpoint has " + std::to_string(n_levels) +
-        " active levels but the replayed composition resolves a maximum of " +
-        std::to_string(max_levels()));
+    throw std::runtime_error("AmrRuntime::rebuild_hierarchy : checkpoint has " +
+                             std::to_string(n_levels) +
+                             " active levels but the replayed composition resolves a maximum of " +
+                             std::to_string(max_levels()));
 
   // Validate and materialize the complete target topology before replacing any accepted storage.
   // Level zero is the composition-owned base layout and is intentionally absent from patch_boxes();
@@ -200,8 +199,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
   Box2D parent_domain = dom_;
   for (int level = 1; level < n_levels; ++level) {
     const auto index = static_cast<std::size_t>(level);
-    if (level_boxes[index].empty() ||
-        level_boxes[index].size() != level_owner_ranks[index].size())
+    if (level_boxes[index].empty() || level_boxes[index].size() != level_owner_ranks[index].size())
       throw std::runtime_error(
           "AmrRuntime::rebuild_hierarchy : every active fine level requires boxes and owners");
     const int ratio = maximum_refinement_ratios_[index - 1];
@@ -215,10 +213,10 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
         throw std::runtime_error(
             "AmrRuntime::rebuild_hierarchy : checkpoint patch is outside its declared level");
       for (int direction = 0; direction < 2; ++direction) {
-        const std::int64_t aligned_lo = static_cast<std::int64_t>(box.lo[direction]) -
-                                        level_domain.lo[direction];
-        const std::int64_t aligned_end = static_cast<std::int64_t>(box.hi[direction]) + 1 -
-                                         level_domain.lo[direction];
+        const std::int64_t aligned_lo =
+            static_cast<std::int64_t>(box.lo[direction]) - level_domain.lo[direction];
+        const std::int64_t aligned_end =
+            static_cast<std::int64_t>(box.hi[direction]) + 1 - level_domain.lo[direction];
         if (aligned_lo % ratio != 0 || aligned_end % ratio != 0)
           throw std::runtime_error(
               "AmrRuntime::rebuild_hierarchy : checkpoint patch is not aligned to parent cells");
@@ -235,10 +233,10 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     }
     target_boxes[index] = BoxArray(std::move(boxes));
     target_mappings[index] = DistributionMapping(level_owner_ranks[index]);
-    validate_fine_layout_proper_nesting(
-        target_boxes[index], target_boxes[index - 1], parent_domain, ratio, regrid_margin_,
-        RegridPeriodicity{base_per_.x, base_per_.y},
-        physical_support ? &*physical_support : nullptr);
+    validate_fine_layout_proper_nesting(target_boxes[index], target_boxes[index - 1], parent_domain,
+                                        ratio, regrid_margin_,
+                                        RegridPeriodicity{base_per_.x, base_per_.y},
+                                        physical_support ? &*physical_support : nullptr);
     target_dx[index] = target_dx[index - 1] / Real(ratio);
     target_dy[index] = target_dy[index - 1] / Real(ratio);
     parent_domain = level_domain;

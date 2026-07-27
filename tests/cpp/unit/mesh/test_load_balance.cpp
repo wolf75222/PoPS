@@ -163,16 +163,13 @@ TEST(test_load_balance, round_robin_authenticates_but_does_not_consume_weights) 
   const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 1), 1);
   const std::vector<std::int64_t> weights{100, 1, 1, 1};
 
-  EXPECT_EQ(make_round_robin_distribution(boxes, 2).ranks(),
-            (std::vector<int>{0, 1, 0, 1}));
+  EXPECT_EQ(make_round_robin_distribution(boxes, 2).ranks(), (std::vector<int>{0, 1, 0, 1}));
   EXPECT_EQ(make_round_robin_distribution(boxes, 2, weights).ranks(),
             (std::vector<int>{0, 1, 0, 1}));
 
-  EXPECT_THROW(make_round_robin_distribution(boxes, 2,
-                                              std::vector<std::int64_t>{1, 2}),
+  EXPECT_THROW(make_round_robin_distribution(boxes, 2, std::vector<std::int64_t>{1, 2}),
                std::invalid_argument);
-  EXPECT_THROW(make_round_robin_distribution(
-                   boxes, 2, std::vector<std::int64_t>{1, 0, 1, 1}),
+  EXPECT_THROW(make_round_robin_distribution(boxes, 2, std::vector<std::int64_t>{1, 0, 1, 1}),
                std::invalid_argument);
 
   const auto authority = prepare_load_balance_authority(
@@ -183,16 +180,14 @@ TEST(test_load_balance, round_robin_authenticates_but_does_not_consume_weights) 
 }
 
 TEST(test_load_balance, third_party_provider_registers_without_core_changes) {
-  register_load_balance_provider(
-      "test_external_index",
-      [](std::string semantic_identity, const PreparedProviderOptions& options) {
-        if (options.schema_identity != "pops.test.load-balance.external-index@1" ||
-            !options.values.empty())
-          throw std::invalid_argument("external load-balance options are not canonical");
-        return PreparedLoadBalanceAuthority(
-            std::move(semantic_identity),
-            PreparedLoadBalanceProvider(ExternalIndexLoadBalance{}));
-      });
+  register_load_balance_provider("test_external_index", [](std::string semantic_identity,
+                                                           const PreparedProviderOptions& options) {
+    if (options.schema_identity != "pops.test.load-balance.external-index@1" ||
+        !options.values.empty())
+      throw std::invalid_argument("external load-balance options are not canonical");
+    return PreparedLoadBalanceAuthority(std::move(semantic_identity),
+                                        PreparedLoadBalanceProvider(ExternalIndexLoadBalance{}));
+  });
 
   const auto authority = prepare_load_balance_authority(
       "test_external_index", "test.external-index.semantic-identity",
@@ -204,9 +199,8 @@ TEST(test_load_balance, third_party_provider_registers_without_core_changes) {
   const DistributionMapping mapping = authority.distribute(boxes, 1);
   EXPECT_EQ(mapping.ranks(), (std::vector<int>{0, 0, 0, 0}));
 
-  EXPECT_THROW(
-      prepare_load_balance_authority(
-          "test_external_index", "test.external-index.semantic-identity",
-          PreparedProviderOptions{"pops.test.load-balance.wrong-schema@1", {}}),
-      std::invalid_argument);
+  EXPECT_THROW(prepare_load_balance_authority(
+                   "test_external_index", "test.external-index.semantic-identity",
+                   PreparedProviderOptions{"pops.test.load-balance.wrong-schema@1", {}}),
+               std::invalid_argument);
 }

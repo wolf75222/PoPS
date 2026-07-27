@@ -59,8 +59,7 @@ inline constexpr Real kEigImagTol = Real(1e-5);
 /// round-off floor of the native QR implementation; it is deliberately distinct from the much
 /// looser diagnostic classifier default above.  Callers that require an exact-zero comparison can
 /// still pass im_tol = 0 explicitly.
-inline constexpr Real kEigStrictImagTol =
-    Real(64) * std::numeric_limits<Real>::epsilon();
+inline constexpr Real kEigStrictImagTol = Real(64) * std::numeric_limits<Real>::epsilon();
 
 /// Result of real_eig_minmax: real-part extremes + diagnostic. The consumer (DSL codegen
 /// wave_speeds_from_jacobian, ADC-87) receives the WHOLE structure: converged and max_im are part
@@ -78,8 +77,8 @@ struct EigBounds {
   /// physics. max_im is a magnitude and therefore additionally required to be non-negative.
   POPS_HD bool valid() const {
     return converged && std::isfinite(static_cast<double>(lmin)) &&
-           std::isfinite(static_cast<double>(lmax)) &&
-           std::isfinite(static_cast<double>(max_im)) && max_im >= Real(0);
+           std::isfinite(static_cast<double>(lmax)) && std::isfinite(static_cast<double>(max_im)) &&
+           max_im >= Real(0);
   }
 
   /// Tri-state scalar for branchless generated kernels: 1 = certified real at @p im_tol,
@@ -109,9 +108,7 @@ struct EigBounds {
   /// magnitude, or negative tolerance also returns false. This matters for partitioned providers: a
   /// NaN 1x1 block must invalidate the complete spectrum instead of disappearing in min/max comparisons.
   /// POPS_HD, no allocation (only std::isfinite, std::fabs and comparisons, like the rest of this header).
-  POPS_HD bool all_real(Real im_tol = kEigImagTol) const {
-    return real_status(im_tol) == Real(1);
-  }
+  POPS_HD bool all_real(Real im_tol = kEigImagTol) const { return real_status(im_tol) == Real(1); }
   /// Complement of all_real RESTRICTED to converged blocks: true iff the spectrum was computed AND
   /// carries a complex conjugate pair beyond @p im_tol. NON-CONVERGENCE => false (NOT a complex signal:
   /// nothing was computed -- tell it apart via converged, or via pops::real_spectrum's kUnknown).
@@ -562,8 +559,7 @@ POPS_HD inline bool matrix_sign_shifted(const Real (&A)[N][N], Real shift, Real 
       // sign(alpha B) == sign(B) for alpha > 0.  Forming the shifted matrix after this
       // normalisation avoids overflow in A_ii + shift and makes tiny, otherwise subnormal,
       // matrices visible to the fixed absolute pivot threshold in mat_inverse.
-      S[i][j] = A[i][j] / input_scale +
-                (i == j ? shift / input_scale : Real(0));
+      S[i][j] = A[i][j] / input_scale + (i == j ? shift / input_scale : Real(0));
   bool converged = false;
   for (int it = 0; it < max_iter; ++it) {
     if (!mat_inverse(S, Sinv))
@@ -613,8 +609,7 @@ POPS_HD inline void matvec(const Real (&A)[N][N], const Real (&x)[N], Real (&out
 /// same-sign branch interpolates from the smaller magnitude; opposite signs can be added safely.
 POPS_HD inline Real safe_average(Real a, Real b) {
   if ((a > Real(0) && b > Real(0)) || (a < Real(0) && b < Real(0)))
-    return std::fabs(a) < std::fabs(b) ? a + Real(0.5) * (b - a)
-                                      : b + Real(0.5) * (a - b);
+    return std::fabs(a) < std::fabs(b) ? a + Real(0.5) * (b - a) : b + Real(0.5) * (a - b);
   return Real(0.5) * (a + b);
 }
 
@@ -637,9 +632,8 @@ POPS_HD inline bool shifted_sign_actions(const Real (&A)[N][N], const Real (&x)[
                                  : std::numeric_limits<Real>::denorm_min();
       // Outward is preferable, but cannot be represented above a cutoff near max(Real).  An
       // inward retry is equally valid at the boundary because the Harten branches agree there.
-      selected = cutoff <= std::numeric_limits<Real>::max() - increment
-                     ? cutoff + increment
-                     : cutoff - increment;
+      selected = cutoff <= std::numeric_limits<Real>::max() - increment ? cutoff + increment
+                                                                        : cutoff - increment;
     }
     if (!matrix_sign_shifted(A, selected, S, max_iter, tol))
       continue;
@@ -698,11 +692,11 @@ POPS_HD inline bool roe_abs_apply_certified_real(const Real (&A)[N][N], const Re
 /// certification.  As above, the complete matrix is retained and every numerical failure is
 /// returned to the caller; certification is never replaced by a fallback.
 template <int N>
-POPS_HD inline bool roe_entropy_fix_apply_certified_real(
-    const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N], Real delta,
-    int max_iter = 80, Real tol = Real(1e-13)) {
-  static_assert(N >= 1 && N <= 16,
-                "roe_entropy_fix_apply_certified_real: 1 <= N <= 16");
+POPS_HD inline bool roe_entropy_fix_apply_certified_real(const Real (&A)[N][N], const Real (&dU)[N],
+                                                         Real (&out)[N], Real delta,
+                                                         int max_iter = 80,
+                                                         Real tol = Real(1e-13)) {
+  static_assert(N >= 1 && N <= 16, "roe_entropy_fix_apply_certified_real: 1 <= N <= 16");
   if (!(delta > Real(0)) || !(delta <= std::numeric_limits<Real>::max()))
     return false;
 
@@ -728,8 +722,7 @@ POPS_HD inline bool roe_entropy_fix_apply_certified_real(
     }
     // Factor delta only after forming the dimensionless average.  This preserves both
     // Phi_delta(delta)=delta at denorm_min and finite O(delta) values near max(Real).
-    const Real inside =
-        delta * safe_average(scaled_inside_quadratic / delta, inside_du[i]);
+    const Real inside = delta * safe_average(scaled_inside_quadratic / delta, inside_du[i]);
     out[i] = outside + inside;
   }
   return true;
@@ -755,8 +748,7 @@ POPS_HD inline bool roe_entropy_fix_apply_certified_real(
 template <int N>
 POPS_HD inline bool roe_abs_apply(const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N],
                                   int max_iter = 80, Real tol = Real(1e-13),
-                                  Real im_tol = kEigStrictImagTol,
-                                  int max_iter_per_eig = 100) {
+                                  Real im_tol = kEigStrictImagTol, int max_iter_per_eig = 100) {
   // The physical default accepts only the bounded QR round-off floor.  An explicit zero remains
   // available to callers that want an exact-zero diagnostic rather than this physical default.
   static_assert(N >= 1 && N <= 16, "roe_abs_apply: 1 <= N <= 16");
@@ -784,8 +776,7 @@ POPS_HD inline bool roe_abs_apply(const Real (&A)[N][N], const Real (&dU)[N], Re
 template <int N>
 POPS_HD inline bool roe_entropy_fix_apply(const Real (&A)[N][N], const Real (&dU)[N],
                                           Real (&out)[N], Real delta, int max_iter = 80,
-                                          Real tol = Real(1e-13),
-                                          Real im_tol = kEigStrictImagTol,
+                                          Real tol = Real(1e-13), Real im_tol = kEigStrictImagTol,
                                           int max_iter_per_eig = 100) {
   static_assert(N >= 1 && N <= 16, "roe_entropy_fix_apply: 1 <= N <= 16");
   if (!(delta > Real(0)) || !(delta <= std::numeric_limits<Real>::max()))

@@ -60,8 +60,8 @@ static int pops_run_test_mpi_fillboundary(int argc, char** argv) {
     for (int c = 0; c < ncomp; ++c)
       for (int j = g.lo[1]; j <= g.hi[1]; ++j)
         for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-            if (std::fabs(F(i, j, c) - val(i, j, c)) > 1e-12)
-              ++fails;
+          if (std::fabs(F(i, j, c) - val(i, j, c)) > 1e-12)
+            ++fails;
   }
 
   // The halo is deeper than both complete periodic extents, including a one-cell x axis. With four

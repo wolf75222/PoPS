@@ -66,10 +66,8 @@ struct ExactValueMismatchKernel {
   ConstArray4 left, right;
   int component;
   POPS_HD void operator()(int i, int j, Real& mismatch) const {
-    const std::uint64_t left_bits =
-        Kokkos::bit_cast<std::uint64_t>(left(i, j, component));
-    const std::uint64_t right_bits =
-        Kokkos::bit_cast<std::uint64_t>(right(i, j, component));
+    const std::uint64_t left_bits = Kokkos::bit_cast<std::uint64_t>(left(i, j, component));
+    const std::uint64_t right_bits = Kokkos::bit_cast<std::uint64_t>(right(i, j, component));
     const Real differs = left_bits == right_bits ? Real(0) : Real(1);
     if (differs > mismatch)
       mismatch = differs;
@@ -135,8 +133,7 @@ inline bool local_exact_values_equal(const MultiFab& left, const MultiFab& right
     const ConstArray4 right_values = right.fab(local).const_array();
     const Box2D valid = left.box(local);
     for (int component = 0; component < left.ncomp(); ++component) {
-      if (reduce_max_cell(valid,
-                          ExactValueMismatchKernel{left_values, right_values, component}) !=
+      if (reduce_max_cell(valid, ExactValueMismatchKernel{left_values, right_values, component}) !=
           Real(0))
         return false;
     }

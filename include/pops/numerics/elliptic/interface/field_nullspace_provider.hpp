@@ -72,8 +72,7 @@ struct FieldNullspaceOperatorFacts {
           !field_boundary_nullspace_behavior_is_valid(current.behavior))
         return false;
       if (index != 0 &&
-          !field_boundary_id_bytewise_less(boundaries[index - 1].boundary_id,
-                                           current.boundary_id))
+          !field_boundary_id_bytewise_less(boundaries[index - 1].boundary_id, current.boundary_id))
         return false;
     }
     return true;
@@ -103,8 +102,7 @@ inline FieldNullspaceOperatorFacts make_field_nullspace_operator_facts(
     std::string boundary_set_identity, std::vector<FieldBoundaryNullspaceFact> boundaries,
     bool has_reaction, bool internal_constraint = false) {
   std::sort(boundaries.begin(), boundaries.end(),
-            [](const FieldBoundaryNullspaceFact& left,
-               const FieldBoundaryNullspaceFact& right) {
+            [](const FieldBoundaryNullspaceFact& left, const FieldBoundaryNullspaceFact& right) {
               return field_boundary_id_bytewise_less(left.boundary_id, right.boundary_id);
             });
   FieldNullspaceOperatorFacts facts{has_reaction, internal_constraint,
@@ -195,8 +193,7 @@ class FieldNullspaceProviderRegistry {
       throw std::invalid_argument("field-nullspace provider requires exact identities");
     const std::string identity(provider->identity());
     if (!providers_.emplace(identity, std::move(provider)).second)
-      throw std::invalid_argument("duplicate field-nullspace provider identity '" + identity +
-                                  "'");
+      throw std::invalid_argument("duplicate field-nullspace provider identity '" + identity + "'");
   }
 
   [[nodiscard]] std::shared_ptr<const FieldNullspaceProvider> resolve(

@@ -66,7 +66,7 @@ struct PreparedCoarseFineOperator {
 namespace detail {
 
 inline int checked_coarse_fine_carrier_growth(int fine_ghost_depth, int refinement_ratio,
-                                               int parent_reach) {
+                                              int parent_reach) {
   if (fine_ghost_depth < 0 || refinement_ratio <= 0 || parent_reach < 0)
     throw std::invalid_argument("prepared coarse/fine carrier has invalid growth metadata");
   const std::int64_t growth = static_cast<std::int64_t>(fine_ghost_depth) +

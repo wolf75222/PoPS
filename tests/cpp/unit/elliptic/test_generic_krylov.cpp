@@ -1103,7 +1103,7 @@ struct CustomOwnedVectorDistributionSource {
           1, "custom distribution sum scratch was not prepared");
     std::copy(values.begin(), values.end(), scratch.begin());
     try {
-  all_reduce_sum_inplace(scratch.data(), values.size(), lane);
+      all_reduce_sum_inplace(scratch.data(), values.size(), lane);
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(2,
                                                        "custom distribution sum collective failed");
@@ -1120,7 +1120,7 @@ struct CustomOwnedVectorDistributionSource {
           3, "custom distribution max scratch was not prepared");
     std::copy(values.begin(), values.end(), scratch.begin());
     try {
-  all_reduce_max_inplace(scratch.data(), values.size(), lane);
+      all_reduce_max_inplace(scratch.data(), values.size(), lane);
     } catch (...) {
       return PreparedVectorDistributionStatus::failure(4,
                                                        "custom distribution max collective failed");
@@ -2629,9 +2629,9 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
   zero.set_val(Real(0));
   const Real exact_unit_norm = static_cast<Real>(kN);  // sqrt(kN*kN), exact for kN=32.
   ASSERT_EQ(PureFieldAlgebra::norm(unit_rhs), exact_unit_norm);
-  const SolveReport absolute = run_prepared(identity, zero, unit_rhs, bicgstab_krylov_method(),
-                                            LinearOperatorProperties::general(), Real(0),
-                                            exact_unit_norm, 50);
+  const SolveReport absolute =
+      run_prepared(identity, zero, unit_rhs, bicgstab_krylov_method(),
+                   LinearOperatorProperties::general(), Real(0), exact_unit_norm, 50);
   EXPECT_TRUE(absolute.solved());
   EXPECT_EQ(absolute.iters, 0);
   EXPECT_EQ(absolute.reference_residual_norm, exact_unit_norm);
@@ -2639,10 +2639,9 @@ TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
 
   MultiFab below_floor(*ba_, *dm_, 1, 1);
   below_floor.set_val(Real(0));
-  const SolveReport below = run_prepared(identity, below_floor, unit_rhs,
-                                         bicgstab_krylov_method(),
-                                         LinearOperatorProperties::general(), Real(0),
-                                         exact_unit_norm / Real(2), 50);
+  const SolveReport below =
+      run_prepared(identity, below_floor, unit_rhs, bicgstab_krylov_method(),
+                   LinearOperatorProperties::general(), Real(0), exact_unit_norm / Real(2), 50);
   EXPECT_TRUE(below.solved());
   EXPECT_EQ(below.iters, 1);
   EXPECT_EQ(below.residual_norm, Real(0));

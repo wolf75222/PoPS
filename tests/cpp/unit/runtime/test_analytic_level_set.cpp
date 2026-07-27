@@ -27,12 +27,9 @@ AnalyticNode binary(AnalyticOp op, AnalyticNode left, AnalyticNode right) {
 }
 
 AnalyticNode circle_level_set(Real cx, Real cy, Real radius) {
-  const AnalyticNode dx =
-      binary(AnalyticOp::Sub, AnalyticNode::x(), AnalyticNode::constant(cx));
-  const AnalyticNode dy =
-      binary(AnalyticOp::Sub, AnalyticNode::y(), AnalyticNode::constant(cy));
-  return binary(AnalyticOp::Sub,
-                binary(AnalyticOp::Hypot, dx, dy), AnalyticNode::constant(radius));
+  const AnalyticNode dx = binary(AnalyticOp::Sub, AnalyticNode::x(), AnalyticNode::constant(cx));
+  const AnalyticNode dy = binary(AnalyticOp::Sub, AnalyticNode::y(), AnalyticNode::constant(cy));
+  return binary(AnalyticOp::Sub, binary(AnalyticOp::Hypot, dx, dy), AnalyticNode::constant(radius));
 }
 
 TEST(AnalyticLevelSet, CallableUsesTheStrictNegativeActiveConvention) {
@@ -84,13 +81,12 @@ TEST(AnalyticLevelSet, NonFiniteReplacementLeavesPublishedFieldsUntouched) {
   const Real old_first_value = old_values[0];
   const Real old_first_mask = old_mask[0];
 
-  const AnalyticNode zero =
-      binary(AnalyticOp::Sub, AnalyticNode::x(), AnalyticNode::x());
-  const auto non_finite = compile_analytic_expression(
-      binary(AnalyticOp::Div, AnalyticNode::constant(Real(1)), zero));
-  EXPECT_THROW(replace_analytic_level_set_materialization(
-                   published, non_finite, geometry, domain, 1),
-               std::domain_error);
+  const AnalyticNode zero = binary(AnalyticOp::Sub, AnalyticNode::x(), AnalyticNode::x());
+  const auto non_finite =
+      compile_analytic_expression(binary(AnalyticOp::Div, AnalyticNode::constant(Real(1)), zero));
+  EXPECT_THROW(
+      replace_analytic_level_set_materialization(published, non_finite, geometry, domain, 1),
+      std::domain_error);
 
   pops::sync_host();
   EXPECT_EQ(published.values.data(), old_values);
@@ -100,19 +96,17 @@ TEST(AnalyticLevelSet, NonFiniteReplacementLeavesPublishedFieldsUntouched) {
 }
 
 TEST(AnalyticLevelSet, PredicateAndInvalidSamplingRequestsFailBeforePublication) {
-  const auto predicate = compile_analytic_expression(binary(
-      AnalyticOp::Lt, AnalyticNode::x(), AnalyticNode::constant(Real(0))));
+  const auto predicate = compile_analytic_expression(
+      binary(AnalyticOp::Lt, AnalyticNode::x(), AnalyticNode::constant(Real(0))));
   EXPECT_THROW(make_analytic_level_set(predicate), std::invalid_argument);
 
   const Box2D domain = Box2D::from_extents(8, 8);
   const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
   const auto scalar = compile_analytic_expression(AnalyticNode::x());
-  EXPECT_THROW(materialize_analytic_level_set(scalar, geometry, Box2D{}, 1),
-               std::invalid_argument);
-  EXPECT_THROW(materialize_analytic_level_set(scalar, geometry, domain, -1),
-               std::invalid_argument);
-  EXPECT_THROW(materialize_analytic_level_set(
-                   scalar, geometry, Box2D{{-1, 0}, {domain.hi[0], domain.hi[1]}}, 0),
+  EXPECT_THROW(materialize_analytic_level_set(scalar, geometry, Box2D{}, 1), std::invalid_argument);
+  EXPECT_THROW(materialize_analytic_level_set(scalar, geometry, domain, -1), std::invalid_argument);
+  EXPECT_THROW(materialize_analytic_level_set(scalar, geometry,
+                                              Box2D{{-1, 0}, {domain.hi[0], domain.hi[1]}}, 0),
                std::invalid_argument);
 }
 

@@ -59,8 +59,7 @@ inline std::shared_ptr<CopyExchangeStorage> CopyScheduleCache::acquire_exchange(
     std::int64_t communicator_identity) {
   for (const auto& candidate : exchange_pool_) {
     if (!candidate->in_use && candidate->schedule.get() == schedule.get() &&
-        candidate->ncomp == ncomp &&
-        candidate->communicator_identity == communicator_identity) {
+        candidate->ncomp == ncomp && candidate->communicator_identity == communicator_identity) {
       candidate->in_use = true;
       return candidate;
     }
@@ -77,8 +76,8 @@ inline std::shared_ptr<CopyExchangeStorage> CopyScheduleCache::acquire_exchange(
 namespace detail {
 
 template <class Prepare>
-inline void collectively_prepare_before_parallel_copy_post(
-    const CommunicatorView& communicator, Prepare&& prepare) {
+inline void collectively_prepare_before_parallel_copy_post(const CommunicatorView& communicator,
+                                                           Prepare&& prepare) {
   if (communicator.size() <= 1) {
     std::forward<Prepare>(prepare)();
     return;
@@ -99,8 +98,7 @@ inline void collectively_prepare_before_parallel_copy_post(
   if (global_failure == 1)
     throw std::bad_alloc();
   if (global_failure == 2)
-    throw std::invalid_argument(
-        "parallel_copy: one rank rejected the distributed copy contract");
+    throw std::invalid_argument("parallel_copy: one rank rejected the distributed copy contract");
   if (global_failure == 3)
     throw std::overflow_error(
         "parallel_copy: one peer payload exceeds the portable MPI int-count limit");
@@ -140,8 +138,7 @@ inline void append_copy_contract_int(std::string& bytes, int value) {
 inline bool locally_materializes_replica(const MultiFab& field, int communicator_rank) {
   const BoxArray& boxes = field.box_array();
   const DistributionMapping& mapping = field.dmap();
-  if (boxes.size() == 0 || mapping.size() != boxes.size() ||
-      field.local_size() != boxes.size())
+  if (boxes.size() == 0 || mapping.size() != boxes.size() || field.local_size() != boxes.size())
     return false;
   return std::all_of(mapping.ranks().begin(), mapping.ranks().end(),
                      [communicator_rank](int owner) { return owner == communicator_rank; });
@@ -269,11 +266,10 @@ inline std::shared_ptr<const CopySchedule> get_copy_schedule_collectively(
   CopyScheduleCache& cache = dst.copy_cache();
   const int communicator_size = communicator.size();
   const int communicator_rank = communicator.rank();
-  const std::int64_t communicator_identity =
-      parallel_copy_communicator_identity(communicator);
+  const std::int64_t communicator_identity = parallel_copy_communicator_identity(communicator);
   std::shared_ptr<const CopySchedule> schedule =
-      cache.find(src.box_array(), src.dmap(), dst.ncomp(), communicator_size,
-                 communicator_rank, communicator_identity, message_tag);
+      cache.find(src.box_array(), src.dmap(), dst.ncomp(), communicator_size, communicator_rank,
+                 communicator_identity, message_tag);
   const long local_state = dst.ncomp() != src.ncomp() ? 2L : (schedule ? 0L : 1L);
   const long global_state = all_reduce_max(local_state, communicator);
   if (global_state >= 2L) {
@@ -290,8 +286,7 @@ inline std::shared_ptr<const CopySchedule> get_copy_schedule_collectively(
     };
     throw std::invalid_argument(
         "parallel_copy requires identical source and destination provider widths on every rank (" +
-        width("dst.ncomp", dst_min, dst_max) + ", " +
-        width("src.ncomp", src_min, src_max) + ")");
+        width("dst.ncomp", dst_min, dst_max) + ", " + width("src.ncomp", src_min, src_max) + ")");
   }
   if (global_state == 0L) {
     copy_schedule_hit_counter().fetch_add(1, std::memory_order_relaxed);
@@ -316,12 +311,11 @@ inline std::shared_ptr<const CopySchedule> get_copy_schedule_collectively(
 
   std::string contract_payload;
   collectively_prepare_before_parallel_copy_post(communicator, [&] {
-    contract_payload = make_parallel_copy_contract_payload(
-        dst, src, communicator_size, message_tag, dst_replicated, src_replicated);
+    contract_payload = make_parallel_copy_contract_payload(dst, src, communicator_size, message_tag,
+                                                           dst_replicated, src_replicated);
   });
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("parallel-copy-layout-v2"),
-            std::string_view(contract_payload)}},
+          {{std::string_view("parallel-copy-layout-v2"), std::string_view(contract_payload)}},
           communicator))
     throw std::invalid_argument(
         "parallel_copy source/destination layouts differ between MPI ranks");
@@ -487,8 +481,7 @@ inline void parallel_copy_on(MultiFab& dst, const MultiFab& src,
       for (const CopyJob& job : sched->send[peer]) {
         const ConstArray4 source = src.fab(src.local_index_of(job.gs)).const_array();
         const int nx = job.region.nx();
-        const std::int64_t region_size =
-            static_cast<std::int64_t>(nx) * job.region.ny();
+        const std::int64_t region_size = static_cast<std::int64_t>(nx) * job.region.ny();
         lease.device_work_will_launch();
         for_each_cell(job.region,
                       detail::PackKernel{buffer, source, base, region_size, job.region.lo[0],
@@ -528,10 +521,9 @@ inline void parallel_copy_on(MultiFab& dst, const MultiFab& src,
     lease.device_work_will_launch();
   launch_local_copies();
   if (!exchange.requests.empty()) {
-    detail::require_mpi_success(
-        MPI_Waitall(static_cast<int>(exchange.requests.size()), exchange.requests.data(),
-                    MPI_STATUSES_IGNORE),
-        "MPI_Waitall(parallel_copy)");
+    detail::require_mpi_success(MPI_Waitall(static_cast<int>(exchange.requests.size()),
+                                            exchange.requests.data(), MPI_STATUSES_IGNORE),
+                                "MPI_Waitall(parallel_copy)");
     exchange.requests.clear();
   }
 
@@ -543,9 +535,8 @@ inline void parallel_copy_on(MultiFab& dst, const MultiFab& src,
       const int nx = job.region.nx();
       const std::int64_t region_size = static_cast<std::int64_t>(nx) * job.region.ny();
       lease.device_work_will_launch();
-      for_each_cell(job.region,
-                    detail::UnpackKernel{buffer, destination, base, region_size,
-                                         job.region.lo[0], job.region.lo[1], nx, nc});
+      for_each_cell(job.region, detail::UnpackKernel{buffer, destination, base, region_size,
+                                                     job.region.lo[0], job.region.lo[1], nx, nc});
       base += region_size * nc;
     }
   }
@@ -595,9 +586,8 @@ class PreparedPeriodicCopyPlan {
   PreparedPeriodicCopyPlan& operator=(PreparedPeriodicCopyPlan&&) noexcept = default;
 
   static PreparedPeriodicCopyPlan prepare(
-      MultiFab& destination, const MultiFab& source, const Box2D& domain,
-      Periodicity periodicity, std::uint64_t topology_generation,
-      const CommunicatorView& communicator,
+      MultiFab& destination, const MultiFab& source, const Box2D& domain, Periodicity periodicity,
+      std::uint64_t topology_generation, const CommunicatorView& communicator,
       int message_tag = ExecutionLane::parallel_copy_message_tag) {
     std::unique_ptr<PreparedPeriodicCopyPlan> pending;
     detail::collectively_prepare_before_parallel_copy_post(communicator, [&] {
@@ -608,8 +598,7 @@ class PreparedPeriodicCopyPlan {
     return std::move(*pending);
   }
 
-  void apply(MultiFab& destination, const MultiFab& source,
-             std::uint64_t topology_generation,
+  void apply(MultiFab& destination, const MultiFab& source, std::uint64_t topology_generation,
              const CommunicatorView& communicator) {
     detail::collectively_prepare_before_parallel_copy_post(communicator, [&] {
       validate_replay_(destination, source, topology_generation, communicator);
@@ -618,8 +607,7 @@ class PreparedPeriodicCopyPlan {
         const int source_global = image_sources_[static_cast<std::size_t>(global)];
         const int source_local = source.local_index_of(source_global);
         if (source_local < 0)
-          throw std::runtime_error(
-              "prepared periodic copy image/source ownership mismatch");
+          throw std::runtime_error("prepared periodic copy image/source ownership mismatch");
         const auto shift = image_shifts_[static_cast<std::size_t>(global)];
         detail::copy_shifted(images_.fab(local), source.fab(source_local), images_.box(local),
                              shift[0], shift[1], source.ncomp());
@@ -629,14 +617,11 @@ class PreparedPeriodicCopyPlan {
     detail::parallel_copy_on(destination, images_, communicator, message_tag_);
   }
 
-  [[nodiscard]] std::uint64_t topology_generation() const noexcept {
-    return topology_generation_;
-  }
+  [[nodiscard]] std::uint64_t topology_generation() const noexcept { return topology_generation_; }
 
  private:
-  PreparedPeriodicCopyPlan(MultiFab& destination, const MultiFab& source,
-                           const Box2D& domain, Periodicity periodicity,
-                           std::uint64_t topology_generation,
+  PreparedPeriodicCopyPlan(MultiFab& destination, const MultiFab& source, const Box2D& domain,
+                           Periodicity periodicity, std::uint64_t topology_generation,
                            const CommunicatorView& communicator, int message_tag)
       : destination_boxes_(destination.box_array().boxes()),
         destination_ranks_(destination.dmap().ranks()),
@@ -652,15 +637,15 @@ class PreparedPeriodicCopyPlan {
         communicator_rank_(communicator.rank()),
         communicator_identity_(detail::parallel_copy_communicator_identity(communicator)),
         message_tag_(message_tag),
-        images_(make_images_(destination, source, domain, periodicity,
-                             image_sources_, image_shifts_)) {
+        images_(
+            make_images_(destination, source, domain, periodicity, image_sources_, image_shifts_)) {
     validate_replay_(destination, source, topology_generation, communicator);
   }
 
-  static MultiFab make_images_(
-      const MultiFab& destination, const MultiFab& source, const Box2D& domain,
-      Periodicity periodicity, std::vector<int>& image_sources,
-      std::vector<std::array<int, 2>>& image_shifts) {
+  static MultiFab make_images_(const MultiFab& destination, const MultiFab& source,
+                               const Box2D& domain, Periodicity periodicity,
+                               std::vector<int>& image_sources,
+                               std::vector<std::array<int, 2>>& image_shifts) {
     if (destination.ncomp() != source.ncomp())
       throw std::invalid_argument("prepared periodic copy component mismatch");
     if (destination.box_array().size() == 0 || source.box_array().size() == 0)
@@ -672,9 +657,7 @@ class PreparedPeriodicCopyPlan {
         throw std::invalid_argument("prepared periodic copy source lies outside its domain");
     for (int source_index = 0; source_index < source.box_array().size(); ++source_index)
       for (int previous = 0; previous < source_index; ++previous)
-        if (!source.box_array()[source_index]
-                 .intersect(source.box_array()[previous])
-                 .empty())
+        if (!source.box_array()[source_index].intersect(source.box_array()[previous]).empty())
           throw std::invalid_argument(
               "prepared periodic copy requires a non-overlapping source decomposition");
 
@@ -690,14 +673,10 @@ class PreparedPeriodicCopyPlan {
       if (!periodic)
         return std::pair<std::int64_t, std::int64_t>{0, 0};
       const std::int64_t extent = axis == 0 ? domain.nx() : domain.ny();
-      const std::int64_t minimum =
-          -floor_div64(-(static_cast<std::int64_t>(destination_bounds.lo[axis]) -
-                         domain.hi[axis]),
-                       extent);
-      const std::int64_t maximum =
-          floor_div64(static_cast<std::int64_t>(destination_bounds.hi[axis]) -
-                          domain.lo[axis],
-                      extent);
+      const std::int64_t minimum = -floor_div64(
+          -(static_cast<std::int64_t>(destination_bounds.lo[axis]) - domain.hi[axis]), extent);
+      const std::int64_t maximum = floor_div64(
+          static_cast<std::int64_t>(destination_bounds.hi[axis]) - domain.lo[axis], extent);
       return std::pair<std::int64_t, std::int64_t>{minimum, maximum};
     };
     const auto [qx_lo, qx_hi] = image_range(0, periodicity.x);
@@ -707,12 +686,10 @@ class PreparedPeriodicCopyPlan {
     const std::int64_t source_count = source.box_array().size();
     if (image_count_x <= 0 || image_count_y <= 0 || source_count <= 0 ||
         image_count_x > std::numeric_limits<int>::max() / image_count_y ||
-        image_count_x * image_count_y >
-            std::numeric_limits<int>::max() / source_count)
-      throw std::overflow_error(
-          "prepared periodic copy image catalogue exceeds native range");
-    const std::size_t maximum_images = static_cast<std::size_t>(
-        image_count_x * image_count_y * source_count);
+        image_count_x * image_count_y > std::numeric_limits<int>::max() / source_count)
+      throw std::overflow_error("prepared periodic copy image catalogue exceeds native range");
+    const std::size_t maximum_images =
+        static_cast<std::size_t>(image_count_x * image_count_y * source_count);
 
     std::vector<Box2D> image_boxes;
     std::vector<int> image_owners;
@@ -722,30 +699,24 @@ class PreparedPeriodicCopyPlan {
     image_shifts.reserve(maximum_images);
     const auto shifted_index = [](int index, std::int64_t shift) {
       const std::int64_t result = static_cast<std::int64_t>(index) + shift;
-      if (result < std::numeric_limits<int>::min() ||
-          result > std::numeric_limits<int>::max())
-        throw std::overflow_error(
-            "prepared periodic copy shifted box exceeds integer range");
+      if (result < std::numeric_limits<int>::min() || result > std::numeric_limits<int>::max())
+        throw std::overflow_error("prepared periodic copy shifted box exceeds integer range");
       return static_cast<int>(result);
     };
     for (std::int64_t qy = qy_lo; qy <= qy_hi; ++qy)
       for (std::int64_t qx = qx_lo; qx <= qx_hi; ++qx) {
         const std::int64_t sx64 = qx * static_cast<std::int64_t>(domain.nx());
         const std::int64_t sy64 = qy * static_cast<std::int64_t>(domain.ny());
-        if (sx64 < std::numeric_limits<int>::min() ||
-            sx64 > std::numeric_limits<int>::max() ||
-            sy64 < std::numeric_limits<int>::min() ||
-            sy64 > std::numeric_limits<int>::max())
-          throw std::overflow_error(
-              "prepared periodic copy image shift exceeds integer range");
+        if (sx64 < std::numeric_limits<int>::min() || sx64 > std::numeric_limits<int>::max() ||
+            sy64 < std::numeric_limits<int>::min() || sy64 > std::numeric_limits<int>::max())
+          throw std::overflow_error("prepared periodic copy image shift exceeds integer range");
         const int sx = static_cast<int>(sx64);
         const int sy = static_cast<int>(sy64);
         for (int source_index = 0; source_index < source.box_array().size(); ++source_index) {
           const Box2D original = source.box_array()[source_index];
-          const Box2D shifted{{shifted_index(original.lo[0], sx64),
-                               shifted_index(original.lo[1], sy64)},
-                              {shifted_index(original.hi[0], sx64),
-                               shifted_index(original.hi[1], sy64)}};
+          const Box2D shifted{
+              {shifted_index(original.lo[0], sx64), shifted_index(original.lo[1], sy64)},
+              {shifted_index(original.hi[0], sx64), shifted_index(original.hi[1], sy64)}};
           bool needed = false;
           for (const Box2D& destination_box : destination.box_array().boxes())
             if (!shifted.intersect(destination_box).empty()) {
@@ -786,16 +757,15 @@ class PreparedPeriodicCopyPlan {
       for (const Box2D& image : image_boxes) {
         const std::int64_t cells = image.intersect(required).num_cells();
         if (cells < 0 || cells > std::numeric_limits<std::int64_t>::max() - covered_cells)
-          throw std::overflow_error(
-              "prepared periodic copy coverage exceeds int64 capacity");
+          throw std::overflow_error("prepared periodic copy coverage exceeds int64 capacity");
         covered_cells += cells;
       }
       if (covered_cells != required.num_cells())
         throw std::invalid_argument(
             "prepared periodic copy source images do not cover the required carrier region");
     }
-    return MultiFab(BoxArray(std::move(image_boxes)),
-                    DistributionMapping(std::move(image_owners)), source.ncomp(), 0);
+    return MultiFab(BoxArray(std::move(image_boxes)), DistributionMapping(std::move(image_owners)),
+                    source.ncomp(), 0);
   }
 
   void validate_replay_(const MultiFab& destination, const MultiFab& source,
@@ -803,21 +773,15 @@ class PreparedPeriodicCopyPlan {
                         const CommunicatorView& communicator) const {
     if (destination.box_array().boxes() != destination_boxes_ ||
         destination.dmap().ranks() != destination_ranks_ ||
-        destination.n_grow() != destination_ngrow_ ||
-        source.box_array().boxes() != source_boxes_ ||
+        destination.n_grow() != destination_ngrow_ || source.box_array().boxes() != source_boxes_ ||
         source.dmap().ranks() != source_ranks_ || source.n_grow() != source_ngrow_ ||
         destination.ncomp() != ncomp_ || source.ncomp() != ncomp_)
-      throw std::invalid_argument(
-          "prepared periodic copy replay does not match its exact layouts");
+      throw std::invalid_argument("prepared periodic copy replay does not match its exact layouts");
     if (topology_generation != topology_generation_)
-      throw std::invalid_argument(
-          "prepared periodic copy replay crossed a topology generation");
-    if (communicator.size() != communicator_size_ ||
-        communicator.rank() != communicator_rank_ ||
-        detail::parallel_copy_communicator_identity(communicator) !=
-            communicator_identity_)
-      throw std::invalid_argument(
-          "prepared periodic copy replay changed execution communicator");
+      throw std::invalid_argument("prepared periodic copy replay crossed a topology generation");
+    if (communicator.size() != communicator_size_ || communicator.rank() != communicator_rank_ ||
+        detail::parallel_copy_communicator_identity(communicator) != communicator_identity_)
+      throw std::invalid_argument("prepared periodic copy replay changed execution communicator");
   }
 
   std::vector<Box2D> destination_boxes_;
@@ -848,8 +812,7 @@ inline void parallel_copy_periodic(MultiFab& destination, const MultiFab& source
     return;
   ExecutionLane lane = ExecutionLane::world();
   (void)PreparedPeriodicCopyPlan::prepare(destination, source, domain, periodicity,
-                                          /*topology_generation=*/0,
-                                          lane.communicator());
+                                          /*topology_generation=*/0, lane.communicator());
 }
 
 namespace detail {

@@ -61,10 +61,11 @@ struct CanonicalAnalyticMetadata {
   bool is_real = false;
 };
 
-inline std::string canonical_analytic_request(
-    std::string_view operation, std::span<const AnalyticTextMetadata> text_metadata,
-    std::span<const AnalyticRealMetadata> real_metadata, const AnalyticOpcodeRows& opcodes,
-    const AnalyticLiteralRows& literals) {
+inline std::string canonical_analytic_request(std::string_view operation,
+                                              std::span<const AnalyticTextMetadata> text_metadata,
+                                              std::span<const AnalyticRealMetadata> real_metadata,
+                                              const AnalyticOpcodeRows& opcodes,
+                                              const AnalyticLiteralRows& literals) {
   static_assert(sizeof(double) == sizeof(std::uint64_t));
   static_assert(std::numeric_limits<double>::is_iec559,
                 "analytic request consensus requires IEEE-754 binary64");
@@ -77,9 +78,8 @@ inline std::string canonical_analytic_request(
     metadata.push_back(CanonicalAnalyticMetadata{name, value, 0.0, false});
   for (const auto& [name, value] : real_metadata)
     metadata.push_back(CanonicalAnalyticMetadata{name, {}, value, true});
-  std::sort(metadata.begin(), metadata.end(), [](const auto& left, const auto& right) {
-    return left.name < right.name;
-  });
+  std::sort(metadata.begin(), metadata.end(),
+            [](const auto& left, const auto& right) { return left.name < right.name; });
   for (std::size_t index = 0; index < metadata.size(); ++index) {
     if (metadata[index].name.empty())
       throw std::invalid_argument("analytic collective metadata name must be non-empty");
@@ -140,13 +140,12 @@ template <class LocalPrepare>
   try {
     prepared.emplace(std::invoke(std::forward<LocalPrepare>(local_prepare)));
     canonical_payload = detail::canonical_analytic_request(operation, text_metadata, real_metadata,
-                                                            opcodes, literals);
+                                                           opcodes, literals);
   } catch (...) {
     local_failure = std::current_exception();
   }
 
-  const long failure_count =
-      all_reduce_sum(local_failure ? 1L : 0L, communicator);
+  const long failure_count = all_reduce_sum(local_failure ? 1L : 0L, communicator);
   if (failure_count != 0) {
     if (communicator.size() == 1 && local_failure)
       std::rethrow_exception(local_failure);
@@ -155,8 +154,8 @@ template <class LocalPrepare>
                              std::to_string(failure_count) + " rank(s)");
   }
 
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"pops.analytic.request.v1", canonical_payload}}, communicator))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.analytic.request.v1", canonical_payload}},
+                                                communicator))
     throw std::runtime_error(std::string(operation) +
                              ": analytic request differs across MPI ranks");
   return std::move(*prepared);
