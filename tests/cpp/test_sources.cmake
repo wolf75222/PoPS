@@ -144,6 +144,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_flux_failure_collective "tests/cpp/integration
 set(POPS_CPP_TEST_SOURCE_test_mpi_hdf5_collective "tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_hybrid_mbox_parity "tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_load_balance_authority "tests/cpp/integration/mpi/test_mpi_load_balance_authority.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_regrid_periodic_crossing "tests/cpp/integration/mpi/test_mpi_regrid_periodic_crossing.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_mbox_parity "tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_multiblock_interface_scheduler "tests/cpp/integration/mpi/test_mpi_multiblock_interface_scheduler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_poisson "tests/cpp/integration/mpi/test_mpi_poisson.cpp")

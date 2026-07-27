@@ -292,6 +292,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_regrid_periodic_crossing"
+sources = ["tests/cpp/integration/mpi/test_mpi_regrid_periodic_crossing.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]

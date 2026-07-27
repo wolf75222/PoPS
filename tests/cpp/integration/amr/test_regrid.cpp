@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "load_balance_test_authority.hpp"
+#include "periodic_regrid_crossing_evidence.hpp"
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/tagging/cluster.hpp>
@@ -16,6 +17,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -282,6 +284,21 @@ TEST(test_regrid, TagGrowthWrapsOnlyOnDeclaredPeriodicAxesAtOffsetOrigin) {
   EXPECT_TRUE(grown.tagged(domain.lo[0], domain.lo[1]));
   EXPECT_TRUE(grown.tagged(domain.lo[0] + 1, domain.lo[1]));
   EXPECT_FALSE(grown.tagged(domain.lo[0], domain.hi[1]));
+}
+
+TEST(test_regrid, RepeatedOrientedPeriodicCrossingsPreserveTagsAndCompositeMass) {
+  for (const int axis : std::array<int, 2>{0, 1}) {
+    const test::PeriodicRegridCrossingEvidence evidence =
+        test::run_periodic_regrid_crossing_evidence(axis);
+    EXPECT_EQ(evidence.regrid_count, 3) << "axis=" << axis;
+    EXPECT_TRUE(evidence.multi_patch_parent) << "axis=" << axis;
+    EXPECT_TRUE(evidence.periodic_low_and_high_covered) << "axis=" << axis;
+    EXPECT_TRUE(evidence.transverse_boundary_covered) << "axis=" << axis;
+    EXPECT_TRUE(evidence.layout_consensus) << "axis=" << axis;
+    EXPECT_LE(evidence.maximum_composite_mass_error, 1e-11) << "axis=" << axis;
+    EXPECT_LE(evidence.maximum_injection_error, 1e-11) << "axis=" << axis;
+    EXPECT_TRUE(evidence.passed()) << "axis=" << axis;
+  }
 }
 
 TEST(test_regrid, ProperNestingAtPhysicalWallRequiresCertifiedGhostDepth) {

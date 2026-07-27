@@ -789,6 +789,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_layout_transfer 2)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
+  set(POPS_MPI_RANKS_test_mpi_regrid_periodic_crossing 2)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
@@ -830,6 +831,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_io_gather
     test_mpi_system_layout_transfer
     test_mpi_load_balance_authority
+    test_mpi_regrid_periodic_crossing
     test_mpi_array_reduce
     test_mpi_multiblock_interface_scheduler
     test_mpi_coupler_inject
