@@ -83,7 +83,7 @@ def test_coupled_reject_attempt_codegen_filters_selected_statuses_and_fails_clos
     _module, program, _solved = _program(
         action=time.RejectAttempt(statuses=("iteration_limit",)))
     source = emit_cpp_program(program, model=None)
-    start = source.index("if (!ci_report_")
+    start = source.index("if (!ci_outcome_")
     end = source.index(".action_name()", start)
     guard = source[start:end]
 
@@ -119,7 +119,7 @@ def test_unconsumed_coupled_implicit_is_rejected_by_graph_validation_and_codegen
 def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     _module, program, _solved = _program()
     source = emit_cpp_program(program, model=None)
-    guard = source.index("if (!ci_report_")
+    guard = source.index("if (!ci_outcome_")
     first_commit = source.index("ctx.commit_many(", guard)
 
     assert "ctx.scratch_state(2, 0, u0)" in source
