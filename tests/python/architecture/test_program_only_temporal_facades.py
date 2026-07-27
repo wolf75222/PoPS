@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
+AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
@@ -110,6 +111,16 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
     )
     assert "run_program_cadence_(dt)" in _function_body(
         source, "double AmrSystem::step_cfl("
+    )
+
+
+def test_amr_program_cfl_does_not_require_native_advance_closures():
+    source = AMR_RUNTIME.read_text(encoding="utf-8")
+    cfl = _function_body(source, "Real cfl_dt(")
+    assert "preflight_program_temporal_state_()" in cfl
+    assert "preflight_native_temporal_step_()" not in cfl
+    assert "preflight_native_temporal_step_()" in _function_body(
+        source, "void step(Real dt)"
     )
 
 

@@ -4637,7 +4637,7 @@ class AmrRuntime {
   /// (AmrSystem::step_cfl's Program route, parity SystemProgramDriver::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
-    preflight_native_temporal_step_();
+    preflight_program_temporal_state_();
     // This pre-solve provides the field required by max_speed. step(dt) keeps its own transaction-level
     // field solve, but the unchanged warm start now exits at zero V-cycles because GeometricMG measures
     // convergence against ||rhs|| rather than demanding another rel_tol factor from its incoming
@@ -5127,10 +5127,11 @@ class AmrRuntime {
 
   bool has_explicit_temporal_relations_() const { return !temporal_relations_.empty(); }
 
-  /// Completes every check that could reject the explicit native route before solve/regrid/state
-  /// mutation.  A block built by an older low-level consumer can still use the separate legacy route
-  /// when no relations are installed, but it cannot silently ignore an installed relation chain.
-  void preflight_native_temporal_step_() const {
+  /// Validate the hierarchy/clock state shared by Program-owned advancement and CFL evaluation.
+  /// This deliberately does not inspect the retiring native advance closures: a generated Program
+  /// owns its temporal method and must be able to ask for a CFL bound without materializing a second
+  /// hidden step implementation.
+  void preflight_program_temporal_state_() const {
     if (nlev_ > 1)
       require_coarse_fine_reconstruction_contract_();
     if (!has_explicit_temporal_relations_())
@@ -5138,6 +5139,13 @@ class AmrRuntime {
     if (!temporal_execution_plan_ || temporal_execution_plan_->nlevels() != nlev_)
       throw std::runtime_error(
           "AMR explicit temporal relations lack their prepared execution plan");
+  }
+
+  /// Completes the additional checks needed only by the legacy native route before any mutation.
+  void preflight_native_temporal_step_() const {
+    preflight_program_temporal_state_();
+    if (!has_explicit_temporal_relations_())
+      return;
     for (const auto& block : blocks_) {
       const bool prepared = block.imex ? static_cast<bool>(block.imex_advance_with_temporal_plan)
                                        : static_cast<bool>(block.advance_with_temporal_plan);
