@@ -65,7 +65,7 @@ class SystemBlockStore {
   /// do not reorder these members nor insert any before add_poisson_rhs.
   ///
   /// DESIGN DECISION (ADC-610, named-option-groups audit): this struct is DELIBERATELY kept flat, unlike
-  /// AmrBuildParams / AmrCompiledHooks which were regrouped into named sub-structs. Three constraints make
+  /// AmrBuildParams, which was regrouped into named sub-structs. Three constraints make
   /// a regroup net-negative here:
   ///   (1) it is a POSITIONAL AGGREGATE (the frozen brace-init above): grouping members into sub-structs
   ///       would break every {..} construction site (install_block, native_loader push_dynamic /

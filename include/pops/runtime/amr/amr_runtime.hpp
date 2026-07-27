@@ -875,7 +875,7 @@ struct AmrRuntimeBlock {
   /// OPTIONAL STEP BOUNDS of the block (AMR StabilityPolicy, audit 2026-06): evaluated on the COARSE
   /// (level 0, where the AMR CFL lives -- cf. step_cfl: h is the conservative coarse spacing).
   /// EMPTY (default) -> step_cfl
-  /// keeps the transport bound only, bit-identical. Filled by build_amr_block / build_amr_compiled when
+  /// keeps the transport bound only, bit-identical. Filled by build_amr_block when
   /// the model declares HasSourceFrequency / HasStabilityDt (same semantics as System: mu in 1/s ->
   /// dt <= cfl*substeps/(stride*mu), without h; direct admissible step -> dt <=
   /// dt_adm*substeps/stride, without cfl).

@@ -4,9 +4,8 @@ inline le gabarit en-tete pops::add_compiled_model(AmrSystem&, ...), puis branch
 via AmrSystem.add_native_block (symbole pops_install_native_amr, distinct du chemin System).
 
 A la difference du chemin System (grille plate mono-niveau), le bloc est l'UNIQUE modele porte sur la
-hierarchie AMR (AmrCouplerMP<Model> + reflux conservatif + regrid), MEME chemin que AmrSystem.add_block
-(dispatch d'une ModelSpec, qui passe par detail::dispatch_amr_compiled = le pendant natif de
-add_compiled_model). On verifie :
+hierarchie AMR (AmrRuntimeBlock + reflux conservatif + regrid), MEME chemin que AmrSystem.add_block
+(dispatch d'une ModelSpec via detail::dispatch_amr_block). On verifie :
 
   1) PARITE STRICTE (transport pur, elliptic_rhs nul => zero bruit FP elliptique) : la densite
      grossiere apres plusieurs pas est BIT-IDENTIQUE (dmax == 0) entre le bloc "production" (loader

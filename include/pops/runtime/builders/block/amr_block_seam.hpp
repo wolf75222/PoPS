@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pops/core/state/variables.hpp>  // VariableSet/VariableRole/role_from_name (resolve mask)
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // dispatch_amr_block / dispatch_amr_compiled + AmrBuildParams
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // dispatch_amr_block + AmrBuildParams
 #include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntimeBlock + AmrTimeMethod
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + compiled bricks + ModelSpec
 
@@ -13,14 +13,10 @@
 /// @file
 /// @brief Per-transport block-build seam for AmrSystem (ADC-335 / P0-B), mirror of block_seam.hpp.
 ///
-/// AmrSystem::Impl had TWO inline `detail::dispatch_model(b.spec, lambda)` sites -- the multi-block
-/// build_multi (-> dispatch_amr_block -> AmrRuntimeBlock) and the single-block lazy build
-/// (-> dispatch_amr_compiled -> AmrCompiledHooks) -- each of which instantiated the full AMR dispatch
-/// product (all transports x flux x limiter) in one TU (python/amr_system.cpp). This header moves each
-/// lambda body behind a fixed-signature, hidden-visibility, non-template free function per transport,
-/// defined in its own .cpp (python/amr_{block,compiled}_<transport>.cpp), so the per-transport leaves
-/// compile in parallel. The boundaries are already type-erased (AmrRuntimeBlock / AmrCompiledHooks), so
-/// the seam carries no template surface. The lambda bodies move VERBATIM -> byte-identical.
+/// The multi-block build resolves each ModelSpec behind a fixed-signature, hidden-visibility,
+/// non-template free function per transport, so the full AMR dispatch product (all transports x flux x
+/// limiter) is split across translation units and compiles in parallel. The type-erased
+/// AmrRuntimeBlock boundary carries no template surface.
 
 namespace pops::detail {
 
@@ -114,17 +110,6 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
   return out;
 }
 
-/// VERBATIM single-block visitor body with the transport pinned: produce the type-erased AmrCompiledHooks
-/// via dispatch_amr_compiled. @p bp (AmrBuildParams) already bundles every single-block parameter.
-template <class TR>
-AmrCompiledHooks build_amr_compiled_for(TR tr, const ModelSpec& spec, const std::string& limiter,
-                                        const std::string& riemann, const AmrBuildParams& bp) {
-  AmrCompiledHooks out;
-  dispatch_model_for(spec, std::move(tr),
-                     [&](auto m) { out = dispatch_amr_compiled(m, limiter, riemann, bp); });
-  return out;
-}
-
 /// ADC-359 flux subdivision (compressible only): like build_amr_block_for, but the riemann dispatch is
 /// supplied by @p dispatch (a flux-pinned detail::dispatch_amr_block_<flux>), so each per-flux compressible
 /// seam TU instantiates ONE flux's build_amr_block leaves and they compile in parallel. The impl_components
@@ -146,36 +131,15 @@ AmrRuntimeBlock build_amr_block_for_flux(TR tr, const AmrBlockBuildArgs& a,
   return out;
 }
 
-/// ADC-359 flux subdivision: like build_amr_compiled_for, with the riemann dispatch supplied by @p dispatch
-/// (a flux-pinned detail::dispatch_amr_compiled_<flux>).
-template <class TR, class DispatchFn>
-AmrCompiledHooks build_amr_compiled_for_flux(TR tr, const ModelSpec& spec,
-                                             const std::string& limiter, const AmrBuildParams& bp,
-                                             DispatchFn dispatch) {
-  AmrCompiledHooks out;
-  dispatch_model_for(spec, std::move(tr), [&](auto m) { out = dispatch(m, limiter, bp); });
-  return out;
-}
-
-// Per-transport seam functions (defined in python/amr_block_<transport>.cpp / amr_compiled_<transport>.cpp).
+// Per-transport seam functions (defined in amr/block/**).
 // TR construction matches dispatch_transport VERBATIM
 // (ExBVelocity{B0}/CompressibleFlux{gamma}/IsothermalFlux{cs2, vacuum_floor}).
 AmrRuntimeBlock build_amr_block_exb(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_isothermal(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);
 
-AmrCompiledHooks build_amr_compiled_exb(const ModelSpec& spec, const std::string& limiter,
-                                        const std::string& riemann, const AmrBuildParams& bp);
-AmrCompiledHooks build_amr_compiled_isothermal(const ModelSpec& spec, const std::string& limiter,
-                                               const std::string& riemann,
-                                               const AmrBuildParams& bp);
-AmrCompiledHooks build_amr_compiled_compressible(const ModelSpec& spec, const std::string& limiter,
-                                                 const std::string& riemann,
-                                                 const AmrBuildParams& bp);
-
-// ADC-359 per-flux compressible seam leaves: each defined in its own .cpp (build_amr_block_for_flux /
-// build_amr_compiled_for_flux pinned to one flux), so they compile in parallel. The thin dispatchers
-// build_amr_block_compressible / build_amr_compiled_compressible route to them by the riemann string.
+// ADC-359 per-flux compressible seam leaves: each is defined in its own .cpp with
+// build_amr_block_for_flux pinned to one flux, so they compile in parallel.
 AmrRuntimeBlock build_amr_block_compressible_rusanov(const AmrBlockBuildArgs& a,
                                                      const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_compressible_hll(const AmrBlockBuildArgs& a,
@@ -184,17 +148,4 @@ AmrRuntimeBlock build_amr_block_compressible_hllc(const AmrBlockBuildArgs& a,
                                                   const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_compressible_roe(const AmrBlockBuildArgs& a,
                                                  const SharedAmrLayout& S);
-AmrCompiledHooks build_amr_compiled_compressible_rusanov(const ModelSpec& spec,
-                                                         const std::string& limiter,
-                                                         const AmrBuildParams& bp);
-AmrCompiledHooks build_amr_compiled_compressible_hll(const ModelSpec& spec,
-                                                     const std::string& limiter,
-                                                     const AmrBuildParams& bp);
-AmrCompiledHooks build_amr_compiled_compressible_hllc(const ModelSpec& spec,
-                                                      const std::string& limiter,
-                                                      const AmrBuildParams& bp);
-AmrCompiledHooks build_amr_compiled_compressible_roe(const ModelSpec& spec,
-                                                     const std::string& limiter,
-                                                     const AmrBuildParams& bp);
-
 }  // namespace pops::detail

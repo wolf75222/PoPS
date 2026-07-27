@@ -190,13 +190,13 @@ struct AmrBuildParams {
     bool recon_prim = false;  ///< recon == "primitive" (frozen by add_compiled_model)
     bool imex = false;        ///< time == "imex": stiff implicit source (backward_euler)
     int time_method = 0;      ///< stable AmrTimeMethod wire: 0 kEuler, 1 kSsprk3, 2 kSsprk2
-    // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
+    // NEWTON OPTIONS of the IMEX source.
     // DEFAULT {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path
-    // (2a) bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
+    // (2a) bit-identical.
     NewtonOptions newton_options{};
     // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
-    // transport. 0 (default) -> inactive, bit-identical. Consumed by build_amr_compiled (mono-block ->
-    // cpl->step / advance_transport). The COMPILED .so path carries it too (ADC-322): the loader marshals
+    // transport. 0 (default) -> inactive, bit-identical. The COMPILED .so path carries it too (ADC-322):
+    // the loader marshals
     // it (pops_install_native_amr) into add_compiled_model -> set_compiled_block, which stores it here.
     double pos_floor = 0.0;
     double weno_epsilon = static_cast<double>(kWenoEpsilon);
@@ -220,83 +220,14 @@ struct AmrBuildParams {
     bool has_state = false;
     std::vector<double> state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
   } initial;
-  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
-  /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
-  /// regrid). Both empty -> bit-identical.
+  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the
+  /// runtime block at build, like bz_field; re-applied each update (persist across regrid).
+  /// Both empty -> bit-identical.
   struct NamedAux {
     std::map<int, std::vector<double>>
         fields;  ///< component (>= kAuxNamedBase) -> coarse field (ny*nx)
     std::map<int, AuxHaloPolicy> halo_policies;  ///< component -> uniform boundary policy
   } named_aux;
-};
-
-/// Type-erased closures of a compiled AMR block, produced by amr_dsl_block::build_amr_compiled and
-/// installed via AmrSystem::set_compiled_block. Symmetric with the std::function hooks of AmrSystem::Impl.
-///
-/// STRUCTURE (ADC-610). The closures are grouped into SIX named tiers documented in the design
-/// (lifetime, base, stability, checkpoint, MPI gather) instead of one flat append-only list. A new
-/// closure goes INTO its tier -- the historical "add at the tail" idiom is retired (a regroup or add
-/// shifts POPS_HEADER_SIG anyway, which re-keys pops_native_abi_key, so a stale .so is REJECTED at
-/// add_native_block with a clear regenerate error, never silently truncated). The builder always
-/// populates every closure (none are optional except stability, empty without the trait).
-struct AmrCompiledHooks {
-  /// LIFETIME tier: keeps the concrete coupler alive (every other closure captures it).
-  std::shared_ptr<void> coupler_holder;  ///< keeps the AmrCouplerMP<Model> alive
-  /// BASE tier: the macro-step + the primary observables.
-  struct Base {
-    std::function<void(double)> step;                ///< one macro-step (periodic regrid included)
-    std::function<double()> max_speed;               ///< max wave speed (CFL step)
-    std::function<double()> mass;                    ///< coarse mass
-    std::function<int()> n_patches;                  ///< number of fine patches
-    std::function<std::vector<double>()> density;    ///< coarse density, ny*nx row-major
-    std::function<std::vector<double>()> potential;  ///< coarse-level phi, ny*nx row-major
-  } base;
-  /// STABILITY tier: patch signatures + OPTIONAL step bounds (empty without the HasSourceFrequency /
-  /// HasStabilityDt traits, bit-identical). patch_boxes mirrors base.n_patches (count becomes boxes).
-  struct Stability {
-    std::function<std::vector<PatchBox>()>
-        patch_boxes;                           ///< index-space signatures of the fine patches
-    std::function<double()> source_frequency;  ///< coarse max of mu [1/s] (0 = does not constrain)
-    std::function<double()>
-        stability_dt;  ///< coarse min of the admissible step (0 = does not constrain)
-  } stability;
-  /// CHECKPOINT tier (ADC-65 mono-rank restart): cadence phase + per-level state/phi + hierarchy.
-  struct Checkpoint {
-    std::function<void(int)>
-        set_macro_step;             ///< restores the cadence (regrid) phase of the mono-block
-    std::function<int()> n_levels;  ///< number of levels (>= 1)
-    std::function<int()> n_vars;    ///< conserved components of the block
-    std::function<std::vector<double>(int)>
-        level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
-    std::function<void(int, const std::vector<double>&)>
-        set_level_state;                                      ///< restores the state of level k
-    std::function<std::vector<double>(int)> level_potential;  ///< phi of level k (nf*nf row-major)
-    std::function<void(int, const std::vector<double>&)>
-        set_level_potential;  ///< restores phi of level k
-    std::function<void(const std::vector<PatchBox>&)>
-        set_hierarchy;  ///< imposes the saved fine patches
-  } checkpoint;
-  /// MPI-GATHER tier: coarse ownership diagnostic (ADC-319) + the all_reduce_sum gather counterparts of
-  /// the checkpoint state/phi (ADC-509), so a bit-identical np>1 checkpoint gathers onto rank 0.
-  struct MpiGather {
-    std::function<int()> coarse_local_boxes;  ///< per-rank owned coarse (level-0) fab count
-    std::function<int()> coarse_total_boxes;  ///< global coarse box count (identical on all ranks)
-    std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
-    std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
-  } mpi_gather;
-  /// OUTPUT tier: exact rank-local valid-cell pieces.  This is distinct from checkpoint buffers:
-  /// scientific writers must preserve native patch ownership and must not allocate zeros outside
-  /// fine patches. ``geometry_boxes`` carries every level's GLOBAL BoxArray in native index order;
-  /// OutputPiece.global_box_index is defined against that exact per-level order.
-  struct Output {
-    std::function<std::vector<PatchBox>()> geometry_boxes;
-    std::function<std::vector<OutputPiece>(int)> state_local_pieces;
-  } output;
-  /// DIAGNOSTICS tier: exact selected-level reductions over the live native hierarchy. This avoids
-  /// gathering complete level arrays through the checkpoint ABI for one scalar diagnostic.
-  struct Diagnostics {
-    std::function<double(const std::string&, int, const std::vector<int>&)> composite_reduce;
-  } diagnostics;
 };
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
@@ -522,8 +453,8 @@ class AmrSystem {
   /// them at the Python facade level (AmrSystem.add_equation raises ValueError on stride>1 or a
   /// non-empty IMEX mask, rather than ignoring them silently). For these parameters, use
   /// native add_block (ModelSpec) or add_compiled_model(AmrSystem&) DIRECTLY (header), which expose
-  /// stride and the mask. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113:
-  /// dispatch_amr_compiled accepts them; the Python facade applies a pressure guard for hllc/roe).
+  /// stride and the mask. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113);
+  /// the Python facade applies a pressure guard for hllc/roe.
   /// The low-level loader contains a WENO5-Z stencil route and allocates its three-cell halo. The
   /// resolved Case route authenticates the matching order-five conservative coarse/fine provider;
   /// neither the facade nor AmrRuntime substitutes the order-two route.

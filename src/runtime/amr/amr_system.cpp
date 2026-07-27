@@ -2,7 +2,7 @@
 
 #include <pops/runtime/dynamic/abi_key.hpp>  // detail::abi_key_string: ABI key (header-only), compared to the loader's
 #include <pops/runtime/config/route_ids.hpp>  // pops::verify_route_manifest (ADC-599: embedded route registry guard)
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // compiled/runtime AMR block builders
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // builtin hierarchy tensor provider factory
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
@@ -268,20 +268,20 @@ struct AmrSystem::Impl {
     bool has_density = false;
     std::vector<double> density;
     // FULL initial conservative state (all components), ncomp*ny*nx component-major; set by
-    // set_conservative_state(name, U). Takes priority over density at seed (cf. make_build_params /
-    // build_amr_compiled and the compiled/native multi-block builders).
+    // set_conservative_state(name, U). Takes priority over density at seed in the compiled/native
+    // runtime block builders.
     bool has_state = false;
     std::vector<double> state;
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
     bool newton_diagnostics = false;  // newton_report: native runtime; compiled .so rejected
     // Stable temporal-method wire: 0=kEuler, 1=kSsprk3 (both historical values), 2=kSsprk2.
-    // Materialized strictly to AmrTimeMethod at build (single-block via make_build_params,
-    // multi-block via dispatch_amr_block). Any SSP method is mutually exclusive with imex.
+    // Materialized strictly to AmrTimeMethod at build via dispatch_amr_block.
+    // Any SSP method is mutually exclusive with imex.
     int time_method = 0;
     // Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors the Density-role face
     // states + C/F fine ghost means to >= pos_floor. 0 (default) = inactive, bit-identical. Threaded
-    // to dispatch_amr_block (multi-block) and to AmrBuildParams::pos_floor (single-block, build_amr_compiled).
+    // to dispatch_amr_block through the unique runtime builder.
     // COMPILED blocks carry it too (ADC-322): set_compiled_block stores it here from the regenerated
     // .so loader (pops_install_native_amr -> add_compiled_model), so both routings floor like a native block.
     double pos_floor = 0.0;
@@ -378,11 +378,11 @@ struct AmrSystem::Impl {
 
   std::vector<double> bz_field;  // coarse B_z(x,y), ny*nx row-major (set_magnetic_field)
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (ny*nx row-major).
-  // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
-  // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
+  // Pending until build, then pushed to the runtime. Empty -> bit-identical.
+  // cf. set_aux_field_component.
   std::map<int, AmrRuntime::StaticAuxField> named_aux_;
   // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
-  // into the engine (bp.named_aux.halo_policies for the coupler; runtime->set_named_aux_bc for the runtime).
+  // into the runtime via set_named_aux_bc.
   std::map<int, AuxHaloPolicy> named_aux_bc_;
   // NAMED multi-elliptic fields (ADC-428): the native AMR loader declares them (register_elliptic_field)
   // and attaches each field's per-block RHS closure (set_block_elliptic_field) BEFORE the lazy build,
@@ -1310,8 +1310,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
         "AmrSystem::add_block : the system is already built (call "
         "add_block before any step/mass/density)");
   // Completeness contract of the model (ADC-290, parity with System::add_block): transport / elliptic
-  // must be chosen explicitly. Validated before the transport string routing (build_multi /
-  // build_amr_compiled), so a default-constructed ModelSpec fails clearly instead of silently
+  // must be chosen explicitly. Validated before the build_multi transport routing, so a
+  // default-constructed ModelSpec fails clearly instead of silently
   // selecting Euler + Poisson-charge.
   detail::validate_model_spec(model);
   if (substeps < 1)
@@ -1943,8 +1943,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // time routes and recon outside {conservative, primitive}, but we diagnose HERE a
   // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
   // (backward_euler_source), explicit transport carried by the reflux. limiter (including weno5, wired #105)
-  // and riemann (including hllc/roe, wired at parity #113) are validated by dispatch_amr_compiled in the
-  // loader (clear exception).
+  // and riemann (including hllc/roe, wired at parity #113) are validated by the compiled runtime builder
+  // in the loader (clear exception).
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error(
         "AmrSystem::add_native_block : recon 'conservative' | 'primitive' "
@@ -2022,7 +2022,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   }
   // EXPLICIT ABI GUARD: the key baked into the loader (at ITS compilation) must equal the module's
   // key. A mismatch = divergent headers / compiler / standard -> potentially different memory layout
-  // of AmrSystem/AmrBuildParams/AmrCompiledHooks at the boundary -> UB. We raise
+  // of AmrSystem/AmrBuildParams/AmrCompiledBlockBuilder at the boundary -> UB. We raise
   // a CLEAR error rather than let an incompatible loader through. SAME key symbol as the
   // System path (pops_native_abi_key): only the installer (pops_install_native_amr) differs.
   auto key_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "pops_native_abi_key"));

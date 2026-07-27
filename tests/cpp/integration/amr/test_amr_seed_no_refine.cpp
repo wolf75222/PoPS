@@ -1,5 +1,5 @@
-// ADC-324 regression : le patch fin SEED du chemin AMR compile (build_amr_compiled, partage par
-// add_compiled_model ET le bloc natif add_block mono-bloc) n'est alloue QUE quand le raffinement est
+// ADC-324 regression : le patch fin SEED du chemin AMR partage par add_compiled_model ET add_block
+// n'est alloue QUE quand le raffinement est
 // reellement configure (set_refinement avec un seuil fini). Sans set_refinement, refine_threshold
 // reste au sentinel 1e30 "pas de raffinement" : la hierarchie est alors MONO-NIVEAU (n_patches()==0),
 // comme le chemin amr-schur, donc le transport grossier se distribue proprement sous MPI. Avant ce
@@ -141,7 +141,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) : raffinement actif apres pas";
   }
 
-  // (C) chemin NATIF (add_block via ModelSpec) : il PARTAGE build_amr_compiled, donc la meme garde
+  // (C) chemin NATIF (add_block via ModelSpec) : il partage le meme runtime, donc la meme garde
   //     s'applique -> sans set_refinement, mono-niveau (n_patches()==0).
   {
     AmrSystemConfig c = cfg;

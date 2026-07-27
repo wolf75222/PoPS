@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """AmrSystem : alignement de table System/AMR pour limiter='weno5' x riemann={'hllc','roe'}.
 
-DIVERGENCE CORRIGEE (audit GENERICITY_2026-06 §8 "registry des tags") : les branches hllc et roe des
-dispatchs AMR (detail::dispatch_amr_block ET dispatch_amr_compiled, amr_dsl_block.hpp) n'avaient PAS de
+DIVERGENCE CORRIGEE (audit GENERICITY_2026-06 §8 "registry des tags") : les branches hllc et roe du
+dispatch AMR (detail::dispatch_amr_block, amr_dsl_block.hpp) n'avaient PAS de
 cas 'weno5' (seulement none/minmod/vanleer) alors que System::make_block (block_builder.hpp) le route.
 Resultat : un utilisateur AmrSystem demandant un schema compressible weno5+hllc (ou weno5+roe) recevait
 "limiter inconnu 'weno5'" la ou le MEME modele buildait sous System. Les deux branches AMR portent
-desormais le cas weno5 (build_amr_block / build_amr_compiled supportent deja Weno5, cables sur
+desormais le cas weno5 (build_amr_block supporte deja Weno5, cable sur
 rusanov/hll) -> parite STRICTE de surface System/AMR.
 
 Verifie (bloc NATIF engine.Model -> AUCUN compilateur requis ; le dispatch est exerce au BUILD) :
-  - MONO-BLOC (un seul add_block -> dispatch_amr_compiled) : Euler compressible + weno5 + hllc TOURNE
+  - UN BLOC (un seul add_block -> dispatch_amr_block) : Euler compressible + weno5 + hllc TOURNE
     fini ; idem weno5 + roe. (Avant le fix : RuntimeError "limiter inconnu 'weno5'".)
   - MULTI-NIVEAUX : WENO5 selectionne le fournisseur coarse/fine conservatif d'ordre 5 / halo 3
     et avance sans abaissement silencieux vers l'interpolation MUSCL.
@@ -64,9 +64,9 @@ def bump(n):
 n = 32
 rho = bump(n)
 
-# --- 1. MONO-BLOC (dispatch_amr_compiled) : weno5 + hllc, puis weno5 + roe ---------------------------
+# --- 1. UN BLOC (dispatch_amr_block) : weno5 + hllc, puis weno5 + roe --------------------------------
 for riem in (HLLC(), Roe()):
-    print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
+    print(f"== un bloc Euler : weno5 + {riem.scheme} (dispatch_amr_block) ==")
     s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)

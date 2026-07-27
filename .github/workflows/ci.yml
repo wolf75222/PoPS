@@ -311,7 +311,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-cpp-prewarm
@@ -525,7 +525,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -586,7 +586,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"
@@ -729,7 +729,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -949,7 +949,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1011,7 +1011,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           # Refuse prewarmed entries unless the final official graph proves the same compiler,
           # complete command flags, Git revision and source content for every runtime object.
           python3 scripts/ci_python_module_objects.py \
@@ -1434,7 +1434,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
@@ -1679,7 +1679,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1754,7 +1754,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-mpi \
             --verify-contracts "${compile_contracts[@]}"
@@ -1939,7 +1939,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm
@@ -2271,7 +2271,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -2325,7 +2325,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"

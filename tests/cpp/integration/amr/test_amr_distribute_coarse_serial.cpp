@@ -1,4 +1,4 @@
-// SERIAL regression lock for ADC-620 (build_amr_compiled paired the single-box fine seed with the
+// SERIAL regression lock for ADC-620 (the old single-block builder paired the single-box fine seed with the
 // COARSE DistributionMapping; with distribute_coarse=true the coarse dmap has one entry per coarse box,
 // so a 1-box fine BoxArray met a 4-entry mapping and the MultiFab layout check added by ADC-590/#416
 // aborted -- test_mpi_amr_distributed_coarse_np{1,2,4} ALL terminated, np1 included, since it is a

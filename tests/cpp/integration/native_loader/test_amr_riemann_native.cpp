@@ -53,7 +53,7 @@ ProdModel make_model() {
                    BackgroundDensity{Real(0), Real(0)}};
 }
 
-// ModelSpec equivalente pour le chemin add_block (dispatch_amr_compiled -> MEME type concret).
+// ModelSpec equivalente pour le chemin add_block (MEME type concret).
 ModelSpec make_spec() {
   ModelSpec spec;
   spec.transport = "compressible";

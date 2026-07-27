@@ -1019,7 +1019,7 @@ class AmrCouplerMP {
   /// brick (hyp / src / ell) carrying a `pops::RuntimeParams params` member takes @p rp in place of its
   /// declaration defaults, so the NEXT update() / advance reads the new values -- no recompile. A brick
   /// without such a member is a no-op (the SAME apply_runtime_params contract as the AOT ABI). Called at
-  /// the top of each macro-step by the build_amr_compiled closure when the block declares a runtime param.
+  /// the top of each macro-step by the runtime block when it declares a runtime param.
   void set_params(const RuntimeParams& rp) {
     apply_params_to_brick(model_.hyp, rp);
     apply_params_to_brick(model_.src, rp);
