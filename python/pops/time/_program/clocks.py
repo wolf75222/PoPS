@@ -36,7 +36,7 @@ class _ProgramClocks(_ProgramBase):
             (value,),
             {
                 "source_clock": value.clock.to_data(),
-                "relation": relation_data(relation),
+                "relation": relation_data(relation, source=value, target=at),
             },
             name,
             value.block,

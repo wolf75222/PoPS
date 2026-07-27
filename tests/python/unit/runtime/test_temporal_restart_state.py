@@ -1,6 +1,7 @@
 """ADC-667 strict Uniform next-attempt checkpoint state."""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -273,12 +274,70 @@ def _nested_schedule():
         "synchronizations": [{
             "node_id": 8, "source_clock": macro.qualified_id,
             "target_clock": child.qualified_id,
-            "relation": {"kind": "sample_and_hold", "schema_version": 1},
+            "relation": {
+                "kind": "sample_and_hold",
+                "schema_version": 1,
+                "provider": {"kind": "latest_accepted_sample", "schema_version": 1},
+            },
             "point": TimePoint(child).to_data(),
         }],
         "schedules": [],
         "histories": [],
     }
+
+
+def _typed_history_schedule():
+    macro, child, schedule = _nested_schedule()
+    state = {
+        "kind": "state",
+        "qualified_id": "case/fluid/U",
+        "block_ref": {"kind": "block", "qualified_id": "case/fluid"},
+    }
+    space = {"kind": "state", "name": "U", "components": ["rho"]}
+    interpolation = {
+        "kind": "linear",
+        "schema_version": 1,
+        "minimum_samples": 2,
+    }
+    validity = {
+        "schema_version": 1,
+        "oldest": TimePoint(macro, step=-2).to_data(),
+        "newest": TimePoint(macro).to_data(),
+    }
+    contract = {
+        "schema_version": 1,
+        "owner": macro.to_data()["owner"],
+        "state": state,
+        "space": space,
+        "clock": macro.to_data(),
+        "validity": validity,
+        "interpolation": interpolation,
+        "depth": 2,
+    }
+    schedule["synchronizations"][0]["relation"] = {
+        "kind": "history_interpolation",
+        "schema_version": 1,
+        "provider": {
+            "kind": "typed_history",
+            "schema_version": 1,
+            "contract": deepcopy(contract),
+        },
+        "interpolation": deepcopy(interpolation),
+    }
+    schedule["histories"] = [{
+        "name": "fluid.U",
+        "owner": state["block_ref"],
+        "state": deepcopy(state),
+        "space": deepcopy(space),
+        "clock": macro.qualified_id,
+        "depth": 2,
+        "ring_slots": 3,
+        "ncomp": None,
+        "validity": deepcopy(validity),
+        "interpolation": deepcopy(interpolation),
+        "checkpoint_policy": None,
+    }]
+    return macro, child, schedule
 
 
 def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state():
@@ -380,6 +439,57 @@ def test_restart_rejects_a_different_installed_nested_clock_schedule():
     with pytest.raises(ValueError, match="differs from installed program"):
         TemporalRestartState.from_json(
             payload, time=0.0, macro_step=0, program_schedule=changed)
+
+
+def test_temporal_schedule_refuses_a_providerless_cross_clock_relation():
+    _, _, schedule = _nested_schedule()
+    schedule["synchronizations"][0]["relation"].pop("provider")
+
+    with pytest.raises(ValueError, match="explicit provider"):
+        TemporalRestartState().configure_program(schedule, time=0.0, macro_step=0)
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("state", {
+            "kind": "state",
+            "qualified_id": "case/other/V",
+            "block_ref": {"kind": "block", "qualified_id": "case/other"},
+        }),
+        ("space", {"kind": "state", "name": "V", "components": ["energy"]}),
+        ("depth", 3),
+        ("validity", {
+            "schema_version": 1,
+            "oldest": TimePoint(Clock("macro"), step=-1).to_data(),
+            "newest": TimePoint(Clock("macro")).to_data(),
+        }),
+        ("interpolation", {"kind": "dense_output", "schema_version": 1, "order": 2}),
+    ],
+)
+def test_temporal_schedule_rejects_history_provider_registry_drift(
+        field, replacement):
+    _, _, schedule = _typed_history_schedule()
+    contract = schedule["synchronizations"][0]["relation"]["provider"]["contract"]
+    contract[field] = replacement
+
+    with pytest.raises(ValueError, match="provider"):
+        TemporalRestartState().configure_program(schedule, time=0.0, macro_step=0)
+
+
+def test_temporal_schedule_rejects_history_provider_source_clock_drift():
+    _, child, schedule = _typed_history_schedule()
+    relation = schedule["synchronizations"][0]["relation"]
+    relation["provider"]["contract"]["clock"] = child.to_data()
+    relation["provider"]["contract"]["owner"] = child.to_data()["owner"]
+    relation["provider"]["contract"]["validity"] = {
+        "schema_version": 1,
+        "oldest": TimePoint(child, step=-2).to_data(),
+        "newest": TimePoint(child).to_data(),
+    }
+
+    with pytest.raises(ValueError, match="source clock"):
+        TemporalRestartState().configure_program(schedule, time=0.0, macro_step=0)
 
 
 @pytest.mark.compiler
