@@ -153,7 +153,7 @@ def test_hash_changes_but_outputs_same():
 def test_history_ring_is_materialized_before_program_install():
     """A fresh restart must expose the qualified ring before its first post-bind step."""
     program = adctime.Program("install_history")
-    state = typed_state(program, "plasma")
+    state = typed_state(program, "plasma", state_name="U")
     program.keep_history(state, depth=1)
     program.commit(
         state.next,
