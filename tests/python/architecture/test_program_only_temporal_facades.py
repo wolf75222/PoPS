@@ -156,6 +156,7 @@ def test_amr_program_cfl_does_not_require_native_advance_closures():
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     builder = AMR_DSL_BLOCK.read_text(encoding="utf-8")
+    header = AMR_SYSTEM_HEADER.read_text(encoding="utf-8")
     for legacy_closure in (
         "advance_with_temporal_plan",
         "imex_advance",
@@ -166,6 +167,9 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
         assert legacy_closure not in builder
     assert "b.advance =" not in builder
     assert "b.imex =" not in builder
+    assert "b.imex" not in runtime
+    assert "bool imex" not in header
+    assert "bimex" not in builder
     assert "project_level_state" in runtime
     assert "project_level_state" in builder
 

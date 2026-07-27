@@ -207,7 +207,6 @@ struct AmrSystem::Impl {
     ModelSpec spec;  // ModelSpec path (is_compiled == false)
     std::string limiter = "minmod", riemann = "rusanov";
     bool recon_prim = false;  // recon == "primitive"
-    bool imex = false;        // time == "imex": immutable Program-authoring metadata
     int substeps = 1;
     int stride = 1;  // authored Program hold/catch-up cadence
     double gamma = static_cast<double>(kPhysicalDefaultGamma);
@@ -845,7 +844,7 @@ struct AmrSystem::Impl {
         // (it never marshals the field) -> inactive, bit-identical. No reject.
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.state,
                                                    b.has_state, b.gamma, b.substeps, b.recon_prim,
-                                                   b.imex, b.stride, {}, {}, b.pos_floor,
+                                                   b.stride, {}, {}, b.pos_floor,
                                                    b.weno_epsilon, b.wave_speed_cache));
         continue;
       }
@@ -1366,7 +1365,6 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.limiter = limiter;
   b.riemann = riemann;
   b.recon_prim = (recon == "primitive");
-  b.imex = imex;
   b.time = time;
   b.pos_floor = positivity_floor;  // Zhang-Shu floor (ADC-259); threaded at build (single/multi)
   b.weno_epsilon = weno_epsilon;
@@ -1609,7 +1607,7 @@ POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
 
 POPS_EXPORT void AmrSystem::set_compiled_block(
     int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
-    const std::string& name, bool recon_prim, bool imex, const std::string& time, int stride,
+    const std::string& name, bool recon_prim, const std::string& time, int stride,
     const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
     double pos_floor, double weno_epsilon, bool wave_speed_cache) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
@@ -1632,21 +1630,17 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
       time != route_token(TimeRouteId::kForwardEuler) &&
       time != route_token(TimeRouteId::kSsprk3) && !token_is_imex)
     throw std::runtime_error("AmrSystem::set_compiled_block : unknown time route '" + time + "'");
-  if (imex != token_is_imex)
-    throw std::runtime_error(
-        "AmrSystem::set_compiled_block : imex flag disagrees with canonical time route '" + time +
-        "'");
-  if (imex && wave_speed_cache)
+  if (token_is_imex && wave_speed_cache)
     throw std::runtime_error(
         "AmrSystem::set_compiled_block : wave_speed_cache is supported by explicit AMR transport "
         "only");
   // The partial IMEX mask belongs only to an authored IMEX Program composition (same guard as
   // add_block): requesting it for an explicit route is an ERROR (no silent ignore).
-  if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
+  if (!token_is_imex && (!implicit_vars.empty() || !implicit_roles.empty()))
     throw std::runtime_error(
         "AmrSystem::set_compiled_block : implicit_vars / implicit_roles require "
         "time='imex' (the implicit mask only applies to an authored IMEX Program)");
-  if (imex && (!implicit_vars.empty() || !implicit_roles.empty()))
+  if (token_is_imex && (!implicit_vars.empty() || !implicit_roles.empty()))
     throw std::runtime_error(
         "AmrSystem::set_compiled_block : implicit_vars / implicit_roles are unavailable on AMR "
         "because no executable AMR Program implicit-source primitive consumes a partial IMEX mask");
@@ -1663,7 +1657,6 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
   b.substeps = substeps;
   b.stride = stride;
   b.recon_prim = recon_prim;
-  b.imex = imex;
   b.time = time;
   // Zhang-Shu positivity floor (ADC-322): carried by the regenerated .so loader (pops_install_native_amr
   // -> add_compiled_model). Stored on the block and forwarded through the AmrRuntime builder.
@@ -2036,7 +2029,6 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     b.limiter = limiter;
     b.riemann = riemann;
     b.recon_prim = (recon == "primitive");
-    b.imex = (time == "imex");
     b.time = time;
     b.gamma = gamma;
     b.substeps = substeps;
@@ -4044,7 +4036,7 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.recon = b.recon_prim ? "primitive" : "conservative";
     row.time = b.time;
     row.time_method = amr_program_method_label(b.time);
-    row.imex = b.imex;
+    row.imex = (b.time == route_token(TimeRouteId::kImex));
     row.substeps = b.substeps;
     row.stride = b.stride;
     row.evolve = true;

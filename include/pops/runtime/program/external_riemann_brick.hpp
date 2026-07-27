@@ -195,7 +195,6 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
   if (time_route == TimeRouteId::kImexRkArs222)
     throw std::runtime_error(
         "external riemann brick: time route 'imexrk_ars222' is not wired on the AMR compiled path");
-  const bool imex = time_route == TimeRouteId::kImex;
 
   Model model{};
   AmrCompiledBlockBuilder builder = [model, limiter](
@@ -204,8 +203,7 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
                                         const std::vector<double>& density, bool has_density,
                                         const std::vector<double>& state, bool has_state,
                                         double block_gamma, int block_substeps,
-                                        bool block_recon_prim, bool /*block_imex*/,
-                                        int block_stride,
+                                        bool block_recon_prim, int block_stride,
                                         const std::vector<std::string>& implicit_vars,
                                         const std::vector<std::string>& implicit_roles,
                                         double block_positivity_floor, double block_weno_epsilon,
@@ -224,8 +222,8 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
                                   block_weno_epsilon, false);
                             });
   };
-  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder), name, recon_prim, imex,
-                         time, stride, {}, {}, positivity_floor, weno_epsilon, false);
+  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder), name, recon_prim, time,
+                         stride, {}, {}, positivity_floor, weno_epsilon, false);
 }
 
 }  // namespace detail

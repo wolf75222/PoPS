@@ -212,7 +212,7 @@ struct AmrBuildParams {
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
 /// ONCE at lazy build, common to all blocks) plus the block parameters frozen at
-/// add time (name, initial density/state, gamma, substeps/stride and recon/imex authoring metadata),
+/// add time (name, initial density/state, gamma, substeps/stride and reconstruction metadata),
 /// and returns the type-erased AmrRuntimeBlock of the block
 /// (captures the CONCRETE Model/Limiter/Flux via detail::dispatch_amr_block, the kernel stays
 /// COMPILED). Symmetric with the
@@ -225,7 +225,7 @@ struct AmrBuildParams {
 using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const detail::SharedAmrLayout& layout, const std::string& name,
     const std::vector<double>& density, bool has_density, const std::vector<double>& state,
-    bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+    bool has_state, double gamma, int substeps, bool recon_prim, int stride,
     // Compatibility slots in the frozen builder ABI. Registration rejects every non-empty selector
     // before this callable is stored; the spatial builder never resolves or executes an IMEX mask.
     const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
@@ -345,7 +345,7 @@ class AmrSystem {
   /// of the loader would fail. Symmetric with the POPS_EXPORT methods of System (grid_context/install_block).
   POPS_EXPORT void set_compiled_block(
       int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
-      const std::string& name = std::string(), bool recon_prim = false, bool imex = false,
+      const std::string& name = std::string(), bool recon_prim = false,
       const std::string& time = "euler", int stride = 1,
       const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0,
