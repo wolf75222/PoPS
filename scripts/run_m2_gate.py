@@ -15,11 +15,12 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/gates/m2_temporal_execution.toml"
 TEST_MANIFEST = ROOT / "tests/test_manifest.toml"
-EXPECTED_ISSUES = ("ADC-648",) + tuple("ADC-%d" % number for number in range(661, 668))
+EXPECTED_ISSUES = ("ADC-648",) + tuple("ADC-%d" % number for number in range(661, 669))
 EXPECTED_REQUIREMENTS = {
     "amr_step_transaction",
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
-    "solve_outcome", "step_transaction", "restart", "temporal_restart",
+    "solve_outcome", "native_multiblock_implicit_phase",
+    "step_transaction", "restart", "temporal_restart",
 }
 ALLOWED_PYTEST_TARGETS = {
     "architecture", "pipeline", "program_graph", "residual", "schedule",
@@ -72,7 +73,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if set(data) != {"schema_version", "gate", "issues", "deferred", "check"}:
         errors.append("manifest fields must be schema_version/gate/issues/deferred/check")
     if data.get("issues") != list(EXPECTED_ISSUES):
-        errors.append("issues must list ADC-648 and ADC-661..ADC-667 exactly once")
+        errors.append("issues must list ADC-648 and ADC-661..ADC-668 exactly once")
 
     deferred = data.get("deferred")
     if deferred != []:

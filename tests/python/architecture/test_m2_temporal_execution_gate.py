@@ -30,5 +30,5 @@ def test_m2_final_gate_has_no_deferred_requirement():
     assert data["deferred"] == []
     assert {row["issue"] for row in data["check"]} == {
         "ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666",
-        "ADC-667",
+        "ADC-667", "ADC-668",
     }
