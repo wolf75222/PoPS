@@ -4036,7 +4036,6 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.recon = b.recon_prim ? "primitive" : "conservative";
     row.time = b.time;
     row.time_method = amr_program_method_label(b.time);
-    row.imex = (b.time == route_token(TimeRouteId::kImex));
     row.substeps = b.substeps;
     row.stride = b.stride;
     row.evolve = true;

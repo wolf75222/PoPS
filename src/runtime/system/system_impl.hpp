@@ -113,7 +113,7 @@ inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newt
 inline EffectiveBlockOptions make_system_block_options(
     const std::string& name, const ModelSpec& model, const std::string& route,
     const std::string& limiter, const std::string& riemann, const std::string& recon,
-    const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
+    const std::string& time, const std::string& method, int substeps, bool evolve,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
     bool newton_diagnostics, double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
@@ -129,7 +129,6 @@ inline EffectiveBlockOptions make_system_block_options(
   out.recon = recon;
   out.time = time;
   out.time_method = method;
-  out.imex = imex;
   out.substeps = substeps;
   out.stride = stride;
   out.evolve = evolve;

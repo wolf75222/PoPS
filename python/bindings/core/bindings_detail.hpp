@@ -385,7 +385,6 @@ inline py::dict effective_block_options_to_dict(const EffectiveBlockOptions& b) 
   d["recon"] = b.recon;
   d["time"] = b.time;
   d["time_method"] = b.time_method;
-  d["imex"] = b.imex;
   d["substeps"] = b.substeps;
   d["stride"] = b.stride;
   d["evolve"] = b.evolve;

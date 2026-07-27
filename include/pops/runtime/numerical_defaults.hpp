@@ -153,7 +153,6 @@ struct EffectiveBlockOptions {
   std::string recon;
   std::string time;
   std::string time_method;
-  bool imex = false;
   int substeps = 1;
   int stride = 1;
   bool evolve = true;

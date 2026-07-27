@@ -263,7 +263,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                 std::move(add_poisson_rhs), substeps, evolve, stride);
   EffectiveBlockOptions block_options =
       make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
-                                imex, substeps, evolve, stride, implicit_vars, implicit_roles,
+                                substeps, evolve, stride, implicit_vars, implicit_roles,
                                 newton, newton_diagnostics, positivity_floor, wave_speed_cache,
                                 weno_epsilon);
   block_options.ncomp = ncomp;
@@ -680,7 +680,6 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   // string ladder. Diagnostic-only (EffectiveBlockOptions.time_method); the installed Program route is
   // normalized from @p time itself.
   opt.time_method = route_token(parse_time_route(time, "System::add_native_block"));
-  opt.imex = (time == "imex");
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;
@@ -713,7 +712,6 @@ void System::add_external_riemann_block(
   opt.recon = recon;
   opt.time = time;
   opt.time_method = route_token(parse_time_route(time, "System::add_external_riemann_block"));
-  opt.imex = time == "imex";
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;

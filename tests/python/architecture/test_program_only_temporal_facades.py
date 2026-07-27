@@ -35,6 +35,10 @@ POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_
 SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
+NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
+SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
+SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
+BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 MANIFEST = ROOT / "tests/test_manifest.toml"
@@ -198,6 +202,10 @@ def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures()
         assert "std::function<void(MultiFab&, Real, int)> advance" not in source
     assert "bool imex;" not in seam
     assert "std::string method;" not in seam
+    assert "bool imex = false;" not in NUMERICAL_DEFAULTS.read_text(encoding="utf-8")
+    assert "out.imex" not in SYSTEM_IMPL.read_text(encoding="utf-8")
+    assert "opt.imex" not in SYSTEM_INSTALL.read_text(encoding="utf-8")
+    assert 'd["imex"]' not in BINDINGS_DETAIL.read_text(encoding="utf-8")
     assert "rhs_into" in closures
     assert "rhs_into" in store
 
