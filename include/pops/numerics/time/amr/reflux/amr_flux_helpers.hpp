@@ -178,9 +178,9 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
 // (mf_advance_faces, already without source since compute_face_fluxes only carries model.flux):
 //   - EXPLICIT (imex == false, DEFAULT): forward Euler, U += dt S(U, aux) -- the legacy
 //     mf_apply_source call, thus bit-identical to the existing path.
-//   - IMEX (imex == true): stiff IMPLICIT source, W = U + dt S(W, aux) solved IN PLACE by
+//   - IMEX (imex == true): stiff IMPLICIT source, W = U + dt S(W, aux) solved transactionally by
 //     backward_euler_source (local Newton, finite-difference Jacobian, NAMED device functor
-//     BackwardEulerSourceKernel). It is the AMR counterpart of the System IMEX advance
+//     BackwardEulerSourceStatKernel). It is the AMR counterpart of the System IMEX advance
 //     (block_builder.hpp::AdvanceImex): same explicit half-step (transport is carried by the
 //     conservative reflux) + same implicit step on the source. The source remaining CELL-LOCAL
 //     (no face flux), it does NOT enter the reflux registers: the implicit split thus does
@@ -189,8 +189,8 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
 //     launching its own named-functor kernel.
 //
 // NEWTON OPTIONS (@p nopts): drive the local Newton of the implicit source (iteration budget,
-// tolerances, fd_eps, damping, fail_policy). DEFAULT {} = legacy constants (2 iters, 1e-7, ...)
-// -> path (2a) bit-identical to the old call backward_euler_source(m, aux, U, dt). The AMR mono-block
+// tolerances, fd_eps, damping). DEFAULT {} retains the legacy numerical constants (2 iters, 1e-7)
+// while every candidate now follows the same typed outcome/publication contract. The AMR mono-block
 // (AmrCouplerMP::step) threads them from AmrSystem (wave 3 -> mono-block options wired). The partial
 // IMEX mask is NOT carried by this path (mono-block coupler = full backward-Euler): so the
 // default mask (inactive) is passed. No diagnostics report here (report == nullptr implicit).
@@ -198,8 +198,7 @@ template <class Model>
 inline void mf_apply_source_treatment(const Model& m, MultiFab& U, const MultiFab& aux, Real dt,
                                       bool imex, const NewtonOptions& nopts = {}) {
   if (imex)
-    // OPTIONS form (Newton driven by nopts), inactive mask, no report. Default nopts={} =>
-    // identical to the legacy form with fixed iters (2), thus bit-identical as long as nopts is default.
+    // OPTIONS form (Newton driven by nopts), inactive mask, immediate FailRun on any failed outcome.
     backward_euler_source(m, aux, U, dt, nopts, ImplicitMask<Model::n_vars>{});
   else
     mf_apply_source(m, U, aux, dt);  // legacy forward Euler (bit-identical)
