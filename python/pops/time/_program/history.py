@@ -87,8 +87,17 @@ class _ProgramHistory(_ProgramBase):
             % (name, current.name, requested.name)
         )
 
-    def history(self, name: Any, lag: Any = 1, ncomp: Any = None, *,
-                space: Any = None, block: Any = None, state_ref: Any = None) -> Any:
+    def history(
+        self,
+        name: Any,
+        lag: Any = 1,
+        ncomp: Any = None,
+        *,
+        space: Any = None,
+        block: Any = None,
+        state_ref: Any = None,
+        contract: Any = None,
+    ) -> Any:
         self._guard_mutable("declare a history read")
         if not isinstance(name, str) or not name:
             raise ValueError("history: name must be a non-empty string")
@@ -106,13 +115,40 @@ class _ProgramHistory(_ProgramBase):
             require_history_space(self, name, space)
             self._declare_history_block(name, block)
             self._declare_history_state(name, state_ref, block)
+            if contract is not None:
+                from pops.time._history.contracts import HistoryContract
+
+                if type(contract) is not HistoryContract:
+                    raise TypeError("history: contract must be an exact HistoryContract")
+                if contract.owner != self.owner_path.canonical():
+                    raise ValueError("history: contract belongs to a different Program")
+                if contract.state is not state_ref or contract.space != space:
+                    raise ValueError(
+                        "history: contract state/space does not match the history ring"
+                    )
+                if contract.state.block_ref is not block:
+                    raise ValueError("history: contract state belongs to a different block")
+                if lag > contract.depth:
+                    raise ValueError("history: requested lag exceeds the HistoryContract depth")
             max_lag = max(self._histories.get(name, 0), lag)
             ring_slots = max_lag + 1
             policy = self._policy_for_history_read(name, ring_slots)
+            attrs = {"history": name, "lag": int(lag), "state": state_ref}
+            point = None
+            if contract is not None:
+                attrs["history_contract"] = contract.to_data()
+                from pops.time.points import TimePoint
+
+                point = TimePoint(contract.clock, step=-lag)
             value = self._new(
                 "state", "history", (),
-                {"history": name, "lag": int(lag), "state": state_ref}, name, block,
-                space=space, state_ref=state_ref)
+                attrs,
+                name,
+                block,
+                space=space,
+                state_ref=state_ref,
+                point=point,
+            )
             self._histories[name] = max_lag
             self._history_persistence[name] = (ring_slots, policy)
             return value
@@ -234,15 +270,21 @@ class _ProgramHistory(_ProgramBase):
         self._history_persistence[name] = (ring_slots, policy)
         return node
 
-    def keep_history(self, timestate: Any, depth: Any, cold_start: Any = None,
-                     checkpoint_policy: Any = None) -> Any:
+    def keep_history(
+        self,
+        timestate: Any,
+        depth: Any,
+        cold_start: Any = None,
+        checkpoint_policy: Any = None,
+        interpolation: Any = None,
+    ) -> Any:
         self._guard_mutable("configure state history")
         from pops.time.handles import TimeState
         if not isinstance(timestate, TimeState):
             raise ValueError(
                 "keep_history: a TimeState handle is required (T.state(block[U]))")
         return self._configure_time_history(
-            timestate, depth, cold_start, checkpoint_policy)
+            timestate, depth, cold_start, checkpoint_policy, interpolation)
 
 
 __all__ = ["_ProgramHistory"]
