@@ -452,8 +452,8 @@ TEST(ProgramContextContract,
   EXPECT_EQ(after_subset_retry.fab_calls, before_subset_retry.fab_calls);
   EXPECT_EQ(after_subset_retry.communication_calls, before_subset_retry.communication_calls);
 
-  // Replacing the live layout invalidates exactly the affected published-state slot. It is
-  // rematerialized once, then remains persistent for the next retry.
+  // A missing provider is rejected before snapshot materialization, even after the live layout
+  // changes. Repeated invalid requests therefore remain allocation-free.
   subset_live = MultiFab(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                          subset_live.n_grow() + 1);
   subset_live.set_val(Real(5));
@@ -465,7 +465,7 @@ TEST(ProgramContextContract,
       (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
       std::runtime_error);
   const AllocationEventStats after_layout_change = allocation_event_stats();
-  EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls);
+  EXPECT_EQ(after_layout_change.fab_calls, before_layout_change.fab_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
   EXPECT_THROW(
       (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
