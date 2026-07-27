@@ -5,13 +5,17 @@
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/spatial_operator.hpp>  // load_state, load_aux
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>  // std::max (Newton report aggregation, host)
 #include <concepts>
-#include <sstream>    // fail_policy structured host message, never in kernel
-#include <stdexcept>  // std::runtime_error (fail_policy = throw, host after reductions)
+#include <exception>  // std::terminate (unconsumed outcome contract)
+#include <memory>
+#include <sstream>    // structured host failure message, never in kernel
+#include <stdexcept>  // explicit FailRun/contract errors, host after reductions
 #include <string>     // std::string (validate_newton_options message prefix)
 
 /// @file
@@ -34,10 +38,10 @@
 ///   (PartiallyImplicitModel::is_implicit), or an ImplicitMask carried by the BLOCK overrides the
 ///   model default. Inactive mask (default) -> all implicit -> bit-identical to before;
 /// - default NewtonOptions {} = 2 FIXED iterations, no stop test, fd_eps=1e-7,
-///   damping=1, fail_policy=kFailNone -> reproduces EXACTLY the historical behavior;
-/// - device kernels = NAMED functors (BackwardEulerSourceKernel, NewtonStat*Kernel);
-///   fail_policy != kFailNone and Newton report aggregation act HOST side, after the
-///   reductions (no snprintf/throw in kernel).
+///   damping=1 -> reproduces the historical numerical iteration;
+/// - device kernels = NAMED functors (BackwardEulerSourceStatKernel, NewtonStat*Kernel);
+/// - publication is transactional: every candidate is reduced into an ImplicitSolveOutcome and
+///   consumed exactly once; invalid/non-converged candidates never overwrite the accepted state.
 
 namespace pops {
 
@@ -97,11 +101,12 @@ POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int c) {
   return model_is_implicit<Model>(c);
 }
 
-/// Options of the local Newton of the implicit source (backward-Euler). The DEFAULTS reproduce
-/// EXACTLY the historical behavior: 2 FIXED iterations, no residual evaluation
-/// (rel_tol == abs_tol == 0 -> no stop test, no extra cost), finite-difference
+/// Options of the local Newton of the implicit source (backward-Euler). The DEFAULTS retain
+/// the historical numerical iteration: 2 FIXED iterations with no early stop
+/// (rel_tol == abs_tol == 0), finite-difference
 /// Jacobian step h = fd_eps*|w| + fd_eps with fd_eps = 1e-7 (the constant
-/// historically hard-coded). Device-clean POD (passed BY VALUE into the kernel).
+/// historically hard-coded). The transactional route still evaluates the final residual and
+/// failure status before publication. Device-clean POD (passed BY VALUE into the kernel).
 ///  - max_iters: Newton iteration budget (historical: 2).
 ///  - rel_tol / abs_tol: stop criterion ||F||_inf <= abs_tol + rel_tol*||F0||_inf, evaluated per
 ///    CELL at the start of an iteration. 0/0 (default) = disabled -> bit-identical historical loop.
@@ -109,10 +114,9 @@ POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int c) {
 ///  - damping: damping factor of the update W -= damping * delta. 1 (default) =
 ///    full Newton, bit-identical (multiplication by 1.0 exact in IEEE). < 1 = damped Newton
 ///    (very stiff source / poor conditioning: robustness at the cost of speed).
-///  - fail_policy: HOST reaction (after reduction) to failed cells --
-///    kFailNone (default) = record only (historical); kFailWarn = structured warning event in
-///    NewtonReport; kFailThrow = structured event + std::runtime_error with the offending cell.
-///    != kFailNone forces the instrumented path (detection required) -- a pure observer, W unchanged.
+///  - fail_policy: legacy inspection value retained in the runtime manifest. It no longer controls
+///    publication: the immediate seam consumes every failure as FailRun, while the prepared seam
+///    requires an explicit RejectAttempt or FailRun.
 struct NewtonOptions {
   static constexpr int kFailNone = kNewtonFailNone;
   static constexpr int kFailWarn = kNewtonFailWarn;
@@ -147,14 +151,22 @@ inline void validate_newton_options(const NewtonOptions& newton, const char* whe
                              "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
 }
 
+enum class NewtonFailureKind : int {
+  kNone = 0,
+  kIterationLimit = 1,
+  kSingular = 2,
+  kInvalidEvaluation = 3,
+};
+
 /// OUTPUT statistic of the Newton of ONE cell (device POD, written into the diagnostics scratch):
-/// res = ||F||_inf at exit; iters = iterations consumed; failed = 1 if the cell failed
-/// (non-finite residual, degenerate/non-finite pivot, or active tolerance not reached within budget), 0 otherwise;
+/// res = ||F||_inf at exit; reference_res = ||F0||_inf; iters = iterations consumed;
+/// failure identifies a non-finite evaluation, singular Jacobian, or exhausted active tolerance;
 /// comp = index of the conserved COMPONENT carrying the max residual at exit (-1 if nothing implicit).
 struct NewtonCellStat {
   Real res = Real(0);
+  Real reference_res = Real(0);
   Real iters = Real(0);
-  Real failed = Real(0);
+  NewtonFailureKind failure = NewtonFailureKind::kNone;
   Real comp = Real(-1);
 };
 
@@ -172,13 +184,13 @@ struct NewtonReport {
   double n_failed =
       0;  ///< number of (cells x substeps) failed (non-finite / pivot / non-convergence)
   double failed_i = -1, failed_j = -1, failed_comp = -1;  ///< one offending cell (-1 if none)
+  SolveReport solve{};  ///< authoritative typed outcome of the most recent local solve
   RuntimeDiagnosticsReport diagnostics =
       make_runtime_diagnostics_report("pops.numerics.time.implicit_newton");
   void reset() { *this = NewtonReport{}; }
 };
 
-/// Finite? (device-safe, without <cmath>: NaN fails x == x; +-inf fails the bounds). Used by the
-/// INSTRUMENTED Newton path only (the default path tests nothing, bit-identical).
+/// Finite? (device-safe, without <cmath>: NaN fails x == x; +-inf fails the bounds).
 POPS_HD inline bool newton_finite(Real x) {
   return x == x && x < kNewtonFiniteAbsLimit && x > -kNewtonFiniteAbsLimit;
 }
@@ -187,12 +199,10 @@ namespace detail {
 // Dense solve J x = b on the leading n x n block (n <= N), partial pivoting. J and b
 // destroyed. N is constexpr (= Model::n_vars) -> fixed array, no allocation,
 // device-callable; n (<= N) is the number of implicit variables (partial IMEX).
-// @return true if all pivots are finite and non-zero; false otherwise (degenerate pivot: the
-// numerics stays STRICTLY the original one -- the division produces inf/NaN as before, only the
-// flag is new; historical callers ignore the return, bit-identical).
+// @return true if all pivots are finite and non-zero; false otherwise. The candidate transaction
+// consumes false as a singular outcome and never publishes the partial update.
 template <int N>
 POPS_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
-  bool ok = true;
   for (int p = 0; p < n; ++p) {
     int piv = p;
     Real best = J[p][p] < 0 ? -J[p][p] : J[p][p];
@@ -215,7 +225,7 @@ POPS_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
     }
     const Real d = J[p][p];
     if (d == Real(0) || !newton_finite(d))
-      ok = false;
+      return false;
     for (int r = 0; r < n; ++r) {
       if (r == p)
         continue;
@@ -227,7 +237,7 @@ POPS_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
   }
   for (int p = 0; p < n; ++p)
     x[p] = b[p] / J[p][p];
-  return ok;
+  return true;
 }
 
 // Assemble the Newton Jacobian of the subsystem reduced to the implicit components:
@@ -279,8 +289,7 @@ POPS_HD inline void assemble_newton_jacobian(const Model& m, const typename Mode
 template <class Model>
 POPS_HD inline typename Model::State newton_source_solve(
     const Model& m, const typename Model::State& Un, const Aux& a, Real dt,
-    const NewtonOptions& opts, const ImplicitMask<Model::n_vars>& mask = {},
-    NewtonCellStat* stat = nullptr) {
+    const NewtonOptions& opts, const ImplicitMask<Model::n_vars>& mask, NewtonCellStat& stat) {
   constexpr int N = Model::n_vars;
   int impl[N];  // indices of the implicit components (the first m_impl useful slots)
   int m_impl = 0;
@@ -297,41 +306,16 @@ POPS_HD inline typename Model::State newton_source_solve(
         W[c] = Un[c] + dt * S_in[c];
   }
   const bool tol_active = opts.rel_tol > Real(0) || opts.abs_tol > Real(0);
-  if (!tol_active && stat == nullptr) {
-    // (2a) HISTORICAL PATH (default): FIXED iterations, no test, no extra residual evaluation
-    // -> BIT-IDENTICAL to the historical one for the defaults (max_iters=2, fd_eps=1e-7).
-    for (int it = 0; it < opts.max_iters; ++it) {
-      const typename Model::State S0 = m.source(W, a);
-      Real F[N];
-      for (int r = 0; r < m_impl; ++r) {
-        const int c = impl[r];
-        F[r] = W[c] - Un[c] - dt * S0[c];
-      }
-      Real J[N][N];
-      assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
-      Real delta[N];
-      solve_dense<N>(J, F, delta, m_impl);
-      for (int r = 0; r < m_impl; ++r)
-        W[impl[r]] -= opts.damping * delta[r];
-    }
-    return W;
-  }
-  // (2b) INSTRUMENTED PATH (active tolerances and/or stat requested): same Newton, plus the stop
+  // Instrumented candidate path: Newton plus the stop
   // criterion ||F||_inf <= abs_tol + rel_tol*||F0||_inf at the start of an iteration, the detection of
   // non-finite residual / degenerate pivot, and the exit statistic. One ADDITIONAL source evaluation
   // may happen at exit (honest residual after the last update).
-  //
-  // PURE-OBSERVER INVARIANT (adversarial review): tolerances INACTIVE + stat requested (the
-  // newton_diagnostics mode) -> the STATE W is STRICTLY identical to path (2a), INCLUDING on a
-  // degenerate cell: the detection (non-finite residual, degenerate pivot) MARKS failed for the
-  // report but does NOT change the control flow (no break, update applied as in
-  // (2a), identical inf/NaN propagation). A diagnostic that would alter the trajectory would not be
-  // representative of the real run. The ONLY early exit is CONVERGENCE under tolerance
-  // (tol_active), explicitly non-historical opt-in behavior.
+  // Invalid evaluations and singular Jacobians stop before an invalid update is applied. The
+  // transaction discards that candidate, so no best-effort iterate can become accepted state.
   Real res = Real(0), res0 = Real(0);
   int used = 0;
   int worst_comp = -1;  // conserved component carrying the max residual at exit (diagnostic)
-  bool failed = false;
+  NewtonFailureKind failure = NewtonFailureKind::kNone;
   bool converged = (m_impl == 0);  // nothing implicit: trivially converged
   for (int it = 0; it < opts.max_iters; ++it) {
     const typename Model::State S0 = m.source(W, a);
@@ -340,17 +324,25 @@ POPS_HD inline typename Model::State newton_source_solve(
     for (int r = 0; r < m_impl; ++r) {
       const int c = impl[r];
       F[r] = W[c] - Un[c] - dt * S0[c];
+      if (!newton_finite(F[r])) {
+        if (failure != NewtonFailureKind::kInvalidEvaluation)
+          worst_comp = c;
+        failure = NewtonFailureKind::kInvalidEvaluation;
+        continue;
+      }
       const Real av = F[r] < 0 ? -F[r] : F[r];
-      if (av > res) {
+      if (failure != NewtonFailureKind::kInvalidEvaluation && av > res) {
         res = av;
         worst_comp = c;
       }
     }
+    if (it == 0)
+      res0 = res;
     if (!newton_finite(res))
-      failed = true;  // marks WITHOUT break: trajectory (2a) preserved
+      failure = NewtonFailureKind::kInvalidEvaluation;
+    if (failure == NewtonFailureKind::kInvalidEvaluation)
+      break;
     if (tol_active) {
-      if (it == 0)
-        res0 = res;
       if (res <= opts.abs_tol + opts.rel_tol * res0) {
         converged = true;
         break;
@@ -360,8 +352,11 @@ POPS_HD inline typename Model::State newton_source_solve(
     assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
     Real delta[N];
     const bool ok = solve_dense<N>(J, F, delta, m_impl);
-    if (!ok)
-      failed = true;  // degenerate pivot: marks WITHOUT break, inf/NaN division as in (2a)
+    if (!ok) {
+      failure = NewtonFailureKind::kSingular;
+      used = it + 1;
+      break;
+    }
     for (int r = 0; r < m_impl; ++r)
       W[impl[r]] -= opts.damping * delta[r];
     used = it + 1;
@@ -369,92 +364,48 @@ POPS_HD inline typename Model::State newton_source_solve(
   // Exit by budget exhaustion: recompute the residual AFTER the last update (honest
   // report; the loop residual precedes the update). One extra source evaluation,
   // only on this instrumented path.
-  if (!failed && used == opts.max_iters && m_impl > 0) {
+  if (failure == NewtonFailureKind::kNone && used == opts.max_iters && m_impl > 0) {
     const typename Model::State S0 = m.source(W, a);
     res = Real(0);
     for (int r = 0; r < m_impl; ++r) {
       const int c = impl[r];
       const Real fr = W[c] - Un[c] - dt * S0[c];
+      if (!newton_finite(fr)) {
+        if (failure != NewtonFailureKind::kInvalidEvaluation)
+          worst_comp = c;
+        failure = NewtonFailureKind::kInvalidEvaluation;
+        continue;
+      }
       const Real av = fr < 0 ? -fr : fr;
-      if (av > res) {
+      if (failure != NewtonFailureKind::kInvalidEvaluation && av > res) {
         res = av;
         worst_comp = c;
       }
     }
     if (!newton_finite(res))
-      failed = true;
+      failure = NewtonFailureKind::kInvalidEvaluation;
     else if (tol_active)
       converged = res <= opts.abs_tol + opts.rel_tol * res0;
   }
-  if (stat) {
-    stat->res = res;
-    stat->iters = Real(used);
-    stat->failed = (failed || (tol_active && !converged)) ? Real(1) : Real(0);
-    stat->comp = Real(worst_comp);
-  }
+  if (failure == NewtonFailureKind::kNone && tol_active && !converged)
+    failure = NewtonFailureKind::kIterationLimit;
+  stat.res = res;
+  stat.reference_res = res0;
+  stat.iters = Real(used);
+  stat.failure = failure;
+  stat.comp = Real(worst_comp);
   return W;
-}
-
-/// COMPATIBILITY: old signature with a bare iteration budget (iters). Equivalent to NewtonOptions
-/// {max_iters = iters} (tolerances inactive, historical fd_eps) -> path (2a), bit-identical.
-template <class Model>
-POPS_HD inline typename Model::State newton_source_solve(
-    const Model& m, const typename Model::State& Un, const Aux& a, Real dt, int iters,
-    const ImplicitMask<Model::n_vars>& mask = {}) {
-  NewtonOptions opts;
-  opts.max_iters = iters;
-  return newton_source_solve(m, Un, a, dt, opts, mask, nullptr);
 }
 }  // namespace detail
 
 namespace detail {
-// Device kernel of the implicit step on the source (local Newton in place). NAMED FUNCTOR (and not an
-// extended lambda): ROBUST device emission when the Model-template kernel is instantiated from an EXTERNAL TU
-// (IMEX path of an add_compiled_model block, via the advance std::function of block_builder). Body
-// identical to the old lambda -> bit-identical result on CPU.
-template <class Model>
-struct BackwardEulerSourceKernel {
-  Model m;
-  ConstArray4 uc, ax;
-  Array4 u;
-  Real dt;
-  NewtonOptions opts;  // Newton options (POD, by value); defaults = historical bit-identical
-  ImplicitMask<Model::n_vars> mask;  // block mask (POD, by value); inactive = model default
-  POPS_HD void operator()(int i, int j) const {
-    const typename Model::State Un = load_state<Model>(uc, i, j);
-    const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
-    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, nullptr);
-    for (int c = 0; c < Model::n_vars; ++c)
-      u(i, j, c) = W[c];
-  }
-};
-
-template <class Model>
-struct BackwardEulerSourceActiveKernel {
-  Model m;
-  ConstArray4 uc, ax, active_cells;
-  Array4 u;
-  Real dt;
-  NewtonOptions opts;
-  ImplicitMask<Model::n_vars> mask;
-  POPS_HD void operator()(int i, int j) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const typename Model::State Un = load_state<Model>(uc, i, j);
-    const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
-    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, nullptr);
-    for (int c = 0; c < Model::n_vars; ++c)
-      u(i, j, c) = W[c];
-  }
-};
-
 // INSTRUMENTED variant: same Newton, but writes the exit statistic of EACH cell into
-// the scratch st (comp 0 = ||F||_inf, 1 = iterations, 2 = failure 0/1, 3 = ENCODED OFFENDING CELL).
-// Encoding comp 3: -1 if the cell did not fail; otherwise (j*2^20 + i)*16 + (offending_comp + 1) --
+// the scratch st (comp 0 = ||F||_inf, 1 = ||F0||_inf, 2 = iterations,
+// 3 = NewtonFailureKind, 4 = ENCODED OFFENDING CELL).
+// Encoding comp 4: -1 if the cell did not fail; otherwise (j*2^20 + i)*16 + (offending_comp + 1) --
 // exact integer in double up to ~2^44 (i, j < 2^20), so that a MAX reduction yields ONE offending
 // cell (the largest in index) decodable host side without a dedicated arg-max reduction. NAMED
-// FUNCTOR (same cross-TU device contract as BackwardEulerSourceKernel). Used only when a
-// report or a fail_policy is requested.
+// FUNCTOR used for every local solve so invalid candidates never have an unchecked fast path.
 template <class Model>
 struct BackwardEulerSourceStatKernel {
   Model m;
@@ -467,13 +418,14 @@ struct BackwardEulerSourceStatKernel {
     const typename Model::State Un = load_state<Model>(uc, i, j);
     const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
     NewtonCellStat s{};
-    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, &s);
+    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, s);
     for (int c = 0; c < Model::n_vars; ++c)
       u(i, j, c) = W[c];
     st(i, j, 0) = s.res;
-    st(i, j, 1) = s.iters;
-    st(i, j, 2) = s.failed;
-    st(i, j, 3) = s.failed > Real(0)
+    st(i, j, 1) = s.reference_res;
+    st(i, j, 2) = s.iters;
+    st(i, j, 3) = Real(static_cast<int>(s.failure));
+    st(i, j, 4) = s.failure != NewtonFailureKind::kNone
                       ? (Real(j) * Real(1048576) + Real(i)) * Real(16) + (s.comp + Real(1))
                       : Real(-1);
   }
@@ -492,19 +444,21 @@ struct BackwardEulerSourceActiveStatKernel {
       st(i, j, 0) = Real(0);
       st(i, j, 1) = Real(0);
       st(i, j, 2) = Real(0);
-      st(i, j, 3) = Real(-1);
+      st(i, j, 3) = Real(0);
+      st(i, j, 4) = Real(-1);
       return;
     }
     const typename Model::State Un = load_state<Model>(uc, i, j);
     const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
     NewtonCellStat s{};
-    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, &s);
+    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, opts, mask, s);
     for (int c = 0; c < Model::n_vars; ++c)
       u(i, j, c) = W[c];
     st(i, j, 0) = s.res;
-    st(i, j, 1) = s.iters;
-    st(i, j, 2) = s.failed;
-    st(i, j, 3) = s.failed > Real(0)
+    st(i, j, 1) = s.reference_res;
+    st(i, j, 2) = s.iters;
+    st(i, j, 3) = Real(static_cast<int>(s.failure));
+    st(i, j, 4) = s.failure != NewtonFailureKind::kNone
                       ? (Real(j) * Real(1048576) + Real(i)) * Real(16) + (s.comp + Real(1))
                       : Real(-1);
   }
@@ -521,57 +475,136 @@ struct NewtonStatMaxKernel {
       acc = v;
   }
 };
-struct NewtonStatSumKernel {
+struct NewtonStatFailureCountKernel {
   ConstArray4 st;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const { acc += st(i, j, comp); }
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    if (st(i, j, 3) > Real(0))
+      acc += Real(1);
+  }
 };
 }  // namespace detail
 
-// W = U + dt * model.source(W, aux), solved IN PLACE by local Newton (finite-difference
-// Jacobian), driven by a NewtonOptions policy (tolerances / fd_eps / iteration budget).
-// @p mask: implicit mask CARRIED BY THE BLOCK (override of the model default); inactive (default) ->
-// bit-identical behavior. @p report: OPT-IN diagnostics -- if non-null, the Newton goes
-// through the instrumented path (per-cell statistic in a scratch, max/sum reductions +
-// MPI all_reduce) and AGGREGATES into *report (max residual, max iterations, number of failures; reset() is
-// the caller's responsibility at the start of the advance). report == nullptr AND tolerances inactive -> historical
-// path strictly bit-identical, zero allocation, zero extra evaluation.
+enum class ImplicitSolveConsumption {
+  kAccept,
+  kRejectAttempt,
+  kFailRun,
+};
+
+/// Transactional result of one local implicit-source solve.
+///
+/// The candidate state is private until exactly one explicit consumption action is selected.
+/// Accept publishes a solved candidate; RejectAttempt and FailRun discard a failed candidate.
+/// Destroying an unconsumed outcome is a contract violation and terminates instead of silently
+/// dropping the solver result.
+class ImplicitSolveOutcome {
+ public:
+  ImplicitSolveOutcome(MultiFab& destination, std::unique_ptr<MultiFab> candidate,
+                       SolveReport solve, NewtonReport* diagnostics, std::string failure_message)
+      : destination_(&destination),
+        candidate_(std::move(candidate)),
+        solve_(std::move(solve)),
+        diagnostics_(diagnostics),
+        failure_message_(std::move(failure_message)) {}
+
+  ImplicitSolveOutcome(const ImplicitSolveOutcome&) = delete;
+  ImplicitSolveOutcome& operator=(const ImplicitSolveOutcome&) = delete;
+  ImplicitSolveOutcome& operator=(ImplicitSolveOutcome&&) = delete;
+  ImplicitSolveOutcome(ImplicitSolveOutcome&& other) noexcept
+      : destination_(other.destination_),
+        candidate_(std::move(other.candidate_)),
+        solve_(std::move(other.solve_)),
+        diagnostics_(other.diagnostics_),
+        failure_message_(std::move(other.failure_message_)),
+        consumed_(other.consumed_) {
+    other.consumed_ = true;
+    other.destination_ = nullptr;
+    other.diagnostics_ = nullptr;
+  }
+
+  ~ImplicitSolveOutcome() {
+    if (!consumed_)
+      std::terminate();
+  }
+
+  const SolveReport& report() const noexcept { return solve_; }
+  const std::string& failure_message() const noexcept { return failure_message_; }
+
+  SolveReport consume(ImplicitSolveConsumption action) {
+    if (consumed_)
+      throw std::logic_error("ImplicitSolveOutcome has already been consumed");
+    consumed_ = true;
+
+    if (action == ImplicitSolveConsumption::kAccept) {
+      if (!solve_.solved_value_available())
+        throw std::logic_error("cannot accept a failed ImplicitSolveOutcome");
+      lincomb(*destination_, Real(1), *candidate_, Real(0), *candidate_);
+    } else if (action == ImplicitSolveConsumption::kRejectAttempt ||
+               action == ImplicitSolveConsumption::kFailRun) {
+      if (solve_.solved_value_available())
+        throw std::logic_error("cannot reject a solved ImplicitSolveOutcome");
+      solve_.action = action == ImplicitSolveConsumption::kRejectAttempt
+                          ? SolveAction::kRejectAttempt
+                          : SolveAction::kFailRun;
+      if (diagnostics_) {
+        diagnostics_->diagnostics.record(
+            action == ImplicitSolveConsumption::kRejectAttempt ? "newton.outcome.reject_attempt"
+                                                               : "newton.outcome.fail_run",
+            "ImplicitSourceNewton",
+            action == ImplicitSolveConsumption::kRejectAttempt ? "warning" : "error",
+            failure_message_, -1, diagnostics_->n_failed);
+      }
+    } else
+      throw std::logic_error("invalid ImplicitSolveConsumption action");
+    if (diagnostics_)
+      diagnostics_->solve = solve_;
+    return solve_;
+  }
+
+ private:
+  MultiFab* destination_ = nullptr;
+  std::unique_ptr<MultiFab> candidate_;
+  SolveReport solve_;
+  NewtonReport* diagnostics_ = nullptr;
+  std::string failure_message_;
+  bool consumed_ = false;
+};
+
+inline SolveStatus newton_failure_status(NewtonFailureKind failure) {
+  switch (failure) {
+    case NewtonFailureKind::kNone:
+      return SolveStatus::kSolved;
+    case NewtonFailureKind::kIterationLimit:
+      return SolveStatus::kIterationLimit;
+    case NewtonFailureKind::kSingular:
+      return SolveStatus::kSingular;
+    case NewtonFailureKind::kInvalidEvaluation:
+      return SolveStatus::kInvalidEvaluation;
+  }
+  return SolveStatus::kInvalidEvaluation;
+}
+
+// Prepare W = U + dt * model.source(W, aux) without publishing W. The candidate is solved by local
+// Newton, reduced collectively into one SolveReport, and returned in an ImplicitSolveOutcome that
+// must be consumed exactly once. Only consume(kAccept) can mutate U.
 template <class Model>
-void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
-                           const NewtonOptions& opts, const ImplicitMask<Model::n_vars>& mask = {},
-                           NewtonReport* report = nullptr, const MultiFab* active_cells = nullptr) {
+[[nodiscard]] ImplicitSolveOutcome prepare_backward_euler_source(
+    const Model& model, const MultiFab& aux, MultiFab& U, Real dt, const NewtonOptions& opts,
+    const ImplicitMask<Model::n_vars>& mask = {}, NewtonReport* report = nullptr,
+    const MultiFab* active_cells = nullptr) {
   if (active_cells != nullptr &&
       (active_cells->ncomp() != 1 || active_cells->local_size() != U.local_size()))
     throw std::invalid_argument(
         "Implicit source active-cell mask must have one component and match the state layout");
-  // FAST path (historical): neither a report requested nor an active fail_policy -> no scratch, no
-  // reduction, historical kernel bit-identical. A fail_policy != kFailNone REQUIRES the detection,
-  // hence the instrumented path (which remains a PURE OBSERVER of W).
-  if (report == nullptr && opts.fail_policy == NewtonOptions::kFailNone) {
-    for (int li = 0; li < U.local_size(); ++li) {
-      Array4 u = U.fab(li).array();
-      const ConstArray4 uc = U.fab(li).const_array();
-      const ConstArray4 ax = aux.fab(li).const_array();
-      const Box2D b = U.box(li);
-      if (active_cells != nullptr)
-        for_each_cell(b,
-                      detail::BackwardEulerSourceActiveKernel<Model>{
-                          model, uc, ax, active_cells->fab(li).const_array(), u, dt, opts, mask});
-      else
-        for_each_cell(b,
-                      detail::BackwardEulerSourceKernel<Model>{model, uc, ax, u, dt, opts, mask});
-    }
-    return;
-  }
-  // DIAGNOSTICS path: per-cell scratch (res, iters, failed, encoded cell) then reductions.
-  // The scratch allocation is local to the call (opt-in diagnostics/fail_policy).
-  MultiFab stats(U.box_array(), U.dmap(), 4, 0);
-  for (int li = 0; li < U.local_size(); ++li) {
-    Array4 u = U.fab(li).array();
+
+  auto candidate = std::make_unique<MultiFab>(U.box_array(), U.dmap(), U.ncomp(), U.n_grow());
+  lincomb(*candidate, Real(1), U, Real(0), U);
+  MultiFab stats(U.box_array(), U.dmap(), 5, 0);
+  for (int li = 0; li < candidate->local_size(); ++li) {
+    Array4 u = candidate->fab(li).array();
     Array4 st = stats.fab(li).array();
-    const ConstArray4 uc = U.fab(li).const_array();
+    const ConstArray4 uc = candidate->fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
-    const Box2D b = U.box(li);
+    const Box2D b = candidate->box(li);
     if (active_cells != nullptr)
       for_each_cell(b,
                     detail::BackwardEulerSourceActiveStatKernel<Model>{
@@ -580,18 +613,23 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
       for_each_cell(
           b, detail::BackwardEulerSourceStatKernel<Model>{model, uc, ax, u, st, dt, opts, mask});
   }
-  Real rmax = Real(0), imax = Real(0), nfail = Real(0), enc = Real(-1);
+  Real rmax = Real(0), reference_max = Real(0), imax = Real(0), nfail = Real(0);
+  Real failure_max = Real(0), enc = Real(-1);
   for (int li = 0; li < stats.local_size(); ++li) {
     const ConstArray4 st = stats.fab(li).const_array();
     const Box2D b = stats.box(li);
     rmax = std::max(rmax, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 0}));
-    imax = std::max(imax, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 1}));
-    nfail += reduce_sum_cell(b, detail::NewtonStatSumKernel{st, 2});
-    enc = std::max(enc, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 3}));
+    reference_max = std::max(reference_max, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 1}));
+    imax = std::max(imax, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 2}));
+    nfail += reduce_sum_cell(b, detail::NewtonStatFailureCountKernel{st});
+    failure_max = std::max(failure_max, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 3}));
+    enc = std::max(enc, reduce_max_cell(b, detail::NewtonStatMaxKernel{st, 4}));
   }
   rmax = static_cast<Real>(all_reduce_max(static_cast<double>(rmax)));
+  reference_max = static_cast<Real>(all_reduce_max(static_cast<double>(reference_max)));
   imax = static_cast<Real>(all_reduce_max(static_cast<double>(imax)));
   const double nfail_g = all_reduce_sum(static_cast<double>(nfail));
+  const int failure_g = static_cast<int>(all_reduce_max(static_cast<double>(failure_max)));
   const double enc_g = all_reduce_max(static_cast<double>(enc));
   double fi = -1, fj = -1, fc = -1;
   if (nfail_g > 0 && enc_g >= 0) {  // decode the offending cell with maximal index (cf. StatKernel)
@@ -601,6 +639,36 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
     fi = static_cast<double>(cell % 1048576);
     fj = static_cast<double>(cell / 1048576);
   }
+
+  SolveReport solve;
+  solve.iters = static_cast<int>(imax);
+  solve.reference_residual_norm = newton_finite(reference_max) ? reference_max : Real(0);
+  solve.residual_norm = newton_finite(rmax) ? rmax : Real(0);
+  solve.rel_residual = solve.reference_residual_norm > Real(0)
+                           ? solve.residual_norm / solve.reference_residual_norm
+                           : solve.residual_norm;
+  NewtonFailureKind failure = static_cast<NewtonFailureKind>(failure_g);
+  if (!newton_finite(solve.rel_residual)) {
+    solve.rel_residual = Real(0);
+    failure = NewtonFailureKind::kInvalidEvaluation;
+  }
+  if (failure == NewtonFailureKind::kNone)
+    solve.mark_solved(opts.rel_tol > Real(0) || opts.abs_tol > Real(0)
+                          ? "implicit_source_newton_converged"
+                          : "implicit_source_newton_fixed_iterations_completed");
+  else
+    solve.mark_failed(
+        newton_failure_status(failure), SolveAction::kFailRun,
+        std::string("implicit_source_newton_") + solve_status_name(newton_failure_status(failure)));
+  if (!solve_report_is_publishable(solve, opts.max_iters))
+    throw std::runtime_error("implicit source Newton produced a malformed SolveReport");
+
+  std::ostringstream message;
+  if (!solve.solved_value_available())
+    message << "Implicit source Newton: " << nfail_g << " cell(s) failed (" << solve.status_name()
+            << ", max residual " << static_cast<double>(rmax) << "; cell (" << fi << ", " << fj
+            << "), component " << fc << ")";
+
   if (report) {
     report->enabled = true;
     report->max_residual = std::max(report->max_residual, rmax);
@@ -611,40 +679,39 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
       report->failed_j = fj;
       report->failed_comp = fc;
     }
-    if (nfail_g > 0 || !newton_finite(rmax))
+    if (!solve.solved_value_available())
       report->converged = false;
+    report->solve = solve;
   }
-  // FAIL_POLICY (host, after reductions -- the device kernels never throw): reaction to the
-  // failed cells. kFailWarn: structured warning in NewtonReport. kFailThrow: structured event plus
-  // a hard error with the offending cell (the step is ABANDONED as is; up to the caller to decide
-  // what to do with it).
-  if (nfail_g > 0 && opts.fail_policy != NewtonOptions::kFailNone) {
-    std::ostringstream os;
-    os << "Implicit source Newton: " << nfail_g << " cell(s) failed (max residual "
-       << static_cast<double>(rmax) << "; cell (" << fi << ", " << fj << "), component " << fc
-       << ")";
-    const std::string msg = os.str();
-    if (report) {
-      report->diagnostics.record(
-          opts.fail_policy == NewtonOptions::kFailThrow ? "newton.fail_policy.throw"
-                                                        : "newton.fail_policy.warn",
-          "ImplicitSourceNewton",
-          opts.fail_policy == NewtonOptions::kFailThrow ? "error" : "warning", msg, -1, nfail_g);
-    }
-    if (opts.fail_policy == NewtonOptions::kFailThrow)
-      throw std::runtime_error(msg);
-  }
+  return ImplicitSolveOutcome(U, std::move(candidate), std::move(solve), report, message.str());
 }
 
-/// COMPATIBILITY: old signature with a bare iteration budget (iters = 2 historical). Equivalent to
-/// NewtonOptions{max_iters = iters} without report -> historical path bit-identical. Kept for
-/// existing callers (AMR couplers, ImplicitSourceStepper, tests).
+// Legacy immediate-consumption seam. It still returns the uniform report, but never exposes an
+// unconsumed candidate: success is explicitly accepted, while every failure is explicitly consumed
+// as FailRun and throws. The former none/warn policies can no longer publish a best-effort state.
 template <class Model>
-void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
-                           int iters = 2, const ImplicitMask<Model::n_vars>& mask = {}) {
+SolveReport backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
+                                  const NewtonOptions& opts,
+                                  const ImplicitMask<Model::n_vars>& mask = {},
+                                  NewtonReport* report = nullptr,
+                                  const MultiFab* active_cells = nullptr) {
+  ImplicitSolveOutcome outcome =
+      prepare_backward_euler_source(model, aux, U, dt, opts, mask, report, active_cells);
+  if (outcome.report().solved_value_available())
+    return outcome.consume(ImplicitSolveConsumption::kAccept);
+  const std::string message = outcome.failure_message();
+  const SolveReport failed = outcome.consume(ImplicitSolveConsumption::kFailRun);
+  throw std::runtime_error(message + " action=" + failed.action_name());
+}
+
+/// Legacy signature with a bare iteration budget (iters = 2 historical). The numerical iteration is
+/// unchanged, but its candidate now goes through the same mandatory transactional consumption.
+template <class Model>
+SolveReport backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
+                                  int iters = 2, const ImplicitMask<Model::n_vars>& mask = {}) {
   NewtonOptions opts;
   opts.max_iters = iters;
-  backward_euler_source(model, aux, U, dt, opts, mask, nullptr);
+  return backward_euler_source(model, aux, U, dt, opts, mask, nullptr);
 }
 
 // Default implicit stepper: backward-Euler (Newton) on the model source.
