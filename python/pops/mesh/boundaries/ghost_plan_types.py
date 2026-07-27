@@ -248,15 +248,22 @@ class CornerPolicy:
         if self.mode is CornerMode.EXPLICIT_RESOLVER:
             _handle(self.resolver, where="CornerPolicy.resolver",
                     kinds=frozenset(("corner_resolver",)))
-        dirichlet = [row for row in self.constraints
-                     if row.condition is CornerCondition.DIRICHLET]
-        if self.mode is CornerMode.ERROR and len({row.datum for row in dirichlet}) > 1:
-            first, second = dirichlet[:2]
+        constraints = tuple(sorted(
+            self.constraints, key=lambda row: row.source.qualified_id))
+        distinct_dirichlet = []
+        seen_data = set()
+        for constraint in constraints:
+            if constraint.condition is not CornerCondition.DIRICHLET \
+                    or constraint.datum in seen_data:
+                continue
+            seen_data.add(constraint.datum)
+            distinct_dirichlet.append(constraint)
+        if self.mode is CornerMode.ERROR and len(distinct_dirichlet) > 1:
+            first, second = distinct_dirichlet[:2]
             raise ValueError(
                 "incompatible Dirichlet corner sources %s and %s require an explicit resolver"
                 % (first.source.qualified_id, second.source.qualified_id))
-        object.__setattr__(self, "constraints", tuple(sorted(
-            self.constraints, key=lambda row: row.source.qualified_id)))
+        object.__setattr__(self, "constraints", constraints)
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"schema_version": _SCHEMA_VERSION, "policy_type": "corner",

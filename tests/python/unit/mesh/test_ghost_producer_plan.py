@@ -98,6 +98,11 @@ def _topology():
                             (periodic,), (y_min, y_max))
 
 
+def _physical_topology():
+    boundaries = _boundaries()
+    return BoundaryTopology(CASE, boundaries, (), boundaries)
+
+
 def _depth(required=(2, 2), available=(3, 3), suffix=""):
     stencil = GhostStencilManifest(
         _h("weno%s" % suffix, "stencil_manifest"), required)
@@ -317,6 +322,20 @@ def _physical_provider(boundary, name):
         dependencies=_none_dependencies())
 
 
+def _corner_layout(*, adaptive):
+    from pops.layouts import Uniform
+    from pops.mesh import normalize_layout_plan
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+
+    state = _h("U", "state", OwnerPath.model("transport"))
+    grid = cartesian_grid(n=8, periodic=False)
+    descriptor = final_amr_layout(grid) if adaptive else Uniform(grid)
+    plan = normalize_layout_plan(descriptor, owner=CASE, states=(state,))
+    layout = plan.layout_for(state)
+    assert plan.normalized(layout).adaptive is adaptive
+    return layout
+
+
 def _interface(topology):
     # BoundaryTopology canonicalizes its sets, so tuple position is not geometric meaning.  Select
     # the authenticated lower face explicitly and pair it with the peer block's upper face.
@@ -398,11 +417,66 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
             (GhostProduction(wrong_region, physical),))
 
 
-def test_incompatible_dirichlet_corner_diagnostic_names_both_sources():
-    topology = _topology()
-    corner = _region("corner")
-    first = _physical_provider(topology.physical[0], "wall_y_min")
-    second = _physical_provider(topology.physical[1], "wall_y_max")
+@pytest.mark.parametrize("adaptive", (False, True), ids=("uniform", "amr"))
+def test_compatible_dirichlet_corner_composes_for_uniform_and_amr(adaptive):
+    topology = _physical_topology()
+    layout = _corner_layout(adaptive=adaptive)
+    x_min = next(row for row in topology.physical
+                 if row.orientation == BoundaryOrientation(0, BoundarySide.LOWER))
+    y_min = next(row for row in topology.physical
+                 if row.orientation == BoundaryOrientation(1, BoundarySide.LOWER))
+    first = _physical_provider(x_min, "wall_x_min")
+    second = _physical_provider(y_min, "wall_y_min")
+    first_ghost = PhysicalGhost(
+        handle=_producer_handle("wall_x_min"), protocol=_protocol("wall_x_min"),
+        provider=first)
+    second_ghost = PhysicalGhost(
+        handle=_producer_handle("wall_y_min"), protocol=_protocol("wall_y_min"),
+        provider=second)
+    corner_ghost = NumericalClosure(
+        handle=_producer_handle("corner"), protocol=_protocol("corner"),
+        closure=_h("corner_closure", "numerical_closure", CASE))
+    x_region = _region("x_min_face", boundary=x_min, layout=layout)
+    y_region = _region("y_min_face", boundary=y_min, layout=layout)
+    corner = _region("x_min_y_min_corner", layout=layout)
+    datum = _h("wall_zero", "boundary_datum")
+    constraints = (
+        CornerConstraint(first, CornerCondition.DIRICHLET, datum),
+        CornerConstraint(second, CornerCondition.DIRICHLET, datum),
+    )
+    policy = CornerPolicy(corner, constraints, CornerMode.ERROR)
+    plan = GhostProducerRegistry(first_ghost, second_ghost, corner_ghost).resolve(
+        topology,
+        _coverage(x_region, y_region, corner),
+        (x_region, y_region, corner),
+        (
+            GhostProduction(x_region, first_ghost),
+            GhostProduction(y_region, second_ghost),
+            GhostProduction(corner, corner_ghost),
+        ),
+        corner_policies=(policy,),
+    )
+
+    resolved_policy = plan.inspect()["corner_policies"][0]
+    assert resolved_policy["mode"] == "error"
+    assert {row["datum"]["qualified_id"] for row in resolved_policy["constraints"]} \
+        == {datum.qualified_id}
+    assert CornerPolicy(
+        corner, tuple(reversed(constraints)), CornerMode.ERROR
+    ).canonical_identity() == policy.canonical_identity()
+
+
+@pytest.mark.parametrize("adaptive", (False, True), ids=("uniform", "amr"))
+def test_incompatible_dirichlet_corner_diagnostic_names_both_sources(adaptive):
+    topology = _physical_topology()
+    layout = _corner_layout(adaptive=adaptive)
+    x_min = next(row for row in topology.physical
+                 if row.orientation == BoundaryOrientation(0, BoundarySide.LOWER))
+    y_min = next(row for row in topology.physical
+                 if row.orientation == BoundaryOrientation(1, BoundarySide.LOWER))
+    corner = _region("x_min_y_min_corner", layout=layout)
+    first = _physical_provider(x_min, "wall_x_min")
+    second = _physical_provider(y_min, "wall_y_min")
     constraints = (
         CornerConstraint(first, CornerCondition.DIRICHLET, _h("zero", "boundary_datum")),
         CornerConstraint(second, CornerCondition.DIRICHLET, _h("one", "boundary_datum")),
@@ -411,6 +485,10 @@ def test_incompatible_dirichlet_corner_diagnostic_names_both_sources():
         CornerPolicy(corner, constraints, CornerMode.ERROR)
     assert first.qualified_id in str(error.value)
     assert second.qualified_id in str(error.value)
+    with pytest.raises(ValueError) as reversed_error:
+        CornerPolicy(corner, tuple(reversed(constraints)), CornerMode.ERROR)
+    assert str(reversed_error.value) == str(error.value)
+
     policy = CornerPolicy(
         corner, constraints, CornerMode.EXPLICIT_RESOLVER,
         _h("corner_reconcile", "corner_resolver"))
