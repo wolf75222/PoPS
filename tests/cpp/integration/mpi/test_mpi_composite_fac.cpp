@@ -40,6 +40,10 @@ static double f_rhs(double x, double y) {
   return -18.0 * kPi * kPi * u_exact(x, y);
 }
 
+static double periodic_exact(double x, double y) {
+  return std::sin(2.0 * kPi * x) * std::sin(2.0 * kPi * y);
+}
+
 static void fill_f(MultiFab& f, const Geometry& g) {
   for (int li = 0; li < f.local_size(); ++li) {
     Array4 a = f.fab(li).array();
@@ -226,6 +230,71 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     if (!(sp == 0.0)) {
       if (me == 0)
         std::printf("FAIL screened 2-level not bit-identical cross-rank\n");
+      ++fails;
+    }
+  }
+
+  // --- (E) singular periodic Poisson, 3 levels, full constant tensor ---
+  //
+  // The periodic base correction has a constant nullspace.  Independently rounded volume and
+  // interface-flux contributions leave a tiny constant component in the internal FAC residual;
+  // every rank must project that replicated correction onto the compatible mean-zero range before
+  // the coarse multigrid solve.  This case used to grow geometrically to infinity at three levels.
+  {
+    constexpr Real eps_x = Real(1.2);
+    constexpr Real eps_y = Real(0.8);
+    constexpr Real a_xy = Real(0.2);
+    constexpr Real a_yx = Real(-0.2);
+    const Real wave = Real(2) * Real(kPi);
+    BCRec periodic;
+    periodic.xlo = periodic.xhi = periodic.ylo = periodic.yhi = BCType::Periodic;
+    const int A0 = n / 4, A1 = 3 * n / 4 - 1;
+    Box2D b1{{r * A0, r * A0}, {r * A1 + r - 1, r * A1 + r - 1}};
+    const int B0 = 3 * n / 8, B1 = 5 * n / 8 - 1;
+    Box2D b2{{r * r * B0, r * r * B0}, {r * r * B1 + r * r - 1,
+                                         r * r * B1 + r * r - 1}};
+    std::vector<BoxArray> lb{BoxArray(std::vector<Box2D>{b1}),
+                             BoxArray(std::vector<Box2D>{b2})};
+    CompositeFacPoisson fac(geom_c, ba_c, periodic, lb, r);
+    for (int level = 0; level < fac.n_levels(); ++level) {
+      const Geometry& geometry = fac.geom_level(level);
+      fac.eps_level(level).set_val(eps_x);
+      fac.eps_y_level(level).set_val(eps_y);
+      fac.a_xy_level(level).set_val(a_xy);
+      fac.a_yx_level(level).set_val(a_yx);
+      MultiFab& rhs = fac.rhs_level(level);
+      for (int local = 0; local < rhs.local_size(); ++local) {
+        Array4 values = rhs.fab(local).array();
+        const Box2D valid = rhs.box(local);
+        for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+          for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+            values(i, j, 0) =
+                -(eps_x + eps_y) * wave * wave *
+                periodic_exact(static_cast<Real>(geometry.x_cell(i)),
+                               static_cast<Real>(geometry.y_cell(j)));
+      }
+    }
+    fac.use_variable_coefficient(true);
+    fac.use_anisotropic_coefficient(true);
+    fac.use_cross_terms(true);
+    const Real rf = fac.solve(60, 100, 1e-9, 1e-12);
+    const double cc = coarse_checksum(fac);
+    const double f1 = fine_checksum(fac.phi_level(1));
+    const double f2 = fine_checksum(fac.phi_level(2));
+    const double sp = std::fmax(spread(cc), spread(rf));
+    if (me == 0)
+      std::printf(
+          "FACPERIODIC3 np=%d rfac=%.17e csum_c=%.17e csum_1=%.17e csum_2=%.17e "
+          "spread=%.3e\n",
+          np, rf, cc, f1, f2, sp);
+    if (!(std::isfinite(rf) && fac.last_solve_report().solved() && rf < 1e-5)) {
+      if (me == 0)
+        std::printf("FAIL periodic 3-level tensor FAC not converged\n");
+      ++fails;
+    }
+    if (!(sp == 0.0)) {
+      if (me == 0)
+        std::printf("FAIL periodic 3-level tensor FAC not bit-identical cross-rank\n");
       ++fails;
     }
   }
