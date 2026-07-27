@@ -823,12 +823,18 @@ inline SolveReport solve_cg(const PreparedAffineLinearProblem& problem, KrylovWo
     if (!finite(measurement.normalized))
       return terminal_candidate_report(normalization, measurement, iteration,
                                        SolveStatus::kInvalidEvaluation);
+    const bool estimate_reached =
+        measurement.normalized <= cycle_normalization.normalized_threshold;
+    if (iteration == controls.max_iterations && estimate_reached)
+      // The common wrapper owns the authoritative b-A(x) confirmation. Publishing this
+      // recurrence-qualified candidate avoids a redundant matvec while still preventing an
+      // exhausted, unconverged provider report from being upgraded after the fact.
+      return terminal_candidate_report(normalization, measurement, iteration, SolveStatus::kSolved);
     if (iteration == controls.max_iterations)
       return terminal_candidate_report(normalization, measurement, iteration,
                                        SolveStatus::kIterationLimit);
     bool restart_recurrence = false;
-    if (measurement.normalized <= cycle_normalization.normalized_threshold ||
-        needs_extreme_recurrence_rebase(measurement.normalized)) {
+    if (estimate_reached || needs_extreme_recurrence_rebase(measurement.normalized)) {
       ResidualMeasurement confirmed =
           physical_true_residual_measurement(problem, workspace, applied, rhs, iterate);
       if (!finite(confirmed.physical))
@@ -952,10 +958,15 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
       return terminal_candidate_report(normalization, measurement, iteration - 1,
                                        SolveStatus::kInvalidEvaluation);
     recurrence_peak = std::max(recurrence_peak, intermediate_norm);
-    if (intermediate_norm <= cycle_normalization.normalized_threshold ||
+    const bool intermediate_estimate_reached =
+        intermediate_norm <= cycle_normalization.normalized_threshold;
+    if (intermediate_estimate_reached ||
         needs_reliable_residual_replacement(intermediate_norm, recurrence_peak) ||
         needs_extreme_recurrence_rebase(intermediate_norm)) {
       ScaledFieldAlgebra::axpy(iterate, alpha, prepared_direction);
+      if (iteration == controls.max_iterations && intermediate_estimate_reached)
+        return terminal_candidate_report(normalization, measurement, iteration,
+                                         SolveStatus::kSolved);
       if (iteration == controls.max_iterations)
         return terminal_candidate_report(normalization, measurement, iteration,
                                          SolveStatus::kIterationLimit);
@@ -1024,11 +1035,15 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     if (!finite(measurement.normalized))
       return terminal_candidate_report(normalization, measurement, iteration,
                                        SolveStatus::kInvalidEvaluation);
+    const bool estimate_reached =
+        measurement.normalized <= cycle_normalization.normalized_threshold;
+    if (iteration == controls.max_iterations && estimate_reached)
+      return terminal_candidate_report(normalization, measurement, iteration, SolveStatus::kSolved);
     if (iteration == controls.max_iterations)
       return terminal_candidate_report(normalization, measurement, iteration,
                                        SolveStatus::kIterationLimit);
     recurrence_peak = std::max(recurrence_peak, measurement.normalized);
-    if (measurement.normalized <= cycle_normalization.normalized_threshold ||
+    if (estimate_reached ||
         needs_reliable_residual_replacement(measurement.normalized, recurrence_peak) ||
         needs_extreme_recurrence_rebase(measurement.normalized)) {
       ResidualMeasurement confirmed =
@@ -1339,6 +1354,9 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
           iterate, KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, column, restart),
           basis(column));
 
+    if (iterations == controls.max_iterations && estimate_reached)
+      return terminal_candidate_report(normalization, measurement, iterations,
+                                       SolveStatus::kSolved);
     if (iterations == controls.max_iterations)
       return terminal_candidate_report(normalization, measurement, iterations,
                                        SolveStatus::kIterationLimit);
