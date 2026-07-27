@@ -83,6 +83,17 @@ struct FacSetAllKernel {
   POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = value; }
 };
 
+struct FacSumKernel {
+  ConstArray4 value;
+  POPS_HD void operator()(int i, int j, Real& sum) const { sum += value(i, j, 0); }
+};
+
+struct FacShiftKernel {
+  Array4 value;
+  Real shift;
+  POPS_HD void operator()(int i, int j) const { value(i, j, 0) -= shift; }
+};
+
 struct FacApplyConstantReactionKernel {
   Array4 value;
   ConstArray4 phi;
@@ -289,6 +300,8 @@ static_assert(std::is_trivially_copyable_v<FacLegacySorKernel>);
 static_assert(std::is_trivially_copyable_v<FacLegacyMaskedResidualKernel>);
 static_assert(std::is_trivially_copyable_v<FacLegacyMaskedNormKernel>);
 static_assert(std::is_trivially_copyable_v<FacLegacyFluxCorrectionKernel>);
+static_assert(std::is_trivially_copyable_v<FacSumKernel>);
+static_assert(std::is_trivially_copyable_v<FacShiftKernel>);
 
 }  // namespace detail
 
@@ -1191,6 +1204,7 @@ class CompositeFacPoisson {
   void relax_level_(int m, int sweeps);         // C-F ghost + fill_boundary + SOR (no avgdown)
   void cascade_avgdown_();                      // fine-to-coarse average-down of the whole tower
   void correct_level_(int m);                   // L_m e_m = res_m; phi_m += e_m on uncovered
+  void project_base_correction_rhs_();  // periodic Poisson correction -> compatible mean-zero range
   Real composite_residual_(int m);              // res_m + C/F flux correction; return ||.||_inf
   void fine_sor_level_(int m, const MultiFab& f_eff, int sweeps);  // red-black SOR on level m
   // Accumulate the level-m/level-(m+1) two-way C-F flux correction into dst (level-m residual or
