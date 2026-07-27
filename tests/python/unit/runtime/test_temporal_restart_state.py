@@ -28,6 +28,12 @@ from pops.time import Clock, ErrorControlledDt, FixedDt, TimePoint
 
 
 ROOT = Path(__file__).resolve().parents[4]
+FROZEN_UNIFORM_V2_B64 = (
+    ROOT / "tests/data/adc667/uniform_v2_ab2_98b7ffe6.npz.b64"
+)
+FROZEN_UNIFORM_V2_SHA256 = (
+    "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226"
+)
 
 
 class _Native:
@@ -1053,6 +1059,44 @@ def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
     payload["status"] = "rejected"
     with pytest.raises(ValueError, match="not an accepted synchronized point"):
         TemporalRestartState.from_json(json.dumps(payload), time=0.0, macro_step=0)
+
+
+def test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary():
+    import base64
+    import hashlib
+    from io import BytesIO
+
+    from pops.runtime._checkpoint_manifest import (
+        authenticate_checkpoint_payload,
+        inspect_checkpoint_payload_integrity,
+    )
+
+    encoded = "".join(FROZEN_UNIFORM_V2_B64.read_text().splitlines())
+    raw = base64.b64decode(encoded, validate=True)
+    assert hashlib.sha256(raw).hexdigest() == FROZEN_UNIFORM_V2_SHA256
+
+    with np.load(BytesIO(raw), allow_pickle=False) as stored:
+        assert int(stored["pops_checkpoint_version"]) == 2
+        assert str(stored["program_hash"]) == (
+            "d1880e66a6b39e4d56aafe1f817591e5dec9212705b430c338bde8836e448215"
+        )
+        assert {
+            "pops_checkpoint_manifest",
+            "pops_restart_identity",
+            "temporal_restart_state",
+            "runtime_consumer_cursors",
+            "field_provider_slots",
+        }.isdisjoint(stored.files)
+
+        message = "no canonical manifest/restart identity"
+        with pytest.raises(ValueError, match=message):
+            inspect_checkpoint_payload_integrity(stored, runtime_kind="uniform")
+        with pytest.raises(ValueError, match=message):
+            authenticate_checkpoint_payload(
+                object(),
+                stored,
+                runtime_kind="uniform",
+            )
 
 
 @pytest.mark.parametrize(
