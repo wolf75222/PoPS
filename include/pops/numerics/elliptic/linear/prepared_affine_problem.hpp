@@ -9,10 +9,12 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/prepared_vector_metric.hpp>
+#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/prepared_provider_consensus.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -221,14 +223,128 @@ using PreparedAllocationCountFn = std::function<std::size_t()>;
 /// source.
 enum class PreparedOperatorConcurrency : std::uint8_t { Independent = 0, Exclusive = 1 };
 
-/// Allocation-free outcome of one hot operator/preconditioner application. A failed status is
-/// sticky in its materialized session and workspace until the next reserved solve starts. Callbacks
-/// still execute after a local failure so every rank preserves the provider's MPI trace; PoPS
-/// re-publishes NaN after each downstream callback so finite output cannot erase the failure.
-enum class PreparedApplyStatus : std::uint8_t { Success = 0, Failure = 1 };
+/// Typed, allocation-free outcome of one hot operator/preconditioner application.  The fixed phase
+/// storage covers every in-tree FluxEvaluationFailure phase and keeps the failure channel usable
+/// from a noexcept prepared callback without allocating another string while the Krylov recurrence
+/// is active.  A trusted extension with a longer phase is reported explicitly as truncated.
+enum class PreparedApplyFailureKind : std::uint8_t {
+  kNone = 0,
+  kUnknownException = 1,
+  kFluxEvaluation = 2,
+};
 
-inline constexpr bool prepared_apply_succeeded(PreparedApplyStatus status) noexcept {
-  return status == PreparedApplyStatus::Success;
+enum class PreparedApplyFailureAction : std::uint8_t {
+  kNone = 0,
+  kRejectAttempt = 1,
+  kFailRun = 2,
+};
+
+inline constexpr PreparedApplyFailureAction prepared_apply_failure_action(
+    EvaluationStatus status) noexcept {
+  switch (transaction_action(status)) {
+    case TransactionFailureAction::kRetryStep:
+    case TransactionFailureAction::kRejectStep:
+      return PreparedApplyFailureAction::kRejectAttempt;
+    case TransactionFailureAction::kNone:
+      return PreparedApplyFailureAction::kNone;
+    case TransactionFailureAction::kAbortRun:
+      return PreparedApplyFailureAction::kFailRun;
+  }
+  return PreparedApplyFailureAction::kFailRun;
+}
+
+struct PreparedApplyResult {
+  static constexpr std::size_t kPhaseCapacity = 64;
+
+  PreparedApplyFailureKind kind = PreparedApplyFailureKind::kNone;
+  PreparedApplyFailureAction action = PreparedApplyFailureAction::kNone;
+  EvaluationStatus evaluation_status = EvaluationStatus::kOk;
+  std::uint32_t reason_code = 0;
+  std::uint8_t phase_size = 0;
+  bool phase_truncated = false;
+  std::array<char, kPhaseCapacity> phase_bytes{};
+
+  [[nodiscard]] static constexpr PreparedApplyResult success() noexcept { return {}; }
+
+  [[nodiscard]] static constexpr PreparedApplyResult unknown_failure() noexcept {
+    PreparedApplyResult result;
+    result.kind = PreparedApplyFailureKind::kUnknownException;
+    result.action = PreparedApplyFailureAction::kFailRun;
+    result.evaluation_status = EvaluationStatus::kFailed;
+    return result;
+  }
+
+  [[nodiscard]] static PreparedApplyResult flux_failure(
+      const FluxEvaluationFailure& failure) noexcept {
+    PreparedApplyResult result;
+    result.kind = PreparedApplyFailureKind::kFluxEvaluation;
+    result.action = prepared_apply_failure_action(failure.status());
+    if (result.action == PreparedApplyFailureAction::kNone)
+      result.action = PreparedApplyFailureAction::kFailRun;
+    result.evaluation_status = failure.status();
+    result.reason_code = failure.reason_code();
+    const std::string& phase = failure.phase();
+    const std::size_t copied = std::min(phase.size(), kPhaseCapacity);
+    if (copied != 0)
+      std::memcpy(result.phase_bytes.data(), phase.data(), copied);
+    result.phase_size = static_cast<std::uint8_t>(copied);
+    result.phase_truncated = phase.size() > copied;
+    return result;
+  }
+
+  [[nodiscard]] constexpr bool succeeded() const noexcept {
+    return kind == PreparedApplyFailureKind::kNone;
+  }
+  [[nodiscard]] constexpr std::string_view phase() const noexcept {
+    return {phase_bytes.data(), phase_size};
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<PreparedApplyResult>);
+
+inline constexpr bool prepared_apply_succeeded(const PreparedApplyResult& result) noexcept {
+  return result.succeeded();
+}
+
+/// Select one deterministic local failure without allocating.  Fatal failures outrank attempt
+/// rejection, typed flux failures outrank the unknown-exception fallback, and remaining ties use
+/// status severity, reason code, then the exact fixed-capacity phase bytes.
+inline bool prepared_apply_failure_is_worse(const PreparedApplyResult& candidate,
+                                            const PreparedApplyResult& current) noexcept {
+  const auto compare_scalar = [](auto left, auto right) noexcept {
+    using Value = decltype(left);
+    return static_cast<std::underlying_type_t<Value>>(left) >
+           static_cast<std::underlying_type_t<Value>>(right);
+  };
+  if (candidate.action != current.action)
+    return compare_scalar(candidate.action, current.action);
+  if (candidate.kind != current.kind)
+    return compare_scalar(candidate.kind, current.kind);
+  const std::uint32_t candidate_severity = flux_evaluation_severity(candidate.evaluation_status);
+  const std::uint32_t current_severity = flux_evaluation_severity(current.evaluation_status);
+  if (candidate_severity != current_severity)
+    return candidate_severity > current_severity;
+  if (candidate.reason_code != current.reason_code)
+    return candidate.reason_code > current.reason_code;
+  const std::string_view candidate_phase = candidate.phase();
+  const std::string_view current_phase = current.phase();
+  const std::size_t common_phase_size = std::min(candidate_phase.size(), current_phase.size());
+  for (std::size_t index = 0; index < common_phase_size; ++index) {
+    const auto candidate_byte = static_cast<unsigned char>(candidate_phase[index]);
+    const auto current_byte = static_cast<unsigned char>(current_phase[index]);
+    if (candidate_byte != current_byte)
+      return candidate_byte > current_byte;
+  }
+  if (candidate_phase.size() != current_phase.size())
+    return candidate_phase.size() > current_phase.size();
+  return candidate.phase_truncated && !current.phase_truncated;
+}
+
+inline void latch_prepared_apply_failure(PreparedApplyResult& current,
+                                         const PreparedApplyResult& candidate) noexcept {
+  if (!candidate.succeeded() &&
+      (current.succeeded() || prepared_apply_failure_is_worse(candidate, current)))
+    current = candidate;
 }
 
 inline constexpr bool prepared_operator_concurrency_is_valid(
@@ -245,7 +361,7 @@ concept PreparedAffineOperatorSessionSource =
     std::movable<std::remove_cvref_t<Session>> &&
     requires(std::remove_cvref_t<Session>& session, MultiFab& out, const MultiFab& in) {
       { session.prepare() } -> std::same_as<void>;
-      { session.apply(out, in) } noexcept -> std::same_as<PreparedApplyStatus>;
+      { session.apply(out, in) } noexcept -> std::same_as<PreparedApplyResult>;
       { session.allocation_count() } -> std::convertible_to<std::size_t>;
     };
 
@@ -272,31 +388,29 @@ class PreparedAffineOperatorSession {
     require_initialized_();
     implementation_->prepare();
   }
-  [[nodiscard]] PreparedApplyStatus apply(MultiFab& out, const MultiFab& in) const noexcept {
+  [[nodiscard]] PreparedApplyResult apply(MultiFab& out, const MultiFab& in) const noexcept {
     if (!implementation_) {
-      apply_status_ = PreparedApplyStatus::Failure;
+      latch_prepared_apply_failure(apply_result_, PreparedApplyResult::unknown_failure());
       publish_failure_(out);
-      return apply_status_;
+      return apply_result_;
     }
-    const PreparedApplyStatus current = implementation_->apply(out, in);
-    if (!prepared_apply_succeeded(current))
-      apply_status_ = PreparedApplyStatus::Failure;
-    if (!prepared_apply_succeeded(apply_status_))
+    latch_prepared_apply_failure(apply_result_, implementation_->apply(out, in));
+    if (!prepared_apply_succeeded(apply_result_))
       publish_failure_(out);
-    return apply_status_;
+    return apply_result_;
   }
   [[nodiscard]] std::size_t allocation_count() const {
     require_initialized_();
     return implementation_->allocation_count();
   }
-  void reset_apply_status() noexcept { apply_status_ = PreparedApplyStatus::Success; }
-  [[nodiscard]] PreparedApplyStatus apply_status() const noexcept { return apply_status_; }
+  void reset_apply_status() noexcept { apply_result_ = PreparedApplyResult::success(); }
+  [[nodiscard]] PreparedApplyResult apply_status() const noexcept { return apply_result_; }
 
  private:
   struct Concept {
     virtual ~Concept() = default;
     virtual void prepare() = 0;
-    [[nodiscard]] virtual PreparedApplyStatus apply(MultiFab&, const MultiFab&) const noexcept = 0;
+    [[nodiscard]] virtual PreparedApplyResult apply(MultiFab&, const MultiFab&) const noexcept = 0;
     [[nodiscard]] virtual std::size_t allocation_count() const = 0;
   };
 
@@ -305,7 +419,7 @@ class PreparedAffineOperatorSession {
    public:
     explicit Model(Session session) : session_(std::move(session)) {}
     void prepare() override { session_.prepare(); }
-    [[nodiscard]] PreparedApplyStatus apply(MultiFab& out,
+    [[nodiscard]] PreparedApplyResult apply(MultiFab& out,
                                             const MultiFab& in) const noexcept override {
       return session_.apply(out, in);
     }
@@ -329,7 +443,7 @@ class PreparedAffineOperatorSession {
   }
 
   std::unique_ptr<Concept> implementation_;
-  mutable PreparedApplyStatus apply_status_ = PreparedApplyStatus::Success;
+  mutable PreparedApplyResult apply_result_{};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<PreparedAffineOperatorSession>);
@@ -536,13 +650,16 @@ class PreparedAffineOperatorProvider {
           if (prepare_callback)
             prepare_callback();
         }
-        [[nodiscard]] PreparedApplyStatus apply(MultiFab& out, const MultiFab& in) noexcept {
+        [[nodiscard]] PreparedApplyResult apply(MultiFab& out, const MultiFab& in) noexcept {
           try {
             apply_callback(out, in);
-            return PreparedApplyStatus::Success;
+            return PreparedApplyResult::success();
+          } catch (const FluxEvaluationFailure& failure) {
+            out.set_val(std::numeric_limits<Real>::quiet_NaN());
+            return PreparedApplyResult::flux_failure(failure);
           } catch (...) {
             out.set_val(std::numeric_limits<Real>::quiet_NaN());
-            return PreparedApplyStatus::Failure;
+            return PreparedApplyResult::unknown_failure();
           }
         }
         [[nodiscard]] std::size_t allocation_count() const { return allocation_count_callback(); }
@@ -569,7 +686,7 @@ concept PreparedLinearPreconditionerSessionSource =
     std::movable<std::remove_cvref_t<Session>> &&
     requires(std::remove_cvref_t<Session>& session, MultiFab& out, const MultiFab& in) {
       { session.prepare() } -> std::same_as<void>;
-      { session.apply(out, in) } noexcept -> std::same_as<PreparedApplyStatus>;
+      { session.apply(out, in) } noexcept -> std::same_as<PreparedApplyResult>;
       { session.allocation_count() } -> std::convertible_to<std::size_t>;
     };
 
@@ -598,31 +715,29 @@ class PreparedLinearPreconditionerSession {
     require_initialized_();
     implementation_->prepare();
   }
-  [[nodiscard]] PreparedApplyStatus apply(MultiFab& out, const MultiFab& in) const noexcept {
+  [[nodiscard]] PreparedApplyResult apply(MultiFab& out, const MultiFab& in) const noexcept {
     if (!implementation_) {
-      apply_status_ = PreparedApplyStatus::Failure;
+      latch_prepared_apply_failure(apply_result_, PreparedApplyResult::unknown_failure());
       publish_failure_(out);
-      return apply_status_;
+      return apply_result_;
     }
-    const PreparedApplyStatus current = implementation_->apply(out, in);
-    if (!prepared_apply_succeeded(current))
-      apply_status_ = PreparedApplyStatus::Failure;
-    if (!prepared_apply_succeeded(apply_status_))
+    latch_prepared_apply_failure(apply_result_, implementation_->apply(out, in));
+    if (!prepared_apply_succeeded(apply_result_))
       publish_failure_(out);
-    return apply_status_;
+    return apply_result_;
   }
   [[nodiscard]] std::size_t allocation_count() const {
     require_initialized_();
     return implementation_->allocation_count();
   }
-  void reset_apply_status() noexcept { apply_status_ = PreparedApplyStatus::Success; }
-  [[nodiscard]] PreparedApplyStatus apply_status() const noexcept { return apply_status_; }
+  void reset_apply_status() noexcept { apply_result_ = PreparedApplyResult::success(); }
+  [[nodiscard]] PreparedApplyResult apply_status() const noexcept { return apply_result_; }
 
  private:
   struct Concept {
     virtual ~Concept() = default;
     virtual void prepare() = 0;
-    [[nodiscard]] virtual PreparedApplyStatus apply(MultiFab&, const MultiFab&) const noexcept = 0;
+    [[nodiscard]] virtual PreparedApplyResult apply(MultiFab&, const MultiFab&) const noexcept = 0;
     [[nodiscard]] virtual std::size_t allocation_count() const = 0;
   };
 
@@ -631,7 +746,7 @@ class PreparedLinearPreconditionerSession {
    public:
     explicit Model(Session session) : session_(std::move(session)) {}
     void prepare() override { session_.prepare(); }
-    [[nodiscard]] PreparedApplyStatus apply(MultiFab& out,
+    [[nodiscard]] PreparedApplyResult apply(MultiFab& out,
                                             const MultiFab& in) const noexcept override {
       return session_.apply(out, in);
     }
@@ -653,7 +768,7 @@ class PreparedLinearPreconditionerSession {
   }
 
   std::unique_ptr<Concept> implementation_;
-  mutable PreparedApplyStatus apply_status_ = PreparedApplyStatus::Success;
+  mutable PreparedApplyResult apply_result_{};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<PreparedLinearPreconditionerSession>);
@@ -799,13 +914,16 @@ class PreparedLinearPreconditionerProvider {
           if (prepare_callback)
             prepare_callback();
         }
-        [[nodiscard]] PreparedApplyStatus apply(MultiFab& out, const MultiFab& in) noexcept {
+        [[nodiscard]] PreparedApplyResult apply(MultiFab& out, const MultiFab& in) noexcept {
           try {
             apply_callback(out, in);
-            return PreparedApplyStatus::Success;
+            return PreparedApplyResult::success();
+          } catch (const FluxEvaluationFailure& failure) {
+            out.set_val(std::numeric_limits<Real>::quiet_NaN());
+            return PreparedApplyResult::flux_failure(failure);
           } catch (...) {
             out.set_val(std::numeric_limits<Real>::quiet_NaN());
-            return PreparedApplyStatus::Failure;
+            return PreparedApplyResult::unknown_failure();
           }
         }
         [[nodiscard]] std::size_t allocation_count() const { return allocation_count_callback(); }
@@ -1503,7 +1621,7 @@ class PreparedLinearPreconditioner {
             "rank");
       }
 
-      const PreparedApplyStatus probe_status = session_.apply(constant_, zero_);
+      const PreparedApplyResult probe_status = session_.apply(constant_, zero_);
       if (all_reduce_max(prepared_apply_succeeded(probe_status) ? 0L : 1L, lane) != 0) {
         session_ = PreparedLinearPreconditionerSession{};
         throw std::runtime_error(
@@ -1537,7 +1655,7 @@ class PreparedLinearPreconditioner {
     snapshot_ = snapshot;
   }
 
-  [[nodiscard]] PreparedApplyStatus apply(MultiFab& out, const MultiFab& in,
+  [[nodiscard]] PreparedApplyResult apply(MultiFab& out, const MultiFab& in,
                                           const OperatorEvaluationSnapshot& snapshot,
                                           const ExecutionLane& lane) const {
     if (!snapshot_ || *snapshot_ != snapshot)
@@ -1546,12 +1664,12 @@ class PreparedLinearPreconditioner {
       throw std::invalid_argument("prepared preconditioner output must not alias its input");
     if (is_identity()) {
       detail::PreparedFieldAlgebra::copy(out, in);
-      return PreparedApplyStatus::Success;
+      return PreparedApplyResult::success();
     } else {
       (void)lane;
       if (!session_)
         throw std::logic_error("prepared preconditioner has no materialized execution session");
-      const PreparedApplyStatus status = session_.apply(out, in);
+      const PreparedApplyResult status = session_.apply(out, in);
       detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
       return status;
     }
@@ -2501,29 +2619,29 @@ class PreparedAffineLinearProblem {
                                      preparation_lane_);
   }
 
-  [[nodiscard]] PreparedApplyStatus apply_workspace_preconditioner_prepared_(
+  [[nodiscard]] PreparedApplyResult apply_workspace_preconditioner_prepared_(
       PreparedLinearPreconditionerSession& session, const MultiFab& affine_constant, MultiFab& out,
       const MultiFab& in) const {
     require_hot_apply_ready_();
-    const PreparedApplyStatus status = session.apply(out, in);
+    const PreparedApplyResult status = session.apply(out, in);
     detail::PreparedFieldAlgebra::axpy(out, Real(-1), affine_constant);
     return status;
   }
 
-  [[nodiscard]] PreparedApplyStatus apply_workspace_linear_prepared_(
+  [[nodiscard]] PreparedApplyResult apply_workspace_linear_prepared_(
       PreparedAffineOperatorSession& session, MultiFab& out, const MultiFab& direction,
       Real equation_scale) const {
     require_hot_apply_ready_();
-    const PreparedApplyStatus status = session.apply(out, direction);
+    const PreparedApplyResult status = session.apply(out, direction);
     detail::PreparedFieldAlgebra::normalized_difference(out, out, constant_, equation_scale);
     return status;
   }
 
-  [[nodiscard]] PreparedApplyStatus workspace_true_residual_prepared_(
+  [[nodiscard]] PreparedApplyResult workspace_true_residual_prepared_(
       PreparedAffineOperatorSession& session, MultiFab& out, const MultiFab& rhs,
       const MultiFab& iterate) const {
     require_hot_apply_ready_();
-    const PreparedApplyStatus status = session.apply(out, iterate);
+    const PreparedApplyResult status = session.apply(out, iterate);
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), out);
     return status;
   }
@@ -2717,18 +2835,18 @@ struct PreparedProblemAccess {
     problem.nullspace_policy_.apply_gauge(iterate, problem.metric_, gauge_scratch, metric_scratch,
                                           lane);
   }
-  static PreparedApplyStatus apply_linear(const PreparedAffineLinearProblem& problem,
+  static PreparedApplyResult apply_linear(const PreparedAffineLinearProblem& problem,
                                           PreparedAffineOperatorSession& session, MultiFab& out,
                                           const MultiFab& direction, Real equation_scale) {
     return problem.apply_workspace_linear_prepared_(session, out, direction, equation_scale);
   }
-  static PreparedApplyStatus true_residual_physical(const PreparedAffineLinearProblem& problem,
+  static PreparedApplyResult true_residual_physical(const PreparedAffineLinearProblem& problem,
                                                     PreparedAffineOperatorSession& session,
                                                     MultiFab& out, const MultiFab& rhs,
                                                     const MultiFab& iterate) {
     return problem.workspace_true_residual_prepared_(session, out, rhs, iterate);
   }
-  static PreparedApplyStatus apply_preconditioner(const PreparedAffineLinearProblem& problem,
+  static PreparedApplyResult apply_preconditioner(const PreparedAffineLinearProblem& problem,
                                                   PreparedLinearPreconditionerSession& session,
                                                   const MultiFab& affine_constant, MultiFab& out,
                                                   const MultiFab& in) {

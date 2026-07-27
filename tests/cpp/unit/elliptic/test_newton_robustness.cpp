@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -102,6 +103,65 @@ struct SingularModel {
     J[2][2] = Real(-1);
   }
   POPS_HD Real elliptic_rhs(const State&) const { return 0; }
+};
+
+POPS_HD static pops::ImplicitEvaluationResult configured_evaluation(
+    pops::ImplicitEvaluationStatus status, std::uint32_t reason) {
+  switch (status) {
+    case pops::ImplicitEvaluationStatus::kOk:
+      return pops::ImplicitEvaluationResult::ok();
+    case pops::ImplicitEvaluationStatus::kRetry:
+      return pops::ImplicitEvaluationResult::retry(reason);
+    case pops::ImplicitEvaluationStatus::kReject:
+      return pops::ImplicitEvaluationResult::reject(reason);
+    case pops::ImplicitEvaluationStatus::kFailed:
+      return pops::ImplicitEvaluationResult::failed(reason);
+    case pops::ImplicitEvaluationStatus::kInvalid:
+      return pops::ImplicitEvaluationResult::invalid(reason);
+  }
+  return pops::ImplicitEvaluationResult::invalid(reason);
+}
+
+// The fallible source contract is a device POD plus an output parameter: no exception, optional,
+// string, allocation, or host callback can escape into a Kokkos kernel. The historical source()
+// remains present to prove that evaluate_source() takes precedence when a model opts in.
+struct FallibleSourceModel {
+  using State = pops::StateVec<3>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 3;
+  pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
+  std::uint32_t reason = 0;
+
+  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State source(const State&, const Aux&) const {
+    return State{Real(1e6), Real(1e6), Real(1e6)};
+  }
+  POPS_HD pops::ImplicitEvaluationResult evaluate_source(const State& u, const Aux&,
+                                                         State& output) const {
+    output = State{-u[0], -u[1], -u[2]};
+    return configured_evaluation(evaluation, reason);
+  }
+  POPS_HD Real elliptic_rhs(const State&) const { return 0; }
+};
+
+struct FallibleJacobianModel : StiffModel {
+  pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
+  std::uint32_t reason = 0;
+
+  POPS_HD pops::ImplicitEvaluationResult evaluate_source_jacobian(const State& u, const Aux&,
+                                                                  Real (&J)[3][3]) const {
+    J[0][0] = -k;
+    J[0][1] = k * u[2];
+    J[0][2] = k * u[1];
+    J[1][0] = k * Real(0.5);
+    J[1][1] = -k;
+    J[1][2] = 0;
+    J[2][0] = 0;
+    J[2][1] = 0;
+    J[2][2] = -Real(3) * k * u[2] * u[2];
+    return configured_evaluation(evaluation, reason);
+  }
 };
 
 static pops::MultiFab make_mf(const pops::BoxArray& ba, const pops::DistributionMapping& dm,
@@ -212,16 +272,36 @@ TEST(SolveOutcomeContract, incompatible_action_does_not_consume_a_valid_outcome)
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
 }
 
-TEST(SolveOutcomeContract, explicit_failure_action_is_the_published_report_action) {
+TEST(SolveOutcomeContract, fail_run_cannot_be_downgraded_to_reject_attempt) {
   pops::SolveReport solve;
   solve.mark_failed(pops::SolveStatus::kBreakdown, pops::SolveAction::kFailRun,
                     "injected breakdown");
   auto outcome = pops::SolveOutcome::serial(std::move(solve));
 
-  const pops::SolveReport rejected =
-      outcome.consume(pops::SolveConsumption::kRejectAttempt);
-  EXPECT_EQ(rejected.status, pops::SolveStatus::kBreakdown);
-  EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kRejectAttempt), std::logic_error);
+  const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
+  EXPECT_EQ(failed.status, pops::SolveStatus::kBreakdown);
+  EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
+}
+
+TEST(SolveOutcomeContract, reject_attempt_may_be_escalated_to_fail_run) {
+  pops::SolveReport solve;
+  solve.mark_failed(pops::SolveStatus::kIterationLimit, pops::SolveAction::kRejectAttempt,
+                    "retry budget exhausted");
+  auto outcome = pops::SolveOutcome::serial(std::move(solve));
+
+  const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
+  EXPECT_EQ(failed.status, pops::SolveStatus::kIterationLimit);
+  EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
+}
+
+TEST(SolveOutcomeContract, direct_consumer_cannot_continue_after_failed_solve) {
+  pops::SolveReport solve;
+  solve.mark_failed(pops::SolveStatus::kIterationLimit, pops::SolveAction::kRejectAttempt,
+                    "direct consumer has no retry policy");
+
+  EXPECT_THROW((void)pops::consume_solve_outcome(pops::SolveOutcome::serial(std::move(solve))),
+               std::runtime_error);
 }
 
 // (1) NON-EULER MULTI-VARIABLES : converge sous tolerance ; W verifie l'equation BE au residu pres.
@@ -330,8 +410,7 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
   EXPECT_TRUE(repf.n_failed >= 1) << "pas d'echec rapporte (n_failed=" << repf.n_failed << ")";
-  const pops::SolveReport failed =
-      outcome.consume(pops::SolveConsumption::kFailRun);
+  const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
   EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
   EXPECT_EQ(repf.diagnostics.count("newton.outcome.fail_run"), 1u)
       << "FailRun non reporte comme consommation explicite";
@@ -353,12 +432,10 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   options.abs_tol = 1e-15;
   pops::NewtonReport report;
 
-  auto outcome =
-      pops::backward_euler_source(model, *aux_, state, kDt, options, {}, &report);
+  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, options, {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kIterationLimit);
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le dernier itere non converge a ete publie";
-  const pops::SolveReport rejected =
-      outcome.consume(pops::SolveConsumption::kRejectAttempt);
+  const pops::SolveReport rejected = outcome.consume(pops::SolveConsumption::kRejectAttempt);
   EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
 }
 
@@ -372,15 +449,15 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
   pops::NewtonOptions options;
   pops::NewtonReport report;
 
-  auto outcome =
-      pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report);
+  auto outcome = pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kSingular);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
   (void)outcome.consume(pops::SolveConsumption::kFailRun);
 }
 
-// (3d) Le controleur temporel peut consommer explicitement RejectAttempt.
-TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt) {
+// (3d) Une evaluation non finie est fatalement invalide : elle ne peut pas etre retrogradee en
+// RejectAttempt, mais son candidat reste prive pendant la consommation FailRun.
+TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_run) {
   NanModel model;
   pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
@@ -392,15 +469,95 @@ TEST_F(NewtonRobustnessTest, prepared_failure_is_consumed_once_as_reject_attempt
 
   auto outcome = pops::backward_euler_source(model, *aux_, state, 0.1, options, {}, &diagnostics);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
-  EXPECT_THROW(
-      outcome.consume(static_cast<pops::SolveConsumption>(255)), std::logic_error);
+  EXPECT_THROW(outcome.consume(static_cast<pops::SolveConsumption>(255)), std::logic_error);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
-  const pops::SolveReport rejected =
-      outcome.consume(pops::SolveConsumption::kRejectAttempt);
-  EXPECT_EQ(rejected.action, pops::SolveAction::kRejectAttempt);
-  EXPECT_EQ(max_difference3(state, accepted), 0.0);
-  EXPECT_EQ(diagnostics.diagnostics.count("newton.outcome.reject_attempt"), 1u);
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kRejectAttempt), std::logic_error);
+  const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
+  EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
+  EXPECT_EQ(max_difference3(state, accepted), 0.0);
+  EXPECT_EQ(diagnostics.diagnostics.count("newton.outcome.fail_run"), 1u);
+  EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
+}
+
+TEST_F(NewtonRobustnessTest,
+       fallible_source_propagates_retry_reject_fail_and_invalid_without_publication) {
+  static_assert(pops::HasFallibleSourceEvaluation<FallibleSourceModel>);
+  constexpr std::uint32_t reason = 0xfedcba98u;
+  struct FailureCase {
+    pops::ImplicitEvaluationStatus status;
+    pops::SolveAction action;
+    const char* reason_fragment;
+  };
+  const std::array<FailureCase, 4> cases{{
+      {pops::ImplicitEvaluationStatus::kRetry, pops::SolveAction::kRejectAttempt,
+       "evaluation_retry"},
+      {pops::ImplicitEvaluationStatus::kReject, pops::SolveAction::kRejectAttempt,
+       "evaluation_reject"},
+      {pops::ImplicitEvaluationStatus::kFailed, pops::SolveAction::kFailRun, "evaluation_failed"},
+      {pops::ImplicitEvaluationStatus::kInvalid, pops::SolveAction::kFailRun, "invalid_evaluation"},
+  }};
+
+  for (const FailureCase& failure : cases) {
+    SCOPED_TRACE(failure.reason_fragment);
+    pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+    copy3(*U0_, accepted);
+    pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+    copy3(accepted, state);
+    FallibleSourceModel model{failure.status, reason};
+
+    auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, pops::NewtonOptions{});
+    EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(outcome.report().action, failure.action);
+    EXPECT_NE(outcome.report().reason.find(failure.reason_fragment), std::string::npos);
+    EXPECT_NE(outcome.report().reason.find(std::to_string(reason)), std::string::npos);
+    EXPECT_EQ(max_difference3(state, accepted), 0.0);
+    const auto consumption = failure.action == pops::SolveAction::kRejectAttempt
+                                 ? pops::SolveConsumption::kRejectAttempt
+                                 : pops::SolveConsumption::kFailRun;
+    EXPECT_EQ(outcome.consume(consumption).action, failure.action);
+    EXPECT_EQ(max_difference3(state, accepted), 0.0);
+  }
+}
+
+TEST_F(NewtonRobustnessTest,
+       fallible_analytic_jacobian_rejects_privately_and_success_keeps_legacy_result) {
+  static_assert(pops::HasFallibleSourceJacobianEvaluation<FallibleJacobianModel>);
+  constexpr std::uint32_t reason = 0x1234abcdu;
+  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  copy3(*U0_, accepted);
+  pops::MultiFab rejected_state = make_mf(*ba_, *dm_, 3);
+  copy3(accepted, rejected_state);
+  FallibleJacobianModel rejected_model;
+  rejected_model.evaluation = pops::ImplicitEvaluationStatus::kReject;
+  rejected_model.reason = reason;
+
+  auto rejected = pops::backward_euler_source(rejected_model, *aux_, rejected_state, kDt,
+                                              pops::NewtonOptions{});
+  EXPECT_EQ(rejected.report().status, pops::SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(rejected.report().action, pops::SolveAction::kRejectAttempt);
+  EXPECT_NE(rejected.report().reason.find("evaluation_reject"), std::string::npos);
+  EXPECT_NE(rejected.report().reason.find(std::to_string(reason)), std::string::npos);
+  EXPECT_EQ(max_difference3(rejected_state, accepted), 0.0);
+  (void)rejected.consume(pops::SolveConsumption::kRejectAttempt);
+  EXPECT_EQ(max_difference3(rejected_state, accepted), 0.0);
+
+  pops::NewtonOptions options;
+  options.max_iters = 25;
+  options.rel_tol = 1e-12;
+  options.abs_tol = 1e-13;
+  pops::MultiFab fallible_state = make_mf(*ba_, *dm_, 3);
+  pops::MultiFab legacy_state = make_mf(*ba_, *dm_, 3);
+  copy3(accepted, fallible_state);
+  copy3(accepted, legacy_state);
+  FallibleJacobianModel fallible_model;
+  JacStiffModel legacy_model;
+  auto fallible = pops::backward_euler_source(fallible_model, *aux_, fallible_state, kDt, options);
+  auto legacy = pops::backward_euler_source(legacy_model, *aux_, legacy_state, kDt, options);
+  ASSERT_TRUE(fallible.report().solved_value_available());
+  ASSERT_TRUE(legacy.report().solved_value_available());
+  (void)fallible.consume(pops::SolveConsumption::kAccept);
+  (void)legacy.consume(pops::SolveConsumption::kAccept);
+  EXPECT_EQ(max_difference3(fallible_state, legacy_state), 0.0);
 }
 
 // (3e) Meme un succes reste prive jusqu'a sa consommation explicite, puis ne peut etre consomme deux

@@ -689,11 +689,15 @@ struct System::Impl {
     explicit FieldPublicationSnapshot(Impl& impl)
         : aux(impl.aux), fields(impl.fields_.step_snapshot()) {}
 
+    [[nodiscard]] static bool same_layout(const MultiFab& lhs,
+                                          const MultiFab& rhs) noexcept {
+      return lhs.box_array().boxes() == rhs.box_array().boxes() &&
+             lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
+             lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
+    }
+
     void capture(Impl& impl) {
-      const bool same_aux_layout =
-          aux.box_array().boxes() == impl.aux.box_array().boxes() &&
-          aux.dmap().ranks() == impl.aux.dmap().ranks() &&
-          aux.ncomp() == impl.aux.ncomp() && aux.n_grow() == impl.aux.n_grow();
+      const bool same_aux_layout = same_layout(aux, impl.aux);
       if (!same_aux_layout)
         aux = MultiFab(impl.aux.box_array(), impl.aux.dmap(), impl.aux.ncomp(),
                        impl.aux.n_grow());
@@ -702,15 +706,24 @@ struct System::Impl {
     }
 
     void restore(Impl& impl) const {
-      const bool same_aux_layout =
-          aux.box_array().boxes() == impl.aux.box_array().boxes() &&
-          aux.dmap().ranks() == impl.aux.dmap().ranks() &&
-          aux.ncomp() == impl.aux.ncomp() && aux.n_grow() == impl.aux.n_grow();
+      const bool same_aux_layout = same_layout(aux, impl.aux);
       if (same_aux_layout)
         PureFieldAlgebra::copy_allocated(impl.aux, aux);
       else
         impl.aux = aux;
       impl.fields_.restore_step_snapshot(fields);
+    }
+
+    [[nodiscard]] bool publication_layout_matches(Impl& impl) const {
+      return same_layout(aux, impl.aux) &&
+             impl.fields_.step_snapshot_publication_layout_matches(fields);
+    }
+
+    void restore_copy_only(Impl& impl) noexcept {
+      if (!publication_layout_matches(impl))
+        std::terminate();
+      PureFieldAlgebra::copy_allocated(impl.aux, aux);
+      impl.fields_.restore_step_snapshot_copy_only(fields);
     }
   };
 

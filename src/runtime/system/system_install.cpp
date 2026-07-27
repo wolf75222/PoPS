@@ -721,6 +721,13 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (!std::isfinite(epsilon) || epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
+  if (p_->polar_ && solver != "polar")
+    throw std::runtime_error(
+        "System::set_poisson: polar geometry requires solver='polar'; solver substitution is "
+        "forbidden");
+  if (!p_->polar_ && solver == "polar")
+    throw std::runtime_error(
+        "System::set_poisson: solver='polar' requires polar geometry");
   using FieldSolver = field_solver::SystemFieldSolver<Impl>;
   if (solver == "geometric_mg") {
     GeometricMgOptions mg_options;

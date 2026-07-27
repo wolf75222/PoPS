@@ -212,6 +212,11 @@ class SystemFieldSolver {
   explicit SystemFieldSolver(Impl* owner)
       : owner_(owner),
         nullspace_provider_registry_(make_default_field_nullspace_provider_registry()) {
+    // The geometry selects its honest built-in default before any plan is inspected.  A polar
+    // System therefore reports "polar" from construction onward instead of advertising
+    // "geometric_mg" and silently replacing it at the first solve.
+    if (owner_ != nullptr && owner_->polar_)
+      p_solver = "polar";
     install_builtin_provider_presets_();
   }
 
@@ -310,6 +315,13 @@ class SystemFieldSolver {
     std::vector<std::string> named_unbuilt;
   };
 
+  [[nodiscard]] static bool same_publication_layout(const MultiFab& lhs,
+                                                    const MultiFab& rhs) noexcept {
+    return lhs.box_array().boxes() == rhs.box_array().boxes() &&
+           lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
+           lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
+  }
+
   StepSnapshot step_snapshot() {
     StepSnapshot out;
     out.had_elliptic = static_cast<bool>(ell_);
@@ -363,6 +375,89 @@ class SystemFieldSolver {
       }
     }
     diagnostics_ = snapshot.diagnostics;
+  }
+
+  /// Pre-materialize the exact backend storage used by a default field solve. Publication snapshots
+  /// taken after this call retain the solver structure, so a later Accept only copies field values.
+  void prepare_default_publication_storage() {
+    if (owner_->polar_)
+      ensure_elliptic_polar();
+    else
+      ensure_elliptic();
+  }
+
+  /// Named-field counterpart of @ref prepare_default_publication_storage.
+  void prepare_named_publication_storage(const std::string& field) {
+    const auto found = named_fields_.find(field);
+    if (found == named_fields_.end())
+      throw std::runtime_error("System: unknown named elliptic field '" + field + "'");
+    ensure_named_backend(found->second, field);
+  }
+
+  /// Read-only proof that @p snapshot can be restored without materializing, invalidating or
+  /// replacing any solver storage. This is evaluated collectively by SolveOutcome before Accept.
+  [[nodiscard]] bool step_snapshot_publication_layout_matches(
+      const StepSnapshot& snapshot) {
+    if (snapshot.had_elliptic != static_cast<bool>(ell_) ||
+        snapshot.potential.has_value() != snapshot.had_elliptic)
+      return false;
+    if (snapshot.potential &&
+        !same_publication_layout(ell_->phi(), *snapshot.potential))
+      return false;
+
+    if (snapshot.had_polar_solver != pell_.has_value() ||
+        snapshot.polar_potential.has_value() != snapshot.had_polar_solver)
+      return false;
+    if (snapshot.polar_potential &&
+        !same_publication_layout(pell_->phi(), *snapshot.polar_potential))
+      return false;
+
+    if (snapshot.polar_source.has_value() != phi_src_polar_.has_value())
+      return false;
+    if (snapshot.polar_source &&
+        !same_publication_layout(*phi_src_polar_, *snapshot.polar_source))
+      return false;
+
+    if (snapshot.named_potentials.size() + snapshot.named_unbuilt.size() !=
+        named_fields_.size())
+      return false;
+    for (const auto& [name, field] : named_fields_) {
+      const auto saved = snapshot.named_potentials.find(name);
+      const bool was_unbuilt =
+          std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), name) !=
+          snapshot.named_unbuilt.end();
+      if ((saved != snapshot.named_potentials.end()) == was_unbuilt)
+        return false;
+      if (saved != snapshot.named_potentials.end() &&
+          (!field.backend ||
+           !same_publication_layout(field.backend->phi(), saved->second)))
+        return false;
+      if (was_unbuilt && field.backend)
+        return false;
+    }
+    return true;
+  }
+
+  /// Publish a previously validated snapshot using only non-allocating copies into existing field
+  /// storage. This is the irreversible half of Accept: validation belongs to
+  /// step_snapshot_publication_layout_matches() and any impossible backend failure is fail-stop
+  /// rather than an exception escaping after a partial publication.
+  void restore_step_snapshot_copy_only(StepSnapshot& snapshot) noexcept {
+    if (snapshot.potential)
+      PureFieldAlgebra::copy_allocated(ell_->phi(), *snapshot.potential);
+    if (snapshot.polar_potential)
+      PureFieldAlgebra::copy_allocated(pell_->phi(), *snapshot.polar_potential);
+    if (snapshot.polar_source)
+      PureFieldAlgebra::copy_allocated(*phi_src_polar_, *snapshot.polar_source);
+    for (auto& [name, field] : named_fields_) {
+      const auto saved = snapshot.named_potentials.find(name);
+      if (saved != snapshot.named_potentials.end())
+        PureFieldAlgebra::copy_allocated(field.backend->phi(), saved->second);
+    }
+    std::swap(diagnostics_.schema_version, snapshot.diagnostics.schema_version);
+    diagnostics_.source.swap(snapshot.diagnostics.source);
+    diagnostics_.events.swap(snapshot.diagnostics.events);
+    std::swap(diagnostics_.dropped_events, snapshot.diagnostics.dropped_events);
   }
 
   // --- OWNED state (elliptic solve + coefficient fields + application buffers) --------
@@ -556,7 +651,7 @@ class SystemFieldSolver {
     }
     SolveReport solve(SystemFieldSolver&) override {
       if (boundary_observes_iteration_)
-        solver_.solve();
+        return solver_.solve_default_report();
       else
         solver_.solve(solve_controls_.rel_tol, solve_controls_.max_cycles, solve_controls_.abs_tol);
       return solver_.last_solve_report();
@@ -2323,11 +2418,11 @@ class SystemFieldSolver {
     if (p_rhs != "charge_density" && p_rhs != "composite")
       throw std::runtime_error("System::set_poisson (polar): unknown rhs '" + p_rhs +
                                "' (valid: " + kPoissonRhsRouteTokensCsv + ")");
-    if (p_solver != "geometric_mg" && p_solver != "polar")
+    if (p_solver != "polar")
       throw std::runtime_error(
           "System::set_poisson (polar): solver '" + p_solver +
           "' unsupported on a ring; the polar Poisson is direct (FFT-in-theta + tridiag-in-r). "
-          "Leave the default ('geometric_mg') or request 'polar'.");
+          "Request solver='polar' explicitly; implicit solver substitution is forbidden.");
     if (has_variable_diffusion_coefficient() || has_kappa_field_)
       throw std::runtime_error(
           "System::set_poisson (polar): variable / anisotropic permittivity / reaction unsupported "

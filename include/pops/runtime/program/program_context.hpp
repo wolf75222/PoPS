@@ -272,6 +272,7 @@ class ProgramContext {
   SolveOutcome solve_fields() const {
     // No count_kernel() here: System's private in-place default provider seam already counts it.
     // The from_state/from_blocks/named seams below do not, so those routes count explicitly.
+    sys_->prepare_default_field_publication_storage_();
     return run_field_solve_transaction_([&]() { return sys_->solve_fields_in_place_(); });
   }
   /// Per-stage field solve (ADC-409): re-solve the elliptic fields and re-fill the shared aux from
@@ -281,13 +282,18 @@ class ProgramContext {
   /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
   SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
     count_kernel();
+    sys_->prepare_default_field_publication_storage_();
     return run_field_solve_transaction_(
         [&]() { return sys_->solve_fields_from_state_in_place_(sys_block(b), u_stage); });
   }
-  SolveOutcome solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int b, MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          const std::string& provider_slot, int b,
+                                          MultiFab& u_stage) const {
     count_kernel();
+    if (provider_slot.empty())
+      throw std::invalid_argument(
+          "System::solve_fields_from_state_at requires an exact provider slot");
+    sys_->prepare_named_field_publication_storage_(provider_slot);
     return run_field_solve_transaction_([&]() {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
                                                         u_stage);
@@ -297,7 +303,7 @@ class ProgramContext {
   void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                     const std::string& provider_slot, int b,
                                     MultiFab& evaluation_state, MultiFab& restore_state,
-    Body&& body) const {
+                                    Body&& body) const {
     const auto restore = [&]() {
       const SolveReport restored = consume_field_outcome_(
           solve_fields_from_state_at(point, provider_slot, b, restore_state));
@@ -325,9 +331,9 @@ class ProgramContext {
   /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
   /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
   /// above, byte-identical.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b,
-                                       MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     count_kernel();
+    sys_->prepare_named_field_publication_storage_(field);
     return run_field_solve_transaction_(
         [&]() { return sys_->solve_fields_from_state_in_place_(field, sys_block(b), u_stage); });
   }
@@ -364,6 +370,7 @@ class ProgramContext {
     // fallthrough and clobber real entries. m[p] is Program block p's System index (install-validated
     // in range); the unlisted System slots stay nullptr = their live state. sys_block validates every
     // mapped value before it is used as a vector index.
+    sys_->prepare_default_field_publication_storage_();
     return run_field_solve_transaction_(
         [&]() { return solve_default_field_workspace_(workspace); });
   }
@@ -373,6 +380,7 @@ class ProgramContext {
     count_kernel();
     FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
     fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
+    sys_->prepare_named_field_publication_storage_(field);
     return run_field_solve_transaction_(
         [&]() { return solve_named_field_workspace_(field, workspace); });
   }
@@ -384,6 +392,7 @@ class ProgramContext {
                                         std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
+    sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
     return run_field_solve_transaction_([&]() {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
@@ -723,8 +732,7 @@ class ProgramContext {
   /// Execute an already prepared affine problem with its bound persistent workspace. The raw callback,
   /// integer method wire, lazy preconditioner path and per-call scratch allocations no longer exist.
   SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                     KrylovWorkspace& workspace, MultiFab& sol,
-                                     const MultiFab& rhs,
+                                     KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
                                      const KrylovControls& controls) const {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }
@@ -1473,9 +1481,15 @@ class ProgramContext {
     System* system = nullptr;
     bool active = false;
 
-    void accept() {
+    void validate_accept() {
       if (!active || system == nullptr)
         throw std::logic_error("Program field publication has no staged candidate");
+      system->validate_field_publication_candidate();
+    }
+
+    void accept() noexcept {
+      if (!active || system == nullptr)
+        std::terminate();
       system->accept_field_publication_candidate();
       system = nullptr;
       active = false;
@@ -1550,6 +1564,8 @@ class ProgramContext {
       coupling_workspace_.system_states[static_cast<std::size_t>(system_block)] = candidate.state;
       ++ordinal;
     }
+  }
+
   void capture_field_publication_(FieldPublicationTransaction& transaction) const {
     // SystemFieldSolver's uniform reductions use MPI_COMM_WORLD, so this transaction must
     // authenticate and release on that exact communicator rather than inventing a private lane.
@@ -1583,30 +1599,34 @@ class ProgramContext {
   SolveOutcome run_field_solve_transaction_(Solve&& solve) const {
     if (!field_solve_workspace_registry_)
       throw std::logic_error("Program field-solve workspace registry is unavailable");
-    const std::shared_ptr<FieldSolveWorkspaceRegistry> registry =
-        field_solve_workspace_registry_;
+    const std::shared_ptr<FieldSolveWorkspaceRegistry> registry = field_solve_workspace_registry_;
     FieldPublicationTransaction& transaction = registry->publication;
     capture_field_publication_(transaction);
 
     SolveReport report;
+    std::exception_ptr solve_error;
+    long solve_failure_local = 0;
     try {
       report = std::forward<Solve>(solve)();
     } catch (...) {
-      transaction.rollback();
-      throw;
+      solve_error = std::current_exception();
+      solve_failure_local = 1;
     }
-    const bool malformed =
-        !solve_report_is_publishable(report, std::numeric_limits<int>::max());
+    if (all_reduce_max(solve_failure_local) != 0) {
+      transaction.rollback();
+      if (n_ranks() == 1 && solve_error != nullptr)
+        std::rethrow_exception(solve_error);
+      throw std::runtime_error("ProgramContext field solver failed on at least one MPI rank");
+    }
+    const bool malformed = !solve_report_is_publishable(report, std::numeric_limits<int>::max());
     if (all_reduce_max(malformed ? 1L : 0L) != 0) {
       transaction.rollback();
-      throw std::runtime_error(
-          "ProgramContext field solver published a malformed SolveReport");
+      throw std::runtime_error("ProgramContext field solver published a malformed SolveReport");
     }
     ExactSolveReportConsensusScratch consensus;
     if (!consensus.agrees(report)) {
       transaction.rollback();
-      throw std::runtime_error(
-          "ProgramContext field solver report differs between MPI ranks");
+      throw std::runtime_error("ProgramContext field solver report differs between MPI ranks");
     }
     if (!report.solved_value_available()) {
       // The uniform backends already restore their potential warm start on a failed report. This
@@ -1635,14 +1655,17 @@ class ProgramContext {
         std::move(report),
         SolveOutcome::PublicationHooks{
             &transaction,
-            [](void* context) {
+            [](void* context) noexcept {
               static_cast<FieldPublicationTransaction*>(context)->accept();
             },
             nullptr,
             [](void* context) noexcept {
               static_cast<FieldPublicationTransaction*>(context)->rollback();
             },
-            std::static_pointer_cast<void>(registry)});
+            std::static_pointer_cast<void>(registry),
+            [](void* context) {
+              static_cast<FieldPublicationTransaction*>(context)->validate_accept();
+            }});
   }
 
   void prepare_field_solve_structure_(FieldSolveWorkspace& workspace) const {

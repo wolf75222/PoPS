@@ -220,7 +220,7 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
   context->install([context, stiff_model, implicit_stiff, stiff_substeps](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context, stiff_model, implicit_stiff,
                                           stiff_substeps](double level_dt) {
-      (void)context->solve_fields();
+      (void)consume_solve_outcome(context->solve_fields());
       MultiFab& stiff_live = context->state(0);
       MultiFab& neutral_live = context->state(1);
       MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);
@@ -235,8 +235,9 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
         if (implicit_stiff) {
           context->neg_div_flux_default_into(0, stiff_candidate, stiff_rate, 3000 + substep);
           context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
-          backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
-                                NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr);
+          (void)consume_solve_outcome(
+              backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
+                                    NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr));
         } else {
           context->rhs_into(0, stiff_candidate, stiff_rate, 3000 + substep);
           context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
@@ -273,8 +274,9 @@ void install_nonlinear_source_program(AmrSystem& system, NonlinearDensityDecay d
       MultiFab& neutral_candidate = context->scratch_state(4001, 0, neutral_live);
       context->lincomb(decay_candidate, Real(1), decay_live, Real(0), decay_live);
       context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
-      backward_euler_source(decay, context->aux(), decay_candidate, Real(level_dt), NewtonOptions{},
-                            ImplicitMask<NonlinearDensityDecay::n_vars>{}, nullptr);
+      (void)consume_solve_outcome(backward_euler_source(
+          decay, context->aux(), decay_candidate, Real(level_dt), NewtonOptions{},
+          ImplicitMask<NonlinearDensityDecay::n_vars>{}, nullptr));
       context->commit_many({{&decay_live, &decay_candidate}, {&neutral_live, &neutral_candidate}});
     });
   });

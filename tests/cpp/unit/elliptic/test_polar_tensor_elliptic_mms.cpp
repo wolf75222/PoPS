@@ -335,6 +335,7 @@ TEST(test_polar_tensor_elliptic_mms, reports_explicit_status_and_action) {
   const SolveReport nonfinite = invalid_eval.solve(Real(1e-8), 4);
   EXPECT_EQ(nonfinite.status, SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(nonfinite.action, SolveAction::kFailRun);
+  EXPECT_THROW(invalid_eval.solve(), std::runtime_error);
 
   BCRec nonfinite_bc = bc;
   nonfinite_bc.xlo_val = std::numeric_limits<Real>::quiet_NaN();

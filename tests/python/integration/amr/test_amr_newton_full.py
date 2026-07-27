@@ -93,7 +93,6 @@ newton_knobs = (
     ("newton_abs_tol", {"newton_abs_tol": 1e-12}),
     ("newton_fd_eps", {"newton_fd_eps": 2e-7}),
     ("newton_damping", {"newton_damping": 0.5}),
-    ("newton_fail_policy", {"newton_fail_policy": "warn"}),
 )
 
 for knob, values in newton_knobs:
