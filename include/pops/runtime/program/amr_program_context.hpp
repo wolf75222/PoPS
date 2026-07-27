@@ -71,6 +71,11 @@ class AmrProgramContext {
     const MultiFab* state = nullptr;
   };
 
+  struct CouplingStateOverride {
+    int program_block = -1;
+    MultiFab* state = nullptr;
+  };
+
   enum class SyncPhase { Reflux, AverageDown };
   struct SyncEvent {
     int parent_level = 0;
@@ -586,6 +591,27 @@ class AmrProgramContext {
   }
   void apply_projection(int b, MultiFab& u) const {
     eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
+  }
+
+  /// AMR structural mirror of ProgramContext::apply_coupling_operators.  The complete candidate pack
+  /// is qualified by the current level cursor; coupling changes only those private candidates and
+  /// leaves publication plus hierarchy synchronization to the Program transaction.
+  void apply_coupling_operators(
+      Real dt, std::initializer_list<CouplingStateOverride> candidates) const {
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument(
+          "AMR Program coupling application requires a finite non-negative dt");
+    if (coupling_workspace_.in_use)
+      throw std::logic_error("AMR Program coupling workspace is already in use");
+    prepare_coupling_workspace_(candidates);
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(coupling_workspace_.in_use);
+    const std::size_t applied =
+        eng_->apply_coupling_operators_at_level(level_, dt, coupling_workspace_.runtime_states);
+    count_kernel(static_cast<std::int64_t>(applied));
   }
 
   // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
@@ -1580,6 +1606,69 @@ class AmrProgramContext {
   }
 
  private:
+  struct CouplingWorkspace {
+    std::vector<int> program_to_runtime;
+    std::vector<MultiFab*> runtime_states;
+    bool in_use = false;
+  };
+
+  void prepare_coupling_workspace_(
+      std::initializer_list<CouplingStateOverride> candidates) const {
+    const std::vector<int>& block_map = facade_->program_block_map();
+    const std::size_t runtime_blocks = eng_->n_blocks();
+    if (block_map.empty())
+      throw block_map_error_(
+          "AmrProgramContext::apply_coupling_operators has no explicit program-to-AMR block map");
+    if (block_map.size() != runtime_blocks || candidates.size() != block_map.size())
+      throw std::invalid_argument(
+          "AMR Program coupling requires a complete candidate pack for every runtime block");
+
+    const bool structure_changed =
+        coupling_workspace_.program_to_runtime != block_map ||
+        coupling_workspace_.runtime_states.size() != runtime_blocks;
+    if (structure_changed) {
+      coupling_workspace_.runtime_states.assign(runtime_blocks, nullptr);
+      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
+        const int runtime_block = sys_block(static_cast<int>(program_block));
+        MultiFab*& mapped =
+            coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)];
+        if (mapped != nullptr)
+          throw std::invalid_argument(
+              "AMR Program coupling block map does not cover each runtime block exactly once");
+        mapped = &eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
+      }
+      coupling_workspace_.program_to_runtime.assign(block_map.begin(), block_map.end());
+    }
+
+    std::fill(coupling_workspace_.runtime_states.begin(),
+              coupling_workspace_.runtime_states.end(), nullptr);
+    std::size_t ordinal = 0;
+    for (const CouplingStateOverride& candidate : candidates) {
+      if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
+        throw std::invalid_argument(
+            "AMR Program coupling candidates must be non-null and ordered by Program block");
+      const int runtime_block =
+          coupling_workspace_.program_to_runtime[static_cast<std::size_t>(candidate.program_block)];
+      const MultiFab& live =
+          eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
+      if (candidate.state->box_array().boxes() != live.box_array().boxes() ||
+          candidate.state->dmap().ranks() != live.dmap().ranks() ||
+          candidate.state->ncomp() != live.ncomp() ||
+          candidate.state->n_grow() != live.n_grow())
+        throw std::invalid_argument(
+            "AMR Program coupling candidate does not match its exact level layout");
+      for (std::size_t other = 0; other < block_map.size(); ++other)
+        if (candidate.state ==
+                &eng_->level_state(
+                    static_cast<std::size_t>(sys_block(static_cast<int>(other))), level_))
+          throw std::invalid_argument(
+              "AMR Program coupling candidates cannot alias accepted live states");
+      coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)] =
+          candidate.state;
+      ++ordinal;
+    }
+  }
+
   enum class ResidualCapture { FullRate, FluxOnly };
   /// The normal Berger-Oliger driver synchronizes each child as soon as it catches its parent.
   /// A hierarchy-scoped operator executes behind one global barrier and therefore synchronizes the
@@ -3675,6 +3764,7 @@ class AmrProgramContext {
   mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable bool named_field_solve_in_use_ = false;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
+  mutable CouplingWorkspace coupling_workspace_;
   mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::map<ProgramScratchKey, ProgramScratchSlot> program_scratch_;
   mutable std::uint64_t program_scratch_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();

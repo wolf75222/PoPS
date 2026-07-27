@@ -1722,35 +1722,38 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     ce.kconsts = kconsts;
     P->coupled_freq_exprs_.push_back(std::move(ce));
   }
-  P->couplings.push_back([P, ins, outs, kconsts, n_in, n_const, n_terms](Real dt) {
-    // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
-    // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
-    const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
-    MultiFab& Uref = P->sp[static_cast<std::size_t>(sref)].U;
-    for (int li = 0; li < Uref.local_size(); ++li) {
-      CoupledSourceKernel kern;
-      kern.dt = dt;
-      kern.n_in = n_in;
-      kern.n_const = n_const;
-      kern.n_terms = n_terms;
-      for (int c = 0; c < n_in; ++c) {
-        kern.in[c] = P->sp[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
-                         .U.fab(li)
-                         .array();
-        kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
+  P->couplings.push_back([ins, outs, kconsts, n_in, n_const, n_terms](
+                             Real dt, const std::vector<MultiFab*>& states) {
+      // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
+      // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
+      const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
+      MultiFab& Uref = *states[static_cast<std::size_t>(sref)];
+      for (int li = 0; li < Uref.local_size(); ++li) {
+        CoupledSourceKernel kern;
+        kern.dt = dt;
+        kern.n_in = n_in;
+        kern.n_const = n_const;
+        kern.n_terms = n_terms;
+        for (int c = 0; c < n_in; ++c) {
+          kern.in[c] =
+              states[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
+                  ->fab(li)
+                  .array();
+          kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
+        }
+        for (int c = 0; c < n_const; ++c)
+          kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
+        for (int t = 0; t < n_terms; ++t) {
+          kern.out[t] =
+              states[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
+                  ->fab(li)
+                  .array();
+          kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
+          kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
+        }
+        for_each_cell(Uref.box(li), kern);  // NAMED functor, device-clean additive forward-Euler
       }
-      for (int c = 0; c < n_const; ++c)
-        kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
-      for (int t = 0; t < n_terms; ++t) {
-        kern.out[t] = P->sp[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
-                          .U.fab(li)
-                          .array();
-        kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
-        kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
-      }
-      for_each_cell(Uref.box(li), kern);  // NAMED functor (device-clean), additive forward-Euler
-    }
-  });
+    });
   // Inspect metadata (ADC-595): a raw add_coupled_source declares NO conservation contract, so it
   // registers an "unchecked" view (empty ConservationContract) carrying the label and the frequency
   // bound. add_coupling_operator overwrites this behavior by pushing the DECLARED contract instead.

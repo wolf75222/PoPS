@@ -268,7 +268,7 @@ struct System::Impl {
   using GlobalDtBound = pops::runtime::system::GlobalDtBound;
   using CoupledFreq = pops::runtime::system::CoupledFreq;
   using CoupledFreqExpr = pops::runtime::system::CoupledFreqExpr;
-  std::vector<std::function<void(Real)>>& couplings = coupling_.operators;
+  std::vector<pops::runtime::system::PreparedCouplingOperator>& couplings = coupling_.operators;
   std::vector<GlobalDtBound>& dt_bounds_ = coupling_.dt_bounds;
   std::vector<CoupledFreq>& coupled_freqs_ = coupling_.coupled_freqs;
   std::vector<CoupledFreqExpr>& coupled_freq_exprs_ = coupling_.coupled_freq_exprs;

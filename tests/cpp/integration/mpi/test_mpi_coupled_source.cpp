@@ -14,7 +14,6 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/mesh/execution/for_each.hpp>
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var, role Density)
 #include <pops/physics/bricks/source.hpp>      // NoSource
@@ -27,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -46,28 +46,27 @@ struct NoEll {
 };
 using Dens = CompositeModel<ExBVelocity, NoSource, NoEll>;  // densite scalaire, transport E x B
 
-static void install_ionization_program(System& system, double rate_constant) {
+static void install_ionization_program(System& system) {
   system.set_program_block_map({0, 1, 2});
   runtime::program::ProgramContext context(&system);
   context.configure_primary_clock("test.clock.macro");
-  context.install([context, rate_constant](double step) {
+  context.install([context](double step) {
     context.begin_step(step);
     MultiFab& electrons = context.state(0);
     MultiFab& ions = context.state(1);
     MultiFab& neutrals = context.state(2);
-    const Real dt = Real(step);
-    const Real coefficient = Real(rate_constant);
-    for (int local = 0; local < electrons.local_size(); ++local) {
-      Array4 electron = electrons.fab(local).array();
-      Array4 ion = ions.fab(local).array();
-      Array4 neutral = neutrals.fab(local).array();
-      for_each_cell(electrons.box(local), [=] POPS_HD(int i, int j) {
-        const Real rate = coefficient * electron(i, j, 0) * neutral(i, j, 0);
-        electron(i, j, 0) += dt * rate;
-        ion(i, j, 0) += dt * rate;
-        neutral(i, j, 0) -= dt * rate;
-      });
-    }
+    MultiFab& next_electrons = context.scratch_state(100, 0, electrons);
+    MultiFab& next_ions = context.scratch_state(101, 0, ions);
+    MultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
+    context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
+    context.lincomb(next_ions, Real(1), ions, Real(0), ions);
+    context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
+    context.apply_coupling_operators(
+        Real(step),
+        {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
+    context.commit_many({{&electrons, &next_electrons},
+                         {&ions, &next_ions},
+                         {&neutrals, &next_neutrals}});
   });
 }
 
@@ -138,7 +137,15 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   prog.prog_lens = lens;
   sys.add_coupled_source(prog);
   chk(sys.coupled_operators().size() == 1, "coupled_source_metadata_registered");
-  install_ionization_program(sys, k);
+  bool live_state_rejected = false;
+  try {
+    sys.apply_coupling_operators(
+        Real(dt), {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
+  } catch (const std::invalid_argument&) {
+    live_state_rejected = true;
+  }
+  chk(live_state_rejected, "accepted_live_states_are_not_coupling_workspace");
+  install_ionization_program(sys);
 
   double ne = ne0, ni = ni0, ng = ng0;
   for (int s = 0; s < nsteps; ++s) {

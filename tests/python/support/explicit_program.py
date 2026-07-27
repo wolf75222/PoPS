@@ -7,8 +7,8 @@ builds an ordinary ABI-checked ``problem.so`` with an explicit block identity ta
 The forward-Euler bridge is useful for tests whose subject is a spatial/runtime capability rather
 than Program authoring.  Explicit-method tests use the separately named SSPRK2/SSPRK3 installers
 below, so their tableau remains authored and visible instead of being inferred from a block adapter.
-Projection is opt-in by block identity; coupling and implicit-solve tests still need purpose-built
-Program primitives.
+Projection and coupled-source splitting are opt-in by block identity/registration; implicit-solve
+tests still need purpose-built Program primitives.
 """
 from __future__ import annotations
 
@@ -79,7 +79,24 @@ def _empty_module_metadata_exports() -> str:
     )
 
 
-def _forward_euler_body(block_count: int, projection_indices: tuple[int, ...]) -> str:
+def _coupling_application(block_count: int, enabled: bool) -> str:
+    if not enabled:
+        return ""
+    candidates = [
+        "        {%d, &next_%d}" % (block, block)
+        for block in range(block_count)
+    ]
+    return "      ctx.apply_coupling_operators(dt, {\n%s\n      });" % ",\n".join(
+        candidates
+    )
+
+
+def _forward_euler_body(
+    block_count: int,
+    projection_indices: tuple[int, ...],
+    *,
+    apply_couplings: bool,
+) -> str:
     declarations = []
     requests = []
     combinations = []
@@ -115,6 +132,7 @@ def _forward_euler_body(block_count: int, projection_indices: tuple[int, ...]) -
             *declarations,
             "      ctx.rhs_group(4000, {\n%s\n      });" % ",\n".join(requests),
             *combinations,
+            _coupling_application(block_count, apply_couplings),
             *projections,
             "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
         )
@@ -164,6 +182,8 @@ def _rhs_stage(
 def _projection_and_commit(
     block_count: int,
     projection_indices: tuple[int, ...],
+    *,
+    apply_couplings: bool,
 ) -> list[str]:
     projections = [
         "      ctx.apply_projection(%d, next_%d);" % (block, block)
@@ -174,12 +194,18 @@ def _projection_and_commit(
         for block in range(block_count)
     ]
     return [
+        _coupling_application(block_count, apply_couplings),
         *projections,
         "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
     ]
 
 
-def _ssprk2_body(block_count: int, projection_indices: tuple[int, ...]) -> str:
+def _ssprk2_body(
+    block_count: int,
+    projection_indices: tuple[int, ...],
+    *,
+    apply_couplings: bool,
+) -> str:
     stage_one = []
     result = []
     for block in range(block_count):
@@ -226,12 +252,21 @@ def _ssprk2_body(block_count: int, projection_indices: tuple[int, ...]) -> str:
                 state_prefix="stage1",
             ),
             *result,
-            *_projection_and_commit(block_count, projection_indices),
+            *_projection_and_commit(
+                block_count,
+                projection_indices,
+                apply_couplings=apply_couplings,
+            ),
         )
     )
 
 
-def _ssprk3_body(block_count: int, projection_indices: tuple[int, ...]) -> str:
+def _ssprk3_body(
+    block_count: int,
+    projection_indices: tuple[int, ...],
+    *,
+    apply_couplings: bool,
+) -> str:
     first_stage = []
     second_stage = []
     result = []
@@ -302,7 +337,11 @@ def _ssprk3_body(block_count: int, projection_indices: tuple[int, ...]) -> str:
                 state_prefix="stage2",
             ),
             *result,
-            *_projection_and_commit(block_count, projection_indices),
+            *_projection_and_commit(
+                block_count,
+                projection_indices,
+                apply_couplings=apply_couplings,
+            ),
         )
     )
 
@@ -312,15 +351,28 @@ def _source(
     target: str,
     block_names: tuple[str, ...],
     projection_indices: tuple[int, ...],
+    coupled_sources: bool,
     identity: str,
     method: str,
 ) -> str:
     if method in {"euler", "imex_source_free"}:
-        body = _forward_euler_body(len(block_names), projection_indices)
+        body = _forward_euler_body(
+            len(block_names),
+            projection_indices,
+            apply_couplings=coupled_sources,
+        )
     elif method == "ssprk2":
-        body = _ssprk2_body(len(block_names), projection_indices)
+        body = _ssprk2_body(
+            len(block_names),
+            projection_indices,
+            apply_couplings=coupled_sources,
+        )
     elif method == "ssprk3":
-        body = _ssprk3_body(len(block_names), projection_indices)
+        body = _ssprk3_body(
+            len(block_names),
+            projection_indices,
+            apply_couplings=coupled_sources,
+        )
     else:  # pragma: no cover - private callers validate the method
         raise ValueError("unsupported explicit test Program %r" % method)
     common = """\
@@ -449,6 +501,7 @@ def _install_explicit_program(
     *,
     method: str,
     project_blocks: tuple[str, ...] = (),
+    coupled_sources: bool = False,
 ) -> str:
     if method not in {"euler", "ssprk2", "ssprk3", "imex_source_free"}:
         raise ValueError(
@@ -473,6 +526,7 @@ def _install_explicit_program(
             "target": target,
             "blocks": block_names,
             "project": projection_indices,
+            "coupled_sources": coupled_sources,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -483,6 +537,7 @@ def _install_explicit_program(
             target=target,
             block_names=block_names,
             projection_indices=projection_indices,
+            coupled_sources=coupled_sources,
             identity=identity,
             method=method,
         )
@@ -495,16 +550,18 @@ def install_forward_euler_program(
     runtime: Any,
     *,
     project_blocks: tuple[str, ...] = (),
+    coupled_sources: bool = False,
 ) -> str:
     """Install an explicit, operator-free forward-Euler Program on ``runtime``.
 
-    ``project_blocks`` is explicit because projection is part of a Program, not a hidden block-time
-    policy. Tests whose oracle concerns projection must still author their own Program.
+    ``project_blocks`` and ``coupled_sources`` are explicit because projection and source splitting
+    are Program nodes, not hidden block-time policies.
     """
     return _install_explicit_program(
         runtime,
         method="euler",
         project_blocks=project_blocks,
+        coupled_sources=coupled_sources,
     )
 
 
@@ -512,12 +569,14 @@ def install_ssprk2_program(
     runtime: Any,
     *,
     project_blocks: tuple[str, ...] = (),
+    coupled_sources: bool = False,
 ) -> str:
-    """Install an explicitly authored SSPRK2/Heun whole-system Program."""
+    """Install an SSPRK2/Heun Program, optionally followed by coupled-source splitting."""
     return _install_explicit_program(
         runtime,
         method="ssprk2",
         project_blocks=project_blocks,
+        coupled_sources=coupled_sources,
     )
 
 
@@ -525,12 +584,14 @@ def install_ssprk3_program(
     runtime: Any,
     *,
     project_blocks: tuple[str, ...] = (),
+    coupled_sources: bool = False,
 ) -> str:
-    """Install an explicitly authored three-stage SSPRK3 whole-system Program."""
+    """Install an SSPRK3 Program, optionally followed by coupled-source splitting."""
     return _install_explicit_program(
         runtime,
         method="ssprk3",
         project_blocks=project_blocks,
+        coupled_sources=coupled_sources,
     )
 
 
