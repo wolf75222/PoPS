@@ -162,13 +162,9 @@ TEST(test_amr_system_twoblock, Runs) {
     EXPECT_GT(norm_inf(ref), Real(1e-6)) << "twoblock_poisson_rhs_nonzero";
     EXPECT_GT(norm_inf(rt.phi()), Real(1e-8)) << "twoblock_poisson_phi_nonzero";
 
-    // (c) masse de CHAQUE bloc conservee a travers un pas (reflux + average_down, PAR BLOC).
-    const Real m0a = rt.mass(0), m1a = rt.mass(1);
-    rt.step(Real(0.01));
-    rt.step(Real(0.01));
-    const Real m0b = rt.mass(0), m1b = rt.mass(1);
-    EXPECT_LT(std::fabs(m0b - m0a), Real(1e-11)) << "twoblock_block0_mass_conserved";
-    EXPECT_LT(std::fabs(m1b - m1a), Real(1e-11)) << "twoblock_block1_mass_conserved";
+    // Temporal evolution is exercised below through an explicitly authored Program on AmrSystem.
+    // This direct-engine section owns only the co-located elliptic assembly contract; it must not
+    // invoke the retired AmrRuntime temporal engine as a second authority.
   }
 
   // ============================================================================================
