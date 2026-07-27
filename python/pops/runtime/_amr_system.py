@@ -24,7 +24,6 @@ from pops.runtime._engine_descriptors import Spatial, Explicit
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -384,7 +383,6 @@ class AmrSystem(
                 getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                 where="AmrSystem.add_block.newton_damping",
             ),
-            getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
             getattr(time, "newton_diagnostics", False),
             native_real(
                 getattr(spatial, "positivity_floor", 0.0),

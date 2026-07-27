@@ -344,7 +344,7 @@ def capabilities() -> Any:
                 "explicit (ssprk2|ssprk3)",
                 "metric-aware explicit Program.solve graph",
             ],
-            "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System route "
+            "newton_options": "options (max_iters/tol/fd_eps/damping) : System route "
             "or typed Program solve; AMR rejects non-default block options and "
             "diagnostics until its typed implicit primitive exists (.so block "
             "loaders: explicit rejection) ; "

@@ -307,13 +307,16 @@ def section_a(t):
         "SolveStatus::kSingular" in reject_consumption
         and "SolveStatus::kInvalidEvaluation" in reject_consumption
         and "SolveStatus::kIterationLimit" not in reject_consumption
+        and ".report().action == pops::SolveAction::kRejectAttempt"
+        in reject_consumption
         and "SolveConsumption::kRejectAttempt" in reject_consumption
         and "SolveConsumption::kFailRun" in reject_consumption,
-        "RejectAttempt is selected exactly at SolveOutcome consumption",
+        "RejectAttempt is selected exactly at SolveOutcome consumption without downgrading FailRun",
     )
+    consumption_end = reject_src.index("\n", reject_src.index(reject_consumption))
     reject_guard = reject_src.index(
         ".action == pops::SolveAction::kRejectAttempt",
-        reject_src.index(reject_consumption),
+        consumption_end,
     )
     chk(
         "local_solve_outcome_" in reject_src[reject_guard - 80:reject_guard],

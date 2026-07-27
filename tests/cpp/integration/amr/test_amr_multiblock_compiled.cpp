@@ -242,7 +242,7 @@ static void install_compiled_coupling_program(AmrSystem& system) {
   context->install([context](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context](double level_dt) {
       context->set_stage_time(0, 1);
-      (void)context->solve_fields();
+      (void)consume_solve_outcome(context->solve_fields());
 
       MultiFab& ions = context->state(0);
       MultiFab& neutrals = context->state(1);

@@ -409,7 +409,13 @@ class PolarTensorKrylovSolver {
     return l2_norm(r_);
   }
 
-  void solve() { solve(kKrylovDefaultRelTol, kPolarTensorKrylovDefaultMaxIters, Real(0)); }
+  void solve() {
+    const SolveReport report =
+        solve(kKrylovDefaultRelTol, kPolarTensorKrylovDefaultMaxIters, Real(0));
+    if (!report.solved())
+      throw std::runtime_error(std::string("PolarTensorKrylovSolver solve failed: ") +
+                               report.status_name());
+  }
 
   /// MATRIX-FREE BiCGStab preconditioned by precond_ (RadialLine by default, Jacobi as fallback);
   /// fixes the gauge (project_mean) when pin_gauge_ (singular pure Neumann/periodic case). phi() =

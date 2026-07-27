@@ -135,6 +135,15 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
     assert ".status == pops::SolveStatus::kBreakdown" not in src, src
     assert ".action == pops::SolveAction::kRejectAttempt" in src, src
     assert '" action=" +' in src and ".action_name()" in src, src
+    consumption = next(
+        line for line in src.splitlines()
+        if ".consume(" in line and "SolveConsumption::kRejectAttempt" in line
+    )
+    assert ".report().action == pops::SolveAction::kRejectAttempt" in consumption, src
+    assert (
+        consumption.index(".report().action == pops::SolveAction::kRejectAttempt")
+        < consumption.index("SolveConsumption::kRejectAttempt")
+    ), consumption
 
 
 def test_solve_outcome_is_consumed_before_graph_publication(t):

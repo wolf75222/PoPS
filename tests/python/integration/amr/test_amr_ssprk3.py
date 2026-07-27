@@ -215,6 +215,7 @@ def _check_imex_ssprk3_rejected(n=16):
     # newton_diagnostics) AVEC time='ssprk3' est REJETE : ssprk3 = transport explicite, exclusif de
     # l'IMEX. La normalisation du Program refuse cette composition avant execution.
     model = _scalar_charge(+1.0)
+    newton_defaults = engine.IMEX()
 
     def add(time, **kw):
         s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
@@ -222,12 +223,11 @@ def _check_imex_ssprk3_rejected(n=16):
         kwargs = dict(
             implicit_vars=[],
             implicit_roles=[],
-            newton_max_iters=2,
-            newton_rel_tol=0.0,
-            newton_abs_tol=0.0,
-            newton_fd_eps=1e-7,
-            newton_damping=1.0,
-            newton_fail_policy="none",
+            newton_max_iters=newton_defaults.newton_max_iters,
+            newton_rel_tol=newton_defaults.newton_rel_tol,
+            newton_abs_tol=newton_defaults.newton_abs_tol,
+            newton_fd_eps=newton_defaults.newton_fd_eps,
+            newton_damping=newton_defaults.newton_damping,
             newton_diagnostics=False,
         )
         kwargs.update(kw)
@@ -247,7 +247,6 @@ def _check_imex_ssprk3_rejected(n=16):
             kwargs["newton_abs_tol"],
             kwargs["newton_fd_eps"],
             kwargs["newton_damping"],
-            kwargs["newton_fail_policy"],
             kwargs["newton_diagnostics"],
         )
         return s

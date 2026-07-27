@@ -181,7 +181,7 @@ std::string amr_program_method_label(const std::string& time) {
 bool amr_newton_options_non_default(const NewtonOptions& newton) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
-         newton.damping != kNewtonDefaultDamping || newton.fail_policy != kNewtonDefaultFailPolicy;
+         newton.damping != kNewtonDefaultDamping;
 }
 
 std::string direct_amr_state_identity(const std::string& block_name) {

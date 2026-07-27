@@ -157,6 +157,47 @@ TEST(CompositeFacNlevelTest, fully_covered_parent_solves_finest_and_averages_dow
   comm_finalize();
 }
 
+TEST(CompositeFacNlevelTest, failed_fully_refined_solve_does_not_publish_iterate) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D coarse_domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{coarse_domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(coarse_domain, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+
+  const Geometry fine_geometry = coarse_geometry.refine(r);
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, bc, fine_geometry.domain, r);
+  fill_f(fac.rhs_coarse(), coarse_geometry);
+  fill_f(fac.rhs_fine(), fine_geometry);
+  fac.phi_coarse().set_val(Real(3));
+  fac.phi_fine().set_val(Real(-2));
+
+  const Real residual =
+      fac.solve(/*max_iters=*/1, /*fine_sweeps=*/0,
+                /*rel_tol=*/std::numeric_limits<Real>::min(), /*abs_tol=*/Real(0));
+  device_fence();
+
+  EXPECT_TRUE(std::isfinite(residual));
+  EXPECT_EQ(fac.last_solve_report().status, SolveStatus::kIterationLimit);
+  EXPECT_EQ(fac.last_solve_report().action, SolveAction::kRejectAttempt);
+  for (int li = 0; li < fac.phi_coarse().local_size(); ++li) {
+    const ConstArray4 phi = fac.phi_coarse().fab(li).const_array();
+    const Box2D box = fac.phi_coarse().box(li);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_EQ(phi(i, j, 0), Real(3));
+  }
+  for (int li = 0; li < fac.phi_fine().local_size(); ++li) {
+    const ConstArray4 phi = fac.phi_fine().fab(li).const_array();
+    const Box2D box = fac.phi_fine().box(li);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_EQ(phi(i, j, 0), Real(-2));
+  }
+  comm_finalize();
+}
+
 // ------------------------------------------------------------------------------------------------
 // (B) 3-level nested MMS: accuracy improves per refinement + C/F conservation to ulp.
 // ------------------------------------------------------------------------------------------------

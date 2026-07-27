@@ -376,93 +376,241 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
 }
 
 inline void AmrRuntime::restore_field_solve_snapshot(const FieldSolveSnapshot& snapshot) {
-    if (snapshot.topology_generation != topology_materialization_generation_)
-      throw std::logic_error("field publication snapshot crossed an AMR topology generation");
-    device_fence();
-    if (snapshot.has_default) {
-      PureFieldAlgebra::copy_allocated(default_field_solver_->phi_level(0), snapshot.default_phi);
-      PureFieldAlgebra::copy_allocated(default_field_solver_->rhs_level(0), snapshot.default_rhs);
-    }
-    unpack_aux_components(snapshot.packed_aux, snapshot.aux_components);
-    for (auto& [name, state] : snapshot.named) {
-      const auto found = named_fields_.find(name);
-      if (found == named_fields_.end())
-        throw std::logic_error("field publication snapshot names an unknown AMR field");
-      NamedField& field = found->second;
-      using Storage = FieldSolveSnapshot::NamedFieldState::Storage;
-      if (state.storage == Storage::kUnallocated) {
-        invalidate_named_field_solver(field);
-      } else {
-        const bool composite = state.storage == Storage::kComposite;
-        if (!field.solver)
-          ensure_named_elliptic(field);
-        if (!field.solver || field.solver->couples_hierarchy_levels() != composite ||
-            state.phi.size() != static_cast<std::size_t>(field.solver->level_count()) ||
-            state.rhs.size() != state.phi.size())
-          throw std::logic_error("field publication snapshot has incompatible AMR solver storage");
-        for (int level = 0; level < field.solver->level_count(); ++level) {
-          PureFieldAlgebra::copy_allocated(field.solver->phi_level(level),
-                                           state.phi[static_cast<std::size_t>(level)]);
-          PureFieldAlgebra::copy_allocated(field.solver->rhs_level(level),
-                                           state.rhs[static_cast<std::size_t>(level)]);
-        }
+  if (snapshot.topology_generation != topology_materialization_generation_)
+    throw std::logic_error("field publication snapshot crossed an AMR topology generation");
+  device_fence();
+  if (snapshot.has_default) {
+    PureFieldAlgebra::copy_allocated(default_field_solver_->phi_level(0), snapshot.default_phi);
+    PureFieldAlgebra::copy_allocated(default_field_solver_->rhs_level(0), snapshot.default_rhs);
+  }
+  unpack_aux_components(snapshot.packed_aux, snapshot.aux_components);
+  for (auto& [name, state] : snapshot.named) {
+    const auto found = named_fields_.find(name);
+    if (found == named_fields_.end())
+      throw std::logic_error("field publication snapshot names an unknown AMR field");
+    NamedField& field = found->second;
+    using Storage = FieldSolveSnapshot::NamedFieldState::Storage;
+    if (state.storage == Storage::kUnallocated) {
+      if (field.solver)
+        throw std::logic_error(
+            "field publication snapshot cannot destroy materialized AMR solver storage");
+    } else {
+      const bool composite = state.storage == Storage::kComposite;
+      if (!field.solver)
+        throw std::logic_error(
+            "field publication snapshot requires pre-materialized AMR solver storage");
+      if (!field.solver || field.solver->couples_hierarchy_levels() != composite ||
+          state.phi.size() != static_cast<std::size_t>(field.solver->level_count()) ||
+          state.rhs.size() != state.phi.size())
+        throw std::logic_error("field publication snapshot has incompatible AMR solver storage");
+      for (int level = 0; level < field.solver->level_count(); ++level) {
+        PureFieldAlgebra::copy_allocated(field.solver->phi_level(level),
+                                         state.phi[static_cast<std::size_t>(level)]);
+        PureFieldAlgebra::copy_allocated(field.solver->rhs_level(level),
+                                         state.rhs[static_cast<std::size_t>(level)]);
       }
-      // Nullspace workspaces are structural caches bound to the materialized solver storage, not
-      // published scientific values. Keep an already compatible workspace alive across accepted /
-      // candidate copies. If the snapshot required an unallocated solver, the invalidation branch
-      // above cleared it; if Accept rematerialized a solver, the next solve prepares it lazily.
     }
-    device_fence();
+    // Nullspace workspaces are structural caches bound to the materialized solver storage, not
+    // published scientific values. Keep an already compatible workspace alive across accepted /
+    // candidate copies. If the snapshot required an unallocated solver, the invalidation branch
+    // above cleared it; if Accept rematerialized a solver, the next solve prepares it lazily.
+  }
+  device_fence();
+}
+
+inline void AmrRuntime::validate_field_solve_snapshot(const FieldSolveSnapshot& snapshot) {
+  if (snapshot.topology_generation != topology_materialization_generation_)
+    throw std::logic_error("field publication snapshot crossed an AMR topology generation");
+  if (snapshot.packed_aux.size() !=
+      (snapshot.aux_components.empty() ? 0u : aux_.size()))
+    throw std::logic_error("field publication aux depth changed before Accept");
+  for (std::size_t level = 0; level < snapshot.packed_aux.size(); ++level) {
+    const MultiFab& packed = snapshot.packed_aux[level];
+    const MultiFab& live = aux_[level];
+    if (packed.box_array().boxes() != live.box_array().boxes() ||
+        packed.dmap().ranks() != live.dmap().ranks() ||
+        packed.ncomp() != static_cast<int>(snapshot.aux_components.size()) ||
+        packed.n_grow() != live.n_grow() || packed.local_size() != live.local_size())
+      throw std::logic_error("field publication aux layout changed before Accept");
+  }
+  if (snapshot.has_default &&
+      (!default_field_solver_ ||
+       !same_exact_multifab_layout_(snapshot.default_phi,
+                                    default_field_solver_->phi_level(0)) ||
+       !same_exact_multifab_layout_(snapshot.default_rhs,
+                                    default_field_solver_->rhs_level(0))))
+    throw std::logic_error("default field publication layout changed before Accept");
+
+  const auto includes = [&](const std::string& name) {
+    return snapshot.scope_named_fields == NamedFieldSnapshotScope::kAll ||
+           (snapshot.scope_named_fields == NamedFieldSnapshotScope::kSelected &&
+            name == snapshot.scope_selected_named_field);
+  };
+  std::size_t expected_named = 0;
+  for (auto& [name, field] : named_fields_) {
+    if (!includes(name))
+      continue;
+    ++expected_named;
+    const auto found = snapshot.named.find(name);
+    if (found == snapshot.named.end())
+      throw std::logic_error("field publication named-field set changed before Accept");
+    const auto& state = found->second;
+    using Storage = FieldSolveSnapshot::NamedFieldState::Storage;
+    const Storage expected_storage =
+        !field.solver ? Storage::kUnallocated
+                      : (field.solver->couples_hierarchy_levels() ? Storage::kComposite
+                                                                  : Storage::kLevelLocal);
+    if (state.storage != expected_storage)
+      throw std::logic_error("field publication named solver changed before Accept");
+    const std::size_t levels =
+        field.solver ? static_cast<std::size_t>(field.solver->level_count()) : 0u;
+    if (state.phi.size() != levels || state.rhs.size() != levels)
+      throw std::logic_error("field publication named depth changed before Accept");
+    for (std::size_t level = 0; level < levels; ++level)
+      if (!same_exact_multifab_layout_(
+              state.phi[level], field.solver->phi_level(static_cast<int>(level))) ||
+          !same_exact_multifab_layout_(
+              state.rhs[level], field.solver->rhs_level(static_cast<int>(level))))
+        throw std::logic_error("field publication named layout changed before Accept");
+  }
+  if (snapshot.named.size() != expected_named)
+    throw std::logic_error("field publication named-field set changed before Accept");
 }
 
 template <class Solve>
 inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScope& scope,
                                                             Solve&& solve) {
-  FieldSolveSnapshot& snapshot = capture_field_solve_snapshot(scope);
+  if (all_reduce_max(field_solve_transaction_active_ ? 1L : 0L) != 0)
+    throw std::logic_error(
+        "AmrRuntime field solves are sequential until their prior SolveOutcome is consumed");
+  const long invalid_scope =
+      scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+              scope.selected_named_field == nullptr
+          ? 1L
+          : 0L;
+  if (all_reduce_max(invalid_scope) != 0)
+    throw std::invalid_argument("selected field-solve scope requires an exact field identity");
+
+  bool selected_found = scope.named_fields != NamedFieldSnapshotScope::kSelected;
+  for (const auto& entry : named_fields_) {
+    const std::string& name = entry.first;
+    const bool included = scope.named_fields == NamedFieldSnapshotScope::kAll ||
+                          (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+                           name == *scope.selected_named_field);
+    selected_found = selected_found || included;
+  }
+  if (all_reduce_min(selected_found ? 1L : 0L) == 0)
+    throw std::runtime_error("selected field-solve scope names an unknown AMR field");
+
+  std::exception_ptr materialization_error;
+  long materialization_failed_local = 0;
+  try {
+    for (auto& [name, field] : named_fields_) {
+      const bool included = scope.named_fields == NamedFieldSnapshotScope::kAll ||
+                            (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+                             name == *scope.selected_named_field);
+      if (!included)
+        continue;
+      // Accept must be a copy-only operation. Materialize lazy providers before the immutable
+      // accepted snapshot so restoring that snapshot cannot destroy the solver and force a second
+      // allocation/collective inside the irreversible publication hook.
+      ensure_named_elliptic(field);
+    }
+  } catch (...) {
+    materialization_error = std::current_exception();
+    materialization_failed_local = 1;
+  }
+  if (all_reduce_max(materialization_failed_local) != 0) {
+    if (n_ranks() == 1 && materialization_error != nullptr)
+      std::rethrow_exception(materialization_error);
+    throw std::runtime_error(
+        "AMR field solver materialization failed on at least one MPI rank");
+  }
+
+  FieldSolveSnapshot* snapshot = nullptr;
+  long snapshot_failed_local = 0;
+  try {
+    snapshot = &capture_field_solve_snapshot(scope);
+  } catch (...) {
+    snapshot_failed_local = 1;
+  }
+  if (all_reduce_max(snapshot_failed_local) != 0) {
+    release_field_solve_snapshot_();
+    throw std::runtime_error("AMR field accepted-state snapshot failed on at least one MPI rank");
+  }
   SolveReport report;
+  std::exception_ptr solve_error;
+  long solve_failed_local = 0;
   try {
     report = std::forward<Solve>(solve)();
   } catch (...) {
-    restore_field_solve_snapshot_noexcept(snapshot);
+    solve_error = std::current_exception();
+    solve_failed_local = 1;
+  }
+  if (all_reduce_max(solve_failed_local) != 0) {
+    restore_field_solve_snapshot_noexcept(*snapshot);
     release_field_solve_snapshot_();
-    throw;
+    if (n_ranks() == 1 && solve_error != nullptr)
+      std::rethrow_exception(solve_error);
+    throw std::runtime_error("AMR field transaction failed on at least one MPI rank");
   }
   if (!report.solved_value_available()) {
-    restore_field_solve_snapshot_noexcept(snapshot);
+    restore_field_solve_snapshot_noexcept(*snapshot);
     release_field_solve_snapshot_();
     return SolveOutcome::collective_world(std::move(report));
   }
 
-  FieldSolveSnapshot& candidate =
-      capture_field_solve_snapshot(scope, /*candidate_slot=*/true);
-  restore_field_solve_snapshot_noexcept(snapshot);
-  snapshot.publication_owner = this;
-  snapshot.publication_candidate = &candidate;
+  FieldSolveSnapshot* candidate = nullptr;
+  long candidate_failed_local = 0;
+  try {
+    candidate = &capture_field_solve_snapshot(scope, /*candidate_slot=*/true);
+  } catch (...) {
+    candidate_failed_local = 1;
+  }
+  if (all_reduce_max(candidate_failed_local) != 0) {
+    restore_field_solve_snapshot_noexcept(*snapshot);
+    release_field_solve_snapshot_();
+    throw std::runtime_error("AMR field candidate staging failed on at least one MPI rank");
+  }
+  restore_field_solve_snapshot_noexcept(*snapshot);
+  snapshot->publication_owner = this;
+  snapshot->publication_candidate = candidate;
 
   // Every physically readable aux/phi/rhs buffer now contains the previous accepted state. The
   // candidate remains in persistent private carriers and is copied back only after collective
   // Accept; release alone leaves the old publication untouched.
   return SolveOutcome::collective_world(
       std::move(report),
-      SolveOutcome::PublicationHooks{
-          &snapshot,
-          [](void* context) {
-            auto* accepted = static_cast<FieldSolveSnapshot*>(context);
-            if (accepted->publication_owner == nullptr ||
-                accepted->publication_candidate == nullptr)
-              throw std::logic_error("AMR field publication candidate is unavailable");
-            accepted->publication_owner->restore_field_solve_snapshot(
-                *accepted->publication_candidate);
-          },
-          nullptr,
-          [](void* context) noexcept {
-            auto* accepted = static_cast<FieldSolveSnapshot*>(context);
-            AmrRuntime* owner = accepted->publication_owner;
-            accepted->publication_owner = nullptr;
-            accepted->publication_candidate = nullptr;
-            if (owner != nullptr)
-              owner->release_field_solve_snapshot_();
-          }});
+      SolveOutcome::PublicationHooks{snapshot,
+                                     [](void* context) noexcept {
+                                       auto* accepted = static_cast<FieldSolveSnapshot*>(context);
+                                       if (accepted->publication_owner == nullptr ||
+                                           accepted->publication_candidate == nullptr)
+                                         std::terminate();
+                                       accepted->publication_owner->restore_field_solve_snapshot(
+                                           *accepted->publication_candidate);
+                                     },
+                                     nullptr,
+                                     [](void* context) noexcept {
+                                       auto* accepted = static_cast<FieldSolveSnapshot*>(context);
+                                       AmrRuntime* owner = accepted->publication_owner;
+                                       accepted->publication_owner = nullptr;
+                                       accepted->publication_candidate = nullptr;
+                                       if (owner != nullptr)
+                                         owner->release_field_solve_snapshot_();
+                                     },
+                                     {},
+                                     [](void* context) {
+                                       auto* accepted =
+                                           static_cast<FieldSolveSnapshot*>(context);
+                                       if (accepted->publication_owner == nullptr ||
+                                           accepted->publication_candidate == nullptr)
+                                         throw std::logic_error(
+                                             "AMR field publication candidate is unavailable");
+                                       accepted->publication_owner
+                                           ->validate_field_solve_snapshot(
+                                               *accepted->publication_candidate);
+                                     }});
 }
 
 }  // namespace pops

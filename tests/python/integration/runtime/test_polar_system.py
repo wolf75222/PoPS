@@ -16,6 +16,7 @@ Mono-rang (le Poisson polaire direct refuse MPI) : ce test n'est pas un test MPI
 import math
 
 import numpy as np
+import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops.mesh import PolarMesh
@@ -42,6 +43,15 @@ def _annular_density(nr, nth, rmin, rmax):
 
 def _flat(field):
     return np.asarray(field, dtype=float).ravel()
+
+
+def test_polar_system_rejects_silent_cartesian_solver_substitution():
+    sim = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=8, ntheta=8))
+    assert sim.poisson_solver() == "polar"
+    sim.set_poisson(rhs="charge_density", bc=Dirichlet())
+    assert sim.poisson_solver() == "polar"
+    with pytest.raises(RuntimeError, match="requires solver='polar'"):
+        sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Dirichlet())
 
 
 def test_polar_system_step_and_cfl_conserve_mass():

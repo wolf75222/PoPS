@@ -1355,9 +1355,12 @@ class System {
   POPS_EXPORT SolveReport solve_fields_from_state_in_place_(const std::string& field,
                                                             int block_idx,
                                                             const MultiFab& U_stage);
+  POPS_EXPORT void prepare_default_field_publication_storage_();
+  POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();
   POPS_EXPORT void stage_field_publication_candidate();
-  POPS_EXPORT void accept_field_publication_candidate();
+  POPS_EXPORT void validate_field_publication_candidate();
+  POPS_EXPORT void accept_field_publication_candidate() noexcept;
   POPS_EXPORT void rollback_field_publication_transaction();
   [[nodiscard]] POPS_EXPORT bool field_publication_transaction_active_() const noexcept;
   POPS_EXPORT void begin_field_publication_outcome_();

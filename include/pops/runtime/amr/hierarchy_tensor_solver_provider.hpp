@@ -75,6 +75,7 @@ class PreparedHierarchyTensorSolver {
   virtual MultiFab& assembly_target(std::string_view field_slot_identity, int level) = 0;
   virtual MultiFab& solution(int level) = 0;
   virtual void stage_initial_guess(int level, const MultiFab* guess) = 0;
+
  protected:
   /// Provider execution is reachable only through the collective SolveOutcome publication seam.
   /// Return only after recomputing the true residual defined by exact_prepared_contract().
@@ -87,7 +88,7 @@ class PreparedHierarchyTensorSolver {
   static bool same_publication_layout_(const MultiFab& lhs, const MultiFab& rhs) noexcept {
     return lhs.box_array().boxes() == rhs.box_array().boxes() &&
            lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
-           lhs.n_grow() == rhs.n_grow();
+           lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
   }
 
   void capture_publication_(std::vector<MultiFab>& storage) {
@@ -108,8 +109,16 @@ class PreparedHierarchyTensorSolver {
     if (storage.size() != static_cast<std::size_t>(level_count()))
       throw std::logic_error("hierarchy tensor publication depth changed during a solve");
     for (int level = 0; level < level_count(); ++level)
-      PureFieldAlgebra::copy_allocated(solution(level),
-                                       storage[static_cast<std::size_t>(level)]);
+      PureFieldAlgebra::copy_allocated(solution(level), storage[static_cast<std::size_t>(level)]);
+  }
+
+  void validate_candidate_publication_() {
+    if (candidate_publication_.size() != static_cast<std::size_t>(level_count()))
+      throw std::logic_error("hierarchy tensor publication depth changed before Accept");
+    for (int level = 0; level < level_count(); ++level)
+      if (!same_publication_layout_(solution(level),
+                                    candidate_publication_[static_cast<std::size_t>(level)]))
+        throw std::logic_error("hierarchy tensor publication layout changed before Accept");
   }
 
   void release_publication_() noexcept { publication_active_ = false; }
@@ -228,20 +237,23 @@ inline SolveOutcome solve_prepared_hierarchy_tensor_collectively(
       std::terminate();
     }
     solver.release_publication_();
-    throw std::runtime_error(
-        "hierarchy tensor candidate staging failed on at least one MPI rank");
+    throw std::runtime_error("hierarchy tensor candidate staging failed on at least one MPI rank");
   }
   return SolveOutcome::collective_world(
       std::move(report),
       SolveOutcome::PublicationHooks{
           &solver,
-          [](void* context) {
+          [](void* context) noexcept {
             auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
             prepared->restore_publication_(prepared->candidate_publication_);
           },
           nullptr,
           [](void* context) noexcept {
             static_cast<PreparedHierarchyTensorSolver*>(context)->release_publication_();
+          },
+          {},
+          [](void* context) {
+            static_cast<PreparedHierarchyTensorSolver*>(context)->validate_candidate_publication_();
           }});
 }
 

@@ -341,7 +341,8 @@ void bind_system_program(py::class_<System>& cls) {
       .def("mark_bound", &System::mark_bound)
       .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver, default "geometric_mg"). install_program reads it to validate a field operator's
+      // solver (geometry-specific default: geometric_mg Cartesian, polar on a ring). install_program
+      // reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
       // ADC-414 (spec op 23): scalar diagnostics a compiled Program records via P.record_scalar,

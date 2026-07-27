@@ -209,12 +209,20 @@ TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
 
   ProgramContext ctx(&sim);
   MultiFab accepted_aux_before(ctx.aux());
+  const BoxArray aux_boxes = ctx.aux().box_array();
+  const DistributionMapping aux_mapping = ctx.aux().dmap();
+  const int aux_components = ctx.aux().ncomp();
+  const int aux_ghosts = ctx.aux().n_grow();
   const std::vector<double> accepted_potential_before = sim.potential();
   SolveOutcome direct = sim.solve_fields();
   ASSERT_TRUE(direct.report().solved_value_available()) << direct.report().reason;
   EXPECT_EQ(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
   EXPECT_EQ(sim.potential(), accepted_potential_before)
       << "uniform aux and potential must remain physically unchanged before Accept";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  EXPECT_THROW((void)direct.consume(SolveConsumption::kAccept), std::logic_error)
+      << "Accept must validate every publication layout before copying a candidate";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
   EXPECT_THROW((void)sim.solve_fields(), std::logic_error);
   EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
   const SolveReport direct_report = direct.consume(SolveConsumption::kAccept);
@@ -230,6 +238,10 @@ TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
   ASSERT_TRUE(accepted.report().solved_value_available()) << accepted.report().reason;
   EXPECT_EQ(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
   EXPECT_EQ(sim.potential(), program_potential_before);
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  EXPECT_THROW((void)accepted.consume(SolveConsumption::kAccept), std::logic_error)
+      << "ProgramContext must use the same read-only System publication validation";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
   EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
   const SolveReport accepted_report = accepted.consume(SolveConsumption::kAccept);
   ASSERT_TRUE(accepted_report.solved_value_available()) << accepted_report.reason;
@@ -238,7 +250,7 @@ TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
 
   std::fill(density.begin(), density.end(), std::numeric_limits<double>::quiet_NaN());
   sim.set_density("plasma", density);
-  EXPECT_THROW((void)ctx.solve_fields(), std::runtime_error);
+  EXPECT_THROW((void)consume_solve_outcome(ctx.solve_fields()), std::runtime_error);
   EXPECT_EQ(max_abs_diff(ctx.aux(), published_aux), Real(0))
       << "a throwing field solve must restore every valid and ghost aux value";
 }

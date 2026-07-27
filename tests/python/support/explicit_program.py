@@ -128,7 +128,7 @@ def _forward_euler_body(
     return "\n".join(
         (
             "      ctx.set_stage_time(0, 1);",
-            "      (void)ctx.solve_fields();",
+        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *declarations,
             "      ctx.rhs_group(4000, {\n%s\n      });" % ",\n".join(requests),
             *combinations,
@@ -235,7 +235,7 @@ def _ssprk2_body(
     return "\n".join(
         (
             *_state_declarations(block_count),
-            "      (void)ctx.solve_fields();",
+        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *_rhs_stage(
                 block_count,
                 stage=0,
@@ -312,7 +312,7 @@ def _ssprk3_body(
     return "\n".join(
         (
             *_state_declarations(block_count),
-            "      (void)ctx.solve_fields();",
+        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *_rhs_stage(
                 block_count,
                 stage=0,
