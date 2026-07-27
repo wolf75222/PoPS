@@ -160,7 +160,7 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
 def test_direct_amr_runtime_step_callers_are_a_closed_migration_inventory():
     """No new C++ test may make the retiring AmrRuntime temporal engine authoritative."""
     direct_step = re.compile(
-        r"\b(?:rt[0-9A-Za-z_]*|rational|integral)\.step(?:_cfl)?\("
+        r"\b(?:rt[0-9A-Za-z_]*|runtime|rational|integral)\.step(?:_cfl)?\("
     )
     discovered = {
         path.relative_to(ROOT).as_posix()
