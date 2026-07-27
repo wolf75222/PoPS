@@ -12,6 +12,7 @@
 // bit-a-bit du chemin raffine est verrouillee par test_amr_compiled_model / test_amr_riemann_native).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -104,6 +105,7 @@ TEST(test_amr_seed_no_refine, Runs) {
                        "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
     A.set_poisson("charge_density", "geometric_mg");
     A.set_density("gas", rho);
+    test::install_forward_euler_program(A);
     EXPECT_EQ(A.n_patches(), 0) << "no set_refinement -> n_patches()==0 (compile, mono-niveau)";
     // le mono-niveau reste un solveur valide : il avance et conserve la masse (FV periodique).
     const double m0 = A.mass();
@@ -132,6 +134,7 @@ TEST(test_amr_seed_no_refine, Runs) {
     B.set_poisson("charge_density", "geometric_mg");
     B.set_refinement(1.2);
     B.set_density("gas", rho);
+    test::install_forward_euler_program(B);
     EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) -> n_patches()>=1 (seed alloue + regrid)";
     for (int s = 0; s < 8; ++s)
       B.step(1e-3);

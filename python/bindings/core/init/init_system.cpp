@@ -429,8 +429,8 @@ void bind_system_physics(py::class_<System>& cls) {
   cls
       // (System) -- see also AmrSystem.add_coupled_source below for the AMR counterpart.
       // GLOBAL time-step bound (step_cfl audit): fn() evaluated ONCE per step (host) by
-      // step_cfl / step_adaptive; dt <= fn() when fn() > 0 and finite. Hook for non
-      // cell-local constraints (coupling, Schur/Poisson, scheduler, user ramp). A Python
+      // step_cfl; dt <= fn() when fn() > 0 and finite. Hook for non cell-local constraints
+      // (coupling, Schur/Poisson, scheduler, user ramp). A Python
       // callback is acceptable here (never per cell).
       .def("add_dt_bound", &System::add_dt_bound, py::arg("label"), py::arg("fn"))
       // ACTIVE bound of the last step_cfl: "transport:<block>" | "source_frequency:<block>" |
@@ -814,9 +814,8 @@ void bind_system_stepping(py::class_<System>& cls) {
            "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
            py::arg("name"))
       .def("step_adaptive", &System::step_adaptive,
-           "Advances by ONE MULTIRATE macro-step: the slowest block sets the macro-step, each "
-           "faster "
-           "block is sub-cycled n = ceil(w_block / w_min) times. Returns the macro-step.",
+           "Reserved fail-closed entry point. Requires an installed whole-system Program, then "
+           "raises until adaptive multirate subcycling has a ProgramGraph lowering.",
            py::arg("cfl"))
       // Explicit host inspection/state-transfer primitives.  Production time programs execute in
       // the prepared native runtime; these bulk copies exist for initialization, checkpoints,

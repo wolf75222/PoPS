@@ -356,10 +356,11 @@ It is the macro-step that differs.
 
 The core is `SystemStepper::step_cfl` (and `step`), in
 [`include/pops/runtime/system/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp). The order is an
-explicit invariant (cf. the contract at the head of the file): without an installed Program it runs
-`solve_fields`, advances each due transport block, applies inter-block couplings and advances the
-clock. With an installed Program, the authored Program owns every stage and the runtime only supplies
-cadence, data and operator/provider seams.
+explicit invariant (cf. the contract at the head of the file): an installed whole-system Program is
+mandatory and owns every stage. The runtime only supplies cadence, data, operator/provider seams and
+the native CFL-bound reduction; it has no implicit transport, coupling, projection or `AmrRuntime`
+fallback. The former adaptive multirate formula remains available as a low-level `SystemCoupler`
+brick, but `System::step_adaptive` fails closed until `ProgramGraph` can lower that composition.
 
 The `solve_fields` delegates to `SystemFieldSolver`
 ([`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)): it

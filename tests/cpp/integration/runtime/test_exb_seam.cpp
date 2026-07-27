@@ -12,6 +12,7 @@
 // conservation check (ExB transport is divergence-free: total mass should not drift beyond round-off).
 #include <gtest/gtest.h>
 
+#include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"  // pops::test::Checker
 #include <pops/runtime/config/model_spec.hpp>
@@ -83,6 +84,7 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   System sys(cfg);
   sys.add_block("blk", exb_seam_model(n0));  // defaults: minmod / rusanov / conservative / explicit
   sys.set_density("blk", rho);
+  test::install_forward_euler_program(sys);
 
   const double m0 = sys.mass("blk");
   chk(std::isfinite(m0), "initial mass finite");

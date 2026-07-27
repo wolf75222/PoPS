@@ -27,6 +27,7 @@
 // lecture hote ici est sure. On insere malgre tout un Kokkos::fence() de ceinture avant les diffs.
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
@@ -111,6 +112,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_refinement(1.2);  // raffine la bulle (rho > 1.2 au coeur)
   sys.set_density("gas", rho);
+  test::install_forward_euler_program(sys);
 
   const double m0 = sys.mass();  // declenche le build paresseux (regrid initial distribue)
   const int np0 = sys.n_patches();

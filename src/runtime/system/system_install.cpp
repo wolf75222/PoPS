@@ -551,10 +551,10 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().supported_geometry_modes = closures.supported_geometry_modes;
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
-  // EMBEDDED-BOUNDARY transport advances (project T5-PR3): empty unless build_block built them
-  // (Cartesian block with prepared mask/inverse-kappa owners provided). Empty -> the stepper falls
-  // back on advance
-  // (bit-identical).
+  // EMBEDDED-BOUNDARY transport advances (project T5-PR3): retained for the low-level engine and
+  // empty unless build_block built them from prepared mask/inverse-kappa owners. They are not a
+  // facade fallback: the Program route selects geometry-qualified residuals and fails closed when
+  // their provider is absent.
   P->sp.back().advance_masked = std::move(closures.advance_masked);
   P->sp.back().advance_eb = std::move(closures.advance_eb);
   P->sp.back().hotspot = std::move(closures.hotspot);  // dt_hotspot diagnostic (ADC-182)
@@ -613,7 +613,7 @@ POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) 
 }
 
 // OPTIONAL step bounds of a block (model traits): set after install_block, read by
-// step_cfl / step_adaptive. Empty functions = the block imposes no bound (historical).
+// step_cfl. Empty functions = the block imposes no bound.
 void System::set_block_dt_bounds(const std::string& name,
                                  std::function<Real(const MultiFab&)> source_frequency,
                                  std::function<Real(const MultiFab&)> stability_dt) {
@@ -1562,7 +1562,8 @@ std::vector<double> System::aux_field_component(int comp) const {
 // are removed (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that emit the
 // same formulas as a generic CoupledSource and register through add_coupling_operator with a declared
 // conservation contract. Impl::couplings / coupled_freqs_ / coupled_freq_exprs_ STORAGE stays untouched
-// (SystemStepper::apply_couplings / step_cfl read them); only the entry methods go.
+// (explicit Program lowering consumes operators; SystemStepper::step_cfl reads the bounds); only the
+// entry methods go.
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
@@ -1700,7 +1701,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     validate_cs_program_stack(freq_pg, "System::add_coupled_source frequency");
   }
   // CONSTANT declared frequency of the coupling (audit wave 3): registered for the step bound of
-  // step_cfl / step_adaptive (dt <= cfl/mu on the MACRO-step). <= 0 = no bound (historical). Pushed
+  // step_cfl (dt <= cfl/mu on the Program macro-step). <= 0 = no bound. Pushed
   // AFTER all the validation (source AND frequency have raised if invalid): a rejected coupling must
   // leave NO phantom bound -- otherwise a script that try/excepts the failure would keep a throttled step without
   // matching physics.
@@ -1708,7 +1709,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     P->coupled_freqs_.push_back(Impl::CoupledFreq{label, frequency});
   // PER-CELL frequency: same rule (push after complete validation). The inputs REUSE the
   // resolve() resolution (ins); the constants are the same as the source (kconsts). The program
-  // mu(U) is reduced (MAX) at each step in step_cfl / step_adaptive.
+  // mu(U) is reduced (MAX) at each step_cfl.
   if (has_freq_expr) {
     Impl::CoupledFreqExpr ce;
     ce.label = label;

@@ -85,6 +85,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     integration Programs live in ``pops.numerics`` and ``pops.lib.time`` respectively.
     Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
     primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.
+    Temporal operations require the whole-system Program installed by ``pops.bind``; there is no
+    native fallback. ``step_adaptive`` is reserved and fails closed until multirate subcycling has a
+    ``ProgramGraph`` lowering.
 
     GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private
     ``SystemConfig`` before this engine is constructed. ``mesh=`` is an advanced geometry seam;

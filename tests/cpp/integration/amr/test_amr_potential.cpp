@@ -12,6 +12,7 @@
 // scenario diocotron qui echantillonne phi sur un cercle median (FFT azimutale).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
@@ -72,6 +73,7 @@ TEST(test_amr_potential, Runs) {
   amr.set_poisson("charge_density", "geometric_mg", "auto");
   amr.set_refinement(1e30);  // jamais : un seul niveau (base couvre tout le domaine)
   amr.set_density("phi_test", rho);
+  test::install_forward_euler_program(amr);
 
   const std::vector<double> pa = amr.potential();
 

@@ -31,11 +31,13 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/coupling/source/coupled_source_program.hpp>   // CsOp (opcodes du bytecode P5)
-#include <pops/physics/bricks/bricks.hpp>                    // CompositeModel
-#include <pops/physics/bricks/elliptic.hpp>                  // ChargeDensity
-#include <pops/physics/bricks/hyperbolic.hpp>                // ExBVelocity
-#include <pops/physics/bricks/source.hpp>                    // NoSource
+#include "explicit_amr_program.hpp"
+#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
+#include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
+#include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
+#include <pops/physics/bricks/hyperbolic.hpp>               // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                   // NoSource
+#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/config/model_spec.hpp>  // ModelSpec (bloc natif, melange compile + natif)
@@ -180,8 +182,9 @@ static bool raises(F&& f) {
 }
 
 static bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
-  return std::string(error.what()).find("produced non-finite finite-volume data") !=
-         std::string::npos;
+  const std::string diagnostic = error.what();
+  return diagnostic.find("produced non-finite finite-volume data") != std::string::npos ||
+         diagnostic.find("reason_code=0x53544201") != std::string::npos;
 }
 
 static double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
@@ -278,6 +281,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
+    test::install_forward_euler_program(sim);
 
     EXPECT_EQ(sim.n_blocks(), 2) << "A_two_compiled_blocks";
 
@@ -306,7 +310,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
   }
 
   // ============================================================================================
-  // (B) COUPLAGE entre deux blocs compiles : ionisation-like +S/-S (ions gagnent, neutrals perdent).
+  // (B) COUPLAGE entre deux blocs compiles : couverture BAS NIVEAU du moteur spatial/legacy
+  //     AmrRuntime, en attendant le lowering du coupled-source dans un Program explicite.
   //     La masse COMPOSITE n_ions + n_neutrals est conservee globalement ; la masse ions AUGMENTE.
   //     Both blocks are field-neutral here: this section isolates the coupled source and keeps the
   //     fully periodic elliptic RHS exactly compatible with its constant nullspace.
@@ -335,7 +340,10 @@ TEST(test_amr_multiblock_compiled, Runs) {
     const double tot0 = sim.mass("ions") + sim.mass("neutrals");
     const double mi0 = sim.mass("ions");
 
-    sim.advance(0.01, 6);
+    ASSERT_TRUE(sim.uses_runtime_engine());
+    ASSERT_NE(sim.engine(), nullptr);
+    for (int step = 0; step < 6; ++step)
+      sim.engine()->step(Real(0.01));
 
     EXPECT_TRUE(all_finite(sim.density("ions")) && all_finite(sim.density("neutrals")))
         << "B_state_finite";
@@ -364,6 +372,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
+    test::install_forward_euler_program(sim);
 
     EXPECT_EQ(sim.n_blocks(), 2) << "C_mixed_two_blocks";
     const std::vector<double> d0_before = sim.density("ions");
@@ -396,6 +405,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       // A single periodic charged block must itself have zero mean; no projection is allowed.
       sim.set_density("ne", periodic_state);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -437,7 +447,9 @@ TEST(test_amr_multiblock_compiled, Runs) {
   //            macro-pas) -> la cadence est REELLEMENT prise en compte par le bloc compile (pas ignoree).
   //       (F3) MASQUE PARTIEL : implicit_roles={"momentum_x"} (sous-ensemble des composantes) est RESOLU
   //            contre l'Euler concret et le bloc tourne FINI ; un masque demande en EXPLICITE LEVE.
-  //     Le 2e bloc (neutre, explicite) force la route MULTI-BLOC (AmrRuntime), pas le mono-bloc AmrCouplerMP.
+  //     Le 2e bloc (neutre, explicite) force la route MULTI-BLOC. Cette section appelle
+  //     EXPLICITEMENT le moteur bas niveau AmrRuntime afin de conserver la preuve IMEX/stride sans
+  //     rouvrir une seconde autorite temporelle dans la facade AmrSystem.
   // ============================================================================================
   {
     const int Nf = 32;
@@ -466,8 +478,10 @@ TEST(test_amr_multiblock_compiled, Runs) {
       sim.set_density("stiff", rhoF);
       sim.set_density("neutral", rhoF);
       const double m0 = sim.mass("stiff");
+      if (!sim.uses_runtime_engine() || sim.engine() == nullptr)
+        throw std::runtime_error("compiled IMEX fixture failed to materialize AmrRuntime");
       for (int s = 0; s < KF; ++s)
-        sim.advance(dtF, 1);
+        sim.engine()->step(Real(dtF));
       const std::vector<double> d = sim.density("stiff");
       return std::make_pair(d, std::fabs(sim.mass("stiff") - m0));
     };

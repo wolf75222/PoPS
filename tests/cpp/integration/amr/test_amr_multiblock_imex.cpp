@@ -397,12 +397,13 @@ TEST(test_amr_multiblock_imex, Runs) {
   }
 
   // ============================================================================================
-  // (5) FACADE AmrSystem : multi-blocs time="imex" construit et tourne ; masque IMEX partiel valide.
+  // (5) FACADE AmrSystem : la configuration IMEX construit encore le moteur spatial, mais elle ne
+  //     constitue plus une autorite temporelle implicite. Les avances IMEX restent prouvees
+  //     directement sur AmrRuntime ci-dessus, jusqu'a leur lowering explicite en ProgramGraph.
   // ============================================================================================
   {
-    // (5a) deux blocs via la facade : A IMEX (potential, source self-consistent), B explicite (ExB).
-    //      Construit, tourne, etat fini -> le drapeau time="imex" traverse add_block -> build_multi ->
-    //      dispatch_amr_block -> build_amr_block -> AmrRuntime::step (selection IMEX par bloc).
+    // (5a) deux blocs via la facade : le drapeau time="imex" traverse encore le builder spatial,
+    //      mais step refuse avant le build paresseux tant qu'aucun Program n'est installe.
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
@@ -415,11 +416,15 @@ TEST(test_amr_multiblock_imex, Runs) {
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("A", facade_rho_a);
     sim.set_density("B", facade_rho_b);
-    for (int s = 0; s < 6; ++s)
-      sim.step(5e-3);
+    ASSERT_EQ(sim.engine(), nullptr);
+    EXPECT_THROW(sim.step(5e-3), std::logic_error);
+    EXPECT_EQ(sim.engine(), nullptr);
+    EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+    ASSERT_TRUE(sim.uses_runtime_engine());
+    ASSERT_NE(sim.engine(), nullptr);
     EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
     EXPECT_TRUE(all_finite(sim.density("A")) && all_finite(sim.density("B")))
-        << "facade_multiblock_imex_runs_finite";
+        << "facade_multiblock_imex_builds_finite";
 
     // (5b) masque IMEX partiel REFUSE en explicite (pas d'ignore silencieux).
     {
@@ -431,9 +436,9 @@ TEST(test_amr_multiblock_imex, Runs) {
           << "facade_mask_rejected_in_explicit";
     }
 
-    // (5c) masque IMEX partiel RESOLU en multi-blocs (role momentum_x present sur un Euler) : construit
-    //      et tourne. Puis un role ABSENT (density n'a pas de... si, density existe ; on prend un role
-    //      inexistant pour le bloc ExB scalaire) leve une erreur claire au build.
+    // (5c) masque IMEX partiel RESOLU en multi-blocs (role momentum_x present sur un Euler) :
+    //      materialiser le moteur suffit a prouver le contrat de construction, sans lancer son
+    //      ancien moteur temporel parallele.
     {
       AmrSystem s3(cfg);
       s3.set_temporal_relations({2}, {1}, {"integral_only"});
@@ -445,13 +450,11 @@ TEST(test_amr_multiblock_imex, Runs) {
       s3.set_density("B", facade_rho_b);
       bool ok = false;
       try {
-        for (int s = 0; s < 4; ++s)
-          s3.step(5e-3);
-        ok = all_finite(s3.density("A"));
+        ok = s3.uses_runtime_engine() && s3.engine() != nullptr && all_finite(s3.density("A"));
       } catch (const std::exception& e) {
         std::printf("      (5c) masque partiel a leve : %s\n", e.what());
       }
-      EXPECT_TRUE(ok) << "facade_partial_mask_resolved_and_runs";
+      EXPECT_TRUE(ok) << "facade_partial_mask_resolved_and_builds";
     }
 
     // (5d) role ABSENT du bloc -> erreur claire au build (resolution du masque, build_multi).
@@ -467,7 +470,7 @@ TEST(test_amr_multiblock_imex, Runs) {
       s4.set_density("B", facade_rho_b);
       std::string diagnostic;
       try {
-        s4.step(5e-3);  // build paresseux : role absent -> leve
+        (void)s4.uses_runtime_engine();  // build paresseux : role absent -> leve
         FAIL() << "facade_partial_mask_absent_role_throws";
       } catch (const std::runtime_error& error) {
         diagnostic = error.what();

@@ -31,6 +31,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
@@ -618,6 +619,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.set_refinement(1.5);  // tag density > 1.5 (union des deux blobs)
       sim.set_density("a", r0);
       sim.set_density("b", r1);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 6);
       if (!all_finite(sim.density("a")) || !all_finite(sim.density("b")))
         throw std::runtime_error("etat non fini");
@@ -640,6 +642,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.set_refinement(1.5);
       sim.set_density("a", r0);
       sim.set_density("b", r1);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 6);
       return sim.density("a");
     };

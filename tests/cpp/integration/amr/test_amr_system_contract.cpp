@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -81,6 +82,32 @@ TEST(test_amr_system_contract, Runs) {
   cfg.n = 16;
   cfg.L = 1.0;
   cfg.periodicity = {true, true};
+
+  // Every facade temporal entry refuses before the lazy hierarchy, a transaction snapshot, a field
+  // solve or either clock can be touched. Even advance(..., 0) is a temporal request and therefore
+  // requires the same explicit Program authority.
+  {
+    AmrSystem missing_program(cfg);
+    missing_program.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    ASSERT_EQ(missing_program.engine(), nullptr);
+    const auto expect_program_required = [&](auto&& operation, const char* name) {
+      try {
+        operation();
+        ADD_FAILURE() << name << " accepted a program-less temporal operation";
+      } catch (const std::logic_error& error) {
+        EXPECT_NE(std::string(error.what()).find(name), std::string::npos);
+        EXPECT_NE(std::string(error.what()).find("installed whole-system Program"),
+                  std::string::npos);
+      }
+      EXPECT_EQ(missing_program.engine(), nullptr);
+      EXPECT_DOUBLE_EQ(missing_program.time(), 0.0);
+      EXPECT_EQ(missing_program.macro_step(), 0);
+      EXPECT_FALSE(missing_program.has_active_step_transaction());
+    };
+    expect_program_required([&] { missing_program.step(0.01); }, "AmrSystem::step");
+    expect_program_required([&] { missing_program.advance(0.01, 0); }, "AmrSystem::advance");
+    expect_program_required([&] { (void)missing_program.step_cfl(0.4); }, "AmrSystem::step_cfl");
+  }
 
   // The facade topology must reach the native level operator axis by axis. This x-periodic/y-open
   // run wraps only x and fills y physical ghosts by Foextrap; neither axis may inherit the other.
@@ -310,6 +337,7 @@ TEST(test_amr_system_contract, Runs) {
         s.set_conservative_state(name, state);
       }
       s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
+      test::install_forward_euler_program(s);
       s.advance(0.01, 1);
       std::vector<std::vector<double>> states;
       states.reserve(static_cast<std::size_t>(block_count));

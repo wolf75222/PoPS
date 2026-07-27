@@ -44,6 +44,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/fluids/euler.hpp>  // Euler (bloc fluide a 4 composantes, etat conservatif riche)
@@ -135,6 +136,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
                      "rusanov", "conservative", "explicit", gamma);
   sys.set_poisson("composite", "geometric_mg");  // f = somme des briques elliptiques (la charge)
+  test::install_forward_euler_program(sys);
 
   const bool owns = (me == 0);  // box 0 -> rang 0 sous DistributionMapping(1, np)
   if (owns)
@@ -211,6 +213,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   add_compiled_model(rs, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
                      "rusanov", "conservative", "explicit", gamma);
   rs.set_poisson("composite", "geometric_mg");
+  test::install_forward_euler_program(rs);
   // Restauration : scatter box-proprietaire pour l'etat, puis set_potential COLLECTIF (sa
   // materialisation du solveur prepare est collective, avant le no-op des rangs sans box) + horloge.
   // state_global et get_state partagent le MEME layout mono-box, donc set_state(ckpt_state) sur le

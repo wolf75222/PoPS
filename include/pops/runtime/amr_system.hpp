@@ -881,8 +881,9 @@ class AmrSystem {
   /// host while the generated package remains RTLD_LOCAL, exactly like set_compiled_block on the
   /// native AMR loader.
   /// @{
-  /// Install the macro-step body. When set, AmrSystem::step calls it instead of the historical
-  /// AmrRuntime::step path (keeping t / macro_step coherent). Pass an empty std::function to clear it.
+  /// Install the mandatory macro-step body. AmrSystem::step, advance and step_cfl reject before lazy
+  /// hierarchy construction or any other mutation while it is empty. Pass an empty std::function to
+  /// clear it during assembly.
   /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
   /// set_compiled_block. The closure drives the per-level Lie/Strang macro-step through an
   /// AmrProgramContext (the AMR counterpart of ProgramContext).

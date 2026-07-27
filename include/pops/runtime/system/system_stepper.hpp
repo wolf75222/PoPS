@@ -4,47 +4,35 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledFreqKernel (per-cell coupled frequency)
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell (max mu over the cells, device-clean functor)
 #include <pops/parallel/comm.hpp>  // all_reduce_min/max (global bounds: identical dt on all ranks)
-#include <pops/runtime/context/grid_context.hpp>  // GeometryMode (disk transport dispatch)
 #include <pops/runtime/numerical_defaults.hpp>
 
-#include <stdexcept>  // std::runtime_error (disk mode requested without disk advance on a block)
+#include <stdexcept>
 
 #include <algorithm>  // std::min, std::max (CFL: min grid physical step, min dt over the blocks)
-#include <cmath>      // std::isfinite, std::ceil (step_cfl / step_adaptive)
+#include <cmath>      // std::isfinite (step_cfl)
 #include <limits>     // std::numeric_limits (per-block CFL: dt = min over the blocks)
 #include <string>     // last_dt_bound (name of the active bound of the last step_cfl)
-#include <vector>
 
 /// @file
-/// @brief SystemStepper: the TIME ADVANCE responsibility extracted from the god-class System::Impl
-///        (audit Lot B, continuation of SystemFieldSolver #176). Extracted VERBATIM from python/system.cpp:
-///        no change to numerics, to the CFL formula, to the stride/substeps cadence, to the
-///        semantics of the macro-step counter, to the fences, nor to the order (solve_fields; advance;
-///        couplings). STRICTLY bit-identical -- the code is moved as-is, only
-///        access to the SHARED members of Impl (sp, fields_, aux, couplings, t, macro_step_, geom,
-///        pgeom_, polar_) goes through the back-pointer owner_->.
+/// @brief Uniform facade time policy after the Program cutover.
 ///
 /// CONTRACT / INVARIANTS
-/// - ORCHESTRATES the time advance: step(dt), advance(dt, nsteps), step_cfl(cfl), step_adaptive(cfl),
-///   plus the cadence helpers (stride_due) and inter-species couplings (apply_couplings).
-/// - READS (without owning) via owner_->: the block list (sp) and each advance closure (s.advance),
-///   the elliptic solver (fields_, for solve_fields() at the head of the step), the coupling list, the
-///   time t and the macro_step_ counter (which it advances), the geometry (Cartesian geom / polar pgeom_)
-///   and the polar_ flag for the CFL physical step h.
+/// - `step` and `step_cfl` advance exclusively through the installed whole-system Program.
+/// - Native block closures remain available to ProgramContext for spatial RHS, source, projection
+///   and field operations; this helper never assembles an implicit fallback macro-step.
+/// - `step_cfl` retains the native, model-aware stability-bound calculation, then hands the selected
+///   dt to the Program.
 /// - CFL PHYSICAL STEP h: Cartesian = min(dx, dy); POLAR = min(dr, r_min * dtheta) (the azimuthal step
 ///   r*dtheta is minimal at the inner radius r_min of the ring -> most constraining edge).
-/// - MULTIRATE CADENCE INVARIANT (hold-then-catch-up): a block of cadence M is HELD as long as
-///   (macro_step + 1) % M != 0, then advances by an effective step M*dt at the macro-step where
-///   (macro_step + 1) % M == 0 (END of window). macro_step_ is incremented ONCE per macro-step, AFTER the
-///   advance of the blocks and the couplings. DO NOT reorder solve_fields; advance; apply_couplings;
-///   t += dt; ++macro_step_.
+/// - PROGRAM CADENCE INVARIANT (hold-then-catch-up): a whole-system Program of cadence M is held until
+///   the end of its window, then receives M*dt; the facade clock advances once per accepted macro-step.
 /// - PER-BLOCK CFL FORMULA (substeps-aware, post-#121): dt <= cfl * h * substeps_b / (stride_b * w_b);
-///   the global dt is the min over the evolving blocks. PRESERVED as is.
+///   the global dt is the min over the evolving blocks.
 ///
 /// Since System::Impl stays PRIVATE to python/system.cpp, this helper is a TEMPLATE parameterized on the
 /// real Impl type (same technique as system_field_solver / native_loader): python/system.cpp instantiates
 /// it with System::Impl after defining Impl. owner_ is an Impl* (the helper lifetime is subordinate to
-/// that of Impl). System::step / advance / step_cfl / step_adaptive become simple delegations to stepper_.
+/// that of Impl). System::step and step_cfl delegate here after the facade's fail-before-mutation guard.
 
 namespace pops {
 namespace stepper {
@@ -69,30 +57,20 @@ class SystemStepper {
   /// Poisson/source coupling.)
   static bool stride_due(int macro_step, int stride) { return (macro_step + 1) % stride == 0; }
 
-  /// Inter-species COUPLING sources: applied by SPLITTING (one explicit additive step of dt)
-  /// AFTER the transport of each block. Each coupling is a for_each_cell (DEVICE kernel) reading /
-  /// updating several blocks at the same point; they order after the transport on the same
-  /// execution space, hence no prior device_fence (no more host access).
-  void apply_couplings(Real dt) {
-    if (owner_->couplings.empty())
-      return;
-    for (auto& c : owner_->couplings)
-      c(dt);
-  }
-
   /// Step bound from PER-CELL COUPLED FREQUENCIES (CoupledSource.frequency with an Expr,
   /// refinement of the CONSTANT frequency). For each registered program: reduces the MAX of mu(U)
   /// over the LOCAL fabs of the FIRST input block (CoupledFreqKernel, named device-clean functor;
-  /// same MPI-safe convention as apply_couplings), GLOBAL all_reduce_max, then dt <= cfl / max(mu).
+  /// same rank-local ownership convention as the registered operator), GLOBAL all_reduce_max, then
+  /// dt <= cfl / max(mu).
   /// Updates @p dt (and @p reason if non-null) if the bound is tighter. max(mu) <= 0 = no
   /// bound this step. Reason "coupled_source:<label>" -- SAME prefix as the constant frequency, for a
-  /// uniform diagnostic. Per-cell counterpart of the constant loop of step_cfl / step_adaptive;
+  /// uniform diagnostic. Per-cell counterpart of the constant loop of step_cfl;
   /// no per-cell source registered -> empty loop, bit-identical trajectory.
   ///
   /// MPI: all_reduce_max is called by ALL ranks, the SAME number of times (coupled_freq_exprs_ is
   /// identical on all ranks) -> symmetric collective, identical dt everywhere (no deadlock). A
   /// rank with no local box reduces m=0 (neutral for MAX). WARNING: the Array4 are rebuilt at
-  /// EACH step (the fabs may be reallocated), like apply_couplings.
+  /// EACH step because the fabs may be reallocated.
   void apply_coupled_freq_expr_bounds(double cfl, double& dt, std::string* reason) const {
     Impl* P = owner_;
     for (const auto& ce : P->coupled_freq_exprs_) {
@@ -137,7 +115,7 @@ class SystemStepper {
     }
   }
 
-  /// MIN physical step of the grid, shared by step_cfl / step_adaptive: Cartesian = min(dx, dy);
+  /// MIN physical step of the grid for step_cfl: Cartesian = min(dx, dy);
   /// POLAR = min(dr, r_min * dtheta) -- the azimuthal physical step r*dtheta is minimal at the inner
   /// radius r_min of the ring (the most constraining edge for the CFL). Reads rank-local geometry
   /// only (no collective).
@@ -153,7 +131,7 @@ class SystemStepper {
   /// evaluated PER RANK (it may read a rank-local state); without the global min each rank would
   /// choose a different dt -> desynchronized step collectives (Krylov / fill_boundary) -> MPI
   /// deadlock. In serial all_reduce_min is the identity (bit-identical). @p reason, if non-null, is
-  /// set to "global:<label>" for the winning bound (step_cfl tracks it; step_adaptive passes nullptr).
+  /// set to "global:<label>" for the winning bound.
   /// MPI: dt_bounds_ is identical on all ranks and `if(!g.fn)` is rank-uniform, so the collective is
   /// symmetric (same count/order on every rank) -- factoring keeps the deadlock-safety unchanged.
   void apply_global_dt_bounds(double& dt, std::string* reason) const {
@@ -173,94 +151,6 @@ class SystemStepper {
     }
   }
 
-  /// PROJECTION PONCTUELLE post-pas (ADC-177) : U <- project(U, aux) par bloc, appliquee UNE fois a
-  /// la FIN de chaque macro-pas ENTIER (apres transport + couplages ; jamais par etage
-  /// RK), sur les cellules VALIDES seulement. Les GHOSTS ne sont pas projetes : chaque consommateur
-  /// de ghosts (residu de transport) refait fill_ghosts en tete d'evaluation (cf. BlockRhsEval), donc
-  /// l'etat fantome est reconstruit du valide projete au pas suivant -- aucun fill_boundary ici.
-  /// Appliquee a TOUS les blocs evolutifs munis d'une projection, y compris les blocs TENUS par leur
-  /// cadence stride : leur etat peut avoir change via les couplages, et une projection etant
-  /// IDEMPOTENTE par contrat (cf. HasPointwiseProjection), la re-application sur un etat deja projete
-  /// est neutre. Bloc sans projection (s.project vide) : jamais interroge -- cout nul, les 4 pas
-  /// (step / step_cfl / step_adaptive) restent bit-identiques a l'historique.
-  void apply_projections() {
-    for (auto& s : owner_->sp) {
-      if (!s.evolve)
-        continue;  // bloc gele : fond fixe jamais modifie, rien a projeter
-      if (!s.project)
-        continue;
-      if (owner_->eb_set_ && owner_->geometry_mode_ != GeometryMode::None) {
-        if (!s.project_masked)
-          throw std::runtime_error(
-              "System embedded-boundary step cannot apply a projection without an active-cell "
-              "projection closure");
-        s.project_masked(s.U);
-      } else {
-        s.project(s.U);
-      }
-    }
-  }
-
-  /// TRANSPORT ADVANCE of block @p s over @p dt in @p n substeps, DISPATCHED by the System geometry
-  /// mode (worksite T5-PR3). This is the SOLE wiring point of the disk in step, step_cfl and
-  /// step_adaptive:
-  ///   - None (default): s.advance (assemble_rhs, full Cartesian). BIT-IDENTICAL.
-  ///   - Staircase, fixed disk: s.advance_masked (assemble_rhs_masked, 0/1 mask).
-  ///   - CutCell, fixed disk: s.advance_eb (assemble_rhs_eb, cut-cell EB).
-  /// An embedded-boundary mode requested WITHOUT a fixed domain (eb_set_ == false) FALLS BACK to
-  /// s.advance: the mode alone (without set_disc_domain) must not change the transport. A mode with a
-  /// fixed domain but on a block that DID NOT build the embedded-boundary advance (e.g. polar block /
-  /// loaded from an earlier .so) raises an EXPLICIT error rather than SILENTLY playing the full path
-  /// (the T2 footgun: believing the boundary active while the transport ignores it). The
-  /// embedded-boundary advances MIMIC s.advance (same RK / IMEX scheme, same limiter / flux); only the
-  /// transport residual is dispatched.
-  void advance_transport_n(typename Impl::Species& s, Real dt, int n) {
-    const GeometryMode mode = owner_->geometry_mode_;
-    if (mode == GeometryMode::None || !owner_->eb_set_) {
-      s.advance(s.U, dt,
-                n);  // default path (or mode without a fixed embedded boundary): BIT-IDENTICAL
-      return;
-    }
-    if (mode == GeometryMode::Staircase) {
-      if (!s.advance_masked)
-        throw std::runtime_error(
-            "SystemStepper: embedded-boundary mode 'staircase' requested but block '" + s.name +
-            "' exposes no masked transport advance (level-set transport not wired for this block)");
-      s.advance_masked(s.U, dt, n);
-      return;
-    }
-    // CutCell
-    if (!s.advance_eb)
-      throw std::runtime_error(
-          "SystemStepper: embedded-boundary mode 'cutcell' requested but block '" + s.name +
-          "' exposes no cut-cell EB transport advance (level-set transport not wired for this "
-          "block)");
-    s.advance_eb(s.U, dt, n);
-  }
-
-  /// TRANSPORT ADVANCE of block @p s over @p eff_dt in s.substeps substeps, dispatched by the mode (cf.
-  /// advance_transport_n). Reuses s.substeps as the former s.advance of the step / step_cfl steps.
-  void advance_transport(typename Impl::Species& s, Real eff_dt) {
-    advance_transport_n(s, eff_dt, s.substeps);
-  }
-
-  /// FULL-STEP advance of every DUE block over @p dt: effective step eff_dt = stride * dt (cadence
-  /// catch-up), then transport (dispatched by the geometry mode, cf. advance_transport). Frozen blocks
-  /// (!evolve) and HELD blocks (outside their stride window, cf. stride_due) are skipped. This is shared
-  /// by step and step_cfl; step_adaptive subcycles each block via advance_transport_n.
-  void advance_due_blocks(double dt) {
-    Impl* P = owner_;
-    for (auto& s : P->sp) {
-      if (!s.evolve)
-        continue;  // frozen block: not advanced
-      if (!stride_due(P->macro_step_, s.stride))
-        continue;                                     // hold: not at the stride window end
-      const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up: effective step s.stride * dt
-      advance_transport(s,
-                        eff_dt);  // transport DISPATCHED by the geometry mode (None: assemble_rhs)
-    }
-  }
-
   /// Runs ONE macro-step of length @p dt through an INSTALLED compiled time Program (epic ADC-399):
   /// the SYSTEM-level cadence (substeps + stride, ADC-411) wrapped around the opaque program closure,
   /// then the clock tick. Shared by step() (Lie path) and step_cfl() (CFL path) so both route a
@@ -268,16 +158,13 @@ class SystemStepper {
   /// step body (solve_fields, RHS, combine, commit -- all via ProgramContext); the runtime adds no
   /// implicit solve_fields / couplings / projections here (cf. step()): they are the Program's job.
   ///
-  /// SUBSTEPS + STRIDE (ADC-411), mirroring the native per-block advance loop (advance_due_blocks):
+  /// SUBSTEPS + STRIDE (ADC-411):
   ///   - stride M: GLOBAL hold-then-catch-up. The whole program is HELD on the macro-steps where
   ///     stride_due is false, then runs ONCE with the effective step eff_dt = M*dt at the window end.
   ///     A compiled program is ONE whole-system closure, so the stride is GLOBAL (whole-system); this
   ///     equals native per-block stride ONLY for a single-block system (or all blocks sharing M).
-  ///   - substeps n: subdivides the EFFECTIVE step into n calls program_.step_(eff_dt/n), mirroring
-  ///     native advance_transport_n(s, eff_dt, n) -> eff_dt/n. BUT program_.step_(h) re-runs the WHOLE
-  ///     program (its solve_fields included), whereas native substeps subdivides ONLY the transport
-  ///     (solve_fields + source run ONCE per macro-step). So n>1 here is bit-exact vs native substeps
-  ///     ONLY for an UNCOUPLED / transport-only program (solve_fields inert).
+  ///   - substeps n: subdivides the EFFECTIVE step into n calls program_.step_(eff_dt/n). Each call
+  ///     executes the complete authored Program; no hidden block-local subcycling is inferred.
   /// The clock ticks EVERY macro-step (held steps included), matching native. Default cadence 1/1 is
   /// byte-identical to the single program_.step_(dt) call: stride_due(_, 1) is always true and n == 1
   /// collapses the loop to one call with h == dt.
@@ -299,35 +186,11 @@ class SystemStepper {
     P->macro_step_++;
   }
 
-  /// One native macro-step of length @p dt: solve fields, advance each due block, apply couplings,
-  /// project, then advance the clock. Authored multi-stage composition uses an installed Program.
+  /// One macro-step of length @p dt through the installed whole-system Program.
   void step(double dt) {
     Impl* P = owner_;
-    // Compiled time Program (epic ADC-399): when a problem.so has installed a macro-step body, IT owns
-    // the whole step (solve_fields, RHS, combine, commit -- all via ProgramContext). The runtime only
-    // keeps the clock coherent (the SYSTEM-level substeps + stride cadence + clock tick are factored
-    // into run_program_cadence, shared with step_cfl so both route a program the same way -- ADC-413).
-    // No implicit solve_fields / couplings / projections here: the Program expresses them explicitly.
-    if (P->program_.step_) {
-      run_program_cadence(dt);
-      return;
-    }
-    // COUPLING / POISSON: solve_fields assembles f = Sum_s elliptic_rhs_s(U_s) on the CURRENT state of
-    // each block. A HELD block (cadence M, outside the window end) contributes with its STALE state (its
-    // last advance, thus frozen until its next catch-up): stale density / charge in the Poisson sum as
-    // long as it has not caught up. Assumed stride choice (loose coupling of the slow block).
-    P->solve_fields();
-    advance_due_blocks(dt);
-    apply_couplings(Real(dt));  // inter-species coupled sources (splitting), after transport
-    apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
-    P->t += dt;
-    P->macro_step_++;
-  }
-
-  /// Advances by @p nsteps macro-steps of length @p dt (loop over step).
-  void advance(double dt, int nsteps) {
-    for (int s = 0; s < nsteps; ++s)
-      step(dt);
+    P->program_.require_step_installed("System::step");
+    run_program_cadence(dt);
   }
 
   /// One macro-step at CFL dt: dt = min over the evolving blocks of the block step BOUNDS, then advances
@@ -357,6 +220,7 @@ class SystemStepper {
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0) {
     Impl* P = owner_;
+    P->program_.require_step_installed("System::step_cfl");
     P->solve_fields();
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
     // cfl_grid_h). The rest of the CFL formula (per block, substeps/stride) is unchanged.
@@ -415,10 +279,8 @@ class SystemStepper {
         reason = std::string(why) + ":" + s.name;
       }
     }
-    // DECLARED frequencies of the coupled sources (CoupledSource.frequency): the couplings
-    // apply ONCE per MACRO-step (apply_couplings(dt)), so the bound applies to the
-    // macro-dt directly: dt <= cfl / mu (NO substeps/stride factor -- those apply
-    // only to the block subcycled transport, not to the coupling splitting).
+    // DECLARED system-coupling frequencies constrain the whole Program macro-dt directly:
+    // dt <= cfl / mu (no block-local substeps/stride factor).
     for (const auto& cs : P->coupled_freqs_) {
       if (!(cs.mu > 0.0))
         continue;
@@ -467,115 +329,9 @@ class SystemStepper {
     if (dt < min_dt)
       throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
     last_dt_reason_ = std::move(reason);
-    // Compiled time Program (epic ADC-399, criterion 7): the CFL dt above is computed in PoPS ON
-    // THE NATIVE STATE (per-block bounds + global bounds, UNCHANGED -- the CFL logic stays here), then
-    // the installed Program drives the macro-step at that dt via the SHARED cadence helper. step_cfl
-    // thus conserves the existing CFL logic AND calls the Program. Semantics match step()'s program
-    // branch EXACTLY: run the cadence + tick the clock, with NO apply_couplings / apply_projections
-    // (the Program expresses solve_fields / couplings / projections itself). The native advance path
-    // below is taken ONLY when no program is installed. (step_adaptive -- multirate -- still drives
-    // only the native path; a Program is whole-system, so multirate subcycling does not apply.)
-    if (P->program_.step_) {
-      run_program_cadence(dt);
-      return dt;
-    }
-    advance_due_blocks(dt);
-    apply_couplings(Real(dt));
-    apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
-    P->t += dt;
-    P->macro_step_++;
+    // CFL remains a native bound calculation, but the accepted advance is exclusively the Program.
+    run_program_cadence(dt);
     return dt;
-  }
-
-  /// One MULTIRATE macro-step: the macro-step = stable step of the SLOWEST block; each faster block
-  /// is subcycled n_b = ceil(stride_b * w_b / w_min) times. aux frozen over the macro-step (coupling
-  /// once-per-step). @return the macro-step.
-  ///
-  /// OPTIONAL BOUNDS (audit 2026-06): like step_cfl, the macro-step is then REDUCED by the
-  /// block bounds (source_frequency / stability_dt, applied to the effective substep
-  /// stride_b*macro_dt/n_b -- n_b does not depend on dt, so the clamp is exact) and by the GLOBAL
-  /// bounds (P->dt_bounds_). Without optional bounds, macro_dt is STRICTLY historical.
-  double step_adaptive(double cfl) {
-    Impl* P = owner_;
-    P->solve_fields();
-    // Multirate: macro-step = stable step of the SLOWEST block; each faster block is
-    // subcycled n_b. aux frozen over the macro-step (coupling once-per-step). STRIDE SEMANTICS =
-    // hold-then-catch-up: a block of cadence M is HELD as long as (macro_step + 1) % M != 0, then
-    // advances by an effective step M*macro_dt at the window end (cf. stride_due).
-    Real wmin = kAdaptiveNoEvolvingBlockSentinel;
-    std::vector<Real> wb;
-    wb.reserve(P->sp.size());
-    for (auto& s : P->sp) {
-      const Real w = s.evolve ? s.max_speed(s.U) : Real(0);  // frozen block: out of cadence
-      wb.push_back(w);
-      if (s.evolve)
-        wmin = std::min(wmin, w);
-    }
-    if (wmin >= kAdaptiveNoEvolvingBlockSentinel)
-      wmin = kCflSpeedFloor;      // no evolving block (all frozen)
-    const Real h = cfl_grid_h();  // Cartesian min(dx,dy) / polar min(dr, r_min*dtheta)
-    double macro_dt = cfl * static_cast<double>(h) / static_cast<double>(wmin);
-    // OPTIONAL block bounds: each block subcycles n_b times its effective step
-    // stride_b*macro_dt; the substep stride_b*macro_dt/n_b must satisfy the source / admissible
-    // step bounds of the block. n_b (formula identical to the advance loop below) does not depend
-    // on macro_dt: the clamp is done BEFORE the advance, n_b stays consistent.
-    for (std::size_t b = 0; b < P->sp.size(); ++b) {
-      auto& s = P->sp[b];
-      if (!s.evolve)
-        continue;
-      if (!s.source_frequency && !s.stability_dt)
-        continue;
-      int n = static_cast<int>(
-          std::ceil(static_cast<double>(s.stride) * static_cast<double>(wb[b] / wmin)));
-      if (n < 1)
-        n = 1;
-      if (s.source_frequency) {
-        const Real mu = s.source_frequency(s.U);
-        if (mu > Real(0))
-          macro_dt =
-              std::min(macro_dt, cfl * static_cast<double>(n) /
-                                     (static_cast<double>(s.stride) * static_cast<double>(mu)));
-      }
-      if (s.stability_dt) {
-        const Real db = s.stability_dt(s.U);
-        if (db > Real(0))
-          macro_dt = std::min(macro_dt, static_cast<double>(db) * static_cast<double>(n) /
-                                            static_cast<double>(s.stride));
-      }
-    }
-    // Declared frequencies of the coupled sources (cf. step_cfl): bound on the MACRO-step.
-    for (const auto& cs : P->coupled_freqs_) {
-      if (cs.mu > 0.0)
-        macro_dt = std::min(macro_dt, cfl / cs.mu);
-    }
-    // PER-CELL frequencies (Expr): MAX of mu(U) per cell, all_reduce_max, bound on the macro-step
-    // (cf. step_cfl). step_adaptive does not track the active reason -> reason = nullptr.
-    apply_coupled_freq_expr_bounds(cfl, macro_dt, nullptr);
-    // GLOBAL bounds (System::add_dt_bound), like step_cfl; step_adaptive does not track the active
-    // reason -> nullptr (same all_reduce_min, identical dt on all ranks).
-    apply_global_dt_bounds(macro_dt, nullptr);
-    for (std::size_t b = 0; b < P->sp.size(); ++b) {
-      auto& s = P->sp[b];
-      if (!s.evolve)
-        continue;  // frozen block: not advanced
-      if (!stride_due(P->macro_step_, s.stride))
-        continue;  // hold: not at the stride window end
-      // Stable subcycling of the EFFECTIVE step M*macro_dt: each substep must satisfy
-      // M*macro_dt / n <= cfl*h / w_b, i.e. n >= ceil(M * w_b / w_min). The stride factor M is thus
-      // carried by the number of substeps (without it, n on w_b/w_min alone would violate the CFL by a factor M).
-      int n = static_cast<int>(
-          std::ceil(static_cast<double>(s.stride) * static_cast<double>(wb[b] / wmin)));
-      if (n < 1)
-        n = 1;
-      const Real eff_dt = Real(macro_dt) * Real(s.stride);  // catch-up: effective step M*macro_dt
-      advance_transport_n(s, eff_dt,
-                          n);  // transport DISPATCHED by the geometry mode (n adaptive substeps)
-    }
-    apply_couplings(Real(macro_dt));
-    apply_projections();  // projection ponctuelle POST-MACRO-PAS (ADC-177), pas par sous-cycle
-    P->t += macro_dt;
-    P->macro_step_++;
-    return macro_dt;
   }
 
   /// Name of the ACTIVE bound (the one that fixed dt) of the last step_cfl: "transport:<block>",

@@ -701,13 +701,16 @@ $$\text{dt}_b = \frac{\text{cfl} \; h_{\text{cell}} \; \text{substeps}_b}{\text{
 where $h_{\text{cell}} = \min(dx, dy)$ in Cartesian, $\min(dr, r_{\min}\, d\theta)$ in polar (the
 physical azimuthal step is minimal at the inner radius), and $w_b$ is the max wave speed of the block.
 
-The variant `step_adaptive` fixes the macro-step on the slowest block,
+The low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the slowest block,
 $\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\min}$, and subcycles each faster block
 
 $$n_b = \left\lceil \text{stride}_b \; \frac{w_b}{w_{\min}} \right\rceil$$
 
 times over its effective step $\Delta t^{\text{eff}}_b = m\,\Delta t$; aux is frozen on the macro-step
-(once-per-step coupling).
+(once-per-step coupling). This formula remains a tested numerical building block, but it is not yet
+lowered by `ProgramGraph`. Consequently, the production `System::step_adaptive` facade fails closed
+even when a Program is installed; multirate subcycling must first become an explicit Program
+composition. `System` and `AmrSystem` never fall back to this low-level scheduler.
 
 ```
 function advance_subcycled(system, dt, macro_step, advance_block):
@@ -727,6 +730,7 @@ function advance_subcycled(system, dt, advance_block):
     advance_subcycled(system, dt, 0, advance_block)
 
 function step_cfl(cfl):                           # choix du macro-pas par CFL
+    require installed whole-system Program
     evaluate_field_operator()                     # champs qualifies a l'instant courant
     h_cell = polar ? min(dr, r_min*dtheta) : min(dx, dy)
     dt = +inf
@@ -734,38 +738,26 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
         w   = max(max_wave_speed(b.U), 1e-30)     # all_reduce_max sous MPI
         dt  = min(dt, cfl * h_cell * substeps_b / (stride_b * w))
     if dt not finite: dt = cfl * h_cell / 1e-30   # tous geles : pas degenere
-    for each block b, evolutif:
-        if (macro_step+1) mod stride_b != 0: continue   # hold ; sinon rattrapage
-        eff_dt = dt * stride_b
-        advance_transport(b, eff_dt)              # substeps_b sous-pas internes
-    apply_couplings(dt); t += dt; macro_step += 1
+    run_program_cadence(dt)                        # aucun transport/couplage implicite
+    t += dt; macro_step += 1
     return dt
 
-function step_adaptive(cfl):                       # macro-pas = pas du bloc le plus lent
-    evaluate_field_operator()
-    for each block b: w_b = b.evolve ? max_wave_speed(b.U) : 0
-    w_min   = min over evolutifs of w_b           # 1e-30 si tous geles
-    h_cell  = polar ? min(dr, r_min*dtheta) : min(dx, dy)
-    macro_dt = cfl * h_cell / w_min
-    for each block b, evolutif:
-        if (macro_step+1) mod stride_b != 0: continue
-        n      = max(1, ceil(stride_b * w_b / w_min))   # sous-cycles pour rester stable
-        eff_dt = macro_dt * stride_b
-        advance_transport_n(b, eff_dt, n)
-    apply_couplings(macro_dt); t += macro_dt; macro_step += 1
-    return macro_dt
+function step_adaptive(cfl):
+    require installed whole-system Program
+    raise "no ProgramGraph lowering for multirate subcycling"
 ```
 
 **Code.** The skeleton is [`numerics/time/scheduler.hpp`](../include/pops/numerics/time/schemes/scheduler.hpp),
-function `advance_subcycled` (two overloads: with and without `macro_step`). It reads
+function `advance_subcycled` (two overloads: with and without `macro_step`). It is a low-level
+composition brick used by `SystemCoupler`, not a fallback of the production facade. It reads
 `block_substeps_v`, `block_stride_v` and `block_time_treatment_v`, aliases of `TimePolicyTraits`
 defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
 `!= Prescribed`). The step choice lives in
-[`runtime/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp): `step_cfl`,
-`step_adaptive`, and the helper `stride_due(macro_step, stride)` that materializes the end of window
-$(k+1)\bmod m = 0$. The speed $w_b$ comes from `max_wave_speed_mf`
+[`runtime/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp): `step_cfl` computes
+the bound, while `run_program_cadence` and `stride_due(macro_step, stride)` apply the explicit
+whole-Program cadence $(k+1)\bmod m = 0$. The speed $w_b$ comes from `max_wave_speed_mf`
 ([`numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp)), collective
 `all_reduce_max` under MPI so that all ranks pick the same $\text{dt}$.
 
@@ -777,9 +769,9 @@ stride); to replay a run calibrated on the old formula, pass the explicit histor
 to `step(dt)`, not `step_cfl`. Under MPI, the absence of `all_reduce_max` would desynchronize the
 ranks (each would see the max of its own boxes only) and would make the simulation diverge. The
 stride semantics is hold-then-catch-up: the slow block is loosely coupled, which is an assumed choice
-(the gas is not resolved at every step). Tests: `test_multirate_stride` (slow species advanced once
-out of $N$), `test_adaptive_multirate` (`step_adaptive`, macro-step fixed by the most
-constraining species), `test_cfl_dt` (`step_cfl` multi-species).
+(the gas is not resolved at every step). Tests `test_multirate_stride`, `test_adaptive_multirate`
+and `test_cfl_dt` prove the low-level `SystemCoupler` numerical bricks. Facade contract tests
+separately prove that no `System` or `AmrSystem` launch can select them implicitly.
 
 ## 8. Parabolic term: diffusion as face flux
 
@@ -2020,9 +2012,10 @@ policy), C++ computes per cell. N species interact in the elliptic right-hand si
 (`f = sum_s q_s n_s`) and in the inter-species source, never in the flux: a block's flux only
 sees its own state and the shared aux.
 
-**Formula / discretization.** At each macro-step, the system solves the shared Poisson whose
-right-hand side is the co-located sum of the elliptic bricks of all the blocks, populates the aux
-`(phi, grad phi)`, then advances each block according to its policy (explicit / IMEX, substeps, stride):
+**Formula / discretization.** At each authored field stage, the Program solves the shared Poisson
+whose right-hand side is the co-located sum of the elliptic bricks of all selected blocks and
+populates the aux `(phi, grad phi)`. The same Program explicitly orders each transport, source,
+coupling and commit:
 
 $$f_{ij} = \sum_{b} \mathrm{elliptic\_rhs}_b(U^b_{ij}),\qquad
   \frac{dU^b}{dt} = -\,\mathrm{div}\,F_b(U^b, \mathrm{aux}) + S_b(U^b, \mathrm{aux})$$
@@ -2075,12 +2068,12 @@ goes through the elliptic right-hand side (sum) and the coupled sources, not thr
 inter-species coupling is a TYPED operator (`CouplingOperator`,
 [`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)):
 it carries a DECLARED conservation contract (conserved versus created roles) validated at registration,
-so `apply_couplings` applies a term-set whose invariants are machine-checked rather than trusted;
+so the Program applies a term-set whose invariants are machine-checked rather than trusted;
 ionization is declared NON-conservative in density (it net-sources an electron/ion pair) while collision
 conserves momentum and thermal exchange conserves energy. The named couplings are presets lowering to
-this one representation, inspectable read-only through `coupled_operators()`. `substeps`
-and `stride` are orthogonal (a slow block on `stride=M` is held M-1 steps then catches up by an effective
-step `M*dt`); between two catch-ups the held block enters the Poisson sum with its stale state.
+this one representation, inspectable read-only through `coupled_operators()`. The production facade
+applies `substeps` and `stride` only to the whole installed Program. Per-block multirate cadence
+remains a low-level `SystemCoupler` capability until its explicit `ProgramGraph` lowering exists.
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
 and `set_conservative_state` accepts a complete block-qualified conservative state for every native
 or deferred compiled (`.so`) block. Without an explicit IMEX mask

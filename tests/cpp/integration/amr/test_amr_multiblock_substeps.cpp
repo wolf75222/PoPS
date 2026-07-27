@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
@@ -330,6 +331,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -347,6 +349,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      test::install_forward_euler_program(sim);
       double last = 0;
       for (int s = 0; s < 5; ++s)
         last = sim.step_cfl(0.4);

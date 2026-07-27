@@ -18,6 +18,7 @@
 // Serial CI, Kokkos Cuda GH200).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -179,6 +180,7 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
     sys.set_poisson("charge_density", "geometric_mg", "periodic");
     sys.set_density("ions", rho0);
     sys.set_density("electrons", rho1);
+    test::install_forward_euler_program(sys);
 
     RunResult result;
     result.initial_ions_mass = sys.mass("ions");  // declenche le runtime multi-bloc paresseux

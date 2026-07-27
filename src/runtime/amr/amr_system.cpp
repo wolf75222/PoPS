@@ -3187,6 +3187,7 @@ const std::vector<CouplingOperatorView>& AmrSystem::coupled_operators() const {
 }
 
 void AmrSystem::step(double dt) {
+  p_->program_.require_step_installed("AmrSystem::step");
   p_->ensure_built();
   p_->execute_step_transaction([&] {
     // PENDING cadence phase restoration (set_clock before the 1st step): now that the
@@ -3196,19 +3197,15 @@ void AmrSystem::step(double dt) {
       p_->clock_restore_pending_ = false;
     }
     p_->runtime->set_component_logical_time(p_->macro_step_, p_->t);
-    // COMPILED time-program path (epic ADC-511 / ADC-508): when a Program is installed, its macro-step
-    // closure REPLACES the native AmrRuntime::step body (parity SystemStepper::step routing to program_
-    // step_), wrapped by the GLOBAL substeps/stride cadence. The closure drives the per-level Lie/Strang
-    // macro-step through the AmrProgramContext. Empty (no program installed) -> the historical path.
-    if (p_->program_.step_)
-      p_->run_program_cadence_(dt);
-    else
-      p_->runtime->step(static_cast<Real>(dt));
+    // The installed Program is the sole temporal authority. It drives the per-level macro-step
+    // through AmrProgramContext; AmrRuntime remains available only as the spatial hierarchy engine.
+    p_->run_program_cadence_(dt);
     p_->t += dt;
     ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
   });
 }
 void AmrSystem::advance(double dt, int nsteps) {
+  p_->program_.require_step_installed("AmrSystem::advance");
   for (int s = 0; s < nsteps; ++s)
     step(dt);
 }
@@ -3264,6 +3261,7 @@ void AmrSystem::restore_active_step_transaction_for_program() {
   p_->restore_active_step_transaction_();
 }
 double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+  p_->program_.require_step_installed("AmrSystem::step_cfl");
   p_->ensure_built();
   return p_->execute_step_transaction([&]() -> double {
     if (std::isnan(max_dt) || max_dt <= 0.0)
@@ -3278,37 +3276,22 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
     const double hx = p_->cfg.L / p_->cfg.n;
     const double hy = p_->cfg.Ly / p_->cfg.ny;
     const double h = std::min(hx, hy);  // conservative Cartesian spacing for the scalar CFL API
-    // A Program is always on the runtime engine: compute its CFL bound there, then run the Program.
-    if (p_->program_.step_) {
-      double dt = static_cast<double>(p_->runtime->cfl_dt(
-          static_cast<Real>(cfl), static_cast<Real>(h), static_cast<Real>(speed_floor)));
-      if (p_->program_.dt_bound_) {
-        const double pb = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
-        if (std::isfinite(pb) && pb > 0.0 && pb < dt) {
-          dt = pb;
-          p_->runtime->override_last_dt_bound("program:dt_bound");
-        }
-      }
-      if (std::isfinite(max_dt) && max_dt < dt) {
-        dt = std::min(dt, max_dt);
-        p_->runtime->override_last_dt_bound("strategy:max_dt");
-      }
-      if (dt < min_dt)
-        throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
-      p_->run_program_cadence_(dt);
-      p_->t += dt;
-      ++p_->macro_step_;
-      return dt;
-    }
     double dt = static_cast<double>(p_->runtime->cfl_dt(
         static_cast<Real>(cfl), static_cast<Real>(h), static_cast<Real>(speed_floor)));
+    if (p_->program_.dt_bound_) {
+      const double pb = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
+      if (std::isfinite(pb) && pb > 0.0 && pb < dt) {
+        dt = pb;
+        p_->runtime->override_last_dt_bound("program:dt_bound");
+      }
+    }
     if (std::isfinite(max_dt) && max_dt < dt) {
       dt = std::min(dt, max_dt);
       p_->runtime->override_last_dt_bound("strategy:max_dt");
     }
     if (dt < min_dt)
       throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
-    p_->runtime->step(static_cast<Real>(dt));
+    p_->run_program_cadence_(dt);
     p_->t += dt;
     ++p_->macro_step_;
     return dt;

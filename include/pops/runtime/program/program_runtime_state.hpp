@@ -146,7 +146,8 @@ struct HistoryManager {
 /// the file header for the shared Uniform/AMR contract (which fields each runtime uses).
 struct ProgramRuntimeState {
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
-  /// Installed macro-step body (ADC-399); empty -> the historical / native step path.
+  /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
+  /// before mutation.
   std::function<void(double)> step_;
   /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
   /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
@@ -203,6 +204,18 @@ struct ProgramRuntimeState {
   HistoryManager hist_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
+
+  /// Require the whole-system Program before a public facade may start a temporal operation.
+  ///
+  /// This guard deliberately lives in the shared Program state so Uniform and AMR fail with the
+  /// same contract. Facades call it before profiling, lazy hierarchy construction, transaction
+  /// capture, field solves or clock changes; a missing Program therefore cannot mutate observable
+  /// runtime state.
+  void require_step_installed(const char* operation) const {
+    if (!step_)
+      throw std::logic_error(std::string(operation) +
+                             " requires an installed whole-system Program");
+  }
 
   /// Validate + set the GLOBAL macro-step cadence (ADC-411). @p runtime is the caller's runtime name
   /// ("System" / "AmrSystem") so the fail-loud message names the Program subsystem setter verbatim.

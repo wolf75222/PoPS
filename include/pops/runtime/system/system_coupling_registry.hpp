@@ -16,11 +16,11 @@
 /// coupling-operator inspect views. Grouping them names one subsystem: "the couplings and the step
 /// bounds they impose".
 ///
-/// STEPPER VISIBILITY: `operators`, `dt_bounds`, `coupled_freqs` and `coupled_freq_exprs` ARE read by
-/// SystemStepper (apply_couplings / step_cfl / step bounds). Impl re-exposes them under their exact
+/// STEPPER VISIBILITY: `dt_bounds`, `coupled_freqs` and `coupled_freq_exprs` are read by
+/// SystemStepper for `step_cfl`; `operators` are consumed only by explicit Program lowering. Impl
+/// re-exposes the bound collections under their exact
 /// historical names via REFERENCE ALIASES (couplings / dt_bounds_ / coupled_freqs_ /
-/// coupled_freq_exprs_) so system_stepper.hpp and the MockImpl stay byte-unchanged. `coupled_operators`
-/// is METADATA ONLY (never read by the stepper) -> accessed registry-direct.
+/// coupled_freq_exprs_). `coupled_operators` is METADATA ONLY -> accessed registry-direct.
 ///
 /// OWNERSHIP CONTRACT: every field is FROZEN AT BIND (populated only by the structural setters
 /// add_coupled_source / add_coupling_operator / add_dt_bound, refused once bound) and READ during run
@@ -30,9 +30,9 @@ namespace pops {
 namespace runtime {
 namespace system {
 
-/// GLOBAL time-step bound (System::add_dt_bound): evaluated ONCE per step (host) by step_cfl /
-/// step_adaptive. Hook for non-cell-local constraints (multi-block coupling, Schur/Poisson,
-/// scheduler). Empty (default) -> historical step policy, bit-identical.
+/// GLOBAL time-step bound (System::add_dt_bound): evaluated ONCE per `step_cfl` (host). Hook for
+/// non-cell-local constraints (multi-block coupling, Schur/Poisson, scheduler). Empty means no
+/// additional Program macro-step constraint.
 struct GlobalDtBound {
   std::string label;
   std::function<double()> fn;

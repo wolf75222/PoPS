@@ -22,7 +22,7 @@
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson, REUSED)
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
-#include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: time advance (step/advance/step_cfl/step_adaptive) (Batch B)
+#include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: Program cadence + native CFL bound
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
@@ -312,9 +312,9 @@ struct System::Impl {
   // ordering dependency. See include/pops/runtime/system_field_solver.hpp.
   field_solver::SystemFieldSolver<Impl> fields_;
 
-  // Time advance (Batch B). ORCHESTRATES step / advance / step_cfl / step_adaptive, the cadence filter
-  // (stride_due) and the couplings (apply_couplings). owner_ = this: the stepper reads the SHARED sp /
-  // fields_ / aux / couplings / t / macro_step_ / geom / pgeom_ / polar_
+  // Program-only time advance. The stepper computes native CFL bounds and wraps the installed
+  // whole-system Program in its declared cadence; it has no native transport/coupling fallback.
+  // owner_ = this: the stepper reads the SHARED sp / fields_ / t / macro_step_ / geom / pgeom_ / polar_
   // of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
   // init at end of list without ordering dependency. See include/pops/runtime/system_stepper.hpp.
   stepper::SystemStepper<Impl> stepper_;
@@ -383,10 +383,8 @@ struct System::Impl {
   const Species& find(const std::string& name) const { return blocks_.find(name); }
   int index(const std::string& name) const { return blocks_.index(name); }
 
-  // apply_couplings (inter-species coupling sources by splitting, AFTER transport) is extracted into
-  // stepper_ (SystemStepper, Batch B) and invoked by step / step_cfl / step_adaptive. It reads the
-  // SHARED state via owner_->. The
-  // couplings list (above) stays a member of Impl (populated by add_ionization / add_collision / ...).
+  // Coupled-source closures remain registered spatial operators and stability metadata. The facade
+  // never schedules them implicitly; an installed Program must lower the coupling it owns.
 
   // --- elliptic solver (system Poisson) -----------------------------
   // poisson_bc / wall_active / ensure_elliptic / apply_epsilon_field / apply_epsilon_anisotropic_field
@@ -522,11 +520,9 @@ struct System::Impl {
   // (SystemFieldSolver, Batch B). Pure delegation: the Cartesian/polar dispatch, the device_fence and
   // the order of fill_ghosts/fill_boundary now live in the header (bit-identical).
   //
-  // PROFILER kernel count (ADC-459, Spec 3 section 29): the elliptic field solve is the per-step
-  // kernel-dispatch chokepoint the NATIVE step actually hits (SystemStepper::step calls P->solve_fields
-  // once per Lie step / three times per Strang step), so counting here moves "kernels" on the native
-  // host path -- no SystemStepper edit (Profiler stays an Impl member the stepper never reads). The
-  // count() is a single predictable branch when profiling is off (zero hot-path cost).
+  // PROFILER kernel count (ADC-459, Spec 3 section 29): the elliptic field solve is a Program
+  // kernel-dispatch chokepoint, reached through ProgramContext at the authored stages. The count()
+  // is a single predictable branch when profiling is off (zero hot-path cost).
   SolveReport solve_fields() {
     program_.profiler_.count("kernels");
     return fields_.solve_fields();

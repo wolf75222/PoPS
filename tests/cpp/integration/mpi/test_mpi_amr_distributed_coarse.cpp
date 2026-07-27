@@ -28,6 +28,7 @@
 // MEME binaire en np=1/2/4 et compare sa signature cmax (bit-identique attendu).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler
@@ -284,6 +285,7 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_refinement(1.2);
   sys.set_density("gas", rho);
+  test::install_forward_euler_program(sys);
 
   Result R;
   R.m0 = sys.mass();

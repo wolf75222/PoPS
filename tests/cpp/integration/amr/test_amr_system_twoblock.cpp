@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "load_balance_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
@@ -196,6 +197,7 @@ TEST(test_amr_system_twoblock, Runs) {
     const double m0_before = sim.mass("ions");
     const double m1_before = sim.mass("electrons");
 
+    test::install_forward_euler_program(sim);
     sim.advance(0.01, 5);
 
     const std::vector<double> d0_after = sim.density("ions");
@@ -263,6 +265,7 @@ TEST(test_amr_system_twoblock, Runs) {
                     "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", rho0);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };

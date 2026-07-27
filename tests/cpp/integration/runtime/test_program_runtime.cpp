@@ -101,11 +101,6 @@ static void add_sourced_gas(System& system, double gamma) {
                      "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_imex_sourced_gas(System& system, double gamma) {
-  add_compiled_model(system, "gas", SourcedGasModel{Euler{gamma}, UnitDensitySource{}, NoEll{}},
-                     "none", "rusanov", "conservative", "imex", gamma);
-}
-
 static void add_projecting_gas(System& system, double gamma) {
   ProjectingEuler transport;
   transport.gamma = gamma;
@@ -113,15 +108,47 @@ static void add_projecting_gas(System& system, double gamma) {
                      "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_ssprk3_gas(System& system, double gamma) {
-  add_compiled_model(system, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, "none", "rusanov",
-                     "conservative", "ssprk3", gamma);
-}
-
 static void add_diffusive_gas(System& system, double gamma) {
   DiffusiveGasModel model;
   model.hyp.gamma = gamma;
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
+}
+
+TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System system(SystemConfig{8, 1.0, Periodicity{true, true}});
+  system.enable_profiling();
+  const double initial_time = system.time();
+  const int initial_step = system.macro_step();
+  const std::string initial_profile = system.profile_report();
+
+  const auto expect_program_required = [&](auto&& operation, const char* name) {
+    try {
+      operation();
+      ADD_FAILURE() << name << " accepted a program-less temporal operation";
+    } catch (const std::logic_error& error) {
+      EXPECT_NE(std::string(error.what()).find(name), std::string::npos);
+      EXPECT_NE(std::string(error.what()).find("installed whole-system Program"),
+                std::string::npos);
+    }
+    EXPECT_DOUBLE_EQ(system.time(), initial_time);
+    EXPECT_EQ(system.macro_step(), initial_step);
+    EXPECT_EQ(system.profile_report(), initial_profile);
+  };
+
+  expect_program_required([&] { system.step(0.01); }, "System::step");
+  expect_program_required([&] { system.advance(0.01, 0); }, "System::advance");
+  expect_program_required([&] { (void)system.step_cfl(0.4); }, "System::step_cfl");
+  expect_program_required([&] { (void)system.step_adaptive(0.4); }, "System::step_adaptive");
+
+  int program_calls = 0;
+  system.install_program_step([&](double) { ++program_calls; });
+  EXPECT_THROW((void)system.step_adaptive(0.4), std::logic_error);
+  EXPECT_EQ(program_calls, 0);
+  EXPECT_DOUBLE_EQ(system.time(), initial_time);
+  EXPECT_EQ(system.macro_step(), initial_step);
 }
 
 TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
@@ -389,7 +416,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   EXPECT_GT(inactive_cells, 0);
 }
 
-TEST(ProgramRuntime, NativeImexSourcePreservesEmbeddedBoundaryInactiveCells) {
+TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -405,10 +432,20 @@ TEST(ProgramRuntime, NativeImexSourcePreservesEmbeddedBoundaryInactiveCells) {
   fill_ic(initial, n, gamma);
 
   System system(cfg);
-  add_imex_sourced_gas(system, gamma);
+  add_sourced_gas(system, gamma);
   system.set_state("gas", initial);
   system.set_disc_domain(0.5, 0.5, 0.31, "staircase");
   const auto mask = system.disc_mask();
+  system.set_program_block_map({0});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("macro");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& state = context.state(0);
+    MultiFab source = context.rhs_scratch_like(state);
+    context.source_default_into(0, state, source);
+    context.axpy(state, Real(step), source);
+  });
   system.step(dt);
   const auto result = system.get_state("gas");
 
@@ -612,7 +649,7 @@ TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
   }
 }
 
-TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
+TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -627,29 +664,40 @@ TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  System native(cfg);
-  add_ssprk3_gas(native, gamma);
-  native.set_disc_domain(0.5, 0.5, 0.32, "staircase");
-  const auto mask = native.disc_mask();
+  System program(cfg);
+  add_gas(program, gamma, "none");
+  program.set_disc_domain(0.5, 0.5, 0.32, "staircase");
+  const auto mask = program.disc_mask();
   for (std::size_t cell = 0; cell < cells; ++cell)
     if (mask[cell] < 0.5)
       for (int component = 0; component < 4; ++component)
         initial[static_cast<std::size_t>(component) * cells + cell] = inactive_value;
-  native.set_state("gas", initial);
-  native.step(1.0e-4);
-  const auto native_result = native.get_state("gas");
-
-  System program(cfg);
-  add_gas(program, gamma, "none");
   program.set_state("gas", initial);
-  program.set_disc_domain(0.5, 0.5, 0.32, "staircase");
   program.set_program_block_map({0});
   runtime::program::ProgramContext context(&program);
   context.configure_primary_clock("macro");
-  context.install([context](double) {
+  context.install([context](double step) {
+    context.begin_step(step);
     MultiFab& state = context.state(0);
-    MultiFab identical = state;
-    context.lincomb(state, Real(1) / Real(3), state, Real(2) / Real(3), identical);
+    MultiFab initial_state = state;
+    MultiFab stage = state;
+    MultiFab residual = context.rhs_scratch_like(state);
+
+    context.set_stage_time(0, 1);
+    context.rhs_into(0, state, residual, 100);
+    context.axpy(stage, Real(step), residual);
+
+    context.set_stage_time(1, 1);
+    residual.set_val(Real(0));
+    context.rhs_into(0, stage, residual, 101);
+    context.axpy(stage, Real(step), residual);
+    context.lincomb(stage, Real(3) / Real(4), initial_state, Real(1) / Real(4), stage);
+
+    context.set_stage_time(1, 2);
+    residual.set_val(Real(0));
+    context.rhs_into(0, stage, residual, 102);
+    context.axpy(stage, Real(step), residual);
+    context.lincomb(state, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
   });
   program.step(1.0e-4);
   const auto program_result = program.get_state("gas");
@@ -661,8 +709,6 @@ TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
     ++inactive_cells;
     for (int component = 0; component < 4; ++component) {
       const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
-      EXPECT_EQ(std::bit_cast<std::uint64_t>(native_result[index]),
-                std::bit_cast<std::uint64_t>(initial[index]));
       EXPECT_EQ(std::bit_cast<std::uint64_t>(program_result[index]),
                 std::bit_cast<std::uint64_t>(initial[index]));
     }

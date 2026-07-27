@@ -41,6 +41,7 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
+#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
@@ -234,6 +235,19 @@ void configure_refined_execution(AmrSystem& system) {
   system.set_refinement(1.2);
 }
 
+void select_runtime_engine_for_low_level_test(AmrSystem& system) {
+  system.set_program_block_map({0});
+  system.install_program_step([](double) {});
+}
+
+// IMEX lowering is not yet available in ProgramGraph. Keep this compatibility proof explicitly
+// below the facade: AmrSystem only assembles the spatial hierarchy and never dispatches this engine.
+void step_legacy_imex_runtime(AmrSystem& system, double dt) {
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("native IMEX fixture failed to materialize AmrRuntime");
+  system.engine()->step(Real(dt));
+}
+
 // @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
 // densite, avance) est commun. Construit son propre AmrSystem (pas de fuite).
 template <class Setup>
@@ -241,9 +255,10 @@ Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Setup set
   AmrSystem s(make_cfg(n));
   setup(s);
   configure_refined_execution(s);
+  select_runtime_engine_for_low_level_test(s);
   s.set_density("gas", rho);
   for (int k = 0; k < nsteps; ++k)
-    s.step(dt);
+    step_legacy_imex_runtime(s, dt);
   return Snap{s.density(), s.mass(), s.n_patches()};
 }
 
@@ -305,10 +320,11 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem s(make_cfg(n));
     add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(s);
+    select_runtime_engine_for_low_level_test(s);
     s.set_density("gas", rho);
     const double m0 = s.mass();
     for (int k = 0; k < nsteps; ++k)
-      s.step(dtA);
+      step_legacy_imex_runtime(s, dtA);
     const double m1 = s.mass();
     const double drift = std::fabs(m1 - m0) / (std::fabs(m0) + 1e-30);
     chk(drift < 1e-12, "[A] masse conservee a ~machine sous IMEX (reflux intact)");
@@ -340,6 +356,13 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       if (rejection.status() != SolveStatus::kInvalidEvaluation ||
           rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
           rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
+        throw;
+      explicit_rejected_nonfinite = true;
+    } catch (const std::runtime_error& error) {
+      // This section deliberately calls AmrRuntime below the facade transaction boundary, so the
+      // finite-volume kernel may expose its fail-closed reason directly instead of the facade's
+      // StepAttemptRejected wrapper.
+      if (std::string(error.what()).find("reason_code=0x53544201") == std::string::npos)
         throw;
       explicit_rejected_nonfinite = true;
     }
@@ -402,16 +425,18 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
+    select_runtime_engine_for_low_level_test(A);
     A.set_density("pot", rho);
     for (int k = 0; k < nsteps; ++k)
-      A.step(dtA);
+      step_legacy_imex_runtime(A, dtA);
 
     AmrSystem B(make_cfg(n));
     add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(B);
+    select_runtime_engine_for_low_level_test(B);
     B.set_density("gas", rho);
     for (int k = 0; k < nsteps; ++k)
-      B.step(dtA);
+      step_legacy_imex_runtime(B, dtA);
 
     chk(maxdiff(A.density(), B.density()) == 0.0,
         "[C-A] add_native_block == add_compiled_model sous IMEX (potential, dmax==0)");
@@ -424,17 +449,19 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem A(make_cfg(n));
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
+    select_runtime_engine_for_low_level_test(A);
     A.set_density(bname, rho);
     for (int k = 0; k < nsteps; ++k)
-      A.step(dtB);
+      step_legacy_imex_runtime(A, dtB);
 
     AmrSystem B(make_cfg(n));
     add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
                        kGamma);
     configure_refined_execution(B);
+    select_runtime_engine_for_low_level_test(B);
     B.set_density("gas", rho);
     for (int k = 0; k < nsteps; ++k)
-      B.step(dtB);
+      step_legacy_imex_runtime(B, dtB);
 
     chk(maxdiff(A.density(), B.density()) == 0.0,
         "[C-B] add_native_block == add_compiled_model sous IMEX (stiff, dmax==0)");
