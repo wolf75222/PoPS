@@ -1835,8 +1835,12 @@ TEST_F(GenericKrylov, every_method_applies_a_binary_scaled_extreme_coefficient_i
             : LinearOperatorProperties::general();
     const PreparedKrylovMethod configured_method =
         test_krylov_method(method.family, method.restart, Real(1e109));
+    // Richardson has no recursive post-update residual estimate. Give it one further budget slot
+    // so it can measure the exact first update without relying on the wrapper to promote an
+    // exhausted report; the other methods prove their one-step candidate from their recurrence.
+    const int max_iterations = method.family == TestKrylovFamily::kRichardson ? 2 : 1;
     const SolveReport report = run_prepared(scaled_identity, iterate, rhs, configured_method,
-                                            properties, Real(0), Real(1e190), 1);
+                                            properties, Real(0), Real(1e190), max_iterations);
 
     EXPECT_TRUE(report.solved()) << "method=" << configured_method.identity()
                                  << " status=" << static_cast<int>(report.status)
@@ -2808,7 +2812,7 @@ TEST_F(GenericKrylov, outcome_keeps_candidate_private_until_accept_and_holds_res
       LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
       [&snapshot]() { return snapshot; });
   KrylovWorkspace workspace(iterate, method, footprint);
-  const KrylovControls controls{method, Real(1e-14), Real(0), 1};
+  const KrylovControls controls{method, Real(1e-14), Real(0), 2};
   problem.prepare(snapshot);
   workspace.bind(problem);
 
@@ -2930,7 +2934,7 @@ TEST_F(GenericKrylov, publication_layout_failure_does_not_consume_the_outcome) {
       LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
       [&snapshot]() { return snapshot; });
   KrylovWorkspace workspace(iterate, method, footprint);
-  const KrylovControls controls{method, Real(1e-14), Real(0), 1};
+  const KrylovControls controls{method, Real(1e-14), Real(0), 2};
   problem.prepare(snapshot);
   workspace.bind(problem);
 

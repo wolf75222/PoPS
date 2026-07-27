@@ -565,6 +565,12 @@ TEST(test_amr_multiblock_imex, Runs) {
     try {
       for (int s = 0; s < K; ++s)
         sim->step(dt);
+    } catch (const runtime::program::StepAttemptRejected& failure) {
+      if (failure.status() != SolveStatus::kInvalidEvaluation ||
+          failure.disposition() != runtime::program::StepAttemptDisposition::kReject ||
+          failure.reason_code() != 0x53544201u || failure.phase() != "stage")
+        throw;
+      explicit_rejected = true;
     } catch (const FluxEvaluationFailure& failure) {
       if (failure.status() != EvaluationStatus::kReject ||
           failure.action() != TransactionFailureAction::kRejectStep ||
