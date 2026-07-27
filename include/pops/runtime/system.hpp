@@ -217,13 +217,10 @@ class System {
   ///                 "momentum_x", "energy", ...) instead of the name (cf. variable_roles). Union with
   ///                 implicit_vars. A role absent from the block raises an EXPLICIT error.
   /// @param newton IMEX only: options of the local Newton of the implicit source (backward-Euler),
-  ///                 grouped in a POD (ADC-214; cf. NewtonOptions). max_iters (default 2 = historical
-  ///                 constant), rel_tol / abs_tol (PER-CELL stopping criterion
-  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf, 0/0 = disabled -> historical fixed
-  ///                 iterations), fd_eps (step of the finite-difference Jacobian, default 1e-7),
-  ///                 damping (damping W -= damping*delta in (0, 1], 1 = full Newton),
-  ///                 fail_policy (kFailNone / kFailWarn / kFailThrow: reaction to failed cells).
-  ///                 Default {} = historical constants, bit-identical.
+  ///                 grouped in a POD (ADC-214; cf. NewtonOptions). max_iters is a hard budget;
+  ///                 rel_tol / abs_tol define the mandatory per-cell stopping criterion
+  ///                 ||F||inf <= abs_tol + rel_tol*||F0||inf; fd_eps controls the finite-difference
+  ///                 Jacobian and damping controls W -= damping*delta in (0, 1].
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
