@@ -189,19 +189,21 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
 //     launching its own named-functor kernel.
 //
 // NEWTON OPTIONS (@p nopts): drive the local Newton of the implicit source (iteration budget,
-// tolerances, fd_eps, damping). DEFAULT {} retains the legacy numerical constants (2 iters, 1e-7)
-// while every candidate now follows the same typed outcome/publication contract. The AMR mono-block
+// tolerances, fd_eps, damping). DEFAULT {} uses the centralized converged-source contract and every
+// candidate follows the same typed outcome/publication contract. The AMR mono-block
 // (AmrCouplerMP::step) threads them from AmrSystem (wave 3 -> mono-block options wired). The partial
 // IMEX mask is NOT carried by this path (mono-block coupler = full backward-Euler): so the
 // default mask (inactive) is passed. No diagnostics report here (report == nullptr implicit).
 template <class Model>
 inline void mf_apply_source_treatment(const Model& m, MultiFab& U, const MultiFab& aux, Real dt,
                                       bool imex, const NewtonOptions& nopts = {}) {
-  if (imex)
-    // OPTIONS form (Newton driven by nopts), inactive mask, immediate FailRun on any failed outcome.
-    backward_euler_source(m, aux, U, dt, nopts, ImplicitMask<Model::n_vars>{});
-  else
+  if (imex) {
+    auto outcome =
+        backward_euler_source(m, aux, U, dt, nopts, ImplicitMask<Model::n_vars>{});
+    (void)consume_implicit_source_fail_run(outcome);
+  } else {
     mf_apply_source(m, U, aux, dt);  // legacy forward Euler (bit-identical)
+  }
 }
 
 /// Device-clean NAMED functor: 2x2 average fine -> coarse on a coarse cell.

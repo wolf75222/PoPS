@@ -194,16 +194,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             double newton_damping, const std::string& newton_fail_policy, bool newton_diagnostics,
-             double positivity_floor, double weno_epsilon, bool wave_speed_cache) {
+             double newton_damping, bool newton_diagnostics, double positivity_floor,
+             double weno_epsilon, bool wave_speed_cache) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
                         implicit_roles, newton, newton_diagnostics, positivity_floor, weno_epsilon,
                         wave_speed_cache);
@@ -223,7 +221,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none", py::arg("newton_diagnostics") = false,
+          py::arg("newton_diagnostics") = false,
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.

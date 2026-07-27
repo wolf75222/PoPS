@@ -22,7 +22,10 @@ def _isothermal_model(cs2=0.7, charge=-2.0):
 def test_numerical_defaults_report_is_structured():
     d = numerical_defaults_report()
     assert d["schema_version"] == 1
-    assert d["newton"]["max_iters"] == 2
+    assert d["newton"]["max_iters"] == 25
+    assert d["newton"]["rel_tol"] == pytest.approx(1e-10)
+    assert d["newton"]["abs_tol"] == pytest.approx(1e-12)
+    assert "fail_policy" not in d["newton"]
     assert d["newton"]["fd_eps"] == pytest.approx(1e-7)
     assert d["krylov"]["polar_tensor_max_iters"] == 400
     assert d["krylov"]["schur_polar_max_iters"] == 600
@@ -75,7 +78,6 @@ def test_system_inspect_reports_effective_block_and_solver_options():
             newton_rel_tol=1e-6,
             newton_fd_eps=2e-7,
             newton_damping=0.8,
-            newton_fail_policy="throw",
             newton_diagnostics=True,
         ),
         spatial=engine.Spatial(positivity_floor=1e-12),
@@ -83,7 +85,7 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     sim.set_poisson(abs_tol=1e-11)
 
     options = sim.inspect().to_dict()["options"]
-    assert options["defaults"]["newton"]["max_iters"] == 2
+    assert options["defaults"]["newton"]["max_iters"] == 25
     assert options["poisson"]["solver"] == "geometric_mg"
     assert options["poisson"]["epsilon"] == pytest.approx(1.0)
     assert options["poisson"]["abs_tol"] == pytest.approx(1e-11)
@@ -96,7 +98,7 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert block["newton"]["max_iters"] == 4
     assert block["newton"]["rel_tol"] == pytest.approx(1e-6)
     assert block["newton"]["fd_eps"] == pytest.approx(2e-7)
-    assert block["newton"]["fail_policy"] == "throw"
+    assert "fail_policy" not in block["newton"]
     assert block["newton"]["diagnostics"] is True
     assert block["physical"]["cs2"] == pytest.approx(0.7)
     assert block["physical"]["q"] == pytest.approx(-2.0)
@@ -106,6 +108,8 @@ def test_system_inspect_reports_effective_block_and_solver_options():
 def test_invalid_newton_and_refinement_values_are_rejected():
     with pytest.raises(ValueError, match="newton_max_iters"):
         engine.IMEX(newton_max_iters=0)
+    with pytest.raises(ValueError, match="newton_rel_tol > 0 or newton_abs_tol > 0"):
+        engine.IMEX(newton_rel_tol=0, newton_abs_tol=0)
 
     amr = AmrSystem(n=8, L=1.0, periodicity=(True, True))
     with pytest.raises(RuntimeError, match="threshold must be finite"):

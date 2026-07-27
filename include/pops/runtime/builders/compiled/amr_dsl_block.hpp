@@ -113,9 +113,11 @@ void apply_amr_implicit_source_and_cascade(const Model& model, std::vector<AmrLe
                                            NewtonReport* nreport,
                                            PreparedAmrAverageDownPlan* average_down_plan) {
   const int nlev = static_cast<int>(levels.size());
-  for (int level = 0; level < nlev; ++level)
-    backward_euler_source<Model>(model, *levels[level].aux, levels[level].U, dt, nopts, mask,
-                                 nreport);
+  for (int level = 0; level < nlev; ++level) {
+    auto outcome = backward_euler_source<Model>(
+        model, *levels[level].aux, levels[level].U, dt, nopts, mask, nreport);
+    (void)consume_implicit_source_fail_run(outcome);
+  }
   for (int level = nlev - 1; level >= 1; --level) {
     if (average_down_plan == nullptr) {
       mf_average_down_mb(levels[level].U, levels[level - 1].U);
@@ -228,8 +230,8 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       bp.physics.imex;  // implicit stiff source (backward_euler) rather than forward Euler
   const int regrid_every = bp.mesh.regrid_every;
   // NEWTON OPTIONS of the mono-block IMEX source (wave 3): threaded to cpl->step -> advance_amr ->
-  // backward_euler_source. DEFAULT {} (newton_options not set) = historical constants (2 iters) ->
-  // bit-identical path (2a). Captured BY VALUE (POD) in the h.step closure.
+  // backward_euler_source. DEFAULT {} uses the centralized converged-source contract. Captured BY
+  // VALUE (POD) in the h.step closure.
   const NewtonOptions nopts = bp.physics.newton_options;
   // TIME METHOD mono-block: the stable integer wire was lowered strictly at function entry, then is
   // threaded to cpl->step -> advance_amr. No unknown value can silently become Euler.
@@ -244,8 +246,8 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0)
       cpl->regrid(crit);
     const double h2 = dt / sub;
-    // NEWTON OPTIONS threaded to the coupler (mono-block): nopts={} by default => iters=2 historical,
-    // bit-identical; non-default nopts (set_density + pops.IMEX(newton_*)) drives the local Newton.
+    // NEWTON OPTIONS threaded to the coupler (mono-block): defaults or exact authored options drive
+    // the local Newton.
     // tmethod selects Euler, SSPRK2/Heun, or SSPRK3 exactly as authored.
     for (int s = 0; s < sub; ++s)
       cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim, imex, nopts, tmethod, pf, weps,
@@ -625,13 +627,10 @@ AmrRuntimeBlock build_amr_block(
       }
     // NEWTON DIAGNOSTICS (wave 3): we allocate the AGGREGATE report of the block in a shared_ptr
     // (STABLE address even after moving the AmrRuntimeBlock into the engine registry) and capture its
-    // raw pointer in the imex_advance closure. Explicit diagnostics and fail_policy warn/throw need
-    // this report: warn/throw events must be structured, not stderr text. No diagnostics and
-    // fail_policy=none -> nreport=nullptr -> backward_euler_source FAST path, bit-identical. The RESET
-    // of the report is the responsibility of AmrRuntime::step (head of the block advance), like
-    // System::AdvanceImex.
+    // raw pointer in the imex_advance closure. The RESET of the report is the responsibility of
+    // AmrRuntime::step (head of the block advance), like System::AdvanceImex.
     std::shared_ptr<NewtonReport> nrep;
-    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
+    if (newton_diagnostics) {
       nrep = std::make_shared<NewtonReport>();
       b.newton_diagnostics = true;
       b.newton_report = nrep;

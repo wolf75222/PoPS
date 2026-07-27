@@ -190,9 +190,9 @@ struct AmrBuildParams {
     bool recon_prim = false;  ///< recon == "primitive" (frozen by add_compiled_model)
     bool imex = false;        ///< time == "imex": stiff implicit source (backward_euler)
     int time_method = 0;      ///< stable AmrTimeMethod wire: 0 kEuler, 1 kSsprk3, 2 kSsprk2
-    // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
-    // DEFAULT {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path
-    // (2a) bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
+    // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path. DEFAULT {} uses the centralized
+    // converged-source contract. Consumed by build_amr_compiled (the mono-block closure passes it to
+    // cpl->step).
     NewtonOptions newton_options{};
     // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
     // transport. 0 (default) -> inactive, bit-identical. Consumed by build_amr_compiled (mono-block ->
@@ -391,7 +391,8 @@ class AmrSystem {
   ///         primitive}, or if an implicit mask is requested outside IMEX / with a name-role absent from the block.
   /// @param newton  options of the IMEX source Newton grouped in a POD (ADC-214; cf.
   ///                 NewtonOptions; parity with System::add_block): max_iters / rel_tol / abs_tol /
-  ///                 fd_eps / damping / fail_policy. Default {} = historical constants, bit-identical.
+  ///                 fd_eps / damping. Exhausting max_iters without meeting the mixed tolerance is
+  ///                 a typed failure and publishes no candidate.
   ///                 These options are wired for native blocks at every block count; compiled .so
   ///                 loaders reject non-default values because their flat ABI does not transport them.
   /// @param newton_diagnostics  aggregated Newton report (newton_report), wired for native blocks at

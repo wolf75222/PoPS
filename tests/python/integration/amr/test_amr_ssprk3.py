@@ -180,15 +180,14 @@ def _check_imex_ssprk3_rejected(n=16):
     def add(time, **kw):
         s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
         s.set_temporal_relations([2], [1], ["integral_only"])
-        kwargs = dict(implicit_vars=[], implicit_roles=[], newton_max_iters=2, newton_rel_tol=0.0,
-                      newton_abs_tol=0.0, newton_fd_eps=1e-7, newton_damping=1.0,
-                      newton_fail_policy="none", newton_diagnostics=False)
+        kwargs = dict(implicit_vars=[], implicit_roles=[], newton_max_iters=25,
+                      newton_rel_tol=1e-10, newton_abs_tol=1e-12, newton_fd_eps=1e-7,
+                      newton_damping=1.0, newton_diagnostics=False)
         kwargs.update(kw)
         s._s.add_block("b", model, "minmod", "rusanov", "conservative", time, 1, 1,
                        kwargs["implicit_vars"], kwargs["implicit_roles"], kwargs["newton_max_iters"],
                        kwargs["newton_rel_tol"], kwargs["newton_abs_tol"], kwargs["newton_fd_eps"],
-                       kwargs["newton_damping"], kwargs["newton_fail_policy"],
-                       kwargs["newton_diagnostics"])
+                       kwargs["newton_damping"], kwargs["newton_diagnostics"])
         return s
 
     # ssprk3 SEUL accepte (transport explicite), imex SEUL accepte (source implicite) : chacun valide.

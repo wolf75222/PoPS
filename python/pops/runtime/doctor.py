@@ -297,7 +297,7 @@ def capabilities() -> Any:
                     "Program factories Lie|Strang + hierarchy-scoped Program.solve"],
             "system_polar": ["explicit (ssprk2|ssprk3)",
                              "metric-aware explicit Program.solve graph"],
-            "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
+            "newton_options": "options (max_iters/tol/fd_eps/damping) : System + AMR "
                               "native at every block count (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
                               "newton_report : System + AMR native at every block count "

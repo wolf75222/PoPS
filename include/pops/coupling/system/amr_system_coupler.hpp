@@ -566,15 +566,18 @@ class AmrSystemCoupler {
 // stability (unconditional for a linear relaxation). No solver on the user side.
 /// Default implicit callback for AmrSystemCoupler::step: backward-Euler (Newton) on the model source,
 /// applied to EACH level of the hierarchy, followed by a fine -> coarse cascade
-/// (coverage consistency, cf. coupled_source_step). @p iters: Newton iterations per stage.
+/// (coverage consistency, cf. coupled_source_step).
 struct AmrImplicitSourceStepper {
-  int iters = 2;
+  NewtonOptions options{};
 
   template <class Coupler, class Block, class Levels>
   void operator()(Coupler& coupler, Block& block, Levels& levels, Real dt) const {
     const int nlev = static_cast<int>(levels.size());
-    for (int k = 0; k < nlev; ++k)
-      backward_euler_source(block.model, coupler.aux(k), levels[k].U, dt, iters);
+    for (int k = 0; k < nlev; ++k) {
+      auto outcome =
+          backward_euler_source(block.model, coupler.aux(k), levels[k].U, dt, options);
+      (void)consume_implicit_source_fail_run(outcome);
+    }
     // COVERAGE INVARIANT (cf. coupled_source_step): the implicit source was
     // solved independently level by level, so the COVERED coarse cells
     // carry a ghost coarse source instead of the 2x2 average of their fine

@@ -309,7 +309,7 @@ struct AdvanceImex {
   GridContext ctx;
   bool recon_prim;
   ImplicitMask<Model::n_vars> mask{};
-  NewtonOptions nopts{};            // block Newton options (defaults = historical: 2 iters, 1e-7)
+  NewtonOptions nopts{};  // block Newton options (centralized converged-source defaults)
   NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
   Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
   Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
@@ -321,8 +321,8 @@ struct AdvanceImex {
       nreport->reset();  // report AGGREGATED over the n substeps of THIS advance
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step(rhs, U, h);  // explicit half-step: source-free transport
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask,
-                            nreport);  // implicit source (stiff relaxation)
+      auto outcome = backward_euler_source(m, *ctx.aux, U, h, nopts, mask, nreport);
+      (void)consume_implicit_source_fail_run(outcome);
     }
   }
 };
@@ -367,7 +367,7 @@ struct AdvanceImexRkArs222 {
   Model m;
   GridContext ctx;
   bool recon_prim;
-  NewtonOptions nopts{};            // Newton options of the stage solves (defaults = historical)
+  NewtonOptions nopts{};            // Central converged defaults shared by both stage solves.
   NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
   Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
   Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
@@ -395,15 +395,16 @@ struct AdvanceImexRkArs222 {
       // Stage 2: U^(2) = base2 + dt*gamma*S(U^(2)),  base2 = U^n + dt*gamma*L1.
       lincomb(base2, Real(1), Un, h * gamma, L1);     // base2 = U^n + dt*gamma*L1
       lincomb(work, Real(1), base2, Real(0), base2);  // work = base2
-      backward_euler_source(m, *ctx.aux, work, h * gamma, nopts, mask, nreport);  // work = U^(2)
+      auto stage2 = backward_euler_source(m, *ctx.aux, work, h * gamma, nopts, mask, nreport);
+      (void)consume_implicit_source_fail_run(stage2);  // work = U^(2)
       rhs(work, L2);                                                              // L2 = L(U^(2))
       // Stage 3: U <- base3 = U^n + dt*delta*L1 + dt*(1-delta)*L2 + ((1-gamma)/gamma)*(U^(2) - base2).
       lincomb(U, Real(1), Un, h * delta, L1);  // U = U^n + dt*delta*L1
       saxpy(U, h * (Real(1) - delta), L2);     // + dt*(1-delta)*L2
       saxpy(U, cS2, work);                     // + ((1-gamma)/gamma)*U^(2)
       saxpy(U, -cS2, base2);                   // - ((1-gamma)/gamma)*base2  -> U = base3
-      backward_euler_source(m, *ctx.aux, U, h * gamma, nopts, mask,
-                            nreport);  // U = U^(3) = U^{n+1}
+      auto stage3 = backward_euler_source(m, *ctx.aux, U, h * gamma, nopts, mask, nreport);
+      (void)consume_implicit_source_fail_run(stage3);  // U = U^(3) = U^{n+1}
     }
   }
 };
@@ -724,7 +725,9 @@ struct AdvanceImexMasked {
     ForwardEuler::Scratch scratch(U);
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step_active(rhs, U, h, scratch, *mask);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, mask);
+      auto outcome =
+          backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, mask);
+      (void)consume_implicit_source_fail_run(outcome);
     }
   }
 };
@@ -752,7 +755,9 @@ struct AdvanceImexEb {
     ForwardEuler::Scratch scratch(U);
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step_active(rhs, U, h, scratch, *ctx.domain_mask);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, ctx.domain_mask);
+      auto outcome = backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport,
+                                           ctx.domain_mask);
+      (void)consume_implicit_source_fail_run(outcome);
     }
   }
 };

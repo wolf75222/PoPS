@@ -97,21 +97,6 @@ inline std::vector<double> flat(
   return std::vector<double>(arr.data(), arr.data() + arr.size());
 }
 
-// ADC-214: the Python SURFACE keeps the newton_fail_policy kwarg as a STRING ("none"/"warn"/"throw");
-// the NewtonOptions POD carries an integer (NewtonOptions::kFail*). This conversion table therefore
-// lives in the bindings (where the flat kwargs are assembled into a POD), with the SAME explicit error
-// message as before this work. @p where names the calling method in the message.
-inline int newton_fail_policy_from_string(const std::string& policy, const char* where) {
-  if (policy == "none")
-    return NewtonOptions::kFailNone;
-  if (policy == "warn")
-    return NewtonOptions::kFailWarn;
-  if (policy == "throw")
-    return NewtonOptions::kFailThrow;
-  throw std::runtime_error(std::string(where) +
-                           ": newton_fail_policy 'none'|'warn'|'throw' (got '" + policy + "')");
-}
-
 inline py::dict profile_snapshot_to_dict(
     const pops::runtime::program::Profiler::Snapshot& snapshot) {
   py::list scopes;
@@ -148,7 +133,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   newton["abs_tol"] = static_cast<double>(kNewtonDefaultAbsTol);
   newton["fd_eps"] = static_cast<double>(kNewtonDefaultFdEps);
   newton["damping"] = static_cast<double>(kNewtonDefaultDamping);
-  newton["fail_policy"] = newton_fail_policy_name(kNewtonDefaultFailPolicy);
   newton["finite_abs_limit"] = static_cast<double>(kNewtonFiniteAbsLimit);
 
   py::dict krylov;
@@ -239,15 +223,11 @@ inline py::dict numerical_defaults_report_to_dict() {
   // asserts no constant is missing from this map -> a new user-visible constant cannot ship unclassified.
   py::dict classification;
   auto klass = [&classification](const char* name, const char* cls) { classification[name] = cls; };
-  klass("kNewtonFailNone", "internal_default");
-  klass("kNewtonFailWarn", "internal_default");
-  klass("kNewtonFailThrow", "internal_default");
   klass("kNewtonDefaultMaxIters", "public_knob");
   klass("kNewtonDefaultRelTol", "public_knob");
   klass("kNewtonDefaultAbsTol", "public_knob");
   klass("kNewtonDefaultFdEps", "public_knob");
   klass("kNewtonDefaultDamping", "public_knob");
-  klass("kNewtonDefaultFailPolicy", "public_knob");
   klass("kNewtonFiniteAbsLimit", "internal_default");
   klass("kKrylovDefaultRelTol", "public_knob");
   klass("kPolarTensorKrylovDefaultMaxIters", "public_knob");
@@ -353,7 +333,6 @@ inline py::dict effective_newton_options_to_dict(const EffectiveNewtonOptions& n
   d["abs_tol"] = n.abs_tol;
   d["fd_eps"] = n.fd_eps;
   d["damping"] = n.damping;
-  d["fail_policy"] = n.fail_policy;
   d["diagnostics"] = n.diagnostics;
   d["non_default"] = n.non_default;
   return d;

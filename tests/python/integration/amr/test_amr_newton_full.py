@@ -13,10 +13,9 @@ Couvre les deux chantiers du solde (docs/GENERICITY_2026-06.md, points NON gener
       max_residual fini, n_failed==0 sur un cas doux). Le rapport est AGREGE par AmrRuntime
       (reset en tete d'avance, max/somme sur niveaux et sous-pas, all_reduce MPI).
 
-  (c) NO-DEFAULT-CHANGE (mono-bloc) : les options Newton par DEFAUT explicites (newton_max_iters=2,
-      rel_tol=0, abs_tol=0, fd_eps=1e-7, damping=1.0) donnent une trajectoire BIT-IDENTIQUE a celle
-      sans options (engine.IMEX()). On compare deux runs de memes graines : dmax == 0 (vrai test de
-      non-regression : le chemin a options par defaut == chemin historique a iters figes).
+  (c) DEFAUTS CENTRALISES (mono-bloc) : les options Newton par defaut explicites
+      (max_iters=25, rel_tol=1e-10, abs_tol=1e-12, fd_eps=1e-7, damping=1.0) donnent une
+      trajectoire BIT-IDENTIQUE a celle sans options (engine.IMEX()).
 
   (d) GARDE PRE-LOADER : les metadonnees detachees d'un package AMR declenchent le rejet explicite
       des options et diagnostics Newton que l'ABI plate ne transporte pas. Ce sous-test ne pretend
@@ -131,8 +130,8 @@ except RuntimeError as e:
 
 # ---- (c) NO-DEFAULT-CHANGE (mono-bloc) : defauts explicites == chemin sans options --------------
 print("== (c) mono-bloc : options par defaut explicites == sans options (dmax == 0, bit-identique) ==")
-d_base = mono_imex(engine.IMEX())  # chemin historique (aucune option)
-d_def = mono_imex(engine.IMEX(newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
+d_base = mono_imex(engine.IMEX())
+d_def = mono_imex(engine.IMEX(newton_max_iters=25, newton_rel_tol=1e-10, newton_abs_tol=1e-12,
                            newton_fd_eps=1e-7, newton_damping=1.0))  # defauts EXPLICITES
 dmax = float(np.max(np.abs(d_def - d_base)))
 chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identique ; recu {dmax:.3e})")

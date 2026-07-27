@@ -978,9 +978,8 @@ class AmrCouplerMP {
   /// default FirstOrder bit-identical to the historical one). recon_prim: primitive reconstruction; imex:
   /// stiff source implicit (backward_euler). Defaults (false) -> historical explicit path.
   /// @p nopts: OPTIONS of the IMEX implicit-source Newton (iteration budget, tolerances,
-  /// fd_eps, damping, fail_policy), threaded down to backward_euler_source by advance_amr ->
-  /// subcycle_level_mp -> mf_apply_source_treatment. DEFAULT {} = historical constants (2 iters,
-  /// 1e-7, ...) -> path (2a) BIT-IDENTICAL to the old call. No effect if imex==false. The
+  /// fd_eps, damping), threaded down to backward_euler_source by advance_amr ->
+  /// subcycle_level_mp -> mf_apply_source_treatment. No effect if imex==false. The
   /// partial IMEX mask is NOT carried by this mono-block path (full backward-Euler), only the OPTIONS
   /// are (the mono-block AmrSystem wires the Newton options but not the mask or the diagnostics).
   /// @p tmethod: time method (kEuler = forward Euler; kSsprk2 = order-2 SSPRK2/Heun;
