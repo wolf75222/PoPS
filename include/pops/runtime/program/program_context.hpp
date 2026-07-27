@@ -1174,11 +1174,15 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
   /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
   /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
-  /// The codegen emits ``ctx.store_history("<name>", <value>)`` near the end of the step body. Uses the
-  /// default ncomp on register (the width is fixed by the prelude register_history the codegen emits).
+  /// A generated logical scope publishes its active dt explicitly, so a child-clock ring records the
+  /// child interval. Hand-written contexts that did not call begin_step retain the legacy System-owned
+  /// macro-dt route. Uses the default ncomp on register (the width is fixed by the prelude register).
   void store_history(const std::string& name, const MultiFab& value) const {
     sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
-    sys_->store_history(name, value);
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
+      sys_->store_history(name, value, current_dt_);
+    else
+      sys_->store_history(name, value);
   }
   void store_history(const std::string& name, const MultiFab& value, int owner) const {
     (void)sys_block(owner);

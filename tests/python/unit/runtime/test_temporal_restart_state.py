@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from fractions import Fraction
 import json
 from pathlib import Path
 
@@ -218,7 +219,7 @@ def _uniform_artifact(native_cxx, *, attempt_policy):
     return artifact
 
 
-def _linear_history_artifact(native_cxx):
+def _linear_history_artifact(native_cxx, *, child_owned=False):
     """Compile a Uniform Program whose solution depends on the native interpolated slots."""
     import pops
     from pops.codegen import Production
@@ -273,41 +274,72 @@ def _linear_history_artifact(native_cxx):
     )
     case.numerics(numerics, block=block)
 
-    program = Program("native_linear_history")
+    program = Program(
+        "native_child_linear_history" if child_owned else "native_linear_history"
+    )
     temporal = program.state(block[state])
-    program.keep_history(
-        temporal,
-        depth=2,
-        interpolation=LinearInterpolation(),
-    )
     fast = Clock("fast", owner=program.owner_path)
-    interpolated = program.synchronize(
-        temporal.prev,
-        at=TimePoint(fast, step=-1),
-        relation=InterpolateHistory(temporal.prev),
-        name="half_previous_interval",
-    )
-    fast_value = program.subcycle(
-        interpolated,
-        clock=fast,
-        within=program.clock,
-        count=2,
-        body_fn=lambda P, value: P.value("fast_copy", 1 * value),
-    )
-    returned = program.synchronize(
-        fast_value,
-        at=temporal.next.point,
-        relation=SampleAndHold(),
-    )
-    rhs = program.rhs(
-        state=temporal.n,
-        terms=[Flux(), SourceTerm(source_operator)],
-    )
-    candidate = program.value(
-        "candidate",
-        returned + program.dt * rhs,
-        at=temporal.next.point,
-    )
+    if child_owned:
+        child = program.state(block[state], clock=fast)
+        program.keep_history(child, depth=2, interpolation=LinearInterpolation())
+        fast_value = program.subcycle(
+            child.n,
+            clock=fast,
+            within=program.clock,
+            count=2,
+            body_fn=lambda P, value: P.value(
+                "fast_advance",
+                value + P.dt * value,
+                at=child.next.point,
+            ),
+        )
+        # Executed native interpolation from a child-owned ring at -3/2 child ticks. The result is
+        # deliberately not the committed state: this isolates the ledger capability from the simple
+        # subcycled evolution while still making a missing/invalid child timestamp fail the step.
+        program.synchronize(
+            child.prev,
+            at=TimePoint(program.clock, Fraction(1, 4), step=-1),
+            relation=InterpolateHistory(child.prev),
+            name="child_history_at_macro_coordinate",
+        )
+        candidate = program.synchronize(
+            fast_value,
+            at=temporal.next.point,
+            relation=SampleAndHold(),
+        )
+    else:
+        program.keep_history(
+            temporal,
+            depth=2,
+            interpolation=LinearInterpolation(),
+        )
+        interpolated = program.synchronize(
+            temporal.prev,
+            at=TimePoint(fast, step=-1),
+            relation=InterpolateHistory(temporal.prev),
+            name="half_previous_interval",
+        )
+        fast_value = program.subcycle(
+            interpolated,
+            clock=fast,
+            within=program.clock,
+            count=2,
+            body_fn=lambda P, value: P.value("fast_copy", 1 * value),
+        )
+        returned = program.synchronize(
+            fast_value,
+            at=temporal.next.point,
+            relation=SampleAndHold(),
+        )
+        rhs = program.rhs(
+            state=temporal.n,
+            terms=[Flux(), SourceTerm(source_operator)],
+        )
+        candidate = program.value(
+            "candidate",
+            returned + program.dt * rhs,
+            at=temporal.next.point,
+        )
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(0.1))
     case.program(program)
@@ -342,6 +374,28 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
     return _bind_uniform_artifact(
         _uniform_artifact(native_cxx, attempt_policy=attempt_policy)
     )
+
+
+def _write_resealed_uniform_payload(payload, owner, destination, replacements):
+    """Write an authenticated test payload after one intentional semantic mutation."""
+    from pops.runtime._checkpoint_manifest import (
+        IDENTITY_KEY,
+        MANIFEST_KEY,
+        seal_checkpoint_payload,
+    )
+
+    candidate = {
+        name: np.array(value, copy=True)
+        for name, value in payload.items()
+        if name not in {MANIFEST_KEY, IDENTITY_KEY}
+    }
+    candidate.update(
+        {name: np.array(value, copy=True) for name, value in replacements.items()}
+    )
+    seal_checkpoint_payload(owner, candidate, runtime_kind="uniform")
+    with open(destination, "wb") as stream:
+        np.savez_compressed(stream, **candidate)
+    return destination
 
 
 def _nested_schedule():
@@ -588,6 +642,7 @@ def test_temporal_schedule_rejects_history_provider_source_clock_drift():
 @pytest.mark.native_loader
 def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     tmp_path,
+    monkeypatch,
     isolated_native_cache,
     native_cxx,
     kokkos_root,
@@ -770,6 +825,89 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             refused.restart(path)
         assert np.array_equal(np.asarray(refused.state_global("blk")), before)
 
+    # Integrity alone is not semantic validity: re-seal malformed continuation metadata with the
+    # current runtime identities and prove the strict preflight refuses it before beginning the
+    # native restore transaction or mutating state/history/cache/clock.
+    first_history = history_names[0]
+    first_cache = cache_nodes[0]
+    invalid_metadata = {
+        "history-slot-dt-nan": (
+            {
+                "history_slot_dt_" + first_history: np.full(
+                    len(pristine["history_slot_dt_" + first_history]),
+                    np.nan,
+                    dtype=np.float64,
+                )
+            },
+            "outgoing-dt ledger must be finite",
+        ),
+        "history-fill-count": (
+            {"history_fill_count_" + first_history: np.asarray(-1, dtype=np.int64)},
+            "history_fill_count_.*must be >= 0",
+        ),
+        "cache-node": (
+            {"cache_nodes": np.asarray([-1], dtype=np.int64)},
+            "cache index is inconsistent",
+        ),
+        "cache-future-update": (
+            {
+                "cache_last_update_%d" % first_cache: np.asarray(
+                    int(pristine["macro_step"]), dtype=np.int64
+                )
+            },
+            "last update is not an accepted prior step",
+        ),
+        "cache-accumulated-dt-nan": (
+            {
+                "cache_accum_dt_%d" % first_cache: np.asarray(
+                    np.nan, dtype=np.float64
+                )
+            },
+            "cache_accum_dt_.*must be finite",
+        ),
+        "cache-empty-name": (
+            {"cache_names": np.asarray([""], dtype="U1")},
+            "must contain non-empty text",
+        ),
+    }
+    for label, (replacement, message) in invalid_metadata.items():
+        path = _write_resealed_uniform_payload(
+            pristine,
+            split,
+            tmp_path / ("adaptive-resealed-invalid-%s.npz" % label),
+            replacement,
+        )
+        refused = fresh()
+        engine = refused._executor
+        native = engine._s
+        before_state = np.asarray(refused.state_global("blk")).copy()
+        before_clock = (refused.time(), refused.macro_step())
+        before_histories = {
+            (name, slot): np.asarray(native.history_global(name, slot)).copy()
+            for name in native.history_names()
+            for slot in range(native.history_depth(name))
+        }
+        before_cache_nodes = tuple(native.program_cache_nodes())
+
+        def transaction_must_not_begin(self):
+            del self
+            raise AssertionError("semantic preflight reached _begin_checkpoint_restart")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                type(engine),
+                "_begin_checkpoint_restart",
+                transaction_must_not_begin,
+            )
+            with pytest.raises((TypeError, ValueError, RuntimeError), match=message):
+                refused.restart(path)
+        assert "_checkpoint_restart_python_snapshot" not in engine.__dict__
+        assert (refused.time(), refused.macro_step()) == before_clock
+        assert np.array_equal(np.asarray(refused.state_global("blk")), before_state)
+        assert tuple(native.program_cache_nodes()) == before_cache_nodes
+        for (name, slot), values in before_histories.items():
+            assert np.array_equal(np.asarray(native.history_global(name, slot)), values)
+
     # The first accepted dt after restart is itself part of the contract, not merely the final
     # field. Both runtimes must also publish the same following queued proposal.
     for runtime in (split, resumed):
@@ -859,6 +997,50 @@ def test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactl
     )
 
 
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
+    native_cxx,
+    tmp_path,
+):
+    import pops
+
+    artifact = _linear_history_artifact(native_cxx, child_owned=True)
+
+    def fresh():
+        return _bind_uniform_artifact(artifact)
+
+    reference = fresh()
+    pops.run(reference, t_end=0.3, max_steps=3, console=False)
+
+    split = fresh()
+    pops.run(split, t_end=0.2, max_steps=2, console=False)
+    checkpoint = Path(split.checkpoint(tmp_path / "child-linear-history"))
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        name = str(stored["history_names"][0])
+        temporal = json.loads(str(stored["temporal_restart_state"]))
+        (history,) = temporal["program_schedule"]["histories"]
+        assert history["name"] == name
+        assert history["clock"] != temporal["program_schedule"]["primary_clock"]
+        assert np.array_equal(
+            stored["history_slot_dt_%s" % name],
+            np.full(3, 0.05, dtype=np.float64),
+        )
+
+    resumed = fresh()
+    resumed.restart(checkpoint)
+    pops.run(split, t_end=0.3, max_steps=1, console=False)
+    pops.run(resumed, t_end=0.3, max_steps=1, console=False)
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(split.state_global("blk")),
+    )
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(reference.state_global("blk")),
+    )
+
+
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
     state = _bound_state()
     payload = json.loads(state.checkpoint_json(time=0.0, macro_step=0))
@@ -899,6 +1081,8 @@ class _Payload(dict):
 def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore():
     payload = _Payload(
         {
+            "t": np.array(0.0, dtype=np.float64),
+            "macro_step": np.array(0, dtype=np.int64),
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
             "cache_nodes": np.array([], dtype=np.int64),
