@@ -207,6 +207,7 @@
   "tests/python/unit/mesh/test_analytic_geometry.py": 2.0,
   "tests/python/unit/mesh/test_board_field_problem.py": 0.5,
   "tests/python/unit/mesh/test_boundary_topology_ports.py": 1.0,
+  "tests/python/unit/mesh/test_compiled_boundary_reports.py": 0.5,
   "tests/python/unit/mesh/test_disc_domain_mask.py": 0.5,
   "tests/python/unit/mesh/test_field_equation_algebra.py": 0.5,
   "tests/python/unit/mesh/test_field_solve_cadence.py": 0.5,
@@ -628,6 +629,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 393
+    "total_files": 394
   }
 }
