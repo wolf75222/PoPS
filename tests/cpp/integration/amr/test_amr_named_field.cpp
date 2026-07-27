@@ -58,6 +58,12 @@
 
 using namespace pops;
 
+static SolveReport consume_expected_solved(SolveOutcome outcome) {
+  const SolveConsumption action = outcome.report().solved() ? SolveConsumption::kAccept
+                                                            : SolveConsumption::kFailRun;
+  return outcome.consume(action);
+}
+
 static AmrFieldHierarchyPolicyAuthority level_local_hierarchy_policy() {
   return {
       "pops.field-hierarchy.level-local",
@@ -462,10 +468,22 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
                                        });
 
   const std::string selected = "graph_identity";
-  const SolveReport report = runtime.solve_named_fields(&selected);
+  runtime.provider_potential(selected).set_val(Real(-7));
+  const MultiFab accepted_phi = runtime.provider_potential(selected);
+  const MultiFab accepted_aux = runtime.aux(0);
+  SolveOutcome outcome = runtime.solve_named_fields(&selected);
+  EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(selected), accepted_phi), Real(0));
+  EXPECT_EQ(max_abs_diff(runtime.aux(0), accepted_aux), Real(0))
+      << "AMR phi and aux must remain physically unchanged before Accept";
+  EXPECT_THROW((void)runtime.solve_named_fields(&selected), std::logic_error)
+      << "the successful candidate remains transaction-private until explicit acceptance";
+  const SolveReport report = consume_expected_solved(std::move(outcome));
   ASSERT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 0);
   EXPECT_GT(report.reference_residual_norm, Real(0));
+  SolveOutcome second_outcome = runtime.solve_named_fields(&selected);
+  EXPECT_TRUE(consume_expected_solved(std::move(second_outcome)).solved())
+      << "acceptance releases the field transaction for the next solve";
 
   const MultiFab& state = runtime.level_state(0, 0);
   MultiFab expected(state.box_array(), state.dmap(), 1, 1);
@@ -514,7 +532,7 @@ TEST(test_amr_named_field, Runs) {
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   EXPECT_EQ(rt.n_blocks(), 1) << "named_engine_one_block";
 
-  const SolveReport default_report = rt.solve_default_field();
+  const SolveReport default_report = consume_expected_solved(rt.solve_default_field());
   ASSERT_TRUE(default_report.solved())
       << "status=" << default_report.status_name() << " action=" << default_report.action_name()
       << " iters=" << default_report.iters << " rel_residual=" << default_report.rel_residual;
@@ -553,7 +571,7 @@ TEST(test_amr_named_field, Runs) {
   EXPECT_TRUE(rt.has_named_field("psi") && rt.n_named_fields() == 1) << "named_psi_registered";
 
   const std::string psi_field = "psi";
-  ASSERT_TRUE(rt.solve_named_fields(&psi_field).solved());
+  ASSERT_TRUE(consume_expected_solved(rt.solve_named_fields(&psi_field)).solved());
   ASSERT_EQ(rt.provider_potential_levels("psi"), rt.nlev());
   for (int level = 0; level < rt.nlev(); ++level) {
     const Real spacing = S.geom.dx() / Real(1 << level);
@@ -609,7 +627,7 @@ TEST(test_amr_named_field, Runs) {
 
   const MultiFab aux_before_selected_chi = rt.aux(0);
   const std::string chi_field = "chi";
-  ASSERT_TRUE(rt.solve_named_fields(&chi_field).solved());
+  ASSERT_TRUE(consume_expected_solved(rt.solve_named_fields(&chi_field)).solved());
   ASSERT_EQ(rt.provider_potential_levels("chi"), rt.nlev());
   for (int level = 0; level < rt.nlev(); ++level) {
     const Real spacing = S.geom.dx() / Real(1 << level);
@@ -660,7 +678,10 @@ TEST(test_amr_named_field, Runs) {
   context.set_level(0);
   std::string context_diagnostic;
   try {
-    (void)context.solve_fields();
+  {
+    auto outcome = context.solve_fields();
+    (void)outcome.consume(SolveConsumption::kAccept);
+  }
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
   } catch (const FieldNullspaceIncompatibleRhs& error) {
     context_diagnostic = error.what();
@@ -721,7 +742,8 @@ TEST(test_amr_named_field, Runs) {
     add_scaled_component(U, Real(q), 0, rhs);
   });
 
-  const SolveReport failed = rt.solve_fields();
+  auto failed_outcome = rt.solve_fields();
+  const SolveReport failed = failed_outcome.consume(SolveConsumption::kRejectAttempt);
   EXPECT_EQ(failed.status, SolveStatus::kIterationLimit);
   EXPECT_EQ(failed.action, SolveAction::kRejectAttempt);
   EXPECT_EQ(failed.iters, 1);
@@ -792,7 +814,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
                                        });
 
   const std::string field = "screened";
-  ASSERT_TRUE(runtime.solve_named_fields(&field).solved());
+  ASSERT_TRUE(consume_expected_solved(runtime.solve_named_fields(&field)).solved());
   ASSERT_EQ(runtime.nlev(), 2);
   for (int level = 0; level < runtime.nlev(); ++level)
     EXPECT_EQ(max_valid_component_error(runtime.provider_potential_level(field, level),
@@ -984,14 +1006,16 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     const std::string wall_field = "wall-field";
     EXPECT_GT(norm_inf(runtime.level_state(0, 0)), Real(0))
         << "the embedded-Dirichlet solve must receive a non-trivial source field";
-    const SolveReport wall_report = runtime.solve_named_fields(&wall_field);
+    const SolveReport wall_report =
+        consume_expected_solved(runtime.solve_named_fields(&wall_field));
     ASSERT_TRUE(wall_report.solved()) << wall_report.reason;
     const MultiFab first_wall_solution = runtime.provider_potential(wall_field);
     EXPECT_GT(norm_inf(first_wall_solution), Real(0))
         << "the level-local active-region provider must execute a non-trivial embedded-Dirichlet "
            "solve";
     runtime.provider_potential(wall_field).set_val(Real(0));
-    const SolveReport repeated_wall_report = runtime.solve_named_fields(&wall_field);
+    const SolveReport repeated_wall_report =
+        consume_expected_solved(runtime.solve_named_fields(&wall_field));
     ASSERT_TRUE(repeated_wall_report.solved()) << repeated_wall_report.reason;
     EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(wall_field), first_wall_solution),
               Real(0))

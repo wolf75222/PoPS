@@ -175,6 +175,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver {
         return HierarchyTensorSolverExecutionPath::DirectProvider;
     return HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
   }
+  int level_count() const noexcept override { return eng_ == nullptr ? 0 : eng_->nlev(); }
 
   /// The level-shaped WRITE target for an assembly field of @p role at level @p k. The emitted
   /// assembly kernel reaches it via AmrProgramContext::assembly_target so its per-cell write lands in

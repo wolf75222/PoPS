@@ -329,14 +329,22 @@ class SystemFieldSolver {
   }
 
   void restore_step_snapshot(const StepSnapshot& snapshot) {
-    if (!snapshot.had_elliptic)
+    if (!snapshot.had_elliptic) {
       invalidate_primary_backend_();
-    else if (snapshot.potential && ell_)
-      ell_->restore(*snapshot.potential);
-    if (!snapshot.had_polar_solver)
+    } else {
+      if (!ell_)
+        ensure_elliptic();
+      if (snapshot.potential)
+        ell_->restore(*snapshot.potential);
+    }
+    if (!snapshot.had_polar_solver) {
       pell_.reset();
-    else if (snapshot.polar_potential && pell_)
-      pell_->phi() = *snapshot.polar_potential;
+    } else {
+      if (!pell_)
+        ensure_elliptic_polar();
+      if (snapshot.polar_potential)
+        pell_->phi() = *snapshot.polar_potential;
+    }
     phi_src_polar_ = snapshot.polar_source;
     for (auto& item : named_fields_) {
       if (std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), item.first) !=
@@ -345,8 +353,11 @@ class SystemFieldSolver {
         continue;
       }
       const auto saved = snapshot.named_potentials.find(item.first);
-      if (saved != snapshot.named_potentials.end() && item.second.backend)
+      if (saved != snapshot.named_potentials.end()) {
+        if (!item.second.backend)
+          ensure_named_backend(item.second, item.first);
         item.second.backend->restore(saved->second);
+      }
     }
     diagnostics_ = snapshot.diagnostics;
   }

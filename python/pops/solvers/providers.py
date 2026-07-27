@@ -409,7 +409,7 @@ class PreparedHierarchySolverNativeEmission:
             if type(value) is not tuple or any(type(line) is not str or not line for line in value):
                 raise TypeError("hierarchy native emission %s must contain exact C++ lines" % name)
         if not self.solve:
-            raise ValueError("hierarchy native emission must publish a solve report")
+            raise ValueError("hierarchy native emission must publish a consumed solve outcome")
 
 
 HierarchyOptionValidator = Callable[[Any, str], dict[str, Any]]
@@ -1050,7 +1050,7 @@ def _emit_composite_tensor_fac(
         ),
     )
     solve = (
-        "pops::SolveReport %s = ctx.solve_hierarchy_tensor(%d, %d, %s, %s, %d);"
+        "pops::SolveOutcome %s = ctx.solve_hierarchy_tensor(%d, %d, %s, %s, %d);"
         % (
             request.report_name,
             request.block_index,

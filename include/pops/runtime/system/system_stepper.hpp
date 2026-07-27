@@ -4,6 +4,7 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledFreqKernel (per-cell coupled frequency)
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell (max mu over the cells, device-clean functor)
 #include <pops/parallel/comm.hpp>  // all_reduce_min/max (global bounds: identical dt on all ranks)
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode (disk transport dispatch)
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -316,7 +317,7 @@ class SystemStepper {
     // each block. A HELD block (cadence M, outside the window end) contributes with its STALE state (its
     // last advance, thus frozen until its next catch-up): stale density / charge in the Poisson sum as
     // long as it has not caught up. Assumed stride choice (loose coupling of the slow block).
-    P->solve_fields();
+    require_solved_field_report_(P->solve_fields(), "SystemStepper::step");
     advance_due_blocks(dt);
     apply_couplings(Real(dt));  // inter-species coupled sources (splitting), after transport
     apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
@@ -357,7 +358,7 @@ class SystemStepper {
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0) {
     Impl* P = owner_;
-    P->solve_fields();
+    require_solved_field_report_(P->solve_fields(), "SystemStepper::step_cfl");
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
     // cfl_grid_h). The rest of the CFL formula (per block, substeps/stride) is unchanged.
     const Real h = cfl_grid_h();
@@ -497,7 +498,7 @@ class SystemStepper {
   /// bounds (P->dt_bounds_). Without optional bounds, macro_dt is STRICTLY historical.
   double step_adaptive(double cfl) {
     Impl* P = owner_;
-    P->solve_fields();
+    require_solved_field_report_(P->solve_fields(), "SystemStepper::step_adaptive");
     // Multirate: macro-step = stable step of the SLOWEST block; each faster block is
     // subcycled n_b. aux frozen over the macro-step (coupling once-per-step). STRIDE SEMANTICS =
     // hold-then-catch-up: a block of cadence M is HELD as long as (macro_step + 1) % M != 0, then
@@ -585,6 +586,12 @@ class SystemStepper {
   void restore_last_dt_reason(std::string reason) { last_dt_reason_ = std::move(reason); }
 
  private:
+  static void require_solved_field_report_(const SolveReport& report, const char* where) {
+    if (!report.solved_value_available())
+      throw std::runtime_error(std::string(where) + ": field solve failed: status=" +
+                               report.status_name() + " action=" + report.action_name());
+  }
+
   Impl* owner_;
   std::string last_dt_reason_;  // active bound of the last step_cfl (diagnostic)
 };

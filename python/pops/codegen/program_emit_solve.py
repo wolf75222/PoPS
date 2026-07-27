@@ -94,28 +94,31 @@ def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ..
 
 
 def _append_solve_report_guard(
-        program: Any, solve: Any, report: str, lines: list[str], *, label: str,
+        program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
         phase: str | None = None) -> None:
-    """Attach the authored action to ``report`` and consume that report exactly once.
+    """Consume one native ``SolveOutcome`` with the unique authored action.
 
-    The unique ``SolveOutcome.consume`` remains the authoring authority.  Generated code copies that
-    decision into ``SolveReport.action`` before branching, so the report -- rather than a second
-    status filter in the guard -- is the sole runtime source of truth.
+    Success is accepted explicitly. Failure is consumed as RejectAttempt or FailRun according to the
+    authored status filter; ``SolveOutcome`` then materializes the authoritative report action.
     """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
+    report = "%s_report" % outcome
     if action_kind == "reject_attempt":
         selected = " || ".join(
-            "%s.status == %s" % (report, _SOLVE_STATUS_CPP[status])
+            "%s.report().status == %s" % (outcome, _SOLVE_STATUS_CPP[status])
             for status in action_statuses)
-        failure_action = (
-            "(%s ? pops::SolveAction::kRejectAttempt : pops::SolveAction::kFailRun)"
+        failure_consumption = (
+            "(%s ? pops::SolveConsumption::kRejectAttempt : "
+            "pops::SolveConsumption::kFailRun)"
             % selected
         )
     else:
-        failure_action = "pops::SolveAction::kFailRun"
+        failure_consumption = "pops::SolveConsumption::kFailRun"
     failure_phase = label if phase is None else phase
-    lines.append("if (!%s.solved_value_available()) {" % report)
-    lines.append("  %s.action = %s;" % (report, failure_action))
+    lines.append("if (!%s.report().solved_value_available()) {" % outcome)
+    lines.append(
+        "  const pops::SolveReport %s = %s.consume(%s);"
+        % (report, outcome, failure_consumption))
     if action_kind == "reject_attempt":
         lines.append("  if (%s.action == pops::SolveAction::kRejectAttempt) {" % report)
         lines.append(
@@ -128,6 +131,8 @@ def _append_solve_report_guard(
         "\" action=\" + %s.action_name());"
         % (json.dumps(label + " failed: "), report, report))
     lines.append("}")
+    lines.append(
+        "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
 
 
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
@@ -979,7 +984,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     lines.append("%s->prepare(*%s);" % (problem_name, snapshot_name))
     lines.append("%s->bind(*%s);" % (workspace_name, problem_name))
     lines.append(
-        "pops::SolveReport %s = ctx.solve_prepared_linear("
+        "pops::SolveOutcome %s = ctx.solve_prepared_linear("
         "*%s, *%s, *%s, %s, %s);"
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_solve_report_guard(

@@ -90,7 +90,11 @@ def _append_pointwise_solve_report(
         % (code, report))
     lines.append(
         "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
-    _append_solve_report_guard(program, solve, report, lines, label=label)
+    outcome = "%s_outcome_%d" % (stem, solve.id)
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
+        % (outcome, report))
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
@@ -150,7 +154,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
-        solve_stmt = ('pops::SolveReport %s = '
+        solve_stmt = ('pops::SolveOutcome %s = '
                       'ctx.solve_fields_from_state(%s, %d, %s);'
                       % (report, json.dumps(field), bidx, var[state_in.id]))
         lines.append(solve_stmt)
@@ -179,7 +183,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
         lines.append(
-            "pops::SolveReport %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
             % (report, int(v.id), json.dumps(field), ", ".join(overrides)))
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first

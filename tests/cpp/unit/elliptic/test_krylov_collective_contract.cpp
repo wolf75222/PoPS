@@ -450,7 +450,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     require(std::abs(static_cast<double>(problem.inner_product(rhs, rhs)) - 32.0) < 1e-12);
     require(std::abs(static_cast<double>(problem.residual_norm(rhs)) - std::sqrt(32.0)) < 1e-12);
     const SolveReport report =
-        solve_prepared_affine(problem, workspace, iterate, rhs,
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                               KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
     require(report.status == SolveStatus::kSolved);
     MultiFab error = make_replicated_field();
@@ -466,7 +466,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
                                kExactReplicaValidationFailure));
     require(uniformly_rejected(
         [&] {
-          (void)solve_prepared_affine(
+          (void)detail::solve_prepared_affine_in_place(
               problem, workspace, iterate, rhs,
               KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
         },
@@ -476,7 +476,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     fill_isometric_rank_permutation(iterate);
     require(uniformly_rejected(
         [&] {
-          (void)solve_prepared_affine(
+          (void)detail::solve_prepared_affine_in_place(
               problem, workspace, iterate, rhs,
               KrylovControls{gmres_krylov_method(3), Real(1e-12), Real(0), 4});
         },
@@ -562,7 +562,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     diverge.store(true, std::memory_order_release);
     require(uniformly_rejected(
         [&] {
-          (void)solve_prepared_affine(problem, workspace, iterate, rhs,
+          (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                                       KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 4});
         },
         "prepared Krylov solve failed terminally on at least one communicator rank"));
@@ -621,7 +621,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const KrylovControls controls{cg_krylov_method(), Real(1e-12), Real(0), 4};
     for (const Real offset : {Real(3), Real(-7)}) {
       iterate.set_val(offset);
-      const SolveReport report = solve_prepared_affine(problem, workspace, iterate, rhs, controls);
+      const SolveReport report = detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
       require(report.solved());
       require(std::abs(static_cast<double>(problem.inner_product(iterate, *constant_mode))) <
               1e-12);
@@ -701,7 +701,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     require(std::abs(static_cast<double>(problem.inner_product(rhs, rhs)) - 96.0) < 1e-12);
     require(std::abs(static_cast<double>(problem.residual_norm(rhs)) - std::sqrt(96.0)) < 1e-12);
     const SolveReport report =
-        solve_prepared_affine(problem, workspace, iterate, rhs,
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
                               KrylovControls{cg_krylov_method(), Real(1e-12), Real(0), 2});
     require(report.solved());
 
@@ -817,7 +817,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     method_problem.prepare(method_snapshot);
     method_workspace.bind(method_problem);
     const SolveReport invalid =
-        solve_prepared_affine(method_problem, method_workspace, method_iterate, method_rhs,
+        detail::solve_prepared_affine_in_place(method_problem, method_workspace, method_iterate, method_rhs,
                               KrylovControls{method, Real(1e-12), Real(0), 2});
     const std::string_view expected_reason =
         behavior == CollectiveBoundaryKrylovProvider::Behavior::kThrowOnRankZero
@@ -856,7 +856,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     method_workspace.bind(method_problem);
 
     const SolveReport report =
-        solve_prepared_affine(method_problem, method_workspace, method_iterate, method_rhs,
+        detail::solve_prepared_affine_in_place(method_problem, method_workspace, method_iterate, method_rhs,
                               KrylovControls{method, Real(1e-12), Real(0), 2});
     if (behavior == LongReasonCollectiveKrylovProvider::Behavior::kIdentical) {
       require(report.status == SolveStatus::kIterationLimit);
@@ -993,7 +993,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     if (rank == 0)
       controls.max_iterations = 0;
     require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, workspace, iterate, rhs, controls); },
+        [&] { (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls); },
         "collective contract differs"));
   }
   {
@@ -1001,27 +1001,27 @@ int run_krylov_collective_contract(int argc, char** argv) {
     if (rank == 0)
       controls.rel_tol = Real(1e-7);
     require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, workspace, iterate, rhs, controls); },
+        [&] { (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls); },
         "collective contract differs"));
   }
   {
     const MultiFab& local_rhs = rank == 0 ? iterate : rhs;
     require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, workspace, iterate, local_rhs, valid); },
+        [&] { (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, local_rhs, valid); },
         "distinct storage"));
   }
   {
     MultiFab incompatible = make_field(rank == 0 ? 2 : 1);
     const MultiFab& local_rhs = rank == 0 ? incompatible : rhs;
     require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, workspace, iterate, local_rhs, valid); },
+        [&] { (void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, local_rhs, valid); },
         "incompatible vector space"));
   }
   {
     KrylovWorkspace unbound(iterate, cg_krylov_method(), footprint);
     KrylovWorkspace& local_workspace = rank == 0 ? unbound : workspace;
     require(uniformly_rejected(
-        [&] { (void)solve_prepared_affine(problem, local_workspace, iterate, rhs, valid); },
+        [&] { (void)detail::solve_prepared_affine_in_place(problem, local_workspace, iterate, rhs, valid); },
         "not bound"));
   }
   {
@@ -1096,7 +1096,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
         sticky_preconditioner_calls.load(std::memory_order_relaxed);
     operator_target.store(operator_calls_before + 2, std::memory_order_release);
     const SolveReport sticky_report =
-        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+        detail::solve_prepared_affine_in_place(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
                               KrylovControls{sticky_method, Real(1e-12), Real(0), 6});
     require_sticky_failure_report(sticky_report, "sticky-gmres-op-preconditioner");
     require(sticky_preconditioner_calls.load(std::memory_order_relaxed) >=
@@ -1156,7 +1156,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
         sticky_preconditioner_calls.load(std::memory_order_relaxed);
     preconditioner_target.store(preconditioner_calls_before + 2, std::memory_order_release);
     const SolveReport sticky_report =
-        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+        detail::solve_prepared_affine_in_place(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
                               KrylovControls{sticky_method, Real(1e-12), Real(0), 6});
     require_sticky_failure_report(sticky_report, "sticky-bicgstab-preconditioner-op");
     require(sticky_operator_calls.load(std::memory_order_relaxed) >= operator_calls_before + 3);
@@ -1202,7 +1202,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
     const long operator_calls_before = sticky_operator_calls.load(std::memory_order_relaxed);
     operator_target.store(operator_calls_before + 2, std::memory_order_release);
     const SolveReport sticky_report =
-        solve_prepared_affine(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
+        detail::solve_prepared_affine_in_place(sticky_problem, sticky_workspace, sticky_iterate, sticky_rhs,
                               KrylovControls{sticky_method, Real(1e-12), Real(0), 4});
     require_sticky_failure_report(sticky_report, "sticky-custom-two-apply");
     require(sticky_operator_calls.load(std::memory_order_relaxed) >= operator_calls_before + 3);
@@ -1211,7 +1211,7 @@ int run_krylov_collective_contract(int argc, char** argv) {
 
   {
     throw_after_collective.store(true, std::memory_order_release);
-    const SolveReport invalid = solve_prepared_affine(problem, workspace, iterate, rhs, valid);
+    const SolveReport invalid = detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, valid);
     require(invalid.status == SolveStatus::kInvalidEvaluation);
     require(invalid.action == SolveAction::kFailRun);
     require(invalid.reason == "prepared operator application failed before Krylov recurrence");

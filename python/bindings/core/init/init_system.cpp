@@ -746,7 +746,8 @@ void bind_system_physics(py::class_<System>& cls) {
 
 // Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
 void bind_system_stepping(py::class_<System>& cls) {
-  cls.def("solve_fields", &System::solve_fields)
+  cls.def("solve_fields",
+          [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)

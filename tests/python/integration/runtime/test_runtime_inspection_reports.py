@@ -28,7 +28,7 @@ def test_system_inspect_is_structured_and_array_free():
     assert d["diagnostics"]["fallbacks"]["schema_version"] == 1
     assert any(row["key"] == "elliptic.fft.direct_dft"
                for row in d["diagnostics"]["fallbacks"]["entries"])
-    assert d["options"]["defaults"]["newton"]["max_iters"] == 2
+    assert d["options"]["defaults"]["newton"]["max_iters"] == 25
     assert d["options"]["poisson"]["solver"] == "geometric_mg"
     assert "array(" not in str(rep)
     assert json.loads(rep.to_json())["runtime"] == "system"
@@ -71,7 +71,6 @@ def test_layout_inspect_reports_native_routes_and_limitations():
     assert any(row["route_id"] == "mesh:2d_storage_arithmetic" and row["status"] == "partial"
                for row in uniform_info["native_capabilities"]["routes"])
 
-    from tests.python.support.layout_plan import final_amr_layout
     amr = final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2)
     amr_info = amr.inspect()
     assert amr_info["capabilities"]["layout"] == "amr"

@@ -204,7 +204,10 @@ static void install_native_ab2_program(runtime::program::AmrProgramContext& cont
   context.install([&context, after_level = std::move(after_level)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context, &after_level](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)context.solve_fields();
+      {
+        auto outcome = context.solve_fields();
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }
       MultiFab& state = context.state(0);
       MultiFab rate = context.rhs_scratch_like(state);
       context.rhs_into(0, state, rate, 17);
@@ -519,7 +522,10 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   bool measured_coarse_capture = false;
   context.advance_hierarchy(dt, [&](double level_dt) {
     context.set_stage_time(0, 1);
-    (void)context.solve_fields();
+    {
+      auto outcome = context.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }
     MultiFab& state = context.state(0);
     MultiFab& rate = context.rhs_scratch(17, 0, state);
     Real* const rate_storage = rate.local_size() > 0 ? rate.fab(0).array().p : nullptr;
@@ -903,7 +909,10 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
         [&context, &initial_patches, &lagged_rate_before_regrid, &lagged_rate_spread_after_regrid,
          &nonflux_carry_kept_old_fine_overlap, rt, n](double level_dt) {
           context.set_stage_time(0, 1);
-          (void)context.solve_fields();
+          {
+            auto outcome = context.solve_fields();
+            (void)outcome.consume(SolveConsumption::kAccept);
+          }
           MultiFab& state = context.state(0);
           if (context.level() == 1 && context.history_flux_topology_rebind_count() == 1) {
             const std::vector<double> carry =
