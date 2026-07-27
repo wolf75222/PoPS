@@ -33,8 +33,14 @@ def install_prepared_threshold_union(
         refine_args.append(len(rows))
     native = getattr(system, "_s", system)
     native._set_bootstrap_tagging(
+        ["state"] * len(rows),
+        [
+            "pops://runtime/amr-direct-state/%d:%s" % (len(block), block)
+            for block, _variable, _threshold in rows
+        ],
         [block for block, _variable, _threshold in rows],
         [variable for _block, variable, _threshold in rows],
+        [-1] * len(rows),
         [above] * len(rows),
         [float(threshold) for _block, _variable, threshold in rows],
         [-1] * len(rows),

@@ -27,6 +27,7 @@ struct PreparedNamedThresholdTag {
   std::string variable;
   double threshold = 0.0;
   PreparedThresholdRelation relation = PreparedThresholdRelation::Above;
+  std::string subject_identity;
 };
 
 inline std::string direct_amr_state_identity(const std::string& block) {
@@ -61,7 +62,9 @@ inline void install_prepared_threshold_union(
                            : POPS_TAGGING_BELOW_V1;
     const auto leaf_index = static_cast<std::int32_t>(blocks.size());
     subject_kinds.emplace_back("state");
-    subject_identities.push_back(direct_amr_state_identity(criterion.block));
+    subject_identities.push_back(criterion.subject_identity.empty()
+                                     ? direct_amr_state_identity(criterion.block)
+                                     : criterion.subject_identity);
     blocks.push_back(criterion.block);
     variables.push_back(criterion.variable);
     field_component_indices.push_back(-1);
@@ -116,7 +119,9 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
                            : POPS_TAGGING_BELOW_V1;
     const auto leaf_index = static_cast<std::int32_t>(leaf_ops.size());
     subject_kinds.emplace_back("state");
-    subject_identities.push_back(direct_amr_state_identity(criterion.block));
+    subject_identities.push_back(criterion.subject_identity.empty()
+                                     ? direct_amr_state_identity(criterion.block)
+                                     : criterion.subject_identity);
     blocks.push_back(criterion.block);
     variables.push_back(criterion.variable);
     field_component_indices.push_back(-1);

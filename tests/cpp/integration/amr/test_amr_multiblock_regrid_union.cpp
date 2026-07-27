@@ -126,13 +126,15 @@ static double dmax_field(const std::vector<double>& a, const std::vector<double>
   return d;
 }
 
+static constexpr const char* kRegridStateA = "test://amr-regrid-union/block/a/state/U";
+static constexpr const char* kRegridStateB = "test://amr-regrid-union/block/b/state/U";
+
 static void install_regrid_state_authorities(AmrSystem& sim) {
   struct StateRoute {
     const char* block;
     const char* subject;
   };
-  const StateRoute routes[] = {{"a", "test://amr-regrid-union/block/a/state/U"},
-                               {"b", "test://amr-regrid-union/block/b/state/U"}};
+  const StateRoute routes[] = {{"a", kRegridStateA}, {"b", kRegridStateB}};
   for (const StateRoute& route : routes)
     sim.install_block_state_route(route.block, route.subject);
   for (const StateRoute& route : routes) {
@@ -625,7 +627,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       test::install_prepared_threshold_union(
-          sim, {{"a", "n", 1.5}, {"b", "n", 1.5}});
+          sim, {{"a", "n", 1.5, test::PreparedThresholdRelation::Above, kRegridStateA},
+                {"b", "n", 1.5, test::PreparedThresholdRelation::Above, kRegridStateB}});
       sim.set_density("a", r0);
       sim.set_density("b", r1);
       sim.advance(0.01, 6);
@@ -648,7 +651,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       test::install_prepared_threshold_union(
-          sim, {{"a", "n", 1.5}, {"b", "n", 1.5}});
+          sim, {{"a", "n", 1.5, test::PreparedThresholdRelation::Above, kRegridStateA},
+                {"b", "n", 1.5, test::PreparedThresholdRelation::Above, kRegridStateB}});
       sim.set_density("a", r0);
       sim.set_density("b", r1);
       sim.advance(0.01, 6);

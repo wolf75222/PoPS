@@ -116,15 +116,15 @@ def test_runtime_environment_and_precision_facts():
     assert env["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")
 
 
-def test_regrid_variable_selector_advertised():
-    # ADC-296 / ADR-0001 Decision 5: the multi-block regrid variable is selectable by name/role
-    # (default = component 0). Native/compiled and one/many-block paths share the exact descriptor.
+def test_resolved_regrid_tagging_authority_advertised():
     regrid = capabilities()["regrid"]
-    assert set(regrid["variable_selector"]) == {"component_0", "by_name", "by_role"}, \
-        regrid["variable_selector"]
-    assert "by_name" in regrid["multi_block"] and "by_role" in regrid["multi_block"], regrid["multi_block"]
-    assert "by_name" in regrid["mono_block"] and "by_role" in regrid["mono_block"]
-    assert "by_name" in regrid["compiled_so"] and "by_role" in regrid["compiled_so"]
+    assert regrid == {
+        "authority": "resolved AMRTagging graph installed as one prepared native program",
+        "state_and_field_leaves": "block-qualified exact Handle identities",
+        "logical_nodes": "prepared not/any/all bytecode; no scalar threshold fallback",
+        "phi_gradient": "ordinary prepared field-gradient leaf",
+    }
+    assert "variable_selector" not in regrid
 
 
 def test_aux_named_surface_and_limit_parity():
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     test_polar_stability_bounds_advertised_wired()
     test_dimension_invariant_2d()
     test_runtime_environment_and_precision_facts()
-    test_regrid_variable_selector_advertised()
+    test_resolved_regrid_tagging_authority_advertised()
     test_aux_named_surface_and_limit_parity()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "
-          "2D dimension, regrid selector, aux named surface + limit parity)")
+          "2D dimension, resolved regrid tagging, aux named surface + limit parity)")

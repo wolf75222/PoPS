@@ -227,13 +227,13 @@ struct Snap {
   int n_patches = 0;
 };
 
-void configure_refined_execution(AmrSystem& system) {
+void configure_refined_execution(AmrSystem& system, const std::string& block = "gas") {
   // Time subcycling is independent from mesh refinement and must remain authored explicitly.
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   // The centered BackgroundDensity source has zero integral by construction, so the periodic
   // nullspace is physically compatible without any silent mean projection.
   system.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_threshold_union(system, {{"gas", "rho", 1.2}});
+  test::install_prepared_threshold_union(system, {{block, "rho", 1.2}});
 }
 
 // @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
@@ -406,7 +406,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   {
     AmrSystem A(make_cfg(n));
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A);
+    configure_refined_execution(A, "pot");
     A.set_density("pot", rho);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtA);
@@ -429,7 +429,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     const std::string bname = "stiff:" + std::to_string(eps);
     AmrSystem A(make_cfg(n));
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A);
+    configure_refined_execution(A, bname);
     A.set_density(bname, rho);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtB);

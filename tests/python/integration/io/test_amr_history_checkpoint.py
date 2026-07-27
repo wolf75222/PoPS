@@ -222,7 +222,7 @@ def _build(program_factory, regrid_every=2):
     amr.add_equation("blk", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
-    install_prepared_threshold_union(amr, (("blk", "n", 1.2),))
+    install_prepared_threshold_union(amr, (("blk", "rho", 1.2),))
     initial = _blob()
     amr.set_density("blk", initial)
     amr.install_program(compiled.so_path)
