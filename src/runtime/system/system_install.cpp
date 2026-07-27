@@ -823,6 +823,16 @@ void System::set_field_solver_plan(
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
   if (existing != p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
+  const auto duplicate_output = std::find_if(
+      p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
+      [&](const auto& configured) {
+        return configured.second.output_block == output_block &&
+               configured.second.output_key == output_key;
+      });
+  if (duplicate_output != p_->fields_.named_field_plans_.end())
+    throw std::runtime_error(
+        "System::set_field_solver_plan output block/key already belongs to another qualified "
+        "provider slot");
   field_solver::SystemFieldSolver<Impl>::FieldSolveConfig plan;
   plan.plan_identity = plan_identity;
   plan.provider_identity = provider_identity;

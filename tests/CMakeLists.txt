@@ -804,6 +804,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
+  set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
@@ -920,6 +921,7 @@ if(POPS_HAS_MPI)
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
+    test_coupled_fieldsolve
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
@@ -984,11 +986,19 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER "GeometricMgCollectiveContract.*")
+      elseif(_test STREQUAL "test_coupled_fieldsolve")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "test_coupled_fieldsolve.named_solve_honors_every_qualified_stage_without_live_mutation")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
     endforeach()
   endforeach()
+  set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1"
+    TIMEOUT 30)
 endif()
 
 get_property(_pops_dir_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)

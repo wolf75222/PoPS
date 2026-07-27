@@ -20,6 +20,7 @@
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson)
 #include <pops/parallel/comm.hpp>                                 // n_ranks() (FFT MPI guard)
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>              // detail::wall_predicate
 #include <pops/runtime/config/generated_component_catalog.hpp>
@@ -34,6 +35,7 @@
 #include <cstdlib>  // getenv
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>  // named_aux_: NAMED aux fields (comp -> field), re-applied after channel realloc
@@ -1424,6 +1426,8 @@ class SystemFieldSolver {
     std::unique_ptr<NamedFieldBackend> backend;
     std::optional<MultiFab> contribution_scratch;
     std::optional<MultiFab> published_phi_scratch;
+    std::optional<MultiFab> published_aux_scratch;
+    ExactSolveReportConsensusScratch solve_report_consensus;
     bool nullspace_ready = false;
     std::unique_ptr<FieldNullspaceWorkspace> nullspace_workspace;
   };
@@ -1866,8 +1870,9 @@ class SystemFieldSolver {
     return {};
   }
 
-  void prepare_boundary_dependencies(NamedField& field, int stage_block,
-                                     const MultiFab* stage_state) {
+  template <class StageForBlock>
+  void prepare_boundary_dependencies_from_(NamedField& field,
+                                           StageForBlock&& stage_for_block) {
     auto& plan = field.plan;
     plan.boundary_state_buffers.clear();
     plan.boundary_state_buffers.reserve(plan.boundary_state_blocks.size());
@@ -1875,9 +1880,7 @@ class SystemFieldSolver {
     plan.boundary_state_distributions.reserve(plan.boundary_state_blocks.size());
     for (std::size_t index = 0; index < plan.boundary_state_blocks.size(); ++index) {
       const int block = owner_->index(plan.boundary_state_blocks[index]);
-      const MultiFab* value = (stage_state != nullptr && block == stage_block)
-                                  ? stage_state
-                                  : &owner_->sp[static_cast<std::size_t>(block)].U;
+      const MultiFab* value = &stage_for_block(block);
       if (plan.boundary_state_components[index] < 0 ||
           plan.boundary_state_components[index] >= value->ncomp())
         throw std::runtime_error("System: boundary state dependency component is out of range");
@@ -1889,15 +1892,13 @@ class SystemFieldSolver {
     plan.boundary_field_distributions.clear();
     plan.boundary_field_distributions.reserve(plan.boundary_field_keys.size());
     for (std::size_t index = 0; index < plan.boundary_field_keys.size(); ++index) {
-      auto dependency =
-          std::find_if(named_fields_.begin(), named_fields_.end(), [&](const auto& item) {
-            return item.second.plan.output_block == plan.boundary_field_blocks[index] &&
-                   item.second.plan.output_key == plan.boundary_field_keys[index];
-          });
-      if (dependency == named_fields_.end() || &dependency->second == &field)
+      const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+          field, plan.boundary_field_blocks[index], plan.boundary_field_keys[index]);
+      if (dependency_slot == nullptr)
         throw std::runtime_error(
-            "System: boundary field dependency is missing or recursively reads its own solve");
-      MultiFab& value = provider_potential(dependency->first);
+            "System: boundary field dependency is missing, ambiguous, or recursively reads its "
+            "own solve");
+      MultiFab& value = provider_potential(*dependency_slot);
       if (plan.boundary_field_components[index] < 0 ||
           plan.boundary_field_components[index] >= value.ncomp())
         throw std::runtime_error("System: boundary field dependency component is out of range");
@@ -1916,6 +1917,27 @@ class SystemFieldSolver {
                                                     ? nullptr
                                                     : plan.boundary_field_distributions.data();
     plan.boundary_context.field_count = static_cast<int>(plan.boundary_field_buffers.size());
+  }
+
+  void prepare_boundary_dependencies(NamedField& field, int stage_block,
+                                     const MultiFab* stage_state) {
+    prepare_boundary_dependencies_from_(field, [&](int block) -> const MultiFab& {
+      return stage_state != nullptr && block == stage_block
+                 ? *stage_state
+                 : owner_->sp[static_cast<std::size_t>(block)].U;
+    });
+  }
+
+  void prepare_boundary_dependencies_from_blocks(
+      NamedField& field, const std::vector<const MultiFab*>& stage_states) {
+    if (stage_states.size() != owner_->sp.size())
+      throw std::invalid_argument(
+          "prepare_boundary_dependencies_from_blocks: stage-state count does not match the "
+          "System block registry");
+    prepare_boundary_dependencies_from_(field, [&](int block) -> const MultiFab& {
+      const MultiFab* stage = stage_states[static_cast<std::size_t>(block)];
+      return stage == nullptr ? owner_->sp[static_cast<std::size_t>(block)].U : *stage;
+    });
   }
 
   void prepare_field_providers(NamedField& field) {
@@ -2622,6 +2644,34 @@ class SystemFieldSolver {
     }
   }
 
+  void assemble_named_poisson_rhs_from_blocks(
+      const std::string& field, MultiFab& rhs,
+      const std::vector<const MultiFab*>& stage_states) {
+    if (stage_states.size() != owner_->sp.size())
+      throw std::invalid_argument(
+          "assemble_named_poisson_rhs_from_blocks: stage-state count does not match the "
+          "System block registry");
+    rhs.set_val(Real(0));
+    const auto route = named_fields_.find(field);
+    if (route == named_fields_.end() || !route->second.has_plan)
+      throw std::runtime_error("System: field provider slot '" + field + "' is not installed");
+    prepare_field_providers(route->second);
+    MultiFab& contribution = reusable_scratch_(route->second.contribution_scratch, rhs, 1, 0);
+    for (const auto& binding : route->second.prepared_providers) {
+      const int block = binding.block;
+      auto& state = owner_->sp[static_cast<std::size_t>(block)];
+      const MultiFab* stage = stage_states[static_cast<std::size_t>(block)];
+      const MultiFab& source = stage == nullptr ? state.U : *stage;
+      if (binding.coefficient == Real(1)) {
+        binding.rhs(source, rhs);
+      } else {
+        contribution.set_val(Real(0));
+        binding.rhs(source, contribution);
+        saxpy(rhs, binding.coefficient, contribution);
+      }
+    }
+  }
+
   /// Solves named field @p field's SECOND elliptic problem from block @p block_idx's stage state
   /// @p U_stage and writes phi (+ centered grad) into the field's OWN aux components (ADC-428):
   /// assemble f = Sum_s named_poisson_rhs_s[field] -> backend.solve() ->
@@ -2631,77 +2681,281 @@ class SystemFieldSolver {
   /// a future extension); @throws on the polar geometry or an unknown field.
   SolveReport solve_named_field_from_state(const std::string& field, int block_idx,
                                            const MultiFab& U_stage) {
-    require_field_plan_consensus();
-    if (block_idx < 0 || block_idx >= static_cast<int>(owner_->sp.size()))
-      throw std::out_of_range("solve_fields_from_state (named): block index " +
-                              std::to_string(block_idx) + " out of range (" +
-                              std::to_string(owner_->sp.size()) + " blocks)");
-    auto it = named_fields_.find(field);
-    if (it == named_fields_.end())
-      throw std::runtime_error("System: unknown named elliptic field '" + field +
-                               "' (register it via m.elliptic_field + the compiled block)");
-    if (owner_->polar_)
-      throw std::runtime_error("System: named elliptic field '" + field +
-                               "' on a polar (ring) grid is not supported yet (cartesian only)");
-    NamedField& nf = it->second;
-    if (nf.phi_comp < 0 || nf.phi_comp >= owner_->aux_ncomp_)
-      throw std::runtime_error(
-          "System: named elliptic field '" + field +
-          "' aux component out of the channel width (add the block that declares "
-          "its aux fields before solving)");
-    if (nf.gradient_sign != -1 && nf.gradient_sign != 1)
-      throw std::runtime_error("System: named elliptic field has no valid gradient sign");
-    const bool has_gradient = nf.gx_comp >= 0 && nf.gy_comp >= 0;
-    if (nf.phi_comp >= owner_->aux_ncomp_ ||
-        (has_gradient && (nf.gx_comp >= owner_->aux_ncomp_ || nf.gy_comp >= owner_->aux_ncomp_)))
-      throw std::runtime_error(
-          "System: named elliptic field output components exceed the aux channel width");
+    require_collective_named_field_request_(field, block_idx, U_stage);
+    NamedField& nf = require_named_field_(field);
+    require_collective_field_providers_(nf);
+    require_collective_boundary_dependencies_(
+        nf, [&](int block) -> const MultiFab& {
+          return block == block_idx ? U_stage : owner_->sp[static_cast<std::size_t>(block)].U;
+        });
     prepare_boundary_dependencies(nf, block_idx, &U_stage);
+    return solve_named_field_request_(field, nf, [&](MultiFab& rhs) {
+      assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
+    });
+  }
+
+  SolveReport solve_named_field_from_blocks(
+      const std::string& field, const std::vector<const MultiFab*>& stage_states) {
+    require_collective_named_field_request_(field, stage_states);
+    NamedField& nf = require_named_field_(field);
+    require_collective_field_providers_(nf);
+    require_collective_boundary_dependencies_(
+        nf, [&](int block) -> const MultiFab& {
+          const MultiFab* stage = stage_states[static_cast<std::size_t>(block)];
+          return stage == nullptr ? owner_->sp[static_cast<std::size_t>(block)].U : *stage;
+        });
+    prepare_boundary_dependencies_from_blocks(nf, stage_states);
+    return solve_named_field_request_(field, nf, [&](MultiFab& rhs) {
+      assemble_named_poisson_rhs_from_blocks(field, rhs, stage_states);
+    });
+  }
+
+ private:
+  NamedField& require_named_field_(const std::string& field) {
+    auto it = named_fields_.find(field);
+    bool invalid = it == named_fields_.end() || owner_->polar_;
+    if (it != named_fields_.end()) {
+      const NamedField& candidate = it->second;
+      const bool has_gradient = candidate.gx_comp >= 0 && candidate.gy_comp >= 0;
+      invalid = invalid || candidate.phi_comp < 0 ||
+                candidate.phi_comp >= owner_->aux_ncomp_ ||
+                (candidate.gradient_sign != -1 && candidate.gradient_sign != 1) ||
+                (has_gradient && (candidate.gx_comp >= owner_->aux_ncomp_ ||
+                                  candidate.gy_comp >= owner_->aux_ncomp_));
+    }
+    if (all_reduce_max(invalid ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "System: named elliptic field request is unavailable or has an invalid output contract "
+          "on at least one communicator rank");
+    return it->second;
+  }
+
+  [[nodiscard]] bool named_stage_layout_matches_(int block, const MultiFab& stage) const {
+    if (block < 0 || block >= static_cast<int>(owner_->sp.size()))
+      return false;
+    const MultiFab& live = owner_->sp[static_cast<std::size_t>(block)].U;
+    if (stage.box_array().boxes() != live.box_array().boxes() ||
+        stage.dmap().ranks() != live.dmap().ranks() || stage.ncomp() != live.ncomp() ||
+        stage.n_grow() != live.n_grow())
+      return false;
+    for (std::size_t other = 0; other < owner_->sp.size(); ++other)
+      if (static_cast<int>(other) != block && &stage == &owner_->sp[other].U)
+        return false;
+    return true;
+  }
+
+  static void append_named_stage_layout_(ExactContractBuilder& contract,
+                                         const MultiFab& stage) {
+    detail::append_elliptic_field_layout_contract(
+        contract, "stage", stage.box_array(), stage.dmap(), stage.ncomp(), stage.n_grow(),
+        FieldDistribution::Distributed);
+  }
+
+  void require_collective_named_field_request_(const std::string& field, int block,
+                                               const MultiFab& stage) {
+    require_field_plan_consensus();
+    ExactContractBuilder request;
+    request.text("pops.system.named-field-request")
+        .scalar(std::uint32_t{1})
+        .text("single-stage")
+        .text(field)
+        .scalar(static_cast<std::int64_t>(block));
+    append_named_stage_layout_(request, stage);
+    const std::string exact_request = std::move(request).release();
+    const bool ranks_agree = all_ranks_agree_exact_ordered_byte_pairs(
+        {{"system-named-field-request", exact_request}});
+    const bool invalid = !named_stage_layout_matches_(block, stage);
+    const long any_invalid = all_reduce_max(invalid ? 1L : 0L);
+    if (!ranks_agree)
+      throw std::invalid_argument(
+          "System: named field solve request differs between communicator ranks");
+    if (any_invalid != 0)
+      throw std::invalid_argument(
+          "System: named field solve stage does not match its qualified block on at least one "
+          "communicator rank");
+  }
+
+  void require_collective_named_field_request_(
+      const std::string& field, const std::vector<const MultiFab*>& stage_states) {
+    require_field_plan_consensus();
+    ExactContractBuilder request;
+    request.text("pops.system.named-field-request")
+        .scalar(std::uint32_t{1})
+        .text("simultaneous-stages")
+        .text(field)
+        .scalar(static_cast<std::uint64_t>(stage_states.size()));
+    bool invalid = stage_states.size() != owner_->sp.size();
+    for (std::size_t block = 0; block < stage_states.size(); ++block) {
+      const MultiFab* stage = stage_states[block];
+      request.presence(stage != nullptr);
+      if (stage == nullptr)
+        continue;
+      append_named_stage_layout_(request, *stage);
+      invalid = invalid || block >= owner_->sp.size() ||
+                !named_stage_layout_matches_(static_cast<int>(block), *stage);
+      for (std::size_t previous = 0; previous < block; ++previous)
+        invalid = invalid || stage_states[previous] == stage;
+    }
+    const std::string exact_request = std::move(request).release();
+    const bool ranks_agree = all_ranks_agree_exact_ordered_byte_pairs(
+        {{"system-named-field-request", exact_request}});
+    const long any_invalid = all_reduce_max(invalid ? 1L : 0L);
+    if (!ranks_agree)
+      throw std::invalid_argument(
+          "System: named field solve request differs between communicator ranks");
+    if (any_invalid != 0)
+      throw std::invalid_argument(
+          "System: named field solve stages are not an exact one-slot-per-qualified-block request "
+          "on at least one communicator rank");
+  }
+
+  [[nodiscard]] int block_index_or_negative_(std::string_view name) const noexcept {
+    for (std::size_t block = 0; block < owner_->sp.size(); ++block)
+      if (owner_->sp[block].name == name)
+        return static_cast<int>(block);
+    return -1;
+  }
+
+  [[nodiscard]] const std::string* unique_boundary_field_dependency_slot_(
+      const NamedField& consumer, std::string_view block, std::string_view key) const noexcept {
+    const std::string* result = nullptr;
+    for (const auto& [slot, candidate] : named_fields_) {
+      if (candidate.plan.output_block != block || candidate.plan.output_key != key)
+        continue;
+      if (result != nullptr)
+        return nullptr;
+      if (&candidate == &consumer)
+        return nullptr;
+      result = &slot;
+    }
+    return result;
+  }
+
+  template <class StageForBlock>
+  void require_collective_boundary_dependencies_(const NamedField& field,
+                                                 StageForBlock&& stage_for_block) const {
+    bool invalid = field.plan.boundary_state_blocks.size() !=
+                       field.plan.boundary_state_components.size() ||
+                   field.plan.boundary_field_blocks.size() !=
+                       field.plan.boundary_field_keys.size() ||
+                   field.plan.boundary_field_blocks.size() !=
+                       field.plan.boundary_field_components.size();
+    if (!invalid) {
+      for (std::size_t index = 0; index < field.plan.boundary_state_blocks.size(); ++index) {
+        const int block = block_index_or_negative_(field.plan.boundary_state_blocks[index]);
+        invalid = invalid || block < 0;
+        if (block >= 0) {
+          const int component = field.plan.boundary_state_components[index];
+          invalid = invalid || component < 0 || component >= stage_for_block(block).ncomp();
+        }
+      }
+      for (std::size_t index = 0; index < field.plan.boundary_field_blocks.size(); ++index) {
+        const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+            field, field.plan.boundary_field_blocks[index], field.plan.boundary_field_keys[index]);
+        invalid = invalid || dependency_slot == nullptr ||
+                  field.plan.boundary_field_components[index] != 0;
+      }
+    }
+    if (all_reduce_max(invalid ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "System: named field boundary dependencies are ambiguous or invalid on at least one "
+          "communicator rank");
+  }
+
+  template <class Phase>
+  void require_collective_named_phase_(std::string_view phase, Phase&& action) const {
+    bool failed = false;
+    try {
+      std::forward<Phase>(action)();
+    } catch (...) {
+      failed = true;
+    }
+    if (all_reduce_max(failed ? 1L : 0L) != 0)
+      throw std::runtime_error("System: named field " + std::string(phase) +
+                               " failed on at least one communicator rank");
+  }
+
+  void require_collective_field_providers_(NamedField& field) {
+    require_collective_named_phase_("provider preparation",
+                                    [&]() { prepare_field_providers(field); });
+  }
+
+  template <class Assemble>
+  SolveReport solve_named_field_request_(const std::string& field, NamedField& nf,
+                                         Assemble&& assemble) {
     ensure_named_backend(nf, field);
-    nf.backend->configure_boundary(nf.plan);
     MultiFab& rhs = nf.backend->rhs();
     MultiFab& phi_mf = nf.backend->phi();
-    MultiFab& published_phi =
-        reusable_scratch_(nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
-    PureFieldAlgebra::copy(published_phi, phi_mf);
-    auto restore_published = [&]() { PureFieldAlgebra::copy(phi_mf, published_phi); };
-    assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
-    nf.backend->prepare_rhs(*this, rhs, nf.plan, *nf.nullspace_workspace);
-    SolveReport report;
+    MultiFab* published_phi = nullptr;
+    MultiFab* published_aux = nullptr;
+    bool snapshot_failed = false;
     try {
-      report = nf.backend->solve(*this);
+      nf.backend->configure_boundary(nf.plan);
+      published_phi =
+          &reusable_scratch_(nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
+      published_aux = &reusable_scratch_(nf.published_aux_scratch, owner_->aux,
+                                        owner_->aux.ncomp(), owner_->aux.n_grow());
+    } catch (...) {
+      snapshot_failed = true;
+    }
+    if (all_reduce_max(snapshot_failed ? 1L : 0L) != 0)
+      throw std::runtime_error(
+          "System: named field publication snapshot allocation failed on at least one "
+          "communicator rank");
+    PureFieldAlgebra::copy_allocated(*published_phi, phi_mf);
+    PureFieldAlgebra::copy_allocated(*published_aux, owner_->aux);
+    const auto restore_published = [&]() {
+      PureFieldAlgebra::copy_allocated(phi_mf, *published_phi);
+      PureFieldAlgebra::copy_allocated(owner_->aux, *published_aux);
+      device_fence();
+    };
+    try {
+      require_collective_named_phase_("RHS assembly", [&]() {
+        std::forward<Assemble>(assemble)(rhs);
+        device_fence();
+      });
+      nf.backend->prepare_rhs(*this, rhs, nf.plan, *nf.nullspace_workspace);
+      SolveReport report;
+      require_collective_named_phase_("backend solve",
+                                      [&]() { report = nf.backend->solve(*this); });
+      if (!nf.solve_report_consensus.agrees(report))
+        throw std::runtime_error(
+            "System: named field backend SolveReport differs between communicator ranks");
       if (!report.solved_value_available()) {
         restore_published();
         return report;
       }
+      require_collective_named_phase_("finalization", [&]() {
+        device_fence();
+        nf.backend->finalize(*this, nf.plan, *nf.nullspace_workspace);
+        device_fence();
+        const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
+        const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
+        const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
+        const bool has_gradient = nf.gx_comp >= 0 && nf.gy_comp >= 0;
+        for (int li = 0; li < owner_->aux.local_size(); ++li) {
+          const ConstArray4 p = phi_mf.fab(li).const_array();
+          Array4 a = owner_->aux.fab(li).array();
+          const Box2D v = owner_->aux.box(li);
+          for_each_cell(
+              v, detail::SystemNamedFieldPostprocessKernel{
+                     a, p, cphi, cgx, cgy, gradient_scale, dx, dy, has_gradient});
+        }
+        device_fence();
+      });
+      require_collective_named_phase_("halo publication", [&]() {
+        fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+        apply_named_aux_bc();
+        device_fence();
+      });
+      return report;
     } catch (...) {
+      const std::exception_ptr failure = std::current_exception();
       restore_published();
-      throw;
+      std::rethrow_exception(failure);
     }
-    device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as ell_)
-    nf.backend->finalize(*this, nf.plan, *nf.nullspace_workspace);
-    device_fence();
-    const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
-    const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
-    const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
-    const bool grad = has_gradient;
-    for (int li = 0; li < owner_->aux.local_size(); ++li) {
-      const ConstArray4 p = phi_mf.fab(li).const_array();
-      Array4 a = owner_->aux.fab(li).array();
-      const Box2D v = owner_->aux.box(li);
-      for_each_cell(v, detail::SystemNamedFieldPostprocessKernel{a, p, cphi, cgx, cgy,
-                                                                 gradient_scale, dx, dy, grad});
-    }
-    // Ghost-fill the named field's aux components: the shared aux fill (same routing as solve_fields)
-    // then the per-field halo override (ADC-369). This re-fills ALL components -- the shared phi/grad
-    // were last written by the default solve_fields, so their valid cells are unchanged and only the
-    // halos are recomputed (idempotent for those components).
-    fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
-    apply_named_aux_bc();
-    return report;
   }
 
- private:
   static MultiFab& reusable_scratch_(std::optional<MultiFab>& storage, const MultiFab& prototype,
                                      int ncomp, int ghosts) {
     const bool compatible = storage &&
