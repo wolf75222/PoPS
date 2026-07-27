@@ -212,18 +212,19 @@ def test_public_amr_bind_preserves_every_conservative_component(
     # coarse-only. Each committed hierarchy transition must republish its accepted clocks
     # immediately: the accepted boundary before the first Program step describes every active level.
     level_clocks = [
-        row for row in simulation._s.program_clock_manifest()
+        row for row in simulation._executor.program_clock_manifest()
         if row and row[0] == "level"
     ]
     assert [int(row[1]) for row in level_clocks] == [0, 1]
     assert all(int(row[2]) == 0 and float(row[5]) == 0.0 for row in level_clocks)
 
     def assert_cold_two_level_history(runtime):
-        (history_name,) = list(runtime._s.history_names())
-        assert runtime._s.history_depth(history_name) == 2
-        assert runtime._s.history_initialized(history_name) is False
-        assert runtime._s.history_fill_count(history_name) == 0
-        (history_row,) = runtime._s.program_accepted_state_manifest()
+        engine = runtime._executor
+        (history_name,) = list(engine.history_names())
+        assert engine.history_depth(history_name) == 2
+        assert engine.history_initialized(history_name) is False
+        assert engine.history_fill_count(history_name) == 0
+        (history_row,) = engine.program_accepted_state_manifest()
         assert history_row[0] == history_name
         assert int(history_row[6]) == 2
         assert int(history_row[7]) == 2
@@ -241,7 +242,7 @@ def test_public_amr_bind_preserves_every_conservative_component(
     restarted.restart(checkpoint)
     assert assert_cold_two_level_history(restarted) == history_name
     restarted_levels = [
-        row for row in restarted._s.program_clock_manifest()
+        row for row in restarted._executor.program_clock_manifest()
         if row and row[0] == "level"
     ]
     assert [int(row[1]) for row in restarted_levels] == [0, 1]

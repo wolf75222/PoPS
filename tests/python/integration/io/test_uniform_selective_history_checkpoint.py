@@ -200,6 +200,18 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
     interrupted = _build(compiled, compiled_block, initial)
     _advance(interrupted, DT_SEQUENCE[:CHECKPOINT_STEP])
     assert interrupted._s.program_last_dt() == DT_SEQUENCE[CHECKPOINT_STEP - 1]
+    from pops.runtime._run_manifest import begin_run
+    from pops.runtime._step_strategy import run_control_payload
+
+    begin_run(
+        interrupted,
+        t_end=interrupted.time(),
+        step_transaction=run_control_payload(
+            pops.time.FixedDt(DT_SEQUENCE[CHECKPOINT_STEP - 1])
+        ),
+        max_steps=0,
+        output_dir=None,
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         checkpoint = interrupted.checkpoint(os.path.join(tmp, "uniform-selective"))
