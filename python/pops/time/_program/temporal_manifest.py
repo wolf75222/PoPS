@@ -39,6 +39,17 @@ def _history_policy(program: Any, name: str) -> Any:
     return configured[1].to_manifest() if configured is not None else None
 
 
+def _history_contracts(program: Any) -> dict[str, Any]:
+    result = {}
+    for temporal_state, contract in getattr(program, "_history_contracts", {}).items():
+        name = "%s.%s" % (
+            block_name(temporal_state.block), state_name(temporal_state.state))
+        if name in result:
+            raise ValueError("history %r has more than one typed HistoryContract" % name)
+        result[name] = contract
+    return result
+
+
 def build_temporal_manifest(program: Any) -> dict[str, Any]:
     """Build and validate the exact nested-clock execution schedule for ``program``."""
     from pops.time._program.serialization import _json_ready
@@ -125,6 +136,7 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
         if state in getattr(program, "_time_history_configs", {}):
             history_clocks[name].add(state.clock)
 
+    typed_contracts = _history_contracts(program)
     histories = []
     for name, depth in sorted(program._histories.items()):
         ring_clocks = history_clocks.get(name, set())
@@ -136,6 +148,26 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
         state = program._history_state_refs.get(name)
         owner = program._history_blocks.get(name)
         space = program._history_spaces.get(name)
+        contract = typed_contracts.get(name)
+        if contract is None:
+            validity = {
+                "domain": "accepted_clock_ticks",
+                "newest_lag": 0,
+                "oldest_lag": int(depth),
+            }
+            interpolation = {
+                "provider": "exact",
+                "schema_version": 1,
+                "dense_output": False,
+            }
+        else:
+            if contract.depth != depth or contract.clock != clock \
+                    or contract.state is not state or contract.space != space:
+                raise RuntimeError(
+                    "history %r disagrees with its typed HistoryContract" % name)
+            contract_data = contract.to_data()
+            validity = contract_data["validity"]
+            interpolation = contract_data["interpolation"]
         histories.append({
             "name": name,
             "owner": handle_data(owner) if owner is not None else None,
@@ -146,16 +178,8 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
             "depth": int(depth),
             "ring_slots": int(depth) + 1,
             "ncomp": program._histories_ncomp.get(name),
-            "validity": {
-                "domain": "accepted_clock_ticks",
-                "newest_lag": 0,
-                "oldest_lag": int(depth),
-            },
-            "interpolation": {
-                "provider": "exact",
-                "schema_version": 1,
-                "dense_output": False,
-            },
+            "validity": validity,
+            "interpolation": interpolation,
             "checkpoint_policy": _history_policy(program, name),
         })
 

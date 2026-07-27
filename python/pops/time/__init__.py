@@ -18,6 +18,10 @@ from pops.time.handles import (  # noqa: F401
     HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
 )
 from pops.time._history.policy import CopyCurrent  # noqa: F401
+from pops.time._history.contracts import (  # noqa: F401
+    DenseOutput, HistoryContract, HistoryValidity, InterpolationCapability,
+    LinearInterpolation, NoInterpolation, PiecewiseConstant,
+)
 from pops.time._history.persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
@@ -65,7 +69,7 @@ from pops.time._schedule.api import (  # noqa: F401
     always, every, every_dt, on_end, on_start, when,
 )
 from pops.time._schedule.synchronization import (  # noqa: F401
-    SampleAndHold, SynchronizationRelation,
+    InterpolateHistory, SampleAndHold, SynchronizationRelation,
 )
 from pops.time._schedule.protocol import UnresolvedScheduleCondition  # noqa: F401
 from pops.time.value_collections import StageStateSet  # noqa: F401
@@ -87,8 +91,10 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
            "MethodCertificate", "MethodProperties", "AdditiveMethodCertificate",
            "AdditiveMethodProperties", "ProgramMethodCertificate", "SSPCertificate",
            "UnknownOrder", "certify_program_graph",
-           "SampleAndHold", "SynchronizationRelation",
+           "InterpolateHistory", "SampleAndHold", "SynchronizationRelation",
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
+           "HistoryContract", "HistoryValidity", "InterpolationCapability",
+           "NoInterpolation", "PiecewiseConstant", "LinearInterpolation", "DenseOutput",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
            "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
            "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every", "EveryDt",

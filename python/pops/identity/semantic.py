@@ -115,7 +115,13 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         raise TypeError("semantic program identity requires a pops.time.Program")
     serialized = program._serialize(include_provenance=False)
     expected = {"name", "version", "clock", "nodes", "commits", "block_order"}
-    optional = {"histories", "history_persistence", "dt_bound", "step_transaction"}
+    optional = {
+        "histories",
+        "history_contracts",
+        "history_persistence",
+        "dt_bound",
+        "step_transaction",
+    }
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
     program_clock_owner = serialized["clock"].get("owner")
@@ -126,7 +132,9 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "commits": serialized["commits"],
         "block_order": serialized["block_order"],
     }
-    for key in ("histories", "history_persistence", "step_transaction"):
+    for key in (
+        "histories", "history_contracts", "history_persistence", "step_transaction",
+    ):
         if key in serialized:
             result[key] = serialized[key]
     if "dt_bound" in serialized:
@@ -154,6 +162,8 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
     """
     if isinstance(value, Mapping):
         normalized = dict(value)
+        if program_clock_owner is not None and normalized == program_clock_owner:
+            return None
         if (
             set(normalized) == {"schema_version", "name", "owner"}
             and normalized.get("schema_version") == 1
