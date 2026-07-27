@@ -44,6 +44,7 @@ from pops.codegen.program_emit_control import (
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
+    _consumed_solve_action,
     _append_solve_report_guard,
     _emit_matrix_free_operator,
     _emit_solve_linear,
@@ -74,7 +75,18 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
 def _append_pointwise_solve_report(
         program: Any, solve: Any, status: str, lines: list[str], *,
         label: str, stem: str) -> None:
-    """Reduce typed per-cell solve status and consume one collective ``SolveReport``."""
+    """Reduce typed per-cell status and consume one collective ``SolveReport``.
+
+    Pointwise kernels own the report they create, so they author its failure disposition before
+    constructing the outcome. Prepared/provider solves retain their native action authority.
+    """
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+
+    def failure_action(status_name: str) -> str:
+        if action_kind == "reject_attempt" and status_name in action_statuses:
+            return "pops::SolveAction::kRejectAttempt"
+        return "pops::SolveAction::kFailRun"
+
     code = "%s_code_%d" % (stem, solve.id)
     report = "%s_report_%d" % (stem, solve.id)
     lines.append(
@@ -83,13 +95,14 @@ def _append_pointwise_solve_report(
     lines.append("pops::SolveReport %s;" % report)
     lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
     lines.append(
-        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
-        % (code, report))
+        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit, %s);"
+        % (code, report, failure_action("iteration_limit")))
     lines.append(
-        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
-        % (code, report))
+        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular, %s);"
+        % (code, report, failure_action("singular")))
     lines.append(
-        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
+        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s);"
+        % (report, failure_action("invalid_evaluation")))
     outcome = "%s_outcome_%d" % (stem, solve.id)
     lines.append(
         "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
