@@ -28,12 +28,14 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/physics/bricks/bricks.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include "amr_transfer_test_authority.hpp"
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -171,6 +173,58 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
       << "field-neutral coupled-source fixtures must have zero periodic RHS mean before solve";
   const Real dt = Real(0.01);
   const int K = 6;  // macro-pas
+
+  // ============================================================================================
+  // (0) PRIMITIVE PROGRAM : le couplage agit sur deux candidats simultanes et ne publie rien dans
+  //     les etats acceptes. Le Program peut donc projeter puis commit_many sans qu'un operateur voie
+  //     un groupe partiellement commite.
+  // ============================================================================================
+  {
+    AmrRuntime rt =
+        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
+    register_ionization(rt, k);
+    MultiFab& live_ions = rt.level_state(0, 0);
+    MultiFab& live_neutrals = rt.level_state(1, 0);
+    MultiFab candidate_ions(live_ions.box_array(), live_ions.dmap(), live_ions.ncomp(),
+                            live_ions.n_grow());
+    MultiFab candidate_neutrals(live_neutrals.box_array(), live_neutrals.dmap(),
+                                live_neutrals.ncomp(), live_neutrals.n_grow());
+    lincomb(candidate_ions, Real(1), live_ions, Real(0), live_ions);
+    lincomb(candidate_neutrals, Real(1), live_neutrals, Real(0), live_neutrals);
+    const std::vector<double> accepted_ions = rt.density(0);
+    const std::vector<double> accepted_neutrals = rt.density(1);
+
+    EXPECT_THROW(
+        rt.apply_coupling_operators_at_level(
+            0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
+        std::invalid_argument)
+        << "accepted hierarchy states are never a hidden Program coupling workspace";
+    EXPECT_EQ(rt.apply_coupling_operators_at_level(
+                  0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_neutrals}),
+              1U)
+        << "one Program coupling operator applied";
+    EXPECT_EQ(rt.density(0), accepted_ions) << "accepted ions remain unpublished";
+    EXPECT_EQ(rt.density(1), accepted_neutrals) << "accepted neutrals remain unpublished";
+
+    const ConstArray4 ions_before = live_ions.fab(0).const_array();
+    const ConstArray4 neutrals_before = live_neutrals.fab(0).const_array();
+    const ConstArray4 ions_after = candidate_ions.fab(0).const_array();
+    const ConstArray4 neutrals_after = candidate_neutrals.fab(0).const_array();
+    const Box2D cells = candidate_ions.box(0);
+    double pair_error = 0.0;
+    double active_change = 0.0;
+    for (int j = cells.lo[1]; j <= cells.hi[1]; ++j)
+      for (int i = cells.lo[0]; i <= cells.hi[0]; ++i) {
+        pair_error =
+            std::max(pair_error,
+                     std::fabs((ions_after(i, j, 0) + neutrals_after(i, j, 0)) -
+                               (ions_before(i, j, 0) + neutrals_before(i, j, 0))));
+        active_change =
+            std::max(active_change, std::fabs(ions_after(i, j, 0) - ions_before(i, j, 0)));
+      }
+    EXPECT_TRUE(pair_error < 1e-12) << "candidate pair remains conservative";
+    EXPECT_TRUE(active_change > 1e-9) << "candidate coupling is active";
+  }
 
   // ============================================================================================
   // (1) ECHANGE CONSERVATIF PAR CELLULE : la SOURCE SEULE (sans transport) conserve n_ions + n_neutrals

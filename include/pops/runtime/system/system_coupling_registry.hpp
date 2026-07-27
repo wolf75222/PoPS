@@ -4,6 +4,7 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsProgram (per-cell frequency bytecode)
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperatorView (inspect metadata)
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <vector>
@@ -27,6 +28,9 @@
 /// by the stepper. Nothing here is checkpointed (re-declared by replaying the composition).
 
 namespace pops {
+
+class MultiFab;
+
 namespace runtime {
 namespace system {
 
@@ -61,10 +65,18 @@ struct CoupledFreqExpr {
   std::vector<Real> kconsts;  // constants loaded into r[n_in ..] (same as the source)
 };
 
-/// Data-only registry of the couplings and the step bounds they impose.
+/// One executable coupling receives the complete, System-indexed state pack selected by the
+/// Program.  Keeping the state pack explicit lets a Program apply an operator-split source to its
+/// uncommitted endpoint candidates and publish the whole group only after coupling and projection
+/// succeed; no operator has to borrow or mutate the accepted live states.
+using PreparedCouplingOperator =
+    std::function<void(Real, const std::vector<MultiFab*>&)>;
+
+/// Prepared registry of the couplings and the step bounds they impose.
 struct SystemCouplingRegistry {
-  /// inter-species coupled sources applied by splitting (AFTER transport). Read by the stepper.
-  std::vector<std::function<void(Real)>> operators;
+  /// Inter-species coupled sources applied by an explicit Program node after transport.  Each
+  /// operator consumes the exact simultaneous candidate-state pack supplied by that Program.
+  std::vector<PreparedCouplingOperator> operators;
   /// GLOBAL host dt bounds (add_dt_bound). Read by the stepper.
   std::vector<GlobalDtBound> dt_bounds;
   /// constant coupled-source frequency bounds. Read by the stepper.
@@ -74,6 +86,12 @@ struct SystemCouplingRegistry {
   /// TYPED coupling-operator inspect views (label + declared conservation / frequency contracts), in
   /// registration order. METADATA ONLY: never read by the stepper.
   std::vector<CouplingOperatorView> coupled_operators;
+
+  std::size_t apply(Real dt, const std::vector<MultiFab*>& states) const {
+    for (const auto& op : operators)
+      op(dt, states);
+    return operators.size();
+  }
 };
 
 }  // namespace system

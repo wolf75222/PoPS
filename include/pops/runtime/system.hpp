@@ -711,6 +711,14 @@ class System {
   /// "unchecked" entry (empty contract). Empty until the first coupling is added.
   const std::vector<CouplingOperatorView>& coupled_operators() const;
 
+  /// Apply every registered coupling operator to one complete simultaneous candidate-state pack.
+  /// The pack is indexed by System block identity and must match every block's exact distributed
+  /// layout.  This is the native Program primitive for operator splitting: generated Programs pass
+  /// their uncommitted endpoint candidates, then project and atomically commit them.  The accepted
+  /// live states are therefore never a hidden coupling workspace.
+  POPS_EXPORT std::size_t
+  apply_coupling_operators(Real dt, const std::vector<MultiFab*>& candidate_states);
+
   POPS_EXPORT SolveReport
   solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
                    ///< so a compiled program .so resolves it via ProgramContext

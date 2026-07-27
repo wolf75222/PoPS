@@ -2352,6 +2352,49 @@ class AmrRuntime {
   /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
   MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
   const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
+
+  /// Apply every registered coupled-source operator to one complete candidate-state pack at an exact
+  /// AMR level.  This is the Program-owned splitting primitive: it never solves fields, walks another
+  /// level, averages down, or mutates accepted live states.  The hierarchy Program applies it to its
+  /// uncommitted endpoint candidates; the ordinary reflux/average-down synchronization then treats
+  /// the coupled result like every other accepted per-level state.
+  std::size_t apply_coupling_operators_at_level(
+      int level, Real dt, const std::vector<MultiFab*>& candidate_states) {
+    if (level < 0 || level >= nlev_)
+      throw std::out_of_range(
+          "AmrRuntime::apply_coupling_operators_at_level level is out of range");
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument(
+          "AmrRuntime::apply_coupling_operators_at_level requires a finite non-negative dt");
+    if (candidate_states.size() != blocks_.size())
+      throw std::invalid_argument(
+          "AmrRuntime::apply_coupling_operators_at_level requires one candidate per block");
+    for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+      const MultiFab* candidate = candidate_states[block];
+      if (candidate == nullptr)
+        throw std::invalid_argument(
+            "AmrRuntime::apply_coupling_operators_at_level received a null candidate");
+      const MultiFab& live = (*blocks_[block].levels)[level].U;
+      if (candidate->box_array().boxes() != live.box_array().boxes() ||
+          candidate->dmap().ranks() != live.dmap().ranks() ||
+          candidate->ncomp() != live.ncomp() || candidate->n_grow() != live.n_grow())
+        throw std::invalid_argument(
+            "AmrRuntime::apply_coupling_operators_at_level candidate layout differs from its block");
+      for (const auto& accepted_block : blocks_)
+        if (candidate == &(*accepted_block.levels)[level].U)
+          throw std::invalid_argument(
+              "AmrRuntime::apply_coupling_operators_at_level cannot mutate accepted live states");
+      for (std::size_t other = 0; other < block; ++other)
+        if (candidate_states[other] == candidate)
+          throw std::invalid_argument(
+              "AmrRuntime::apply_coupling_operators_at_level cannot alias block candidates");
+    }
+
+    for (const auto& source : coupled_sources_)
+      apply_coupling_operator_to_pack_(source, dt, candidate_states);
+    return coupled_sources_.size();
+  }
+
   PreparedAmrTransitionAdvanceScratch& prepared_reflux_transition(std::size_t b, int child_level) {
     if (b >= blocks_.size() || !blocks_[b].advance_scratch_plan)
       throw std::logic_error("AMR block has no prepared reflux transition storage");
@@ -3599,36 +3642,10 @@ class AmrRuntime {
       // (same_layout_or_throw guard), so same local_size() and same local indexing -> we iterate in
       // parallel over the local fabs. local_size()==0 on a rank without a box -> empty loop (MPI-safe).
       for (int k = 0; k < nlev_; ++k) {
-        const int sref = cs.n_in > 0 ? cs.ins[0].block : cs.outs[0].block;
-        MultiFab& Uref = (*blocks_[static_cast<std::size_t>(sref)].levels)[k].U;
-        for (int li = 0; li < Uref.local_size(); ++li) {
-          CoupledSourceKernel kern;
-          kern.dt = dt;
-          kern.n_in = cs.n_in;
-          kern.n_const = cs.n_const;
-          kern.n_terms = cs.n_terms;
-          for (int c = 0; c < cs.n_in; ++c) {
-            kern.in[c] =
-                (*blocks_[static_cast<std::size_t>(cs.ins[static_cast<std::size_t>(c)].block)]
-                      .levels)[k]
-                    .U.fab(li)
-                    .array();
-            kern.in_comp[c] = cs.ins[static_cast<std::size_t>(c)].comp;
-          }
-          for (int c = 0; c < cs.n_const; ++c)
-            kern.consts[c] = cs.kconsts[static_cast<std::size_t>(c)];
-          for (int t = 0; t < cs.n_terms; ++t) {
-            kern.out[t] =
-                (*blocks_[static_cast<std::size_t>(cs.outs[static_cast<std::size_t>(t)].block)]
-                      .levels)[k]
-                    .U.fab(li)
-                    .array();
-            kern.out_comp[t] = cs.outs[static_cast<std::size_t>(t)].comp;
-            kern.prog[t] = cs.outs[static_cast<std::size_t>(t)].prog;
-          }
-          for_each_cell(Uref.box(li),
-                        kern);  // NAMED functor (device-clean), additive forward-Euler
-        }
+        coupled_live_state_workspace_.resize(blocks_.size());
+        for (std::size_t block = 0; block < blocks_.size(); ++block)
+          coupled_live_state_workspace_[block] = &(*blocks_[block].levels)[k].U;
+        apply_coupling_operator_to_pack_(cs, dt, coupled_live_state_workspace_);
       }
       // Restore the consistency of the covered coarse cells (cf. COVERAGE INVARIANT above).
       for (auto& b : blocks_) {
@@ -5693,6 +5710,35 @@ class AmrRuntime {
     int n_terms = 0;
   };
 
+  static void apply_coupling_operator_to_pack_(
+      const CoupledSourceSpec& source, Real dt,
+      const std::vector<MultiFab*>& states) {
+    const int reference =
+        source.n_in > 0 ? source.ins[0].block : source.outs[0].block;
+    MultiFab& iteration_space = *states[static_cast<std::size_t>(reference)];
+    for (int local = 0; local < iteration_space.local_size(); ++local) {
+      CoupledSourceKernel kernel;
+      kernel.dt = dt;
+      kernel.n_in = source.n_in;
+      kernel.n_const = source.n_const;
+      kernel.n_terms = source.n_terms;
+      for (int input = 0; input < source.n_in; ++input) {
+        const CsRef& ref = source.ins[static_cast<std::size_t>(input)];
+        kernel.in[input] = states[static_cast<std::size_t>(ref.block)]->fab(local).array();
+        kernel.in_comp[input] = ref.comp;
+      }
+      for (int constant = 0; constant < source.n_const; ++constant)
+        kernel.consts[constant] = source.kconsts[static_cast<std::size_t>(constant)];
+      for (int term = 0; term < source.n_terms; ++term) {
+        const CsRef& ref = source.outs[static_cast<std::size_t>(term)];
+        kernel.out[term] = states[static_cast<std::size_t>(ref.block)]->fab(local).array();
+        kernel.out_comp[term] = ref.comp;
+        kernel.prog[term] = ref.prog;
+      }
+      for_each_cell(iteration_space.box(local), kernel);
+    }
+  }
+
   Geometry geom_;
   Box2D dom_;
   Periodicity base_per_;
@@ -5771,6 +5817,7 @@ class AmrRuntime {
   std::map<std::string, NamedField> named_fields_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
+  std::vector<MultiFab*> coupled_live_state_workspace_;
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
   // one read-only view (label + declared contracts) per registered coupled source, in registration
   // order. Populated by add_coupled_source (unchecked) / add_coupling_operator (declared). Metadata

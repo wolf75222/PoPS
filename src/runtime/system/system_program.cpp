@@ -6,6 +6,7 @@
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 #include <algorithm>
+#include <cmath>
 
 namespace pops {
 
@@ -44,6 +45,38 @@ int System::program_stride() const {
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());
 }
+
+std::size_t System::apply_coupling_operators(
+    Real dt, const std::vector<MultiFab*>& candidate_states) {
+  if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+    throw std::invalid_argument(
+        "System::apply_coupling_operators requires a finite non-negative dt");
+  if (candidate_states.size() != p_->sp.size())
+    throw std::invalid_argument(
+        "System::apply_coupling_operators requires one candidate state per block");
+  for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+    const MultiFab* candidate = candidate_states[block];
+    if (candidate == nullptr)
+      throw std::invalid_argument(
+          "System::apply_coupling_operators received a null candidate state");
+    const MultiFab& live = p_->sp[block].U;
+    if (candidate->box_array().boxes() != live.box_array().boxes() ||
+        candidate->dmap().ranks() != live.dmap().ranks() ||
+        candidate->ncomp() != live.ncomp() || candidate->n_grow() != live.n_grow())
+      throw std::invalid_argument(
+          "System::apply_coupling_operators candidate layout differs from its block");
+    for (const auto& accepted : p_->sp)
+      if (candidate == &accepted.U)
+        throw std::invalid_argument(
+            "System::apply_coupling_operators cannot mutate accepted live states");
+    for (std::size_t other = 0; other < block; ++other)
+      if (candidate_states[other] == candidate)
+        throw std::invalid_argument(
+            "System::apply_coupling_operators cannot alias two block candidates");
+  }
+  return p_->coupling_.apply(dt, candidate_states);
+}
+
 MultiFab& System::block_state(int b) {
   return p_->sp[static_cast<std::size_t>(b)].U;
 }

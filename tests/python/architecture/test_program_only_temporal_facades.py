@@ -1,13 +1,15 @@
 """ADC-700: fail closed until every temporal route has an explicit Program primitive.
 
 The ordinary explicit runtime tests may install the small Programs from
-``tests.python.support.explicit_program``.  The semantic coupling, implicit, and polar tests below
-must not use that bridge: forward Euler cannot stand in for a coupled-source transaction, backward
-Euler, partial IMEX, ARS(2,2,2), Newton diagnostics, or a missing point-qualified polar RHS.
+``tests.python.support.explicit_program``.  The remaining semantic implicit and polar tests below
+must not use that bridge: forward Euler cannot stand in for backward Euler, partial IMEX,
+ARS(2,2,2), Newton diagnostics, or a missing point-qualified polar RHS.
 
 This source-only gate records the current blockers deliberately.  Once typed Program primitives for
 one family land, its semantic test must be migrated to that real primitive and removed from
-``SEMANTIC_BLOCKERS`` in the same change.
+``SEMANTIC_BLOCKERS`` in the same change. Coupled sources now execute through an explicit
+candidate-state Program primitive, so their tests install a real SSPRK2 transport + split-source
+Program instead of borrowing the retired facade stepper.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 MANIFEST = ROOT / "tests/test_manifest.toml"
 
 EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
@@ -30,21 +33,9 @@ SEMANTIC_BLOCKERS = {
         "engine.IMEX(",
         "newton_report(",
     ),
-    "tests/python/integration/runtime/test_coupling_preset_parity.py": (
-        "add_coupling(",
-        ".step(",
-    ),
     "tests/python/integration/runtime/test_polar_system.py": (
         "PolarMesh(",
         ".step_cfl(",
-    ),
-    "tests/python/unit/codegen/test_dsl_coupled_source.py": (
-        "add_coupling(",
-        ".step(",
-    ),
-    "tests/python/unit/codegen/test_dsl_coupled_source_conservation.py": (
-        "add_coupling(",
-        ".step(",
     ),
     "tests/python/unit/physics/test_polar_conservation_radial_flux.py": (
         "PolarMesh(",
@@ -156,3 +147,17 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             "newton_report(",
         ):
             assert legacy_engine_primitive not in source
+
+
+def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
+    uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    runtime = AMR_RUNTIME.read_text(encoding="utf-8")
+    for source in (uniform, amr):
+        assert "apply_coupling_operators(" in source
+        assert "CouplingStateOverride" in source
+    assert "complete candidate pack for every System block" in uniform
+    assert "complete candidate pack for every runtime block" in amr
+    assert "cannot alias accepted live states" in uniform
+    assert "cannot alias accepted live states" in amr
+    assert "apply_coupling_operators_at_level(" in runtime
