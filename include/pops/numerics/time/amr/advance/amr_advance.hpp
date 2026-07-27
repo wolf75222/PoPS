@@ -51,7 +51,7 @@ struct LevelHierarchy {
   bool coarse_replicated = true;     // level 0 replicated (true) or multi-box distributed (false)
   bool recon_prim = false;           // primitive reconstruction (cf. compute_face_fluxes)
   bool imex = false;  // stiff implicit source (backward_euler) instead of forward Euler
-  // NEWTON OPTIONS of the IMEX step (default {} = historical constants 2 iters / 1e-7 -> bit-identical).
+  // NEWTON OPTIONS of the IMEX step (default {} = centralized converged-source contract).
   // Honored only when imex==true; forwarded to backward_euler_source by mf_apply_source_treatment.
   NewtonOptions newton_options{};
   // TIME METHOD: kEuler (forward Euler), kSsprk2 (SSPRK2/Heun, order 2), or kSsprk3 (order 3).

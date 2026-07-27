@@ -92,8 +92,7 @@ inline std::vector<double> gather_global(const MultiFab& mf, int ncomp, int gnx,
 inline bool newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
-         diagnostics || newton.damping != kNewtonDefaultDamping ||
-         newton.fail_policy != kNewtonDefaultFailPolicy;
+         diagnostics || newton.damping != kNewtonDefaultDamping;
 }
 
 inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newton,
@@ -104,7 +103,6 @@ inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newt
   out.abs_tol = static_cast<double>(newton.abs_tol);
   out.fd_eps = static_cast<double>(newton.fd_eps);
   out.damping = static_cast<double>(newton.damping);
-  out.fail_policy = newton_fail_policy_name(newton.fail_policy);
   out.diagnostics = diagnostics;
   out.non_default = newton_options_non_default(newton, diagnostics);
   return out;

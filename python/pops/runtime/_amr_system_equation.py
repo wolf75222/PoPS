@@ -19,7 +19,6 @@ from pops.runtime.routes import (
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -37,8 +36,8 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
     """Reject Newton options absent from the compiled AMR package ABI. On the native side, the
     Newton OPTIONS and newton_diagnostics REPORT use the unified runtime at every block count; the
     flat ABI of the .so loader transports NEITHER
-    the options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy) NOR the report. Passed
-    via the loader, they would be taken at their defaults SILENTLY (iters=2, no report). We
+    the options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping) NOR the report. Passed
+    via the loader, they would be taken at the compiled defaults SILENTLY. We
     REJECT them explicitly (same spirit as the stride/mask rejection of the AMR production path). For these
     parameters : AmrSystem.add_block (native model) or add_compiled_model(AmrSystem&) directly (C++)."""
     if (getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)
@@ -51,12 +50,10 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
             != NEWTON_DEFAULT_FD_EPS
             or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)
             != NEWTON_DEFAULT_DAMPING
-            or getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY)
-            != NEWTON_DEFAULT_FAIL_POLICY
             or getattr(time, "newton_diagnostics", False)):
         raise ValueError(
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
-            "fail_policy/diagnostics) are not transported by the AMR production package; "
+            "diagnostics) are not transported by the AMR production package; "
             "They are available only on the internal native engine API (a private ModelSpec on "
             "the AMR layout)." % label)
 
@@ -170,7 +167,6 @@ class _AmrSystemEquation(_AmrSystem):
                                           where="AmrSystem.add_equation.newton_fd_eps"),
                               native_real(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                                           where="AmrSystem.add_equation.newton_damping"),
-                              getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               getattr(time, "newton_diagnostics", False),
                               native_real(getattr(spatial, "positivity_floor", 0.0),
                                           where="AmrSystem.add_equation.positivity_floor"),
@@ -222,7 +218,7 @@ class _AmrSystemEquation(_AmrSystem):
                 "available only on the internal native engine API (a private ModelSpec on the "
                 "AMR layout).")
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
-        # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
+        # through the .so loader. Explicit rejection (otherwise compiled defaults/no report silently), parity with
         # the stride/mask rejection above and with System.add_equation (compiled backend).
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now

@@ -163,14 +163,12 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     P->ensure_aux_width(bb.aux_width);
   } else {
     const GridContext ctx = P->grid_ctx(name);
-    // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
+    // Newton options of the IMEX implicit source.
     // The report lives in diagnostics_.newton_reports in a shared_ptr -> STABLE address captured by
-    // the closures even when the map reallocates at a later add_block. It is allocated for explicit
-    // diagnostics and for fail_policy warn/throw, because those policies must surface as structured
-    // report events rather than stderr text.
+    // the closures even when the map reallocates at a later add_block.
     const NewtonOptions& nopts = newton;
     NewtonReport* nreport = nullptr;
-    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
+    if (newton_diagnostics) {
       auto rep = std::make_shared<NewtonReport>();
       P->diagnostics_.newton_reports[name] = rep;
       nreport = rep.get();
@@ -660,8 +658,7 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   if (rp == nullptr)
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; enable diagnostics on the installed private implicit-solve policy or set "
-        "newton_fail_policy='warn'/'throw'");
+        "' ; enable diagnostics on the installed private implicit-solve policy");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,

@@ -5,7 +5,7 @@
       (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, sans compilateur ; et un couplage
       REJETE ne laisse AUCUNE borne fantome (frequence enregistree apres validation, revue v3) ;
   (B) options Newton sur AMR : OPTIONS et newton_diagnostics cablees en multi-blocs natif ET en
-      mono-bloc (run fini, fail_policy acceptee, rapports newton_report coherents) ;
+      mono-bloc (run fini, options et rapports newton_report coherents) ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
       grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
@@ -108,14 +108,14 @@ amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.add_equation("e1", iso_model(+1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
-              time=engine.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
+              time=engine.IMEX(newton_max_iters=4))
 amr.add_equation("e2", iso_model(-1.0, n0=rho16_mean), spatial=engine.Spatial(limiter=Minmod()),
               time=engine.Explicit())
 amr.set_density("e1", rho16)
 amr.set_density("e2", rho16)
 amr.step(2e-3)
 chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
-    "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
+    "multi-blocs : IMEX(newton_max_iters=4) tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 mono.set_temporal_relations([2], [1], ["integral_only"])

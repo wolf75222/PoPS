@@ -201,8 +201,7 @@ std::string amr_effective_time_route_token(int wire) {
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
-         diagnostics || newton.damping != kNewtonDefaultDamping ||
-         newton.fail_policy != kNewtonDefaultFailPolicy;
+         diagnostics || newton.damping != kNewtonDefaultDamping;
 }
 
 EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton, bool diagnostics) {
@@ -212,7 +211,6 @@ EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton,
   out.abs_tol = static_cast<double>(newton.abs_tol);
   out.fd_eps = static_cast<double>(newton.fd_eps);
   out.damping = static_cast<double>(newton.damping);
-  out.fail_policy = newton_fail_policy_name(newton.fail_policy);
   out.diagnostics = diagnostics;
   out.non_default = amr_newton_options_non_default(newton, diagnostics);
   return out;
@@ -846,7 +844,7 @@ struct AmrSystem::Impl {
         // component indices against cons_vars of the concrete Model (the raw implicit_vars/roles are
         // passed to it). No throw: the 2nd compiled block (or a mix of compiled + native) is wired.
         // Newton options NOT transported by the .so loader builder (ABI frozen at generation):
-        // explicit rejection rather than a silent iters=2 (regenerate the loader = dedicated follow-up).
+        // explicit rejection rather than silently substituting the compiled defaults.
         if (b.newton_non_default)
           throw std::runtime_error(
               "AmrSystem : Newton options are not transported by the compiled .so loader "
@@ -1334,10 +1332,10 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (wave_speed_cache && time == "imex")
     throw std::runtime_error(
         "AmrSystem::add_block : wave_speed_cache is supported by explicit AMR transport only");
-  // IMEX source Newton options grouped into a POD (ADC-214; wave 3 audit, parity
-  // System::add_block). Defaults {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none),
-  // bit-identical. Native blocks use these options through the unified AmrRuntime at every block
-  // count; compiled .so loaders reject non-default options instead of ignoring them.
+  // IMEX source Newton options grouped into a POD (ADC-214; parity System::add_block).
+  // Defaults {} carry the centralized converged-source contract. Native blocks use these options
+  // through the unified AmrRuntime at every block count; compiled .so loaders reject non-default
+  // options instead of ignoring them.
   // Range check shared with System::add_block (validate_newton_options, in implicit_stepper.hpp).
   validate_newton_options(newton, "AmrSystem::add_block");
   const bool newton_non_default = amr_newton_options_non_default(newton);
