@@ -22,12 +22,9 @@
 //   (e) regrid_every == 0 BIT-IDENTIQUE : multi-blocs fige reste STRICTEMENT le comportement actuel
 //       (regrid jamais appele) -> meme cas joue deux fois donne dmax == 0, et le layout fin ne bouge pas.
 //
-// CHOIX DE COMPILABILITE (nvcc-safe, comme test_amr_coupled_source_role_strict / test_amr_multiblock_
-// compiled) : on construit l'AmrRuntime DIRECTEMENT via detail::make_shared_amr_layout +
-// detail::dispatch_amr_block (le noyau AMR reste capture par une fonction template NOMMEE, pas une
-// lambda etendue cross-TU). Les criteres de test sont installes comme un graphe de tagging prepare,
-// identique au chemin Case -> bind -> run : le champ est lu dans un noyau Kokkos, jamais par une
-// std::function cellule par cellule sur l'hote.
+// AUTORITE TEMPORELLE : chaque avance passe par AmrSystem et un Program explicite. AmrRuntime reste
+// uniquement le moteur spatial expose par sim.engine() pour inspecter les layouts et installer les
+// graphes de tagging prepares. Il n'est jamais appele directement pour avancer le temps.
 
 #include <gtest/gtest.h>
 
@@ -44,6 +41,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -187,61 +185,50 @@ static bool layout_covers(const BoxArray& layout, const Box2D& required) {
   return covered == required.num_cells();
 }
 
-// Construit un AmrRuntime a deux blocs ExB scalaires sur une hierarchie 2 niveaux N x N (un patch fin
-// central seed). Densites initiales fournies. q0/q1 : charges (signe inclus) pour le Poisson somme.
-static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q1,
-                                 const std::vector<double>& rho0, const std::vector<double>& rho1,
-                                 int stride1 = 1) {
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = N;
-  bp.mesh.L = L;
-  bp.mesh.regrid_every =
-      0;  // le runtime porte sa propre cadence via set_regrid (la facade ne pilote pas ici)
-  bp.poisson.bc = BCRec{};  // periodique
-  const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
-  std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(q0, B0), "minmod", "rusanov", S, "a", rho0,
-                                              /*has_density=*/true, 1.4, 1, false, false, 1));
-  blocks.back().state_identity = "test://amr-regrid-union/block/a/state/U";
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(q1, B0), "minmod", "rusanov", S, "b", rho1,
-                                              /*has_density=*/true, 1.4, 1, false, false, stride1));
-  blocks.back().state_identity = "test://amr-regrid-union/block/b/state/U";
-  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                     S.replicated_coarse, S.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 2);
-  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
-      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
-  return runtime;
+static ModelSpec exb_spec(double q, double B0) {
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = q;
+  spec.B0 = B0;
+  return spec;
 }
 
-static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& rho) {
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = N;
-  bp.mesh.L = 1.0;
-  bp.poisson.bc = BCRec{};
-  const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, 3);
-  std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(+1.0, 1.0), "minmod", "rusanov", S,
-                                              "positive", rho, /*has_density=*/true, 1.4, 1, false,
-                                              false, 1));
-  blocks.back().state_identity = "test://amr-regrid-union/block/positive/state/U";
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", S,
-                                              "negative", rho, /*has_density=*/true, 1.4, 1, false,
-                                              false, 1));
-  blocks.back().state_identity = "test://amr-regrid-union/block/negative/state/U";
-  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                     S.replicated_coarse, S.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 2);
-  runtime.set_parent_child_temporal_relations(
-      {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
-                                             ::pops::amr::RemainderPolicy::IntegralOnly),
-       ::pops::amr::ParentChildClockRelation(1, 2, ::pops::amr::Rational(2, 1),
-                                             ::pops::amr::RemainderPolicy::IntegralOnly)});
-  return runtime;
+// L'objet AmrSystem reste a une adresse stable : l'AmrProgramContext installe par le helper conserve
+// un pointeur vers cette facade. Le moteur spatial est materialise par le Program, jamais construit
+// directement par ce test.
+static std::unique_ptr<AmrSystem> make_two_block_system(int N, double L, double B0, double q0,
+                                                        double q1, const std::vector<double>& rho0,
+                                                        const std::vector<double>& rho1,
+                                                        int stride1 = 1, int regrid_every = 0,
+                                                        int regrid_grow = 2, int regrid_margin = 2,
+                                                        int level_count = 2) {
+  AmrSystemConfig cfg;
+  cfg.n = N;
+  cfg.L = L;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = regrid_every;
+  cfg.regrid_grow = regrid_grow;
+  cfg.regrid_margin = regrid_margin;
+  cfg.level_count = level_count;
+  cfg.explicit_bootstrap = level_count > 2;
+  auto sim = std::make_unique<AmrSystem>(cfg);
+  install_regrid_state_authorities(*sim);
+  std::vector<std::int64_t> numerators(static_cast<std::size_t>(level_count - 1), 2);
+  std::vector<std::int64_t> denominators(static_cast<std::size_t>(level_count - 1), 1);
+  std::vector<std::string> policies(static_cast<std::size_t>(level_count - 1), "integral_only");
+  sim->set_temporal_relations(numerators, denominators, policies);
+  sim->add_block("a", exb_spec(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim->add_block("b", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1,
+                 stride1);
+  sim->set_poisson("charge_density", "geometric_mg", "periodic");
+  sim->set_density("a", rho0);
+  sim->set_density("b", rho1);
+  test::install_forward_euler_program(*sim);
+  if (!sim->uses_runtime_engine() || sim->engine() == nullptr)
+    throw std::runtime_error("multi-block regrid test requires the AmrSystem runtime engine");
+  return sim;
 }
 
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
@@ -251,11 +238,24 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   // replaces the middle level with a layout that cannot carry the complete old finest layout. The
   // runtime must retire that stale descendant before preparing the new parent topology, then
   // rebuild it from the new middle level in the same transaction.
-  AmrRuntime rt = make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
+  auto sim =
+      make_two_block_system(N, 1.0, 1.0, +1.0, -1.0, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08),
+                            blob(N, 0.32, 0.50, 0.8, 1.0, 0.08), /*stride1=*/1, /*regrid_every=*/1,
+                            /*regrid_grow=*/2, /*regrid_margin=*/2, /*level_count=*/3);
+  AmrRuntime& rt = *sim->engine();
+  EXPECT_EQ(rt.nlev(), 1);
+  EXPECT_EQ(rt.max_levels(), 3);
+  test::install_prepared_threshold_union(rt, {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
+  sim->step(Real(1e-4));  // macro step zero never regrids
+  EXPECT_EQ(sim->checkpoint_regrid_count(), 0);
+  sim->step(Real(1e-4));  // Program cadence activates every resolved transition
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.levels(0).size(), 3u);
-  EXPECT_EQ(rt.patch_boxes().size(), 2u);
-  EXPECT_EQ(rt.n_patches(), 2) << "all fine levels contribute to the patch count";
+  const std::size_t expected_fine_patches =
+      rt.levels(0)[1].U.box_array().size() + rt.levels(0)[2].U.box_array().size();
+  EXPECT_EQ(rt.patch_boxes().size(), expected_fine_patches);
+  EXPECT_EQ(static_cast<std::size_t>(rt.n_patches()), expected_fine_patches)
+      << "all fine levels contribute to the patch count";
   EXPECT_TRUE(
       same_box_list(rt.levels(0)[1].U.box_array().boxes(), rt.levels(1)[1].U.box_array().boxes()));
   EXPECT_TRUE(
@@ -280,7 +280,6 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
         << "level-2 initialization conservatively prolongs its immediate parent";
   }
 
-  rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
   // Regridding is decision based: a false refine root holds the accepted fine coverage. The
   // complementary roots below deliberately replace it, so the displaced threshold region can
   // invalidate the old level-2 parent. Equality remains Hold and the roots never conflict.
@@ -291,10 +290,8 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
       {{0, 0, Real(1.25), test::PreparedThresholdRelation::Below},
        {1, 0, Real(1.25), test::PreparedThresholdRelation::Below}},
       "test::prepared-replacement-threshold@1");
-  rt.step(Real(1e-4));  // macro step zero never regrids
-  EXPECT_EQ(rt.regrid_count(), 0);
 
-  const AmrRuntime::StepSnapshot accepted = rt.step_snapshot();
+  const int accepted_regrids = sim->checkpoint_regrid_count();
   const std::uint64_t accepted_materialization = rt.topology_materialization_generation();
   const std::vector<Box2D> accepted_middle = rt.levels(0)[1].U.box_array().boxes();
   const std::vector<Box2D> accepted_finest = rt.levels(0)[2].U.box_array().boxes();
@@ -304,10 +301,11 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
                                                  accepted_child.coarsen(kAmrRefRatio));
                           }))
       << "the accepted descendant must initially be supported by its parent";
-  rt.step(Real(1e-4));  // regrids every active transition, coarse to fine
+  sim->begin_step_transaction();
+  sim->step(Real(1e-4));  // explicit Program regrids every active transition, coarse to fine
   const std::uint64_t regridded_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
-  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_EQ(sim->checkpoint_regrid_count(), accepted_regrids + 1);
   EXPECT_GT(regridded_materialization, accepted_materialization);
   EXPECT_FALSE(same_box_list(accepted_middle, rt.levels(0)[1].U.box_array().boxes()));
   EXPECT_FALSE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
@@ -319,91 +317,93 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
       << "the regression must replace a parent that cannot support the stale descendant";
   EXPECT_TRUE(all_level_states_finite(rt));
 
-  // This is the exact engine operation the AmrSystem accepted-attempt coordinator invokes after a
-  // StepAttemptRejected.  Topology, cadence and every level return to the accepted image.
-  rt.restore_step_snapshot(accepted);
+  // The facade-owned accepted-attempt transaction restores topology, cadence, clock, profiler and
+  // every level together. No test-side AmrRuntime snapshot stands in for the public authority.
+  sim->rollback_step_transaction();
   const std::uint64_t restored_materialization = rt.topology_materialization_generation();
   EXPECT_EQ(rt.nlev(), 3);
-  EXPECT_EQ(rt.regrid_count(), 0);
+  EXPECT_EQ(sim->checkpoint_regrid_count(), accepted_regrids);
   EXPECT_GT(restored_materialization, regridded_materialization)
       << "restoring an older epoch still invalidates concrete layout-bound resources";
   EXPECT_TRUE(same_box_list(accepted_middle, rt.levels(0)[1].U.box_array().boxes()));
   EXPECT_TRUE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
 
-  rt.step(Real(1e-4));
+  sim->step(Real(1e-4));
   EXPECT_EQ(rt.nlev(), 3);
-  EXPECT_EQ(rt.regrid_count(), 1) << "the accepted retry commits one regrid exactly once";
+  EXPECT_EQ(sim->checkpoint_regrid_count(), accepted_regrids + 1)
+      << "the accepted retry commits one regrid exactly once";
   EXPECT_GT(rt.topology_materialization_generation(), restored_materialization);
 
   // Coarsening is an explicit decision, not the absence of a refine match. Deactivate the complete
   // fine suffix without changing the resolved capacity, then reactivate that same capacity.
   test::install_prepared_threshold_decisions(rt, {{0, 0, Real(1e30)}, {1, 0, Real(1e30)}},
                                              {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
-  rt.regrid();
+  sim->step(Real(1e-4));
   EXPECT_EQ(rt.nlev(), 1);
   EXPECT_EQ(rt.max_levels(), 3);
 
   test::install_prepared_threshold_union(rt, {{0, 0, Real(-1e30)}, {1, 0, Real(-1e30)}});
-  rt.regrid();
+  sim->step(Real(1e-4));
   ASSERT_EQ(rt.nlev(), 3);
   ASSERT_EQ(rt.max_levels(), 3);
 
   const std::uint64_t full_layout_generation = rt.topology_materialization_generation();
-  const int full_layout_regrids = rt.regrid_count();
-  rt.regrid();
+  const int full_layout_regrids = sim->checkpoint_regrid_count();
+  sim->step(Real(1e-4));
   EXPECT_EQ(rt.topology_materialization_generation(), full_layout_generation)
       << "an identical regrid must preserve layout-bound caches and storage";
-  EXPECT_EQ(rt.regrid_count(), full_layout_regrids)
+  EXPECT_EQ(sim->checkpoint_regrid_count(), full_layout_regrids)
       << "an identical regrid is not a topology replacement";
 
-  std::vector<std::vector<PatchBox>> checkpoint_boxes(3);
-  std::vector<std::vector<int>> checkpoint_owners(3);
+  std::vector<PatchBox> checkpoint_boxes;
+  std::vector<int> checkpoint_owners;
   for (int level = 1; level < 3; ++level) {
-    for (const Box2D& box : rt.levels(0)[static_cast<std::size_t>(level)].U.box_array().boxes())
-      checkpoint_boxes[static_cast<std::size_t>(level)].push_back(
-          PatchBox{level, box.lo[0], box.lo[1], box.hi[0], box.hi[1]});
-    checkpoint_owners[static_cast<std::size_t>(level)] = rt.level_owner_ranks(level);
+    const std::vector<int> level_owners = sim->level_owner_ranks(level);
+    std::size_t patch = 0;
+    for (const Box2D& box : rt.levels(0)[static_cast<std::size_t>(level)].U.box_array().boxes()) {
+      checkpoint_boxes.push_back(PatchBox{level, box.lo[0], box.lo[1], box.hi[0], box.hi[1]});
+      checkpoint_owners.push_back(level_owners.at(patch++));
+    }
   }
 
   const std::uint64_t accepted_generation = rt.topology_materialization_generation();
   const std::vector<PatchBox> accepted_patches = rt.patch_boxes();
-  std::vector<std::vector<PatchBox>> misaligned(2);
-  std::vector<std::vector<int>> misaligned_owners(2);
-  misaligned[1].push_back(PatchBox{1, 1, 0, 16, 15});
-  misaligned_owners[1].push_back(0);
-  EXPECT_THROW(rt.rebuild_hierarchy(misaligned, misaligned_owners), std::runtime_error);
+  const std::vector<PatchBox> misaligned{{1, 1, 0, 16, 15}};
+  EXPECT_THROW(sim->rebuild_hierarchy(misaligned, {0}), std::runtime_error);
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.topology_materialization_generation(), accepted_generation);
   EXPECT_EQ(rt.patch_boxes(), accepted_patches);
 
-  std::vector<std::vector<PatchBox>> unnested(3);
-  std::vector<std::vector<int>> unnested_owners(3);
-  unnested[1].push_back(PatchBox{1, 8, 8, 23, 23});
-  unnested[2].push_back(PatchBox{2, 0, 0, 3, 3});
-  unnested_owners[1].push_back(0);
-  unnested_owners[2].push_back(0);
-  EXPECT_THROW(rt.rebuild_hierarchy(unnested, unnested_owners), std::runtime_error);
+  const std::vector<PatchBox> unnested{{1, 8, 8, 23, 23}, {2, 0, 0, 3, 3}};
+  EXPECT_THROW(sim->rebuild_hierarchy(unnested, {0, 0}), std::runtime_error);
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.topology_materialization_generation(), accepted_generation);
   EXPECT_EQ(rt.patch_boxes(), accepted_patches);
 
-  rt.rebuild_hierarchy(std::vector<std::vector<PatchBox>>(1), std::vector<std::vector<int>>(1));
+  sim->rebuild_hierarchy({}, {});
   EXPECT_EQ(rt.nlev(), 1);
   EXPECT_EQ(rt.max_levels(), 3);
-  rt.rebuild_hierarchy(checkpoint_boxes, checkpoint_owners);
+  sim->rebuild_hierarchy(checkpoint_boxes, checkpoint_owners);
   EXPECT_EQ(rt.nlev(), 3);
   EXPECT_EQ(rt.max_levels(), 3);
   for (int level = 1; level < 3; ++level) {
     const auto& restored = rt.levels(0)[static_cast<std::size_t>(level)].U.box_array().boxes();
-    ASSERT_EQ(restored.size(), checkpoint_boxes[static_cast<std::size_t>(level)].size());
+    std::vector<PatchBox> expected_level;
+    std::vector<int> expected_owners;
+    for (std::size_t patch = 0; patch < checkpoint_boxes.size(); ++patch)
+      if (checkpoint_boxes[patch].level == level) {
+        expected_level.push_back(checkpoint_boxes[patch]);
+        expected_owners.push_back(checkpoint_owners[patch]);
+      }
+    ASSERT_EQ(restored.size(), expected_level.size());
     for (std::size_t patch = 0; patch < restored.size(); ++patch) {
-      const PatchBox& expected = checkpoint_boxes[static_cast<std::size_t>(level)][patch];
+      const PatchBox& expected = expected_level[patch];
       EXPECT_EQ(restored[patch].lo[0], expected.ilo);
       EXPECT_EQ(restored[patch].lo[1], expected.jlo);
       EXPECT_EQ(restored[patch].hi[0], expected.ihi);
       EXPECT_EQ(restored[patch].hi[1], expected.jhi);
     }
-    EXPECT_EQ(rt.level_owner_ranks(level), checkpoint_owners[static_cast<std::size_t>(level)]);
+    EXPECT_EQ(sim->level_owner_ranks(level), expected_owners);
   }
 
   AmrBuildParams invalid;
@@ -432,14 +432,13 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   {
     SCOPED_TRACE("frozen hierarchy");
     auto run_frozen = [&]() {
-      AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
-                                     blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
-      // set_regrid(0) explicite : meme avec des predicats enregistres, regrid_every_==0 -> figee.
-      rt.set_regrid(0);
+      auto sim = make_two_block_system(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
+                                       blob(N, 0.65, 0.5, 0.8, 1.0, 0.10), /*stride1=*/1,
+                                       /*regrid_every=*/0);
+      AmrRuntime& rt = *sim->engine();
       test::install_prepared_threshold_union(rt, {{0, 0, Real(1.3)}, {1, 0, Real(1.3)}});
       const std::vector<Box2D> fb_before = fine_boxes(rt);
-      for (int s = 0; s < 8; ++s)
-        rt.step(Real(0.01));
+      sim->advance(Real(0.01), 8);
       const std::vector<Box2D> fb_after = fine_boxes(rt);
       return std::make_pair(rt.density(0), same_box_list(fb_before, fb_after));
     };
@@ -448,13 +447,13 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     EXPECT_TRUE(a.second) << "e_frozen_fine_layout_unchanged";  // la grille n'a pas bouge
     EXPECT_EQ(dmax_field(a.first, b.first), 0.0) << "e_frozen_bit_identical_dmax0";
 
-    AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
-                                   blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
-    rt.set_regrid(0);
+    auto sim = make_two_block_system(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
+                                     blob(N, 0.65, 0.5, 0.8, 1.0, 0.10), /*stride1=*/1,
+                                     /*regrid_every=*/0);
+    AmrRuntime& rt = *sim->engine();
     test::install_prepared_threshold_union(rt, {{0, 0, Real(1.3)}});
-    for (int s = 0; s < 8; ++s)
-      rt.step(Real(0.01));
-    EXPECT_EQ(rt.regrid_count(), 0) << "e_regrid_count_zero_when_frozen";
+    sim->advance(Real(0.01), 8);
+    EXPECT_EQ(sim->checkpoint_regrid_count(), 0) << "e_regrid_count_zero_when_frozen";
   }
 
   // ============================================================================================
@@ -463,22 +462,22 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   // ============================================================================================
   {
     SCOPED_TRACE("evolving hierarchy");
-    AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
-                                   blob(N, 0.70, 0.5, 1.0, 1.0, 0.07));
-    rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
+    auto sim =
+        make_two_block_system(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
+                              blob(N, 0.70, 0.5, 1.0, 1.0, 0.07), /*stride1=*/1, /*regrid_every=*/2,
+                              /*regrid_grow=*/2, /*regrid_margin=*/2);
+    AmrRuntime& rt = *sim->engine();
     test::install_prepared_threshold_union(rt, {{0, 0, Real(1.5)}, {1, 0, Real(1.5)}});
     // ADC-607: wire a profiler so the regrid data-structure counters emit. The regrid site records
     // tag_density (dense TagBox fill, permille), box_hash_rebuilds + copy_cache_hits/misses
     // (parallel_copy schedule-cache engagement). We only assert the counters exist and are
     // internally consistent (rebuilds == misses); the numeric trajectory is untouched.
-    pops::runtime::program::Profiler prof;
-    prof.enable();
-    rt.set_profiler(&prof);
+    sim->enable_profiling();
+    pops::runtime::program::Profiler& prof = sim->profiler_handle();
     const std::vector<Box2D> fb_seed = fine_boxes(rt);            // patch central fixe du build
     const double m0_before = rt.mass(0), m1_before = rt.mass(1);  // (V1) snapshot avant la sequence
-    for (int s = 0; s < 6; ++s)
-      rt.step(Real(0.01));
-    EXPECT_TRUE(rt.regrid_count() >= 1) << "a_regrid_was_called";
+    sim->advance(Real(0.01), 6);
+    EXPECT_TRUE(sim->checkpoint_regrid_count() >= 1) << "a_regrid_was_called";
     // (ADC-607) the regrid emitted the new counters; box_hash_rebuilds mirrors copy_cache_misses,
     // and each parallel_copy either hit or missed (hits + misses == total copies >= misses >= 0).
     EXPECT_EQ(prof.counter("box_hash_rebuilds"), prof.counter("copy_cache_misses"))
@@ -486,9 +485,9 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     EXPECT_TRUE(prof.counter("copy_cache_hits") >= 0 && prof.counter("copy_cache_misses") >= 0)
         << "a_copy_cache_counters_nonnegative";
     EXPECT_TRUE(prof.counter("tag_density") >= 0 &&
-                prof.counter("tag_density") <= 1000 * rt.regrid_count())
+                prof.counter("tag_density") <= 1000 * sim->checkpoint_regrid_count())
         << "a_tag_density_in_permille_range";
-    rt.set_profiler(nullptr);  // detach before rt is destroyed (prof is a local)
+    sim->disable_profiling();
     const std::vector<Box2D> fb_now = fine_boxes(rt);
     EXPECT_TRUE(!same_box_list(fb_seed, fb_now)) << "a_fine_layout_evolved_from_seed";
     EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1)))
@@ -512,17 +511,18 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     SCOPED_TRACE("union and phi-only tagging");
     // Bloc A : blob a gauche (cx=0.25). Bloc B : blob a droite (cx=0.75). Charges opposees -> phi non
     // trivial (Poisson somme). Predicats par bloc seulement (phi non enregistre) : union = A OU B.
-    AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.25, 0.5, 1.2, 1.0, 0.06),
-                                   blob(N, 0.75, 0.5, 1.2, 1.0, 0.06));
-    rt.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
+    auto sim =
+        make_two_block_system(N, L, B0, +1.0, -1.0, blob(N, 0.25, 0.5, 1.2, 1.0, 0.06),
+                              blob(N, 0.75, 0.5, 1.2, 1.0, 0.06), /*stride1=*/1, /*regrid_every=*/1,
+                              /*regrid_grow=*/1, /*regrid_margin=*/1);
+    AmrRuntime& rt = *sim->engine();
     test::install_prepared_threshold_union(rt, {{0, 0, Real(1.6)}, {1, 0, Real(1.6)}});
     // phi NON enregistre ici : on isole l'union A OU B. Le premier step (macro_step_=0) ne regrid PAS
     // (la grille est fraichement construite, convention mono-bloc) ; le 2e step (macro_step_=1, every=1)
     // declenche le regrid d'union.
     const std::vector<Box2D> fb_seed = fine_boxes(rt);
-    rt.step(Real(0.005));
-    rt.step(Real(0.005));
-    EXPECT_TRUE(rt.regrid_count() >= 1) << "bc_union_regrid_called";
+    sim->advance(Real(0.005), 2);
+    EXPECT_TRUE(sim->checkpoint_regrid_count() >= 1) << "bc_union_regrid_called";
     const Box2D bb = fine_bbox(rt);
     // coords du niveau fin = 2 x coords grossieres. Gauche ~ cellule grossiere 8 (x=0.25*32) -> fin ~16 ;
     // droite ~ cellule grossiere 24 -> fin ~48. L'union doit enjamber le milieu (fin ~32) : lo a gauche
@@ -540,15 +540,15 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     //     |grad phi|. Un raffinement est alors declenche PAR PHI (preuve que phi entre dans l'union,
     //     independamment des criteres de bloc, D4). On choisit un seuil bas pour garantir des tags. La
     //     comparaison au seed prouve que le layout fin est REELLEMENT celui calcule par le regrid phi.
-    AmrRuntime rtp =
-        make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.5, 0.5, 1.5, 1.0, 0.06), flat(N, 1.0));
-    rtp.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
+    auto phi_sim = make_two_block_system(
+        N, L, B0, +1.0, -1.0, blob(N, 0.5, 0.5, 1.5, 1.0, 0.06), flat(N, 1.0),
+        /*stride1=*/1, /*regrid_every=*/1, /*regrid_grow=*/1, /*regrid_margin=*/1);
+    AmrRuntime& rtp = *phi_sim->engine();
     // Aucun critere de bloc : la feuille gradient du champ aux partage pilote seule l'union.
     test::install_prepared_shared_aux_gradient(rtp, 2, Real(1e-6));
     const std::vector<Box2D> fb_seed_phi = fine_boxes(rtp);
-    rtp.step(Real(0.005));
-    rtp.step(Real(0.005));
-    EXPECT_TRUE(rtp.regrid_count() >= 1) << "c_phi_only_regrid_called";
+    phi_sim->advance(Real(0.005), 2);
+    EXPECT_TRUE(phi_sim->checkpoint_regrid_count() >= 1) << "c_phi_only_regrid_called";
     EXPECT_TRUE(rtp.n_patches() >= 1) << "c_phi_only_triggers_refinement";
     EXPECT_TRUE(!same_box_list(fb_seed_phi, fine_boxes(rtp)))
         << "c_phi_only_layout_from_regrid_not_seed";
@@ -564,14 +564,15 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   // ============================================================================================
   {
     SCOPED_TRACE("stride-held block regrid");
-    AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
-                                   blob(N, 0.70, 0.5, 1.0, 1.0, 0.07), /*stride1=*/4);
-    rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
+    auto sim =
+        make_two_block_system(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
+                              blob(N, 0.70, 0.5, 1.0, 1.0, 0.07), /*stride1=*/4, /*regrid_every=*/2,
+                              /*regrid_grow=*/2, /*regrid_margin=*/2);
+    AmrRuntime& rt = *sim->engine();
     test::install_prepared_threshold_union(rt, {{0, 0, Real(1.5)}, {1, 0, Real(1.5)}});
     // Avance jusqu'a un macro-pas de regrid (macro_step_=2, every=2) ou B est TENU ((2+1)%4 != 0).
-    for (int s = 0; s < 3; ++s)
-      rt.step(Real(0.01));
-    EXPECT_TRUE(rt.regrid_count() >= 1) << "d_regrid_called_with_strided_block";
+    sim->advance(Real(0.01), 3);
+    EXPECT_TRUE(sim->checkpoint_regrid_count() >= 1) << "d_regrid_called_with_strided_block";
     // Le bloc B (stride-tenu) partage EXACTEMENT le layout fin du bloc A apres regrid (sinon le
     // same_layout_or_throw interne au regrid aurait leve avant d'arriver ici).
     const std::vector<Box2D> fa = rt.levels(0)[1].U.box_array().boxes();
@@ -591,15 +592,6 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   //        - regrid_every == 0 reste FIGE et BIT-IDENTIQUE (meme cas joue deux fois -> dmax == 0).
   // ============================================================================================
   {
-    auto exb_spec = [](double q, double B0) {
-      ModelSpec s;
-      s.transport = "exb";
-      s.source = "none";
-      s.elliptic = "charge";
-      s.q = q;
-      s.B0 = B0;
-      return s;
-    };
     const std::vector<double> r0 = blob(N, 0.30, 0.5, 1.0, 1.0, 0.07);
     const std::vector<double> r1 = blob(N, 0.70, 0.5, 1.0, 1.0, 0.07);
 
