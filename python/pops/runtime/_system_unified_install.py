@@ -292,8 +292,9 @@ class _SystemUnifiedInstall(_System):
 
         @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``,
             installed via install_program after every instance/field-plan/aux route is wired. Pass ``None`` for a
-            native per-block sim: no Program is installed; each instance must still supply its own
-            InstallPlan ``CompiledModel`` and optional ``"time"`` policy.
+            spatial-only native assembly: no Program is installed, so stepping remains unavailable
+            until an explicit Program authority is installed. Each instance must still supply its own
+            InstallPlan ``CompiledModel`` and optional spatial metadata.
         @param instances dict {name: {"initial": array, "spatial": <descriptor>,
             "model": <CompiledModel>, "time": <private engine policy>}}. The block is bound by the
             dict KEY @p name (Spec criterion
@@ -422,7 +423,8 @@ class _SystemUnifiedInstall(_System):
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
-        # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
+        # NATIVE mode (compiled=None) deliberately installs no temporal authority. The blocks are
+        # inspectable spatial carriers, but step/advance fail closed until a Program is installed.
         if so_path is not None:
             self.install_program(so_path)
             # (5a) HISTORY-PERSISTENCE POLICIES (ADC-626): the compiled Program records a per-ring

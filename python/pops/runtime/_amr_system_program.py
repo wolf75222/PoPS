@@ -29,9 +29,10 @@ class _AmrSystemProgram(_AmrSystem):
           - (5) install the compiled time Program on the AMR hierarchy (binds blocks by name +
             runs the section-24 .so requirement validation: block instance / solver). The .so must
             export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
-            at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no Program
-            -- the step-2 blocks drive the native AMR loop. Package parameters were fixed before their
-            closures were constructed; @p params remains available for Program-owned slots.
+            at the C++ loader with an actionable message. NATIVE mode (so_path is None) installs only
+            spatial blocks: it has no temporal authority and stepping fails closed until an explicit
+            Program is installed. Package parameters were fixed before their closures were constructed;
+            @p params remains available for Program-owned slots.
           - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route the remaining params to the
             per-PROGRAM-block set_program_params, AFTER install_program seeded each block's declaration
             defaults. A name declared by no Program kernel raises (no silent drop).

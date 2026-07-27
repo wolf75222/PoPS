@@ -1284,7 +1284,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   ASSERT_NE(rt, nullptr);
   test::install_prepared_threshold_union(*rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
   detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
-  sim.set_clock(0.25, 1);  // next native engine step is regrid-due
+  sim.set_clock(0.25, 1);  // the next Program-owned hierarchy attempt is regrid-due
 
   const std::vector<PatchBox> patches_before = rt->patch_boxes();
   const std::vector<int> owners_before = rt->level_owner_ranks(1);

@@ -466,7 +466,7 @@ struct AmrSystem::Impl {
   // (whole-program), equal to the native per-block stride only for a single-block Program.
   void run_program_cadence_(double dt) {
     // stride window: program runs only at the END of each stride window ((macro_step_+1) % stride == 0),
-    // mirroring AmrRuntime::step / SystemProgramDriver. stride=1 -> always true (every macro-step).
+    // mirroring SystemProgramDriver. stride=1 -> always true (every macro-step).
     if ((macro_step_ + 1) % program_.stride_ != 0)
       return;
     const double eff_dt = dt * static_cast<double>(program_.stride_);  // catch-up effective step
@@ -3317,8 +3317,8 @@ std::string AmrSystem::last_dt_bound() const {
   return p_->last_dt_reason;
 }
 
-// Newton report (OPT-IN IMEX diagnostics) of the block, aggregated over the levels/sub-steps of its
-// last advance (reset at the head of advance by AmrRuntime::step).
+// Read back the native diagnostic carrier of one block. A Program that authors an implicit source
+// step is responsible for resetting and aggregating this carrier over its declared levels/stages.
 AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) {
   p_->ensure_built();
   const NewtonReport& r =

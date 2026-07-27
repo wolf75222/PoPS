@@ -501,24 +501,23 @@ sub-flows into the same IR rather than selecting a native `System` stepper branc
 ### Adaptive runtime execution
 
 On the adaptive hierarchy, `AmrSystem::step`
-([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) forces the lazy build
-then delegates to the multi-block engine `AmrRuntime::step`
-([`include/pops/runtime/amr/amr_runtime.hpp`](../include/pops/runtime/amr/amr_runtime.hpp)) (or, in single-block, to
-the closure `step_fn` of an `AmrCouplerMP`). The engine adds two steps proper to the adaptive around
-the same skeleton.
+([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) first requires an
+installed Program, opens one complete accepted-step transaction, then invokes that Program through
+`AmrProgramContext`
+([`include/pops/runtime/program/amr_program_context.hpp`](../include/pops/runtime/program/amr_program_context.hpp)).
+`AmrRuntime`
+([`include/pops/runtime/amr/amr_runtime.hpp`](../include/pops/runtime/amr/amr_runtime.hpp)) is the
+spatial hierarchy engine: it owns layouts, states, field solves, residuals, tagging, transfers and
+reflux services, but it does not choose a temporal method.
 
-First the periodic regrid: if `regrid_every > 0` and the macro-step falls on the cadence
-(`macro_step_ % regrid_every == 0`, and not at the very first step), `regrid()` re-grids the hierarchy
-from the union of the tags of all the blocks plus the tag of $|\nabla\phi|$, applies a single new
-fine layout to all the blocks and to the shared aux. Then `solve_fields`: it first does an
-`average_down` per block (fine -> coarse), assembles the co-located summed right-hand side
-($f = \sum_b r_b(U_b)$ (each $r_b$ = `elliptic_rhs` of the block)), solves the coarse Poisson by geometric multigrid,
-derives the coarse aux ($\phi$, $\nabla\phi$ via `field_postprocess`), then injects the coarse aux
-to the fine levels (`coupler_inject_aux_mb`). The transport of each block DU is then `advance`
-(explicit transport: `advance_amr` = Berger-Oliger + conservative reflux + `average_down`) or
-`imex_advance` (source-free transport + stiff implicit source `backward_euler_source`), subcycled
-`substeps` times on the effective step $\mathrm{stride} \cdot dt$. Finally `coupled_source_step` applies the
-inter-species sources by splitting, before `advance the macro-step counter`.
+At the start of a Program-owned hierarchy attempt, the context performs a due regrid from the union
+of the resolved tagging predicates and applies the same topology to every block and field. The
+Program then places `solve_fields`, residual evaluations, explicit or implicit stages, multirate
+cadence and inter-species coupling at explicit clock points. `advance_hierarchy` recursively walks
+the authored parent/child clock relations; its conservative flux ledger refluxes coarse/fine
+interfaces and restores covered coarse cells by `average_down`. A failed solve or numerical guard
+restores state, topology, fields, histories, clocks, diagnostics and counters before the attempt is
+reported. Only a successful outer transaction advances the facade clock and publishes outputs.
 
 ```mermaid
 sequenceDiagram
@@ -526,10 +525,10 @@ sequenceDiagram
     actor Utilisateur
     participant Case
     participant Runtime as RuntimeInstance
-    participant AmrRuntime as AdaptiveExecutor
+    participant Program as AmrProgramContext
+    participant AmrRuntime as SpatialHierarchy
     participant EllipticSolver as EllipticSolver (GeometricMG)
     participant SpatialOperator as SpatialOperator (advance_amr)
-    participant TimeIntegrator as TimeIntegrator (SSPRK / IMEX)
 
     Note over Utilisateur,Case: Authoring pur (une fois)
     Utilisateur->>Case: layout(AMRHierarchy, tagging, transfer, reflux)
@@ -538,42 +537,41 @@ sequenceDiagram
 
     Note over Utilisateur,TimeIntegrator: Une tentative de macro-pas transactionnelle
     Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
-    Runtime->>AmrRuntime: propose(dt, snapshot complet)
+    Runtime->>Program: propose(dt, snapshot complet)
 
     opt regrid_every > 0 et macro_step % regrid_every == 0
-        AmrRuntime->>AmrRuntime: regrid() (union des tags densite et gradient de phi, nouveau layout fin)
+        Program->>AmrRuntime: regrid() (union des tags, topologie partagee)
     end
 
+    Program->>AmrRuntime: solve_fields au clock point explicite
     AmrRuntime->>EllipticSolver: solve_fields()
     EllipticSolver->>EllipticSolver: average_down par bloc (du fin vers le grossier)
     EllipticSolver->>EllipticSolver: assemble le second membre par bloc puis resout le Poisson grossier (phi)
     EllipticSolver->>EllipticSolver: aux grossier (phi, grad phi) puis injection du grossier vers le fin
     EllipticSolver-->>AmrRuntime: aux a jour par niveau
 
-    loop pour chaque bloc DU (stride honore), bdt = stride*dt
-        loop substeps sous-pas (h = bdt/substeps)
-            AmrRuntime->>TimeIntegrator: advance (explicite) ou imex_advance
-            TimeIntegrator->>SpatialOperator: advance_amr (Berger-Oliger)
-            SpatialOperator->>SpatialOperator: transport par niveau, reflux conservatif, average_down
-            SpatialOperator-->>TimeIntegrator: U mis a jour (conservatif par bloc)
+    loop noeuds, etages et sous-pas declares par le Program
+        Program->>AmrRuntime: rhs_into / solve / coupling sur candidats prives
+        AmrRuntime->>SpatialOperator: ghosts, reconstruction, flux et residu par niveau
+        SpatialOperator-->>Program: taux et rapports qualifies
+        Program->>Program: combinaison des candidats et commit atomique
+        opt interface grossier/fin
+            Program->>AmrRuntime: reflux conservatif puis average_down
         end
     end
-    AmrRuntime->>AmrRuntime: évalue les gardes sur état, hiérarchie et rapports collectifs
+    Program->>Program: évalue les gardes sur état, hiérarchie et rapports collectifs
     alt tentative acceptée
-        AmrRuntime->>AmrRuntime: commit état + topologie + historiques + compteurs
-        AmrRuntime-->>Runtime: rapport accepté et état publiable
+        Program->>Runtime: commit état + topologie + historiques + compteurs
+        Runtime-->>Utilisateur: rapport accepté et état publiable
     else tentative rejetée
-        AmrRuntime->>AmrRuntime: rollback intégral puis nouvelle proposition de dt
-        AmrRuntime-->>Runtime: rapport de rejet structuré
+        Program->>Runtime: rollback intégral
+        Runtime-->>Utilisateur: rapport de rejet structuré
     end
 ```
 
-The parallel between the two pipelines is deliberate: `AmrRuntime::solve_fields` reproduces
-`AmrSystemCoupler::solve_fields` (the compile-time counterpart), and the sequence (solve the elliptic;
-transport per block honoring stride/substeps; source; advance the macro-step counter) is the
-same as that of `SystemProgramDriver`. The difference lies in the transport engine (`assemble_rhs` full
-versus `advance_amr` Berger-Oliger with reflux and `average_down`), in the coarse -> fine injection of the aux
-and in the periodic regrid, proper to the hierarchy.
+The uniform and adaptive pipelines therefore share one rule: the Program is the only temporal
+authority. Their difference is spatial. The AMR context adds hierarchy clocks, coarse/fine field
+transfer, periodic regrid and a conservative interface-flux ledger around the same authored graph.
 
 
 ## Verified properties
