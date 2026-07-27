@@ -227,6 +227,18 @@ class _CompositeTemporalRestartState:
         return self._same_attribute("controller_state")
 
     @property
+    def event_queue(self) -> Any:
+        return self._same_attribute("event_queue")
+
+    @property
+    def time_hex(self) -> Any:
+        return self._same_attribute("time_hex")
+
+    @property
+    def macro_step(self) -> Any:
+        return self._same_attribute("macro_step")
+
+    @property
     def program_schedule(self) -> Any:
         return self._same_attribute("program_schedule")
 
@@ -245,6 +257,24 @@ class _CompositeTemporalRestartState:
 
     def before_attempt(self, *, time: Any, macro_step: Any) -> None:
         self._broadcast("before_attempt", time=time, macro_step=macro_step)
+
+    def before_queued_attempt(
+        self, event: Any, *, time: Any, macro_step: Any,
+    ) -> None:
+        for state in self.states:
+            state.before_queued_attempt(event, time=time, macro_step=macro_step)
+
+    def queue_error_controlled_proposal(self, **kwargs: Any) -> Any:
+        return _common_exact(
+            (state.queue_error_controlled_proposal(**kwargs) for state in self.states),
+            where="multi-layout temporal proposal",
+        )
+
+    def queued_error_controlled_proposal(self, **kwargs: Any) -> Any:
+        return _common_exact(
+            (state.queued_error_controlled_proposal(**kwargs) for state in self.states),
+            where="multi-layout queued temporal proposal",
+        )
 
     def accept(self, **kwargs: Any) -> None:
         self._broadcast("accept", **kwargs)

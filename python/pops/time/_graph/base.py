@@ -100,7 +100,8 @@ def _validate_history_contract_data(contract: Any) -> dict[str, Any]:
         )
     if _canonical_int(contract["schema_version"]) != 1:
         raise ValueError("history_interpolation provider has an unsupported contract schema")
-    if _canonical_int(contract["depth"]) is None or _canonical_int(contract["depth"]) < 1:
+    depth = _canonical_int(contract["depth"])
+    if depth is None or depth < 1:
         raise ValueError("history_interpolation provider depth must be a positive integer")
 
     clock = contract["clock"]
