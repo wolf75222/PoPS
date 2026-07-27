@@ -86,9 +86,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
             assert (
                 require_exact_payload_version(
                     {key: exact},
-                    key,
-                    expected,
-                    runtime=runtime,
+                    key=key,
+                    expected=expected,
+                    runtime_kind=runtime,
                 )
                 == expected
             )
@@ -96,9 +96,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
         with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
             require_exact_payload_version(
                 {key: np.int64(expected - 1)},
-                key,
-                expected,
-                runtime=runtime,
+                key=key,
+                expected=expected,
+                runtime_kind=runtime,
             )
 
         for malformed in (
@@ -110,9 +110,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
             with pytest.raises(TypeError, match="exact integer scalar"):
                 require_exact_payload_version(
                     {key: malformed},
-                    key,
-                    expected,
-                    runtime=runtime,
+                    key=key,
+                    expected=expected,
+                    runtime_kind=runtime,
                 )
 
 

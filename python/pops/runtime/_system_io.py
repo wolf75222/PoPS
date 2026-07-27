@@ -257,9 +257,9 @@ class _SystemIO(_System):
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
         require_exact_payload_version(
             d,
-            "pops_checkpoint_version",
-            UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
-            runtime="Uniform",
+            key="pops_checkpoint_version",
+            expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            runtime_kind="Uniform",
         )
         preflight_uniform_restart(d)
         cadence = prepare_program_cadence(
