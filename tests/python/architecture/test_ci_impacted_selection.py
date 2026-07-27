@@ -1144,10 +1144,21 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
 
     asan = workflow.split("\n  sanitizers:\n", 1)[1].split("\n  # --- TSan", 1)[0]
     assert "shard: [0, 1, 2, 3]" in asan
-    assert "ASAN_SHARD_TOTAL: '4'" in asan
-    assert "shard_start=$(( ${{ matrix.shard }} + 1 ))" in asan
-    assert '-I "${shard_start},,${ASAN_SHARD_TOTAL}"' in asan
+    assert "scripts/ci_select_tests.py cpp" in asan
+    assert "--force-all" in asan
+    assert "--shard-index ${{ matrix.shard }}" in asan
+    assert "--shard-total 4" in asan
+    assert 'read -r -a cpp_targets <<< "${{ steps.asan-plan.outputs.cpp_shard_targets }}"' in asan
+    assert 'cmake --build --preset ci-asan --target "${cpp_targets[@]}"' in asan
+    assert "verify-cpp-target-labels" in asan
+    assert "-L '${{ steps.asan-plan.outputs.cpp_shard_label_regex }}'" in asan
+    assert "ASAN_SHARD_TOTAL" not in asan
+    assert "shard_start=" not in asan
     assert "asan-log-shard-${{ matrix.shard }}" in asan
+
+    tests_cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'POPS_ENABLE_SANITIZERS AND name STREQUAL "test_polar_fluid_transport"' in tests_cmake
+    assert "pops_add_gtest_suite(NAME ${name} TIMEOUT 900)" in tests_cmake
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():

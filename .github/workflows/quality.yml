@@ -438,7 +438,6 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
-      ASAN_SHARD_TOTAL: '4'
       # Kokkos n'est pas instrumente -> on coupe LSan (singletons Kokkos) et les faux positifs de
       # frontiere instrumente/non instrumente. halt_on_error=0 : on collecte tous les rapports.
       ASAN_OPTIONS: detect_leaks=0:detect_container_overflow=0:abort_on_error=0:halt_on_error=0
@@ -449,6 +448,14 @@ jobs:
           fetch-depth: 1
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
+      - name: Plan exact ASan target shard
+        id: asan-plan
+        run: |
+          python3 scripts/ci_select_tests.py cpp \
+            --changed-files /dev/null \
+            --force-all \
+            --shard-index ${{ matrix.shard }} \
+            --shard-total 4
       - name: Cache ccache (quality/asan)
         uses: actions/cache@v6
         with:
@@ -490,12 +497,18 @@ jobs:
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-asan \
             --verify-contracts "${compile_contracts[@]}"
-          cmake --build --preset ci-asan
-          shard_start=$(( ${{ matrix.shard }} + 1 ))
+          read -r -a cpp_targets <<< "${{ steps.asan-plan.outputs.cpp_shard_targets }}"
+          test "${#cpp_targets[@]}" -gt 0
+          cmake --build --preset ci-asan --target "${cpp_targets[@]}"
+          ctest_inventory="$RUNNER_TEMP/ctest-asan-shard-${{ matrix.shard }}.json"
+          ctest --preset ci-asan -N --show-only=json-v1 > "$ctest_inventory"
+          python3 scripts/ci_select_tests.py verify-cpp-target-labels \
+            --ctest-json "$ctest_inventory" \
+            --targets "${cpp_targets[@]}"
           shard_log="asan-shard-${{ matrix.shard }}.log"
           set +e
           ctest --preset ci-asan --output-on-failure \
-            -I "${shard_start},,${ASAN_SHARD_TOTAL}" 2>&1 | tee "$shard_log"
+            -L '${{ steps.asan-plan.outputs.cpp_shard_label_regex }}' 2>&1 | tee "$shard_log"
           rc=${PIPESTATUS[0]}
           {
             echo "### Sanitizers (ASan + UBSan)"

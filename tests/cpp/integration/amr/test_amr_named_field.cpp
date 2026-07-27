@@ -362,7 +362,10 @@ static CoarseFineGhostCheck coarse_fine_ghost_check(const MultiFab& coarse,
 }
 
 static Real max_valid_coarse_injection_gap(const MultiFab& coarse, const MultiFab& fine,
-                                           int component) {
+                                           int coarse_component, int fine_component) {
+  if (coarse_component < 0 || coarse_component >= coarse.ncomp() || fine_component < 0 ||
+      fine_component >= fine.ncomp())
+    throw std::invalid_argument("coarse injection oracle component is outside its field");
   device_fence();
   Real result = Real(0);
   for (int li = 0; li < fine.local_size(); ++li) {
@@ -375,8 +378,8 @@ static Real max_valid_coarse_injection_gap(const MultiFab& coarse, const MultiFa
         const int parent_box = mf_find_box(coarse, ci, cj);
         if (parent_box < 0)
           continue;
-        const Real parent = coarse.fab(parent_box).const_array()(ci, cj, component);
-        result = std::max(result, std::fabs(child(i, j, component) - parent));
+        const Real parent = coarse.fab(parent_box).const_array()(ci, cj, coarse_component);
+        result = std::max(result, std::fabs(child(i, j, fine_component) - parent));
       }
   }
   return result;
@@ -798,7 +801,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
         << "resolved FAC valid cells remain authoritative on level " << level;
 
   EXPECT_GT(max_valid_coarse_injection_gap(
-                runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component),
+                runtime.aux(0), runtime.provider_potential_level(field, 1), phi_component, 0),
             Real(1e-8))
       << "the fine FAC solution must differ from full-grown coarse injection for this oracle";
 

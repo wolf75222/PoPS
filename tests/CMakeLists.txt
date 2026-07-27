@@ -199,7 +199,13 @@ endforeach()
 endfunction()
 
 function(pops_add_test name)
-  pops_add_gtest_suite(NAME ${name})
+  if(POPS_ENABLE_SANITIZERS AND name STREQUAL "test_polar_fluid_transport")
+    # The full manufactured-fluid convergence case is intentionally retained under ASan/UBSan.
+    # Instrumentation makes it slightly slower than the ordinary ten-minute per-case ceiling.
+    pops_add_gtest_suite(NAME ${name} TIMEOUT 900)
+  else()
+    pops_add_gtest_suite(NAME ${name})
+  endif()
 endfunction()
 
 function(pops_add_mpi_rank_test name nproc)

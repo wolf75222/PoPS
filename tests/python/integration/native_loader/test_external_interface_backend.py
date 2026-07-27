@@ -59,8 +59,11 @@ def test_field_topology_and_solver_share_the_topology_contract():
     assert "size_t topology_label_count" in header
     assert "const char* topology_provenance" in header
     assert header.count("const char* topology_digest") >= 2
-    assert "PopsSolveStatusV2 status" in header
-    assert "PopsSolveActionV2 action" in header
+    assert "int32_t status" in header
+    assert header.count("int32_t action") >= 2
+    assert "PopsComponentActionV1 action" not in header
+    assert "PopsSolveStatusV2 status" not in header
+    assert "PopsSolveActionV2 action" not in header
     assert "double relative_residual" in header
     assert "double reference_residual_norm" in header
     assert "double residual_norm" in header

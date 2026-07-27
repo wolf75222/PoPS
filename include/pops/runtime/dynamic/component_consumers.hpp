@@ -36,7 +36,7 @@ inline PopsComponentStatusV1 unwritten_component_status() {
           "native component did not write its status"};
 }
 
-inline bool component_action_is_known(PopsComponentActionV1 action) {
+inline bool component_action_is_known(std::int32_t action) {
   return action == POPS_COMPONENT_CONTINUE_V1 || action == POPS_COMPONENT_RETRY_STEP_V1 ||
          action == POPS_COMPONENT_REJECT_STEP_V1 || action == POPS_COMPONENT_ABORT_RUN_V1;
 }
@@ -46,7 +46,7 @@ inline bool component_status_is_well_formed(const PopsComponentStatusV1& status)
          status.code != kUnwrittenComponentStatusCode && component_action_is_known(status.action);
 }
 
-inline bool solve_status_is_known(PopsSolveStatusV2 status) {
+inline bool solve_status_is_known(std::int32_t status) {
   switch (status) {
     case POPS_SOLVE_SOLVED_V2:
     case POPS_SOLVE_SINGULAR_V2:
@@ -61,7 +61,7 @@ inline bool solve_status_is_known(PopsSolveStatusV2 status) {
   return false;
 }
 
-inline bool solve_action_is_known(PopsSolveActionV2 action) {
+inline bool solve_action_is_known(std::int32_t action) {
   return action == POPS_SOLVE_ACTION_NONE_V2 || action == POPS_SOLVE_ACTION_FAIL_RUN_V2 ||
          action == POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2;
 }
@@ -1518,8 +1518,8 @@ inline int solve_field(const PopsFieldSolverApiV2& api, void* state,
   validate_request_authority();
   report = {};
   report.struct_size = sizeof(PopsSolveReportV2);
-  report.status = static_cast<PopsSolveStatusV2>(-1);
-  report.action = static_cast<PopsSolveActionV2>(-1);
+  report.status = -1;
+  report.action = -1;
   report.iterations = -1;
   report.relative_residual = std::numeric_limits<double>::quiet_NaN();
   report.reference_residual_norm = std::numeric_limits<double>::quiet_NaN();

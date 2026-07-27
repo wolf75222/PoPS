@@ -180,7 +180,7 @@ class PreparedFieldSolverComponent final {
     provider_identity_ = hashed_identity_("external-field-solver-provider", collective_contract_);
   }
 
-  static SolveStatus solve_status_(PopsSolveStatusV2 status) {
+  static SolveStatus solve_status_(std::int32_t status) {
     switch (status) {
       case POPS_SOLVE_SOLVED_V2:
         return SolveStatus::kSolved;
@@ -202,7 +202,7 @@ class PreparedFieldSolverComponent final {
     throw std::invalid_argument("FieldSolver v2 returned an unknown solve status");
   }
 
-  static SolveAction solve_action_(PopsSolveActionV2 action) {
+  static SolveAction solve_action_(std::int32_t action) {
     switch (action) {
       case POPS_SOLVE_ACTION_NONE_V2:
         return SolveAction::kNone;
