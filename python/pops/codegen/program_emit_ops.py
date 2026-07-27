@@ -175,10 +175,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             if source.op != "history":
                 raise ValueError(
                     "LinearInterpolation native lowering requires one retained history value")
-            if source.clock != program.clock:
-                raise NotImplementedError(
-                    "LinearInterpolation native lowering currently requires a primary-clock "
-                    "history; child-clock slot intervals are not yet an exact timestamp ledger")
             contract = relation["provider"]["contract"]
             depth = _canonical_metadata_int(
                 contract["depth"], where="LinearInterpolation history depth")

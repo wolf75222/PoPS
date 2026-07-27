@@ -1,12 +1,15 @@
-"""Strict offline migration of accepted Uniform checkpoint artifacts.
+"""Strict offline migration of one authenticated Uniform-v2 compatibility projection.
 
-Runtime restart remains deliberately current-format-only.  This module is an explicit, offline
-artifact transformer: it authenticates the complete historical envelope, requires every temporal
-fact that version 2 did not store, emits a complete current payload, and runs both current restart
-preflights before publishing any destination bytes.
+Runtime restart remains deliberately current-format-only. This module transforms only a sealed v2
+projection that retains the current runtime's semantic identity and compiled Program hash. It
+validates that envelope, requires the temporal facts omitted by v2, emits a complete current
+payload, and runs both current restart preflights before publishing destination bytes.
 
-Only the exact historical Uniform v2 codec is supported.  AMR hierarchy migration and distributed
-publication atomicity remain owned by ADC-678 and ADC-666 respectively.
+This is not yet a release-to-release migration for artifacts emitted by the historical v2 writer:
+those files were unsealed and omitted the identities and continuation facts needed to prove
+semantic equivalence. They remain refused until an explicit, reviewed version map can supply that
+evidence. AMR hierarchy migration and distributed publication atomicity remain owned by ADC-678
+and ADC-666 respectively.
 """
 from __future__ import annotations
 
@@ -23,12 +26,15 @@ from typing import Any
 
 from ._checkpoint_migration_uniform_v2 import (
     HISTORICAL_UNIFORM_PAYLOAD_VERSION,
-    validate_historical_v2,
+    validate_compatible_v2_projection,
 )
 from pops.time import StepStrategy
 
 
 MIGRATION_PROTOCOL = "pops.uniform-checkpoint-migration.v1"
+MIGRATION_COMPATIBILITY_SCOPE = (
+    "authenticated-v2-projection-same-semantic-and-program-hash"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,11 +157,14 @@ def migrate_uniform_checkpoint(
     runtime: Any,
     state: UniformCheckpointMigrationState,
 ) -> CheckpointMigrationReport:
-    """Migrate one exact Uniform v2 checkpoint into the strict current format.
+    """Migrate one exact compatible Uniform v2 projection into the current format.
 
     ``runtime`` must be a bound current Uniform :class:`RuntimeInstance` for the same semantic
-    Case/Program.  It is used only as an authenticated schema/preflight authority; no restart
-    transaction begins and no native state is mutated.  Runtime loaders never call this function.
+    Case/Program, including the same semantic identity and compiled Program hash sealed into the
+    projection. It is used only as an authenticated schema/preflight authority; no restart
+    transaction begins and no native state is mutated. Runtime loaders never call this function.
+    Files produced by the actual unsealed historical v2 writer, and artifacts from an older
+    semantic schema, are outside this API's explicit compatibility scope.
     """
     import numpy as np
     from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
@@ -204,15 +213,18 @@ def migrate_uniform_checkpoint(
     source_payload = decode_checkpoint_bytes(raw)
     source_manifest, source_restart = inspect_checkpoint_payload_integrity(
         source_payload, runtime_kind="uniform")
-    facts = validate_historical_v2(source_payload)
+    facts = validate_compatible_v2_projection(source_payload)
     current_semantic, current_artifact, current_bind = _runtime_identities(runtime)
     source_semantic = _identity_from_json(source_manifest["semantic_identity"])
     if source_semantic.token != current_semantic.token:
-        raise ValueError(
-            "historical checkpoint semantic identity differs from the bound runtime")
+        raise NotImplementedError(
+            "Uniform v2 checkpoint is outside the authenticated compatibility subset: "
+            "its semantic identity differs from the bound runtime; an explicit versioned "
+            "semantic migration is required")
     if facts["program_hash"] != runtime.installed_program_hash():
-        raise ValueError(
-            "historical checkpoint compiled Program hash differs from the bound runtime")
+        raise NotImplementedError(
+            "Uniform v2 checkpoint is outside the authenticated compatibility subset: "
+            "its compiled Program hash differs from the bound runtime")
 
     migrated = {
         name: np.array(source_payload[name], copy=True, order="C")
@@ -223,6 +235,10 @@ def migrate_uniform_checkpoint(
         UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64)
     migrated["abi_key"] = np.asarray(abi_key())
     migrated["field_provider_slots"] = np.asarray([], dtype="U1")
+    if np.asarray(migrated["history_names"]).size == 0:
+        migrated["history_names"] = np.asarray([], dtype="U1")
+    if np.asarray(migrated["cache_names"]).size == 0:
+        migrated["cache_names"] = np.asarray([], dtype="U1")
     migrated["temporal_restart_state"] = np.asarray(
         _current_temporal_json(runtime, facts=facts, state=state))
     for name, depth, policy, stored, initialized in facts["histories"]:
@@ -262,6 +278,7 @@ def migrate_uniform_checkpoint(
             "transaction_stats": dict(state.transaction_stats),
         },
         "scope": {
+            "compatibility": MIGRATION_COMPATIBILITY_SCOPE,
             "runtime_kind": "uniform",
             "field_provider_slots": [],
             "consumer_graph": "empty",
@@ -318,6 +335,7 @@ def migrate_uniform_checkpoint(
 __all__ = [
     "CheckpointMigrationReport",
     "HISTORICAL_UNIFORM_PAYLOAD_VERSION",
+    "MIGRATION_COMPATIBILITY_SCOPE",
     "MIGRATION_PROTOCOL",
     "UniformCheckpointMigrationState",
     "migrate_uniform_checkpoint",

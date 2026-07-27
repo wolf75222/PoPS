@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from fractions import Fraction
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,6 +23,10 @@ from pops.time import Clock, ErrorControlledDt, FixedDt, TimePoint
 
 
 ROOT = Path(__file__).resolve().parents[4]
+FROZEN_UNIFORM_V2 = ROOT / "tests/data/adc667/uniform_v2_ab2_98b7ffe6.npz"
+FROZEN_UNIFORM_V2_SHA256 = (
+    "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226"
+)
 
 
 class _Native:
@@ -204,7 +210,7 @@ def _uniform_artifact(native_cxx, *, attempt_policy):
     return artifact
 
 
-def _linear_history_artifact(native_cxx):
+def _linear_history_artifact(native_cxx, *, child_owned=False):
     """Compile a Uniform Program whose solution depends on the native interpolated slots."""
     import pops
     from pops.codegen import Production
@@ -257,38 +263,69 @@ def _linear_history_artifact(native_cxx):
     )
     case.numerics(numerics, block=block)
 
-    program = Program("native_linear_history")
+    program = Program(
+        "native_child_linear_history" if child_owned else "native_linear_history")
     temporal = program.state(block[state])
-    program.keep_history(
-        temporal, depth=2, interpolation=LinearInterpolation())
     fast = Clock("fast", owner=program.owner_path)
-    interpolated = program.synchronize(
-        temporal.prev,
-        at=TimePoint(fast, step=-1),
-        relation=InterpolateHistory(temporal.prev),
-        name="half_previous_interval",
-    )
-    fast_value = program.subcycle(
-        interpolated,
-        clock=fast,
-        within=program.clock,
-        count=2,
-        body_fn=lambda P, value: P.value("fast_copy", 1 * value),
-    )
-    returned = program.synchronize(
-        fast_value,
-        at=temporal.next.point,
-        relation=SampleAndHold(),
-    )
-    rhs = program.rhs(
-        state=temporal.n,
-        terms=[Flux(), SourceTerm(source_operator)],
-    )
-    candidate = program.value(
-        "candidate",
-        returned + program.dt * rhs,
-        at=temporal.next.point,
-    )
+    if child_owned:
+        child = program.state(block[state], clock=fast)
+        program.keep_history(
+            child, depth=2, interpolation=LinearInterpolation())
+        fast_value = program.subcycle(
+            child.n,
+            clock=fast,
+            within=program.clock,
+            count=2,
+            body_fn=lambda P, value: P.value(
+                "fast_advance",
+                value + P.dt * value,
+                at=child.next.point,
+            ),
+        )
+        # Executed native interpolation from a child-owned ring at -3/2 child ticks. The result is
+        # deliberately not the committed state: this isolates the ledger capability from the simple
+        # subcycled evolution while still making a missing/invalid child timestamp fail the step.
+        program.synchronize(
+            child.prev,
+            at=TimePoint(program.clock, Fraction(1, 4), step=-1),
+            relation=InterpolateHistory(child.prev),
+            name="child_history_at_macro_coordinate",
+        )
+        candidate = program.synchronize(
+            fast_value,
+            at=temporal.next.point,
+            relation=SampleAndHold(),
+        )
+    else:
+        program.keep_history(
+            temporal, depth=2, interpolation=LinearInterpolation())
+        interpolated = program.synchronize(
+            temporal.prev,
+            at=TimePoint(fast, step=-1),
+            relation=InterpolateHistory(temporal.prev),
+            name="half_previous_interval",
+        )
+        fast_value = program.subcycle(
+            interpolated,
+            clock=fast,
+            within=program.clock,
+            count=2,
+            body_fn=lambda P, value: P.value("fast_copy", 1 * value),
+        )
+        returned = program.synchronize(
+            fast_value,
+            at=temporal.next.point,
+            relation=SampleAndHold(),
+        )
+        rhs = program.rhs(
+            state=temporal.n,
+            terms=[Flux(), SourceTerm(source_operator)],
+        )
+        candidate = program.value(
+            "candidate",
+            returned + program.dt * rhs,
+            at=temporal.next.point,
+        )
     program.commit(temporal.next, candidate)
     program.step_strategy(FixedDt(0.1))
     case.program(program)
@@ -322,8 +359,8 @@ def _bound_uniform_runtime(native_cxx, *, attempt_policy):
         _uniform_artifact(native_cxx, attempt_policy=attempt_policy))
 
 
-def _write_historical_uniform_v2(current, owner, destination):
-    """Project one current test checkpoint onto the exact historical Uniform v2 schema."""
+def _write_compatible_uniform_v2_projection(current, owner, destination):
+    """Project current data onto the exact v2 schema within the documented identity subset."""
     from pops.runtime._checkpoint_manifest import (
         IDENTITY_KEY,
         MANIFEST_KEY,
@@ -357,6 +394,42 @@ def _write_historical_uniform_v2(current, owner, destination):
     seal_checkpoint_payload(owner, legacy, runtime_kind="uniform")
     with open(destination, "wb") as stream:
         np.savez_compressed(stream, **legacy)
+    return destination
+
+
+def _write_resealed_uniform_payload(
+    payload, owner, destination, replacements, *, semantic_identity=None,
+):
+    """Write an authenticated test payload after an intentional semantic mutation."""
+    from pops.runtime._checkpoint_manifest import (
+        IDENTITY_KEY,
+        MANIFEST_KEY,
+        _seal_checkpoint_payload_with_identities,
+        seal_checkpoint_payload,
+    )
+
+    candidate = {
+        name: np.array(value, copy=True)
+        for name, value in payload.items()
+        if name not in {MANIFEST_KEY, IDENTITY_KEY}
+    }
+    candidate.update({
+        name: np.array(value, copy=True) for name, value in replacements.items()
+    })
+    if semantic_identity is None:
+        seal_checkpoint_payload(owner, candidate, runtime_kind="uniform")
+    else:
+        _semantic, artifact, bind = owner._checkpoint_identities()
+        _seal_checkpoint_payload_with_identities(
+            candidate,
+            runtime_kind="uniform",
+            semantic=semantic_identity,
+            artifact=artifact,
+            bind=bind,
+            run=owner.last_run_identity,
+        )
+    with open(destination, "wb") as stream:
+        np.savez_compressed(stream, **candidate)
     return destination
 
 
@@ -596,6 +669,29 @@ def test_temporal_schedule_rejects_history_provider_source_clock_drift():
         TemporalRestartState().configure_program(schedule, time=0.0, macro_step=0)
 
 
+def test_frozen_release_v2_fixture_is_authentic_unsealed_legacy_evidence():
+    from pops.runtime._checkpoint_manifest import inspect_checkpoint_payload_integrity
+
+    assert hashlib.sha256(FROZEN_UNIFORM_V2.read_bytes()).hexdigest() \
+        == FROZEN_UNIFORM_V2_SHA256
+    with np.load(FROZEN_UNIFORM_V2, allow_pickle=False) as stored:
+        assert int(stored["pops_checkpoint_version"]) == 2
+        assert str(stored["program_hash"]) \
+            == "d1880e66a6b39e4d56aafe1f817591e5dec9212705b430c338bde8836e448215"
+        assert {
+            "pops_checkpoint_manifest",
+            "pops_restart_identity",
+            "temporal_restart_state",
+            "runtime_consumer_cursors",
+            "field_provider_slots",
+        }.isdisjoint(stored.files)
+        with pytest.raises(
+            ValueError,
+            match="no canonical manifest/restart identity; historical formats are refused",
+        ):
+            inspect_checkpoint_payload_integrity(stored, runtime_kind="uniform")
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
@@ -767,9 +863,86 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             refused.restart(path)
         assert np.array_equal(np.asarray(refused.state_global("blk")), before)
 
-    # Build an exact historical fixture, then exercise the public offline migration.  The runtime
-    # loader itself continues to reject v2; only the migrated current payload is restarted.
-    historical = _write_historical_uniform_v2(
+    # Integrity alone is not semantic validity: re-seal malformed continuation metadata with the
+    # current runtime identities and prove the strict preflight refuses it before beginning the
+    # native restore transaction or mutating state/history/cache/clock.
+    first_history = history_names[0]
+    first_cache = cache_nodes[0]
+    invalid_metadata = {
+        "history-slot-dt-nan": (
+            {"history_slot_dt_" + first_history: np.full(
+                len(pristine["history_slot_dt_" + first_history]),
+                np.nan,
+                dtype=np.float64,
+            )},
+            "slot dt values must be finite",
+        ),
+        "history-fill-count": (
+            {"history_fill_count_" + first_history: np.asarray(-1, dtype=np.int64)},
+            "history_fill_count_.*must be >= 0",
+        ),
+        "cache-node": (
+            {"cache_nodes": np.asarray([-1], dtype=np.int64)},
+            "cache index is inconsistent",
+        ),
+        "cache-future-update": (
+            {"cache_last_update_%d" % first_cache: np.asarray(
+                int(pristine["macro_step"]), dtype=np.int64)},
+            "last update is not an accepted prior step",
+        ),
+        "cache-accumulated-dt-nan": (
+            {"cache_accum_dt_%d" % first_cache: np.asarray(
+                np.nan, dtype=np.float64)},
+            "cache_accum_dt_.*must be finite",
+        ),
+        "cache-empty-name": (
+            {"cache_names": np.asarray([""], dtype="U1")},
+            "must contain non-empty text",
+        ),
+    }
+    for label, (replacement, message) in invalid_metadata.items():
+        path = _write_resealed_uniform_payload(
+            pristine,
+            split,
+            tmp_path / ("adaptive-resealed-invalid-%s.npz" % label),
+            replacement,
+        )
+        refused = fresh()
+        engine = refused._executor
+        native = engine._s
+        before_state = np.asarray(refused.state_global("blk")).copy()
+        before_clock = (refused.time(), refused.macro_step())
+        before_histories = {
+            (name, slot): np.asarray(native.history_global(name, slot)).copy()
+            for name in native.history_names()
+            for slot in range(native.history_depth(name))
+        }
+        before_cache_nodes = tuple(native.program_cache_nodes())
+
+        def transaction_must_not_begin(self):
+            del self
+            raise AssertionError("semantic preflight reached _begin_checkpoint_restart")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                type(engine),
+                "_begin_checkpoint_restart",
+                transaction_must_not_begin,
+            )
+            with pytest.raises((TypeError, ValueError, RuntimeError), match=message):
+                refused.restart(path)
+        assert "_checkpoint_restart_python_snapshot" not in engine.__dict__
+        assert (refused.time(), refused.macro_step()) == before_clock
+        assert np.array_equal(np.asarray(refused.state_global("blk")), before_state)
+        assert tuple(native.program_cache_nodes()) == before_cache_nodes
+        for (name, slot), values in before_histories.items():
+            assert np.array_equal(
+                np.asarray(native.history_global(name, slot)), values)
+
+    # Build the exact authenticated v2 compatibility projection, then exercise the public offline
+    # transformer. This proves its plumbing without misrepresenting the unsealed artifact produced
+    # by the actual historical writer as a semantically equivalent current Program.
+    historical = _write_compatible_uniform_v2_projection(
         checkpoint, split, tmp_path / "adaptive-v2.npz")
     descriptor = ErrorControlledDt.from_data(
         checkpoint_temporal["strategy"]["strategy"])
@@ -782,6 +955,93 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             checkpoint_temporal["controller_state"]["last_accepted_dt"]),
         transaction_stats=checkpoint_temporal["transaction_stats"],
     )
+
+    # Runtime restart is current-format-only and never dispatches to the explicit offline
+    # transformer. A fully current sealed envelope carrying codec version 2 reaches the exact
+    # version guard and is refused before a native restore transaction can begin.
+    version_only_v2 = _write_resealed_uniform_payload(
+        pristine,
+        split,
+        tmp_path / "adaptive-current-envelope-v2-codec.npz",
+        {"pops_checkpoint_version": np.asarray(2, dtype=np.int64)},
+    )
+    migration_was_called = False
+
+    def migration_must_not_be_called(*args, **kwargs):
+        del args, kwargs
+        nonlocal migration_was_called
+        migration_was_called = True
+        raise AssertionError("runtime restart attempted implicit checkpoint migration")
+
+    direct_refusal = fresh()
+    direct_before = np.asarray(direct_refusal.state_global("blk")).copy()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "pops.codegen.checkpoint_migration.migrate_uniform_checkpoint",
+            migration_must_not_be_called,
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"payload version 2 unsupported; expected exactly 3",
+        ):
+            direct_refusal.restart(version_only_v2)
+    assert migration_was_called is False
+    assert direct_refusal.macro_step() == 0
+    assert direct_refusal.time() == 0.0
+    assert np.array_equal(
+        np.asarray(direct_refusal.state_global("blk")), direct_before)
+
+    # The true frozen release-v2 file is also refused directly and by the narrow offline
+    # transformer. It lacks a canonical envelope, and its compiled Program hash differs from the
+    # current one. No output is published until an explicit version map proves those missing facts.
+    frozen_destination = tmp_path / "must-not-publish-frozen-v2"
+    frozen_runtime = fresh()
+    assert frozen_runtime.installed_program_hash() \
+        != "d1880e66a6b39e4d56aafe1f817591e5dec9212705b430c338bde8836e448215"
+    with pytest.raises(
+        ValueError,
+        match="checkpoint has no canonical manifest",
+    ):
+        frozen_runtime.restart(FROZEN_UNIFORM_V2)
+    with pytest.raises(
+        ValueError,
+        match="checkpoint has no canonical manifest",
+    ):
+        migrate_uniform_checkpoint(
+            FROZEN_UNIFORM_V2,
+            frozen_destination,
+            runtime=frozen_runtime,
+            state=migration_state,
+        )
+    assert not frozen_destination.with_suffix(".npz").exists()
+
+    # A pre-contract semantic identity cannot be proven equivalent to the current Program. The
+    # compatibility transformer refuses it rather than inventing a mapping.
+    from pops.identity import make_identity
+
+    with np.load(historical, allow_pickle=False) as stored:
+        historical_payload = {
+            name: np.array(stored[name], copy=True) for name in stored.files
+        }
+    unmapped_historical = _write_resealed_uniform_payload(
+        historical_payload,
+        split,
+        tmp_path / "adaptive-v2-unmapped-semantic.npz",
+        {},
+        semantic_identity=make_identity(
+            "semantic",
+            {"schema": "pre-history-contract", "version": 2},
+        ),
+    )
+    unmapped_destination = tmp_path / "must-not-publish-unmapped-semantic"
+    with pytest.raises(NotImplementedError, match="compatibility subset.*semantic identity"):
+        migrate_uniform_checkpoint(
+            unmapped_historical,
+            unmapped_destination,
+            runtime=fresh(),
+            state=migration_state,
+        )
+    assert not unmapped_destination.with_suffix(".npz").exists()
 
     # An incomplete historical envelope and a refusal by the exact current preflight are both
     # publication failures: neither may leave even a destination archive behind.
@@ -919,6 +1179,49 @@ def test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactl
     )
 
 
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
+    native_cxx, tmp_path,
+):
+    import pops
+
+    artifact = _linear_history_artifact(native_cxx, child_owned=True)
+
+    def fresh():
+        return _bind_uniform_artifact(artifact)
+
+    reference = fresh()
+    pops.run(reference, t_end=0.3, max_steps=3, console=False)
+
+    split = fresh()
+    pops.run(split, t_end=0.2, max_steps=2, console=False)
+    checkpoint = Path(split.checkpoint(tmp_path / "child-linear-history"))
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        name = str(stored["history_names"][0])
+        temporal = json.loads(str(stored["temporal_restart_state"]))
+        history, = temporal["program_schedule"]["histories"]
+        assert history["name"] == name
+        assert history["clock"] != temporal["program_schedule"]["primary_clock"]
+        assert np.array_equal(
+            stored["history_slot_dt_%s" % name],
+            np.full(3, 0.05, dtype=np.float64),
+        )
+
+    resumed = fresh()
+    resumed.restart(checkpoint)
+    pops.run(split, t_end=0.3, max_steps=1, console=False)
+    pops.run(resumed, t_end=0.3, max_steps=1, console=False)
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(split.state_global("blk")),
+    )
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(reference.state_global("blk")),
+    )
+
+
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
     state = _bound_state()
     payload = json.loads(state.checkpoint_json(time=0.0, macro_step=0))
@@ -958,6 +1261,8 @@ class _Payload(dict):
 
 def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore():
     payload = _Payload({
+        "t": np.array(0.0, dtype=np.float64),
+        "macro_step": np.array(0, dtype=np.int64),
         "program_hash": np.array("ab" * 32),
         "history_names": np.array([], dtype="U1"),
         "cache_nodes": np.array([], dtype=np.int64),

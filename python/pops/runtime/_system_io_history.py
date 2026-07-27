@@ -8,6 +8,7 @@ to ``dense_regrid_safety``. Restart replays only gaps proven exact by both guard
 """
 from dataclasses import dataclass
 import json
+import math
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +173,18 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
         slot_dt = None
         if hasattr(system, "history_slot_dt"):
             slot_dt = tuple(float(system.history_slot_dt(hname, k)) for k in range(depth))
+            if any(not math.isfinite(dt) for dt in slot_dt):
+                raise ValueError(
+                    "checkpoint history '%s' slot dt values must be finite" % hname)
+            if initialized:
+                if any(dt <= 0.0 for dt in slot_dt):
+                    raise ValueError(
+                        "checkpoint initialized history '%s' requires positive slot dt values"
+                        % hname)
+            elif any(dt != 0.0 for dt in slot_dt):
+                raise ValueError(
+                    "checkpoint uninitialized history '%s' must have zero slot dt values"
+                    % hname)
         rings.append(HistoryRingCapture(
             name=hname,
             depth=depth,
@@ -199,7 +212,7 @@ def capture_histories(system, plan, out):
     import numpy as np
     if not isinstance(plan, HistoryCapturePlan):
         raise TypeError("history capture requires its exact prepared plan")
-    out["history_names"] = np.array([ring.name for ring in plan.rings])
+    out["history_names"] = np.asarray([ring.name for ring in plan.rings], dtype=str)
     for ring in plan.rings:
         hname = ring.name
         depth = ring.depth

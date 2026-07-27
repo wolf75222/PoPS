@@ -1,4 +1,9 @@
-"""Exact historical Uniform v2 checkpoint schema used only by offline migration."""
+"""Uniform-v2 array schema accepted only inside a sealed compatibility projection.
+
+The historical writer used most of this array codec, but did not emit the canonical manifest or
+runtime identities required by :mod:`pops.codegen.checkpoint_migration`. Validation here must not
+be interpreted as proof that a real release-v2 artifact is migratable.
+"""
 from __future__ import annotations
 
 import math
@@ -49,7 +54,10 @@ def _text_vector(payload: Any, key: str) -> tuple[str, ...]:
     import numpy as np
 
     value = np.asarray(payload[key])
-    if value.ndim != 1 or value.dtype.kind not in "US":
+    # The exact v2 writer used ``np.array([])`` for an empty index, which NumPy encoded as
+    # float64. Non-empty text remains strict; the migrator canonicalizes the historical empty
+    # representation to a current text vector before running the current preflight.
+    if value.ndim != 1 or (value.size and value.dtype.kind not in "US"):
         raise TypeError("historical Uniform checkpoint %r must be a text vector" % key)
     result = tuple(str(item) for item in value.tolist())
     if any(not item for item in result) or len(result) != len(set(result)):
@@ -104,8 +112,8 @@ def _historical_dense_policy(payload: Any, name: str, depth: int) -> tuple[Any, 
     return policy, stored
 
 
-def validate_historical_v2(payload: Any) -> dict[str, Any]:
-    """Validate the exact supported v2 array schema and return its detached facts."""
+def validate_compatible_v2_projection(payload: Any) -> dict[str, Any]:
+    """Validate the supported projected-v2 array schema and return detached facts."""
     import numpy as np
     from pops.runtime._checkpoint_manifest import (
         IDENTITY_KEY,
@@ -117,7 +125,7 @@ def validate_historical_v2(payload: Any) -> dict[str, Any]:
         payload,
         key="pops_checkpoint_version",
         expected=HISTORICAL_UNIFORM_PAYLOAD_VERSION,
-        runtime_kind="historical Uniform",
+        runtime_kind="Uniform-v2 compatibility projection",
     )
     time = _scalar_float(payload, "t")
     macro_step = _scalar_int(payload, "macro_step")
