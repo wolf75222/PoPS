@@ -83,14 +83,15 @@ def _checkpoint_amr_level_envelope(sim, payload):
     elif callable(stored_files):
         stored_files = stored_files()
     files = set(cast(Any, stored_files))
-    if "n_levels" not in files:
-        raise ValueError("restart: AMR checkpoint lacks level-envelope key 'n_levels'")
+    required = {"n_levels", "configured_n_levels"}
+    missing = sorted(required - files)
+    if missing:
+        raise ValueError(
+            "restart: strict AMR checkpoint lacks level-envelope key(s) %r; "
+            "historical checkpoints require offline migration" % missing
+        )
     checkpoint_active = int(payload["n_levels"])
     _current_active, current_configured = _live_amr_level_envelope(sim)
-    if "configured_n_levels" not in files:
-        raise ValueError(
-            "restart: strict AMR checkpoint lacks level-envelope key 'configured_n_levels'"
-        )
     checkpoint_configured = int(payload["configured_n_levels"])
     if checkpoint_configured != current_configured:
         raise ValueError(
